@@ -15,6 +15,7 @@ from typing import Any
 
 from google.adk.events.event import Event
 from google.adk.sessions import Session
+from google.adk.sessions._session_util import make_json_safe_state
 
 from sqlspec.extensions.adk._types import StoredEvent, StoredSession
 
@@ -22,6 +23,7 @@ __all__ = (
     "compute_update_marker",
     "event_to_record",
     "filter_temp_state",
+    "make_json_safe_state",
     "merge_scoped_state",
     "merge_state",
     "record_to_event",
@@ -142,18 +144,21 @@ def record_to_event(record: "StoredEvent") -> "Event":
 
 
 def filter_temp_state(state: "dict[str, Any]") -> "dict[str, Any]":
-    """Return a copy of *state* with all ``temp:`` keys removed.
+    """Return a JSON-safe copy of *state* with all ``temp:`` keys removed.
 
     ``temp:`` keys are process-local/session-runtime state and must never be
-    written to persistent storage.
+    written to persistent storage. Remaining values are coerced via ADK's
+    ``make_json_safe_state`` so rich or non-JSON-serializable values are
+    handled consistently with upstream ADK session services.
 
     Args:
         state: ADK state dictionary (may contain ``temp:`` prefixed keys).
 
     Returns:
-        A new dict without any ``temp:``-prefixed keys.
+        A new JSON-safe dict without any ``temp:``-prefixed keys.
     """
-    return {k: v for k, v in state.items() if not k.startswith("temp:")}
+    filtered = {k: v for k, v in state.items() if not k.startswith("temp:")}
+    return make_json_safe_state(filtered)
 
 
 def split_scoped_state(state: "dict[str, Any]") -> "tuple[dict[str, Any], dict[str, Any], dict[str, Any]]":

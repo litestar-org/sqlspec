@@ -32,7 +32,7 @@ Source = "https://github.com/litestar-org/sqlspec"
 
 [project.optional-dependencies]
 adbc = ["adbc_driver_manager", "pyarrow"]
-adk = ["google-adk"]
+adk = ["google-adk>=2.10.0"]
 aiomysql = ["aiomysql"]
 aiosqlite = ["aiosqlite"]
 alloydb = ["google-cloud-alloydb-connector"]

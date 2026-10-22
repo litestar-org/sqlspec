@@ -1,6 +1,6 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for psqlpy ADK store extension configuration."""
 
+from datetime import UTC, datetime
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
@@ -8,7 +8,8 @@ import pytest
 from psqlpy.exceptions import ConnectionExecuteError, DatabaseError
 
 from sqlspec.adapters.psqlpy.adk import PsqlpyADKConfig, PsqlpyADKMemoryStore, PsqlpyADKStore
-from sqlspec.adapters.psqlpy.adk.store import _is_psqlpy_database_error, _is_table_missing_error
+from sqlspec.adapters.psqlpy.adk.store import _is_psqlpy_database_error, _is_table_missing_error, decode_postgres_vector
+from sqlspec.adapters.psqlpy.core import detect_postgres_extensions
 from sqlspec.config import ADKConfig
 
 
@@ -194,3 +195,120 @@ async def test_psqlpy_memory_store_vector_and_bm25_ddl_parity() -> None:
     assert "embedding VECTOR(768)" in table_ddl
     assert "USING hnsw (embedding vector_cosine_ops)" in table_ddl
     assert "USING bm25 (content_text)" in table_ddl
+
+
+class _FakePgVector:
+    def __init__(self, values: list[float]) -> None:
+        self._values = values
+
+    def to_list(self) -> list[float]:
+        return list(self._values)
+
+
+class _FakeMemoryFetchResult:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+
+    def result(self) -> list[dict[str, Any]]:
+        return self._rows
+
+
+class _FakeMemoryConnection:
+    def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
+        self._rows = rows or []
+        self.fetch_calls: list[tuple[str, list[Any]]] = []
+        self.execute_calls: list[tuple[str, list[Any]]] = []
+
+    async def fetch(self, sql: str, params: list[Any]) -> _FakeMemoryFetchResult:
+        self.fetch_calls.append((sql, list(params)))
+        return _FakeMemoryFetchResult(self._rows)
+
+    async def execute(self, sql: str, params: list[Any]) -> str:
+        self.execute_calls.append((sql, list(params)))
+        return "INSERT 0 1"
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        return None
+
+
+def _sample_memory_row(embedding: Any) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    return {
+        "id": "mem-1",
+        "session_id": "sess-1",
+        "app_name": "app",
+        "user_id": "user-1",
+        "scope": "user",
+        "event_id": "evt-1",
+        "author": "user",
+        "timestamp": now,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": now,
+        "embedding": embedding,
+    }
+
+
+@pytest.mark.parametrize(
+    ("raw_embedding", "expected"),
+    [
+        (None, None),
+        ("[0.25, 0.5, 0.75]", [0.25, 0.5, 0.75]),
+        (b"[0.25,0.5,0.75]", [0.25, 0.5, 0.75]),
+        (_FakePgVector([0.25, 0.5, 0.75]), [0.25, 0.5, 0.75]),
+        ((0.25, 0.5, 0.75), [0.25, 0.5, 0.75]),
+    ],
+)
+def test_psqlpy_memory_store_decodes_vector_text_and_pgvector(raw_embedding: Any, expected: list[float] | None) -> None:
+    """PsqlpyADKMemoryStore._decode_row normalizes text, bytes, PgVector, and sequence embeddings."""
+    decoded = PsqlpyADKMemoryStore._decode_row(_sample_memory_row(raw_embedding))
+    assert decoded["embedding"] == expected
+    assert decode_postgres_vector(raw_embedding) == expected
+
+
+async def test_psqlpy_memory_store_fts_and_simple_select_13_columns() -> None:
+    """FTS and simple search paths project and decode the 13th embedding column."""
+    conn = _FakeMemoryConnection([_sample_memory_row("[0.1, 0.2, 0.3]")])
+    config = _mock_config({"use_fts": True})
+    config.provide_connection = lambda *_a, **_k: conn
+    store = PsqlpyADKMemoryStore(config)
+
+    fts_results = await store._search_entries_fts("hello", "app", "user-1", 5)
+    simple_results = await store._search_entries_simple("hello", "app", "user-1", 5)
+
+    assert "embedding" in conn.fetch_calls[0][0]
+    assert "embedding" in conn.fetch_calls[1][0]
+    assert fts_results[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert simple_results[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+async def test_psqlpy_memory_store_normalizes_tuple_embeddings_on_insert_and_search() -> None:
+    """Tuple embeddings are normalized to list[float] for psqlpy parameter binding."""
+    conn = _FakeMemoryConnection([_sample_memory_row(_FakePgVector([0.1, 0.2]))])
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = PsqlpyADKMemoryStore(config)
+    entry = _sample_memory_row((0.1, 0.2))
+
+    inserted = await store.insert_memory_entries([cast("Any", entry)])
+    results = await store.search_entries("", "app", "user-1", embedding=(0.1, 0.2))
+
+    assert inserted == 1
+    assert conn.execute_calls[0][1][8] == [0.1, 0.2]
+    assert conn.fetch_calls[0][1][0] == [0.1, 0.2]
+    assert results[0]["embedding"] == [0.1, 0.2]
+
+
+async def test_psqlpy_detect_postgres_extensions_sets_pg_textsearch_available() -> None:
+    """detect_postgres_extensions detects vector, pg_search, and pg_textsearch for psqlpy connections."""
+    conn = _FakeMemoryConnection([{"extname": "vector"}, {"extname": "pg_search"}, {"extname": "pg_textsearch"}])
+    pgvector, paradedb, pg_textsearch = await detect_postgres_extensions(
+        conn, enable_pgvector=True, enable_paradedb=True, enable_pg_textsearch=True
+    )
+    assert pgvector is True
+    assert paradedb is True
+    assert pg_textsearch is True

@@ -58,7 +58,12 @@ class SQLSpecMemoryService(BaseMemoryService):
         return self._store
 
     async def add_session_to_memory(
-        self, session: "Session", scope: str = "user", embeddings: "Mapping[str, Sequence[float]] | None" = None
+        self,
+        session: "Session",
+        scope: str = "user",
+        embeddings: "Mapping[str, Sequence[float]] | None" = None,
+        *,
+        custom_metadata: "Mapping[str, object] | None" = None,
     ) -> None:
         """Add a completed session to the memory store.
 
@@ -73,8 +78,12 @@ class SQLSpecMemoryService(BaseMemoryService):
             session: Completed ADK Session with events.
             scope: Visibility scope ('user' or 'app').
             embeddings: Optional mapping of ``event_id`` to embedding vector.
+            custom_metadata: Optional portable metadata merged into each
+                record's ``metadata_json``.
         """
-        records = session_to_memory_records(session, scope=scope, embeddings=embeddings)
+        records = session_to_memory_records(
+            session, scope=scope, embeddings=embeddings, custom_metadata=custom_metadata
+        )
 
         if not records:
             logger.debug(
@@ -282,7 +291,12 @@ class SQLSpecSyncMemoryService:
         return self._store
 
     def add_session_to_memory(
-        self, session: "Session", scope: str = "user", embeddings: "Mapping[str, Sequence[float]] | None" = None
+        self,
+        session: "Session",
+        scope: str = "user",
+        embeddings: "Mapping[str, Sequence[float]] | None" = None,
+        *,
+        custom_metadata: "Mapping[str, object] | None" = None,
     ) -> None:
         """Add a completed session to the memory store.
 
@@ -293,8 +307,12 @@ class SQLSpecSyncMemoryService:
             session: Completed ADK Session with events.
             scope: Visibility scope ('user' or 'app').
             embeddings: Optional mapping of ``event_id`` to embedding vector.
+            custom_metadata: Optional portable metadata merged into each
+                record's ``metadata_json``.
         """
-        records = session_to_memory_records(session, scope=scope, embeddings=embeddings)
+        records = session_to_memory_records(
+            session, scope=scope, embeddings=embeddings, custom_metadata=custom_metadata
+        )
 
         if not records:
             logger.debug(

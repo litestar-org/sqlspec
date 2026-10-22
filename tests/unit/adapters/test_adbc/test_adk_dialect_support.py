@@ -1,5 +1,6 @@
 """Tests for ADBC ADK store dialect-specific DDL generation."""
 
+import struct
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
@@ -7,11 +8,17 @@ from unittest.mock import MagicMock
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
-from sqlspec.adapters.adbc.adk import AdbcADKMemoryStore, AdbcADKStore
-from sqlspec.adapters.adbc.adk.store import _oracle_store_sql, _postgresql_store_sql
+from sqlspec.adapters.adbc.adk import AdbcADKConfig, AdbcADKMemoryStore, AdbcADKStore
+from sqlspec.adapters.adbc.adk.store import (
+    _oracle_store_sql,
+    _postgresql_store_sql,
+    decode_adbc_pgvector,
+    format_pgvector_literal,
+)
 from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
 from sqlspec.adapters.adbc.litestar.store import ADBCStore
 from sqlspec.core import StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
@@ -541,6 +548,210 @@ def test_enterprise_memory_search_entries_uses_dialect_grammar(driver_name: str,
         assert "content_text LIKE ?" in sql
         assert "OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY" in sql
         assert params == ("app1", "user1", "%needle%", 5)
+
+
+def test_adbc_adk_config_accepts_vector_and_bm25_options() -> None:
+    """AdbcADKConfig validates vector, BM25, and ScaNN configuration keys."""
+    adk_cfg: AdbcADKConfig = {
+        "enable_memory": True,
+        "memory_use_fts": True,
+        "enable_bm25": True,
+        "vector_dimensions": 3,
+        "vector_index_type": "scann",
+        "scann_num_leaves": 64,
+        "scann_quantizer": "SQ8",
+    }
+    config = AdbcConfig(connection_config={"driver_name": "postgresql"}, extension_config={"adk": adk_cfg})
+    mem_store = AdbcADKMemoryStore(config)
+    assert mem_store._enable_bm25 is True
+    assert mem_store._vector_dimensions == 3
+    assert mem_store._vector_index_type == "scann"
+    assert mem_store._scann_num_leaves == 64
+    assert mem_store._scann_quantizer == "SQ8"
+
+
+def test_format_pgvector_literal_and_decode_adbc_pgvector() -> None:
+    """format_pgvector_literal and decode_adbc_pgvector round-trip text and binary pgvector values."""
+    assert format_pgvector_literal([0.1, 0.25, -0.5]) == "[0.1,0.25,-0.5]"
+    assert format_pgvector_literal((1.0, 2.0)) == "[1.0,2.0]"
+
+    assert decode_adbc_pgvector(None) is None
+    assert decode_adbc_pgvector("") == []
+    assert decode_adbc_pgvector("[]") == []
+    assert decode_adbc_pgvector("[0.1, 0.25, -0.5]") == [0.1, 0.25, -0.5]
+    assert decode_adbc_pgvector(b"[0.5, -1.5]") == [0.5, -1.5]
+    assert decode_adbc_pgvector((0.25, 0.75)) == [0.25, 0.75]
+
+    binary_payload = struct.pack(">hh3f", 3, 0, 0.5, -0.25, 1.25)
+    assert decode_adbc_pgvector(binary_payload) == [0.5, -0.25, 1.25]
+
+
+def test_postgresql_adbc_memory_ddl_and_vector_indexes(monkeypatch: Any) -> None:
+    """PostgreSQL AdbcADKMemoryStore emits VECTOR(N) DDL and vector/BM25/FTS indexes when extensions are enabled."""
+    executed_sql: list[str] = []
+    mock_cursor = MagicMock()
+    mock_cursor.execute.side_effect = lambda sql, params=None: executed_sql.append(_normalized(sql))
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__.return_value = mock_conn
+    mock_ctx.__exit__.return_value = None
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: mock_ctx)
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "postgresql"},
+        extension_config={
+            "adk": {
+                "enable_memory": True,
+                "memory_use_fts": True,
+                "enable_bm25": True,
+                "vector_dimensions": 3,
+                "vector_index_type": "scann",
+                "scann_num_leaves": 50,
+                "scann_quantizer": "SQ8",
+            }
+        },
+    )
+    config._pgvector_available = True
+    config._pg_textsearch_available = True
+
+    mem_store = AdbcADKMemoryStore(config)
+    ddl = getattr(mem_store, "_memory_table_ddl")()
+    assert "embedding VECTOR(3)" in ddl
+
+    mem_store.create_tables()
+    assert any("USING GIN (to_tsvector('english', content_text))" in stmt for stmt in executed_sql)
+    assert any("USING bm25 (content_text) WITH (text_config='english')" in stmt for stmt in executed_sql)
+    assert any("USING scann (embedding) WITH (num_leaves = 50, quantizer = 'SQ8')" in stmt for stmt in executed_sql)
+
+
+def test_postgresql_adbc_memory_insert_and_vector_hybrid_search(monkeypatch: Any) -> None:
+    """PostgreSQL AdbcADKMemoryStore binds $N::text::vector on insert/search and decodes 13-column rows."""
+    captured: list[tuple[str, Any]] = []
+    now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    sample_row = (
+        "mem-1",
+        "sess-1",
+        "app1",
+        "user1",
+        "user",
+        "evt-1",
+        "user",
+        now,
+        '{"parts": [{"text": "hello"}]}',
+        "hello",
+        '{"topic": "greeting"}',
+        now,
+        "[0.1,0.2,0.3]",
+    )
+    mock_cursor = MagicMock()
+
+    def _capture_execute(sql: str, params: Any = None) -> None:
+        captured.append((_normalized(sql), params))
+
+    mock_cursor.execute.side_effect = _capture_execute
+    mock_cursor.fetchone.return_value = (1,)
+    mock_cursor.fetchall.return_value = [sample_row]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__.return_value = mock_conn
+    mock_ctx.__exit__.return_value = None
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: mock_ctx)
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "postgresql"},
+        extension_config={
+            "adk": {"enable_memory": True, "memory_use_fts": True, "enable_bm25": True, "vector_dimensions": 3}
+        },
+    )
+    config._pgvector_available = True
+    config._pg_textsearch_available = True
+
+    mem_store = AdbcADKMemoryStore(config)
+    inserted = mem_store.insert_memory_entries([
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app1",
+            "user_id": "user1",
+            "scope": "user",
+            "event_id": "evt-1",
+            "author": "user",
+            "timestamp": now,
+            "embedding": (0.1, 0.2, 0.3),
+            "content_json": {"parts": [{"text": "hello"}]},
+            "content_text": "hello",
+            "metadata_json": {"topic": "greeting"},
+            "inserted_at": now,
+        }
+    ])
+    assert inserted == 1
+    insert_sql, insert_params = captured[-1]
+    assert "$9::text::vector" in insert_sql
+    assert insert_params[8] == "[0.1,0.2,0.3]"
+
+    captured.clear()
+    vec_rows = mem_store.search_entries("", "app1", "user1", limit=5, embedding=(0.1, 0.2, 0.3))
+    assert len(vec_rows) == 1
+    assert vec_rows[0]["embedding"] == [0.1, 0.2, 0.3]
+    vec_sql, vec_params = captured[0]
+    assert "embedding::text AS embedding" in vec_sql
+    assert "embedding <=> $3::text::vector ASC" in vec_sql
+    assert vec_params == ("app1", "user1", "[0.1,0.2,0.3]", 5)
+
+    captured.clear()
+    hybrid_rows = mem_store.search_entries("hello", "app1", "user1", limit=5, embedding=[0.1, 0.2, 0.3])
+    assert len(hybrid_rows) == 1
+    assert hybrid_rows[0]["embedding"] == [0.1, 0.2, 0.3]
+    hybrid_sql, hybrid_params = captured[0]
+    assert "WITH vector_matches AS" in hybrid_sql
+    assert "m.embedding::text AS embedding" in hybrid_sql
+    assert "embedding <=> $1::text::vector" in hybrid_sql
+    assert "content_text <@> $5" in hybrid_sql
+    assert hybrid_params == ("[0.1,0.2,0.3]", "app1", "user1", 50, "hello", "app1", "user1", 50, 5)
+
+
+@pytest.mark.parametrize("driver_name", ["sqlite", "duckdb"])
+def test_non_postgresql_adbc_memory_rejects_vector_operations(driver_name: str, monkeypatch: Any) -> None:
+    """Non-PostgreSQL AdbcADKMemoryStore raises ImproperConfigurationError when embeddings are supplied."""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = None
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__.return_value = mock_conn
+    mock_ctx.__exit__.return_value = None
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: mock_ctx)
+
+    config = AdbcConfig(
+        connection_config={"driver_name": driver_name, "uri": ":memory:"},
+        extension_config={"adk": {"enable_memory": True}},
+    )
+    mem_store = AdbcADKMemoryStore(config)
+    now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+    with pytest.raises(ImproperConfigurationError, match="Vector embeddings in AdbcADKMemoryStore are only supported"):
+        mem_store.search_entries("query", "app1", "user1", embedding=[0.1, 0.2])
+
+    with pytest.raises(ImproperConfigurationError, match="Vector embeddings in AdbcADKMemoryStore are only supported"):
+        mem_store.insert_memory_entries([
+            {
+                "id": "mem-1",
+                "session_id": "sess-1",
+                "app_name": "app1",
+                "user_id": "user1",
+                "scope": "user",
+                "event_id": "evt-1",
+                "author": "user",
+                "timestamp": now,
+                "embedding": [0.1, 0.2],
+                "content_json": {"parts": [{"text": "hello"}]},
+                "content_text": "hello",
+                "metadata_json": None,
+                "inserted_at": now,
+            }
+        ])
 
 
 def _store_for(driver_name: str) -> AdbcADKStore:

@@ -72,6 +72,7 @@ __all__ = (
     "collect_rows",
     "create_mapped_exception",
     "default_statement_config",
+    "detect_postgres_extensions",
     "driver_profile",
     "extract_rows_affected",
     "format_execute_many_parameters",
@@ -540,6 +541,41 @@ def format_execute_many_parameters(parameters: Any, *, coerce_numeric: bool) -> 
         return formatted
 
     return [_format_execute_many_param_set(parameters, coerce_numeric=coerce_numeric)]
+
+
+async def detect_postgres_extensions(
+    connection: Any, *, enable_pgvector: bool = False, enable_paradedb: bool = False, enable_pg_textsearch: bool = False
+) -> "tuple[bool, bool, bool]":
+    """Detect whether pgvector, paradedb, and pg_textsearch extensions are installed on PostgreSQL.
+
+    Args:
+        connection: Active psqlpy connection.
+        enable_pgvector: Whether to probe for pgvector extension.
+        enable_paradedb: Whether to probe for paradedb extension.
+        enable_pg_textsearch: Whether to probe for pg_textsearch extension.
+
+    Returns:
+        Tuple of ``(pgvector_available, paradedb_available, pg_textsearch_available)``.
+    """
+    driver_features: dict[str, Any] = {
+        "enable_pgvector": enable_pgvector,
+        "enable_paradedb": enable_paradedb,
+        "enable_pg_textsearch": enable_pg_textsearch,
+    }
+    extensions_to_check = build_postgres_extension_probe_names(driver_features)
+    if not extensions_to_check:
+        return False, False, False
+
+    try:
+        result = await connection.fetch(
+            "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions_to_check]
+        )
+        rows = result.result() if result else []
+        detected = {cast("str", row["extname"] if isinstance(row, dict) else row[0]) for row in rows}
+    except Exception:
+        logger.debug("PostgreSQL extension detection failed for psqlpy connection")
+        return False, False, False
+    return "vector" in detected, "pg_search" in detected, "pg_textsearch" in detected
 
 
 def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:

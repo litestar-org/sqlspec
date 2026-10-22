@@ -14,6 +14,7 @@ from sqlspec.adapters.psycopg.adk import (
     PsycopgSyncADKMemoryStore,
     PsycopgSyncADKStore,
 )
+from sqlspec.adapters.psycopg.adk.store import decode_postgres_vector
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
 
 
@@ -560,3 +561,77 @@ def test_psycopg_sync_adk_store_commits_mutating_operations() -> None:
     connection.commit_called = False
     store.delete_session("app", "u1", "s1")
     assert connection.commit_called
+
+
+class _FakePsycopgVector:
+    def __init__(self, values: list[float]) -> None:
+        self._values = values
+
+    def to_list(self) -> list[float]:
+        return list(self._values)
+
+
+@pytest.mark.parametrize(
+    ("raw_embedding", "expected"),
+    [
+        (None, None),
+        ("[0.1, 0.2, 0.3]", [0.1, 0.2, 0.3]),
+        (b"[0.1,0.2,0.3]", [0.1, 0.2, 0.3]),
+        (_FakePsycopgVector([0.1, 0.2, 0.3]), [0.1, 0.2, 0.3]),
+        ((0.1, 0.2, 0.3), [0.1, 0.2, 0.3]),
+    ],
+)
+def test_psycopg_memory_store_decodes_vector_text_and_bytes(raw_embedding: Any, expected: list[float] | None) -> None:
+    """Psycopg sync and async memory stores normalize text, bytes, PgVector, and sequence embeddings."""
+    now = datetime.now(UTC)
+    row = {
+        "id": "mem-1",
+        "session_id": "sess-1",
+        "app_name": "app",
+        "user_id": "user-1",
+        "scope": "user",
+        "event_id": "evt-1",
+        "author": "user",
+        "timestamp": now,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": now,
+        "embedding": raw_embedding,
+    }
+    assert PsycopgSyncADKMemoryStore._decode_row(row)["embedding"] == expected
+    assert PsycopgAsyncADKMemoryStore._decode_row(row)["embedding"] == expected
+    assert decode_postgres_vector(raw_embedding) == expected
+
+
+def test_psycopg_sync_memory_fts_and_simple_select_13_columns() -> None:
+    """Psycopg sync FTS and simple search project and decode the 13th embedding column."""
+    now = datetime.now(UTC)
+    cursor = _DummyCursor([
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user-1",
+            "scope": "user",
+            "event_id": "evt-1",
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+            "embedding": "[0.5, 0.25]",
+        }
+    ])
+    config = _DummyConfig(_DummyConnection(cursor))
+    config.extension_config = {"adk": {"use_fts": True}}
+    store = PsycopgSyncADKMemoryStore(cast("Any", config))
+
+    fts_rows = store._search_entries_fts("hello", "app", "user-1", 5)
+    simple_rows = store._search_entries_simple("hello", "app", "user-1", 5)
+
+    assert "embedding" in cursor.execute_calls[0][0].as_string()
+    assert "embedding" in cursor.execute_calls[1][0].as_string()
+    assert fts_rows[0]["embedding"] == [0.5, 0.25]
+    assert simple_rows[0]["embedding"] == [0.5, 0.25]

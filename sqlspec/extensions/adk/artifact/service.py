@@ -14,9 +14,11 @@ import inspect
 import logging
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
+from google.adk.artifacts import artifact_util
 from google.adk.artifacts.base_artifact_service import ArtifactVersion, BaseArtifactService, ensure_part
+from google.adk.errors.input_validation_error import InputValidationError
 from google.genai import types
 
 from sqlspec.extensions.adk.artifact._types import StoredArtifact
@@ -31,6 +33,27 @@ if TYPE_CHECKING:
 __all__ = ("SQLSpecArtifactService",)
 
 logger = get_logger("sqlspec.extensions.adk.artifact.service")
+
+_REWIND_TOMBSTONE = types.Part(inline_data=types.Blob(mime_type="application/octet-stream", data=b""))
+
+
+def _file_has_user_namespace(filename: str) -> bool:
+    """Return True when *filename* uses ADK's ``user:`` user-scoped prefix."""
+    return filename.startswith("user:")
+
+
+def _resolve_scoped_session_id(
+    filename: str, session_id: "str | None", *, require_session_id: bool = False
+) -> "str | None":
+    """Resolve effective ``session_id`` honoring ``user:`` prefix and flat-storage validation."""
+    if session_id is not None:
+        artifact_util._validate_session_id_for_flat_storage(session_id)
+    if _file_has_user_namespace(filename):
+        return None
+    if require_session_id and session_id is None:
+        msg = "Session ID must be provided for session-scoped artifacts."
+        raise InputValidationError(msg)
+    return session_id
 
 
 class SQLSpecArtifactService(BaseArtifactService):
@@ -99,22 +122,35 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             The version number (0-based, incrementing).
         """
+        effective_session_id = _resolve_scoped_session_id(filename, session_id, require_session_id=True)
         artifact_part: types.Part = ensure_part(artifact)
+        if artifact_util.is_artifact_ref(artifact_part):
+            file_uri = cast("str", artifact_part.file_data.file_uri) if artifact_part.file_data is not None else ""
+            parsed_uri = artifact_util.parse_artifact_uri(file_uri)
+            if not parsed_uri:
+                msg = f"Invalid artifact reference URI: {file_uri}"
+                raise InputValidationError(msg)
+            artifact_util.validate_artifact_reference_scope(
+                app_name=app_name, user_id=user_id, session_id=effective_session_id, parsed_uri=parsed_uri
+            )
+            mime_type: str | None = None
+        else:
+            mime_type = _extract_mime_type(artifact_part)
+
         version = await self._call_store(
-            "get_next_version", app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
+            "get_next_version", app_name=app_name, user_id=user_id, filename=filename, session_id=effective_session_id
         )
         content_path = _build_content_path(
-            app_name=app_name, user_id=user_id, filename=filename, version=version, session_id=session_id
+            app_name=app_name, user_id=user_id, filename=filename, version=version, session_id=effective_session_id
         )
         canonical_uri = f"{self._artifact_storage_uri}/{content_path}"
         content_bytes = _serialize_artifact(artifact_part)
-        mime_type = _extract_mime_type(artifact_part)
         backend = self._registry.get(self._artifact_storage_uri)
         await _call_storage_backend(backend, "write_bytes_async", "write_bytes_sync", content_path, content_bytes)
         record = StoredArtifact(
             app_name=app_name,
             user_id=user_id,
-            session_id=session_id,
+            session_id=effective_session_id,
             filename=filename,
             version=version,
             mime_type=mime_type,
@@ -132,7 +168,7 @@ class SQLSpecArtifactService(BaseArtifactService):
             user_id=user_id,
             filename=filename,
             version=version,
-            session_id=session_id,
+            session_id=effective_session_id,
             mime_type=mime_type,
         )
         return int(version)
@@ -158,41 +194,14 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             Deserialized Part, or None if not found.
         """
-        record = await self._call_store(
-            "get_artifact",
+        return await self._load_artifact(
             app_name=app_name,
             user_id=user_id,
             filename=filename,
             session_id=session_id,
             version=version,
+            remaining_depth=artifact_util._MAX_ARTIFACT_REFERENCE_DEPTH,
         )
-        if record is None:
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "adk.artifact.load",
-                app_name=app_name,
-                filename=filename,
-                version=version,
-                found=False,
-            )
-            return None
-
-        content_path = record["canonical_uri"].removeprefix(self._artifact_storage_uri + "/")
-
-        backend = self._registry.get(self._artifact_storage_uri)
-        content_bytes = await _call_storage_backend(backend, "read_bytes_async", "read_bytes_sync", content_path)
-
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "adk.artifact.load",
-            app_name=app_name,
-            filename=filename,
-            version=record["version"],
-            found=True,
-        )
-        return _deserialize_artifact(content_bytes)
 
     async def list_artifact_keys(self, *, app_name: str, user_id: str, session_id: "str | None" = None) -> "list[str]":
         """List distinct artifact filenames.
@@ -208,6 +217,8 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             List of artifact filenames.
         """
+        if session_id is not None:
+            artifact_util._validate_session_id_for_flat_storage(session_id)
         keys: list[str] = list(
             await self._call_store("list_artifact_keys", app_name=app_name, user_id=user_id, session_id=session_id)
         )
@@ -236,8 +247,9 @@ class SQLSpecArtifactService(BaseArtifactService):
             filename: Artifact filename.
             session_id: Session identifier (None for user-scoped).
         """
+        effective_session_id = _resolve_scoped_session_id(filename, session_id)
         deleted_records = await self._call_store(
-            "delete_artifact", app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
+            "delete_artifact", app_name=app_name, user_id=user_id, filename=filename, session_id=effective_session_id
         )
         await self._delete_content(deleted_records)
 
@@ -247,7 +259,7 @@ class SQLSpecArtifactService(BaseArtifactService):
             "adk.artifact.delete",
             app_name=app_name,
             filename=filename,
-            session_id=session_id,
+            session_id=effective_session_id,
             versions_deleted=len(deleted_records),
         )
 
@@ -296,8 +308,13 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             Sorted list of version numbers.
         """
+        effective_session_id = _resolve_scoped_session_id(filename, session_id)
         records = await self._call_store(
-            "list_artifact_versions", app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
+            "list_artifact_versions",
+            app_name=app_name,
+            user_id=user_id,
+            filename=filename,
+            session_id=effective_session_id,
         )
         return [r["version"] for r in records]
 
@@ -315,8 +332,13 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             List of ArtifactVersion objects ordered by version ascending.
         """
+        effective_session_id = _resolve_scoped_session_id(filename, session_id)
         records = await self._call_store(
-            "list_artifact_versions", app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
+            "list_artifact_versions",
+            app_name=app_name,
+            user_id=user_id,
+            filename=filename,
+            session_id=effective_session_id,
         )
         return [_record_to_artifact_version(r) for r in records]
 
@@ -341,17 +363,86 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             ArtifactVersion if found, None otherwise.
         """
+        effective_session_id = _resolve_scoped_session_id(filename, session_id)
         record = await self._call_store(
             "get_artifact",
             app_name=app_name,
             user_id=user_id,
             filename=filename,
-            session_id=session_id,
+            session_id=effective_session_id,
             version=version,
         )
         if record is None:
             return None
         return _record_to_artifact_version(record)
+
+    async def _load_artifact(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        filename: str,
+        session_id: "str | None",
+        version: "int | None",
+        remaining_depth: int,
+    ) -> "types.Part | None":
+        """Load an artifact, following at most *remaining_depth* ``artifact://`` references."""
+        effective_session_id = _resolve_scoped_session_id(filename, session_id)
+        record = await self._call_store(
+            "get_artifact",
+            app_name=app_name,
+            user_id=user_id,
+            filename=filename,
+            session_id=effective_session_id,
+            version=version,
+        )
+        if record is None:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "adk.artifact.load",
+                app_name=app_name,
+                filename=filename,
+                version=version,
+                found=False,
+            )
+            return None
+
+        content_path = record["canonical_uri"].removeprefix(self._artifact_storage_uri + "/")
+        backend = self._registry.get(self._artifact_storage_uri)
+        content_bytes = await _call_storage_backend(backend, "read_bytes_async", "read_bytes_sync", content_path)
+
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "adk.artifact.load",
+            app_name=app_name,
+            filename=filename,
+            version=record["version"],
+            found=True,
+        )
+        artifact_part = _deserialize_artifact(content_bytes)
+        if artifact_util.is_artifact_ref(artifact_part):
+            file_uri = cast("str", artifact_part.file_data.file_uri) if artifact_part.file_data is not None else ""
+            parsed_uri = artifact_util.resolve_artifact_reference(
+                file_uri=file_uri,
+                app_name=app_name,
+                user_id=user_id,
+                session_id=session_id,
+                remaining_depth=remaining_depth,
+            )
+            return await self._load_artifact(
+                app_name=parsed_uri.app_name,
+                user_id=parsed_uri.user_id,
+                filename=parsed_uri.filename,
+                session_id=parsed_uri.session_id,
+                version=parsed_uri.version,
+                remaining_depth=remaining_depth - 1,
+            )
+
+        if artifact_part in (types.Part(), _REWIND_TOMBSTONE):
+            return None
+        return artifact_part
 
     async def _call_store(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
         """Invoke an async or sync artifact store method, bridging sync stores via async_()."""

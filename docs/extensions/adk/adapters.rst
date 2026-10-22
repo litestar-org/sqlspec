@@ -31,16 +31,25 @@ Each Adapter Provides
 Every adapter with ADK support ships session/event and memory stores:
 
 - **Session store** (e.g., ``AsyncpgADKStore``) -- sessions and events.
-- **Memory store** (e.g., ``AsyncpgADKMemoryStore``) -- long-term memory with FTS.
+- **Memory store** (e.g., ``AsyncpgADKMemoryStore``) -- long-term memory with FTS and vector recall.
 
 Import from the adapter's ``adk`` subpackage:
 
 .. code-block:: python
 
    from sqlspec.adapters.asyncpg.adk import (
+       AsyncpgADKConfig,
        AsyncpgADKStore,
        AsyncpgADKMemoryStore,
    )
+
+PostgreSQL adapters (``asyncpg``, ``psycopg``, ``psqlpy``, and ``adbc`` on the
+PostgreSQL dialect) expose typed ADK config classes (:class:`~sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig`,
+:class:`~sqlspec.adapters.psycopg.adk.PsycopgADKConfig`,
+:class:`~sqlspec.adapters.psqlpy.adk.PsqlpyADKConfig`, and
+:class:`~sqlspec.adapters.adbc.adk.AdbcADKConfig`) for ``pgvector`` semantic
+recall, ``pg_textsearch`` BM25 hybrid Reciprocal Rank Fusion (RRF), and
+``scann`` / ``hnsw`` / ``ivfflat`` vector index tuning.
 
 Artifact service base classes live under ``sqlspec.extensions.adk.artifact``.
 Google Cloud Spanner also provides concrete artifact metadata stores

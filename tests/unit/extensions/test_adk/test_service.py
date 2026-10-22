@@ -12,7 +12,7 @@ The store is mocked — no database required.
 import importlib.util
 import inspect
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -20,12 +20,14 @@ if importlib.util.find_spec("google.genai") is None or importlib.util.find_spec(
     pytest.skip("google-adk not installed", allow_module_level=True)
 
 from google.adk.errors import StaleSessionError
+from google.adk.errors.already_exists_error import AlreadyExistsError
 from google.adk.errors.session_not_found_error import SessionNotFoundError
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
 from google.adk.sessions.base_session_service import GetSessionConfig
 from google.adk.sessions.session import Session
 
+from sqlspec.exceptions import UniqueViolationError
 from sqlspec.extensions.adk._types import StoredEvent, StoredSession
 from sqlspec.extensions.adk.service import SQLSpecSessionService
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
@@ -144,7 +146,7 @@ class MockStore:
         raise AssertionError("append_event (old method) must not be called — use append_event_and_update_state")
 
     async def get_events(
-        self, *, app_name: str, user_id: str, session_id: str, after_timestamp: Any = None, limit: Any = None
+        self, app_name: str, user_id: str, session_id: str, after_timestamp: Any = None, limit: Any = None
     ) -> list:
         self.get_events_calls.append({
             "app_name": app_name,
@@ -153,7 +155,7 @@ class MockStore:
             "after_timestamp": after_timestamp,
             "limit": limit,
         })
-        return []
+        return list(getattr(self, "stored_events", []))
 
     async def list_sessions(
         self,
@@ -275,10 +277,22 @@ class SyncStore:
 class StaleDetectionStore(MockStore):
     """Mock store that can simulate a storage-side update between load and append."""
 
-    def __init__(self, *, stale_marker: bool = False, stale_timestamp: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        stale_marker: bool = False,
+        stale_timestamp: bool = False,
+        stored_events: "list[dict[str, Any]] | None" = None,
+    ) -> None:
         super().__init__()
         self._stale_marker = stale_marker
         self._stale_timestamp = stale_timestamp
+        if stored_events is not None:
+            self.stored_events = stored_events
+        elif stale_timestamp:
+            self.stored_events = [{"id": "concurrent-storage-event"}]
+        else:
+            self.stored_events = []
 
     async def get_session(self, app_name: str, user_id: str, session_id: str) -> "dict[str, Any] | None":
         record = dict(self._session_record)
@@ -801,3 +815,119 @@ def test_service_and_store_contracts_share_session_list_options() -> None:
 
     assert service_options == options(BaseAsyncADKStore.list_sessions)
     assert service_options == options(BaseSyncADKStore.list_sessions)
+
+
+@pytest.mark.anyio
+async def test_create_session_strips_whitespace_and_rejects_duplicate_session_id() -> None:
+    """create_session strips session_id whitespace and raises AlreadyExistsError when session exists."""
+    store = MockStore()
+    service = SQLSpecSessionService(cast("Any", store))
+
+    created = await service.create_session(app_name="app", user_id="u1", session_id="  custom-id  ")
+    assert created.id == "custom-id"
+
+    with pytest.raises(AlreadyExistsError, match="Session with id custom-id already exists"):
+        await service.create_session(app_name="app", user_id="u1", session_id="custom-id")
+
+    blank_session = await service.create_session(app_name="app", user_id="u1", session_id="   ")
+    assert blank_session.id != ""
+    assert blank_session.id != "custom-id"
+
+
+@pytest.mark.anyio
+async def test_create_session_converts_unique_violation_to_already_exists_error() -> None:
+    """create_session maps UniqueViolationError on race condition to AlreadyExistsError."""
+
+    class RaceStore(MockStore):
+        async def get_session(self, app_name: str, user_id: str, session_id: str) -> "dict[str, Any] | None":
+            return None
+
+        async def create_session(
+            self, *, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+        ) -> "dict[str, Any]":
+            raise UniqueViolationError("duplicate key value violates unique constraint")
+
+    service = SQLSpecSessionService(cast("Any", RaceStore()))
+    with pytest.raises(AlreadyExistsError, match="Session with id raced-id already exists"):
+        await service.create_session(app_name="app", user_id="u1", session_id="raced-id")
+
+
+@pytest.mark.anyio
+async def test_append_event_deduplicates_redelivered_event() -> None:
+    """append_event drops re-delivered equal events with matching id without hitting the store again."""
+    store = MockStore()
+    service = SQLSpecSessionService(cast("Any", store))
+    session = _make_session(state={"count": 0})
+    event = _make_event(state_delta={"count": 1})
+
+    await service.append_event(session, event)
+    assert len(store.append_event_and_update_state_calls) == 1
+    assert len(session.events) == 1
+
+    redelivered = event.model_copy(deep=True)
+    await service.append_event(session, redelivered)
+    assert len(store.append_event_and_update_state_calls) == 1
+    assert len(session.events) == 1
+
+
+@pytest.mark.anyio
+async def test_append_event_markerless_session_matching_storage_revision_succeeds() -> None:
+    """A marker-less session whose events still match stored events adopts the storage marker and succeeds."""
+    existing_event = _make_event(invocation_id="inv-0")
+    store = StaleDetectionStore(stale_timestamp=True, stored_events=[{"id": existing_event.id}])
+    service = SQLSpecSessionService(cast("Any", store))
+    session = _make_session()
+    session.events.append(existing_event)
+    setattr(session, "_storage_update_marker", None)
+
+    new_event = _make_event(invocation_id="inv-1", state_delta={"ok": True})
+    await service.append_event(session, new_event)
+
+    assert store.append_event_and_update_state_called
+    assert getattr(session, "_storage_update_marker", None) is not None
+    assert len(session.events) == 2
+
+
+@pytest.mark.anyio
+async def test_create_and_append_coerce_state_via_make_json_safe_state() -> None:
+    """create_session and append_event coerce non-JSON-primitive values via make_json_safe_state."""
+    store = MockStore()
+    service = SQLSpecSessionService(cast("Any", store))
+    ts = datetime(2026, 10, 21, 12, 0, 0, tzinfo=UTC)
+
+    session = await service.create_session(
+        app_name="app",
+        user_id="u1",
+        session_id="json-safe-session",
+        state={"created_at": ts, "unserializable": lambda x: x},
+    )
+    persisted_init = store.create_session_calls[-1]["state"]
+    assert isinstance(persisted_init["created_at"], str)
+    assert isinstance(persisted_init["unserializable"], str)
+
+    event = _make_event(state_delta={"updated_at": ts})
+    await service.append_event(session, event)
+    persisted_append = store.append_event_and_update_state_calls[-1]["state"]
+    assert isinstance(persisted_append["updated_at"], str)
+
+
+@pytest.mark.anyio
+async def test_session_service_context_manager_and_lock_cleanup() -> None:
+    """SQLSpecSessionService supports async context manager and cleans up per-session locks."""
+
+    class ClosableStore(MockStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    store = ClosableStore()
+    async with SQLSpecSessionService(cast("Any", store)) as service:
+        session = _make_session()
+        await service.append_event(session, _make_event())
+        assert service._session_locks == {}
+        assert service._session_lock_ref_count == {}
+
+    assert store.closed is True
