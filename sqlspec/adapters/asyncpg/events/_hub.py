@@ -15,7 +15,7 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
-from sqlspec.exceptions import EventChannelError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.extensions.events._buffer import enqueue_with_capacity, resolve_listener_queue_capacity
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -40,6 +40,7 @@ class AsyncpgListenerHub:
         "_config",
         "_connection",
         "_connection_cm",
+        "_listener_config",
         "_listener_queue_capacity",
         "_lock",
         "_pool_destroying_registered",
@@ -50,6 +51,7 @@ class AsyncpgListenerHub:
     def __init__(self, config: "AsyncpgConfig", backend_name: str = "notify") -> None:
         self._backend_name = backend_name
         self._config = config
+        self._listener_config: AsyncpgConfig | None = None
         self._lock = asyncio.Lock()
         self._listener_queue_capacity = resolve_listener_queue_capacity(config)
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
@@ -143,6 +145,15 @@ class AsyncpgListenerHub:
             with contextlib.suppress(Exception):
                 await connection_cm.__aexit__(None, None, None)
             _record_listener_lifecycle(self._config, self._backend_name, "release")
+        listener_config = self._listener_config
+        self._listener_config = None
+        if (
+            listener_config is not None
+            and listener_config is not self._config
+            and callable(getattr(listener_config, "close_pool", None))
+        ):
+            with contextlib.suppress(Exception):
+                await listener_config.close_pool()
         self._shutting_down = False
 
     def is_subscribed(self, channel: str) -> bool:
@@ -162,6 +173,37 @@ class AsyncpgListenerHub:
             queues[task] = queue
         return queue
 
+    def _resolve_listener_config(self) -> "AsyncpgConfig":
+        if self._listener_config is not None:
+            return self._listener_config
+        raw_features = getattr(self._config, "driver_features", None)
+        driver_features = raw_features if isinstance(raw_features, dict) else {}
+        pooler_mode = str(
+            driver_features.get("pooler_mode")
+            or (
+                "transaction"
+                if driver_features.get("pgbouncer") or driver_features.get("pgbouncer_mode")
+                else "session"
+            )
+        ).lower()
+        raw_direct_dsn = driver_features.get("direct_dsn")
+        direct_dsn = raw_direct_dsn if isinstance(raw_direct_dsn, str) and raw_direct_dsn else None
+        if pooler_mode in {"transaction", "statement"} and not direct_dsn:
+            logger.warning(
+                "PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode=%r without configuring driver_features['direct_dsn']",
+                pooler_mode,
+            )
+            msg = (
+                f"PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode={pooler_mode!r} without "
+                "configuring driver_features['direct_dsn']"
+            )
+            raise ImproperConfigurationError(msg)
+        derive_fn = getattr(self._config, "derive_direct_config", None)
+        self._listener_config = (
+            cast("AsyncpgConfig", derive_fn()) if direct_dsn and callable(derive_fn) else self._config
+        )
+        return self._listener_config
+
     async def _ensure_connection_locked(self) -> None:
         if self._connection is not None and not self._connection.is_closed():
             return
@@ -172,7 +214,8 @@ class AsyncpgListenerHub:
             _record_listener_lifecycle(self._config, self._backend_name, "release")
             self._connection = None
             self._connection_cm = None
-        connection_cm = self._config.provide_connection()
+        listener_config = self._resolve_listener_config()
+        connection_cm = listener_config.provide_connection()
         connection = await connection_cm.__aenter__()
         if connection is None or not has_add_listener(connection):
             with contextlib.suppress(Exception):

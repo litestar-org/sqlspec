@@ -13,7 +13,8 @@ from sqlspec.adapters.psqlpy.core import (
     build_statement_config,
     resolve_postgres_extension_state,
 )
-from sqlspec.core import StatementConfig
+from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
+from sqlspec.core import SQL, StatementConfig
 
 
 class _ExtensionQueryResult:
@@ -280,3 +281,75 @@ async def test_psqlpy_session_context_rolls_back_open_transaction_on_exit() -> N
 
     conn.execute.assert_any_await("ROLLBACK")
     assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.anyio
+async def test_psqlpy_pooler_mode_transaction_disables_prepared_statements() -> None:
+    """Transaction pooler mode should disable statement caching and pass prepared=False on execution."""
+    config = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://localhost:6432/test"}, driver_features={"pooler_mode": "transaction"}
+    )
+    assert config.connection_config["max_cached_statement_lifetime"] == 0
+
+    alias_config = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://localhost:6432/test"}, driver_features={"pgbouncer": True}
+    )
+    assert alias_config.driver_features["pooler_mode"] == "transaction"
+    assert alias_config.connection_config["max_cached_statement_lifetime"] == 0
+
+    conn = AsyncMock()
+    conn.fetch.return_value = _ExtensionQueryResult(set())
+    conn.execute.return_value = "CREATE TABLE"
+    driver = PsqlpyDriver(
+        cast("PsqlpyConnection", conn), statement_config=config.statement_config, driver_features=config.driver_features
+    )
+
+    select_stmt = SQL("SELECT 1", statement_config=config.statement_config)
+    await driver.dispatch_execute(cast("PsqlpyConnection", conn), select_stmt)
+    assert conn.fetch.await_args.kwargs.get("prepared") is False
+
+    ddl_stmt = SQL("CREATE TABLE items (id INT)", statement_config=config.statement_config)
+    await driver.dispatch_execute(cast("PsqlpyConnection", conn), ddl_stmt)
+    assert conn.execute.await_args.kwargs.get("prepared") is False
+
+    many_stmt = SQL(
+        "INSERT INTO items (id) VALUES ($1)", [[1], [2]], statement_config=config.statement_config, is_many=True
+    )
+    await driver.dispatch_execute_many(cast("PsqlpyConnection", conn), many_stmt)
+    assert conn.execute_many.await_args.kwargs.get("prepared") is False
+
+
+@pytest.mark.anyio
+async def test_psqlpy_derive_direct_config_and_columnar_engine() -> None:
+    """derive_direct_config and enable_alloydb_columnar should configure session and transaction modes."""
+    base_config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
+    assert base_config.derive_direct_config() is base_config
+
+    pooled_config = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://pooler:6432/test"},
+        driver_features={
+            "pooler_mode": "transaction",
+            "direct_dsn": "postgresql://direct:5432/test",
+            "enable_alloydb_columnar": True,
+        },
+    )
+    assert "options" not in pooled_config.connection_config
+
+    direct_config = pooled_config.derive_direct_config()
+    assert direct_config is not pooled_config
+    assert direct_config.connection_config["dsn"] == "postgresql://direct:5432/test"
+    assert "max_cached_statement_lifetime" not in direct_config.connection_config
+    assert direct_config.driver_features["pooler_mode"] == "session"
+    assert direct_config.driver_features["direct_dsn"] is None
+    assert direct_config.connection_config["options"] == "-c google_columnar_engine.enabled=on"
+
+    conn = AsyncMock()
+    conn.in_transaction = False
+    driver = PsqlpyDriver(
+        cast("PsqlpyConnection", conn),
+        statement_config=pooled_config.statement_config,
+        driver_features=pooled_config.driver_features,
+    )
+    await driver.begin()
+    conn.execute.assert_any_await("BEGIN")
+    conn.execute.assert_any_await("SET LOCAL google_columnar_engine.enabled = 'on'")

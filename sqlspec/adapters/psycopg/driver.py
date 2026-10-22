@@ -391,6 +391,8 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             restore_autocommit = self.connection.autocommit
             if restore_autocommit:
                 self.connection.autocommit = False
+            if self._should_set_local_columnar():
+                self.connection.execute("SET LOCAL google_columnar_engine.enabled = 'on'")
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
@@ -689,6 +691,16 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             msg = f"Failed to restore autocommit: {e}"
             raise SQLSpecError(msg) from e
 
+    def _should_set_local_columnar(self) -> bool:
+        """Return True when AlloyDB columnar GUC must be set transaction-locally."""
+        if not self.driver_features.get("enable_alloydb_columnar"):
+            return False
+        return bool(
+            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
+            or self.driver_features.get("pgbouncer")
+            or self.driver_features.get("pgbouncer_mode")
+        )
+
 
 class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling PostgreSQL psycopg database exceptions.
@@ -910,6 +922,8 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             restore_autocommit = self.connection.autocommit
             if restore_autocommit:
                 await self.connection.set_autocommit(False)
+            if self._should_set_local_columnar():
+                await self.connection.execute("SET LOCAL google_columnar_engine.enabled = 'on'")
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
@@ -1214,6 +1228,16 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         except psycopg.Error as e:
             msg = f"Failed to restore autocommit: {e}"
             raise SQLSpecError(msg) from e
+
+    def _should_set_local_columnar(self) -> bool:
+        """Return True when AlloyDB columnar GUC must be set transaction-locally."""
+        if not self.driver_features.get("enable_alloydb_columnar"):
+            return False
+        return bool(
+            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
+            or self.driver_features.get("pgbouncer")
+            or self.driver_features.get("pgbouncer_mode")
+        )
 
 
 def _attribute_pipeline_failure(

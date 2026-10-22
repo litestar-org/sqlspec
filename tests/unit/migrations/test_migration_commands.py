@@ -15,6 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+from sqlspec.adapters.psqlpy.config import PsqlpyConfig
+from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.base import BaseMigrationCommands
@@ -514,3 +517,61 @@ def test_commands_contract_base_revision_file_type_default_matches_concrete_comm
     assert base_param.default is None
     assert sync_param.default is None
     assert async_param.default is None
+
+
+async def test_migration_commands_route_over_direct_dsn() -> None:
+    """SyncMigrationCommands and AsyncMigrationCommands derive a session-mode config when direct_dsn is configured."""
+    pooled_sync = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://pooler:6432/db"},
+        driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://direct:5432/db"},
+    )
+    sync_commands = SyncMigrationCommands(pooled_sync)
+    assert sync_commands.config is not pooled_sync
+    assert sync_commands.config.connection_config["conninfo"] == "postgresql://direct:5432/db"
+    assert sync_commands.config.driver_features["pooler_mode"] == "session"
+    assert sync_commands.config.driver_features["direct_dsn"] is None
+
+    mock_sync_driver = MagicMock()
+    with (
+        patch.object(sync_commands.config, "provide_session") as mock_direct_session,
+        patch.object(pooled_sync, "provide_session") as mock_pooled_session,
+        patch("sqlspec.migrations.commands.console"),
+    ):
+        mock_direct_session.return_value.__enter__.return_value = mock_sync_driver
+        sync_commands.tracker = MagicMock()
+        sync_commands.tracker.get_current_version.return_value = "0001"
+        assert sync_commands.current() == "0001"
+        mock_direct_session.assert_called_once()
+        mock_pooled_session.assert_not_called()
+
+    for async_cfg in (
+        AsyncpgConfig(
+            connection_config={"dsn": "postgresql://pooler:6432/db"},
+            driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://direct:5432/db"},
+        ),
+        PsycopgAsyncConfig(
+            connection_config={"conninfo": "postgresql://pooler:6432/db"},
+            driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://direct:5432/db"},
+        ),
+        PsqlpyConfig(
+            connection_config={"dsn": "postgresql://pooler:6432/db"},
+            driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://direct:5432/db"},
+        ),
+    ):
+        async_commands = AsyncMigrationCommands(async_cfg)
+        assert async_commands.config is not async_cfg
+        assert async_commands.config.driver_features["pooler_mode"] == "session"
+        assert async_commands.config.driver_features["direct_dsn"] is None
+        mock_async_driver = AsyncMock()
+        with (
+            patch.object(async_commands.config, "provide_session") as mock_direct_async_session,
+            patch.object(async_cfg, "provide_session") as mock_pooled_async_session,
+            patch("sqlspec.migrations.commands.console"),
+        ):
+            mock_direct_async_session.return_value.__aenter__.return_value = mock_async_driver
+            async_commands.tracker = MagicMock()
+            async_commands.tracker.ensure_tracking_table = AsyncMock()
+            async_commands.tracker.get_current_version = AsyncMock(return_value="0001")
+            assert await async_commands.current() == "0001"
+            mock_direct_async_session.assert_called_once()
+            mock_pooled_async_session.assert_not_called()

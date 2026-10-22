@@ -1,8 +1,9 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
 import asyncio
+from collections.abc import Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -216,10 +217,14 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_instance_uri: NotRequired[str]
     enable_alloydb_iam_auth: NotRequired[bool]
     alloydb_ip_type: NotRequired[str]
+    enable_alloydb_columnar: NotRequired[bool]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
     on_connection_create: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
+    pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
     pgbouncer: NotRequired[bool]
+    pgbouncer_mode: NotRequired[bool]
+    direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     type_codecs: NotRequired["list[dict[str, Any]]"]
 
 
@@ -346,12 +351,30 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self._user_connection_hook: Callable[[AsyncpgConnection], Awaitable[None]] | None = features_dict.get(
             "on_connection_create"
         )
-        if connection_config and connection_config.get("pgbouncer"):
+        raw_conn_cfg = normalize_connection_config(connection_config)
+        self._explicit_statement_cache_size = "statement_cache_size" in raw_conn_cfg
+        raw_server_settings = raw_conn_cfg.get("server_settings")
+        self._explicit_server_settings: dict[str, str] | None = (
+            dict(raw_server_settings) if isinstance(raw_server_settings, Mapping) else None
+        )
+        normalized_conn_cfg = build_connection_config(raw_conn_cfg)
+        if raw_conn_cfg.get("pgbouncer"):
             features_dict["pgbouncer"] = True
+            features_dict["pgbouncer_mode"] = True
+            if features_dict.get("pooler_mode") in {None, "session", "auto"}:
+                features_dict["pooler_mode"] = "transaction"
+        if features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
+            features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
+        ):
+            normalized_conn_cfg.setdefault("statement_cache_size", 0)
+        if bool(features_dict.get("enable_alloydb_columnar", False)) and features_dict.get("pooler_mode") == "session":
+            merged_settings = dict(self._explicit_server_settings) if self._explicit_server_settings is not None else {}
+            merged_settings.setdefault("google_columnar_engine.enabled", "on")
+            normalized_conn_cfg["server_settings"] = merged_settings
         self._custom_type_codecs: list[dict[str, Any]] = list(features_dict.get("type_codecs") or [])
 
         super().__init__(
-            connection_config=build_connection_config(normalize_connection_config(connection_config)),
+            connection_config=normalized_conn_cfg,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
@@ -473,6 +496,40 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """Return polling defaults for PostgreSQL queue fallback."""
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+    def derive_direct_config(self) -> Self:
+        """Derive a session-mode configuration using direct_dsn for DDL, migrations, or LISTEN/NOTIFY."""
+        direct_dsn = self.driver_features.get("direct_dsn")
+        if not direct_dsn:
+            return self
+        conn_cfg: dict[str, Any] = dict(self.connection_config)
+        if not self._explicit_statement_cache_size and conn_cfg.get("statement_cache_size") == 0:
+            conn_cfg.pop("statement_cache_size", None)
+        if self._explicit_server_settings is not None:
+            conn_cfg["server_settings"] = dict(self._explicit_server_settings)
+        else:
+            conn_cfg.pop("server_settings", None)
+        if isinstance(direct_dsn, str):
+            conn_cfg["dsn"] = direct_dsn
+        elif isinstance(direct_dsn, Mapping):
+            conn_cfg.update(build_connection_config(direct_dsn))
+        features: dict[str, Any] = dict(self.driver_features)
+        features["pooler_mode"] = "session"
+        features["pgbouncer"] = False
+        features["pgbouncer_mode"] = False
+        features["direct_dsn"] = None
+        if self._user_connection_hook is not None:
+            features["on_connection_create"] = self._user_connection_hook
+        return type(self)(
+            connection_config=cast("AsyncpgPoolConfig", conn_cfg),
+            connection_instance=None,
+            migration_config=dict(self.migration_config),
+            statement_config=self.statement_config,
+            driver_features=cast("AsyncpgDriverFeatures", features),
+            bind_key=self.bind_key,
+            extension_config=cast("ExtensionConfigs", dict(self.extension_config)),
+            observability_config=self.observability_config,
+        )
 
     def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""

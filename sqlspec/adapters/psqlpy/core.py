@@ -37,6 +37,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
@@ -183,6 +184,25 @@ def apply_driver_features(
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
     features.setdefault("enable_pg_textsearch", True)
+    pgbouncer_enabled = bool(features.get("pgbouncer") or features.get("pgbouncer_mode"))
+    features["pgbouncer"] = pgbouncer_enabled
+    features["pgbouncer_mode"] = pgbouncer_enabled
+    raw_pooler_mode = features.get("pooler_mode")
+    if raw_pooler_mode is None:
+        features["pooler_mode"] = "transaction" if pgbouncer_enabled else "session"
+    else:
+        normalized_mode = str(raw_pooler_mode).lower()
+        if normalized_mode not in {"session", "transaction", "statement", "auto"}:
+            msg = (
+                f"Invalid pooler_mode: {raw_pooler_mode!r}. Expected 'session', 'transaction', 'statement', or 'auto'."
+            )
+            raise ImproperConfigurationError(msg)
+        features["pooler_mode"] = "transaction" if normalized_mode == "auto" and pgbouncer_enabled else normalized_mode
+    if features["pooler_mode"] in {"transaction", "statement"}:
+        features["pgbouncer"] = True
+        features["pgbouncer_mode"] = True
+    features.setdefault("direct_dsn", None)
+    features.setdefault("enable_alloydb_columnar", False)
 
     base_config = build_statement_config_from_profile(
         driver_profile, json_serializer=serializer, json_deserializer=deserializer
