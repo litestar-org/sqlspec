@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none" role="img" aria-label="Vertebra">
+  <title>Vertebra</title>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#202235" stroke="#EDB641" stroke-width="6"/>
+  <path d="M64 56L128 32L192 56L168 88H88L64 56Z" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M56 120L128 96L200 120L172 152H84L56 120Z" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M68 184L128 160L188 184L160 216H96L68 184Z" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M128 24V232" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

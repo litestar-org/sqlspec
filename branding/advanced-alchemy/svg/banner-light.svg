@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" fill="none" role="img" aria-label="Advanced Alchemy">
+  <title>Advanced Alchemy</title>
+  <rect width="1200" height="300" rx="16" fill="#F8FAFC"/>
+  <g transform="translate(56, 22)">
+  <rect x="92" y="24" width="72" height="24" rx="12" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M106 48V86.5C68.5 96.8 42 131.2 42 172C42 213.97 80.5 236 128 236C175.5 236 214 213.97 214 172C214 131.2 187.5 96.8 150 86.5V48" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M46 140C78 158 104 158 128 142C152 126 178 126 210 144" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="90" cy="186" r="14" fill="none" stroke="#EDB641" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="134" cy="206" r="11" fill="none" stroke="#EDB641" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="164" cy="174" r="9" fill="none" stroke="#EDB641" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <line x1="348" y1="48" x2="348" y2="252" stroke="#EDB641" stroke-width="5" stroke-linecap="round"/>
+  <text x="392" y="148" fill="#202235" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="76" font-weight="700" letter-spacing="6">ADVANCED ALCHEMY</text>
+  <text x="396" y="206" fill="#475569" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="26" font-weight="500" letter-spacing="1.5">SQLAlchemy Repository, Service &amp; Migration Toolkit</text>
+</svg>

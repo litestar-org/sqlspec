@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none" role="img" aria-label="Litestar Queues">
+  <title>Litestar Queues</title>
+  <rect x="0" y="0" width="256" height="256" fill="#202235"/>
+  <rect x="32" y="44" width="136" height="36" rx="18" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="60" y="110" width="136" height="36" rx="18" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="32" y="176" width="116" height="36" rx="18" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M176 194H224" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M204 174L224 194L204 214" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

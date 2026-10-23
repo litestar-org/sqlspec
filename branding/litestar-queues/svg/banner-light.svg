@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" fill="none" role="img" aria-label="Litestar Queues">
+  <title>Litestar Queues</title>
+  <rect width="1200" height="300" rx="16" fill="#F8FAFC"/>
+  <g transform="translate(56, 22)">
+  <rect x="32" y="44" width="136" height="36" rx="18" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="60" y="110" width="136" height="36" rx="18" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="32" y="176" width="116" height="36" rx="18" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M176 194H224" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M204 174L224 194L204 214" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <line x1="348" y1="48" x2="348" y2="252" stroke="#EDB641" stroke-width="5" stroke-linecap="round"/>
+  <text x="392" y="148" fill="#202235" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="76" font-weight="700" letter-spacing="6">LITESTAR QUEUES</text>
+  <text x="396" y="206" fill="#475569" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="26" font-weight="500" letter-spacing="1.5">Multi-Backend Async Task &amp; Message Queues</text>
+</svg>

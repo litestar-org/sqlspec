@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none" role="img" aria-label="Litestar SAQ">
+  <title>Litestar SAQ</title>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="6"/>
+  <path d="M204 104A80 80 0 1 0 194 176" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M204 68V106H166" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M138 72L92 132H132L116 184L164 124H124L138 72Z" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

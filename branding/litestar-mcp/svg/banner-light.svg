@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" fill="none" role="img" aria-label="Litestar MCP">
+  <title>Litestar MCP</title>
+  <rect width="1200" height="300" rx="16" fill="#F8FAFC"/>
+  <g transform="translate(56, 22)">
+  <path d="M148 44L52 140C38.75 153.25 38.75 174.75 52 188C65.25 201.25 86.75 201.25 100 188L176 112" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M80 144L156 68C169.25 54.75 190.75 54.75 204 68C217.25 81.25 217.25 102.75 204 116L108 212" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="156" cy="36" r="12" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="100" cy="220" r="12" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <line x1="348" y1="48" x2="348" y2="252" stroke="#EDB641" stroke-width="5" stroke-linecap="round"/>
+  <text x="392" y="148" fill="#202235" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="76" font-weight="700" letter-spacing="6">LITESTAR MCP</text>
+  <text x="396" y="206" fill="#475569" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="26" font-weight="500" letter-spacing="1.5">Model Context Protocol &amp; A2A Integration</text>
+</svg>

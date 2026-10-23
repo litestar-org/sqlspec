@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" fill="none" role="img" aria-label="Litestar SAQ">
+  <title>Litestar SAQ</title>
+  <rect width="1200" height="300" rx="16" fill="#F8FAFC"/>
+  <g transform="translate(56, 22)">
+  <path d="M204 104A80 80 0 1 0 194 176" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M204 68V106H166" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M138 72L92 132H132L116 184L164 124H124L138 72Z" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <line x1="348" y1="48" x2="348" y2="252" stroke="#EDB641" stroke-width="5" stroke-linecap="round"/>
+  <text x="392" y="148" fill="#202235" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="76" font-weight="700" letter-spacing="6">LITESTAR SAQ</text>
+  <text x="396" y="206" fill="#475569" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="26" font-weight="500" letter-spacing="1.5">Simple Async Queues Worker &amp; Cron Plugin</text>
+</svg>

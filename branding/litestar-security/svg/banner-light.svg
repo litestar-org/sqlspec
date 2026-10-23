@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" fill="none" role="img" aria-label="Litestar Security">
+  <title>Litestar Security</title>
+  <rect width="1200" height="300" rx="16" fill="#F8FAFC"/>
+  <g transform="translate(56, 22)">
+  <path d="M128 28L48 60V120C48 174 82 214 128 232C174 214 208 174 208 120V60L128 28Z" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="128" cy="112" r="20" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M128 132V176" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <line x1="348" y1="48" x2="348" y2="252" stroke="#EDB641" stroke-width="5" stroke-linecap="round"/>
+  <text x="392" y="148" fill="#202235" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="76" font-weight="700" letter-spacing="6">LITESTAR SECURITY</text>
+  <text x="396" y="206" fill="#475569" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="26" font-weight="500" letter-spacing="1.5">Authentication, Authorization &amp; Guard Primitives</text>
+</svg>

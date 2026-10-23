@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none" role="img" aria-label="Litestar Security">
+  <title>Litestar Security</title>
+  <path d="M128 28L48 60V120C48 174 82 214 128 232C174 214 208 174 208 120V60L128 28Z" fill="none" stroke="#202235" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="128" cy="112" r="20" fill="none" stroke="#202235" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M128 132V176" fill="none" stroke="#202235" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

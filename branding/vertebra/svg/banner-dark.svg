@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" fill="none" role="img" aria-label="Vertebra">
+  <title>Vertebra</title>
+  <rect width="1200" height="300" rx="16" fill="#202235"/>
+  <g transform="translate(56, 22)">
+  <path d="M64 56L128 32L192 56L168 88H88L64 56Z" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M56 120L128 96L200 120L172 152H84L56 120Z" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M68 184L128 160L188 184L160 216H96L68 184Z" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M128 24V232" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <line x1="348" y1="48" x2="348" y2="252" stroke="#EDB641" stroke-width="5" stroke-linecap="round"/>
+  <text x="392" y="148" fill="#FFFFFF" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="76" font-weight="700" letter-spacing="6">VERTEBRA</text>
+  <text x="396" y="206" fill="#EDB641" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="26" font-weight="500" letter-spacing="1.5">High-Throughput Shared-Memory IPC &amp; Process Backbone</text>
+</svg>

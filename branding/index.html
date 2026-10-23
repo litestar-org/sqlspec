@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Litestar &amp; Cofin Ecosystem Branding Pack</title>
+  <link rel="icon" type="image/svg+xml" href="sqlspec/favicons/favicon.svg">
+  <style>
+    :root {
+      --navy: #202235;
+      --surface: #2a2d40;
+      --gold: #EDB641;
+      --light: #F8FAFC;
+      --text: #F1F5F9;
+      --muted: #94A3B8;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 2.5rem 2rem;
+      background: var(--navy);
+      color: var(--text);
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      line-height: 1.5;
+    }
+    header {
+      max-width: 1400px;
+      margin: 0 auto 2.5rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.5rem;
+    }
+    h1 {
+      margin: 0 0 0.5rem;
+      font-size: 2rem;
+      letter-spacing: 0.04em;
+      color: var(--gold);
+    }
+    header p {
+      margin: 0;
+      color: var(--muted);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(620px, 1fr));
+      gap: 1.75rem;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .card h2 {
+      margin: 0 0 0.25rem;
+      font-size: 1.25rem;
+      color: var(--text);
+    }
+    .card .slug {
+      font-family: monospace;
+      color: var(--gold);
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+      display: block;
+    }
+    .swatches {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .swatch {
+      border-radius: 8px;
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      border: 1px solid var(--border);
+    }
+    .swatch.dark { background: var(--navy); }
+    .swatch.light { background: var(--light); color: var(--navy); }
+    .swatch img { width: 64px; height: 64px; object-fit: contain; }
+    .swatch span { font-size: 0.72rem; opacity: 0.85; text-align: center; }
+    .banners {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+    .banners img {
+      width: 100%;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Litestar &amp; Cofin Ecosystem Branding Pack</h1>
+    <p>14 projects &bull; All-Gold (<code>#EDB641</code>) &amp; Litestar Navy (<code>#202235</code>) &bull; SVGs, Multi-Res PNGs, Favicons, &amp; Social Banners</p>
+  </header>
+  <main class="grid">
+    <script>
+      const projects = [
+        ["sqlspec", "SQLSpec"],
+        ["advanced-alchemy", "Advanced Alchemy"],
+        ["pytest-databases", "Pytest Databases"],
+        ["litestar-vite", "Litestar Vite"],
+        ["litestar-granian", "Litestar Granian"],
+        ["litestar-mcp", "Litestar MCP"],
+        ["litestar-queues", "Litestar Queues"],
+        ["litestar-saq", "Litestar SAQ"],
+        ["litestar-security", "Litestar Security"],
+        ["litestar-autowire", "Litestar Autowire"],
+        ["litestar-email", "Litestar Email"],
+        ["litestar-htmx", "Litestar HTMX"],
+        ["vertebra", "Vertebra"],
+        ["flow", "Flow"]
+      ];
+      const grid = document.querySelector(".grid");
+      for (const [slug, title] of projects) {
+        const card = document.createElement("section");
+        card.className = "card";
+        card.innerHTML = `
+          <h2>${title}</h2>
+          <span class="slug">${slug}/</span>
+          <div class="swatches">
+            <div class="swatch dark"><img src="${slug}/svg/icon-gold.svg" alt="${title} Gold"><span>Gold SVG (Dark)</span></div>
+            <div class="swatch light"><img src="${slug}/svg/icon-gold.svg" alt="${title} Gold Light"><span>Gold SVG (Light)</span></div>
+            <div class="swatch light"><img src="${slug}/svg/icon-navy.svg" alt="${title} Navy"><span>Navy SVG</span></div>
+            <div class="swatch dark"><img src="${slug}/svg/badge-dark.svg" alt="${title} App Badge"><span>App Badge</span></div>
+            <div class="swatch dark"><img src="${slug}/favicons/apple-touch-icon.png" alt="${title} Touch Icon"><span>Touch / Fav</span></div>
+          </div>
+          <div class="banners">
+            <img src="${slug}/banners/banner-dark.png" alt="${title} Dark Banner">
+            <img src="${slug}/banners/banner-light.png" alt="${title} Light Banner">
+          </div>
+        `;
+        grid.appendChild(card);
+      }
+    </script>
+  </main>
+</body>
+</html>
