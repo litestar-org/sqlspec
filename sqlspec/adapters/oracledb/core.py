@@ -1,7 +1,9 @@
 """OracleDB adapter compiled helpers."""
 
 import contextlib
+import hashlib
 import io
+import os
 import re
 import shutil
 import tempfile
@@ -129,6 +131,8 @@ __all__ = (
     "normalize_execute_many_parameters_sync",
     "oracle_df_batches_to_arrow_reader",
     "oracle_df_to_arrow_table",
+    "parse_sqlnet_ora",
+    "parse_tnsnames_ora",
     "resolve_row_metadata",
     "resolve_rowcount",
     "sanitize_oracle_text_query",
@@ -318,7 +322,7 @@ SPARSE_VECTOR_MIN_DATABASE_MAJOR: int = 23
 
 ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = True
 
-VALID_ORACLE_DRIVER_FEATURE_KEYS: "Final[frozenset[str]]" = frozenset({
+VALID_ORACLE_DRIVER_FEATURE_KEYS: Final[frozenset[str]] = frozenset({
     "_statement_cache_holder",
     "arraysize",
     "arrow_requested_schema",
@@ -1741,44 +1745,165 @@ default_statement_config = build_statement_config()
 
 
 def extract_oracle_wallet_zip(
-    wallet_zip: "Path | str | bytes", target_dir: "Path | None" = None, *, prefix: str = "sqlspec_oracle_wallet_"
+    wallet_zip: "Path | str | bytes",
+    target_dir: "Path | None" = None,
+    *,
+    prefix: str = "sqlspec_oracle_wallet_",
+    wallet_password: "str | bytes | None" = None,
 ) -> Path:
-    """Extract an Oracle mTLS wallet archive safely into a 0o700 directory.
+    """Extract or prepare an Oracle mTLS wallet into a 0o700 directory.
 
-    Validates all archive entries against path traversal (ZipSlip), sets
-    ``0o600`` permissions on extracted files, and verifies expected Oracle
-    wallet artifacts (``ewallet.pem`` or ``tnsnames.ora``) exist.
+    Supports ``.zip`` wallet archives (as file paths or raw ``bytes``) and
+    pre-extracted wallet directories. Validates archive entries against path
+    traversal (ZipSlip), enforces ``0o600`` permissions on wallet files,
+    converts PKCS#12 ``ewallet.p12`` bundles to ``ewallet.pem`` when
+    ``ewallet.pem`` is absent, and reuses a deterministic SHA-256
+    content-hashed temporary directory when ``target_dir`` is omitted.
 
     Args:
-        wallet_zip: Path to a wallet ``.zip`` archive or raw archive bytes.
-        target_dir: Optional directory to extract into. When ``None``, creates
-            a temporary directory with ``prefix``.
+        wallet_zip: Path to a wallet ``.zip`` archive, raw archive bytes, or
+            path to an existing extracted wallet directory.
+        target_dir: Optional directory to extract into. When ``None``,
+            existing directories are validated in-place and ``.zip`` archives
+            use a deterministic content-hashed directory under the system
+            temp root.
         prefix: Temporary directory prefix when ``target_dir`` is omitted.
+        wallet_password: Optional passphrase used to decrypt ``ewallet.p12``
+            when ``ewallet.pem`` is not present.
 
     Returns:
-        Path to the extracted wallet directory.
+        Path to the prepared wallet directory.
 
     Raises:
-        ImproperConfigurationError: If the archive is missing, corrupt, contains
-            unsafe paths, or lacks required wallet files.
+        ImproperConfigurationError: If the wallet source is missing, corrupt,
+            contains unsafe paths, cannot decrypt ``ewallet.p12``, or lacks
+            required wallet artifacts.
     """
-    created_temp = target_dir is None
+    if isinstance(wallet_zip, (str, Path)):
+        candidate_dir = Path(wallet_zip)
+        if candidate_dir.is_dir():
+            return _prepare_wallet_directory_source(
+                candidate_dir.resolve(), target_dir=target_dir, prefix=prefix, wallet_password=wallet_password
+            )
+
+    if isinstance(wallet_zip, bytes):
+        archive_bytes = wallet_zip
+    else:
+        zip_path = Path(wallet_zip)
+        if not zip_path.is_file():
+            msg = f"Oracle wallet archive does not exist: {zip_path}"
+            raise ImproperConfigurationError(msg)
+        archive_bytes = zip_path.read_bytes()
+
     if target_dir is None:
-        extract_dir = Path(tempfile.mkdtemp(prefix=prefix))
+        digest = _compute_wallet_digest(archive_bytes, wallet_password)
+        extract_dir = Path(tempfile.gettempdir()) / f"{prefix}{digest[:16]}"
+        if _is_prepared_wallet_dir(extract_dir):
+            extract_dir.chmod(0o700)
+            return extract_dir
+        cleanup_on_error = not extract_dir.exists()
+        extract_dir.mkdir(parents=True, exist_ok=True)
     else:
         extract_dir = Path(target_dir)
+        cleanup_on_error = False
         extract_dir.mkdir(parents=True, exist_ok=True)
     extract_dir.chmod(0o700)
 
     resolved_root = extract_dir.resolve()
     try:
-        _extract_wallet_archive_into(wallet_zip, extract_dir, resolved_root)
+        _extract_wallet_bytes_into(archive_bytes, extract_dir, resolved_root, wallet_password=wallet_password)
     except BaseException:
-        if created_temp:
+        if cleanup_on_error:
             shutil.rmtree(extract_dir, ignore_errors=True)
         raise
 
     return extract_dir
+
+
+def parse_tnsnames_ora(source: "str | Path") -> "dict[str, str]":
+    """Parse an Oracle ``tnsnames.ora`` file, directory, or text payload.
+
+    Args:
+        source: Path to ``tnsnames.ora``, path to a directory containing
+            ``tnsnames.ora``, or raw ``tnsnames.ora`` file contents.
+
+    Returns:
+        Mapping of lowercase TNS service alias to normalized ``(DESCRIPTION=...)``
+        connect descriptor string.
+    """
+    text = _read_ora_config_text(source, "tnsnames.ora")
+    if not text:
+        return {}
+    cleaned_lines = [stripped.rstrip() for raw in text.splitlines() if (stripped := _strip_ora_comment(raw)).strip()]
+    content = "\n".join(cleaned_lines)
+    entries: dict[str, str] = {}
+    idx = 0
+    length = len(content)
+    while idx < length:
+        eq_pos = content.find("=", idx)
+        if eq_pos == -1:
+            break
+        lhs = content[idx:eq_pos].strip()
+        rhs_start = eq_pos + 1
+        while rhs_start < length and content[rhs_start].isspace():
+            rhs_start += 1
+        if rhs_start >= length:
+            break
+        if content[rhs_start] != "(":
+            line_end = content.find("\n", rhs_start)
+            idx = length if line_end == -1 else line_end + 1
+            continue
+        pos = _scan_balanced_ora_parens(content, rhs_start)
+        descriptor = " ".join(content[rhs_start:pos].split())
+        for raw_alias in lhs.replace("\n", " ").split(","):
+            alias = raw_alias.strip().lower()
+            if alias:
+                entries[alias] = descriptor
+        idx = pos
+    return entries
+
+
+def parse_sqlnet_ora(source: "str | Path") -> "dict[str, str]":
+    """Parse an Oracle ``sqlnet.ora`` file, directory, or text payload.
+
+    Args:
+        source: Path to ``sqlnet.ora``, path to a directory containing
+            ``sqlnet.ora``, or raw ``sqlnet.ora`` file contents.
+
+    Returns:
+        Mapping of uppercase parameter name to string value.
+    """
+    text = _read_ora_config_text(source, "sqlnet.ora")
+    if not text:
+        return {}
+    cleaned_lines = [stripped.rstrip() for raw in text.splitlines() if (stripped := _strip_ora_comment(raw)).strip()]
+    content = "\n".join(cleaned_lines)
+    settings: dict[str, str] = {}
+    idx = 0
+    length = len(content)
+    while idx < length:
+        eq_pos = content.find("=", idx)
+        if eq_pos == -1:
+            break
+        raw_lhs = content[idx:eq_pos].strip()
+        norm_key = raw_lhs.splitlines()[-1].strip().upper() if raw_lhs else ""
+        rhs_start = eq_pos + 1
+        while rhs_start < length and content[rhs_start].isspace():
+            rhs_start += 1
+        if rhs_start >= length:
+            break
+        if content[rhs_start] == "(":
+            pos = _scan_balanced_ora_parens(content, rhs_start)
+            norm_val = " ".join(content[rhs_start:pos].split())
+            idx = pos
+        else:
+            line_end = content.find("\n", rhs_start)
+            pos = length if line_end == -1 else line_end
+            norm_val = content[rhs_start:pos].strip().strip('"').strip("'")
+            idx = pos + 1
+        if norm_key:
+            settings[norm_key] = norm_val
+    return settings
 
 
 def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") -> str:
@@ -1838,114 +1963,6 @@ def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") 
     return f"(DESCRIPTION={''.join(desc_parts)})"
 
 
-def _build_session_checkout_plan(
-    config: "OracleSessionContextConfig | Mapping[str, Any]",
-) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
-    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
-    piggyback_attrs: dict[str, str | None] = {}
-
-    client_id = _resolve_callable_or_str(resolved.client_identifier)
-    if client_id is not None:
-        piggyback_attrs["client_identifier"] = client_id
-    mod = _resolve_callable_or_str(resolved.module)
-    if mod is not None:
-        piggyback_attrs["module"] = mod
-    act = _resolve_callable_or_str(resolved.action)
-    if act is not None:
-        piggyback_attrs["action"] = act
-    ecid_val = _resolve_callable_or_str(resolved.ecid)
-    if ecid_val is not None:
-        piggyback_attrs["econtext_id"] = ecid_val
-
-    alter_clauses: list[str] = []
-    tz = _resolve_callable_or_str(resolved.time_zone)
-    if tz is not None:
-        _validate_oracle_time_zone(tz)
-        alter_clauses.append(f"TIME_ZONE = ''{tz}''")
-
-    ed = _resolve_callable_or_str(resolved.edition)
-    if ed is not None:
-        _validate_oracle_identifier(ed, "edition")
-        alter_clauses.append(f"EDITION = {ed}")
-
-    nls_raw = resolved.nls_parameters() if callable(resolved.nls_parameters) else resolved.nls_parameters
-    if nls_raw:
-        _validate_oracle_nls_parameters(nls_raw)
-        for key in sorted(nls_raw.keys()):
-            val = nls_raw[key]
-            alter_clauses.append(f"{key.upper()} = ''{val}''")
-
-    plsql_statements: list[str] = []
-    if alter_clauses:
-        joined_alter = " ".join(alter_clauses)
-        plsql_statements.append(f"EXECUTE IMMEDIATE 'ALTER SESSION SET {joined_alter}';")
-
-    bind_params: dict[str, Any] = {}
-    uses_plsql_identifier = bool(
-        resolved.clear_identifier
-        or resolved.ebs_apps_initialize is not None
-        or resolved.mo_global_policy is not None
-        or resolved.apex_session is not None
-        or (
-            client_id is not None
-            and resolved.module is None
-            and resolved.action is None
-            and resolved.ecid is None
-            and not alter_clauses
-            and not resolved.contexts
-        )
-    )
-    if client_id is not None and uses_plsql_identifier:
-        plsql_statements.append("DBMS_SESSION.SET_IDENTIFIER(:p_client_id);")
-        bind_params["p_client_id"] = client_id
-
-    ctx_raw = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
-    if ctx_raw:
-        _validate_oracle_contexts(ctx_raw)
-        idx = 0
-        for namespace in sorted(ctx_raw.keys()):
-            attrs = ctx_raw[namespace]
-            for attr_key in sorted(attrs.keys()):
-                raw_val = attrs[attr_key]
-                attr_val = _resolve_callable_or_str(raw_val)
-                ns_param = f"ctx_ns_{idx}"
-                key_param = f"ctx_attr_{idx}"
-                val_param = f"ctx_val_{idx}"
-                bind_params[ns_param] = namespace
-                bind_params[key_param] = attr_key
-                bind_params[val_param] = attr_val
-                plsql_statements.append(f"DBMS_SESSION.SET_CONTEXT(:{ns_param}, :{key_param}, :{val_param});")
-                idx += 1
-
-    if resolved.ebs_apps_initialize is not None:
-        u_id, r_id, a_id = resolved.ebs_apps_initialize
-        plsql_statements.append(
-            "FND_GLOBAL.APPS_INITIALIZE(user_id => :p_ebs_uid, resp_id => :p_ebs_rid, resp_appl_id => :p_ebs_aid);"
-        )
-        bind_params["p_ebs_uid"] = u_id
-        bind_params["p_ebs_rid"] = r_id
-        bind_params["p_ebs_aid"] = a_id
-
-    if resolved.mo_global_policy is not None:
-        mode, org_id = resolved.mo_global_policy
-        plsql_statements.append("MO_GLOBAL.SET_POLICY_CONTEXT(:p_mo_mode, :p_mo_org);")
-        bind_params["p_mo_mode"] = mode
-        bind_params["p_mo_org"] = org_id
-
-    if resolved.apex_session is not None:
-        app_id, page_id, sess_id = resolved.apex_session
-        plsql_statements.append(
-            "APEX_SESSION.ATTACH(p_app_id => :p_apex_app, p_page_id => :p_apex_page, p_session_id => :p_apex_sess);"
-        )
-        bind_params["p_apex_app"] = app_id
-        bind_params["p_apex_page"] = page_id
-        bind_params["p_apex_sess"] = sess_id
-
-    if not plsql_statements:
-        return None, bind_params, piggyback_attrs
-    return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
-
-
 def build_session_checkout_plsql(
     config: "OracleSessionContextConfig | Mapping[str, Any]",
 ) -> "tuple[str | None, dict[str, Any]]":
@@ -1959,51 +1976,6 @@ def build_session_context_plsql(
 ) -> "tuple[str | None, dict[str, Any]]":
     """Return checkout PL/SQL block and bind parameters for :class:`OracleSessionContextConfig`."""
     return build_session_checkout_plsql(config)
-
-
-def _build_session_release_plan(
-    config: "OracleSessionContextConfig | Mapping[str, Any]",
-) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
-    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
-    if not resolved.reset_on_release and not (
-        resolved.apex_detach or resolved.clear_identifier or resolved.clear_context_namespaces or resolved.reset_package
-    ):
-        return None, {}, {}
-
-    piggyback_attrs: dict[str, str | None] = {}
-    if resolved.client_identifier is not None or resolved.clear_identifier:
-        piggyback_attrs["client_identifier"] = ""
-    if resolved.module is not None:
-        piggyback_attrs["module"] = ""
-    if resolved.action is not None:
-        piggyback_attrs["action"] = ""
-    if resolved.ecid is not None:
-        piggyback_attrs["econtext_id"] = ""
-
-    plsql_statements: list[str] = []
-    bind_params: dict[str, Any] = {}
-    if resolved.apex_detach:
-        plsql_statements.append("APEX_SESSION.DETACH;")
-    if resolved.clear_identifier:
-        plsql_statements.append("DBMS_SESSION.CLEAR_IDENTIFIER;")
-    for idx, namespace in enumerate(resolved.clear_context_namespaces):
-        plsql_statements.append(f"DBMS_SESSION.CLEAR_ALL_CONTEXT(:p_clr_ns_{idx});")
-        bind_params[f"p_clr_ns_{idx}"] = namespace
-    if resolved.reset_on_release:
-        ctx_raw = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
-        if ctx_raw:
-            _validate_oracle_contexts(ctx_raw)
-            plsql_statements.extend(
-                f"DBMS_SESSION.CLEAR_CONTEXT('{namespace}');"
-                for namespace in sorted(ctx_raw.keys())
-                if namespace not in resolved.clear_context_namespaces
-            )
-    if resolved.reset_package:
-        plsql_statements.append("DBMS_SESSION.RESET_PACKAGE;")
-
-    if not plsql_statements:
-        return None, bind_params, piggyback_attrs
-    return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
 
 
 def build_session_release_plsql(
@@ -2183,9 +2155,10 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     """
     config = {k: v for k, v in connection_config.items() if v is not None}
     if "wallet_zip" in config:
-        wallet_dir = extract_oracle_wallet_zip(config.pop("wallet_zip"))
+        wallet_dir = extract_oracle_wallet_zip(config.pop("wallet_zip"), wallet_password=config.get("wallet_password"))
         config.setdefault("config_dir", str(wallet_dir))
         config.setdefault("wallet_location", str(wallet_dir))
+    tns_alias = config.pop("tns_alias", None)
     if "topology" in config:
         topology_val = config.pop("topology")
         resolved_topology = OracleTopologyConfig(**topology_val) if isinstance(topology_val, Mapping) else topology_val
@@ -2205,21 +2178,313 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     user_alias = config.pop("username", None)
     if "user" not in config and user_alias is not None:
         config["user"] = user_alias
+    _apply_ora_directory_resolution(config, tns_alias=tns_alias)
     return config
 
 
-def _extract_wallet_archive_into(wallet_zip: "Path | str | bytes", extract_dir: Path, resolved_root: Path) -> None:
-    if isinstance(wallet_zip, bytes):
-        zip_source: Any = io.BytesIO(wallet_zip)
-    else:
-        zip_path = Path(wallet_zip)
-        if not zip_path.is_file():
-            msg = f"Oracle wallet archive does not exist: {zip_path}"
-            raise ImproperConfigurationError(msg)
-        zip_source = zip_path
+def _build_session_checkout_plan(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
+    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
+    piggyback_attrs: dict[str, str | None] = {}
 
+    client_id = _resolve_callable_or_str(resolved.client_identifier)
+    if client_id is not None:
+        piggyback_attrs["client_identifier"] = client_id
+    mod = _resolve_callable_or_str(resolved.module)
+    if mod is not None:
+        piggyback_attrs["module"] = mod
+    act = _resolve_callable_or_str(resolved.action)
+    if act is not None:
+        piggyback_attrs["action"] = act
+    ecid_val = _resolve_callable_or_str(resolved.ecid)
+    if ecid_val is not None:
+        piggyback_attrs["econtext_id"] = ecid_val
+
+    alter_clauses: list[str] = []
+    tz = _resolve_callable_or_str(resolved.time_zone)
+    if tz is not None:
+        _validate_oracle_time_zone(tz)
+        alter_clauses.append(f"TIME_ZONE = ''{tz}''")
+
+    ed = _resolve_callable_or_str(resolved.edition)
+    if ed is not None:
+        _validate_oracle_identifier(ed, "edition")
+        alter_clauses.append(f"EDITION = {ed}")
+
+    nls_raw = resolved.nls_parameters() if callable(resolved.nls_parameters) else resolved.nls_parameters
+    if nls_raw:
+        _validate_oracle_nls_parameters(nls_raw)
+        for key in sorted(nls_raw.keys()):
+            val = nls_raw[key]
+            alter_clauses.append(f"{key.upper()} = ''{val}''")
+
+    plsql_statements: list[str] = []
+    if alter_clauses:
+        joined_alter = " ".join(alter_clauses)
+        plsql_statements.append(f"EXECUTE IMMEDIATE 'ALTER SESSION SET {joined_alter}';")
+
+    bind_params: dict[str, Any] = {}
+    uses_plsql_identifier = bool(
+        resolved.clear_identifier
+        or resolved.ebs_apps_initialize is not None
+        or resolved.mo_global_policy is not None
+        or resolved.apex_session is not None
+        or (
+            client_id is not None
+            and resolved.module is None
+            and resolved.action is None
+            and resolved.ecid is None
+            and not alter_clauses
+            and not resolved.contexts
+        )
+    )
+    if client_id is not None and uses_plsql_identifier:
+        plsql_statements.append("DBMS_SESSION.SET_IDENTIFIER(:p_client_id);")
+        bind_params["p_client_id"] = client_id
+
+    ctx_raw = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
+    if ctx_raw:
+        _validate_oracle_contexts(ctx_raw)
+        idx = 0
+        for namespace in sorted(ctx_raw.keys()):
+            attrs = ctx_raw[namespace]
+            for attr_key in sorted(attrs.keys()):
+                raw_val = attrs[attr_key]
+                attr_val = _resolve_callable_or_str(raw_val)
+                ns_param = f"ctx_ns_{idx}"
+                key_param = f"ctx_attr_{idx}"
+                val_param = f"ctx_val_{idx}"
+                bind_params[ns_param] = namespace
+                bind_params[key_param] = attr_key
+                bind_params[val_param] = attr_val
+                plsql_statements.append(f"DBMS_SESSION.SET_CONTEXT(:{ns_param}, :{key_param}, :{val_param});")
+                idx += 1
+
+    if resolved.ebs_apps_initialize is not None:
+        u_id, r_id, a_id = resolved.ebs_apps_initialize
+        plsql_statements.append(
+            "FND_GLOBAL.APPS_INITIALIZE(user_id => :p_ebs_uid, resp_id => :p_ebs_rid, resp_appl_id => :p_ebs_aid);"
+        )
+        bind_params["p_ebs_uid"] = u_id
+        bind_params["p_ebs_rid"] = r_id
+        bind_params["p_ebs_aid"] = a_id
+
+    if resolved.mo_global_policy is not None:
+        mode, org_id = resolved.mo_global_policy
+        plsql_statements.append("MO_GLOBAL.SET_POLICY_CONTEXT(:p_mo_mode, :p_mo_org);")
+        bind_params["p_mo_mode"] = mode
+        bind_params["p_mo_org"] = org_id
+
+    if resolved.apex_session is not None:
+        app_id, page_id, sess_id = resolved.apex_session
+        plsql_statements.append(
+            "APEX_SESSION.ATTACH(p_app_id => :p_apex_app, p_page_id => :p_apex_page, p_session_id => :p_apex_sess);"
+        )
+        bind_params["p_apex_app"] = app_id
+        bind_params["p_apex_page"] = page_id
+        bind_params["p_apex_sess"] = sess_id
+
+    if not plsql_statements:
+        return None, bind_params, piggyback_attrs
+    return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
+
+
+def _build_session_release_plan(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
+    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
+    if not resolved.reset_on_release and not (
+        resolved.apex_detach or resolved.clear_identifier or resolved.clear_context_namespaces or resolved.reset_package
+    ):
+        return None, {}, {}
+
+    piggyback_attrs: dict[str, str | None] = {}
+    if resolved.client_identifier is not None or resolved.clear_identifier:
+        piggyback_attrs["client_identifier"] = ""
+    if resolved.module is not None:
+        piggyback_attrs["module"] = ""
+    if resolved.action is not None:
+        piggyback_attrs["action"] = ""
+    if resolved.ecid is not None:
+        piggyback_attrs["econtext_id"] = ""
+
+    plsql_statements: list[str] = []
+    bind_params: dict[str, Any] = {}
+    if resolved.apex_detach:
+        plsql_statements.append("APEX_SESSION.DETACH;")
+    if resolved.clear_identifier:
+        plsql_statements.append("DBMS_SESSION.CLEAR_IDENTIFIER;")
+    for idx, namespace in enumerate(resolved.clear_context_namespaces):
+        plsql_statements.append(f"DBMS_SESSION.CLEAR_ALL_CONTEXT(:p_clr_ns_{idx});")
+        bind_params[f"p_clr_ns_{idx}"] = namespace
+    if resolved.reset_on_release:
+        ctx_raw = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
+        if ctx_raw:
+            _validate_oracle_contexts(ctx_raw)
+            plsql_statements.extend(
+                f"DBMS_SESSION.CLEAR_CONTEXT('{namespace}');"
+                for namespace in sorted(ctx_raw.keys())
+                if namespace not in resolved.clear_context_namespaces
+            )
+    if resolved.reset_package:
+        plsql_statements.append("DBMS_SESSION.RESET_PACKAGE;")
+
+    if not plsql_statements:
+        return None, bind_params, piggyback_attrs
+    return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
+
+
+def _compute_wallet_digest(payload: bytes, wallet_password: "str | bytes | None") -> str:
+    hasher = hashlib.sha256(payload)
+    if wallet_password is not None:
+        pw_bytes = wallet_password.encode("utf-8") if isinstance(wallet_password, str) else bytes(wallet_password)
+        hasher.update(b"\x00")
+        hasher.update(pw_bytes)
+    return hasher.hexdigest()
+
+
+def _is_prepared_wallet_dir(wallet_dir: Path) -> bool:
+    if not wallet_dir.is_dir():
+        return False
+    if (wallet_dir / "ewallet.pem").is_file():
+        return True
+    if (wallet_dir / "ewallet.p12").is_file():
+        return False
+    return (wallet_dir / "tnsnames.ora").is_file()
+
+
+def _validate_wallet_directory_contents(wallet_dir: Path) -> None:
+    if (
+        not (wallet_dir / "ewallet.pem").is_file()
+        and not (wallet_dir / "ewallet.p12").is_file()
+        and not (wallet_dir / "tnsnames.ora").is_file()
+    ):
+        msg = "Oracle wallet directory must contain 'ewallet.pem', 'ewallet.p12', or 'tnsnames.ora'"
+        raise ImproperConfigurationError(msg)
+
+
+def _write_private_wallet_file(target_path: Path, data: bytes) -> None:
+    fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        with zipfile.ZipFile(zip_source, "r") as archive:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    target_path.chmod(0o600)
+
+
+def _convert_p12_to_pem_bytes(p12_bytes: bytes, wallet_password: "str | bytes | None") -> bytes:
+    serialization_mod: Any = import_optional("cryptography.hazmat.primitives.serialization")
+    pkcs12_mod: Any = import_optional("cryptography.hazmat.primitives.serialization.pkcs12")
+    if serialization_mod is None or pkcs12_mod is None:
+        msg = "Converting Oracle 'ewallet.p12' requires the 'cryptography' package to be installed"
+        raise ImproperConfigurationError(msg)
+
+    parsed_bundle: Any = None
+    if wallet_password is None:
+        try:
+            parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, None)
+        except (ValueError, TypeError):
+            try:
+                parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, b"")
+            except (ValueError, TypeError) as exc:
+                msg = "Oracle wallet contains encrypted 'ewallet.p12'; provide a valid 'wallet_password'"
+                raise ImproperConfigurationError(msg) from exc
+    else:
+        pw_bytes = wallet_password.encode("utf-8") if isinstance(wallet_password, str) else bytes(wallet_password)
+        try:
+            parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, pw_bytes)
+        except (ValueError, TypeError) as exc:
+            if pw_bytes == b"":
+                try:
+                    parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, None)
+                except (ValueError, TypeError) as inner_exc:
+                    msg = "Failed to decrypt Oracle 'ewallet.p12' with the provided 'wallet_password'"
+                    raise ImproperConfigurationError(msg) from inner_exc
+            else:
+                msg = "Failed to decrypt Oracle 'ewallet.p12' with the provided 'wallet_password'"
+                raise ImproperConfigurationError(msg) from exc
+
+    private_key, certificate, additional_certs = parsed_bundle
+    if private_key is None and certificate is None:
+        msg = "Oracle 'ewallet.p12' did not contain a private key or certificate"
+        raise ImproperConfigurationError(msg)
+
+    pem_chunks: list[bytes] = []
+    if private_key is not None:
+        pem_chunks.append(
+            private_key.private_bytes(
+                encoding=serialization_mod.Encoding.PEM,
+                format=serialization_mod.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization_mod.NoEncryption(),
+            )
+        )
+    if certificate is not None:
+        pem_chunks.append(certificate.public_bytes(serialization_mod.Encoding.PEM))
+    if additional_certs:
+        pem_chunks.extend(ca_cert.public_bytes(serialization_mod.Encoding.PEM) for ca_cert in additional_certs)
+    return b"".join(pem_chunks)
+
+
+def _ensure_wallet_pem(wallet_dir: Path, *, wallet_password: "str | bytes | None") -> None:
+    pem_path = wallet_dir / "ewallet.pem"
+    if pem_path.is_file():
+        return
+    p12_path = wallet_dir / "ewallet.p12"
+    if not p12_path.is_file():
+        return
+    pem_bytes = _convert_p12_to_pem_bytes(p12_path.read_bytes(), wallet_password)
+    _write_private_wallet_file(pem_path, pem_bytes)
+
+
+def _copy_wallet_directory_into(src_dir: Path, dst_root: Path) -> None:
+    for item in src_dir.iterdir():
+        if item.is_symlink():
+            msg = f"Unsafe symlink in Oracle wallet directory: {item.name!r}"
+            raise ImproperConfigurationError(msg)
+        if item.is_file():
+            dest_file = (dst_root / item.name).resolve()
+            if dst_root not in dest_file.parents:
+                msg = f"Unsafe path in Oracle wallet directory: {item.name!r}"
+                raise ImproperConfigurationError(msg)
+            _write_private_wallet_file(dest_file, item.read_bytes())
+
+
+def _prepare_wallet_directory_source(
+    src_dir: Path, *, target_dir: "Path | None", prefix: str, wallet_password: "str | bytes | None"
+) -> Path:
+    _validate_wallet_directory_contents(src_dir)
+    if target_dir is not None:
+        extract_dir = Path(target_dir)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        extract_dir.chmod(0o700)
+        _copy_wallet_directory_into(src_dir, extract_dir.resolve())
+        _ensure_wallet_pem(extract_dir, wallet_password=wallet_password)
+        return extract_dir
+
+    if (src_dir / "ewallet.pem").is_file() or not (src_dir / "ewallet.p12").is_file():
+        return src_dir
+
+    p12_bytes = (src_dir / "ewallet.p12").read_bytes()
+    pem_bytes = _convert_p12_to_pem_bytes(p12_bytes, wallet_password)
+    try:
+        _write_private_wallet_file(src_dir / "ewallet.pem", pem_bytes)
+    except OSError:
+        digest = _compute_wallet_digest(p12_bytes + str(src_dir).encode("utf-8"), wallet_password)
+        fallback_dir = Path(tempfile.gettempdir()) / f"{prefix}{digest[:16]}"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        fallback_dir.chmod(0o700)
+        _copy_wallet_directory_into(src_dir, fallback_dir.resolve())
+        _write_private_wallet_file(fallback_dir / "ewallet.pem", pem_bytes)
+        return fallback_dir
+    return src_dir
+
+
+def _extract_wallet_bytes_into(
+    archive_bytes: bytes, extract_dir: Path, resolved_root: Path, *, wallet_password: "str | bytes | None"
+) -> None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes), "r") as archive:
             for info in archive.infolist():
                 raw_name = info.filename
                 member_path = Path(raw_name)
@@ -2244,16 +2509,96 @@ def _extract_wallet_archive_into(wallet_zip: "Path | str | bytes", extract_dir: 
                     continue
                 dest_path.parent.mkdir(parents=True, exist_ok=True)
                 dest_path.parent.chmod(0o700)
-                with archive.open(info, "r") as src_file, dest_path.open("wb") as dst_file:
-                    shutil.copyfileobj(src_file, dst_file)
-                dest_path.chmod(0o600)
+                with archive.open(info, "r") as src_file:
+                    _write_private_wallet_file(dest_path, src_file.read())
     except zipfile.BadZipFile as exc:
         msg = f"Invalid Oracle wallet zip archive: {exc}"
         raise ImproperConfigurationError(msg) from exc
 
-    if not (extract_dir / "ewallet.pem").exists() and not (extract_dir / "tnsnames.ora").exists():
-        msg = "Oracle wallet archive must contain 'ewallet.pem' or 'tnsnames.ora'"
+    _ensure_wallet_pem(extract_dir, wallet_password=wallet_password)
+    if not (extract_dir / "ewallet.pem").is_file() and not (extract_dir / "tnsnames.ora").is_file():
+        msg = "Oracle wallet archive must contain 'ewallet.pem', 'ewallet.p12', or 'tnsnames.ora'"
         raise ImproperConfigurationError(msg)
+
+
+def _read_ora_config_text(source: "str | Path", default_filename: str) -> str:
+    if isinstance(source, Path):
+        candidate = source / default_filename if source.is_dir() else source
+        return candidate.read_text(encoding="utf-8") if candidate.is_file() else ""
+    if "\n" not in source and "\r" not in source and "=" not in source:
+        path_obj = Path(source)
+        candidate = path_obj / default_filename if path_obj.is_dir() else path_obj
+        return candidate.read_text(encoding="utf-8") if candidate.is_file() else ""
+    return source
+
+
+def _strip_ora_comment(line: str) -> str:
+    in_single = False
+    in_double = False
+    for idx, ch in enumerate(line):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double:
+            return line[:idx]
+    return line
+
+
+def _scan_balanced_ora_parens(content: str, start: int) -> int:
+    depth = 0
+    pos = start
+    length = len(content)
+    in_single = False
+    in_double = False
+    while pos < length:
+        ch = content[pos]
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and not in_double:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return pos + 1
+        pos += 1
+    return pos
+
+
+def _apply_ora_directory_resolution(config: "dict[str, Any]", *, tns_alias: Any) -> None:
+    ora_dir_val = config.get("config_dir") or config.get("wallet_location")
+    ora_dir = Path(str(ora_dir_val)) if ora_dir_val is not None else None
+
+    if tns_alias is not None:
+        if not isinstance(tns_alias, str) or not tns_alias.strip():
+            msg = f"Invalid Oracle tns_alias: {tns_alias!r}"
+            raise ImproperConfigurationError(msg)
+        if ora_dir is None or not (ora_dir / "tnsnames.ora").is_file():
+            msg = f"Cannot resolve Oracle tns_alias {tns_alias!r}: tnsnames.ora not found in config_dir or wallet_location"
+            raise ImproperConfigurationError(msg)
+        resolved_dsn = parse_tnsnames_ora(ora_dir / "tnsnames.ora").get(tns_alias.strip().lower())
+        if resolved_dsn is None:
+            msg = f"Oracle TNS alias {tns_alias!r} not found in tnsnames.ora"
+            raise ImproperConfigurationError(msg)
+        config["dsn"] = resolved_dsn
+    elif ora_dir is not None and isinstance(config.get("dsn"), str):
+        raw_dsn = config["dsn"].strip()
+        if raw_dsn and not any(ch in raw_dsn for ch in ("(", "/", ":", "@")) and (ora_dir / "tnsnames.ora").is_file():
+            resolved_dsn = parse_tnsnames_ora(ora_dir / "tnsnames.ora").get(raw_dsn.lower())
+            if resolved_dsn is not None:
+                config["dsn"] = resolved_dsn
+
+    if ora_dir is not None and "ssl_server_dn_match" not in config and (ora_dir / "sqlnet.ora").is_file():
+        dn_match = parse_sqlnet_ora(ora_dir / "sqlnet.ora").get("SSL_SERVER_DN_MATCH")
+        if dn_match is not None:
+            lowered = dn_match.strip().lower()
+            if lowered in {"yes", "on", "true", "1"}:
+                config["ssl_server_dn_match"] = True
+            elif lowered in {"no", "off", "false", "0"}:
+                config["ssl_server_dn_match"] = False
 
 
 def _validate_tns_token(value: str, field_name: str) -> None:

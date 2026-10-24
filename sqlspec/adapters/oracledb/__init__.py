@@ -36,6 +36,8 @@ from sqlspec.adapters.oracledb.core import (
     inject_duality_view_etag,
     oracle_df_batches_to_arrow_reader,
     oracle_df_to_arrow_table,
+    parse_sqlnet_ora,
+    parse_tnsnames_ora,
     sanitize_oracle_text_query,
 )
 from sqlspec.adapters.oracledb.data_dictionary import (
@@ -93,5 +95,7 @@ __all__ = (
     "inject_duality_view_etag",
     "oracle_df_batches_to_arrow_reader",
     "oracle_df_to_arrow_table",
+    "parse_sqlnet_ora",
+    "parse_tnsnames_ora",
     "sanitize_oracle_text_query",
 )

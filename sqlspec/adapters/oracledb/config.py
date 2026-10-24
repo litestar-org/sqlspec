@@ -154,6 +154,7 @@ class OracleConnectionParams(TypedDict):
     extra: NotRequired[dict[str, Any]]
     topology: NotRequired[OracleTopologyConfig | dict[str, Any]]
     wallet_zip: NotRequired[str | Path | bytes]
+    tns_alias: NotRequired[str]
 
 
 class OraclePoolParams(OracleConnectionParams):
@@ -391,8 +392,13 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         normalized_conn = dict(normalize_connection_config(connection_config))
         self._extracted_wallet_dir: Path | None = None
         if normalized_conn.get("wallet_zip") is not None:
-            wallet_dir = extract_oracle_wallet_zip(normalized_conn.pop("wallet_zip"))
-            self._extracted_wallet_dir = wallet_dir
+            raw_wallet_source = normalized_conn.pop("wallet_zip")
+            source_is_existing_dir = isinstance(raw_wallet_source, (str, Path)) and Path(raw_wallet_source).is_dir()
+            wallet_dir = extract_oracle_wallet_zip(
+                raw_wallet_source, wallet_password=normalized_conn.get("wallet_password")
+            )
+            if not source_is_existing_dir or wallet_dir.resolve() != Path(raw_wallet_source).resolve():
+                self._extracted_wallet_dir = wallet_dir
             normalized_conn.setdefault("config_dir", str(wallet_dir))
             normalized_conn.setdefault("wallet_location", str(wallet_dir))
         connection_config = build_connection_config(normalized_conn)
@@ -696,8 +702,13 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         normalized_conn = dict(normalize_connection_config(connection_config))
         self._extracted_wallet_dir: Path | None = None
         if normalized_conn.get("wallet_zip") is not None:
-            wallet_dir = extract_oracle_wallet_zip(normalized_conn.pop("wallet_zip"))
-            self._extracted_wallet_dir = wallet_dir
+            raw_wallet_source = normalized_conn.pop("wallet_zip")
+            source_is_existing_dir = isinstance(raw_wallet_source, (str, Path)) and Path(raw_wallet_source).is_dir()
+            wallet_dir = extract_oracle_wallet_zip(
+                raw_wallet_source, wallet_password=normalized_conn.get("wallet_password")
+            )
+            if not source_is_existing_dir or wallet_dir.resolve() != Path(raw_wallet_source).resolve():
+                self._extracted_wallet_dir = wallet_dir
             normalized_conn.setdefault("config_dir", str(wallet_dir))
             normalized_conn.setdefault("wallet_location", str(wallet_dir))
         connection_config = build_connection_config(normalized_conn)
