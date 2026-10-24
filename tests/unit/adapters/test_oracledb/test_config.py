@@ -676,6 +676,75 @@ async def test_oracle_sync_and_async_provide_connection_and_session_run_checkout
     pool_async.release.assert_awaited_once_with(conn_async)
 
 
+@pytest.mark.anyio
+async def test_oracle_shared_wallet_zip_refcounted_across_pools_and_derive_pool() -> None:
+    """Shared deterministic wallet extractions survive single-pool teardown until the final owner closes."""
+    p12_bytes = _make_p12_wallet_bytes(b"WalletSecret123")
+    tns_text = (
+        "mydb_tp = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb.oraclecloud.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=mydb_tp.adb.oraclecloud.com)))\n"
+        "mydb_low = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb.oraclecloud.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=mydb_low.adb.oraclecloud.com)))\n"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_bytes)
+        zf.writestr("tnsnames.ora", tns_text)
+    archive_bytes = buf.getvalue()
+
+    with pytest.raises(ImproperConfigurationError, match="not found in tnsnames\\.ora"):
+        OracleSyncConfig(
+            connection_config={
+                "user": "admin",
+                "password": "pw",
+                "wallet_zip": archive_bytes,
+                "wallet_password": "WalletSecret123",
+                "tns_alias": "missing_alias",
+            }
+        )
+
+    sync_cfg = OracleSyncConfig(
+        connection_instance=Mock(),
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": archive_bytes,
+            "wallet_password": "WalletSecret123",
+            "tns_alias": "mydb_tp",
+        },
+    )
+    pool_async = MagicMock()
+    pool_async.close = AsyncMock()
+    async_cfg = OracleAsyncConfig(
+        connection_instance=pool_async,
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": archive_bytes,
+            "wallet_password": "WalletSecret123",
+            "tns_alias": "mydb_low",
+        },
+    )
+    derived_cfg = sync_cfg.derive_pool(min=2)
+
+    shared_dir = sync_cfg._extracted_wallet_dir
+    assert shared_dir is not None
+    assert async_cfg._extracted_wallet_dir == shared_dir
+    assert derived_cfg._extracted_wallet_dir == shared_dir
+    assert (shared_dir / "ewallet.pem").is_file()
+
+    sync_cfg._close_pool()
+    assert shared_dir.is_dir()
+    assert (shared_dir / "ewallet.pem").is_file()
+
+    await async_cfg._close_pool()
+    assert shared_dir.is_dir()
+    assert (shared_dir / "ewallet.pem").is_file()
+
+    derived_cfg._close_pool()
+    assert not shared_dir.exists()
+
+
 def _make_p12_wallet_bytes(password: bytes = b"WalletSecret123") -> bytes:
     """Create a test PKCS#12 payload for Oracle config wallet tests."""
     private_key = ec.generate_private_key(ec.SECP256R1())

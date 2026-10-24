@@ -2460,6 +2460,9 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
+        *,
+        fts_operator: str = "ACCUM",
+        approximate: bool = True,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2470,10 +2473,19 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         try:
             if embedding is not None and self._use_fts:
                 return await self._search_entries_hybrid_rrf(
-                    query, embedding, app_name, user_id, effective_limit, scope_filter
+                    query,
+                    embedding,
+                    app_name,
+                    user_id,
+                    effective_limit,
+                    scope_filter,
+                    fts_operator=fts_operator,
+                    approximate=approximate,
                 )
             if self._use_fts:
-                return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                return await self._search_entries_fts(
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=fts_operator
+                )
             return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
@@ -2666,9 +2678,16 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         return True
 
     async def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        fts_operator: str = "ACCUM",
     ) -> "list[StoredMemory]":
-        sanitized_query = sanitize_oracle_text_query(query)
+        sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         if not sanitized_query:
             return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
@@ -2897,6 +2916,9 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
+        *,
+        fts_operator: str = "ACCUM",
+        approximate: bool = True,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
@@ -2908,10 +2930,19 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         try:
             if embedding is not None and self._use_fts:
                 return self._search_entries_hybrid_rrf(
-                    query, embedding, app_name, user_id, effective_limit, scope_filter
+                    query,
+                    embedding,
+                    app_name,
+                    user_id,
+                    effective_limit,
+                    scope_filter,
+                    fts_operator=fts_operator,
+                    approximate=approximate,
                 )
             if self._use_fts:
-                return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                return self._search_entries_fts(
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=fts_operator
+                )
             return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
@@ -3102,9 +3133,16 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         return True
 
     def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        fts_operator: str = "ACCUM",
     ) -> "list[StoredMemory]":
-        sanitized_query = sanitize_oracle_text_query(query)
+        sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         if not sanitized_query:
             return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)

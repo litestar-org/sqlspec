@@ -418,6 +418,42 @@ def test_parse_tnsnames_ora_and_sqlnet_ora_multiline_and_comments(tmp_path: Path
     sqlnet_settings = parse_sqlnet_ora(sqlnet_file)
     assert sqlnet_settings["SSL_SERVER_DN_MATCH"] == "yes"
 
+    eq_dir = tmp_path / "env=prod"
+    eq_dir.mkdir()
+    (eq_dir / "tnsnames.ora").write_text(tns_content, encoding="utf-8")
+    (eq_dir / "sqlnet.ora").write_text("SSL_SERVER_DN_MATCH = no\n", encoding="utf-8")
+    assert parse_tnsnames_ora(str(eq_dir))["mydb_low"] == parsed_from_file["mydb_low"]
+    assert parse_tnsnames_ora(str(eq_dir / "tnsnames.ora"))["mydb_tp"] == parsed_from_file["mydb_tp"]
+    assert parse_sqlnet_ora(str(eq_dir))["SSL_SERVER_DN_MATCH"] == "no"
+    assert parse_sqlnet_ora(str(eq_dir / "sqlnet.ora"))["SSL_SERVER_DN_MATCH"] == "no"
+
+
+def test_extract_oracle_wallet_zip_rejects_symlinks(tmp_path: Path) -> None:
+    """Wallet extraction rejects symlinked target directories and symlinked wallet files."""
+    p12_bytes = _build_test_p12_bytes(None)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_bytes)
+        zf.writestr("tnsnames.ora", b"mydb_tp = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb)(PORT=1522)))")
+
+    real_dir = tmp_path / "real_target"
+    real_dir.mkdir()
+    symlink_target = tmp_path / "symlink_target"
+    symlink_target.symlink_to(real_dir)
+
+    with pytest.raises(ImproperConfigurationError, match="symlink"):
+        extract_oracle_wallet_zip(buf.getvalue(), target_dir=symlink_target)
+
+    valid_target = tmp_path / "valid_target"
+    valid_target.mkdir(mode=0o700)
+    decoy_file = tmp_path / "decoy.pem"
+    decoy_file.write_text("ORIGINAL", encoding="utf-8")
+    (valid_target / "ewallet.pem").symlink_to(decoy_file)
+
+    with pytest.raises(ImproperConfigurationError, match="symlink"):
+        extract_oracle_wallet_zip(buf.getvalue(), target_dir=valid_target)
+    assert decoy_file.read_text(encoding="utf-8") == "ORIGINAL"
+
 
 def _build_test_p12_bytes(password: bytes | None = b"WalletSecret123") -> bytes:
     """Generate an in-memory PKCS#12 wallet payload with a private key and self-signed certificate."""

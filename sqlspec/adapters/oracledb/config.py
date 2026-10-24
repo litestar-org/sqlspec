@@ -1,7 +1,6 @@
 """OracleDB database configuration with direct field-based configuration."""
 
 import contextlib
-import shutil
 from collections.abc import Awaitable, Callable, Mapping
 from inspect import isawaitable
 from pathlib import Path
@@ -38,6 +37,8 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_async,
     execute_session_release_sync,
     extract_oracle_wallet_zip,
+    release_extracted_wallet_dir,
+    retain_extracted_wallet_dir,
 )
 from sqlspec.adapters.oracledb.data_dictionary import (
     OracleVersionCache,
@@ -395,6 +396,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """
         normalized_conn = dict(normalize_connection_config(connection_config))
         self._extracted_wallet_dir: Path | None = None
+        pending_wallet_dir: Path | None = None
         if normalized_conn.get("wallet_zip") is not None:
             raw_wallet_source = normalized_conn.pop("wallet_zip")
             source_is_existing_dir = isinstance(raw_wallet_source, (str, Path)) and Path(raw_wallet_source).is_dir()
@@ -402,7 +404,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
                 raw_wallet_source, wallet_password=normalized_conn.get("wallet_password")
             )
             if not source_is_existing_dir or wallet_dir.resolve() != Path(raw_wallet_source).resolve():
-                self._extracted_wallet_dir = wallet_dir
+                pending_wallet_dir = wallet_dir
             normalized_conn.setdefault("config_dir", str(wallet_dir))
             normalized_conn.setdefault("wallet_location", str(wallet_dir))
         connection_config = build_connection_config(normalized_conn)
@@ -427,6 +429,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             extension_config=extension_config,
             **kwargs,
         )
+        if pending_wallet_dir is not None:
+            self._extracted_wallet_dir = pending_wallet_dir
+            retain_extracted_wallet_dir(pending_wallet_dir)
 
     def create_connection(self) -> "OracleSyncConnection":
         """Create a single connection (not from pool).
@@ -476,7 +481,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
                 new_driver_features[key] = val
             else:
                 new_conn_cfg[key] = val
-        return type(self)(
+        derived = type(self)(
             connection_config=new_conn_cfg,
             connection_instance=None,
             migration_config=cast("dict[str, Any] | None", dict(self.migration_config))
@@ -490,6 +495,15 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             else extension_config,
             observability_config=self.observability_config if observability_config is None else observability_config,
         )
+        if (
+            self._extracted_wallet_dir is not None
+            and derived._extracted_wallet_dir is None
+            and str(self._extracted_wallet_dir)
+            in {derived.connection_config.get("config_dir"), derived.connection_config.get("wallet_location")}
+        ):
+            derived._extracted_wallet_dir = self._extracted_wallet_dir
+            retain_extracted_wallet_dir(self._extracted_wallet_dir)
+        return derived
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for OracleDB types.
@@ -588,7 +602,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         return driver
 
     def _close_pool(self) -> None:
-        """Close the actual connection pool and remove any extracted temporary wallet directory."""
+        """Close the actual connection pool and release any extracted temporary wallet directory."""
         try:
             if self.connection_instance:
                 self.connection_instance.close()
@@ -596,8 +610,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             self._oracle_version_cache.reset()
         finally:
             if self._extracted_wallet_dir is not None:
-                shutil.rmtree(self._extracted_wallet_dir, ignore_errors=True)
+                wallet_dir = self._extracted_wallet_dir
                 self._extracted_wallet_dir = None
+                release_extracted_wallet_dir(wallet_dir)
 
 
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -705,6 +720,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """
         normalized_conn = dict(normalize_connection_config(connection_config))
         self._extracted_wallet_dir: Path | None = None
+        pending_wallet_dir: Path | None = None
         if normalized_conn.get("wallet_zip") is not None:
             raw_wallet_source = normalized_conn.pop("wallet_zip")
             source_is_existing_dir = isinstance(raw_wallet_source, (str, Path)) and Path(raw_wallet_source).is_dir()
@@ -712,7 +728,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
                 raw_wallet_source, wallet_password=normalized_conn.get("wallet_password")
             )
             if not source_is_existing_dir or wallet_dir.resolve() != Path(raw_wallet_source).resolve():
-                self._extracted_wallet_dir = wallet_dir
+                pending_wallet_dir = wallet_dir
             normalized_conn.setdefault("config_dir", str(wallet_dir))
             normalized_conn.setdefault("wallet_location", str(wallet_dir))
         connection_config = build_connection_config(normalized_conn)
@@ -738,6 +754,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             extension_config=extension_config,
             **kwargs,
         )
+        if pending_wallet_dir is not None:
+            self._extracted_wallet_dir = pending_wallet_dir
+            retain_extracted_wallet_dir(pending_wallet_dir)
 
     async def create_connection(self) -> OracleAsyncConnection:
         """Create a single async connection (not from pool).
@@ -787,7 +806,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
                 new_driver_features[key] = val
             else:
                 new_conn_cfg[key] = val
-        return type(self)(
+        derived = type(self)(
             connection_config=new_conn_cfg,
             connection_instance=None,
             migration_config=cast("dict[str, Any] | None", dict(self.migration_config))
@@ -801,6 +820,15 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             else extension_config,
             observability_config=self.observability_config if observability_config is None else observability_config,
         )
+        if (
+            self._extracted_wallet_dir is not None
+            and derived._extracted_wallet_dir is None
+            and str(self._extracted_wallet_dir)
+            in {derived.connection_config.get("config_dir"), derived.connection_config.get("wallet_location")}
+        ):
+            derived._extracted_wallet_dir = self._extracted_wallet_dir
+            retain_extracted_wallet_dir(self._extracted_wallet_dir)
+        return derived
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for OracleAsyncConfig types.
@@ -896,7 +924,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         return driver
 
     async def _close_pool(self) -> None:
-        """Close the actual async connection pool and remove any extracted temporary wallet directory."""
+        """Close the actual async connection pool and release any extracted temporary wallet directory."""
         try:
             if self.connection_instance:
                 await self.connection_instance.close()
@@ -904,5 +932,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             self._oracle_version_cache.reset()
         finally:
             if self._extracted_wallet_dir is not None:
-                shutil.rmtree(self._extracted_wallet_dir, ignore_errors=True)
+                wallet_dir = self._extracted_wallet_dir
                 self._extracted_wallet_dir = None
+                release_extracted_wallet_dir(wallet_dir)

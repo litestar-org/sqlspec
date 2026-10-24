@@ -232,19 +232,40 @@ def test_build_dbms_cloud_copy_data_sql_qualified_unqualified_and_format_options
     assert from_json(binds["format_json"]) == {"type": "parquet"}
 
     quoted_plsql, quoted_binds = build_dbms_cloud_copy_data_sql(
-        '"my_schema"."sales_data"',
+        '"my_schema"."sales.2026"',
         credential_name="AWS_CRED",
-        file_uri="https://objectstorage.oraclecloud.com/n/ns/b/bkt/o/sales.csv",
+        file_uri="https://objectstorage.us-ashburn-1.oraclecloud.com/n/ns/b/bkt/o/sales.csv",
         file_format="csv",
         format_options={"delimiter": "|"},
     )
     assert "schema_name => :schema_name" in quoted_plsql
-    assert quoted_binds["schema_name"] == "my_schema"
-    assert quoted_binds["table_name"] == "sales_data"
+    assert quoted_binds["schema_name"] == '"my_schema"'
+    assert quoted_binds["table_name"] == '"sales.2026"'
     assert from_json(quoted_binds["format_json"]) == {"type": "csv", "skipheaders": 1, "delimiter": "|"}
 
+    upper_quoted_plsql, upper_quoted_binds = build_dbms_cloud_copy_data_sql(
+        '"MYSCHEMA"."SALES"',
+        credential_name="AWS_CRED",
+        file_uri="https://s3.amazonaws.com/bucket/sales.parquet",
+        file_format="parquet",
+    )
+    assert "schema_name => :schema_name" in upper_quoted_plsql
+    assert upper_quoted_binds["schema_name"] == "MYSCHEMA"
+    assert upper_quoted_binds["table_name"] == "SALES"
+
+    with pytest.raises(SQLSpecError, match="Invalid Oracle table identifier"):
+        build_dbms_cloud_copy_data_sql(
+            "CAT.SCHEMA.SALES",
+            credential_name="CRED",
+            file_uri="https://s3.amazonaws.com/b/f.parquet",
+            file_format="parquet",
+        )
+
     unqual_plsql, unqual_binds = build_dbms_cloud_copy_data_sql(
-        "SALES", credential_name="CRED", file_uri="gs://bucket/sales.ndjson", file_format="ndjson"
+        "SALES",
+        credential_name="CRED",
+        file_uri="https://bucket.storage.googleapis.com/sales.ndjson",
+        file_format="ndjson",
     )
     assert "schema_name => :schema_name" not in unqual_plsql
     assert "schema_name" not in unqual_binds
@@ -254,42 +275,66 @@ def test_build_dbms_cloud_copy_data_sql_qualified_unqualified_and_format_options
     default_schema_plsql, default_schema_binds = build_dbms_cloud_copy_data_sql(
         "SALES",
         credential_name="CRED",
-        file_uri="oci://bucket@ns/sales.json",
+        file_uri="https://objectstorage.us-ashburn-1.oraclecloud.com/n/ns/b/bucket/o/sales.json",
         file_format="json",
-        default_schema="APP_OWNER",
+        default_schema='"AppOwner"',
     )
     assert "schema_name => :schema_name" in default_schema_plsql
-    assert default_schema_binds["schema_name"] == "APP_OWNER"
+    assert default_schema_binds["schema_name"] == '"AppOwner"'
 
     assert from_json(build_dbms_cloud_format_json("jsonl")) == {"type": "json"}
 
     with pytest.raises(ImproperConfigurationError, match="Unsupported DBMS_CLOUD\\.COPY_DATA format"):
-        build_dbms_cloud_copy_data_sql("SALES", credential_name="CRED", file_uri="s3://b/f.arrow", file_format="arrow")
+        build_dbms_cloud_copy_data_sql(
+            "SALES", credential_name="CRED", file_uri="https://s3.amazonaws.com/b/f.arrow", file_format="arrow"
+        )
 
     with pytest.raises(SQLSpecError, match="Table name must not be empty"):
         build_dbms_cloud_copy_data_sql(
-            "   ", credential_name="CRED", file_uri="s3://b/f.parquet", file_format="parquet"
+            "   ", credential_name="CRED", file_uri="https://s3.amazonaws.com/b/f.parquet", file_format="parquet"
         )
 
     with pytest.raises(ImproperConfigurationError, match="credential_name"):
         build_dbms_cloud_copy_data_sql(
-            "SALES", credential_name="  ", file_uri="s3://b/f.parquet", file_format="parquet"
+            "SALES", credential_name="  ", file_uri="https://s3.amazonaws.com/b/f.parquet", file_format="parquet"
         )
 
     assert (
-        resolve_dbms_cloud_source_uri("s3://bucket/sales.parquet", file_format="parquet") == "s3://bucket/sales.parquet"
-    )
-    assert resolve_dbms_cloud_source_uri("gs://bucket/sales.csv", file_format="csv") == "gs://bucket/sales.csv"
-    assert (
-        resolve_dbms_cloud_source_uri("oci://bucket@ns/sales.json", file_format="json") == "oci://bucket@ns/sales.json"
+        resolve_dbms_cloud_source_uri("s3://bucket/sales.parquet", file_format="parquet")
+        == "https://bucket.s3.amazonaws.com/sales.parquet"
     )
     assert (
-        resolve_dbms_cloud_source_uri("az://container/sales.jsonl", file_format="jsonl") == "az://container/sales.jsonl"
+        resolve_dbms_cloud_source_uri("s3://my.dotted.bucket/sales.parquet", file_format="parquet")
+        == "https://s3.amazonaws.com/my.dotted.bucket/sales.parquet"
     )
+    assert (
+        resolve_dbms_cloud_source_uri("gs://bucket/sales.csv", file_format="csv")
+        == "https://bucket.storage.googleapis.com/sales.csv"
+    )
+    assert (
+        resolve_dbms_cloud_source_uri("gcs://my.dotted.bucket/sales.csv", file_format="csv")
+        == "https://storage.googleapis.com/my.dotted.bucket/sales.csv"
+    )
+    assert (
+        resolve_dbms_cloud_source_uri("wasbs://cont@acct.blob.core.windows.net/sales.parquet", file_format="parquet")
+        == "https://acct.blob.core.windows.net/cont/sales.parquet"
+    )
+    assert (
+        resolve_dbms_cloud_source_uri("abfss://cont@acct.dfs.core.windows.net/sales.parquet", file_format="parquet")
+        == "https://acct.blob.core.windows.net/cont/sales.parquet"
+    )
+    assert (
+        resolve_dbms_cloud_source_uri(
+            "https://objectstorage.us-ashburn-1.oraclecloud.com/n/ns/b/bucket/o/sales.json", file_format="json"
+        )
+        == "https://objectstorage.us-ashburn-1.oraclecloud.com/n/ns/b/bucket/o/sales.json"
+    )
+    assert resolve_dbms_cloud_source_uri("oci://bucket@ns/sales.json", file_format="json") is None
+    assert resolve_dbms_cloud_source_uri("az://container/sales.jsonl", file_format="jsonl") is None
     assert resolve_dbms_cloud_source_uri(Path("/tmp/sales.parquet"), file_format="parquet") is None
     assert resolve_dbms_cloud_source_uri("/tmp/sales.parquet", file_format="parquet") is None
     assert resolve_dbms_cloud_source_uri("file:///tmp/sales.parquet", file_format="parquet") is None
-    assert resolve_dbms_cloud_source_uri("s3://bucket/sales.arrow", file_format="arrow") is None
+    assert resolve_dbms_cloud_source_uri("s3://bucket/sales.arrow", file_format="arrow-ipc") is None
 
 
 @pytest.mark.anyio
@@ -334,7 +379,7 @@ async def test_oracle_sync_and_async_load_from_storage_uses_dbms_cloud_copy_data
     assert sync_calls[1][1]["table_name"] == "SALES"
     assert sync_calls[1][1]["schema_name"] == "MYSCHEMA"
     assert sync_calls[1][1]["credential_name"] == "OCI$RESOURCE_PRINCIPAL"
-    assert sync_calls[1][1]["file_uri_list"] == "s3://bucket/sales.parquet"
+    assert sync_calls[1][1]["file_uri_list"] == "https://bucket.s3.amazonaws.com/sales.parquet"
     assert from_json(sync_calls[1][1]["format_json"]) == {"type": "parquet"}
     assert sync_closed >= 1
 
@@ -349,7 +394,7 @@ async def test_oracle_sync_and_async_load_from_storage_uses_dbms_cloud_copy_data
         )
     assert alias_job.telemetry["backend"] == "dbms_cloud"
     assert len(sync_calls) == 1
-    assert sync_calls[0][1]["file_uri_list"] == "gs://lake-bucket/orders.csv"
+    assert sync_calls[0][1]["file_uri_list"] == "https://lake-bucket.storage.googleapis.com/orders.csv"
 
     async_calls: list[tuple[str, Any]] = []
     async_closed = 0
@@ -375,7 +420,7 @@ async def test_oracle_sync_and_async_load_from_storage_uses_dbms_cloud_copy_data
 
     async_job = await async_driver.load_from_storage(
         "EVENTS",
-        "oci://bucket@ns/events.jsonl",
+        "https://objectstorage.us-ashburn-1.oraclecloud.com/n/ns/b/bucket/o/events.jsonl",
         file_format="jsonl",
         overwrite=True,
         format_options={"unpackcolumns": True},
@@ -387,7 +432,10 @@ async def test_oracle_sync_and_async_load_from_storage_uses_dbms_cloud_copy_data
     assert "DBMS_CLOUD.COPY_DATA(" in async_calls[1][0]
     assert "schema_name" not in async_calls[1][1]
     assert async_calls[1][1]["credential_name"] == "DEF_CLOUD_CRED"
-    assert async_calls[1][1]["file_uri_list"] == "oci://bucket@ns/events.jsonl"
+    assert (
+        async_calls[1][1]["file_uri_list"]
+        == "https://objectstorage.us-ashburn-1.oraclecloud.com/n/ns/b/bucket/o/events.jsonl"
+    )
     assert from_json(async_calls[1][1]["format_json"]) == {"type": "json", "unpackcolumns": True}
     assert async_closed >= 1
 
@@ -444,11 +492,15 @@ async def test_oracle_load_from_storage_falls_back_to_arrow_when_local_or_no_cre
         res_arrow_fmt = sync_driver.load_from_storage(
             "SALES", "s3://bucket/sales.arrow", file_format="arrow-ipc", credential_name="OCI$RESOURCE_PRINCIPAL"
         )
+        res_regionless_oci = sync_driver.load_from_storage(
+            "SALES", "oci://bucket@ns/sales.parquet", file_format="parquet", credential_name="OCI$RESOURCE_PRINCIPAL"
+        )
 
     assert res_no_cred is sentinel_job
     assert res_arrow_fmt is sentinel_job
-    assert sync_read.call_count == 2
-    assert sync_load.call_count == 2
+    assert res_regionless_oci is sentinel_job
+    assert sync_read.call_count == 3
+    assert sync_load.call_count == 3
 
     async_executed: list[tuple[str, Any]] = []
 

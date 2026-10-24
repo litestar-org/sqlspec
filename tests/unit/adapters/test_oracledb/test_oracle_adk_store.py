@@ -680,8 +680,14 @@ def test_oracle_sync_adk_memory_hybrid_rrf_near_and_exact_fallback() -> None:
     config.provide_connection = lambda *_a, **_k: conn
     store = OracleSyncADKMemoryStore(config)
 
-    store._search_entries_hybrid_rrf(
-        "dark roast espresso", [0.1, 0.2, 0.3], "app", "u1", 5, fts_operator="NEAR", approximate=False
+    store.search_entries(
+        "dark roast espresso",
+        embedding=[0.1, 0.2, 0.3],
+        app_name="app",
+        user_id="u1",
+        limit=5,
+        fts_operator="NEAR",
+        approximate=False,
     )
     assert len(cursor.calls) == 1
     rrf_sql, rrf_params = cursor.calls[0]
@@ -709,8 +715,14 @@ async def test_oracle_async_adk_memory_hybrid_rrf_near_and_exact_fallback() -> N
     config.provide_connection = lambda *_a, **_k: conn
     store = OracleAsyncADKMemoryStore(config)
 
-    await store._search_entries_hybrid_rrf(
-        "dark roast espresso", [0.1, 0.2, 0.3], "app", "u1", 5, fts_operator="NEAR", approximate=False
+    await store.search_entries(
+        "dark roast espresso",
+        embedding=[0.1, 0.2, 0.3],
+        app_name="app",
+        user_id="u1",
+        limit=5,
+        fts_operator="NEAR",
+        approximate=False,
     )
     assert len(cursor.calls) == 1
     rrf_sql, rrf_params = cursor.calls[0]
