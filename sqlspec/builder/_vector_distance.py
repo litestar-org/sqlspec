@@ -173,16 +173,19 @@ def build_oracle_hnsw_subquery(
     query_vector_bind: str | None = None,
     top_k_bind: str | None = None,
     target_accuracy: int | None = None,
+    approximate: bool = True,
     where_clause: str | None = None,
     rank_alias: str = "vector_rank",
     distance_alias: str = "vector_distance",
 ) -> str:
-    """Build an Oracle 26ai HNSW-preserving top-K subquery using outer ``ROWNUM``.
+    """Build an Oracle 26ai HNSW-preserving or exact top-K subquery using outer ``ROWNUM``.
 
     Oracle 26ai CBO disables ``VECTOR INDEX HNSW SCAN`` when ``ROW_NUMBER() OVER (...)``
     appears in the same query block as ``ORDER BY VECTOR_DISTANCE(...) FETCH APPROX FIRST :k ROWS ONLY``.
-    This helper isolates the ``ORDER BY VECTOR_DISTANCE(...) FETCH APPROX FIRST`` clause inside
-    an inner derived table and assigns ``ROWNUM`` in the outer query block.
+    This helper isolates the ``ORDER BY VECTOR_DISTANCE(...)`` fetch clause inside
+    an inner derived table and assigns ``ROWNUM`` in the outer query block. When
+    ``approximate=False``, ``FETCH FIRST :k ROWS ONLY`` is emitted instead of
+    ``FETCH APPROX FIRST`` for unindexed tables or exact top-K evaluation.
     """
     oracle_metric = _ORACLE_METRIC_MAP.get(metric.lower(), metric.upper())
     vec_bind = _format_oracle_bind(query_vector_bind if query_vector_bind is not None else vector_param)
@@ -199,14 +202,20 @@ def build_oracle_hnsw_subquery(
         ):
             msg = f"target_accuracy must be an integer between 1 and 100, got {target_accuracy!r}"
             raise ValueError(msg)
-        accuracy_sql = f" WITH TARGET ACCURACY {target_accuracy}"
+        if approximate:
+            accuracy_sql = f" WITH TARGET ACCURACY {target_accuracy}"
+    fetch_clause = (
+        f"FETCH APPROX FIRST {limit_bind} ROWS ONLY{accuracy_sql}"
+        if approximate
+        else f"FETCH FIRST {limit_bind} ROWS ONLY"
+    )
     return (
         f"SELECT {cols_sql}, {distance_alias}, ROWNUM AS {rank_alias} "
         f"FROM ("
         f"SELECT {cols_sql}, VECTOR_DISTANCE({vector_column}, {vec_bind}, {oracle_metric}) AS {distance_alias} "
         f"FROM {table}{where_sql} "
         f"ORDER BY VECTOR_DISTANCE({vector_column}, {vec_bind}, {oracle_metric}) "
-        f"FETCH APPROX FIRST {limit_bind} ROWS ONLY{accuracy_sql}"
+        f"{fetch_clause}"
         f") vec_top"
     )
 
@@ -228,9 +237,10 @@ def build_oracle_hybrid_rrf_sql(
     final_limit_param: str = ":final_limit",
     top_k_param: str | None = None,
     target_accuracy: int | None = None,
+    approximate: bool = True,
     where_clause: str | None = None,
 ) -> str:
-    """Build an Oracle 26ai Hybrid Search query fusing HNSW vector similarity and Oracle Text FTS via RRF."""
+    """Build an Oracle 26ai Hybrid Search query fusing vector similarity and Oracle Text FTS via RRF."""
     resolved_id_col = key_column if key_column is not None else id_column
     if top_k_param is not None:
         if candidate_limit_param == ":candidate_limit":
@@ -251,6 +261,7 @@ def build_oracle_hybrid_rrf_sql(
         metric=metric,
         top_k_param=cand_bind,
         target_accuracy=target_accuracy,
+        approximate=approximate,
         where_clause=where_clause,
         rank_alias="vector_rank",
         distance_alias="vector_distance",
@@ -309,6 +320,8 @@ def build_oracle_hybrid_rrf_query(
     candidate_limit_param: str = ":candidate_limit",
     final_limit_param: str = ":final_limit",
     top_k_param: str | None = None,
+    target_accuracy: int | None = None,
+    approximate: bool = True,
     where_clause: str | None = None,
 ) -> str:
     """Alias for :func:`build_oracle_hybrid_rrf_sql`."""
@@ -327,6 +340,8 @@ def build_oracle_hybrid_rrf_query(
         candidate_limit_param=candidate_limit_param,
         final_limit_param=final_limit_param,
         top_k_param=top_k_param,
+        target_accuracy=target_accuracy,
+        approximate=approximate,
         where_clause=where_clause,
     )
 

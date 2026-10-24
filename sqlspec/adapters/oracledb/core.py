@@ -354,6 +354,7 @@ VALID_ORACLE_DRIVER_FEATURE_KEYS: Final[frozenset[str]] = frozenset({
 _ORACLE_TIME_ZONE_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Za-z0-9_+\-/:]{1,64}$")
 _ORACLE_NLS_KEY_PATTERN: "re.Pattern[str]" = re.compile(r"^NLS_[A-Z0-9_]{1,60}$")
 _ORACLE_TEXT_TOKEN_PATTERN: "re.Pattern[str]" = re.compile(r"[A-Za-z0-9_]+")
+_ORACLE_TEXT_OPERATORS: Final[frozenset[str]] = frozenset({"ACCUM", "AND", "OR", "NEAR"})
 _ORACLE_TEXT_RESERVED_OPERATORS: "frozenset[str]" = frozenset({
     "ABOUT",
     "ACCUM",
@@ -2058,22 +2059,35 @@ def sanitize_oracle_text_query(raw_query: str, *, operator: str = "ACCUM") -> st
 
     Extracts alphanumeric tokens and wraps each token in ``{token}`` literal
     braces so user queries containing Oracle Text reserved keywords or syntax
-    punctuation never raise ``DRG-50901``.
+    punctuation never raise ``DRG-50901``. When ``operator="NEAR"``, multi-token
+    queries are formatted using functional ``NEAR(({tok1}, {tok2}, ...))`` syntax.
 
     Args:
         raw_query: Raw user search string.
-        operator: Operator used to join escaped tokens (defaults to ``"ACCUM"``).
+        operator: Operator used to join escaped tokens (``"ACCUM"``, ``"AND"``,
+            ``"OR"``, or ``"NEAR"``, case-insensitive; defaults to ``"ACCUM"``).
 
     Returns:
         Sanitized Oracle Text query string, or ``""`` when no tokens remain.
+
+    Raises:
+        ImproperConfigurationError: If ``operator`` is not a supported Oracle Text operator.
     """
+    normalized_op = operator.strip().upper()
+    if normalized_op not in _ORACLE_TEXT_OPERATORS:
+        msg = f"Unsupported Oracle Text operator: {operator!r}"
+        raise ImproperConfigurationError(msg)
     if not raw_query or not raw_query.strip():
         return ""
     tokens = [match.group(0) for match in _ORACLE_TEXT_TOKEN_PATTERN.finditer(raw_query)]
     if not tokens:
         return ""
-    joiner = f" {operator} " if operator else " "
-    return joiner.join(f"{{{tok}}}" for tok in tokens)
+    escaped = [f"{{{tok}}}" for tok in tokens]
+    if normalized_op == "NEAR":
+        if len(escaped) == 1:
+            return escaped[0]
+        return f"NEAR(({', '.join(escaped)}))"
+    return f" {normalized_op} ".join(escaped)
 
 
 def extract_duality_view_etag(row_or_doc: "Mapping[str, Any] | str | bytes") -> str | None:

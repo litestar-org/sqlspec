@@ -290,6 +290,23 @@ def test_sanitize_oracle_text_query_escapes_reserved_words_and_syntax() -> None:
     assert sanitize_oracle_text_query("   !@#$%^&*()   ") == ""
 
 
+def test_sanitize_oracle_text_query_near_and_boolean_operators() -> None:
+    """NEAR operator should emit functional NEAR((...)) syntax and reject unknown operators."""
+    assert sanitize_oracle_text_query("dark roast espresso", operator="NEAR") == "NEAR(({dark}, {roast}, {espresso}))"
+    assert sanitize_oracle_text_query("dark roast", operator="near") == "NEAR(({dark}, {roast}))"
+    assert sanitize_oracle_text_query("espresso", operator="NEAR") == "{espresso}"
+    assert sanitize_oracle_text_query("   !@#$%^&*()   ", operator="NEAR") == ""
+    assert sanitize_oracle_text_query("alpha beta", operator="and") == "{alpha} AND {beta}"
+    assert sanitize_oracle_text_query("alpha beta", operator=" OR ") == "{alpha} OR {beta}"
+    assert sanitize_oracle_text_query("alpha beta", operator="accum") == "{alpha} ACCUM {beta}"
+
+    with pytest.raises(ImproperConfigurationError, match="Unsupported Oracle Text operator"):
+        sanitize_oracle_text_query("alpha beta", operator="WITHIN")
+
+    with pytest.raises(ImproperConfigurationError, match="Unsupported Oracle Text operator"):
+        sanitize_oracle_text_query("", operator="INVALID")
+
+
 def test_duality_view_etag_helpers_extract_inject_and_build_update_sql() -> None:
     doc = {"_metadata": {"etag": "etag-abc-123"}, "id": 42, "name": "Order"}
     assert extract_duality_etag(doc) == "etag-abc-123"

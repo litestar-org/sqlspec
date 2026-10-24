@@ -2705,8 +2705,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         vector_column: str = "embedding",
         rrf_k: int = 60,
         metric: str = "COSINE",
+        fts_operator: str = "ACCUM",
+        approximate: bool = True,
     ) -> "list[StoredMemory]":
-        sanitized_query = sanitize_oracle_text_query(query)
+        sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         select_cols = (
             "id",
@@ -2730,6 +2732,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 vector_param="query_vector",
                 top_k_param="top_k",
                 metric=metric,
+                approximate=approximate,
                 where_clause=where_scope,
             )
             params: dict[str, Any] = {**scope_params, "query_vector": embedding, "top_k": limit}
@@ -2745,6 +2748,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 top_k_param="top_k",
                 rrf_k_param="rrf_k",
                 metric=metric,
+                approximate=approximate,
                 where_clause=where_scope,
             )
             params = {
@@ -3136,8 +3140,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         vector_column: str = "embedding",
         rrf_k: int = 60,
         metric: str = "COSINE",
+        fts_operator: str = "ACCUM",
+        approximate: bool = True,
     ) -> "list[StoredMemory]":
-        sanitized_query = sanitize_oracle_text_query(query)
+        sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         select_cols = (
             "id",
@@ -3161,6 +3167,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 vector_param="query_vector",
                 top_k_param="top_k",
                 metric=metric,
+                approximate=approximate,
                 where_clause=where_scope,
             )
             params: dict[str, Any] = {**scope_params, "query_vector": embedding, "top_k": limit}
@@ -3176,6 +3183,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 top_k_param="top_k",
                 rrf_k_param="rrf_k",
                 metric=metric,
+                approximate=approximate,
                 where_clause=where_scope,
             )
             params = {

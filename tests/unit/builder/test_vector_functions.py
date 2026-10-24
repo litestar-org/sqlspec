@@ -613,3 +613,55 @@ def test_oracle_select_approx_limit_and_hybrid_rrf_builders() -> None:
 
     rrf_stmt = build_oracle_hybrid_rrf_query("docs", vector_column="embedding", text_column="content_text")
     assert "rrf_score" in rrf_stmt
+
+
+def test_build_oracle_hnsw_subquery_and_hybrid_rrf_exact_fallback() -> None:
+    """approximate=False should emit exact FETCH FIRST without APPROX or WITH TARGET ACCURACY."""
+    exact_vec_sql = build_oracle_hnsw_subquery(
+        "docs",
+        vector_column="embedding",
+        query_vector_bind="query_vec",
+        top_k_bind="top_k",
+        target_accuracy=95,
+        approximate=False,
+    )
+    assert "FETCH FIRST :top_k ROWS ONLY" in exact_vec_sql
+    assert "FETCH APPROX" not in exact_vec_sql
+    assert "WITH TARGET ACCURACY" not in exact_vec_sql
+    assert "ROWNUM AS vector_rank" in exact_vec_sql
+
+    with pytest.raises(ValueError, match="target_accuracy"):
+        build_oracle_hnsw_subquery("docs", target_accuracy=101, approximate=False)
+
+    exact_rrf_sql = build_oracle_hybrid_rrf_sql(
+        "docs",
+        id_column="id",
+        text_column="content_text",
+        vector_column="embedding",
+        top_k_param="top_k",
+        target_accuracy=90,
+        approximate=False,
+    )
+    assert "FETCH APPROX" not in exact_rrf_sql
+    assert "WITH TARGET ACCURACY" not in exact_rrf_sql
+    assert exact_rrf_sql.count("FETCH FIRST :top_k ROWS ONLY") == 3
+
+    exact_rrf_query = build_oracle_hybrid_rrf_query(
+        "docs",
+        vector_column="embedding",
+        text_column="content_text",
+        top_k_param="top_k",
+        target_accuracy=90,
+        approximate=False,
+    )
+    assert exact_rrf_query == exact_rrf_sql
+
+    approx_rrf_query = build_oracle_hybrid_rrf_query(
+        "docs",
+        vector_column="embedding",
+        text_column="content_text",
+        top_k_param="top_k",
+        target_accuracy=85,
+        approximate=True,
+    )
+    assert "FETCH APPROX FIRST :top_k ROWS ONLY WITH TARGET ACCURACY 85" in approx_rrf_query
