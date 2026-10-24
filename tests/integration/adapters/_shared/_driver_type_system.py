@@ -294,6 +294,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_direct_path_load",
         "session_context_hook",
         "enable_session_tracing",
+        "dbms_cloud_credential",
     ),
     "psqlpy": (
         "enable_cast_detection",

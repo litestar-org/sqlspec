@@ -2382,13 +2382,33 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
     """Oracle ADK memory store using async oracledb driver."""
 
-    __slots__ = ("_in_memory",)
+    __slots__ = ("_approximate", "_fts_operator", "_in_memory")
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         super().__init__(config)
         validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
+        self._fts_operator: str = str(adk_config.get("fts_operator", "ACCUM"))
+        self._approximate: bool = bool(adk_config.get("approximate", True))
+
+    @property
+    def fts_operator(self) -> str:
+        """Return the default Oracle Text operator for hybrid search."""
+        return self._fts_operator
+
+    @fts_operator.setter
+    def fts_operator(self, value: str) -> None:
+        self._fts_operator = value
+
+    @property
+    def approximate(self) -> bool:
+        """Return whether approximate vector search is enabled."""
+        return self._approximate
+
+    @approximate.setter
+    def approximate(self, value: bool) -> None:
+        self._approximate = bool(value)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -2470,10 +2490,19 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         try:
             if embedding is not None and self._use_fts:
                 return await self._search_entries_hybrid_rrf(
-                    query, embedding, app_name, user_id, effective_limit, scope_filter
+                    query,
+                    embedding,
+                    app_name,
+                    user_id,
+                    effective_limit,
+                    scope_filter,
+                    fts_operator=self._fts_operator,
+                    approximate=self._approximate,
                 )
             if self._use_fts:
-                return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                return await self._search_entries_fts(
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator
+                )
             return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
@@ -2666,9 +2695,16 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         return True
 
     async def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        fts_operator: str = "ACCUM",
     ) -> "list[StoredMemory]":
-        sanitized_query = sanitize_oracle_text_query(query)
+        sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         if not sanitized_query:
             return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
@@ -2705,8 +2741,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         vector_column: str = "embedding",
         rrf_k: int = 60,
         metric: str = "COSINE",
+        fts_operator: str = "ACCUM",
+        approximate: bool = True,
     ) -> "list[StoredMemory]":
-        sanitized_query = sanitize_oracle_text_query(query)
+        sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         select_cols = (
             "id",
@@ -2730,6 +2768,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 vector_param="query_vector",
                 top_k_param="top_k",
                 metric=metric,
+                approximate=approximate,
                 where_clause=where_scope,
             )
             params: dict[str, Any] = {**scope_params, "query_vector": embedding, "top_k": limit}
@@ -2745,6 +2784,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 top_k_param="top_k",
                 rrf_k_param="rrf_k",
                 metric=metric,
+                approximate=approximate,
                 where_clause=where_scope,
             )
             params = {
@@ -2814,13 +2854,33 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
     """Oracle ADK memory store using sync oracledb driver."""
 
-    __slots__ = ("_in_memory",)
+    __slots__ = ("_approximate", "_fts_operator", "_in_memory")
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         super().__init__(config)
         validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory = bool(adk_config.get("in_memory", False))
+        self._fts_operator: str = str(adk_config.get("fts_operator", "ACCUM"))
+        self._approximate: bool = bool(adk_config.get("approximate", True))
+
+    @property
+    def fts_operator(self) -> str:
+        """Return the default Oracle Text operator for hybrid search."""
+        return self._fts_operator
+
+    @fts_operator.setter
+    def fts_operator(self, value: str) -> None:
+        self._fts_operator = value
+
+    @property
+    def approximate(self) -> bool:
+        """Return whether approximate vector search is enabled."""
+        return self._approximate
+
+    @approximate.setter
+    def approximate(self, value: bool) -> None:
+        self._approximate = bool(value)
 
     def create_tables(self) -> None:
         """Create the memory table when the data dictionary reports it missing."""
@@ -2904,10 +2964,19 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         try:
             if embedding is not None and self._use_fts:
                 return self._search_entries_hybrid_rrf(
-                    query, embedding, app_name, user_id, effective_limit, scope_filter
+                    query,
+                    embedding,
+                    app_name,
+                    user_id,
+                    effective_limit,
+                    scope_filter,
+                    fts_operator=self._fts_operator,
+                    approximate=self._approximate,
                 )
             if self._use_fts:
-                return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                return self._search_entries_fts(
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator
+                )
             return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
@@ -3098,9 +3167,16 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         return True
 
     def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        fts_operator: str = "ACCUM",
     ) -> "list[StoredMemory]":
-        sanitized_query = sanitize_oracle_text_query(query)
+        sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         if not sanitized_query:
             return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
@@ -3136,8 +3212,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         vector_column: str = "embedding",
         rrf_k: int = 60,
         metric: str = "COSINE",
+        fts_operator: str = "ACCUM",
+        approximate: bool = True,
     ) -> "list[StoredMemory]":
-        sanitized_query = sanitize_oracle_text_query(query)
+        sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         select_cols = (
             "id",
@@ -3161,6 +3239,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 vector_param="query_vector",
                 top_k_param="top_k",
                 metric=metric,
+                approximate=approximate,
                 where_clause=where_scope,
             )
             params: dict[str, Any] = {**scope_params, "query_vector": embedding, "top_k": limit}
@@ -3176,6 +3255,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 top_k_param="top_k",
                 rrf_k_param="rrf_k",
                 metric=metric,
+                approximate=approximate,
                 where_clause=where_scope,
             )
             params = {

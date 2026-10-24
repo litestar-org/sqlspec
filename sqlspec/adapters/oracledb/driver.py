@@ -22,6 +22,7 @@ from sqlspec.adapters.oracledb.core import (
     OracleSyncStreamSource,
     apply_oracle_session_trace_attributes,
     build_arrow_fetch_kwargs,
+    build_dbms_cloud_copy_data_sql,
     build_fetch_kwargs,
     build_insert_statement,
     build_pipeline_stack_result,
@@ -38,6 +39,7 @@ from sqlspec.adapters.oracledb.core import (
     default_statement_config,
     driver_profile,
     normalize_column_names,
+    resolve_dbms_cloud_source_uri,
     resolve_row_metadata,
     resolve_rowcount,
     supports_df_batches,
@@ -86,7 +88,7 @@ from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
@@ -904,8 +906,50 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        credential_name: str | None = None,
+        format_options: "Mapping[str, Any] | None" = None,
     ) -> "StorageBridgeJob":
-        """Load staged artifacts into Oracle."""
+        """Load staged artifacts into Oracle via ``DBMS_CLOUD.COPY_DATA`` or client-side Arrow."""
+        raw_credential = (
+            credential_name if credential_name is not None else self.driver_features.get("dbms_cloud_credential")
+        )
+        effective_credential = (
+            raw_credential.strip() if isinstance(raw_credential, str) and raw_credential.strip() else None
+        )
+        if effective_credential is not None:
+            resolved_source: StorageDestination = (
+                self._storage_pipeline().resolve_destination(source).uri
+                if isinstance(source, str) and source.startswith("alias://")
+                else source
+            )
+            remote_uri = resolve_dbms_cloud_source_uri(resolved_source, file_format=file_format)
+            if remote_uri is not None:
+                plsql, binds = build_dbms_cloud_copy_data_sql(
+                    table,
+                    credential_name=effective_credential,
+                    file_uri=remote_uri,
+                    file_format=file_format,
+                    format_options=format_options,
+                )
+                truncate_sql = build_truncate_statement(table) if overwrite else None
+                rows_processed = 0
+                exc_handler = self.handle_database_exceptions()
+                with self.with_cursor(self.connection) as cursor, exc_handler:
+                    if truncate_sql is not None:
+                        cursor.execute(truncate_sql)
+                    cursor.execute(plsql, binds)
+                    rows_processed = resolve_rowcount(cursor)
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+                telemetry_payload: StorageTelemetry = {
+                    "destination": table,
+                    "backend": "dbms_cloud",
+                    "format": file_format,
+                    "rows_processed": rows_processed,
+                    "extra": {"source_uri": remote_uri, "credential_name": effective_credential},
+                }
+                self._attach_partition_telemetry(telemetry_payload, partitioner)
+                return self._storage_job(telemetry_payload)
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
@@ -1635,8 +1679,50 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        credential_name: str | None = None,
+        format_options: "Mapping[str, Any] | None" = None,
     ) -> "StorageBridgeJob":
-        """Asynchronously load staged artifacts into Oracle."""
+        """Asynchronously load staged artifacts into Oracle via ``DBMS_CLOUD.COPY_DATA`` or client-side Arrow."""
+        raw_credential = (
+            credential_name if credential_name is not None else self.driver_features.get("dbms_cloud_credential")
+        )
+        effective_credential = (
+            raw_credential.strip() if isinstance(raw_credential, str) and raw_credential.strip() else None
+        )
+        if effective_credential is not None:
+            resolved_source: StorageDestination = (
+                self._storage_pipeline().resolve_destination(source).uri
+                if isinstance(source, str) and source.startswith("alias://")
+                else source
+            )
+            remote_uri = resolve_dbms_cloud_source_uri(resolved_source, file_format=file_format)
+            if remote_uri is not None:
+                plsql, binds = build_dbms_cloud_copy_data_sql(
+                    table,
+                    credential_name=effective_credential,
+                    file_uri=remote_uri,
+                    file_format=file_format,
+                    format_options=format_options,
+                )
+                truncate_sql = build_truncate_statement(table) if overwrite else None
+                rows_processed = 0
+                exc_handler = self.handle_database_exceptions()
+                async with self.with_cursor(self.connection) as cursor, exc_handler:
+                    if truncate_sql is not None:
+                        await cursor.execute(truncate_sql)
+                    await cursor.execute(plsql, binds)
+                    rows_processed = resolve_rowcount(cursor)
+                if exc_handler.pending_exception is not None:
+                    raise exc_handler.pending_exception from None
+                telemetry_payload: StorageTelemetry = {
+                    "destination": table,
+                    "backend": "dbms_cloud",
+                    "format": file_format,
+                    "rows_processed": rows_processed,
+                    "extra": {"source_uri": remote_uri, "credential_name": effective_credential},
+                }
+                self._attach_partition_telemetry(telemetry_payload, partitioner)
+                return self._storage_job(telemetry_payload)
         arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound

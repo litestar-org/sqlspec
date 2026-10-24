@@ -669,3 +669,56 @@ async def test_oracle_async_adk_memory_fts_sanitizes_query_and_hybrid_rrf_fuses_
     rrf_sql, rrf_params = cursor.calls[0]
     assert "rrf_score" in rrf_sql
     assert rrf_params["text_query"] == "{NOT} ACCUM {alpha} ACCUM {beta}"
+
+
+def test_oracle_sync_adk_memory_hybrid_rrf_near_and_exact_fallback() -> None:
+    """Sync ADK memory store forwards fts_operator='NEAR' and approximate=False."""
+    cursor = _RecordingCursor()
+    conn = _RecordingConnection(cursor)
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config.extension_config = {"adk": {"memory_use_fts": True, "fts_operator": "NEAR", "approximate": False}}
+    config.provide_connection = lambda *_a, **_k: conn
+    store = OracleSyncADKMemoryStore(config)
+
+    store.search_entries("dark roast espresso", embedding=[0.1, 0.2, 0.3], app_name="app", user_id="u1", limit=5)
+    assert len(cursor.calls) == 1
+    rrf_sql, rrf_params = cursor.calls[0]
+    assert rrf_params["text_query"] == "NEAR(({dark}, {roast}, {espresso}))"
+    assert "FETCH APPROX" not in rrf_sql
+    assert "FETCH FIRST :top_k ROWS ONLY" in rrf_sql
+
+    cursor.calls.clear()
+    store._search_entries_hybrid_rrf(
+        "   !@#   ", [0.1, 0.2, 0.3], "app", "u1", 5, fts_operator="NEAR", approximate=False
+    )
+    assert len(cursor.calls) == 1
+    vec_sql, _ = cursor.calls[0]
+    assert "FETCH APPROX" not in vec_sql
+    assert "FETCH FIRST :top_k ROWS ONLY" in vec_sql
+
+
+@pytest.mark.anyio
+async def test_oracle_async_adk_memory_hybrid_rrf_near_and_exact_fallback() -> None:
+    """Async ADK memory store forwards fts_operator='NEAR' and approximate=False."""
+    cursor = _AsyncRecordingCursor()
+    conn = _RecordingConnection(cursor)
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config.extension_config = {"adk": {"memory_use_fts": True, "fts_operator": "NEAR", "approximate": False}}
+    config.provide_connection = lambda *_a, **_k: conn
+    store = OracleAsyncADKMemoryStore(config)
+
+    await store.search_entries("dark roast espresso", embedding=[0.1, 0.2, 0.3], app_name="app", user_id="u1", limit=5)
+    assert len(cursor.calls) == 1
+    rrf_sql, rrf_params = cursor.calls[0]
+    assert rrf_params["text_query"] == "NEAR(({dark}, {roast}, {espresso}))"
+    assert "FETCH APPROX" not in rrf_sql
+    assert "FETCH FIRST :top_k ROWS ONLY" in rrf_sql
+
+    cursor.calls.clear()
+    await store._search_entries_hybrid_rrf(
+        "   !@#   ", [0.1, 0.2, 0.3], "app", "u1", 5, fts_operator="NEAR", approximate=False
+    )
+    assert len(cursor.calls) == 1
+    vec_sql, _ = cursor.calls[0]
+    assert "FETCH APPROX" not in vec_sql
+    assert "FETCH FIRST :top_k ROWS ONLY" in vec_sql

@@ -9,6 +9,83 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.69.0 - Oracle PKCS#12 wallet conversion, TNS alias resolution, proximity RRF, and server-side DBMS_CLOUD ingestion
+----------------------------------------------------------------------------------------------------------------------
+
+**Added:**
+
+* Added PKCS#12 (``ewallet.p12``) wallet conversion and direct directory wallet support
+  in ``wallet_location`` across ``OracleSyncConfig`` and ``OracleAsyncConfig``,
+  extracting certificates and keys to PEM format with deterministic SHA-256 directory
+  hashing, process-isolated temporary extraction directories, and ``0o700``/``0o600``
+  permission hardening guarding against symlink attacks.
+  (`#854 <https://github.com/litestar-org/sqlspec/issues/854>`_,
+  `#858 <https://github.com/litestar-org/sqlspec/pull/858>`_)
+* Added thread-safe wallet directory reference counting (``retain_extracted_wallet_dir``
+  and ``release_extracted_wallet_dir``) shared across parent configurations and cloned
+  sub-pools created via ``DatabaseConfig.derive_pool(...)``.
+  (`#854 <https://github.com/litestar-org/sqlspec/issues/854>`_,
+  `#858 <https://github.com/litestar-org/sqlspec/pull/858>`_)
+* Added process-isolated Oracle Net configuration parsing (``parse_oracle_net_config_dir``
+  and ``resolve_tns_alias_from_dir``) to resolve connection descriptors from ``tnsnames.ora``
+  and security parameters (``SSL_SERVER_DN_MATCH``) from ``sqlnet.ora`` without mutating the
+  global ``os.environ["TNS_ADMIN"]`` environment variable.
+  (`#854 <https://github.com/litestar-org/sqlspec/issues/854>`_,
+  `#858 <https://github.com/litestar-org/sqlspec/pull/858>`_)
+* Added Oracle Text proximity query operator support (``NEAR((...))``) in
+  ``sanitize_oracle_text_query`` and exposed ``fts_operator`` (``"AND"``, ``"OR"``,
+  ``"ACCUM"``, ``"NEAR"``) on ``OracleAsyncADKMemoryStore.search_entries`` and
+  ``OracleSyncADKMemoryStore.search_entries``.
+  (`#855 <https://github.com/litestar-org/sqlspec/issues/855>`_,
+  `#858 <https://github.com/litestar-org/sqlspec/pull/858>`_)
+* Added exact top-K fallback toggle (``approximate: bool = True``) to
+  ``build_oracle_hnsw_subquery``, ``build_oracle_hybrid_rrf_sql``, and
+  ``build_oracle_hybrid_rrf_query``, emitting exact ``FETCH FIRST :limit ROWS ONLY``
+  when disabled and approximate ``FETCH APPROX FIRST :limit ROWS ONLY WITH TARGET ACCURACY :target_accuracy``
+  when enabled, wired into ADK memory store search options.
+  (`#855 <https://github.com/litestar-org/sqlspec/issues/855>`_,
+  `#858 <https://github.com/litestar-org/sqlspec/pull/858>`_)
+* Implemented server-side ``DBMS_CLOUD.COPY_DATA`` ingestion in
+  ``OracleSyncDriver.load_from_storage`` and ``OracleAsyncDriver.load_from_storage``,
+  supporting S3 (``s3://``), Google Cloud Storage (``gs://``, ``gcs://``),
+  Azure Blob Storage (``wasbs://``, ``wasb://``, ``abfss://``, ``abfs://``), and Cloud
+  URI endpoints with preserved double-quoted table identifiers and transparent fallback
+  to streaming Apache Arrow IPC buffer insertion.
+  (`#856 <https://github.com/litestar-org/sqlspec/issues/856>`_,
+  `#858 <https://github.com/litestar-org/sqlspec/pull/858>`_)
+
+**Changed:**
+
+* Upgraded CI GitHub Actions across ``astral-sh/setup-uv`` (``10.3.0`` -> ``10.3.1``),
+  ``actions/setup-python`` (``7.0.0`` -> ``7.1.0``), and ``pypa/gh-action-pypi-publish``
+  (``1.14.2`` -> ``1.14.3``).
+  (`#857 <https://github.com/litestar-org/sqlspec/pull/857>`_)
+* Upgraded pre-commit ``ruff-pre-commit`` from ``v0.17.0`` to ``v0.17.1`` and
+  refreshed project lockfile dependencies in ``uv.lock`` (including ``fastapi``
+  ``0.162.0``, ``google-adk`` ``2.13.0``, ``starlette`` ``1.10.0``, ``pandas``
+  ``3.1.0``, ``opentelemetry-api`` / ``opentelemetry-sdk`` ``1.44.0``, and
+  ``botocore`` ``1.43.117``).
+
+**Fixed:**
+
+* Conformed ``OracleAsyncADKMemoryStore.search_entries`` and
+  ``OracleSyncADKMemoryStore.search_entries`` signatures to the abstract base contract
+  (``BaseAsyncADKMemoryStore`` and ``BaseSyncADKMemoryStore``), configuring
+  ``fts_operator`` and ``approximate`` at the store instance and extension configuration
+  level.
+  (`#858 <https://github.com/litestar-org/sqlspec/pull/858>`_)
+* Hardened ``DBMS_CLOUD.COPY_DATA`` execution against SQL injection by validating cloud
+  URI scheme prefixes (``s3://``, ``gs://``, ``gcs://``, ``wasbs://``, ``wasb://``,
+  ``abfss://``, ``abfs://``, ``https://``), escaping single quotes in credential names,
+  and preserving case-sensitive double-quoted table identifiers.
+  (`#856 <https://github.com/litestar-org/sqlspec/issues/856>`_,
+  `#858 <https://github.com/litestar-org/sqlspec/pull/858>`_)
+* Hardened PKCS#12 wallet extraction against symlink attacks and path traversal by enforcing
+  canonical path resolution, strict file and directory access permissions
+  (``0o700``/``0o600``), and atomic file replacement.
+  (`#854 <https://github.com/litestar-org/sqlspec/issues/854>`_,
+  `#858 <https://github.com/litestar-org/sqlspec/pull/858>`_)
+
 v0.68.0 - Oracle enterprise and 26ai capabilities, PostgreSQL pooler modes, Google ADK v2 parity, wire-level SQLCommenter, and DuckDB profiling
 ------------------------------------------------------------------------------------------------------------------------------------------------
 

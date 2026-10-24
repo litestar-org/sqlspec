@@ -3,15 +3,22 @@
 
 import inspect
 import io
+import os
 import shutil
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import NameOID
 
 import sqlspec.adapters.oracledb._typing as oracle_typing
-from sqlspec.adapters.oracledb import config
+from sqlspec.adapters.oracledb import config, parse_sqlnet_ora, parse_tnsnames_ora
 from sqlspec.adapters.oracledb._typing import OracleAsyncCursor
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleDriverFeatures, OracleSyncConfig
 from sqlspec.adapters.oracledb.core import (
@@ -283,6 +290,23 @@ def test_sanitize_oracle_text_query_escapes_reserved_words_and_syntax() -> None:
     assert sanitize_oracle_text_query("   !@#$%^&*()   ") == ""
 
 
+def test_sanitize_oracle_text_query_near_and_boolean_operators() -> None:
+    """NEAR operator should emit functional NEAR((...)) syntax and reject unknown operators."""
+    assert sanitize_oracle_text_query("dark roast espresso", operator="NEAR") == "NEAR(({dark}, {roast}, {espresso}))"
+    assert sanitize_oracle_text_query("dark roast", operator="near") == "NEAR(({dark}, {roast}))"
+    assert sanitize_oracle_text_query("espresso", operator="NEAR") == "{espresso}"
+    assert sanitize_oracle_text_query("   !@#$%^&*()   ", operator="NEAR") == ""
+    assert sanitize_oracle_text_query("alpha beta", operator="and") == "{alpha} AND {beta}"
+    assert sanitize_oracle_text_query("alpha beta", operator=" OR ") == "{alpha} OR {beta}"
+    assert sanitize_oracle_text_query("alpha beta", operator="accum") == "{alpha} ACCUM {beta}"
+
+    with pytest.raises(ImproperConfigurationError, match="Unsupported Oracle Text operator"):
+        sanitize_oracle_text_query("alpha beta", operator="WITHIN")
+
+    with pytest.raises(ImproperConfigurationError, match="Unsupported Oracle Text operator"):
+        sanitize_oracle_text_query("", operator="INVALID")
+
+
 def test_duality_view_etag_helpers_extract_inject_and_build_update_sql() -> None:
     doc = {"_metadata": {"etag": "etag-abc-123"}, "id": 42, "name": "Order"}
     assert extract_duality_etag(doc) == "etag-abc-123"
@@ -294,3 +318,162 @@ def test_duality_view_etag_helpers_extract_inject_and_build_update_sql() -> None
 
     sql = build_duality_etag_update_sql("orders_dv")
     assert "JSON_VALUE(DATA, '$._metadata.etag') = :expected_etag" in sql
+
+
+def test_extract_oracle_wallet_zip_converts_ewallet_p12_to_pem() -> None:
+    """Wallet archives containing only ewallet.p12 should materialize a 0o600 ewallet.pem."""
+    p12_bytes = _build_test_p12_bytes(b"WalletSecret123")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_bytes)
+        zf.writestr("tnsnames.ora", b"mydb_high = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb)(PORT=1522)))")
+
+    extracted_dir = extract_oracle_wallet_zip(buf.getvalue(), wallet_password="WalletSecret123")
+    try:
+        pem_path = extracted_dir / "ewallet.pem"
+        assert pem_path.is_file()
+        pem_text = pem_path.read_text(encoding="utf-8")
+        assert "-----BEGIN PRIVATE KEY-----" in pem_text
+        assert "-----BEGIN CERTIFICATE-----" in pem_text
+        assert (pem_path.stat().st_mode & 0o777) == 0o600
+        assert (extracted_dir.stat().st_mode & 0o777) == 0o700
+    finally:
+        shutil.rmtree(extracted_dir, ignore_errors=True)
+
+    with pytest.raises(ImproperConfigurationError, match="ewallet\\.p12"):
+        extract_oracle_wallet_zip(buf.getvalue(), wallet_password="WrongPassword")
+
+    with pytest.raises(ImproperConfigurationError, match="ewallet\\.p12"):
+        extract_oracle_wallet_zip(buf.getvalue())
+
+
+def test_extract_oracle_wallet_zip_deterministic_hash_and_directory_input(tmp_path: Path) -> None:
+    """Wallet extraction should reuse content-hashed temp dirs and accept pre-extracted directories."""
+    p12_unencrypted = _build_test_p12_bytes(None)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_unencrypted)
+        zf.writestr("tnsnames.ora", b"mydb_tp = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb)(PORT=1522)))")
+
+    first_dir = extract_oracle_wallet_zip(buf.getvalue())
+    second_dir = extract_oracle_wallet_zip(buf.getvalue())
+    try:
+        assert first_dir == second_dir
+        assert (first_dir / "ewallet.pem").is_file()
+    finally:
+        shutil.rmtree(first_dir, ignore_errors=True)
+
+    wallet_dir = tmp_path / "existing_wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "ewallet.p12").write_bytes(_build_test_p12_bytes(b"DirSecret"))
+    (wallet_dir / "tnsnames.ora").write_text(
+        "mydb_low = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb)(PORT=1522)))", encoding="utf-8"
+    )
+
+    resolved_dir = extract_oracle_wallet_zip(wallet_dir, wallet_password="DirSecret")
+    assert resolved_dir == wallet_dir.resolve()
+    assert (wallet_dir / "ewallet.pem").is_file()
+    assert ((wallet_dir / "ewallet.pem").stat().st_mode & 0o777) == 0o600
+
+    empty_dir = tmp_path / "empty_wallet"
+    empty_dir.mkdir()
+    with pytest.raises(ImproperConfigurationError):
+        extract_oracle_wallet_zip(empty_dir)
+
+
+def test_parse_tnsnames_ora_and_sqlnet_ora_multiline_and_comments(tmp_path: Path) -> None:
+    """TNS and sqlnet parsers should handle comments, multi-line descriptors, and alias lists."""
+    tns_content = (
+        "# Autonomous Database TNS aliases\n"
+        "mydb_high, mydb_tp =\n"
+        "  (DESCRIPTION =\n"
+        "    (RETRY_COUNT = 20)\n"
+        "    (ADDRESS = (PROTOCOL = TCPS)(PORT = 1522)(HOST = adb.us-ashburn-1.oraclecloud.com))\n"
+        "    (CONNECT_DATA = (SERVICE_NAME = g123_mydb_high.adb.oraclecloud.com))\n"
+        "    (SECURITY = (SSL_SERVER_DN_MATCH = YES))\n"
+        "  )\n"
+        "\n"
+        "mydb_low = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(PORT=1522)(HOST=adb.oraclecloud.com))"
+        "(CONNECT_DATA=(SERVICE_NAME=g123_mydb_low.adb.oraclecloud.com)))\n"
+    )
+    tns_file = tmp_path / "tnsnames.ora"
+    tns_file.write_text(tns_content, encoding="utf-8")
+
+    parsed_from_file = parse_tnsnames_ora(tns_file)
+    parsed_from_dir = parse_tnsnames_ora(tmp_path)
+    parsed_from_text = parse_tnsnames_ora(tns_content)
+    assert parsed_from_file == parsed_from_dir == parsed_from_text
+    assert "mydb_high" in parsed_from_file
+    assert "mydb_tp" in parsed_from_file
+    assert parsed_from_file["mydb_high"] == parsed_from_file["mydb_tp"]
+    assert "(SERVICE_NAME = g123_mydb_high.adb.oraclecloud.com)" in parsed_from_file["mydb_high"]
+    assert "mydb_low" in parsed_from_file
+    assert os.environ.get("TNS_ADMIN") is None or str(tmp_path) != os.environ.get("TNS_ADMIN")
+
+    sqlnet_file = tmp_path / "sqlnet.ora"
+    sqlnet_file.write_text(
+        '# Wallet settings\nWALLET_LOCATION = (SOURCE = (METHOD = file))\nSSL_SERVER_DN_MATCH = "yes"\n',
+        encoding="utf-8",
+    )
+    sqlnet_settings = parse_sqlnet_ora(sqlnet_file)
+    assert sqlnet_settings["SSL_SERVER_DN_MATCH"] == "yes"
+
+    eq_dir = tmp_path / "env=prod"
+    eq_dir.mkdir()
+    (eq_dir / "tnsnames.ora").write_text(tns_content, encoding="utf-8")
+    (eq_dir / "sqlnet.ora").write_text("SSL_SERVER_DN_MATCH = no\n", encoding="utf-8")
+    assert parse_tnsnames_ora(str(eq_dir))["mydb_low"] == parsed_from_file["mydb_low"]
+    assert parse_tnsnames_ora(str(eq_dir / "tnsnames.ora"))["mydb_tp"] == parsed_from_file["mydb_tp"]
+    assert parse_sqlnet_ora(str(eq_dir))["SSL_SERVER_DN_MATCH"] == "no"
+    assert parse_sqlnet_ora(str(eq_dir / "sqlnet.ora"))["SSL_SERVER_DN_MATCH"] == "no"
+
+
+def test_extract_oracle_wallet_zip_rejects_symlinks(tmp_path: Path) -> None:
+    """Wallet extraction rejects symlinked target directories and symlinked wallet files."""
+    p12_bytes = _build_test_p12_bytes(None)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_bytes)
+        zf.writestr("tnsnames.ora", b"mydb_tp = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb)(PORT=1522)))")
+
+    real_dir = tmp_path / "real_target"
+    real_dir.mkdir()
+    symlink_target = tmp_path / "symlink_target"
+    symlink_target.symlink_to(real_dir)
+
+    with pytest.raises(ImproperConfigurationError, match="symlink"):
+        extract_oracle_wallet_zip(buf.getvalue(), target_dir=symlink_target)
+
+    valid_target = tmp_path / "valid_target"
+    valid_target.mkdir(mode=0o700)
+    decoy_file = tmp_path / "decoy.pem"
+    decoy_file.write_text("ORIGINAL", encoding="utf-8")
+    (valid_target / "ewallet.pem").symlink_to(decoy_file)
+
+    with pytest.raises(ImproperConfigurationError, match="symlink"):
+        extract_oracle_wallet_zip(buf.getvalue(), target_dir=valid_target)
+    assert decoy_file.read_text(encoding="utf-8") == "ORIGINAL"
+
+
+def _build_test_p12_bytes(password: bytes | None = b"WalletSecret123") -> bytes:
+    """Generate an in-memory PKCS#12 wallet payload with a private key and self-signed certificate."""
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "adb.oraclecloud.com")])
+    now = datetime.now(UTC)
+    cert = (
+        x509
+        .CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=1))
+        .sign(private_key, hashes.SHA256())
+    )
+    encryption = (
+        serialization.BestAvailableEncryption(password) if password is not None else serialization.NoEncryption()
+    )
+    return pkcs12.serialize_key_and_certificates(
+        name=b"oracle-wallet", key=private_key, cert=cert, cas=[cert], encryption_algorithm=encryption
+    )

@@ -1,8 +1,10 @@
 """OracleDB configuration tests covering driver kwargs and typed options."""
 
 import io
+import os
 import zipfile
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from inspect import isawaitable
 from pathlib import Path
 from ssl import TLSVersion
@@ -10,6 +12,11 @@ from typing import Any, NotRequired, cast, get_args, get_origin, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, Mock, call
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import NameOID
 from oracledb import AuthMode, PoolGetMode, Purity
 
 from sqlspec.adapters.oracledb import (
@@ -104,6 +111,7 @@ def test_oracle_connection_params_expose_current_driver_options() -> None:
         "tag",
         "terminal",
         "thick_mode_dsn_passthrough",
+        "tns_alias",
         "use_sni",
         "use_tcp_fast_open",
         "wallet_password",
@@ -379,6 +387,80 @@ def test_oracle_config_wallet_zip_extracted_and_cleaned_up_on_close_pool() -> No
     assert not Path(wallet_dir).exists()
 
 
+@pytest.mark.anyio
+async def test_oracle_config_p12_wallet_tns_alias_and_existing_wallet_dir_preserved(tmp_path: Path) -> None:
+    """Sync and async configs should convert ewallet.p12, resolve tns_alias, and preserve user wallet dirs."""
+    p12_bytes = _make_p12_wallet_bytes(b"WalletSecret123")
+    tns_text = (
+        "mydb_high = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb.oraclecloud.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=mydb_high.adb.oraclecloud.com)))\n"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_bytes)
+        zf.writestr("tnsnames.ora", tns_text)
+        zf.writestr("sqlnet.ora", "SSL_SERVER_DN_MATCH = yes\n")
+
+    prior_tns_admin = os.environ.get("TNS_ADMIN")
+    sync_cfg = OracleSyncConfig(
+        connection_instance=Mock(),
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": buf.getvalue(),
+            "wallet_password": "WalletSecret123",
+            "tns_alias": "MYDB_HIGH",
+        },
+    )
+    try:
+        assert os.environ.get("TNS_ADMIN") == prior_tns_admin
+        assert "tns_alias" not in sync_cfg.connection_config
+        assert "(SERVICE_NAME=mydb_high.adb.oraclecloud.com)" in sync_cfg.connection_config["dsn"]
+        assert sync_cfg.connection_config["ssl_server_dn_match"] is True
+        assert sync_cfg._extracted_wallet_dir is not None
+        assert (sync_cfg._extracted_wallet_dir / "ewallet.pem").is_file()
+    finally:
+        sync_cfg._close_pool()
+
+    user_wallet_dir = tmp_path / "user_wallet"
+    user_wallet_dir.mkdir()
+    (user_wallet_dir / "ewallet.p12").write_bytes(p12_bytes)
+    (user_wallet_dir / "tnsnames.ora").write_text(tns_text, encoding="utf-8")
+    (user_wallet_dir / "sqlnet.ora").write_text("SSL_SERVER_DN_MATCH = OFF\n", encoding="utf-8")
+
+    pool_async = MagicMock()
+    pool_async.close = AsyncMock()
+    async_cfg = OracleAsyncConfig(
+        connection_instance=pool_async,
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": user_wallet_dir,
+            "wallet_password": "WalletSecret123",
+            "dsn": "mydb_high",
+        },
+    )
+    assert async_cfg._extracted_wallet_dir is None
+    assert "(SERVICE_NAME=mydb_high.adb.oraclecloud.com)" in async_cfg.connection_config["dsn"]
+    assert async_cfg.connection_config["ssl_server_dn_match"] is False
+    assert (user_wallet_dir / "ewallet.pem").is_file()
+
+    await async_cfg._close_pool()
+    assert user_wallet_dir.exists()
+    assert (user_wallet_dir / "ewallet.pem").is_file()
+
+    with pytest.raises(ImproperConfigurationError, match="not found in tnsnames\\.ora"):
+        OracleSyncConfig(
+            connection_config={
+                "user": "admin",
+                "password": "pw",
+                "wallet_zip": user_wallet_dir,
+                "wallet_password": "WalletSecret123",
+                "tns_alias": "nonexistent_alias",
+            }
+        )
+
+
 def test_oracle_derive_pool_preserves_popped_callbacks_and_applies_overrides() -> None:
     def _session_cb(conn: Any, tag: str) -> None:
         return None
@@ -592,3 +674,97 @@ async def test_oracle_sync_and_async_provide_connection_and_session_run_checkout
     assert "DBMS_SESSION.SET_IDENTIFIER" in executed_async[0]
     assert "DBMS_SESSION.RESET_PACKAGE;" in executed_async[1]
     pool_async.release.assert_awaited_once_with(conn_async)
+
+
+@pytest.mark.anyio
+async def test_oracle_shared_wallet_zip_refcounted_across_pools_and_derive_pool() -> None:
+    """Shared deterministic wallet extractions survive single-pool teardown until the final owner closes."""
+    p12_bytes = _make_p12_wallet_bytes(b"WalletSecret123")
+    tns_text = (
+        "mydb_tp = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb.oraclecloud.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=mydb_tp.adb.oraclecloud.com)))\n"
+        "mydb_low = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb.oraclecloud.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=mydb_low.adb.oraclecloud.com)))\n"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_bytes)
+        zf.writestr("tnsnames.ora", tns_text)
+    archive_bytes = buf.getvalue()
+
+    with pytest.raises(ImproperConfigurationError, match="not found in tnsnames\\.ora"):
+        OracleSyncConfig(
+            connection_config={
+                "user": "admin",
+                "password": "pw",
+                "wallet_zip": archive_bytes,
+                "wallet_password": "WalletSecret123",
+                "tns_alias": "missing_alias",
+            }
+        )
+
+    sync_cfg = OracleSyncConfig(
+        connection_instance=Mock(),
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": archive_bytes,
+            "wallet_password": "WalletSecret123",
+            "tns_alias": "mydb_tp",
+        },
+    )
+    pool_async = MagicMock()
+    pool_async.close = AsyncMock()
+    async_cfg = OracleAsyncConfig(
+        connection_instance=pool_async,
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": archive_bytes,
+            "wallet_password": "WalletSecret123",
+            "tns_alias": "mydb_low",
+        },
+    )
+    derived_cfg = sync_cfg.derive_pool(min=2)
+
+    shared_dir = sync_cfg._extracted_wallet_dir
+    assert shared_dir is not None
+    assert async_cfg._extracted_wallet_dir == shared_dir
+    assert derived_cfg._extracted_wallet_dir == shared_dir
+    assert (shared_dir / "ewallet.pem").is_file()
+
+    sync_cfg._close_pool()
+    assert shared_dir.is_dir()
+    assert (shared_dir / "ewallet.pem").is_file()
+
+    await async_cfg._close_pool()
+    assert shared_dir.is_dir()
+    assert (shared_dir / "ewallet.pem").is_file()
+
+    derived_cfg._close_pool()
+    assert not shared_dir.exists()
+
+
+def _make_p12_wallet_bytes(password: bytes = b"WalletSecret123") -> bytes:
+    """Create a test PKCS#12 payload for Oracle config wallet tests."""
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "adb.oraclecloud.com")])
+    now = datetime.now(UTC)
+    cert = (
+        x509
+        .CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=1))
+        .sign(private_key, hashes.SHA256())
+    )
+    return pkcs12.serialize_key_and_certificates(
+        name=b"adb",
+        key=private_key,
+        cert=cert,
+        cas=None,
+        encryption_algorithm=serialization.BestAvailableEncryption(password),
+    )

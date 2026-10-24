@@ -1,10 +1,15 @@
 """OracleDB adapter compiled helpers."""
 
+import atexit
 import contextlib
+import hashlib
 import io
+import os
 import re
 import shutil
+import stat
 import tempfile
+import threading
 import zipfile
 from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
 from pathlib import Path
@@ -52,6 +57,7 @@ from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
 
@@ -92,6 +98,8 @@ __all__ = (
     "apply_oracle_session_trace_attributes",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
+    "build_dbms_cloud_copy_data_sql",
+    "build_dbms_cloud_format_json",
     "build_duality_etag_update_sql",
     "build_fetch_kwargs",
     "build_insert_statement",
@@ -129,8 +137,13 @@ __all__ = (
     "normalize_execute_many_parameters_sync",
     "oracle_df_batches_to_arrow_reader",
     "oracle_df_to_arrow_table",
+    "parse_sqlnet_ora",
+    "parse_tnsnames_ora",
+    "release_extracted_wallet_dir",
+    "resolve_dbms_cloud_source_uri",
     "resolve_row_metadata",
     "resolve_rowcount",
+    "retain_extracted_wallet_dir",
     "sanitize_oracle_text_query",
     "supports_df_batches",
     "supports_direct_path_load",
@@ -318,11 +331,12 @@ SPARSE_VECTOR_MIN_DATABASE_MAJOR: int = 23
 
 ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = True
 
-VALID_ORACLE_DRIVER_FEATURE_KEYS: "Final[frozenset[str]]" = frozenset({
+VALID_ORACLE_DRIVER_FEATURE_KEYS: Final[frozenset[str]] = frozenset({
     "_statement_cache_holder",
     "arraysize",
     "arrow_requested_schema",
     "custom",
+    "dbms_cloud_credential",
     "enable_direct_path_load",
     "enable_events",
     "enable_lob_fetch",
@@ -347,9 +361,28 @@ VALID_ORACLE_DRIVER_FEATURE_KEYS: "Final[frozenset[str]]" = frozenset({
     "vector_return_format",
 })
 
+_DBMS_CLOUD_FORMAT_MAP: Final[dict[str, str]] = {
+    "parquet": "parquet",
+    "csv": "csv",
+    "json": "json",
+    "jsonl": "json",
+    "ndjson": "json",
+}
+
+_ORACLE_UPPER_SIMPLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Z][A-Z0-9_$#]*$")
+_WALLET_DIR_MODE: Final[int] = 0o700
+_WALLET_FILE_MODE: Final[int] = 0o600
+_MIN_QUOTED_IDENTIFIER_LEN: Final[int] = 2
+_QUALIFIED_TABLE_PARTS: Final[int] = 2
+_WALLET_DIR_LOCK: Final[threading.Lock] = threading.Lock()
+_WALLET_DIR_REFCOUNTS: Final[dict[Path, int]] = {}
+_ATEXIT_WALLET_DIRS: Final[set[Path]] = set()
+_ATEXIT_WALLET_HOOK_REGISTERED: list[bool] = [False]
+
 _ORACLE_TIME_ZONE_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Za-z0-9_+\-/:]{1,64}$")
 _ORACLE_NLS_KEY_PATTERN: "re.Pattern[str]" = re.compile(r"^NLS_[A-Z0-9_]{1,60}$")
 _ORACLE_TEXT_TOKEN_PATTERN: "re.Pattern[str]" = re.compile(r"[A-Za-z0-9_]+")
+_ORACLE_TEXT_OPERATORS: Final[frozenset[str]] = frozenset({"ACCUM", "AND", "OR", "NEAR"})
 _ORACLE_TEXT_RESERVED_OPERATORS: "frozenset[str]" = frozenset({
     "ABOUT",
     "ACCUM",
@@ -1741,44 +1774,201 @@ default_statement_config = build_statement_config()
 
 
 def extract_oracle_wallet_zip(
-    wallet_zip: "Path | str | bytes", target_dir: "Path | None" = None, *, prefix: str = "sqlspec_oracle_wallet_"
+    wallet_zip: "Path | str | bytes",
+    target_dir: "Path | None" = None,
+    *,
+    prefix: str = "sqlspec_oracle_wallet_",
+    wallet_password: "str | bytes | None" = None,
 ) -> Path:
-    """Extract an Oracle mTLS wallet archive safely into a 0o700 directory.
+    """Extract or prepare an Oracle mTLS wallet into a 0o700 directory.
 
-    Validates all archive entries against path traversal (ZipSlip), sets
-    ``0o600`` permissions on extracted files, and verifies expected Oracle
-    wallet artifacts (``ewallet.pem`` or ``tnsnames.ora``) exist.
+    Supports ``.zip`` wallet archives (as file paths or raw ``bytes``) and
+    pre-extracted wallet directories. Validates archive entries against path
+    traversal (ZipSlip), enforces ``0o600`` permissions on wallet files,
+    converts PKCS#12 ``ewallet.p12`` bundles to ``ewallet.pem`` when
+    ``ewallet.pem`` is absent, and reuses a deterministic SHA-256
+    content-hashed temporary directory when ``target_dir`` is omitted.
 
     Args:
-        wallet_zip: Path to a wallet ``.zip`` archive or raw archive bytes.
-        target_dir: Optional directory to extract into. When ``None``, creates
-            a temporary directory with ``prefix``.
+        wallet_zip: Path to a wallet ``.zip`` archive, raw archive bytes, or
+            path to an existing extracted wallet directory.
+        target_dir: Optional directory to extract into. When ``None``,
+            existing directories are validated in-place and ``.zip`` archives
+            use a deterministic content-hashed directory under the system
+            temp root.
         prefix: Temporary directory prefix when ``target_dir`` is omitted.
+        wallet_password: Optional passphrase used to decrypt ``ewallet.p12``
+            when ``ewallet.pem`` is not present.
 
     Returns:
-        Path to the extracted wallet directory.
+        Path to the prepared wallet directory.
 
     Raises:
-        ImproperConfigurationError: If the archive is missing, corrupt, contains
-            unsafe paths, or lacks required wallet files.
+        ImproperConfigurationError: If the wallet source is missing, corrupt,
+            contains unsafe paths, cannot decrypt ``ewallet.p12``, or lacks
+            required wallet artifacts.
     """
-    created_temp = target_dir is None
+    if isinstance(wallet_zip, (str, Path)):
+        candidate_dir = Path(wallet_zip)
+        if candidate_dir.is_symlink():
+            msg = f"Unsafe symlink for Oracle wallet directory: {candidate_dir}"
+            raise ImproperConfigurationError(msg)
+        if candidate_dir.is_dir():
+            return _prepare_wallet_directory_source(
+                candidate_dir.resolve(), target_dir=target_dir, prefix=prefix, wallet_password=wallet_password
+            )
+
+    if isinstance(wallet_zip, bytes):
+        archive_bytes = wallet_zip
+    else:
+        zip_path = Path(wallet_zip)
+        if not zip_path.is_file():
+            msg = f"Oracle wallet archive does not exist: {zip_path}"
+            raise ImproperConfigurationError(msg)
+        archive_bytes = zip_path.read_bytes()
+
     if target_dir is None:
-        extract_dir = Path(tempfile.mkdtemp(prefix=prefix))
+        digest = _compute_wallet_digest(archive_bytes, wallet_password)
+        extract_dir = _default_temp_wallet_dir(prefix, digest)
+        if _is_prepared_wallet_dir(extract_dir, check_owner=True):
+            _track_atexit_wallet_dir(extract_dir)
+            return extract_dir
+        cleanup_on_error = not extract_dir.exists()
+        _ensure_private_wallet_dir(extract_dir, check_owner=True)
+        _track_atexit_wallet_dir(extract_dir)
     else:
         extract_dir = Path(target_dir)
-        extract_dir.mkdir(parents=True, exist_ok=True)
-    extract_dir.chmod(0o700)
+        cleanup_on_error = False
+        _ensure_private_wallet_dir(extract_dir, check_owner=False)
 
     resolved_root = extract_dir.resolve()
     try:
-        _extract_wallet_archive_into(wallet_zip, extract_dir, resolved_root)
+        _extract_wallet_bytes_into(archive_bytes, extract_dir, resolved_root, wallet_password=wallet_password)
     except BaseException:
-        if created_temp:
+        if cleanup_on_error:
             shutil.rmtree(extract_dir, ignore_errors=True)
         raise
 
     return extract_dir
+
+
+def retain_extracted_wallet_dir(wallet_dir: Path) -> None:
+    """Increment the active pool reference count for an extracted temporary wallet directory.
+
+    Args:
+        wallet_dir: Temporary wallet directory owned by one or more pool configurations.
+    """
+    resolved = wallet_dir.resolve()
+    with _WALLET_DIR_LOCK:
+        _WALLET_DIR_REFCOUNTS[resolved] = _WALLET_DIR_REFCOUNTS.get(resolved, 0) + 1
+        _ATEXIT_WALLET_DIRS.add(resolved)
+        _ensure_atexit_wallet_hook_locked()
+
+
+def release_extracted_wallet_dir(wallet_dir: Path) -> None:
+    """Decrement the active pool reference count and delete the wallet directory when unused.
+
+    Args:
+        wallet_dir: Temporary wallet directory previously retained by a pool configuration.
+    """
+    resolved = wallet_dir.resolve()
+    should_delete = False
+    with _WALLET_DIR_LOCK:
+        remaining = _WALLET_DIR_REFCOUNTS.get(resolved, 0) - 1
+        if remaining <= 0:
+            _WALLET_DIR_REFCOUNTS.pop(resolved, None)
+            _ATEXIT_WALLET_DIRS.discard(resolved)
+            should_delete = True
+        else:
+            _WALLET_DIR_REFCOUNTS[resolved] = remaining
+    if should_delete:
+        shutil.rmtree(resolved, ignore_errors=True)
+
+
+def parse_tnsnames_ora(source: "str | Path") -> "dict[str, str]":
+    """Parse an Oracle ``tnsnames.ora`` file, directory, or text payload.
+
+    Args:
+        source: Path to ``tnsnames.ora``, path to a directory containing
+            ``tnsnames.ora``, or raw ``tnsnames.ora`` file contents.
+
+    Returns:
+        Mapping of lowercase TNS service alias to normalized ``(DESCRIPTION=...)``
+        connect descriptor string.
+    """
+    text = _read_ora_config_text(source, "tnsnames.ora")
+    if not text:
+        return {}
+    cleaned_lines = [stripped.rstrip() for raw in text.splitlines() if (stripped := _strip_ora_comment(raw)).strip()]
+    content = "\n".join(cleaned_lines)
+    entries: dict[str, str] = {}
+    idx = 0
+    length = len(content)
+    while idx < length:
+        eq_pos = content.find("=", idx)
+        if eq_pos == -1:
+            break
+        lhs = content[idx:eq_pos].strip()
+        rhs_start = eq_pos + 1
+        while rhs_start < length and content[rhs_start].isspace():
+            rhs_start += 1
+        if rhs_start >= length:
+            break
+        if content[rhs_start] != "(":
+            line_end = content.find("\n", rhs_start)
+            idx = length if line_end == -1 else line_end + 1
+            continue
+        pos = _scan_balanced_ora_parens(content, rhs_start)
+        descriptor = " ".join(content[rhs_start:pos].split())
+        for raw_alias in lhs.replace("\n", " ").split(","):
+            alias = raw_alias.strip().lower()
+            if alias:
+                entries[alias] = descriptor
+        idx = pos
+    return entries
+
+
+def parse_sqlnet_ora(source: "str | Path") -> "dict[str, str]":
+    """Parse an Oracle ``sqlnet.ora`` file, directory, or text payload.
+
+    Args:
+        source: Path to ``sqlnet.ora``, path to a directory containing
+            ``sqlnet.ora``, or raw ``sqlnet.ora`` file contents.
+
+    Returns:
+        Mapping of uppercase parameter name to string value.
+    """
+    text = _read_ora_config_text(source, "sqlnet.ora")
+    if not text:
+        return {}
+    cleaned_lines = [stripped.rstrip() for raw in text.splitlines() if (stripped := _strip_ora_comment(raw)).strip()]
+    content = "\n".join(cleaned_lines)
+    settings: dict[str, str] = {}
+    idx = 0
+    length = len(content)
+    while idx < length:
+        eq_pos = content.find("=", idx)
+        if eq_pos == -1:
+            break
+        raw_lhs = content[idx:eq_pos].strip()
+        norm_key = raw_lhs.splitlines()[-1].strip().upper() if raw_lhs else ""
+        rhs_start = eq_pos + 1
+        while rhs_start < length and content[rhs_start].isspace():
+            rhs_start += 1
+        if rhs_start >= length:
+            break
+        if content[rhs_start] == "(":
+            pos = _scan_balanced_ora_parens(content, rhs_start)
+            norm_val = " ".join(content[rhs_start:pos].split())
+            idx = pos
+        else:
+            line_end = content.find("\n", rhs_start)
+            pos = length if line_end == -1 else line_end
+            norm_val = content[rhs_start:pos].strip().strip('"').strip("'")
+            idx = pos + 1
+        if norm_key:
+            settings[norm_key] = norm_val
+    return settings
 
 
 def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") -> str:
@@ -1836,6 +2026,402 @@ def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") 
         connect_parts.append(f"(FAILOVER_MODE={''.join(fm_clauses)})")
     desc_parts.append(f"(CONNECT_DATA={''.join(connect_parts)})")
     return f"(DESCRIPTION={''.join(desc_parts)})"
+
+
+def build_session_checkout_plsql(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any]]":
+    """Compile checkout session context into a single PL/SQL block and bind parameters."""
+    plsql, bind_params, _ = _build_session_checkout_plan(config)
+    return plsql, bind_params
+
+
+def build_session_context_plsql(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any]]":
+    """Return checkout PL/SQL block and bind parameters for :class:`OracleSessionContextConfig`."""
+    return build_session_checkout_plsql(config)
+
+
+def build_session_release_plsql(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any]]":
+    """Compile release reset PL/SQL block and bind parameters."""
+    plsql, bind_params, _ = _build_session_release_plan(config)
+    return plsql, bind_params
+
+
+def build_session_reset_plsql(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any]]":
+    """Return release reset PL/SQL block and bind parameters for :class:`OracleSessionContextConfig`."""
+    return build_session_release_plsql(config)
+
+
+def execute_session_checkout_sync(connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]") -> None:
+    """Apply TTC piggyback attributes and execute session checkout PL/SQL synchronously."""
+    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
+    for attr_name, attr_val in piggyback_attrs.items():
+        with contextlib.suppress(AttributeError):
+            setattr(connection, attr_name, attr_val)
+    if plsql is not None:
+        with connection.cursor() as cursor:
+            if bind_params:
+                cursor.execute(plsql, bind_params)
+            else:
+                cursor.execute(plsql)
+
+
+def execute_session_release_sync(connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]") -> None:
+    """Clear TTC piggyback attributes and execute session release PL/SQL synchronously."""
+    plsql, bind_params, piggyback_attrs = _build_session_release_plan(config)
+    for attr_name, attr_val in piggyback_attrs.items():
+        with contextlib.suppress(AttributeError):
+            setattr(connection, attr_name, attr_val)
+    if plsql is not None:
+        with connection.cursor() as cursor:
+            if bind_params:
+                cursor.execute(plsql, bind_params)
+            else:
+                cursor.execute(plsql)
+
+
+async def execute_session_checkout_async(
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]"
+) -> None:
+    """Apply TTC piggyback attributes and execute session checkout PL/SQL asynchronously."""
+    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
+    for attr_name, attr_val in piggyback_attrs.items():
+        with contextlib.suppress(AttributeError):
+            setattr(connection, attr_name, attr_val)
+    if plsql is not None:
+        with connection.cursor() as cursor:
+            if bind_params:
+                await cursor.execute(plsql, bind_params)
+            else:
+                await cursor.execute(plsql)
+
+
+async def execute_session_release_async(
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]"
+) -> None:
+    """Clear TTC piggyback attributes and execute session release PL/SQL asynchronously."""
+    plsql, bind_params, piggyback_attrs = _build_session_release_plan(config)
+    for attr_name, attr_val in piggyback_attrs.items():
+        with contextlib.suppress(AttributeError):
+            setattr(connection, attr_name, attr_val)
+    if plsql is not None:
+        with connection.cursor() as cursor:
+            if bind_params:
+                await cursor.execute(plsql, bind_params)
+            else:
+                await cursor.execute(plsql)
+
+
+def sanitize_oracle_text_query(raw_query: str, *, operator: str = "ACCUM") -> str:
+    """Sanitize a free-text search string for Oracle Text ``CONTAINS``.
+
+    Extracts alphanumeric tokens and wraps each token in ``{token}`` literal
+    braces so user queries containing Oracle Text reserved keywords or syntax
+    punctuation never raise ``DRG-50901``. When ``operator="NEAR"``, multi-token
+    queries are formatted using functional ``NEAR(({tok1}, {tok2}, ...))`` syntax.
+
+    Args:
+        raw_query: Raw user search string.
+        operator: Operator used to join escaped tokens (``"ACCUM"``, ``"AND"``,
+            ``"OR"``, or ``"NEAR"``, case-insensitive; defaults to ``"ACCUM"``).
+
+    Returns:
+        Sanitized Oracle Text query string, or ``""`` when no tokens remain.
+
+    Raises:
+        ImproperConfigurationError: If ``operator`` is not a supported Oracle Text operator.
+    """
+    normalized_op = operator.strip().upper()
+    if normalized_op not in _ORACLE_TEXT_OPERATORS:
+        msg = f"Unsupported Oracle Text operator: {operator!r}"
+        raise ImproperConfigurationError(msg)
+    if not raw_query or not raw_query.strip():
+        return ""
+    tokens = [match.group(0) for match in _ORACLE_TEXT_TOKEN_PATTERN.finditer(raw_query)]
+    if not tokens:
+        return ""
+    escaped = [f"{{{tok}}}" for tok in tokens]
+    if normalized_op == "NEAR":
+        if len(escaped) == 1:
+            return escaped[0]
+        return f"NEAR(({', '.join(escaped)}))"
+    return f" {normalized_op} ".join(escaped)
+
+
+def extract_duality_view_etag(row_or_doc: "Mapping[str, Any] | str | bytes") -> str | None:
+    """Extract ``_metadata.etag`` from an Oracle 26ai JSON Relational Duality View document or row.
+
+    Args:
+        row_or_doc: Duality view document mapping, row mapping containing a
+            ``data``/``DATA`` document, or raw JSON string/bytes.
+
+    Returns:
+        The hex ETag string if present, otherwise ``None``.
+    """
+    parsed: Any = row_or_doc
+    if isinstance(parsed, (str, bytes)):
+        try:
+            parsed = from_json(parsed)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(parsed, Mapping):
+        return None
+    metadata = parsed.get("_metadata")
+    if isinstance(metadata, Mapping):
+        etag = metadata.get("etag")
+        if isinstance(etag, str) and etag:
+            return etag
+    for key in ("data", "DATA"):
+        nested = parsed.get(key)
+        if isinstance(nested, (str, bytes)):
+            try:
+                nested = from_json(nested)
+            except (ValueError, TypeError):
+                continue
+        if isinstance(nested, Mapping):
+            nested_meta = nested.get("_metadata")
+            if isinstance(nested_meta, Mapping):
+                etag = nested_meta.get("etag")
+                if isinstance(etag, str) and etag:
+                    return etag
+    return None
+
+
+def extract_duality_etag(payload: "Mapping[str, Any] | str | bytes") -> str | None:
+    """Alias for :func:`extract_duality_view_etag`."""
+    return extract_duality_view_etag(payload)
+
+
+def inject_duality_view_etag(doc: "Mapping[str, Any]", etag: str) -> "dict[str, Any]":
+    """Return a copy of a Duality View document with ``_metadata.etag`` injected for optimistic concurrency."""
+    result: dict[str, Any] = dict(doc)
+    existing_meta = result.get("_metadata")
+    merged_meta: dict[str, Any] = dict(existing_meta) if isinstance(existing_meta, Mapping) else {}
+    merged_meta["etag"] = etag
+    result["_metadata"] = merged_meta
+    return result
+
+
+def build_duality_etag_update_sql(
+    view_name: str, id_column: str = "ID", data_column: str = "DATA", *, etag_param: str = "expected_etag"
+) -> str:
+    """Build an optimistic-concurrency ``UPDATE`` statement for an Oracle 26ai JSON Relational Duality View."""
+    _validate_oracle_identifier(view_name, "view_name")
+    _validate_oracle_identifier(id_column, "id_column")
+    _validate_oracle_identifier(data_column, "data_column")
+    _validate_oracle_identifier(etag_param, "etag_param")
+    return (
+        f"UPDATE {view_name} SET {data_column} = :data "
+        f"WHERE {id_column} = :id AND JSON_VALUE({data_column}, '$._metadata.etag') = :{etag_param}"
+    )
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build a normalized connection configuration dictionary.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Normalized connection parameters.
+    """
+    config = {k: v for k, v in connection_config.items() if v is not None}
+    if "wallet_zip" in config:
+        wallet_dir = extract_oracle_wallet_zip(config.pop("wallet_zip"), wallet_password=config.get("wallet_password"))
+        config.setdefault("config_dir", str(wallet_dir))
+        config.setdefault("wallet_location", str(wallet_dir))
+    tns_alias = config.pop("tns_alias", None)
+    if "topology" in config:
+        topology_val = config.pop("topology")
+        resolved_topology = OracleTopologyConfig(**topology_val) if isinstance(topology_val, Mapping) else topology_val
+        if "dsn" not in config:
+            config["dsn"] = build_tns_description(resolved_topology)
+        if resolved_topology.retry_count is not None and "retry_count" not in config:
+            config["retry_count"] = resolved_topology.retry_count
+        if resolved_topology.retry_delay is not None and "retry_delay" not in config:
+            config["retry_delay"] = resolved_topology.retry_delay
+    if "dsn" not in config:
+        dsn = config.pop("url", None) or config.pop("connection_string", None)
+        if dsn is not None:
+            config["dsn"] = dsn
+    else:
+        config.pop("url", None)
+        config.pop("connection_string", None)
+    user_alias = config.pop("username", None)
+    if "user" not in config and user_alias is not None:
+        config["user"] = user_alias
+    _apply_ora_directory_resolution(config, tns_alias=tns_alias)
+    return config
+
+
+def resolve_dbms_cloud_source_uri(source: "str | Path", *, file_format: str) -> str | None:
+    """Return a normalized HTTP(S) object-store URI when eligible for ``DBMS_CLOUD.COPY_DATA``.
+
+    Oracle ``DBMS_CLOUD.COPY_DATA`` requires HTTP(S) REST endpoints in
+    ``file_uri_list``. Direct ``https://`` and ``http://`` URLs are returned
+    verbatim; ``s3://``, ``gs://`` / ``gcs://``, ``wasbs://`` / ``wasb://``,
+    and ``abfss://`` / ``abfs://`` URIs with deterministic REST host mappings
+    are normalized to HTTP(S); and local paths or schemes lacking host/region
+    metadata (such as ``oci://`` or ``az://``) return ``None`` so callers fall
+    back to client-side Arrow ingestion.
+
+    Args:
+        source: Storage destination string or local path.
+        file_format: Requested storage format name.
+
+    Returns:
+        Normalized HTTP(S) URI string when ``file_format`` and URI scheme are
+        supported by ``DBMS_CLOUD.COPY_DATA``, otherwise ``None``.
+    """
+    if file_format.strip().lower() not in _DBMS_CLOUD_FORMAT_MAP:
+        return None
+    if not isinstance(source, str):
+        return None
+    cleaned = source.strip()
+    if "://" not in cleaned:
+        return None
+    raw_scheme, _, rest = cleaned.partition("://")
+    scheme = raw_scheme.strip().lower()
+    if not rest:
+        return None
+    if scheme in {"https", "http"}:
+        host, sep, obj_path = rest.partition("/")
+        return cleaned if host and sep and obj_path else None
+    if scheme in {"s3", "s3a", "s3n"}:
+        bucket, sep, key = rest.partition("/")
+        if not bucket or not sep or not key:
+            return None
+        if "." in bucket:
+            return f"https://s3.amazonaws.com/{bucket}/{key}"
+        return f"https://{bucket}.s3.amazonaws.com/{key}"
+    if scheme in {"gs", "gcs"}:
+        bucket, sep, key = rest.partition("/")
+        if not bucket or not sep or not key:
+            return None
+        if "." in bucket:
+            return f"https://storage.googleapis.com/{bucket}/{key}"
+        return f"https://{bucket}.storage.googleapis.com/{key}"
+    if scheme in {"wasbs", "wasb", "abfss", "abfs"}:
+        authority, sep, key = rest.partition("/")
+        if not sep or not key or "@" not in authority:
+            return None
+        container, _, host = authority.partition("@")
+        if not container or not host or "." not in host:
+            return None
+        blob_host = (
+            host.replace(".dfs.core.windows.net", ".blob.core.windows.net") if scheme in {"abfss", "abfs"} else host
+        )
+        proto = "http" if scheme == "wasb" else "https"
+        return f"{proto}://{blob_host}/{container}/{key}"
+    return None
+
+
+def build_dbms_cloud_format_json(file_format: str, format_options: "Mapping[str, Any] | None" = None) -> str:
+    """Serialize the ``format`` JSON parameter for ``DBMS_CLOUD.COPY_DATA``.
+
+    Args:
+        file_format: Storage format (``"parquet"``, ``"csv"``, ``"json"``,
+            ``"jsonl"``, or ``"ndjson"``).
+        format_options: Optional ``DBMS_CLOUD`` format attributes merged over defaults.
+
+    Returns:
+        JSON string suitable for the ``format`` argument of ``DBMS_CLOUD.COPY_DATA``.
+
+    Raises:
+        ImproperConfigurationError: If ``file_format`` is not supported by ``DBMS_CLOUD.COPY_DATA``.
+    """
+    norm_format = file_format.strip().lower()
+    cloud_type = _DBMS_CLOUD_FORMAT_MAP.get(norm_format)
+    if cloud_type is None:
+        msg = f"Unsupported DBMS_CLOUD.COPY_DATA format: {file_format!r}"
+        raise ImproperConfigurationError(msg)
+    fmt_payload: dict[str, Any] = {"type": cloud_type}
+    if cloud_type == "csv":
+        fmt_payload["skipheaders"] = 1
+    if format_options:
+        fmt_payload.update(format_options)
+    return to_json(fmt_payload)
+
+
+def build_dbms_cloud_copy_data_sql(
+    table: str,
+    *,
+    credential_name: str,
+    file_uri: str,
+    file_format: str,
+    default_schema: str | None = None,
+    format_options: "Mapping[str, Any] | None" = None,
+) -> "tuple[str, dict[str, Any]]":
+    """Build a parameterized ``DBMS_CLOUD.COPY_DATA`` PL/SQL block and bind dictionary.
+
+    Preserves double quotes on case-sensitive or special-character Oracle
+    identifiers so ``DBMS_CLOUD.COPY_DATA`` targets the exact same table and
+    schema as ``TRUNCATE TABLE`` when ``overwrite=True``.
+
+    Args:
+        table: Qualified or unqualified target table identifier.
+        credential_name: ``DBMS_CLOUD`` credential name (e.g. ``"OCI$RESOURCE_PRINCIPAL"``).
+        file_uri: Remote HTTP(S) object-store URI passed to ``file_uri_list``.
+        file_format: Storage format (``"parquet"``, ``"csv"``, ``"json"``, ``"jsonl"``, ``"ndjson"``).
+        default_schema: Optional default schema name when ``table`` is unqualified.
+        format_options: Optional ``DBMS_CLOUD`` format attributes merged over defaults.
+
+    Returns:
+        Tuple of ``(plsql_block, bind_params)``.
+
+    Raises:
+        SQLSpecError: If ``table`` or ``default_schema`` is empty or invalid.
+        ImproperConfigurationError: If ``credential_name``, ``file_uri``, or ``file_format`` is invalid.
+    """
+    schema_name, table_name = _split_oracle_dbms_cloud_table(table)
+    if schema_name is None and isinstance(default_schema, str) and default_schema.strip():
+        schema_name = _normalize_oracle_dbms_cloud_part(default_schema, full_identifier=default_schema)
+    cleaned_credential = credential_name.strip()
+    if not cleaned_credential:
+        msg = "DBMS_CLOUD.COPY_DATA requires a non-empty credential_name"
+        raise ImproperConfigurationError(msg)
+    cleaned_uri = file_uri.strip()
+    if not cleaned_uri:
+        msg = "DBMS_CLOUD.COPY_DATA requires a non-empty file_uri"
+        raise ImproperConfigurationError(msg)
+    format_json = build_dbms_cloud_format_json(file_format, format_options)
+    binds: dict[str, Any] = {
+        "table_name": table_name,
+        "credential_name": cleaned_credential,
+        "file_uri_list": cleaned_uri,
+        "format_json": format_json,
+    }
+    if schema_name:
+        binds["schema_name"] = schema_name
+        plsql = (
+            "BEGIN "
+            "DBMS_CLOUD.COPY_DATA("
+            "table_name => :table_name, "
+            "credential_name => :credential_name, "
+            "file_uri_list => :file_uri_list, "
+            "schema_name => :schema_name, "
+            "format => :format_json"
+            "); "
+            "END;"
+        )
+    else:
+        plsql = (
+            "BEGIN "
+            "DBMS_CLOUD.COPY_DATA("
+            "table_name => :table_name, "
+            "credential_name => :credential_name, "
+            "file_uri_list => :file_uri_list, "
+            "format => :format_json"
+            "); "
+            "END;"
+        )
+    return plsql, binds
 
 
 def _build_session_checkout_plan(
@@ -1946,21 +2532,6 @@ def _build_session_checkout_plan(
     return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
 
 
-def build_session_checkout_plsql(
-    config: "OracleSessionContextConfig | Mapping[str, Any]",
-) -> "tuple[str | None, dict[str, Any]]":
-    """Compile checkout session context into a single PL/SQL block and bind parameters."""
-    plsql, bind_params, _ = _build_session_checkout_plan(config)
-    return plsql, bind_params
-
-
-def build_session_context_plsql(
-    config: "OracleSessionContextConfig | Mapping[str, Any]",
-) -> "tuple[str | None, dict[str, Any]]":
-    """Return checkout PL/SQL block and bind parameters for :class:`OracleSessionContextConfig`."""
-    return build_session_checkout_plsql(config)
-
-
 def _build_session_release_plan(
     config: "OracleSessionContextConfig | Mapping[str, Any]",
 ) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
@@ -2006,222 +2577,244 @@ def _build_session_release_plan(
     return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
 
 
-def build_session_release_plsql(
-    config: "OracleSessionContextConfig | Mapping[str, Any]",
-) -> "tuple[str | None, dict[str, Any]]":
-    """Compile release reset PL/SQL block and bind parameters."""
-    plsql, bind_params, _ = _build_session_release_plan(config)
-    return plsql, bind_params
+def _cleanup_atexit_wallet_dirs() -> None:
+    with _WALLET_DIR_LOCK:
+        pending = list(_ATEXIT_WALLET_DIRS)
+        _ATEXIT_WALLET_DIRS.clear()
+        _WALLET_DIR_REFCOUNTS.clear()
+    for dir_path in pending:
+        shutil.rmtree(dir_path, ignore_errors=True)
 
 
-def build_session_reset_plsql(
-    config: "OracleSessionContextConfig | Mapping[str, Any]",
-) -> "tuple[str | None, dict[str, Any]]":
-    """Return release reset PL/SQL block and bind parameters for :class:`OracleSessionContextConfig`."""
-    return build_session_release_plsql(config)
+def _ensure_atexit_wallet_hook_locked() -> None:
+    if not _ATEXIT_WALLET_HOOK_REGISTERED[0]:
+        atexit.register(_cleanup_atexit_wallet_dirs)
+        _ATEXIT_WALLET_HOOK_REGISTERED[0] = True
 
 
-def execute_session_checkout_sync(connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]") -> None:
-    """Apply TTC piggyback attributes and execute session checkout PL/SQL synchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
-    for attr_name, attr_val in piggyback_attrs.items():
-        with contextlib.suppress(AttributeError):
-            setattr(connection, attr_name, attr_val)
-    if plsql is not None:
-        with connection.cursor() as cursor:
-            if bind_params:
-                cursor.execute(plsql, bind_params)
-            else:
-                cursor.execute(plsql)
+def _track_atexit_wallet_dir(wallet_dir: Path) -> None:
+    resolved = wallet_dir.resolve()
+    with _WALLET_DIR_LOCK:
+        _ATEXIT_WALLET_DIRS.add(resolved)
+        _ensure_atexit_wallet_hook_locked()
 
 
-def execute_session_release_sync(connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]") -> None:
-    """Clear TTC piggyback attributes and execute session release PL/SQL synchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_release_plan(config)
-    for attr_name, attr_val in piggyback_attrs.items():
-        with contextlib.suppress(AttributeError):
-            setattr(connection, attr_name, attr_val)
-    if plsql is not None:
-        with connection.cursor() as cursor:
-            if bind_params:
-                cursor.execute(plsql, bind_params)
-            else:
-                cursor.execute(plsql)
+def _default_temp_wallet_dir(prefix: str, digest: str) -> Path:
+    getuid = getattr(os, "getuid", None)
+    uid_part = f"{getuid()}_" if callable(getuid) else ""
+    return Path(tempfile.gettempdir()) / f"{prefix}{uid_part}{digest[:16]}"
 
 
-async def execute_session_checkout_async(
-    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]"
-) -> None:
-    """Apply TTC piggyback attributes and execute session checkout PL/SQL asynchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
-    for attr_name, attr_val in piggyback_attrs.items():
-        with contextlib.suppress(AttributeError):
-            setattr(connection, attr_name, attr_val)
-    if plsql is not None:
-        with connection.cursor() as cursor:
-            if bind_params:
-                await cursor.execute(plsql, bind_params)
-            else:
-                await cursor.execute(plsql)
+def _ensure_private_wallet_dir(dir_path: Path, *, check_owner: bool) -> None:
+    if dir_path.is_symlink():
+        msg = f"Unsafe symlink for Oracle wallet directory: {dir_path}"
+        raise ImproperConfigurationError(msg)
+    dir_path.mkdir(mode=_WALLET_DIR_MODE, parents=True, exist_ok=True)
+    st = os.lstat(dir_path)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        msg = f"Unsafe non-directory or symlink for Oracle wallet directory: {dir_path}"
+        raise ImproperConfigurationError(msg)
+    getuid = getattr(os, "getuid", None)
+    if check_owner and callable(getuid) and st.st_uid != getuid():
+        msg = f"Oracle wallet directory is not owned by the current user: {dir_path}"
+        raise ImproperConfigurationError(msg)
+    dir_path.chmod(_WALLET_DIR_MODE)
 
 
-async def execute_session_release_async(
-    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]"
-) -> None:
-    """Clear TTC piggyback attributes and execute session release PL/SQL asynchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_release_plan(config)
-    for attr_name, attr_val in piggyback_attrs.items():
-        with contextlib.suppress(AttributeError):
-            setattr(connection, attr_name, attr_val)
-    if plsql is not None:
-        with connection.cursor() as cursor:
-            if bind_params:
-                await cursor.execute(plsql, bind_params)
-            else:
-                await cursor.execute(plsql)
+def _compute_wallet_digest(payload: bytes, wallet_password: "str | bytes | None") -> str:
+    hasher = hashlib.sha256(payload)
+    if wallet_password is not None:
+        pw_bytes = wallet_password.encode("utf-8") if isinstance(wallet_password, str) else bytes(wallet_password)
+        hasher.update(b"\x00")
+        hasher.update(pw_bytes)
+    return hasher.hexdigest()
 
 
-def sanitize_oracle_text_query(raw_query: str, *, operator: str = "ACCUM") -> str:
-    """Sanitize a free-text search string for Oracle Text ``CONTAINS``.
-
-    Extracts alphanumeric tokens and wraps each token in ``{token}`` literal
-    braces so user queries containing Oracle Text reserved keywords or syntax
-    punctuation never raise ``DRG-50901``.
-
-    Args:
-        raw_query: Raw user search string.
-        operator: Operator used to join escaped tokens (defaults to ``"ACCUM"``).
-
-    Returns:
-        Sanitized Oracle Text query string, or ``""`` when no tokens remain.
-    """
-    if not raw_query or not raw_query.strip():
-        return ""
-    tokens = [match.group(0) for match in _ORACLE_TEXT_TOKEN_PATTERN.finditer(raw_query)]
-    if not tokens:
-        return ""
-    joiner = f" {operator} " if operator else " "
-    return joiner.join(f"{{{tok}}}" for tok in tokens)
-
-
-def extract_duality_view_etag(row_or_doc: "Mapping[str, Any] | str | bytes") -> str | None:
-    """Extract ``_metadata.etag`` from an Oracle 26ai JSON Relational Duality View document or row.
-
-    Args:
-        row_or_doc: Duality view document mapping, row mapping containing a
-            ``data``/``DATA`` document, or raw JSON string/bytes.
-
-    Returns:
-        The hex ETag string if present, otherwise ``None``.
-    """
-    parsed: Any = row_or_doc
-    if isinstance(parsed, (str, bytes)):
-        try:
-            parsed = from_json(parsed)
-        except (ValueError, TypeError):
-            return None
-    if not isinstance(parsed, Mapping):
-        return None
-    metadata = parsed.get("_metadata")
-    if isinstance(metadata, Mapping):
-        etag = metadata.get("etag")
-        if isinstance(etag, str) and etag:
-            return etag
-    for key in ("data", "DATA"):
-        nested = parsed.get(key)
-        if isinstance(nested, (str, bytes)):
-            try:
-                nested = from_json(nested)
-            except (ValueError, TypeError):
-                continue
-        if isinstance(nested, Mapping):
-            nested_meta = nested.get("_metadata")
-            if isinstance(nested_meta, Mapping):
-                etag = nested_meta.get("etag")
-                if isinstance(etag, str) and etag:
-                    return etag
-    return None
-
-
-def extract_duality_etag(payload: "Mapping[str, Any] | str | bytes") -> str | None:
-    """Alias for :func:`extract_duality_view_etag`."""
-    return extract_duality_view_etag(payload)
-
-
-def inject_duality_view_etag(doc: "Mapping[str, Any]", etag: str) -> "dict[str, Any]":
-    """Return a copy of a Duality View document with ``_metadata.etag`` injected for optimistic concurrency."""
-    result: dict[str, Any] = dict(doc)
-    existing_meta = result.get("_metadata")
-    merged_meta: dict[str, Any] = dict(existing_meta) if isinstance(existing_meta, Mapping) else {}
-    merged_meta["etag"] = etag
-    result["_metadata"] = merged_meta
-    return result
-
-
-def build_duality_etag_update_sql(
-    view_name: str, id_column: str = "ID", data_column: str = "DATA", *, etag_param: str = "expected_etag"
-) -> str:
-    """Build an optimistic-concurrency ``UPDATE`` statement for an Oracle 26ai JSON Relational Duality View."""
-    _validate_oracle_identifier(view_name, "view_name")
-    _validate_oracle_identifier(id_column, "id_column")
-    _validate_oracle_identifier(data_column, "data_column")
-    _validate_oracle_identifier(etag_param, "etag_param")
-    return (
-        f"UPDATE {view_name} SET {data_column} = :data "
-        f"WHERE {id_column} = :id AND JSON_VALUE({data_column}, '$._metadata.etag') = :{etag_param}"
-    )
-
-
-def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build a normalized connection configuration dictionary.
-
-    Args:
-        connection_config: Raw connection configuration mapping.
-
-    Returns:
-        Normalized connection parameters.
-    """
-    config = {k: v for k, v in connection_config.items() if v is not None}
-    if "wallet_zip" in config:
-        wallet_dir = extract_oracle_wallet_zip(config.pop("wallet_zip"))
-        config.setdefault("config_dir", str(wallet_dir))
-        config.setdefault("wallet_location", str(wallet_dir))
-    if "topology" in config:
-        topology_val = config.pop("topology")
-        resolved_topology = OracleTopologyConfig(**topology_val) if isinstance(topology_val, Mapping) else topology_val
-        if "dsn" not in config:
-            config["dsn"] = build_tns_description(resolved_topology)
-        if resolved_topology.retry_count is not None and "retry_count" not in config:
-            config["retry_count"] = resolved_topology.retry_count
-        if resolved_topology.retry_delay is not None and "retry_delay" not in config:
-            config["retry_delay"] = resolved_topology.retry_delay
-    if "dsn" not in config:
-        dsn = config.pop("url", None) or config.pop("connection_string", None)
-        if dsn is not None:
-            config["dsn"] = dsn
-    else:
-        config.pop("url", None)
-        config.pop("connection_string", None)
-    user_alias = config.pop("username", None)
-    if "user" not in config and user_alias is not None:
-        config["user"] = user_alias
-    return config
-
-
-def _extract_wallet_archive_into(wallet_zip: "Path | str | bytes", extract_dir: Path, resolved_root: Path) -> None:
-    if isinstance(wallet_zip, bytes):
-        zip_source: Any = io.BytesIO(wallet_zip)
-    else:
-        zip_path = Path(wallet_zip)
-        if not zip_path.is_file():
-            msg = f"Oracle wallet archive does not exist: {zip_path}"
-            raise ImproperConfigurationError(msg)
-        zip_source = zip_path
-
+def _is_prepared_wallet_dir(wallet_dir: Path, *, check_owner: bool = True) -> bool:
     try:
-        with zipfile.ZipFile(zip_source, "r") as archive:
+        st = os.lstat(wallet_dir)
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        msg = f"Unsafe symlink for Oracle wallet directory: {wallet_dir}"
+        raise ImproperConfigurationError(msg)
+    getuid = getattr(os, "getuid", None)
+    if check_owner and callable(getuid):
+        if st.st_uid != getuid():
+            msg = f"Oracle wallet directory is not owned by the current user: {wallet_dir}"
+            raise ImproperConfigurationError(msg)
+        if stat.S_IMODE(st.st_mode) != _WALLET_DIR_MODE:
+            return False
+    for fname in ("ewallet.pem", "ewallet.p12", "tnsnames.ora", "sqlnet.ora"):
+        if (wallet_dir / fname).is_symlink():
+            msg = f"Unsafe symlink in Oracle wallet directory: {fname!r}"
+            raise ImproperConfigurationError(msg)
+    if (wallet_dir / "ewallet.pem").is_file():
+        return True
+    if (wallet_dir / "ewallet.p12").is_file():
+        return False
+    return (wallet_dir / "tnsnames.ora").is_file()
+
+
+def _validate_wallet_directory_contents(wallet_dir: Path) -> None:
+    for fname in ("ewallet.pem", "ewallet.p12", "tnsnames.ora", "sqlnet.ora"):
+        if (wallet_dir / fname).is_symlink():
+            msg = f"Unsafe symlink in Oracle wallet directory: {fname!r}"
+            raise ImproperConfigurationError(msg)
+    if (
+        not (wallet_dir / "ewallet.pem").is_file()
+        and not (wallet_dir / "ewallet.p12").is_file()
+        and not (wallet_dir / "tnsnames.ora").is_file()
+    ):
+        msg = "Oracle wallet directory must contain 'ewallet.pem', 'ewallet.p12', or 'tnsnames.ora'"
+        raise ImproperConfigurationError(msg)
+
+
+def _write_private_wallet_file(target_path: Path, data: bytes) -> None:
+    if target_path.is_symlink():
+        msg = f"Unsafe symlink for Oracle wallet file: {target_path.name!r}"
+        raise ImproperConfigurationError(msg)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(target_path, flags, _WALLET_FILE_MODE)
+    except OSError as exc:
+        if target_path.is_symlink():
+            msg = f"Unsafe symlink for Oracle wallet file: {target_path.name!r}"
+            raise ImproperConfigurationError(msg) from exc
+        raise
+    try:
+        fchmod = getattr(os, "fchmod", None)
+        if callable(fchmod):
+            fchmod(fd, _WALLET_FILE_MODE)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    if not hasattr(os, "fchmod"):
+        target_path.chmod(_WALLET_FILE_MODE)
+
+
+def _convert_p12_to_pem_bytes(p12_bytes: bytes, wallet_password: "str | bytes | None") -> bytes:
+    serialization_mod: Any = import_optional("cryptography.hazmat.primitives.serialization")
+    pkcs12_mod: Any = import_optional("cryptography.hazmat.primitives.serialization.pkcs12")
+    if serialization_mod is None or pkcs12_mod is None:
+        msg = "Converting Oracle 'ewallet.p12' requires the 'cryptography' package to be installed"
+        raise ImproperConfigurationError(msg)
+
+    parsed_bundle: Any = None
+    if wallet_password is None:
+        try:
+            parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, None)
+        except (ValueError, TypeError):
+            try:
+                parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, b"")
+            except (ValueError, TypeError) as exc:
+                msg = "Oracle wallet contains encrypted 'ewallet.p12'; provide a valid 'wallet_password'"
+                raise ImproperConfigurationError(msg) from exc
+    else:
+        pw_bytes = wallet_password.encode("utf-8") if isinstance(wallet_password, str) else bytes(wallet_password)
+        try:
+            parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, pw_bytes)
+        except (ValueError, TypeError) as exc:
+            if pw_bytes == b"":
+                try:
+                    parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, None)
+                except (ValueError, TypeError) as inner_exc:
+                    msg = "Failed to decrypt Oracle 'ewallet.p12' with the provided 'wallet_password'"
+                    raise ImproperConfigurationError(msg) from inner_exc
+            else:
+                msg = "Failed to decrypt Oracle 'ewallet.p12' with the provided 'wallet_password'"
+                raise ImproperConfigurationError(msg) from exc
+
+    private_key, certificate, additional_certs = parsed_bundle
+    if private_key is None and certificate is None:
+        msg = "Oracle 'ewallet.p12' did not contain a private key or certificate"
+        raise ImproperConfigurationError(msg)
+
+    pem_chunks: list[bytes] = []
+    if private_key is not None:
+        pem_chunks.append(
+            private_key.private_bytes(
+                encoding=serialization_mod.Encoding.PEM,
+                format=serialization_mod.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization_mod.NoEncryption(),
+            )
+        )
+    if certificate is not None:
+        pem_chunks.append(certificate.public_bytes(serialization_mod.Encoding.PEM))
+    if additional_certs:
+        pem_chunks.extend(ca_cert.public_bytes(serialization_mod.Encoding.PEM) for ca_cert in additional_certs)
+    return b"".join(pem_chunks)
+
+
+def _ensure_wallet_pem(wallet_dir: Path, *, wallet_password: "str | bytes | None") -> None:
+    pem_path = wallet_dir / "ewallet.pem"
+    if pem_path.is_symlink():
+        msg = "Unsafe symlink in Oracle wallet directory: 'ewallet.pem'"
+        raise ImproperConfigurationError(msg)
+    if pem_path.is_file():
+        return
+    p12_path = wallet_dir / "ewallet.p12"
+    if p12_path.is_symlink():
+        msg = "Unsafe symlink in Oracle wallet directory: 'ewallet.p12'"
+        raise ImproperConfigurationError(msg)
+    if not p12_path.is_file():
+        return
+    pem_bytes = _convert_p12_to_pem_bytes(p12_path.read_bytes(), wallet_password)
+    _write_private_wallet_file(pem_path, pem_bytes)
+
+
+def _copy_wallet_directory_into(src_dir: Path, dst_root: Path) -> None:
+    for item in src_dir.iterdir():
+        if item.is_symlink():
+            msg = f"Unsafe symlink in Oracle wallet directory: {item.name!r}"
+            raise ImproperConfigurationError(msg)
+        if item.is_file():
+            dest_file = (dst_root / item.name).resolve()
+            if dst_root not in dest_file.parents:
+                msg = f"Unsafe path in Oracle wallet directory: {item.name!r}"
+                raise ImproperConfigurationError(msg)
+            _write_private_wallet_file(dest_file, item.read_bytes())
+
+
+def _prepare_wallet_directory_source(
+    src_dir: Path, *, target_dir: "Path | None", prefix: str, wallet_password: "str | bytes | None"
+) -> Path:
+    _validate_wallet_directory_contents(src_dir)
+    if target_dir is not None:
+        extract_dir = Path(target_dir)
+        _ensure_private_wallet_dir(extract_dir, check_owner=False)
+        _copy_wallet_directory_into(src_dir, extract_dir.resolve())
+        _ensure_wallet_pem(extract_dir, wallet_password=wallet_password)
+        return extract_dir
+
+    if (src_dir / "ewallet.pem").is_file() or not (src_dir / "ewallet.p12").is_file():
+        return src_dir
+
+    p12_bytes = (src_dir / "ewallet.p12").read_bytes()
+    pem_bytes = _convert_p12_to_pem_bytes(p12_bytes, wallet_password)
+    try:
+        _write_private_wallet_file(src_dir / "ewallet.pem", pem_bytes)
+    except OSError:
+        digest = _compute_wallet_digest(p12_bytes + str(src_dir).encode("utf-8"), wallet_password)
+        fallback_dir = _default_temp_wallet_dir(prefix, digest)
+        _ensure_private_wallet_dir(fallback_dir, check_owner=True)
+        _track_atexit_wallet_dir(fallback_dir)
+        _copy_wallet_directory_into(src_dir, fallback_dir.resolve())
+        _write_private_wallet_file(fallback_dir / "ewallet.pem", pem_bytes)
+        return fallback_dir
+    return src_dir
+
+
+def _extract_wallet_bytes_into(
+    archive_bytes: bytes, extract_dir: Path, resolved_root: Path, *, wallet_password: "str | bytes | None"
+) -> None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes), "r") as archive:
             for info in archive.infolist():
                 raw_name = info.filename
+                if stat.S_ISLNK(info.external_attr >> 16):
+                    msg = f"Unsafe symlink in Oracle wallet archive: {raw_name!r}"
+                    raise ImproperConfigurationError(msg)
                 member_path = Path(raw_name)
                 if (
                     member_path.is_absolute()
@@ -2237,23 +2830,179 @@ def _extract_wallet_archive_into(wallet_zip: "Path | str | bytes", extract_dir: 
                     raise ImproperConfigurationError(msg)
 
             for info in archive.infolist():
-                dest_path = (resolved_root / Path(info.filename)).resolve()
+                dest_path = resolved_root / Path(info.filename)
                 if info.is_dir() or info.filename.endswith("/"):
-                    dest_path.mkdir(parents=True, exist_ok=True)
-                    dest_path.chmod(0o700)
+                    _ensure_private_wallet_dir(dest_path, check_owner=False)
                     continue
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
-                dest_path.parent.chmod(0o700)
-                with archive.open(info, "r") as src_file, dest_path.open("wb") as dst_file:
-                    shutil.copyfileobj(src_file, dst_file)
-                dest_path.chmod(0o600)
+                if dest_path.parent != resolved_root:
+                    _ensure_private_wallet_dir(dest_path.parent, check_owner=False)
+                with archive.open(info, "r") as src_file:
+                    _write_private_wallet_file(dest_path, src_file.read())
     except zipfile.BadZipFile as exc:
         msg = f"Invalid Oracle wallet zip archive: {exc}"
         raise ImproperConfigurationError(msg) from exc
 
-    if not (extract_dir / "ewallet.pem").exists() and not (extract_dir / "tnsnames.ora").exists():
-        msg = "Oracle wallet archive must contain 'ewallet.pem' or 'tnsnames.ora'"
+    _ensure_wallet_pem(extract_dir, wallet_password=wallet_password)
+    if not (extract_dir / "ewallet.pem").is_file() and not (extract_dir / "tnsnames.ora").is_file():
+        msg = "Oracle wallet archive must contain 'ewallet.pem', 'ewallet.p12', or 'tnsnames.ora'"
         raise ImproperConfigurationError(msg)
+
+
+def _read_ora_config_text(source: "str | Path", default_filename: str) -> str:
+    if isinstance(source, Path):
+        with contextlib.suppress(OSError):
+            candidate = source / default_filename if source.is_dir() else source
+            return candidate.read_text(encoding="utf-8") if candidate.is_file() else ""
+        return ""
+    if "\n" not in source and "\r" not in source:
+        with contextlib.suppress(OSError):
+            path_obj = Path(source)
+            if path_obj.is_dir():
+                candidate = path_obj / default_filename
+                return candidate.read_text(encoding="utf-8") if candidate.is_file() else ""
+            if path_obj.is_file():
+                return path_obj.read_text(encoding="utf-8")
+        if "=" not in source:
+            return ""
+    return source
+
+
+def _normalize_oracle_dbms_cloud_part(raw_part: str, *, full_identifier: str) -> str:
+    cleaned = raw_part.strip()
+    if not cleaned:
+        msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+        raise SQLSpecError(msg)
+    if cleaned.startswith('"'):
+        if len(cleaned) < _MIN_QUOTED_IDENTIFIER_LEN or not cleaned.endswith('"'):
+            msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+            raise SQLSpecError(msg)
+        raw_inner = cleaned[1:-1]
+        if '"' in raw_inner.replace('""', ""):
+            msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+            raise SQLSpecError(msg)
+        inner = raw_inner.replace('""', '"')
+        if not inner:
+            msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+            raise SQLSpecError(msg)
+        if _ORACLE_UPPER_SIMPLE_IDENTIFIER_PATTERN.match(inner):
+            return inner
+        return quote_identifier(inner)
+    if not _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.match(cleaned):
+        msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+        raise SQLSpecError(msg)
+    return cleaned
+
+
+def _split_oracle_dbms_cloud_table(table: str) -> "tuple[str | None, str]":
+    cleaned = table.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    parts: list[str] = []
+    buf: list[str] = []
+    in_quotes = False
+    idx = 0
+    length = len(cleaned)
+    while idx < length:
+        ch = cleaned[idx]
+        if ch == '"':
+            if in_quotes and idx + 1 < length and cleaned[idx + 1] == '"':
+                buf.append('""')
+                idx += 2
+                continue
+            in_quotes = not in_quotes
+            buf.append(ch)
+            idx += 1
+            continue
+        if ch == "." and not in_quotes:
+            parts.append("".join(buf))
+            buf.clear()
+            idx += 1
+            continue
+        buf.append(ch)
+        idx += 1
+    if in_quotes:
+        msg = f"Invalid Oracle table identifier: {table!r}"
+        raise SQLSpecError(msg)
+    parts.append("".join(buf))
+    if len(parts) == 1:
+        return None, _normalize_oracle_dbms_cloud_part(parts[0], full_identifier=table)
+    if len(parts) == _QUALIFIED_TABLE_PARTS:
+        return (
+            _normalize_oracle_dbms_cloud_part(parts[0], full_identifier=table),
+            _normalize_oracle_dbms_cloud_part(parts[1], full_identifier=table),
+        )
+    msg = f"Invalid Oracle table identifier: {table!r}"
+    raise SQLSpecError(msg)
+
+
+def _strip_ora_comment(line: str) -> str:
+    in_single = False
+    in_double = False
+    for idx, ch in enumerate(line):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double:
+            return line[:idx]
+    return line
+
+
+def _scan_balanced_ora_parens(content: str, start: int) -> int:
+    depth = 0
+    pos = start
+    length = len(content)
+    in_single = False
+    in_double = False
+    while pos < length:
+        ch = content[pos]
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and not in_double:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return pos + 1
+        pos += 1
+    return pos
+
+
+def _apply_ora_directory_resolution(config: "dict[str, Any]", *, tns_alias: Any) -> None:
+    ora_dir_val = config.get("config_dir") or config.get("wallet_location")
+    ora_dir = Path(str(ora_dir_val)) if ora_dir_val is not None else None
+
+    if tns_alias is not None:
+        if not isinstance(tns_alias, str) or not tns_alias.strip():
+            msg = f"Invalid Oracle tns_alias: {tns_alias!r}"
+            raise ImproperConfigurationError(msg)
+        if ora_dir is None or not (ora_dir / "tnsnames.ora").is_file():
+            msg = f"Cannot resolve Oracle tns_alias {tns_alias!r}: tnsnames.ora not found in config_dir or wallet_location"
+            raise ImproperConfigurationError(msg)
+        resolved_dsn = parse_tnsnames_ora(ora_dir / "tnsnames.ora").get(tns_alias.strip().lower())
+        if resolved_dsn is None:
+            msg = f"Oracle TNS alias {tns_alias!r} not found in tnsnames.ora"
+            raise ImproperConfigurationError(msg)
+        config["dsn"] = resolved_dsn
+    elif ora_dir is not None and isinstance(config.get("dsn"), str):
+        raw_dsn = config["dsn"].strip()
+        if raw_dsn and not any(ch in raw_dsn for ch in ("(", "/", ":", "@")) and (ora_dir / "tnsnames.ora").is_file():
+            resolved_dsn = parse_tnsnames_ora(ora_dir / "tnsnames.ora").get(raw_dsn.lower())
+            if resolved_dsn is not None:
+                config["dsn"] = resolved_dsn
+
+    if ora_dir is not None and "ssl_server_dn_match" not in config and (ora_dir / "sqlnet.ora").is_file():
+        dn_match = parse_sqlnet_ora(ora_dir / "sqlnet.ora").get("SSL_SERVER_DN_MATCH")
+        if dn_match is not None:
+            lowered = dn_match.strip().lower()
+            if lowered in {"yes", "on", "true", "1"}:
+                config["ssl_server_dn_match"] = True
+            elif lowered in {"no", "off", "false", "0"}:
+                config["ssl_server_dn_match"] = False
 
 
 def _validate_tns_token(value: str, field_name: str) -> None:

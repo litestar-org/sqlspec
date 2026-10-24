@@ -17,6 +17,7 @@ from sqlspec.adapters.oracledb.core import (
     OracleTopologyConfig,
     build_arrow_fetch_kwargs,
     build_connection_config,
+    build_dbms_cloud_copy_data_sql,
     build_duality_etag_update_sql,
     build_session_checkout_plsql,
     build_session_context_plsql,
@@ -36,6 +37,8 @@ from sqlspec.adapters.oracledb.core import (
     inject_duality_view_etag,
     oracle_df_batches_to_arrow_reader,
     oracle_df_to_arrow_table,
+    parse_sqlnet_ora,
+    parse_tnsnames_ora,
     sanitize_oracle_text_query,
 )
 from sqlspec.adapters.oracledb.data_dictionary import (
@@ -74,6 +77,7 @@ __all__ = (
     "OracledbSyncDataDictionary",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
+    "build_dbms_cloud_copy_data_sql",
     "build_duality_etag_update_sql",
     "build_session_checkout_plsql",
     "build_session_context_plsql",
@@ -93,5 +97,7 @@ __all__ = (
     "inject_duality_view_etag",
     "oracle_df_batches_to_arrow_reader",
     "oracle_df_to_arrow_table",
+    "parse_sqlnet_ora",
+    "parse_tnsnames_ora",
     "sanitize_oracle_text_query",
 )
