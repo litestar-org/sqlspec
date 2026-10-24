@@ -2382,13 +2382,33 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
     """Oracle ADK memory store using async oracledb driver."""
 
-    __slots__ = ("_in_memory",)
+    __slots__ = ("_approximate", "_fts_operator", "_in_memory")
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         super().__init__(config)
         validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
+        self._fts_operator: str = str(adk_config.get("fts_operator", "ACCUM"))
+        self._approximate: bool = bool(adk_config.get("approximate", True))
+
+    @property
+    def fts_operator(self) -> str:
+        """Return the default Oracle Text operator for hybrid search."""
+        return self._fts_operator
+
+    @fts_operator.setter
+    def fts_operator(self, value: str) -> None:
+        self._fts_operator = value
+
+    @property
+    def approximate(self) -> bool:
+        """Return whether approximate vector search is enabled."""
+        return self._approximate
+
+    @approximate.setter
+    def approximate(self, value: bool) -> None:
+        self._approximate = bool(value)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -2460,9 +2480,6 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
-        *,
-        fts_operator: str = "ACCUM",
-        approximate: bool = True,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2479,12 +2496,12 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                     user_id,
                     effective_limit,
                     scope_filter,
-                    fts_operator=fts_operator,
-                    approximate=approximate,
+                    fts_operator=self._fts_operator,
+                    approximate=self._approximate,
                 )
             if self._use_fts:
                 return await self._search_entries_fts(
-                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=fts_operator
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator
                 )
             return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except OracleDatabaseError as exc:
@@ -2837,13 +2854,33 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
     """Oracle ADK memory store using sync oracledb driver."""
 
-    __slots__ = ("_in_memory",)
+    __slots__ = ("_approximate", "_fts_operator", "_in_memory")
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         super().__init__(config)
         validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory = bool(adk_config.get("in_memory", False))
+        self._fts_operator: str = str(adk_config.get("fts_operator", "ACCUM"))
+        self._approximate: bool = bool(adk_config.get("approximate", True))
+
+    @property
+    def fts_operator(self) -> str:
+        """Return the default Oracle Text operator for hybrid search."""
+        return self._fts_operator
+
+    @fts_operator.setter
+    def fts_operator(self, value: str) -> None:
+        self._fts_operator = value
+
+    @property
+    def approximate(self) -> bool:
+        """Return whether approximate vector search is enabled."""
+        return self._approximate
+
+    @approximate.setter
+    def approximate(self, value: bool) -> None:
+        self._approximate = bool(value)
 
     def create_tables(self) -> None:
         """Create the memory table when the data dictionary reports it missing."""
@@ -2916,9 +2953,6 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
-        *,
-        fts_operator: str = "ACCUM",
-        approximate: bool = True,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
@@ -2936,12 +2970,12 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                     user_id,
                     effective_limit,
                     scope_filter,
-                    fts_operator=fts_operator,
-                    approximate=approximate,
+                    fts_operator=self._fts_operator,
+                    approximate=self._approximate,
                 )
             if self._use_fts:
                 return self._search_entries_fts(
-                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=fts_operator
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator
                 )
             return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except OracleDatabaseError as exc:

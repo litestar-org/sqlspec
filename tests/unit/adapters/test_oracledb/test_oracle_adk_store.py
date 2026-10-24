@@ -676,19 +676,11 @@ def test_oracle_sync_adk_memory_hybrid_rrf_near_and_exact_fallback() -> None:
     cursor = _RecordingCursor()
     conn = _RecordingConnection(cursor)
     config = _config_for_storage(JSONStorageType.JSON_NATIVE)
-    config.extension_config = {"adk": {"memory_use_fts": True}}
+    config.extension_config = {"adk": {"memory_use_fts": True, "fts_operator": "NEAR", "approximate": False}}
     config.provide_connection = lambda *_a, **_k: conn
     store = OracleSyncADKMemoryStore(config)
 
-    store.search_entries(
-        "dark roast espresso",
-        embedding=[0.1, 0.2, 0.3],
-        app_name="app",
-        user_id="u1",
-        limit=5,
-        fts_operator="NEAR",
-        approximate=False,
-    )
+    store.search_entries("dark roast espresso", embedding=[0.1, 0.2, 0.3], app_name="app", user_id="u1", limit=5)
     assert len(cursor.calls) == 1
     rrf_sql, rrf_params = cursor.calls[0]
     assert rrf_params["text_query"] == "NEAR(({dark}, {roast}, {espresso}))"
@@ -711,19 +703,11 @@ async def test_oracle_async_adk_memory_hybrid_rrf_near_and_exact_fallback() -> N
     cursor = _AsyncRecordingCursor()
     conn = _RecordingConnection(cursor)
     config = _config_for_storage(JSONStorageType.JSON_NATIVE)
-    config.extension_config = {"adk": {"memory_use_fts": True}}
+    config.extension_config = {"adk": {"memory_use_fts": True, "fts_operator": "NEAR", "approximate": False}}
     config.provide_connection = lambda *_a, **_k: conn
     store = OracleAsyncADKMemoryStore(config)
 
-    await store.search_entries(
-        "dark roast espresso",
-        embedding=[0.1, 0.2, 0.3],
-        app_name="app",
-        user_id="u1",
-        limit=5,
-        fts_operator="NEAR",
-        approximate=False,
-    )
+    await store.search_entries("dark roast espresso", embedding=[0.1, 0.2, 0.3], app_name="app", user_id="u1", limit=5)
     assert len(cursor.calls) == 1
     rrf_sql, rrf_params = cursor.calls[0]
     assert rrf_params["text_query"] == "NEAR(({dark}, {roast}, {espresso}))"
