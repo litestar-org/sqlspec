@@ -241,6 +241,9 @@ class OracleDriverFeatures(TypedDict):
      executemany.
     session_context_hook: Optional declarative session context configuration
      applied on checkout and cleared on release.
+    dbms_cloud_credential: Optional default ``DBMS_CLOUD`` credential name used
+     by ``load_from_storage`` for server-side object-store ingestion via
+     ``DBMS_CLOUD.COPY_DATA``.
     Native pipeline execution is runtime-gated by async Thin-mode driver API support,
      Oracle Database 26ai or newer, and the SQLSPEC_ORACLE_DISABLE_PIPELINE environment
      override; there is no adapter config switch that can force-enable unsupported
@@ -263,6 +266,7 @@ class OracleDriverFeatures(TypedDict):
     enable_direct_path_load: NotRequired[bool]
     session_context_hook: NotRequired[OracleSessionContextConfig | dict[str, Any]]
     enable_session_tracing: NotRequired[bool]
+    dbms_cloud_credential: NotRequired[str | None]
 
 
 class OracleSyncConnectionContext(SyncPoolConnectionContext):

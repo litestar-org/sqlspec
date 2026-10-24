@@ -54,6 +54,7 @@ from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
 
@@ -94,6 +95,8 @@ __all__ = (
     "apply_oracle_session_trace_attributes",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
+    "build_dbms_cloud_copy_data_sql",
+    "build_dbms_cloud_format_json",
     "build_duality_etag_update_sql",
     "build_fetch_kwargs",
     "build_insert_statement",
@@ -133,6 +136,7 @@ __all__ = (
     "oracle_df_to_arrow_table",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
+    "resolve_dbms_cloud_source_uri",
     "resolve_row_metadata",
     "resolve_rowcount",
     "sanitize_oracle_text_query",
@@ -327,6 +331,7 @@ VALID_ORACLE_DRIVER_FEATURE_KEYS: Final[frozenset[str]] = frozenset({
     "arraysize",
     "arrow_requested_schema",
     "custom",
+    "dbms_cloud_credential",
     "enable_direct_path_load",
     "enable_events",
     "enable_lob_fetch",
@@ -350,6 +355,29 @@ VALID_ORACLE_DRIVER_FEATURE_KEYS: Final[frozenset[str]] = frozenset({
     "storage_capabilities",
     "vector_return_format",
 })
+
+_DBMS_CLOUD_SCHEMES: Final[frozenset[str]] = frozenset({
+    "https",
+    "http",
+    "s3",
+    "gs",
+    "gcs",
+    "oci",
+    "az",
+    "azure",
+    "abfs",
+    "abfss",
+    "wasb",
+    "wasbs",
+})
+
+_DBMS_CLOUD_FORMAT_MAP: Final[dict[str, str]] = {
+    "parquet": "parquet",
+    "csv": "csv",
+    "json": "json",
+    "jsonl": "json",
+    "ndjson": "json",
+}
 
 _ORACLE_TIME_ZONE_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Za-z0-9_+\-/:]{1,64}$")
 _ORACLE_NLS_KEY_PATTERN: "re.Pattern[str]" = re.compile(r"^NLS_[A-Z0-9_]{1,60}$")
@@ -2194,6 +2222,135 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         config["user"] = user_alias
     _apply_ora_directory_resolution(config, tns_alias=tns_alias)
     return config
+
+
+def resolve_dbms_cloud_source_uri(source: "str | Path", *, file_format: str) -> str | None:
+    """Return a normalized remote object-store URI when eligible for ``DBMS_CLOUD.COPY_DATA``.
+
+    Args:
+        source: Storage destination string or local path.
+        file_format: Requested storage format name.
+
+    Returns:
+        Normalized remote URI string when ``file_format`` and URI scheme are
+        supported by ``DBMS_CLOUD.COPY_DATA``, otherwise ``None``.
+    """
+    if file_format.strip().lower() not in _DBMS_CLOUD_FORMAT_MAP:
+        return None
+    if not isinstance(source, str):
+        return None
+    cleaned = source.strip()
+    if "://" not in cleaned:
+        return None
+    scheme, _, rest = cleaned.partition("://")
+    if not rest or scheme.strip().lower() not in _DBMS_CLOUD_SCHEMES:
+        return None
+    return cleaned
+
+
+def build_dbms_cloud_format_json(file_format: str, format_options: "Mapping[str, Any] | None" = None) -> str:
+    """Serialize the ``format`` JSON parameter for ``DBMS_CLOUD.COPY_DATA``.
+
+    Args:
+        file_format: Storage format (``"parquet"``, ``"csv"``, ``"json"``,
+            ``"jsonl"``, or ``"ndjson"``).
+        format_options: Optional ``DBMS_CLOUD`` format attributes merged over defaults.
+
+    Returns:
+        JSON string suitable for the ``format`` argument of ``DBMS_CLOUD.COPY_DATA``.
+
+    Raises:
+        ImproperConfigurationError: If ``file_format`` is not supported by ``DBMS_CLOUD.COPY_DATA``.
+    """
+    norm_format = file_format.strip().lower()
+    cloud_type = _DBMS_CLOUD_FORMAT_MAP.get(norm_format)
+    if cloud_type is None:
+        msg = f"Unsupported DBMS_CLOUD.COPY_DATA format: {file_format!r}"
+        raise ImproperConfigurationError(msg)
+    fmt_payload: dict[str, Any] = {"type": cloud_type}
+    if cloud_type == "csv":
+        fmt_payload["skipheaders"] = 1
+    if format_options:
+        fmt_payload.update(format_options)
+    return to_json(fmt_payload)
+
+
+def build_dbms_cloud_copy_data_sql(
+    table: str,
+    *,
+    credential_name: str,
+    file_uri: str,
+    file_format: str,
+    default_schema: str | None = None,
+    format_options: "Mapping[str, Any] | None" = None,
+) -> "tuple[str, dict[str, Any]]":
+    """Build a parameterized ``DBMS_CLOUD.COPY_DATA`` PL/SQL block and bind dictionary.
+
+    Args:
+        table: Qualified or unqualified target table identifier.
+        credential_name: ``DBMS_CLOUD`` credential name (e.g. ``"OCI$RESOURCE_PRINCIPAL"``).
+        file_uri: Remote object-store URI passed to ``file_uri_list``.
+        file_format: Storage format (``"parquet"``, ``"csv"``, ``"json"``, ``"jsonl"``, ``"ndjson"``).
+        default_schema: Optional default schema name when ``table`` is unqualified.
+        format_options: Optional ``DBMS_CLOUD`` format attributes merged over defaults.
+
+    Returns:
+        Tuple of ``(plsql_block, bind_params)``.
+
+    Raises:
+        SQLSpecError: If ``table`` is empty.
+        ImproperConfigurationError: If ``credential_name``, ``file_uri``, or ``file_format`` is invalid.
+    """
+    parts = split_qualified_identifier(table, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    cleaned_credential = credential_name.strip()
+    if not cleaned_credential:
+        msg = "DBMS_CLOUD.COPY_DATA requires a non-empty credential_name"
+        raise ImproperConfigurationError(msg)
+    cleaned_uri = file_uri.strip()
+    if not cleaned_uri:
+        msg = "DBMS_CLOUD.COPY_DATA requires a non-empty file_uri"
+        raise ImproperConfigurationError(msg)
+    if len(parts) == 1:
+        schema_name = default_schema.strip() if isinstance(default_schema, str) and default_schema.strip() else None
+        table_name = parts[0]
+    else:
+        schema_name = ".".join(parts[:-1])
+        table_name = parts[-1]
+    format_json = build_dbms_cloud_format_json(file_format, format_options)
+    binds: dict[str, Any] = {
+        "table_name": table_name,
+        "credential_name": cleaned_credential,
+        "file_uri_list": cleaned_uri,
+        "format_json": format_json,
+    }
+    if schema_name:
+        binds["schema_name"] = schema_name
+        plsql = (
+            "BEGIN "
+            "DBMS_CLOUD.COPY_DATA("
+            "table_name => :table_name, "
+            "credential_name => :credential_name, "
+            "file_uri_list => :file_uri_list, "
+            "schema_name => :schema_name, "
+            "format => :format_json"
+            "); "
+            "END;"
+        )
+    else:
+        plsql = (
+            "BEGIN "
+            "DBMS_CLOUD.COPY_DATA("
+            "table_name => :table_name, "
+            "credential_name => :credential_name, "
+            "file_uri_list => :file_uri_list, "
+            "format => :format_json"
+            "); "
+            "END;"
+        )
+    return plsql, binds
 
 
 def _build_session_checkout_plan(
