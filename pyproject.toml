@@ -104,6 +104,12 @@ extras = [
   "adbc_driver_postgresql",
   "adbc_driver_flightsql",
   "adbc_driver_bigquery",
+  "adbc-driver-db2>=0.1.2",
+  "adbc-driver-gizmosql>=1.1.0",
+  "adbc-driver-oracle>=0.1.3",
+  "adbc-driver-snowflake",
+  "adlfs",
+  "gcsfs",
   "dishka",
 ]
 lint = [

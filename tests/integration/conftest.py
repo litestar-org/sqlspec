@@ -13,15 +13,19 @@ if TYPE_CHECKING:
     from pytest_databases.docker.rustfs import RustfsService
 
 pytest_plugins = [
+    "pytest_databases.docker.azure_blob",
     "pytest_databases.docker.bigquery",
     "pytest_databases.docker.cockroachdb",
     "pytest_databases.docker.db2",
+    "pytest_databases.docker.floci",
     "pytest_databases.docker.gizmosql",
+    "pytest_databases.docker.mariadb",
     "pytest_databases.docker.mssql",
     "pytest_databases.docker.mysql",
     "pytest_databases.docker.oracle",
     "pytest_databases.docker.postgres",
     "pytest_databases.docker.rustfs",
+    "pytest_databases.docker.snowflake",
     "pytest_databases.docker.spanner",
 ]
 
@@ -31,6 +35,7 @@ _FIXTURE_DRIVER_REQUIREMENTS: dict[str, tuple[tuple[str, ...], ...]] = {
     "adbc": (("adbc_driver_manager", "pyarrow"),),
     "adapter_cases": ((),),
     "bigquery": (("google.cloud.bigquery",),),
+    "cloud_storage": ((),),
     "cockroach": (("asyncpg",), ("psycopg", "psycopg_pool")),
     "db2": (("ibm_db",),),
     "duckdb": (("duckdb",),),

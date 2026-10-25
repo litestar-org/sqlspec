@@ -68,6 +68,22 @@ wheels = [
 ]
 
 [[package]]
+name = "adbc-driver-db2"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adbc-driver-manager" },
+    { name = "importlib-resources" },
+    { name = "pyarrow" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/4b/48c9619cc81c8cbef39cb9c3253bd91005c84067078d7508ee1047daaf7d/adbc_driver_db2-0.2.1-py3-none-macosx_12_0_universal2.whl", hash = "sha256:3573a21ef6f22ab8b66062d982bbafef99a16ca19fb7069e85dfa3c7a79b4a87", size = 3979102, upload-time = "2026-09-30T16:12:32.278Z" },
+    { url = "https://files.pythonhosted.org/packages/da/ff/673cede5fe0a4942526139829e29f1338bdcbb75381989e48c03e7296bda/adbc_driver_db2-0.2.1-py3-none-manylinux2014_aarch64.whl", hash = "sha256:286da0af1d0c64676986792f6331592e9e8c2bde5a151877c46e7961c54204de", size = 7507117, upload-time = "2026-09-30T16:12:34.021Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/af/6b70086e8873d5d64e961bdcf842d9b64bed2046580b59d56826d789909c/adbc_driver_db2-0.2.1-py3-none-manylinux2014_x86_64.whl", hash = "sha256:ccd8eb2ffe39a439ca36e186c38d515defe64227c8e5a295f2ee87f5a3f26b37", size = 8280573, upload-time = "2026-09-30T16:12:36.045Z" },
+    { url = "https://files.pythonhosted.org/packages/60/80/6679772b54d968226452cd700b18fa7d09d54fe0e0d254c5615396be9ce4/adbc_driver_db2-0.2.1-py3-none-win_amd64.whl", hash = "sha256:9eed1d3de68d868cef7df835cfd1f5930a882b2455222b6b178e13ebbbdd8aab", size = 8134110, upload-time = "2026-09-30T16:12:38.749Z" },
+]
+
+[[package]]
 name = "adbc-driver-flightsql"
 version = "1.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -82,6 +98,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2b/5b/f8566aa6d05eb40225f5874f8f5f5e8b8b4a4ce866d817a5ff352f326302/adbc_driver_flightsql-1.12.0-py3-none-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:69742e4f8fcc254490aa7f8e254a3b704c24bde9d5d827a0926ea90a6b4c3a6d", size = 14981635, upload-time = "2026-07-28T00:41:33.2Z" },
     { url = "https://files.pythonhosted.org/packages/57/45/6468fb425f3c0ae868c1ca9ab8e15cba76b59e941edd7e80e892e5476728/adbc_driver_flightsql-1.12.0-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9adfb5e46abc77347476d09ee76dfc835fef2b4dcb0c76d08d6d35aa3a4cce17", size = 13699634, upload-time = "2026-07-28T00:41:38.232Z" },
     { url = "https://files.pythonhosted.org/packages/dc/c7/6773dedc54fad73277ee2d767dd817e203e949972b0cfb197df99e00b784/adbc_driver_flightsql-1.12.0-py3-none-win_amd64.whl", hash = "sha256:098f2498778fd3efd671fbeacba80987de98ebfeb0291da77fe0a26c6fa78532", size = 15033803, upload-time = "2026-07-28T00:41:42.483Z" },
+]
+
+[[package]]
+name = "adbc-driver-gizmosql"
+version = "2.0.15"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adbc-driver-manager" },
+    { name = "pyarrow" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3d/c3/d5db1abcea27640316d8bc8c5ef9a8e484141625869506576ba02516046a/adbc_driver_gizmosql-2.0.15-py3-none-macosx_11_0_universal2.whl", hash = "sha256:e2d0d1a9e27531c2b6b1802b4e91c247882b873ae128059a5d27c81cda36d512", size = 7731932, upload-time = "2026-10-15T15:32:07.645Z" },
+    { url = "https://files.pythonhosted.org/packages/59/81/c27222e2ca87c32fbd27fbf60dd34a7d6b8f998edfb50c22706570b9b7a2/adbc_driver_gizmosql-2.0.15-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:4db0d79d338633c7851fd9201a13b5d2a348b1a80d5e18a315a0dc9fc7dd94be", size = 8364974, upload-time = "2026-10-15T15:32:09.478Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/c6/4657531cd20cfdbc009274afc9732260851923605b65dff14b204ef1db9f/adbc_driver_gizmosql-2.0.15-py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:b4ab0ee877379a183dd57ada85ae597d145664fd820bd1f950bbf881b1efed33", size = 15145743, upload-time = "2026-10-15T15:32:11.565Z" },
+    { url = "https://files.pythonhosted.org/packages/69/d6/f0bce82c184b0cc210469037ef11bedf3d60eedeb5be8efe3720a1b7c394/adbc_driver_gizmosql-2.0.15-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:8a53915c959e91ed9a2d9a6460356cc0fd7af84d43a5cc397b11977a88958639", size = 13954800, upload-time = "2026-10-15T15:32:13.927Z" },
+    { url = "https://files.pythonhosted.org/packages/30/f0/ca80126114b838373d8c0446f354f0330551c42aa28a9aea24b18238c372/adbc_driver_gizmosql-2.0.15-py3-none-win_amd64.whl", hash = "sha256:1d689b38881d5161c733ecf05f1c94bf24fdaea94d4a361e855700088b78734e", size = 15081876, upload-time = "2026-10-15T15:32:16.144Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/d3/73cd364434e532cd8d7109bef0882c476a8cdeb0c8cc29f426c22d87913a/adbc_driver_gizmosql-2.0.15-py3-none-win_arm64.whl", hash = "sha256:a82135401501f8c4f632059e448249acf9db3d80e13dfec99b167d3d79df04fb", size = 13707197, upload-time = "2026-10-15T15:32:18.354Z" },
 ]
 
 [[package]]
@@ -121,6 +154,22 @@ wheels = [
 ]
 
 [[package]]
+name = "adbc-driver-oracle"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adbc-driver-manager" },
+    { name = "importlib-resources" },
+    { name = "pyarrow" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/b4/1c0a418a4cd99a32ecf6d054d9ef71de869f7c4d83ff10fb6e953281f4fd/adbc_driver_oracle-1.0.1-py3-none-macosx_12_0_universal2.whl", hash = "sha256:4bfaedbb38803893791842601504e45d583ac5e94a75d3ca867e300f9322cf77", size = 4733798, upload-time = "2026-10-15T16:11:06.957Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/e2/169358ad85ac78a2558bf9f458b70f1a6cb2397827f3f952e4a5016dff89/adbc_driver_oracle-1.0.1-py3-none-manylinux2014_aarch64.whl", hash = "sha256:b9baeca7fdfdd04d1250f0dc2dd2932cad4fc2841bc737d18b5c04d6049c91a4", size = 8833896, upload-time = "2026-10-15T16:11:09.316Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/a5/747b2bf253c3988a094f3619c7a54a77016a83964dfcabba085c3054e6f3/adbc_driver_oracle-1.0.1-py3-none-manylinux2014_x86_64.whl", hash = "sha256:b1008012fc1bcd9efc11a593c06df9fa5fee4bf059ab7bacddb39e96ac3f24d9", size = 9641676, upload-time = "2026-10-15T16:11:11.888Z" },
+    { url = "https://files.pythonhosted.org/packages/24/a8/c7a6ba0cac3da4c2a0fdb12ed37105b64c789b20aaafb890408663920ca1/adbc_driver_oracle-1.0.1-py3-none-win_amd64.whl", hash = "sha256:7abc29e759119fafbcd6f59ab37175fcafd767c8ee9835a8fda73ee927a65e53", size = 9598563, upload-time = "2026-10-15T16:11:15.301Z" },
+]
+
+[[package]]
 name = "adbc-driver-postgresql"
 version = "1.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -138,6 +187,23 @@ wheels = [
 ]
 
 [[package]]
+name = "adbc-driver-snowflake"
+version = "1.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adbc-driver-manager" },
+    { name = "importlib-resources" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fd/c1/561549e36abe8644bedc6b4848abb79ab41a6b0fc4b106ceef944b0c3493/adbc_driver_snowflake-1.11.0.tar.gz", hash = "sha256:7fce54ae7540c6c63aad6cc9ec2795a05647cc147c8af41ca2bd4e95455e8eae", size = 30570, upload-time = "2026-04-07T00:17:30.403Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2a/f3/1125c7929faf750e7a5bdcec33ca22259ce040338dae12f75f3eb8080def/adbc_driver_snowflake-1.11.0-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:5ebddfa5fc0b5cd7c86b5cce17bb578889c8db5ff2b756903b64e684b56829e8", size = 15094744, upload-time = "2026-04-07T00:16:55.86Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/1d/88d564a8941607e6e555a3d3290ecb92852d4aa5a926a1cdbe86b17a8424/adbc_driver_snowflake-1.11.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:be862f8d0b6a507dae5c0644e13be79290180532c097d97c5a95a294c0bb5302", size = 13517204, upload-time = "2026-04-07T00:17:00.137Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/26/baa44b8b9faaf26846dd8c0e513c7ce6862d7f35de46ee61175ac976699f/adbc_driver_snowflake-1.11.0-py3-none-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:7c7d7ecef7246303648a08cee3d78c383133bea8f2e1568cf6e8750ab94b5a57", size = 27574063, upload-time = "2026-04-07T00:17:04.862Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/41/fe557f0d8414037dfe86fcba6338eb094a51da894050ec9a4c9f4504513d/adbc_driver_snowflake-1.11.0-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:07b5edbeb1b85be0882d7095641df26a24b3b4c2ba4d8edda35e3bbe89e70a06", size = 24767291, upload-time = "2026-04-07T00:17:09.763Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/ca/542793fc9a164f013e3248061e922ac5d5246ce93718a5c0cb44bbd2219e/adbc_driver_snowflake-1.11.0-py3-none-win_amd64.whl", hash = "sha256:83b1a363a44ae4cb1e4956f9cc6c4e44dddd7c768a0f0a8b42d9cb8eb8906305", size = 27264722, upload-time = "2026-04-07T00:17:14.083Z" },
+]
+
+[[package]]
 name = "adbc-driver-sqlite"
 version = "1.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -152,6 +218,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6c/99/415bf90eb912403d2d5d0c31baa1cedf200bd510f40027ee8fd3421c4c02/adbc_driver_sqlite-1.12.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:c987d03e3f4850e57f218c8a0b9d224209123af642469ee1f36901c5a51725bd", size = 1501753, upload-time = "2026-07-28T00:42:57.442Z" },
     { url = "https://files.pythonhosted.org/packages/69/10/a3156f19fadd254a4f58a328a8aa9472c981ff93bb4d23f3c22a4341796e/adbc_driver_sqlite-1.12.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:3005a80bedf6624c6856da98037ea943a791aa8e82dad458259e0558be32912c", size = 1548999, upload-time = "2026-07-28T00:42:59.163Z" },
     { url = "https://files.pythonhosted.org/packages/f4/d9/3245d741936100365ea77c434f84a0985523467bd812e5e11bb9b36d7152/adbc_driver_sqlite-1.12.0-py3-none-win_amd64.whl", hash = "sha256:0982bfc06158c2140b5c490b1a1325019c827b158f8432a30d49c8a0c18533ad", size = 1522964, upload-time = "2026-07-28T00:43:00.917Z" },
+]
+
+[[package]]
+name = "adlfs"
+version = "2026.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "azure-identity" },
+    { name = "azure-storage-blob", extra = ["aio"] },
+    { name = "fsspec" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/29/9937905acfaf3e4826d7782f8efab845bb11eaa2e24749a16eeab32e7fa0/adlfs-2026.8.0.tar.gz", hash = "sha256:b78a01bd892c2a99f461b2b2ef4592c2eb45934e728f318472291ccaa6378e06", size = 55898, upload-time = "2026-08-11T18:43:14.13Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/8c/2a895811f69699915ddd4e346ea3a1ab26b585025eac890d19dd5193c7f4/adlfs-2026.8.0-py3-none-any.whl", hash = "sha256:858d8999b83ad70baae89ee2ad67f40443f9d94e0257351a74866d643f22d54d", size = 46108, upload-time = "2026-08-11T18:43:12.974Z" },
 ]
 
 [[package]]
@@ -706,6 +787,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/5b/db/325c6d7312d2200251c52323878281045aaffcb5586612296484e4280eaa/azure_core-1.41.0-py3-none-any.whl", hash = "sha256:522b4011e8180b1a3dcd2024396a4e7fe9ac37fb8597db47163d230b5efe892d", size = 220920, upload-time = "2026-05-07T23:30:56.357Z" },
 ]
 
+[package.optional-dependencies]
+aio = [
+    { name = "aiohttp" },
+]
+
 [[package]]
 name = "azure-identity"
 version = "1.26.0"
@@ -720,6 +806,26 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e6/87/e88098a024d74b7434de5b110c261da024fe5d6c139f1847f6f8a2b76678/azure_identity-1.26.0.tar.gz", hash = "sha256:61b4538b87df10d2d6d44b77cd5ea28a8929fd4929d58b45bf3f230f7daba02e", size = 310151, upload-time = "2026-10-01T14:17:47.825Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b2/d5/ae45ce8009d0d015304b206c7c4a6cbab02c03f8f07eedefb32b099ccee3/azure_identity-1.26.0-py3-none-any.whl", hash = "sha256:3c60d9682b3ac01507388d474cb5a5ffbe54152a96b6cdcaa7013da9315cf186", size = 195958, upload-time = "2026-10-01T14:17:49.705Z" },
+]
+
+[[package]]
+name = "azure-storage-blob"
+version = "12.31.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "cryptography" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/ca/5299cedef5957dd838d4dc46f97bea37335bb39f6610d72b27e1a3317650/azure_storage_blob-12.31.0.tar.gz", hash = "sha256:997b393cfcbdc4b186d5911790d91f80387f7edc12c4d73eab963a2d26e5b2a9", size = 670868, upload-time = "2026-09-30T21:23:22.837Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/57/d1f45fbccc0dfbe6b6db7e5fa06199e35219c712f3743677bec1b4e7d78b/azure_storage_blob-12.31.0-py3-none-any.whl", hash = "sha256:0c0cb601d3462491d09ea96023cd791bb9dd4b173bf950daf3cff34ff47ba5b5", size = 455738, upload-time = "2026-09-30T21:23:24.944Z" },
+]
+
+[package.optional-dependencies]
+aio = [
+    { name = "azure-core", extra = ["aio"] },
 ]
 
 [[package]]
@@ -1334,6 +1440,15 @@ wheels = [
 ]
 
 [[package]]
+name = "decorator"
+version = "5.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/60/8b/32f9823da46cde7df2087faa08cd98d01b908f8dcab982cdba9c84e85355/decorator-5.3.1.tar.gz", hash = "sha256:4cbcdd55a6efadb9dbea26b858f4fb3264567b52d69ca0d25b721b553f60ea82", size = 58084, upload-time = "2026-05-18T06:03:28.057Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/7f/798705f5296a58ca505d600456748d1be48078eac8a7050d8a98bc9edb89/decorator-5.3.1-py3-none-any.whl", hash = "sha256:f47fe6fdbd2edd623ecfe36875d37aba411624e2670dd395dddae1358689bb3c", size = 10365, upload-time = "2026-05-18T06:03:26.517Z" },
+]
+
+[[package]]
 name = "deepmerge"
 version = "3.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1704,6 +1819,25 @@ s3 = [
 ]
 
 [[package]]
+name = "gcsfs"
+version = "2026.10.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "decorator" },
+    { name = "fsspec" },
+    { name = "google-auth" },
+    { name = "google-auth-oauthlib" },
+    { name = "google-cloud-storage" },
+    { name = "google-cloud-storage-control" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ed/78/e3eeed58d314b3906c36896999b5f15bd1e0669fba7a8d6733aee046234c/gcsfs-2026.10.1.tar.gz", hash = "sha256:ebdd435946894c47b17a2e4ac2d5f2832e8cde520e227db65d9b901c01fd7d28", size = 1118233, upload-time = "2026-10-16T02:07:28.851Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0f/64/bd0cd661009e1e379a7d5d100f13d40dd0a1a28fa70115931d0e0328f7bd/gcsfs-2026.10.1-py3-none-any.whl", hash = "sha256:037e7e1fa695f12719eeb778be6453085dce0ecd8b17ef1dbeecbbce05fa3b60", size = 88539, upload-time = "2026-10-16T02:07:26.913Z" },
+]
+
+[[package]]
 name = "google-adk"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1779,6 +1913,19 @@ pyopenssl = [
 ]
 requests = [
     { name = "requests" },
+]
+
+[[package]]
+name = "google-auth-oauthlib"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-auth" },
+    { name = "requests-oauthlib" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c4/40/1d7901e454831247e377ef3f642cb857cc0e82ec4d2380b7a148a48f20d1/google_auth_oauthlib-1.5.0.tar.gz", hash = "sha256:b351107c7dd9017f426cbb0272ea1bc04f469020fd18f4443c7d40362e0b1510", size = 23926, upload-time = "2026-09-29T19:25:56.699Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/bb/b5cc0757ad2f8068e7eb7180c37f82eb488627624c1b1214aa47ddbc032c/google_auth_oauthlib-1.5.0-py3-none-any.whl", hash = "sha256:71625fdea21c6c03217eb9ff13741c3096e6d257ebca0ad084dbd6e9f4aa4ef4", size = 20348, upload-time = "2026-09-29T19:25:31.842Z" },
 ]
 
 [[package]]
@@ -1936,6 +2083,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1d/d8/9d6444c1bc301bd4bad36cc91306524e8aba670cbefcc0d2fc184c88fbea/google_cloud_storage-3.17.1.tar.gz", hash = "sha256:b24df37900f5e0a93518bd7d3a2a7b7b48d8a1e72add8eb57d53a38b8b2b0640", size = 17355234, upload-time = "2026-10-15T17:49:57.847Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/09/77/4376bb26f24966008a9522c61bae025d7030baabf443f20c4b795fb58308/google_cloud_storage-3.17.1-py3-none-any.whl", hash = "sha256:287c7919d7bcda710eae6f6b60c756e89140475d9a4daec01b6174e737488ca8", size = 345706, upload-time = "2026-10-15T17:49:27.497Z" },
+]
+
+[[package]]
+name = "google-cloud-storage-control"
+version = "1.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpc-google-iam-v1" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fa/8b/71e457c5442faf669fb23c3b400952d2f2de4d7a5cd576e52275b25365b1/google_cloud_storage_control-1.16.0.tar.gz", hash = "sha256:52af754aa24bee34bc58287f67a1a849b07c33a010d58d2c1f7c91fa1be0f119", size = 160170, upload-time = "2026-10-01T18:18:16.704Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/6c/c779f90e89a381ba38c3bd4173f1560e0765dd4d2b31ca686f7c90484a64/google_cloud_storage_control-1.16.0-py3-none-any.whl", hash = "sha256:b3b20047d09743fc143db70ac2738f1df7c482af381335bb0dbb86ee4732215d", size = 115201, upload-time = "2026-10-01T18:12:30.057Z" },
 ]
 
 [[package]]
@@ -2489,6 +2653,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/e1/2069291243c926a2ff1cd706c7f3eeb9b62144bf60f77c9fb9ff2fb26bd3/iniconfig-2.3.1.tar.gz", hash = "sha256:67f4b9c50da0dedf52af349e7749a80a9057a5031199791b906c3bb3ae878960", size = 21209, upload-time = "2026-10-06T22:48:38.076Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/43/4ca9e49d27a1fcf6bece6f6aec0ea46bb9112489b93d4b688fb415457bdb/iniconfig-2.3.1-py3-none-any.whl", hash = "sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7", size = 7552, upload-time = "2026-10-06T22:48:36.959Z" },
+]
+
+[[package]]
+name = "isodate"
+version = "0.7.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/54/4d/e940025e2ce31a8ce1202635910747e5a87cc3a6a6bb2d00973375014749/isodate-0.7.2.tar.gz", hash = "sha256:4cd1aa0f43ca76f4a6c6c0292a85f40b35ec2e43e315b59f06e6d32171a953e6", size = 29705, upload-time = "2024-10-08T23:04:11.5Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/aa/0aca39a37d3c7eb941ba736ede56d689e7be91cab5d9ca846bde3999eba6/isodate-0.7.2-py3-none-any.whl", hash = "sha256:28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15", size = 22320, upload-time = "2024-10-08T23:04:09.501Z" },
 ]
 
 [[package]]
@@ -3673,6 +3846,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c4/2f/5e9bf8ed0a93587b8089242b4926dfd04d4b3b0b65f04345d219a1225f03/numpydoc-1.11.0.tar.gz", hash = "sha256:26db0adaac8087e98da05c86b11198defd962aef7c21f4dffd2703c8c6eb4187", size = 101575, upload-time = "2026-09-15T16:31:08.905Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/e5/f5c38d4899cd8edd5b522071c5658202077d113c3225484d779cf257970e/numpydoc-1.11.0-py3-none-any.whl", hash = "sha256:493ad2ce0d8275ca5da484ec37dbdbbc1334c3a6968dffd10ec729b51753e15e", size = 71464, upload-time = "2026-09-15T16:31:07.521Z" },
+]
+
+[[package]]
+name = "oauthlib"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/d8/a1bcc8ba112a627f8ffbdc212a78ce18d3ac07e91a5ca65d27918eee25a1/oauthlib-4.0.0.tar.gz", hash = "sha256:efb274799819440f95b4ab3b818869f1ce9ae26c5beacba0201d1a1b76b54f86", size = 187232, upload-time = "2026-09-28T06:01:18.77Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/f4/78229a1066068ca14fc60fb26cf7381cabe4382261392b90e5f9552722d4/oauthlib-4.0.0-py3-none-any.whl", hash = "sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd", size = 159715, upload-time = "2026-09-28T06:01:17.008Z" },
 ]
 
 [[package]]
@@ -5107,6 +5289,19 @@ wheels = [
 ]
 
 [[package]]
+name = "requests-oauthlib"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "oauthlib" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650, upload-time = "2024-03-22T20:32:29.939Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36", size = 24179, upload-time = "2024-03-22T20:32:28.055Z" },
+]
+
+[[package]]
 name = "rich"
 version = "15.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5915,10 +6110,15 @@ build = [
 ]
 dev = [
     { name = "adbc-driver-bigquery" },
+    { name = "adbc-driver-db2" },
     { name = "adbc-driver-flightsql" },
+    { name = "adbc-driver-gizmosql" },
     { name = "adbc-driver-manager" },
+    { name = "adbc-driver-oracle" },
     { name = "adbc-driver-postgresql" },
+    { name = "adbc-driver-snowflake" },
     { name = "adbc-driver-sqlite" },
+    { name = "adlfs" },
     { name = "aiohttp" },
     { name = "anyio" },
     { name = "asyncpg-stubs" },
@@ -5930,6 +6130,7 @@ dev = [
     { name = "dishka" },
     { name = "duckdb-engine" },
     { name = "fsspec", extra = ["s3"] },
+    { name = "gcsfs" },
     { name = "hatch-mypyc" },
     { name = "mypy" },
     { name = "myst-parser" },
@@ -5994,12 +6195,18 @@ doc = [
 ]
 extras = [
     { name = "adbc-driver-bigquery" },
+    { name = "adbc-driver-db2" },
     { name = "adbc-driver-flightsql" },
+    { name = "adbc-driver-gizmosql" },
     { name = "adbc-driver-manager" },
+    { name = "adbc-driver-oracle" },
     { name = "adbc-driver-postgresql" },
+    { name = "adbc-driver-snowflake" },
     { name = "adbc-driver-sqlite" },
+    { name = "adlfs" },
     { name = "dishka" },
     { name = "fsspec", extra = ["s3"] },
+    { name = "gcsfs" },
     { name = "pgvector" },
     { name = "polars" },
     { name = "pyarrow" },
@@ -6114,10 +6321,15 @@ build = [
 ]
 dev = [
     { name = "adbc-driver-bigquery" },
+    { name = "adbc-driver-db2", specifier = ">=0.1.2" },
     { name = "adbc-driver-flightsql" },
+    { name = "adbc-driver-gizmosql", specifier = ">=1.1.0" },
     { name = "adbc-driver-manager" },
+    { name = "adbc-driver-oracle", specifier = ">=0.1.3" },
     { name = "adbc-driver-postgresql" },
+    { name = "adbc-driver-snowflake" },
     { name = "adbc-driver-sqlite" },
+    { name = "adlfs" },
     { name = "aiohttp" },
     { name = "anyio" },
     { name = "asyncpg-stubs" },
@@ -6129,6 +6341,7 @@ dev = [
     { name = "dishka" },
     { name = "duckdb-engine", specifier = ">=0.17.0" },
     { name = "fsspec", extras = ["s3"] },
+    { name = "gcsfs" },
     { name = "hatch-mypyc" },
     { name = "mypy", specifier = ">=2.0.0" },
     { name = "myst-parser" },
@@ -6193,12 +6406,18 @@ doc = [
 ]
 extras = [
     { name = "adbc-driver-bigquery" },
+    { name = "adbc-driver-db2", specifier = ">=0.1.2" },
     { name = "adbc-driver-flightsql" },
+    { name = "adbc-driver-gizmosql", specifier = ">=1.1.0" },
     { name = "adbc-driver-manager" },
+    { name = "adbc-driver-oracle", specifier = ">=0.1.3" },
     { name = "adbc-driver-postgresql" },
+    { name = "adbc-driver-snowflake" },
     { name = "adbc-driver-sqlite" },
+    { name = "adlfs" },
     { name = "dishka" },
     { name = "fsspec", extras = ["s3"] },
+    { name = "gcsfs" },
     { name = "pgvector" },
     { name = "polars" },
     { name = "pyarrow" },
