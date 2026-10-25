@@ -1,1 +1,0 @@
-"""aiomysql extensions integration tests."""

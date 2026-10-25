@@ -115,6 +115,9 @@ CONTRACT_OWNED_REMOVED_TEST_PATHS = {
     "bigquery/test_exceptions.py",
     "duckdb/test_migrations.py",
     "duckdb/test_vector_functions.py",
+    "mysql/aiomysql/extensions/adk/test_store.py",
+    "mysql/asyncmy/extensions/adk/test_store.py",
+    "mysql/mysqlconnector/extensions/adk/test_store.py",
     "mysqlconnector/test_driver_async.py",
     "oracledb/extensions/events/test_queue_backend.py",
     "oracledb/extensions/litestar/test_store_async.py",
@@ -136,18 +139,6 @@ CONTRACT_OWNED_REMOVED_TEST_PATHS = {
     "psycopg/test_pgvector.py",
     "sqlite/test_data_dictionary.py",
 }
-
-
-def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:
-    return tuple(cast("DriverCase", param.values[0]) for param in params)
-
-
-def _adk_cases(params: tuple[ParameterSet, ...]) -> tuple[AdkStoreCase, ...]:
-    return tuple(cast("AdkStoreCase", param.values[0]) for param in params)
-
-
-def _parameter_style_cases(params: tuple[ParameterSet, ...]) -> tuple[ParameterStyleCase, ...]:
-    return tuple(cast("ParameterStyleCase", param.values[0]) for param in params)
 
 
 def test_active_driver_cases_do_not_use_string_deviations() -> None:
@@ -273,6 +264,7 @@ def test_postgres_extension_cases_are_contract_owned() -> None:
 
 def test_contract_owned_adapter_local_test_files_do_not_reappear() -> None:
     """Adapter-local files removed by consolidation stay contract-owned."""
+    assert all(not path.startswith("tests/") for path in CONTRACT_OWNED_REMOVED_TEST_PATHS)
     adapters_root = Path(__file__).resolve().parents[1]
     existing = sorted(path for path in CONTRACT_OWNED_REMOVED_TEST_PATHS if (adapters_root / path).exists())
     assert existing == []
@@ -294,3 +286,15 @@ def test_parameter_style_params_are_method_filtered() -> None:
     assert {case.id for case in execute_cases} | {case.id for case in execute_many_cases} == {
         case.id for case in all_cases
     }
+
+
+def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:
+    return tuple(cast("DriverCase", param.values[0]) for param in params)
+
+
+def _adk_cases(params: tuple[ParameterSet, ...]) -> tuple[AdkStoreCase, ...]:
+    return tuple(cast("AdkStoreCase", param.values[0]) for param in params)
+
+
+def _parameter_style_cases(params: tuple[ParameterSet, ...]) -> tuple[ParameterStyleCase, ...]:
+    return tuple(cast("ParameterStyleCase", param.values[0]) for param in params)

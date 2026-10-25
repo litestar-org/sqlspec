@@ -1,1 +1,0 @@
-# PyMySQL extensions integration tests
