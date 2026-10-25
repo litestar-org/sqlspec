@@ -10,7 +10,13 @@ SHELL := /bin/bash
 .EXPORT_ALL_VARIABLES:
 MAKEFLAGS += --no-print-directory
 MYPY_WORKERS ?= 2
-ADAPTER_FAMILIES := bigquery cockroach db2 duckdb gizmosql mssql mysql oracle postgres spanner sqlite
+UNIT_WORKERS ?= 4
+INTEGRATION_WORKERS ?= 2
+SHARD_POSTGRES_COCKROACH := tests/integration/adapters/postgres tests/integration/adapters/cockroach tests/integration/extensions tests/integration/observability
+SHARD_MYSQL_MARIADB_EMBEDDED := tests/integration/adapters/mysql tests/integration/adapters/sqlite tests/integration/adapters/duckdb tests/integration/cli tests/integration/migrations
+SHARD_ORACLE := tests/integration/adapters/oracle
+SHARD_MSSQL_DB2 := tests/integration/adapters/mssql tests/integration/adapters/db2
+SHARD_CLOUD_ADBC_STORAGE := tests/integration/adapters/bigquery tests/integration/adapters/spanner tests/integration/adapters/gizmosql tests/integration/storage
 
 # -----------------------------------------------------------------------------
 # Display Formatting and Colors
@@ -169,12 +175,51 @@ clean:                                              ## Cleanup temporary build a
 .PHONY: test
 test:                                               ## Run the tests
 	@echo "${INFO} Running test cases... 🧪"
-	@uv run pytest -n 4 --dist=loadgroup tests/unit
-	@uv run pytest -n 1 --dist=loadgroup tests/integration --ignore=tests/integration/adapters
-	@for family in $(ADAPTER_FAMILIES); do
-		uv run pytest -n 1 --dist=loadgroup "tests/integration/adapters/$${family}"
-	done
+	@uv run pytest -n $(UNIT_WORKERS) --dist=loadgroup tests/unit
+	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup tests/integration
 	@echo "${OK} Tests complete ✨"
+
+.PHONY: test-unit
+test-unit:                                          ## Run unit tests
+	@echo "${INFO} Running unit tests... 🧪"
+	@uv run pytest -n $(UNIT_WORKERS) --dist=loadgroup tests/unit
+	@echo "${OK} Unit tests complete ✨"
+
+.PHONY: test-integration
+test-integration:                                   ## Run integration tests
+	@echo "${INFO} Running integration tests... 🧪"
+	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup tests/integration
+	@echo "${OK} Integration tests complete ✨"
+
+.PHONY: test-integration-postgres-cockroach
+test-integration-postgres-cockroach:                ## Run Postgres and CockroachDB integration shard
+	@echo "${INFO} Running postgres-cockroach integration shard... 🧪"
+	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup $(SHARD_POSTGRES_COCKROACH)
+	@echo "${OK} postgres-cockroach integration shard complete ✨"
+
+.PHONY: test-integration-mysql-mariadb-embedded
+test-integration-mysql-mariadb-embedded:            ## Run MySQL, MariaDB, and embedded integration shard
+	@echo "${INFO} Running mysql-mariadb-embedded integration shard... 🧪"
+	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup $(SHARD_MYSQL_MARIADB_EMBEDDED)
+	@echo "${OK} mysql-mariadb-embedded integration shard complete ✨"
+
+.PHONY: test-integration-oracle
+test-integration-oracle:                            ## Run Oracle integration shard
+	@echo "${INFO} Running oracle integration shard... 🧪"
+	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup $(SHARD_ORACLE)
+	@echo "${OK} oracle integration shard complete ✨"
+
+.PHONY: test-integration-mssql-db2
+test-integration-mssql-db2:                         ## Run SQL Server and Db2 integration shard
+	@echo "${INFO} Running mssql-db2 integration shard... 🧪"
+	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup $(SHARD_MSSQL_DB2)
+	@echo "${OK} mssql-db2 integration shard complete ✨"
+
+.PHONY: test-integration-cloud-adbc-storage
+test-integration-cloud-adbc-storage:                ## Run BigQuery, Spanner, GizmoSQL, and storage shard
+	@echo "${INFO} Running cloud-adbc-storage integration shard... 🧪"
+	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup --run-bigquery-tests --run-spanner-tests $(SHARD_CLOUD_ADBC_STORAGE)
+	@echo "${OK} cloud-adbc-storage integration shard complete ✨"
 
 .PHONY: test-all
 test-all: test				                         ## Run all tests
@@ -184,14 +229,10 @@ test-all: test				                         ## Run all tests
 coverage:                                           ## Run tests with coverage report
 	@echo "${INFO} Running tests with coverage... 📊"
 	@uv run coverage erase
-	@uv run pytest --cov --cov-report= --cov-fail-under=0 -n 4 --dist=loadgroup --quiet \
+	@uv run pytest --cov --cov-report= --cov-fail-under=0 -n $(UNIT_WORKERS) --dist=loadgroup --quiet \
 		tests/unit
-	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n 1 --dist=loadgroup --quiet \
-		tests/integration --ignore=tests/integration/adapters
-	@for family in $(ADAPTER_FAMILIES); do
-		uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n 1 --dist=loadgroup --quiet \
-			"tests/integration/adapters/$${family}"
-	done
+	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n $(INTEGRATION_WORKERS) --dist=loadgroup --quiet \
+		tests/integration
 	@uv run coverage report --fail-under=0
 	@uv run coverage html >/dev/null 2>&1
 	@uv run coverage xml >/dev/null 2>&1
