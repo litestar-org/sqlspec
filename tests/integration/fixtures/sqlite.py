@@ -2,16 +2,23 @@
 
 import sqlite3
 import tempfile
-from collections.abc import AsyncGenerator, Generator
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from pytest_databases.helpers import get_xdist_worker_num
 
-from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.utils.module_loader import import_optional_attr
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Generator
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+else:
+    AiosqliteConfig = import_optional_attr("sqlspec.adapters.aiosqlite", "AiosqliteConfig")
+    AiosqliteDriver = import_optional_attr("sqlspec.adapters.aiosqlite", "AiosqliteDriver")
 
 __all__ = (
     "aiosqlite_config",
@@ -25,13 +32,6 @@ __all__ = (
     "sqlite_session",
     "sqlite_temp_file_config",
 )
-
-
-def _temporary_database_path(prefix: str) -> Path:
-    worker_num = get_xdist_worker_num()
-    worker_suffix = f"-worker-{worker_num}" if worker_num is not None else ""
-    with tempfile.NamedTemporaryFile(prefix=f"{prefix}{worker_suffix}-", suffix=".db", delete=False) as tmp:
-        return Path(tmp.name)
 
 
 @pytest.fixture
@@ -145,6 +145,7 @@ def sqlite_temp_file_config() -> "Generator[SqliteConfig, None, None]":
 @pytest.fixture
 async def aiosqlite_session_config() -> "AsyncGenerator[AiosqliteConfig, None]":
     """Provide a per-test config for sessions that create mutable tables."""
+    pytest.importorskip("aiosqlite")
     config = AiosqliteConfig()
     try:
         yield config
@@ -157,6 +158,7 @@ async def aiosqlite_session_config() -> "AsyncGenerator[AiosqliteConfig, None]":
 @pytest.fixture
 async def aiosqlite_session(aiosqlite_session_config: "AiosqliteConfig") -> "AsyncGenerator[AiosqliteDriver, None]":
     """Create an aiosqlite session with a fresh test table."""
+    pytest.importorskip("aiosqlite")
     async with aiosqlite_session_config.provide_session() as session:
         await session.execute_script("""
             CREATE TABLE IF NOT EXISTS test_table (
@@ -180,6 +182,7 @@ async def aiosqlite_session(aiosqlite_session_config: "AiosqliteConfig") -> "Asy
 @pytest.fixture(scope="session")
 async def aiosqlite_config() -> "AsyncGenerator[AiosqliteConfig, None]":
     """Provide a reusable config for tests that own their session cleanup."""
+    pytest.importorskip("aiosqlite")
     config = AiosqliteConfig()
     try:
         yield config
@@ -192,6 +195,7 @@ async def aiosqlite_config() -> "AsyncGenerator[AiosqliteConfig, None]":
 @pytest.fixture
 async def aiosqlite_config_file() -> "AsyncGenerator[AiosqliteConfig, None]":
     """Provide an xdist-isolated file-backed config for concurrent access tests."""
+    pytest.importorskip("aiosqlite")
     db_path = _temporary_database_path("sqlspec-aiosqlite")
     config = AiosqliteConfig(connection_config={"database": str(db_path), "pool_size": 5})
     try:
@@ -201,3 +205,10 @@ async def aiosqlite_config_file() -> "AsyncGenerator[AiosqliteConfig, None]":
             await config.close_pool()
         config.connection_instance = None
         db_path.unlink(missing_ok=True)
+
+
+def _temporary_database_path(prefix: str) -> Path:
+    worker_num = get_xdist_worker_num()
+    worker_suffix = f"-worker-{worker_num}" if worker_num is not None else ""
+    with tempfile.NamedTemporaryFile(prefix=f"{prefix}{worker_suffix}-", suffix=".db", delete=False) as tmp:
+        return Path(tmp.name)

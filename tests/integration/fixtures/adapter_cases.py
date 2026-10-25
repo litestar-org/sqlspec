@@ -1,10 +1,9 @@
 """Fixtures for shared adapter contract tests."""
 
 import contextlib
-from collections.abc import AsyncGenerator, Callable, Generator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -16,86 +15,8 @@ from pytest_databases.docker.oracle import OracleService
 from pytest_databases.docker.postgres import PostgresService
 from pytest_databases.docker.spanner import SpannerService
 
-from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.adapters.adbc.adk import AdbcADKStore
-from sqlspec.adapters.adbc.litestar import ADBCStore
-from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver, AiomysqlDriverFeatures
-from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
-from sqlspec.adapters.aiomysql.litestar import AiomysqlStore
-from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver, AiosqliteDriverFeatures
-from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
-from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
-from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver
-from sqlspec.adapters.arrow_odbc.adk import ArrowOdbcADKStore
-from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
-from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, AsyncmyDriverFeatures
-from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
-from sqlspec.adapters.asyncmy.litestar import AsyncmyStore
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgDriverFeatures
-from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
-from sqlspec.adapters.asyncpg.litestar import AsyncpgStore
-from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver, BigQueryDriverFeatures
-from sqlspec.adapters.cockroach_asyncpg import (
-    CockroachAsyncpgConfig,
-    CockroachAsyncpgDriver,
-    CockroachAsyncpgDriverFeatures,
-)
-from sqlspec.adapters.cockroach_asyncpg.adk import CockroachAsyncpgADKStore
-from sqlspec.adapters.cockroach_psycopg import (
-    CockroachPsycopgAsyncConfig,
-    CockroachPsycopgAsyncDriver,
-    CockroachPsycopgDriverFeatures,
-    CockroachPsycopgSyncConfig,
-    CockroachPsycopgSyncDriver,
-)
-from sqlspec.adapters.cockroach_psycopg.adk import CockroachPsycopgAsyncADKStore, CockroachPsycopgSyncADKStore
-from sqlspec.adapters.db2 import Db2AsyncConfig, Db2AsyncDriver, Db2DriverFeatures, Db2SyncConfig, Db2SyncDriver
-from sqlspec.adapters.db2.adk import Db2AsyncADKStore, Db2SyncADKStore
-from sqlspec.adapters.db2.litestar import Db2AsyncStore, Db2SyncStore
-from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver, DuckDBDriverFeatures
-from sqlspec.adapters.duckdb.adk import DuckdbADKStore
-from sqlspec.adapters.duckdb.litestar import DuckdbStore
-from sqlspec.adapters.mssql_python import MssqlPythonConfig, MssqlPythonDriver
-from sqlspec.adapters.mssql_python.adk import MssqlPythonADKStore
-from sqlspec.adapters.mysqlconnector import (
-    MysqlConnectorAsyncConfig,
-    MysqlConnectorAsyncDriver,
-    MysqlConnectorDriverFeatures,
-    MysqlConnectorSyncConfig,
-    MysqlConnectorSyncDriver,
-)
-from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore, MysqlConnectorSyncADKStore
-from sqlspec.adapters.mysqlconnector.litestar import MysqlConnectorAsyncStore, MysqlConnectorSyncStore
-from sqlspec.adapters.oracledb import (
-    OracleAsyncConfig,
-    OracleAsyncDriver,
-    OracleDriverFeatures,
-    OracleSyncConfig,
-    OracleSyncDriver,
-)
-from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
-from sqlspec.adapters.oracledb.litestar import OracleAsyncStore, OracleSyncStore
-from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyDriverFeatures, PsqlpyPoolParams
-from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
-from sqlspec.adapters.psqlpy.litestar import PsqlpyStore
-from sqlspec.adapters.psycopg import (
-    PsycopgAsyncConfig,
-    PsycopgAsyncDriver,
-    PsycopgDriverFeatures,
-    PsycopgSyncConfig,
-    PsycopgSyncDriver,
-)
-from sqlspec.adapters.psycopg.adk import PsycopgAsyncADKStore, PsycopgSyncADKStore
-from sqlspec.adapters.psycopg.litestar import PsycopgAsyncStore, PsycopgSyncStore
-from sqlspec.adapters.pymssql import PymssqlConfig, PymssqlDriver
-from sqlspec.adapters.pymssql.adk import PymssqlADKStore
-from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver, PyMysqlDriverFeatures
-from sqlspec.adapters.pymysql.adk import PyMysqlADKStore
-from sqlspec.adapters.pymysql.litestar import PyMysqlStore
-from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver, SqliteDriverFeatures
-from sqlspec.adapters.sqlite.adk import SqliteADKStore
-from sqlspec.adapters.sqlite.litestar import SQLiteStore
+from sqlspec.utils.module_loader import import_optional_attr
 from tests.integration.adapters._shared._adk_cases import ADK_STORE_PARAMS, AdkStoreCase, AdkStoreCaseContext
 from tests.integration.adapters._shared._cases import (
     ASYNC_DRIVER_PARAMS,
@@ -136,28 +57,252 @@ from tests.integration.adapters._shared._schema import (
     build_bigquery_contract_table,
 )
 from tests.integration.adapters._shared._store_cases import STORE_PARAMS, StoreCase, StoreCaseContext
-from tests.integration.adapters.bigquery._wedge import describe_wedge, is_emulator_wedge
-from tests.integration.fixtures.bigquery import _bigquery_connection_config
+from tests.integration.fixtures.cockroach import _cockroach_asyncpg_connection_config, _cockroach_conninfo
 from tests.integration.fixtures.mssql import (
     _arrow_odbc_connection_config,
     _mssql_connection_config,
     _mssql_python_connection_config,
 )
-from tests.integration.fixtures.mysql import _mysql_connection_config
 from tests.integration.fixtures.oracle import _oracle_pool_params
 from tests.integration.fixtures.postgres import (
     _adbc_postgres_uri,
-    _cockroach_asyncpg_connection_config,
-    _cockroach_conninfo,
     _postgres_connection_config,
     _postgres_conninfo,
     _psqlpy_dsn,
 )
-from tests.integration.fixtures.spanner import build_spanner_connection_config
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable, Generator
+
+    from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
+    from sqlspec.adapters.adbc.adk import AdbcADKStore
+    from sqlspec.adapters.adbc.litestar import ADBCStore
+    from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver, AiomysqlDriverFeatures
+    from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
+    from sqlspec.adapters.aiomysql.litestar import AiomysqlStore
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver, AiosqliteDriverFeatures
+    from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
+    from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
+    from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver
+    from sqlspec.adapters.arrow_odbc.adk import ArrowOdbcADKStore
+    from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
+    from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, AsyncmyDriverFeatures
+    from sqlspec.adapters.asyncmy.adk import AsyncmyADKStore
+    from sqlspec.adapters.asyncmy.litestar import AsyncmyStore
+    from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgDriverFeatures
+    from sqlspec.adapters.asyncpg.adk import AsyncpgADKStore
+    from sqlspec.adapters.asyncpg.litestar import AsyncpgStore
+    from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver, BigQueryDriverFeatures
+    from sqlspec.adapters.cockroach_asyncpg import (
+        CockroachAsyncpgConfig,
+        CockroachAsyncpgDriver,
+        CockroachAsyncpgDriverFeatures,
+    )
+    from sqlspec.adapters.cockroach_asyncpg.adk import CockroachAsyncpgADKStore
+    from sqlspec.adapters.cockroach_psycopg import (
+        CockroachPsycopgAsyncConfig,
+        CockroachPsycopgAsyncDriver,
+        CockroachPsycopgDriverFeatures,
+        CockroachPsycopgSyncConfig,
+        CockroachPsycopgSyncDriver,
+    )
+    from sqlspec.adapters.cockroach_psycopg.adk import CockroachPsycopgAsyncADKStore, CockroachPsycopgSyncADKStore
+    from sqlspec.adapters.db2 import Db2AsyncConfig, Db2AsyncDriver, Db2DriverFeatures, Db2SyncConfig, Db2SyncDriver
+    from sqlspec.adapters.db2.adk import Db2AsyncADKStore, Db2SyncADKStore
+    from sqlspec.adapters.db2.litestar import Db2AsyncStore, Db2SyncStore
+    from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver, DuckDBDriverFeatures
+    from sqlspec.adapters.duckdb.adk import DuckdbADKStore
+    from sqlspec.adapters.duckdb.litestar import DuckdbStore
+    from sqlspec.adapters.mssql_python import MssqlPythonConfig, MssqlPythonDriver
+    from sqlspec.adapters.mssql_python.adk import MssqlPythonADKStore
+    from sqlspec.adapters.mysqlconnector import (
+        MysqlConnectorAsyncConfig,
+        MysqlConnectorAsyncDriver,
+        MysqlConnectorDriverFeatures,
+        MysqlConnectorSyncConfig,
+        MysqlConnectorSyncDriver,
+    )
+    from sqlspec.adapters.mysqlconnector.adk import MysqlConnectorAsyncADKStore, MysqlConnectorSyncADKStore
+    from sqlspec.adapters.mysqlconnector.litestar import MysqlConnectorAsyncStore, MysqlConnectorSyncStore
+    from sqlspec.adapters.oracledb import (
+        OracleAsyncConfig,
+        OracleAsyncDriver,
+        OracleDriverFeatures,
+        OracleSyncConfig,
+        OracleSyncDriver,
+    )
+    from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
+    from sqlspec.adapters.oracledb.litestar import OracleAsyncStore, OracleSyncStore
+    from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver, PsqlpyDriverFeatures, PsqlpyPoolParams
+    from sqlspec.adapters.psqlpy.adk import PsqlpyADKStore
+    from sqlspec.adapters.psqlpy.litestar import PsqlpyStore
+    from sqlspec.adapters.psycopg import (
+        PsycopgAsyncConfig,
+        PsycopgAsyncDriver,
+        PsycopgDriverFeatures,
+        PsycopgSyncConfig,
+        PsycopgSyncDriver,
+    )
+    from sqlspec.adapters.psycopg.adk import PsycopgAsyncADKStore, PsycopgSyncADKStore
+    from sqlspec.adapters.psycopg.litestar import PsycopgAsyncStore, PsycopgSyncStore
+    from sqlspec.adapters.pymssql import PymssqlConfig, PymssqlDriver
+    from sqlspec.adapters.pymssql.adk import PymssqlADKStore
+    from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver, PyMysqlDriverFeatures
+    from sqlspec.adapters.pymysql.adk import PyMysqlADKStore
+    from sqlspec.adapters.pymysql.litestar import PyMysqlStore
+    from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
+    from sqlspec.adapters.sqlite.adk import SqliteADKStore
+    from sqlspec.adapters.sqlite.litestar import SQLiteStore
+    from tests.integration.adapters.bigquery._wedge import describe_wedge, is_emulator_wedge
+    from tests.integration.fixtures.bigquery import _bigquery_connection_config
+    from tests.integration.fixtures.mysql import _mysql_connection_config
+    from tests.integration.fixtures.spanner import build_spanner_connection_config
+else:
+    AdbcConfig = import_optional_attr("sqlspec.adapters.adbc", "AdbcConfig")
+    AdbcDriver = import_optional_attr("sqlspec.adapters.adbc", "AdbcDriver")
+    AdbcADKStore = import_optional_attr("sqlspec.adapters.adbc.adk", "AdbcADKStore")
+    ADBCStore = import_optional_attr("sqlspec.adapters.adbc.litestar", "ADBCStore")
+    AiomysqlConfig = import_optional_attr("sqlspec.adapters.aiomysql", "AiomysqlConfig")
+    AiomysqlDriver = import_optional_attr("sqlspec.adapters.aiomysql", "AiomysqlDriver")
+    AiomysqlDriverFeatures = import_optional_attr("sqlspec.adapters.aiomysql", "AiomysqlDriverFeatures")
+    AiomysqlADKStore = import_optional_attr("sqlspec.adapters.aiomysql.adk", "AiomysqlADKStore")
+    AiomysqlStore = import_optional_attr("sqlspec.adapters.aiomysql.litestar", "AiomysqlStore")
+    AiosqliteConfig = import_optional_attr("sqlspec.adapters.aiosqlite", "AiosqliteConfig")
+    AiosqliteDriver = import_optional_attr("sqlspec.adapters.aiosqlite", "AiosqliteDriver")
+    AiosqliteDriverFeatures = import_optional_attr("sqlspec.adapters.aiosqlite", "AiosqliteDriverFeatures")
+    AiosqliteADKStore = import_optional_attr("sqlspec.adapters.aiosqlite.adk", "AiosqliteADKStore")
+    AiosqliteStore = import_optional_attr("sqlspec.adapters.aiosqlite.litestar", "AiosqliteStore")
+    ArrowOdbcConfig = import_optional_attr("sqlspec.adapters.arrow_odbc", "ArrowOdbcConfig")
+    ArrowOdbcDriver = import_optional_attr("sqlspec.adapters.arrow_odbc", "ArrowOdbcDriver")
+    ArrowOdbcADKStore = import_optional_attr("sqlspec.adapters.arrow_odbc.adk", "ArrowOdbcADKStore")
+    ArrowOdbcStore = import_optional_attr("sqlspec.adapters.arrow_odbc.litestar", "ArrowOdbcStore")
+    AsyncmyConfig = import_optional_attr("sqlspec.adapters.asyncmy", "AsyncmyConfig")
+    AsyncmyDriver = import_optional_attr("sqlspec.adapters.asyncmy", "AsyncmyDriver")
+    AsyncmyDriverFeatures = import_optional_attr("sqlspec.adapters.asyncmy", "AsyncmyDriverFeatures")
+    AsyncmyADKStore = import_optional_attr("sqlspec.adapters.asyncmy.adk", "AsyncmyADKStore")
+    AsyncmyStore = import_optional_attr("sqlspec.adapters.asyncmy.litestar", "AsyncmyStore")
+    AsyncpgConfig = import_optional_attr("sqlspec.adapters.asyncpg", "AsyncpgConfig")
+    AsyncpgDriver = import_optional_attr("sqlspec.adapters.asyncpg", "AsyncpgDriver")
+    AsyncpgDriverFeatures = import_optional_attr("sqlspec.adapters.asyncpg", "AsyncpgDriverFeatures")
+    AsyncpgADKStore = import_optional_attr("sqlspec.adapters.asyncpg.adk", "AsyncpgADKStore")
+    AsyncpgStore = import_optional_attr("sqlspec.adapters.asyncpg.litestar", "AsyncpgStore")
+    BigQueryConfig = import_optional_attr("sqlspec.adapters.bigquery", "BigQueryConfig")
+    BigQueryDriver = import_optional_attr("sqlspec.adapters.bigquery", "BigQueryDriver")
+    BigQueryDriverFeatures = import_optional_attr("sqlspec.adapters.bigquery", "BigQueryDriverFeatures")
+    CockroachAsyncpgConfig = import_optional_attr("sqlspec.adapters.cockroach_asyncpg", "CockroachAsyncpgConfig")
+    CockroachAsyncpgDriver = import_optional_attr("sqlspec.adapters.cockroach_asyncpg", "CockroachAsyncpgDriver")
+    CockroachAsyncpgDriverFeatures = import_optional_attr(
+        "sqlspec.adapters.cockroach_asyncpg", "CockroachAsyncpgDriverFeatures"
+    )
+    CockroachAsyncpgADKStore = import_optional_attr(
+        "sqlspec.adapters.cockroach_asyncpg.adk", "CockroachAsyncpgADKStore"
+    )
+    CockroachPsycopgAsyncConfig = import_optional_attr(
+        "sqlspec.adapters.cockroach_psycopg", "CockroachPsycopgAsyncConfig"
+    )
+    CockroachPsycopgAsyncDriver = import_optional_attr(
+        "sqlspec.adapters.cockroach_psycopg", "CockroachPsycopgAsyncDriver"
+    )
+    CockroachPsycopgDriverFeatures = import_optional_attr(
+        "sqlspec.adapters.cockroach_psycopg", "CockroachPsycopgDriverFeatures"
+    )
+    CockroachPsycopgSyncConfig = import_optional_attr(
+        "sqlspec.adapters.cockroach_psycopg", "CockroachPsycopgSyncConfig"
+    )
+    CockroachPsycopgSyncDriver = import_optional_attr(
+        "sqlspec.adapters.cockroach_psycopg", "CockroachPsycopgSyncDriver"
+    )
+    CockroachPsycopgAsyncADKStore = import_optional_attr(
+        "sqlspec.adapters.cockroach_psycopg.adk", "CockroachPsycopgAsyncADKStore"
+    )
+    CockroachPsycopgSyncADKStore = import_optional_attr(
+        "sqlspec.adapters.cockroach_psycopg.adk", "CockroachPsycopgSyncADKStore"
+    )
+    Db2AsyncConfig = import_optional_attr("sqlspec.adapters.db2", "Db2AsyncConfig")
+    Db2AsyncDriver = import_optional_attr("sqlspec.adapters.db2", "Db2AsyncDriver")
+    Db2DriverFeatures = import_optional_attr("sqlspec.adapters.db2", "Db2DriverFeatures")
+    Db2SyncConfig = import_optional_attr("sqlspec.adapters.db2", "Db2SyncConfig")
+    Db2SyncDriver = import_optional_attr("sqlspec.adapters.db2", "Db2SyncDriver")
+    Db2AsyncADKStore = import_optional_attr("sqlspec.adapters.db2.adk", "Db2AsyncADKStore")
+    Db2SyncADKStore = import_optional_attr("sqlspec.adapters.db2.adk", "Db2SyncADKStore")
+    Db2AsyncStore = import_optional_attr("sqlspec.adapters.db2.litestar", "Db2AsyncStore")
+    Db2SyncStore = import_optional_attr("sqlspec.adapters.db2.litestar", "Db2SyncStore")
+    DuckDBConfig = import_optional_attr("sqlspec.adapters.duckdb", "DuckDBConfig")
+    DuckDBDriver = import_optional_attr("sqlspec.adapters.duckdb", "DuckDBDriver")
+    DuckDBDriverFeatures = import_optional_attr("sqlspec.adapters.duckdb", "DuckDBDriverFeatures")
+    DuckdbADKStore = import_optional_attr("sqlspec.adapters.duckdb.adk", "DuckdbADKStore")
+    DuckdbStore = import_optional_attr("sqlspec.adapters.duckdb.litestar", "DuckdbStore")
+    MssqlPythonConfig = import_optional_attr("sqlspec.adapters.mssql_python", "MssqlPythonConfig")
+    MssqlPythonDriver = import_optional_attr("sqlspec.adapters.mssql_python", "MssqlPythonDriver")
+    MssqlPythonADKStore = import_optional_attr("sqlspec.adapters.mssql_python.adk", "MssqlPythonADKStore")
+    MysqlConnectorAsyncConfig = import_optional_attr("sqlspec.adapters.mysqlconnector", "MysqlConnectorAsyncConfig")
+    MysqlConnectorAsyncDriver = import_optional_attr("sqlspec.adapters.mysqlconnector", "MysqlConnectorAsyncDriver")
+    MysqlConnectorDriverFeatures = import_optional_attr(
+        "sqlspec.adapters.mysqlconnector", "MysqlConnectorDriverFeatures"
+    )
+    MysqlConnectorSyncConfig = import_optional_attr("sqlspec.adapters.mysqlconnector", "MysqlConnectorSyncConfig")
+    MysqlConnectorSyncDriver = import_optional_attr("sqlspec.adapters.mysqlconnector", "MysqlConnectorSyncDriver")
+    MysqlConnectorAsyncADKStore = import_optional_attr(
+        "sqlspec.adapters.mysqlconnector.adk", "MysqlConnectorAsyncADKStore"
+    )
+    MysqlConnectorSyncADKStore = import_optional_attr(
+        "sqlspec.adapters.mysqlconnector.adk", "MysqlConnectorSyncADKStore"
+    )
+    MysqlConnectorAsyncStore = import_optional_attr(
+        "sqlspec.adapters.mysqlconnector.litestar", "MysqlConnectorAsyncStore"
+    )
+    MysqlConnectorSyncStore = import_optional_attr(
+        "sqlspec.adapters.mysqlconnector.litestar", "MysqlConnectorSyncStore"
+    )
+    OracleAsyncConfig = import_optional_attr("sqlspec.adapters.oracledb", "OracleAsyncConfig")
+    OracleAsyncDriver = import_optional_attr("sqlspec.adapters.oracledb", "OracleAsyncDriver")
+    OracleDriverFeatures = import_optional_attr("sqlspec.adapters.oracledb", "OracleDriverFeatures")
+    OracleSyncConfig = import_optional_attr("sqlspec.adapters.oracledb", "OracleSyncConfig")
+    OracleSyncDriver = import_optional_attr("sqlspec.adapters.oracledb", "OracleSyncDriver")
+    OracleAsyncADKStore = import_optional_attr("sqlspec.adapters.oracledb.adk", "OracleAsyncADKStore")
+    OracleSyncADKStore = import_optional_attr("sqlspec.adapters.oracledb.adk", "OracleSyncADKStore")
+    OracleAsyncStore = import_optional_attr("sqlspec.adapters.oracledb.litestar", "OracleAsyncStore")
+    OracleSyncStore = import_optional_attr("sqlspec.adapters.oracledb.litestar", "OracleSyncStore")
+    PsqlpyConfig = import_optional_attr("sqlspec.adapters.psqlpy", "PsqlpyConfig")
+    PsqlpyDriver = import_optional_attr("sqlspec.adapters.psqlpy", "PsqlpyDriver")
+    PsqlpyDriverFeatures = import_optional_attr("sqlspec.adapters.psqlpy", "PsqlpyDriverFeatures")
+    PsqlpyPoolParams = import_optional_attr("sqlspec.adapters.psqlpy", "PsqlpyPoolParams")
+    PsqlpyADKStore = import_optional_attr("sqlspec.adapters.psqlpy.adk", "PsqlpyADKStore")
+    PsqlpyStore = import_optional_attr("sqlspec.adapters.psqlpy.litestar", "PsqlpyStore")
+    PsycopgAsyncConfig = import_optional_attr("sqlspec.adapters.psycopg", "PsycopgAsyncConfig")
+    PsycopgAsyncDriver = import_optional_attr("sqlspec.adapters.psycopg", "PsycopgAsyncDriver")
+    PsycopgDriverFeatures = import_optional_attr("sqlspec.adapters.psycopg", "PsycopgDriverFeatures")
+    PsycopgSyncConfig = import_optional_attr("sqlspec.adapters.psycopg", "PsycopgSyncConfig")
+    PsycopgSyncDriver = import_optional_attr("sqlspec.adapters.psycopg", "PsycopgSyncDriver")
+    PsycopgAsyncADKStore = import_optional_attr("sqlspec.adapters.psycopg.adk", "PsycopgAsyncADKStore")
+    PsycopgSyncADKStore = import_optional_attr("sqlspec.adapters.psycopg.adk", "PsycopgSyncADKStore")
+    PsycopgAsyncStore = import_optional_attr("sqlspec.adapters.psycopg.litestar", "PsycopgAsyncStore")
+    PsycopgSyncStore = import_optional_attr("sqlspec.adapters.psycopg.litestar", "PsycopgSyncStore")
+    PymssqlConfig = import_optional_attr("sqlspec.adapters.pymssql", "PymssqlConfig")
+    PymssqlDriver = import_optional_attr("sqlspec.adapters.pymssql", "PymssqlDriver")
+    PymssqlADKStore = import_optional_attr("sqlspec.adapters.pymssql.adk", "PymssqlADKStore")
+    PyMysqlConfig = import_optional_attr("sqlspec.adapters.pymysql", "PyMysqlConfig")
+    PyMysqlDriver = import_optional_attr("sqlspec.adapters.pymysql", "PyMysqlDriver")
+    PyMysqlDriverFeatures = import_optional_attr("sqlspec.adapters.pymysql", "PyMysqlDriverFeatures")
+    PyMysqlADKStore = import_optional_attr("sqlspec.adapters.pymysql.adk", "PyMysqlADKStore")
+    PyMysqlStore = import_optional_attr("sqlspec.adapters.pymysql.litestar", "PyMysqlStore")
+    SpannerAsyncConfig = import_optional_attr("sqlspec.adapters.spanner", "SpannerAsyncConfig")
+    SpannerSyncConfig = import_optional_attr("sqlspec.adapters.spanner", "SpannerSyncConfig")
+    SqliteADKStore = import_optional_attr("sqlspec.adapters.sqlite.adk", "SqliteADKStore")
+    SQLiteStore = import_optional_attr("sqlspec.adapters.sqlite.litestar", "SQLiteStore")
+    describe_wedge = import_optional_attr("tests.integration.adapters.bigquery._wedge", "describe_wedge")
+    is_emulator_wedge = import_optional_attr("tests.integration.adapters.bigquery._wedge", "is_emulator_wedge")
+    _bigquery_connection_config = import_optional_attr(
+        "tests.integration.fixtures.bigquery", "_bigquery_connection_config"
+    )
+    _mysql_connection_config = import_optional_attr("tests.integration.fixtures.mysql", "_mysql_connection_config")
+    build_spanner_connection_config = import_optional_attr(
+        "tests.integration.fixtures.spanner", "build_spanner_connection_config"
+    )
 
 
 @pytest.fixture
-def contract_sqlite_driver(sqlite_config_regular_memory: SqliteConfig) -> Generator[SqliteDriver, None, None]:
+def contract_sqlite_driver(sqlite_config_regular_memory: SqliteConfig) -> "Generator[SqliteDriver, None, None]":
     """Provide a fresh SQLite driver for contract tests."""
     with sqlite_config_regular_memory.provide_session() as driver:
         driver.execute("PRAGMA foreign_keys = ON")
@@ -167,8 +312,9 @@ def contract_sqlite_driver(sqlite_config_regular_memory: SqliteConfig) -> Genera
 
 
 @pytest.fixture
-def contract_duckdb_driver(duckdb_basic_config: DuckDBConfig) -> Generator[DuckDBDriver, None, None]:
+def contract_duckdb_driver(duckdb_basic_config: "DuckDBConfig") -> "Generator[DuckDBDriver, None, None]":
     """Provide a fresh DuckDB driver for contract tests."""
+    pytest.importorskip("duckdb")
     with duckdb_basic_config.provide_session() as driver:
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
         driver.execute_script(DUCKDB_CONTRACT_TABLE.create_sql)
@@ -185,7 +331,9 @@ _ADBC_DRIVER_MISSING_MARKERS = (
 
 
 @contextlib.contextmanager
-def _provide_adbc_contract_driver(config: AdbcConfig, table: ContractTable) -> Generator[AdbcDriver, None, None]:
+def _provide_adbc_contract_driver(config: "AdbcConfig", table: ContractTable) -> "Generator[AdbcDriver, None, None]":
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
     try:
         with config.provide_session() as driver:
             driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -199,22 +347,28 @@ def _provide_adbc_contract_driver(config: AdbcConfig, table: ContractTable) -> G
 
 
 @pytest.fixture
-def contract_adbc_sqlite_driver(adbc_sqlite_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
+def contract_adbc_sqlite_driver(adbc_sqlite_config: "AdbcConfig") -> "Generator[AdbcDriver, None, None]":
     """Provide a fresh ADBC SQLite driver for contract tests."""
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
     with _provide_adbc_contract_driver(adbc_sqlite_config, DEFAULT_CONTRACT_TABLE) as driver:
         yield driver
 
 
 @pytest.fixture
-def contract_adbc_duckdb_driver(adbc_duckdb_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
+def contract_adbc_duckdb_driver(adbc_duckdb_config: "AdbcConfig") -> "Generator[AdbcDriver, None, None]":
     """Provide a fresh ADBC DuckDB driver for contract tests."""
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
     with _provide_adbc_contract_driver(adbc_duckdb_config, DUCKDB_CONTRACT_TABLE) as driver:
         yield driver
 
 
 @pytest.fixture
-def contract_adbc_postgres_driver(adbc_postgres_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
+def contract_adbc_postgres_driver(adbc_postgres_config: "AdbcConfig") -> "Generator[AdbcDriver, None, None]":
     """Provide a fresh ADBC PostgreSQL driver for contract tests."""
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
     with _provide_adbc_contract_driver(adbc_postgres_config, POSTGRES_CONTRACT_TABLE) as driver:
         yield driver
 
@@ -234,6 +388,7 @@ def _bigquery_contract_session(bigquery_service: BigQueryService) -> "Generator[
     config, so the client is reused across the xdist group, a dotted dataset_id keeps
     the default dataset unset, and tables are referenced fully-qualified.
     """
+    pytest.importorskip("google.cloud.bigquery")
     config = BigQueryConfig(
         connection_config=_bigquery_connection_config(bigquery_service),
         driver_features={"job_result_timeout": 30.0, "job_retry_deadline": 0.0, "request_timeout": 15.0},
@@ -250,14 +405,15 @@ _bigquery_wedge_reason: "str | None" = None
 
 @pytest.fixture
 def contract_bigquery_driver(
-    _bigquery_contract_session: BigQueryDriver, bigquery_contract_table: ContractTable
-) -> BigQueryDriver:
+    _bigquery_contract_session: "BigQueryDriver", bigquery_contract_table: ContractTable
+) -> "BigQueryDriver":
     """Provide the session BigQuery driver with an isolated contract table per test.
 
     Once the emulator wedges (accepts requests but never responds), every call
     fails after the request timeout; skip the remaining BigQuery contract tests
     instead of paying that timeout per test.
     """
+    pytest.importorskip("google.cloud.bigquery")
     global _bigquery_wedge_reason
     if _bigquery_wedge_reason is not None:
         pytest.skip(f"BigQuery emulator wedged earlier in this session ({_bigquery_wedge_reason})")
@@ -272,8 +428,9 @@ def contract_bigquery_driver(
 
 
 @pytest.fixture
-def contract_oracle_sync_driver(oracle_sync_config: OracleSyncConfig) -> Generator[OracleSyncDriver, None, None]:
+def contract_oracle_sync_driver(oracle_sync_config: "OracleSyncConfig") -> "Generator[OracleSyncDriver, None, None]":
     """Provide a fresh Oracle sync driver for contract tests."""
+    pytest.importorskip("oracledb")
     with oracle_sync_config.provide_session() as driver:
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
         driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
@@ -287,9 +444,11 @@ def contract_oracle_sync_driver(oracle_sync_config: OracleSyncConfig) -> Generat
 
 @pytest.fixture
 def contract_arrow_odbc_mssql_driver(
-    arrow_odbc_mssql_config: ArrowOdbcConfig,
-) -> Generator[ArrowOdbcDriver, None, None]:
+    arrow_odbc_mssql_config: "ArrowOdbcConfig",
+) -> "Generator[ArrowOdbcDriver, None, None]":
     """Provide a fresh arrow-odbc driver backed by SQL Server."""
+    pytest.importorskip("arrow_odbc")
+    pytest.importorskip("pyarrow")
     with arrow_odbc_mssql_config.provide_session() as driver:
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
         driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
@@ -302,8 +461,11 @@ def contract_arrow_odbc_mssql_driver(
 
 
 @pytest.fixture
-def contract_mssql_python_driver(mssql_python_config: MssqlPythonConfig) -> Generator[MssqlPythonDriver, None, None]:
+def contract_mssql_python_driver(
+    mssql_python_config: "MssqlPythonConfig",
+) -> "Generator[MssqlPythonDriver, None, None]":
     """Provide a fresh mssql-python driver backed by SQL Server."""
+    pytest.importorskip("mssql_python")
     with mssql_python_config.provide_session() as driver:
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
         driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
@@ -316,8 +478,9 @@ def contract_mssql_python_driver(mssql_python_config: MssqlPythonConfig) -> Gene
 
 
 @pytest.fixture
-def contract_pymssql_driver(pymssql_config: PymssqlConfig) -> Generator[PymssqlDriver, None, None]:
+def contract_pymssql_driver(pymssql_config: "PymssqlConfig") -> "Generator[PymssqlDriver, None, None]":
     """Provide a fresh pymssql driver backed by SQL Server."""
+    pytest.importorskip("pymssql")
     with pymssql_config.provide_session() as driver:
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
         driver.execute_script(MSSQL_CONTRACT_TABLE.create_sql)
@@ -331,9 +494,10 @@ def contract_pymssql_driver(pymssql_config: PymssqlConfig) -> Generator[PymssqlD
 
 @pytest.fixture
 async def contract_oracle_async_driver(
-    oracle_async_config: OracleAsyncConfig,
+    oracle_async_config: "OracleAsyncConfig",
 ) -> "AsyncGenerator[OracleAsyncDriver, None]":
     """Provide a fresh Oracle async driver for contract tests."""
+    pytest.importorskip("oracledb")
     async with oracle_async_config.provide_session() as driver:
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
         await driver.execute_script(ORACLE_CONTRACT_TABLE.create_sql)
@@ -347,9 +511,10 @@ async def contract_oracle_async_driver(
 
 @pytest.fixture
 def contract_mysqlconnector_sync_driver(
-    mysqlconnector_sync_config: MysqlConnectorSyncConfig,
-) -> Generator[MysqlConnectorSyncDriver, None, None]:
+    mysqlconnector_sync_config: "MysqlConnectorSyncConfig",
+) -> "Generator[MysqlConnectorSyncDriver, None, None]":
     """Provide a fresh mysql-connector sync driver for contract tests."""
+    pytest.importorskip("mysql.connector")
     with mysqlconnector_sync_config.provide_session() as driver:
         driver.execute("SET sql_notes = 0")
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -364,8 +529,9 @@ def contract_mysqlconnector_sync_driver(
 
 
 @pytest.fixture
-def contract_pymysql_driver(pymysql_config: PyMysqlConfig) -> Generator[PyMysqlDriver, None, None]:
+def contract_pymysql_driver(pymysql_config: "PyMysqlConfig") -> "Generator[PyMysqlDriver, None, None]":
     """Provide a fresh PyMySQL driver for contract tests."""
+    pytest.importorskip("pymysql")
     with pymysql_config.provide_session() as driver:
         driver.execute("SET sql_notes = 0")
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -380,8 +546,12 @@ def contract_pymysql_driver(pymysql_config: PyMysqlConfig) -> Generator[PyMysqlD
 
 
 @pytest.fixture
-def contract_psycopg_sync_driver(psycopg_sync_config: PsycopgSyncConfig) -> Generator[PsycopgSyncDriver, None, None]:
+def contract_psycopg_sync_driver(
+    psycopg_sync_config: "PsycopgSyncConfig",
+) -> "Generator[PsycopgSyncDriver, None, None]":
     """Provide a fresh psycopg sync driver for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
     with psycopg_sync_config.provide_session() as driver:
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
         driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
@@ -395,9 +565,11 @@ def contract_psycopg_sync_driver(psycopg_sync_config: PsycopgSyncConfig) -> Gene
 
 @pytest.fixture
 def contract_cockroach_psycopg_sync_driver(
-    cockroach_psycopg_sync_config: CockroachPsycopgSyncConfig,
-) -> Generator[CockroachPsycopgSyncDriver, None, None]:
+    cockroach_psycopg_sync_config: "CockroachPsycopgSyncConfig",
+) -> "Generator[CockroachPsycopgSyncDriver, None, None]":
     """Provide a fresh CockroachDB psycopg sync driver for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
     with cockroach_psycopg_sync_config.provide_session() as driver:
         driver.execute_script("DROP TABLE IF EXISTS contract_items")
         driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
@@ -410,8 +582,11 @@ def contract_cockroach_psycopg_sync_driver(
 
 
 @pytest.fixture
-async def contract_aiosqlite_driver(aiosqlite_session_config: AiosqliteConfig) -> AsyncGenerator[AiosqliteDriver, None]:
+async def contract_aiosqlite_driver(
+    aiosqlite_session_config: "AiosqliteConfig",
+) -> "AsyncGenerator[AiosqliteDriver, None]":
     """Provide a fresh aiosqlite driver for contract tests."""
+    pytest.importorskip("aiosqlite")
     async with aiosqlite_session_config.provide_session() as driver:
         await driver.execute("PRAGMA foreign_keys = ON")
         await driver.execute_script(DEFAULT_CONTRACT_TABLE.create_sql)
@@ -420,8 +595,9 @@ async def contract_aiosqlite_driver(aiosqlite_session_config: AiosqliteConfig) -
 
 
 @pytest.fixture
-async def contract_aiomysql_driver(aiomysql_config: AiomysqlConfig) -> AsyncGenerator[AiomysqlDriver, None]:
+async def contract_aiomysql_driver(aiomysql_config: "AiomysqlConfig") -> "AsyncGenerator[AiomysqlDriver, None]":
     """Provide a fresh aiomysql driver for contract tests."""
+    pytest.importorskip("aiomysql")
     async with aiomysql_config.provide_session() as driver:
         await driver.execute("SET sql_notes = 0")
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -436,8 +612,9 @@ async def contract_aiomysql_driver(aiomysql_config: AiomysqlConfig) -> AsyncGene
 
 
 @pytest.fixture
-async def contract_asyncmy_driver(asyncmy_config: AsyncmyConfig) -> AsyncGenerator[AsyncmyDriver, None]:
+async def contract_asyncmy_driver(asyncmy_config: "AsyncmyConfig") -> "AsyncGenerator[AsyncmyDriver, None]":
     """Provide a fresh AsyncMy driver for contract tests."""
+    pytest.importorskip("asyncmy")
     async with asyncmy_config.provide_session() as driver:
         await driver.execute("SET sql_notes = 0")
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -453,9 +630,10 @@ async def contract_asyncmy_driver(asyncmy_config: AsyncmyConfig) -> AsyncGenerat
 
 @pytest.fixture
 async def contract_mysqlconnector_async_driver(
-    mysqlconnector_async_config: MysqlConnectorAsyncConfig,
-) -> AsyncGenerator[MysqlConnectorAsyncDriver, None]:
+    mysqlconnector_async_config: "MysqlConnectorAsyncConfig",
+) -> "AsyncGenerator[MysqlConnectorAsyncDriver, None]":
     """Provide a fresh mysql-connector async driver for contract tests."""
+    pytest.importorskip("mysql.connector")
     async with mysqlconnector_async_config.provide_session() as driver:
         await driver.execute("SET sql_notes = 0")
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
@@ -470,8 +648,9 @@ async def contract_mysqlconnector_async_driver(
 
 
 @pytest.fixture
-async def contract_asyncpg_driver(asyncpg_config: AsyncpgConfig) -> AsyncGenerator[AsyncpgDriver, None]:
+async def contract_asyncpg_driver(asyncpg_config: "AsyncpgConfig") -> "AsyncGenerator[AsyncpgDriver, None]":
     """Provide a fresh asyncpg driver for contract tests."""
+    pytest.importorskip("asyncpg")
     async with asyncpg_config.provide_session() as driver:
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
         await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
@@ -484,8 +663,9 @@ async def contract_asyncpg_driver(asyncpg_config: AsyncpgConfig) -> AsyncGenerat
 
 
 @pytest.fixture
-async def contract_psqlpy_driver(psqlpy_config: PsqlpyConfig) -> AsyncGenerator[PsqlpyDriver, None]:
+async def contract_psqlpy_driver(psqlpy_config: "PsqlpyConfig") -> "AsyncGenerator[PsqlpyDriver, None]":
     """Provide a fresh psqlpy driver for contract tests."""
+    pytest.importorskip("psqlpy")
     async with psqlpy_config.provide_session() as driver:
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
         await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
@@ -499,9 +679,11 @@ async def contract_psqlpy_driver(psqlpy_config: PsqlpyConfig) -> AsyncGenerator[
 
 @pytest.fixture
 async def contract_psycopg_async_driver(
-    psycopg_async_config: PsycopgAsyncConfig,
-) -> AsyncGenerator[PsycopgAsyncDriver, None]:
+    psycopg_async_config: "PsycopgAsyncConfig",
+) -> "AsyncGenerator[PsycopgAsyncDriver, None]":
     """Provide a fresh psycopg async driver for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
     async with psycopg_async_config.provide_session() as driver:
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
         await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
@@ -515,9 +697,10 @@ async def contract_psycopg_async_driver(
 
 @pytest.fixture
 async def contract_cockroach_asyncpg_driver(
-    cockroach_asyncpg_config: CockroachAsyncpgConfig,
-) -> AsyncGenerator[CockroachAsyncpgDriver, None]:
+    cockroach_asyncpg_config: "CockroachAsyncpgConfig",
+) -> "AsyncGenerator[CockroachAsyncpgDriver, None]":
     """Provide a fresh CockroachDB asyncpg driver for contract tests."""
+    pytest.importorskip("asyncpg")
     async with cockroach_asyncpg_config.provide_session() as driver:
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
         await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
@@ -531,9 +714,11 @@ async def contract_cockroach_asyncpg_driver(
 
 @pytest.fixture
 async def contract_cockroach_psycopg_async_driver(
-    cockroach_psycopg_async_config: CockroachPsycopgAsyncConfig,
-) -> AsyncGenerator[CockroachPsycopgAsyncDriver, None]:
+    cockroach_psycopg_async_config: "CockroachPsycopgAsyncConfig",
+) -> "AsyncGenerator[CockroachPsycopgAsyncDriver, None]":
     """Provide a fresh CockroachDB psycopg async driver for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
     async with cockroach_psycopg_async_config.provide_session() as driver:
         await driver.execute_script("DROP TABLE IF EXISTS contract_items")
         await driver.execute_script(POSTGRES_CONTRACT_TABLE.create_sql)
@@ -556,7 +741,7 @@ def _events_migration_config(tmp_path: Path, suffix: str) -> dict[str, Any]:
 
 
 @pytest.fixture
-def events_config_sqlite(tmp_path: Path) -> Callable[..., Any]:
+def events_config_sqlite(tmp_path: Path) -> "Callable[..., Any]":
     """Build SQLite event-channel configs for contract tests."""
 
     def make(*, extension_config: dict[str, Any], suffix: str) -> SqliteConfig:
@@ -570,10 +755,11 @@ def events_config_sqlite(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def events_config_duckdb(tmp_path: Path) -> Callable[..., Any]:
+def events_config_duckdb(tmp_path: Path) -> "Callable[..., Any]":
     """Build DuckDB event-channel configs for contract tests."""
+    pytest.importorskip("duckdb")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> DuckDBConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "DuckDBConfig":
         return DuckDBConfig(
             connection_config={"database": str(tmp_path / f"events_{suffix}.duckdb")},
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -584,10 +770,11 @@ def events_config_duckdb(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def events_config_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
+def events_config_aiosqlite(tmp_path: Path) -> "Callable[..., Any]":
     """Build aiosqlite event-channel configs for contract tests."""
+    pytest.importorskip("aiosqlite")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> AiosqliteConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "AiosqliteConfig":
         return AiosqliteConfig(
             connection_config={"database": str(tmp_path / f"events_{suffix}.db")},
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -598,10 +785,11 @@ def events_config_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def events_config_pymysql(mysql_service: MySQLService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_pymysql(mysql_service: MySQLService, tmp_path: Path) -> "Callable[..., Any]":
     """Build PyMySQL event-channel configs for contract tests."""
+    pytest.importorskip("pymysql")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> PyMysqlConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "PyMysqlConfig":
         return PyMysqlConfig(
             connection_config=_mysql_connection_config(mysql_service),
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -612,10 +800,11 @@ def events_config_pymysql(mysql_service: MySQLService, tmp_path: Path) -> Callab
 
 
 @pytest.fixture
-def events_config_asyncmy(mysql_service: MySQLService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_asyncmy(mysql_service: MySQLService, tmp_path: Path) -> "Callable[..., Any]":
     """Build AsyncMy event-channel configs for contract tests."""
+    pytest.importorskip("asyncmy")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> AsyncmyConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "AsyncmyConfig":
         return AsyncmyConfig(
             connection_config=_mysql_connection_config(mysql_service),
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -626,10 +815,11 @@ def events_config_asyncmy(mysql_service: MySQLService, tmp_path: Path) -> Callab
 
 
 @pytest.fixture
-def events_config_aiomysql(mysql_service: MySQLService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_aiomysql(mysql_service: MySQLService, tmp_path: Path) -> "Callable[..., Any]":
     """Build aiomysql event-channel configs for contract tests."""
+    pytest.importorskip("aiomysql")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> AiomysqlConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "AiomysqlConfig":
         return AiomysqlConfig(
             connection_config=_mysql_connection_config(mysql_service, database_key="db"),
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -640,10 +830,11 @@ def events_config_aiomysql(mysql_service: MySQLService, tmp_path: Path) -> Calla
 
 
 @pytest.fixture
-def events_config_mysqlconnector_async(mysql_service: MySQLService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_mysqlconnector_async(mysql_service: MySQLService, tmp_path: Path) -> "Callable[..., Any]":
     """Build mysql-connector async event-channel configs for contract tests."""
+    pytest.importorskip("mysql.connector")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> MysqlConnectorAsyncConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "MysqlConnectorAsyncConfig":
         connection_config = _mysql_connection_config(mysql_service)
         connection_config["use_pure"] = True
         return MysqlConnectorAsyncConfig(
@@ -656,10 +847,12 @@ def events_config_mysqlconnector_async(mysql_service: MySQLService, tmp_path: Pa
 
 
 @pytest.fixture
-def events_config_psycopg_sync(postgres_service: PostgresService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_psycopg_sync(postgres_service: PostgresService, tmp_path: Path) -> "Callable[..., Any]":
     """Build psycopg sync event-channel configs for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> PsycopgSyncConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "PsycopgSyncConfig":
         return PsycopgSyncConfig(
             connection_config={"conninfo": _postgres_conninfo(postgres_service)},
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -670,10 +863,12 @@ def events_config_psycopg_sync(postgres_service: PostgresService, tmp_path: Path
 
 
 @pytest.fixture
-def events_config_psycopg_async(postgres_service: PostgresService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_psycopg_async(postgres_service: PostgresService, tmp_path: Path) -> "Callable[..., Any]":
     """Build psycopg async event-channel configs for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> PsycopgAsyncConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "PsycopgAsyncConfig":
         return PsycopgAsyncConfig(
             connection_config={"conninfo": _postgres_conninfo(postgres_service)},
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -684,10 +879,11 @@ def events_config_psycopg_async(postgres_service: PostgresService, tmp_path: Pat
 
 
 @pytest.fixture
-def events_config_psqlpy(postgres_service: PostgresService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_psqlpy(postgres_service: PostgresService, tmp_path: Path) -> "Callable[..., Any]":
     """Build psqlpy event-channel configs for contract tests."""
+    pytest.importorskip("psqlpy")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> PsqlpyConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "PsqlpyConfig":
         return PsqlpyConfig(
             connection_config={"dsn": _psqlpy_dsn(postgres_service)},
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -698,10 +894,12 @@ def events_config_psqlpy(postgres_service: PostgresService, tmp_path: Path) -> C
 
 
 @pytest.fixture
-def events_config_arrow_odbc_mssql(mssql_service: MSSQLService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_arrow_odbc_mssql(mssql_service: MSSQLService, tmp_path: Path) -> "Callable[..., Any]":
     """Build arrow-odbc SQL Server event-channel configs for contract tests."""
+    pytest.importorskip("arrow_odbc")
+    pytest.importorskip("pyarrow")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> ArrowOdbcConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "ArrowOdbcConfig":
         return ArrowOdbcConfig(
             connection_config=_arrow_odbc_connection_config(mssql_service),
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -713,10 +911,11 @@ def events_config_arrow_odbc_mssql(mssql_service: MSSQLService, tmp_path: Path) 
 
 
 @pytest.fixture
-def events_config_oracle_sync(oracle_23ai_service: OracleService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_oracle_sync(oracle_23ai_service: OracleService, tmp_path: Path) -> "Callable[..., Any]":
     """Build Oracle sync event-channel configs for contract tests."""
+    pytest.importorskip("oracledb")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> OracleSyncConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "OracleSyncConfig":
         return OracleSyncConfig(
             connection_config=_oracle_pool_params(oracle_23ai_service),
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -727,10 +926,11 @@ def events_config_oracle_sync(oracle_23ai_service: OracleService, tmp_path: Path
 
 
 @pytest.fixture
-def events_config_oracle_async(oracle_23ai_service: OracleService, tmp_path: Path) -> Callable[..., Any]:
+def events_config_oracle_async(oracle_23ai_service: OracleService, tmp_path: Path) -> "Callable[..., Any]":
     """Build Oracle async event-channel configs for contract tests."""
+    pytest.importorskip("oracledb")
 
-    def make(*, extension_config: dict[str, Any], suffix: str) -> OracleAsyncConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "OracleAsyncConfig":
         return OracleAsyncConfig(
             connection_config=_oracle_pool_params(oracle_23ai_service),
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -741,10 +941,11 @@ def events_config_oracle_async(oracle_23ai_service: OracleService, tmp_path: Pat
 
 
 @pytest.fixture
-def listen_notify_config_asyncpg(postgres_service: PostgresService) -> Callable[..., Any]:
+def listen_notify_config_asyncpg(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build asyncpg native LISTEN/NOTIFY configs for contract tests."""
+    pytest.importorskip("asyncpg")
 
-    def make(*, suffix: str) -> AsyncpgConfig:
+    def make(*, suffix: str) -> "AsyncpgConfig":
         return AsyncpgConfig(
             connection_config={"dsn": _postgres_conninfo(postgres_service)},
             extension_config={"events": {"backend": "notify"}},
@@ -754,10 +955,11 @@ def listen_notify_config_asyncpg(postgres_service: PostgresService) -> Callable[
 
 
 @pytest.fixture
-def listen_notify_config_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
+def listen_notify_config_psqlpy(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build psqlpy native LISTEN/NOTIFY configs for contract tests."""
+    pytest.importorskip("psqlpy")
 
-    def make(*, suffix: str) -> PsqlpyConfig:
+    def make(*, suffix: str) -> "PsqlpyConfig":
         return PsqlpyConfig(
             connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(postgres_service)),
             extension_config={"events": {"backend": "notify"}},
@@ -767,10 +969,12 @@ def listen_notify_config_psqlpy(postgres_service: PostgresService) -> Callable[.
 
 
 @pytest.fixture
-def listen_notify_config_psycopg_sync(postgres_service: PostgresService) -> Callable[..., Any]:
+def listen_notify_config_psycopg_sync(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build psycopg sync native LISTEN/NOTIFY configs for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
-    def make(*, suffix: str) -> PsycopgSyncConfig:
+    def make(*, suffix: str) -> "PsycopgSyncConfig":
         return PsycopgSyncConfig(
             connection_config={"conninfo": _postgres_conninfo(postgres_service)},
             extension_config={"events": {"backend": "notify"}},
@@ -780,10 +984,12 @@ def listen_notify_config_psycopg_sync(postgres_service: PostgresService) -> Call
 
 
 @pytest.fixture
-def listen_notify_config_psycopg_async(postgres_service: PostgresService) -> Callable[..., Any]:
+def listen_notify_config_psycopg_async(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build psycopg async native LISTEN/NOTIFY configs for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
-    def make(*, suffix: str) -> PsycopgAsyncConfig:
+    def make(*, suffix: str) -> "PsycopgAsyncConfig":
         return PsycopgAsyncConfig(
             connection_config={"conninfo": _postgres_conninfo(postgres_service)},
             extension_config={"events": {"backend": "notify"}},
@@ -863,6 +1069,7 @@ def lifecycle_config_sqlite(tmp_path: Path) -> "Callable[..., SqliteConfig]":
 @pytest.fixture
 def lifecycle_config_aiosqlite(tmp_path: Path) -> "Callable[..., AiosqliteConfig]":
     """Build fresh aiosqlite configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("aiosqlite")
 
     def make(
         *,
@@ -870,7 +1077,7 @@ def lifecycle_config_aiosqlite(tmp_path: Path) -> "Callable[..., AiosqliteConfig
         driver_features: "AiosqliteDriverFeatures | None" = None,
         connection_overrides: "dict[str, Any] | None" = None,
         connection_instance: object | None = None,
-    ) -> AiosqliteConfig:
+    ) -> "AiosqliteConfig":
         connection_config = _lifecycle_connection_config(
             str(tmp_path / "lifecycle_aiosqlite.db"), pooled=pooled, connection_overrides=connection_overrides
         )
@@ -887,13 +1094,14 @@ def lifecycle_config_aiosqlite(tmp_path: Path) -> "Callable[..., AiosqliteConfig
 @pytest.fixture
 def lifecycle_config_duckdb(tmp_path: Path) -> "Callable[..., DuckDBConfig]":
     """Build fresh DuckDB configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("duckdb")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "DuckDBDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> DuckDBConfig:
+    ) -> "DuckDBConfig":
         connection_config = _lifecycle_connection_config(str(tmp_path / "lifecycle.duckdb"), pooled=pooled)
         extra: dict[str, Any] = {}
         if driver_features is not None:
@@ -908,13 +1116,14 @@ def lifecycle_config_duckdb(tmp_path: Path) -> "Callable[..., DuckDBConfig]":
 @pytest.fixture
 def lifecycle_config_asyncpg(postgres_service: PostgresService) -> "Callable[..., AsyncpgConfig]":
     """Build fresh asyncpg configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("asyncpg")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "AsyncpgDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> AsyncpgConfig:
+    ) -> "AsyncpgConfig":
         connection_config: dict[str, Any] = _postgres_connection_config(postgres_service)
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
@@ -931,13 +1140,14 @@ def lifecycle_config_asyncpg(postgres_service: PostgresService) -> "Callable[...
 @pytest.fixture
 def lifecycle_config_psqlpy(postgres_service: PostgresService) -> "Callable[..., PsqlpyConfig]":
     """Build fresh psqlpy configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("psqlpy")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "PsqlpyDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> PsqlpyConfig:
+    ) -> "PsqlpyConfig":
         connection_config: dict[str, Any] = {"dsn": _psqlpy_dsn(postgres_service)}
         if pooled:
             connection_config["max_db_pool_size"] = 5
@@ -954,6 +1164,8 @@ def lifecycle_config_psqlpy(postgres_service: PostgresService) -> "Callable[...,
 @pytest.fixture
 def lifecycle_config_psycopg_sync(postgres_service: PostgresService) -> "Callable[..., PsycopgSyncConfig]":
     """Build fresh psycopg sync configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
     def make(
         *,
@@ -961,7 +1173,7 @@ def lifecycle_config_psycopg_sync(postgres_service: PostgresService) -> "Callabl
         driver_features: "PsycopgDriverFeatures | None" = None,
         connection_overrides: "dict[str, Any] | None" = None,
         connection_instance: object | None = None,
-    ) -> PsycopgSyncConfig:
+    ) -> "PsycopgSyncConfig":
         connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
         if connection_overrides:
             connection_config.update(connection_overrides)
@@ -980,6 +1192,8 @@ def lifecycle_config_psycopg_sync(postgres_service: PostgresService) -> "Callabl
 @pytest.fixture
 def lifecycle_config_psycopg_async(postgres_service: PostgresService) -> "Callable[..., PsycopgAsyncConfig]":
     """Build fresh psycopg async configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
     def make(
         *,
@@ -987,7 +1201,7 @@ def lifecycle_config_psycopg_async(postgres_service: PostgresService) -> "Callab
         driver_features: "PsycopgDriverFeatures | None" = None,
         connection_overrides: "dict[str, Any] | None" = None,
         connection_instance: object | None = None,
-    ) -> PsycopgAsyncConfig:
+    ) -> "PsycopgAsyncConfig":
         connection_config: dict[str, Any] = {"conninfo": _postgres_conninfo(postgres_service), "autocommit": True}
         if connection_overrides:
             connection_config.update(connection_overrides)
@@ -1008,13 +1222,14 @@ def lifecycle_config_cockroach_asyncpg(
     cockroachdb_service: CockroachDBService,
 ) -> "Callable[..., CockroachAsyncpgConfig]":
     """Build fresh CockroachDB asyncpg configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("asyncpg")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "CockroachAsyncpgDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> CockroachAsyncpgConfig:
+    ) -> "CockroachAsyncpgConfig":
         connection_config = _cockroach_asyncpg_connection_config(cockroachdb_service)
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
@@ -1033,13 +1248,15 @@ def lifecycle_config_cockroach_psycopg_sync(
     cockroachdb_service: CockroachDBService,
 ) -> "Callable[..., CockroachPsycopgSyncConfig]":
     """Build fresh CockroachDB psycopg sync configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "CockroachPsycopgDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> CockroachPsycopgSyncConfig:
+    ) -> "CockroachPsycopgSyncConfig":
         connection_config: dict[str, Any] = {"conninfo": _cockroach_conninfo(cockroachdb_service)}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
@@ -1058,13 +1275,15 @@ def lifecycle_config_cockroach_psycopg_async(
     cockroachdb_service: CockroachDBService,
 ) -> "Callable[..., CockroachPsycopgAsyncConfig]":
     """Build fresh CockroachDB psycopg async configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "CockroachPsycopgDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> CockroachPsycopgAsyncConfig:
+    ) -> "CockroachPsycopgAsyncConfig":
         connection_config: dict[str, Any] = {"conninfo": _cockroach_conninfo(cockroachdb_service)}
         if pooled:
             connection_config.update({"min_size": 2, "max_size": 5})
@@ -1081,13 +1300,14 @@ def lifecycle_config_cockroach_psycopg_async(
 @pytest.fixture
 def lifecycle_config_aiomysql(mysql_service: MySQLService) -> "Callable[..., AiomysqlConfig]":
     """Build fresh aiomysql configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("aiomysql")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "AiomysqlDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> AiomysqlConfig:
+    ) -> "AiomysqlConfig":
         connection_config = _mysql_connection_config(mysql_service, database_key="db")
         if pooled:
             connection_config.update({"minsize": 2, "maxsize": 5})
@@ -1104,13 +1324,14 @@ def lifecycle_config_aiomysql(mysql_service: MySQLService) -> "Callable[..., Aio
 @pytest.fixture
 def lifecycle_config_asyncmy(mysql_service: MySQLService) -> "Callable[..., AsyncmyConfig]":
     """Build fresh asyncmy configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("asyncmy")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "AsyncmyDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> AsyncmyConfig:
+    ) -> "AsyncmyConfig":
         connection_config = _mysql_connection_config(mysql_service)
         if pooled:
             connection_config.update({"minsize": 2, "maxsize": 5})
@@ -1127,13 +1348,14 @@ def lifecycle_config_asyncmy(mysql_service: MySQLService) -> "Callable[..., Asyn
 @pytest.fixture
 def lifecycle_config_mysqlconnector_sync(mysql_service: MySQLService) -> "Callable[..., MysqlConnectorSyncConfig]":
     """Build fresh mysql-connector sync configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("mysql.connector")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "MysqlConnectorDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> MysqlConnectorSyncConfig:
+    ) -> "MysqlConnectorSyncConfig":
         connection_config = _mysql_connection_config(mysql_service)
         connection_config["use_pure"] = True
         if pooled:
@@ -1151,10 +1373,11 @@ def lifecycle_config_mysqlconnector_sync(mysql_service: MySQLService) -> "Callab
 @pytest.fixture
 def lifecycle_config_mysqlconnector_async(mysql_service: MySQLService) -> "Callable[..., MysqlConnectorAsyncConfig]":
     """Build fresh mysql-connector async configs for the connection-hook lifecycle contract (no pooling)."""
+    pytest.importorskip("mysql.connector")
 
     def make(
         *, pooled: bool = False, driver_features: "MysqlConnectorDriverFeatures | None" = None
-    ) -> MysqlConnectorAsyncConfig:
+    ) -> "MysqlConnectorAsyncConfig":
         connection_config = _mysql_connection_config(mysql_service)
         connection_config["use_pure"] = True
         if driver_features is None:
@@ -1167,13 +1390,14 @@ def lifecycle_config_mysqlconnector_async(mysql_service: MySQLService) -> "Calla
 @pytest.fixture
 def lifecycle_config_pymysql(mysql_service: MySQLService) -> "Callable[..., PyMysqlConfig]":
     """Build fresh PyMySQL configs for the pooling/connection-hook lifecycle contracts (thread-local pool)."""
+    pytest.importorskip("pymysql")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "PyMysqlDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> PyMysqlConfig:
+    ) -> "PyMysqlConfig":
         connection_config = _mysql_connection_config(mysql_service)
         extra: dict[str, Any] = {}
         if driver_features is not None:
@@ -1188,8 +1412,9 @@ def lifecycle_config_pymysql(mysql_service: MySQLService) -> "Callable[..., PyMy
 @pytest.fixture
 def lifecycle_config_bigquery(bigquery_service: BigQueryService) -> "Callable[..., BigQueryConfig]":
     """Build fresh BigQuery configs for the connection-hook lifecycle contract (no pooling)."""
+    pytest.importorskip("google.cloud.bigquery")
 
-    def make(*, pooled: bool = False, driver_features: "BigQueryDriverFeatures | None" = None) -> BigQueryConfig:
+    def make(*, pooled: bool = False, driver_features: "BigQueryDriverFeatures | None" = None) -> "BigQueryConfig":
         connection_config = _bigquery_connection_config(bigquery_service)
         if driver_features is None:
             return BigQueryConfig(connection_config=connection_config)
@@ -1201,13 +1426,14 @@ def lifecycle_config_bigquery(bigquery_service: BigQueryService) -> "Callable[..
 @pytest.fixture
 def lifecycle_config_oracle_sync(oracle_23ai_service: OracleService) -> "Callable[..., OracleSyncConfig]":
     """Build fresh Oracle sync configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("oracledb")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "OracleDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> OracleSyncConfig:
+    ) -> "OracleSyncConfig":
         connection_config = _oracle_pool_params(oracle_23ai_service)
         extra: dict[str, Any] = {}
         if driver_features is not None:
@@ -1222,13 +1448,14 @@ def lifecycle_config_oracle_sync(oracle_23ai_service: OracleService) -> "Callabl
 @pytest.fixture
 def lifecycle_config_oracle_async(oracle_23ai_service: OracleService) -> "Callable[..., OracleAsyncConfig]":
     """Build fresh Oracle async configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("oracledb")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "OracleDriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> OracleAsyncConfig:
+    ) -> "OracleAsyncConfig":
         connection_config = _oracle_pool_params(oracle_23ai_service)
         extra: dict[str, Any] = {}
         if driver_features is not None:
@@ -1241,7 +1468,7 @@ def lifecycle_config_oracle_async(oracle_23ai_service: OracleService) -> "Callab
 
 
 @pytest.fixture
-def migration_config_sqlite(tmp_path: Path) -> Callable[..., Any]:
+def migration_config_sqlite(tmp_path: Path) -> "Callable[..., Any]":
     """Build SQLite configs for migration contract tests."""
 
     def make(*, script_location: str, version_table_name: str, suffix: str) -> SqliteConfig:
@@ -1254,8 +1481,9 @@ def migration_config_sqlite(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def migration_config_duckdb(tmp_path: Path) -> Callable[..., Any]:
+def migration_config_duckdb(tmp_path: Path) -> "Callable[..., Any]":
     """Build DuckDB configs for migration contract tests."""
+    pytest.importorskip("duckdb")
 
     def make(
         *,
@@ -1264,7 +1492,7 @@ def migration_config_duckdb(tmp_path: Path) -> Callable[..., Any]:
         suffix: str,
         default_schema: str | None = None,
         version_table_schema: str | None = None,
-    ) -> DuckDBConfig:
+    ) -> "DuckDBConfig":
         migration_config: dict[str, Any] = {
             "script_location": script_location,
             "version_table_name": version_table_name,
@@ -1281,10 +1509,11 @@ def migration_config_duckdb(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def migration_config_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
+def migration_config_aiosqlite(tmp_path: Path) -> "Callable[..., Any]":
     """Build aiosqlite configs for migration contract tests."""
+    pytest.importorskip("aiosqlite")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> AiosqliteConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "AiosqliteConfig":
         return AiosqliteConfig(
             connection_config={"database": str(tmp_path / f"mig_{suffix}.db")},
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
@@ -1294,10 +1523,11 @@ def migration_config_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def migration_config_pymysql(mysql_service: MySQLService) -> Callable[..., Any]:
+def migration_config_pymysql(mysql_service: MySQLService) -> "Callable[..., Any]":
     """Build PyMySQL configs for migration contract tests."""
+    pytest.importorskip("pymysql")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> PyMysqlConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "PyMysqlConfig":
         return PyMysqlConfig(
             connection_config=_mysql_connection_config(mysql_service),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
@@ -1307,10 +1537,11 @@ def migration_config_pymysql(mysql_service: MySQLService) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def migration_config_asyncmy(mysql_service: MySQLService) -> Callable[..., Any]:
+def migration_config_asyncmy(mysql_service: MySQLService) -> "Callable[..., Any]":
     """Build AsyncMy configs for migration contract tests."""
+    pytest.importorskip("asyncmy")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> AsyncmyConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "AsyncmyConfig":
         return AsyncmyConfig(
             connection_config=_mysql_connection_config(mysql_service),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
@@ -1320,10 +1551,11 @@ def migration_config_asyncmy(mysql_service: MySQLService) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def migration_config_aiomysql(mysql_service: MySQLService) -> Callable[..., Any]:
+def migration_config_aiomysql(mysql_service: MySQLService) -> "Callable[..., Any]":
     """Build aiomysql configs for migration contract tests."""
+    pytest.importorskip("aiomysql")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> AiomysqlConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "AiomysqlConfig":
         return AiomysqlConfig(
             connection_config=_mysql_connection_config(mysql_service, database_key="db"),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
@@ -1333,10 +1565,11 @@ def migration_config_aiomysql(mysql_service: MySQLService) -> Callable[..., Any]
 
 
 @pytest.fixture
-def migration_config_mysqlconnector_async(mysql_service: MySQLService) -> Callable[..., Any]:
+def migration_config_mysqlconnector_async(mysql_service: MySQLService) -> "Callable[..., Any]":
     """Build mysql-connector async configs for migration contract tests."""
+    pytest.importorskip("mysql.connector")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> MysqlConnectorAsyncConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "MysqlConnectorAsyncConfig":
         connection_config = _mysql_connection_config(mysql_service)
         connection_config["use_pure"] = True
         return MysqlConnectorAsyncConfig(
@@ -1348,8 +1581,9 @@ def migration_config_mysqlconnector_async(mysql_service: MySQLService) -> Callab
 
 
 @pytest.fixture
-def migration_config_asyncpg(postgres_service: PostgresService) -> Callable[..., Any]:
+def migration_config_asyncpg(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build asyncpg configs for migration contract tests."""
+    pytest.importorskip("asyncpg")
 
     def make(
         *,
@@ -1358,7 +1592,7 @@ def migration_config_asyncpg(postgres_service: PostgresService) -> Callable[...,
         suffix: str,
         default_schema: str | None = None,
         version_table_schema: str | None = None,
-    ) -> AsyncpgConfig:
+    ) -> "AsyncpgConfig":
         migration_config: dict[str, Any] = {
             "script_location": script_location,
             "version_table_name": version_table_name,
@@ -1375,8 +1609,10 @@ def migration_config_asyncpg(postgres_service: PostgresService) -> Callable[...,
 
 
 @pytest.fixture
-def migration_config_psycopg_sync(postgres_service: PostgresService) -> Callable[..., Any]:
+def migration_config_psycopg_sync(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build psycopg sync configs for migration contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
     def make(
         *,
@@ -1385,7 +1621,7 @@ def migration_config_psycopg_sync(postgres_service: PostgresService) -> Callable
         suffix: str,
         default_schema: str | None = None,
         version_table_schema: str | None = None,
-    ) -> PsycopgSyncConfig:
+    ) -> "PsycopgSyncConfig":
         migration_config: dict[str, Any] = {
             "script_location": script_location,
             "version_table_name": version_table_name,
@@ -1402,8 +1638,10 @@ def migration_config_psycopg_sync(postgres_service: PostgresService) -> Callable
 
 
 @pytest.fixture
-def migration_config_psycopg_async(postgres_service: PostgresService) -> Callable[..., Any]:
+def migration_config_psycopg_async(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build psycopg async configs for migration contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
 
     def make(
         *,
@@ -1412,7 +1650,7 @@ def migration_config_psycopg_async(postgres_service: PostgresService) -> Callabl
         suffix: str,
         default_schema: str | None = None,
         version_table_schema: str | None = None,
-    ) -> PsycopgAsyncConfig:
+    ) -> "PsycopgAsyncConfig":
         migration_config: dict[str, Any] = {
             "script_location": script_location,
             "version_table_name": version_table_name,
@@ -1429,8 +1667,9 @@ def migration_config_psycopg_async(postgres_service: PostgresService) -> Callabl
 
 
 @pytest.fixture
-def migration_config_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
+def migration_config_psqlpy(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build psqlpy configs for migration contract tests."""
+    pytest.importorskip("psqlpy")
 
     def make(
         *,
@@ -1439,7 +1678,7 @@ def migration_config_psqlpy(postgres_service: PostgresService) -> Callable[..., 
         suffix: str,
         default_schema: str | None = None,
         version_table_schema: str | None = None,
-    ) -> PsqlpyConfig:
+    ) -> "PsqlpyConfig":
         migration_config: dict[str, Any] = {
             "script_location": script_location,
             "version_table_name": version_table_name,
@@ -1454,8 +1693,10 @@ def migration_config_psqlpy(postgres_service: PostgresService) -> Callable[..., 
 
 
 @pytest.fixture
-def migration_config_adbc_postgres(postgres_service: PostgresService) -> Callable[..., Any]:
+def migration_config_adbc_postgres(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build ADBC PostgreSQL configs for migration contract tests."""
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
 
     def make(
         *,
@@ -1464,7 +1705,7 @@ def migration_config_adbc_postgres(postgres_service: PostgresService) -> Callabl
         suffix: str,
         default_schema: str | None = None,
         version_table_schema: str | None = None,
-    ) -> AdbcConfig:
+    ) -> "AdbcConfig":
         migration_config: dict[str, Any] = {
             "script_location": script_location,
             "version_table_name": version_table_name,
@@ -1482,10 +1723,12 @@ def migration_config_adbc_postgres(postgres_service: PostgresService) -> Callabl
 
 
 @pytest.fixture
-def migration_config_adbc_sqlite(tmp_path: Path) -> Callable[..., Any]:
+def migration_config_adbc_sqlite(tmp_path: Path) -> "Callable[..., Any]":
     """Build ADBC SQLite configs for migration contract tests."""
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> AdbcConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "AdbcConfig":
         return AdbcConfig(
             connection_config={
                 "uri": f"file:{tmp_path / f'mig_{suffix}.db'}",
@@ -1499,10 +1742,11 @@ def migration_config_adbc_sqlite(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def migration_config_oracle_sync(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+def migration_config_oracle_sync(oracle_23ai_service: OracleService) -> "Callable[..., Any]":
     """Build Oracle sync configs for migration contract tests."""
+    pytest.importorskip("oracledb")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> OracleSyncConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "OracleSyncConfig":
         return OracleSyncConfig(
             connection_config=_oracle_pool_params(oracle_23ai_service),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
@@ -1512,10 +1756,11 @@ def migration_config_oracle_sync(oracle_23ai_service: OracleService) -> Callable
 
 
 @pytest.fixture
-def migration_config_oracle_async(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+def migration_config_oracle_async(oracle_23ai_service: OracleService) -> "Callable[..., Any]":
     """Build Oracle async configs for migration contract tests."""
+    pytest.importorskip("oracledb")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> OracleAsyncConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "OracleAsyncConfig":
         return OracleAsyncConfig(
             connection_config=_oracle_pool_params(oracle_23ai_service),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
@@ -1525,8 +1770,9 @@ def migration_config_oracle_async(oracle_23ai_service: OracleService) -> Callabl
 
 
 @pytest.fixture
-def migration_config_mssql_python(mssql_python_migration_connection_config: dict[str, Any]) -> Callable[..., Any]:
+def migration_config_mssql_python(mssql_python_migration_connection_config: dict[str, Any]) -> "Callable[..., Any]":
     """Build mssql-python sync configs for migration contract tests."""
+    pytest.importorskip("mssql_python")
 
     def make(
         *,
@@ -1535,7 +1781,7 @@ def migration_config_mssql_python(mssql_python_migration_connection_config: dict
         suffix: str,
         default_schema: str | None = None,
         version_table_schema: str | None = None,
-    ) -> MssqlPythonConfig:
+    ) -> "MssqlPythonConfig":
         migration_config: dict[str, Any] = {
             "script_location": script_location,
             "version_table_name": version_table_name,
@@ -1552,8 +1798,9 @@ def migration_config_mssql_python(mssql_python_migration_connection_config: dict
 
 
 @pytest.fixture
-def migration_config_pymssql(mssql_migration_connection_config: dict[str, Any]) -> Callable[..., Any]:
+def migration_config_pymssql(mssql_migration_connection_config: dict[str, Any]) -> "Callable[..., Any]":
     """Build pymssql sync configs for migration contract tests."""
+    pytest.importorskip("pymssql")
 
     def make(
         *,
@@ -1562,7 +1809,7 @@ def migration_config_pymssql(mssql_migration_connection_config: dict[str, Any]) 
         suffix: str,
         default_schema: str | None = None,
         version_table_schema: str | None = None,
-    ) -> PymssqlConfig:
+    ) -> "PymssqlConfig":
         migration_config: dict[str, Any] = {
             "script_location": script_location,
             "version_table_name": version_table_name,
@@ -1601,6 +1848,7 @@ _STORE_EXTENSION_CONFIG: dict[str, Any] = {"litestar": {"session_table": _STORE_
 @pytest.fixture
 async def contract_sqlite_store() -> "AsyncGenerator[SQLiteStore, None]":
     """Provide a ready SQLite Litestar store for contract tests."""
+    pytest.importorskip("litestar")
     config = SqliteConfig(
         connection_config={"database": "file:contract_store_sqlite?mode=memory&cache=shared", "uri": True},
         extension_config=_STORE_EXTENSION_CONFIG,
@@ -1616,6 +1864,8 @@ async def contract_sqlite_store() -> "AsyncGenerator[SQLiteStore, None]":
 @pytest.fixture
 async def contract_aiosqlite_store() -> "AsyncGenerator[AiosqliteStore, None]":
     """Provide a ready aiosqlite Litestar store for contract tests."""
+    pytest.importorskip("aiosqlite")
+    pytest.importorskip("litestar")
     config = AiosqliteConfig(connection_config={"database": ":memory:"}, extension_config=_STORE_EXTENSION_CONFIG)
     store = AiosqliteStore(config)
     await store.create_table()
@@ -1628,6 +1878,8 @@ async def contract_aiosqlite_store() -> "AsyncGenerator[AiosqliteStore, None]":
 @pytest.fixture
 async def contract_duckdb_store(tmp_path: Path) -> "AsyncGenerator[DuckdbStore, None]":
     """Provide a ready DuckDB Litestar store for contract tests."""
+    pytest.importorskip("duckdb")
+    pytest.importorskip("litestar")
     config = DuckDBConfig(
         connection_config={"database": str(tmp_path / f"store_{uuid4().hex}.duckdb")},
         extension_config=_STORE_EXTENSION_CONFIG,
@@ -1643,6 +1895,8 @@ async def contract_duckdb_store(tmp_path: Path) -> "AsyncGenerator[DuckdbStore, 
 @pytest.fixture
 async def contract_asyncpg_store(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgStore, None]":
     """Provide a ready asyncpg Litestar store for contract tests."""
+    pytest.importorskip("asyncpg")
+    pytest.importorskip("litestar")
     config = AsyncpgConfig(
         connection_config=_postgres_connection_config(postgres_service), extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -1657,6 +1911,8 @@ async def contract_asyncpg_store(postgres_service: PostgresService) -> "AsyncGen
 @pytest.fixture
 async def contract_psqlpy_store(postgres_service: PostgresService) -> "AsyncGenerator[PsqlpyStore, None]":
     """Provide a ready psqlpy Litestar store for contract tests."""
+    pytest.importorskip("psqlpy")
+    pytest.importorskip("litestar")
     config = PsqlpyConfig(
         connection_config={"dsn": _psqlpy_dsn(postgres_service)}, extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -1671,6 +1927,9 @@ async def contract_psqlpy_store(postgres_service: PostgresService) -> "AsyncGene
 @pytest.fixture
 async def contract_psycopg_async_store(postgres_service: PostgresService) -> "AsyncGenerator[PsycopgAsyncStore, None]":
     """Provide a ready psycopg async Litestar store for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
+    pytest.importorskip("litestar")
     config = PsycopgAsyncConfig(
         connection_config={"conninfo": _postgres_conninfo(postgres_service)}, extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -1685,6 +1944,9 @@ async def contract_psycopg_async_store(postgres_service: PostgresService) -> "As
 @pytest.fixture
 async def contract_psycopg_sync_store(postgres_service: PostgresService) -> "AsyncGenerator[PsycopgSyncStore, None]":
     """Provide a ready psycopg sync Litestar store for contract tests."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
+    pytest.importorskip("litestar")
     config = PsycopgSyncConfig(
         connection_config={"conninfo": _postgres_conninfo(postgres_service)}, extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -1699,6 +1961,8 @@ async def contract_psycopg_sync_store(postgres_service: PostgresService) -> "Asy
 @pytest.fixture
 async def contract_aiomysql_store(mysql_service: MySQLService) -> "AsyncGenerator[AiomysqlStore, None]":
     """Provide a ready aiomysql Litestar store for contract tests."""
+    pytest.importorskip("aiomysql")
+    pytest.importorskip("litestar")
     config = AiomysqlConfig(
         connection_config=_mysql_connection_config(mysql_service, database_key="db"),
         extension_config=_STORE_EXTENSION_CONFIG,
@@ -1714,6 +1978,8 @@ async def contract_aiomysql_store(mysql_service: MySQLService) -> "AsyncGenerato
 @pytest.fixture
 async def contract_asyncmy_store(mysql_service: MySQLService) -> "AsyncGenerator[AsyncmyStore, None]":
     """Provide a ready asyncmy Litestar store for contract tests."""
+    pytest.importorskip("asyncmy")
+    pytest.importorskip("litestar")
     config = AsyncmyConfig(
         connection_config=_mysql_connection_config(mysql_service), extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -1730,6 +1996,8 @@ async def contract_mysqlconnector_async_store(
     mysql_service: MySQLService,
 ) -> "AsyncGenerator[MysqlConnectorAsyncStore, None]":
     """Provide a ready mysql-connector async Litestar store for contract tests."""
+    pytest.importorskip("mysql.connector")
+    pytest.importorskip("litestar")
     connection_config = _mysql_connection_config(mysql_service)
     connection_config["use_pure"] = True
     config = MysqlConnectorAsyncConfig(connection_config=connection_config, extension_config=_STORE_EXTENSION_CONFIG)
@@ -1746,6 +2014,8 @@ async def contract_mysqlconnector_sync_store(
     mysql_service: MySQLService,
 ) -> "AsyncGenerator[MysqlConnectorSyncStore, None]":
     """Provide a ready mysql-connector sync Litestar store for contract tests."""
+    pytest.importorskip("mysql.connector")
+    pytest.importorskip("litestar")
     connection_config = _mysql_connection_config(mysql_service)
     connection_config["use_pure"] = True
     config = MysqlConnectorSyncConfig(connection_config=connection_config, extension_config=_STORE_EXTENSION_CONFIG)
@@ -1760,6 +2030,8 @@ async def contract_mysqlconnector_sync_store(
 @pytest.fixture
 async def contract_pymysql_store(mysql_service: MySQLService) -> "AsyncGenerator[PyMysqlStore, None]":
     """Provide a ready PyMySQL Litestar store for contract tests."""
+    pytest.importorskip("pymysql")
+    pytest.importorskip("litestar")
     config = PyMysqlConfig(
         connection_config=_mysql_connection_config(mysql_service), extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -1774,6 +2046,9 @@ async def contract_pymysql_store(mysql_service: MySQLService) -> "AsyncGenerator
 @pytest.fixture
 async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenerator[ArrowOdbcStore, None]":
     """Provide a ready arrow-odbc SQL Server Litestar store for contract tests."""
+    pytest.importorskip("arrow_odbc")
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("litestar")
     config = ArrowOdbcConfig(
         connection_config=_arrow_odbc_connection_config(mssql_service),
         extension_config=_STORE_EXTENSION_CONFIG,
@@ -1804,6 +2079,9 @@ async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenera
 @pytest.fixture
 async def contract_adbc_store(postgres_service: PostgresService) -> "AsyncGenerator[ADBCStore, None]":
     """Provide a ready PostgreSQL-backed ADBC Litestar store for contract tests."""
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("litestar")
     config = AdbcConfig(
         connection_config={"uri": _adbc_postgres_uri(postgres_service), "driver_name": "adbc_driver_postgresql"},
         extension_config=_STORE_EXTENSION_CONFIG,
@@ -1819,6 +2097,8 @@ async def contract_adbc_store(postgres_service: PostgresService) -> "AsyncGenera
 @pytest.fixture
 async def contract_oracle_async_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleAsyncStore, None]":
     """Provide a ready Oracle async Litestar store for contract tests."""
+    pytest.importorskip("oracledb")
+    pytest.importorskip("litestar")
     config = OracleAsyncConfig(
         connection_config=_oracle_pool_params(oracle_23ai_service), extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -1834,6 +2114,8 @@ async def contract_oracle_async_store(oracle_23ai_service: OracleService) -> "As
 @pytest.fixture
 async def contract_oracle_sync_store(oracle_23ai_service: OracleService) -> "AsyncGenerator[OracleSyncStore, None]":
     """Provide a ready Oracle sync Litestar store for contract tests."""
+    pytest.importorskip("oracledb")
+    pytest.importorskip("litestar")
     config = OracleSyncConfig(
         connection_config=_oracle_pool_params(oracle_23ai_service), extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -1858,7 +2140,7 @@ def _adk_extension_config(suffix: str) -> dict[str, Any]:
     }
 
 
-def _ensure_adbc_store_driver_available(config: AdbcConfig) -> None:
+def _ensure_adbc_store_driver_available(config: "AdbcConfig") -> None:
     try:
         with config.provide_session():
             pass
@@ -1869,8 +2151,9 @@ def _ensure_adbc_store_driver_available(config: AdbcConfig) -> None:
 
 
 @pytest.fixture
-def adk_store_sqlite(tmp_path: Path) -> Callable[..., Any]:
+def adk_store_sqlite(tmp_path: Path) -> "Callable[..., Any]":
     """Build a fresh SQLite ADK store with isolated tables per call."""
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -1884,8 +2167,10 @@ def adk_store_sqlite(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
+def adk_store_aiosqlite(tmp_path: Path) -> "Callable[..., Any]":
     """Build a fresh aiosqlite ADK store with isolated tables per call."""
+    pytest.importorskip("aiosqlite")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -1899,8 +2184,10 @@ def adk_store_aiosqlite(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_duckdb(tmp_path: Path) -> Callable[..., Any]:
+def adk_store_duckdb(tmp_path: Path) -> "Callable[..., Any]":
     """Build a fresh DuckDB ADK store with isolated tables per call."""
+    pytest.importorskip("duckdb")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -1914,8 +2201,10 @@ def adk_store_duckdb(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_aiomysql(mysql_service: MySQLService) -> Callable[..., Any]:
+def adk_store_aiomysql(mysql_service: MySQLService) -> "Callable[..., Any]":
     """Build a fresh aiomysql ADK store with isolated tables per call."""
+    pytest.importorskip("aiomysql")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -1929,8 +2218,10 @@ def adk_store_aiomysql(mysql_service: MySQLService) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_asyncmy(mysql_service: MySQLService) -> Callable[..., Any]:
+def adk_store_asyncmy(mysql_service: MySQLService) -> "Callable[..., Any]":
     """Build a fresh asyncmy ADK store with isolated tables per call."""
+    pytest.importorskip("asyncmy")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -1943,8 +2234,10 @@ def adk_store_asyncmy(mysql_service: MySQLService) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_mysqlconnector_async(mysql_service: MySQLService) -> Callable[..., Any]:
+def adk_store_mysqlconnector_async(mysql_service: MySQLService) -> "Callable[..., Any]":
     """Build a fresh mysql-connector async ADK store with isolated tables per call."""
+    pytest.importorskip("mysql.connector")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -1959,8 +2252,10 @@ def adk_store_mysqlconnector_async(mysql_service: MySQLService) -> Callable[...,
 
 
 @pytest.fixture
-def adk_store_mysqlconnector_sync(mysql_service: MySQLService) -> Callable[..., Any]:
+def adk_store_mysqlconnector_sync(mysql_service: MySQLService) -> "Callable[..., Any]":
     """Build a fresh mysql-connector sync ADK store with isolated tables per call."""
+    pytest.importorskip("mysql.connector")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -1975,8 +2270,10 @@ def adk_store_mysqlconnector_sync(mysql_service: MySQLService) -> Callable[..., 
 
 
 @pytest.fixture
-def adk_store_asyncpg(postgres_service: PostgresService) -> Callable[..., Any]:
+def adk_store_asyncpg(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build a fresh asyncpg ADK store with isolated tables per call."""
+    pytest.importorskip("asyncpg")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -1990,8 +2287,10 @@ def adk_store_asyncpg(postgres_service: PostgresService) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
+def adk_store_psqlpy(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build a fresh psqlpy ADK store with isolated tables per call."""
+    pytest.importorskip("psqlpy")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2004,8 +2303,11 @@ def adk_store_psqlpy(postgres_service: PostgresService) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_psycopg_async(postgres_service: PostgresService) -> Callable[..., Any]:
+def adk_store_psycopg_async(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build a fresh psycopg async ADK store with isolated tables per call."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2019,8 +2321,11 @@ def adk_store_psycopg_async(postgres_service: PostgresService) -> Callable[..., 
 
 
 @pytest.fixture
-def adk_store_psycopg_sync(postgres_service: PostgresService) -> Callable[..., Any]:
+def adk_store_psycopg_sync(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build a fresh psycopg sync ADK store with isolated tables per call."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2034,8 +2339,10 @@ def adk_store_psycopg_sync(postgres_service: PostgresService) -> Callable[..., A
 
 
 @pytest.fixture
-def adk_store_oracle_async(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+def adk_store_oracle_async(oracle_23ai_service: OracleService) -> "Callable[..., Any]":
     """Build a fresh Oracle async ADK store with isolated tables per call."""
+    pytest.importorskip("oracledb")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2048,8 +2355,10 @@ def adk_store_oracle_async(oracle_23ai_service: OracleService) -> Callable[..., 
 
 
 @pytest.fixture
-def adk_store_oracle_sync(oracle_23ai_service: OracleService) -> Callable[..., Any]:
+def adk_store_oracle_sync(oracle_23ai_service: OracleService) -> "Callable[..., Any]":
     """Build a fresh Oracle sync ADK store with isolated tables per call."""
+    pytest.importorskip("oracledb")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2062,8 +2371,10 @@ def adk_store_oracle_sync(oracle_23ai_service: OracleService) -> Callable[..., A
 
 
 @pytest.fixture
-def adk_store_pymysql(mysql_service: MySQLService) -> Callable[..., Any]:
+def adk_store_pymysql(mysql_service: MySQLService) -> "Callable[..., Any]":
     """Build a fresh PyMySQL ADK store with isolated tables per call."""
+    pytest.importorskip("pymysql")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2076,8 +2387,10 @@ def adk_store_pymysql(mysql_service: MySQLService) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_cockroach_asyncpg(cockroachdb_service: CockroachDBService) -> Callable[..., Any]:
+def adk_store_cockroach_asyncpg(cockroachdb_service: CockroachDBService) -> "Callable[..., Any]":
     """Build a fresh CockroachDB asyncpg ADK store with isolated tables per call."""
+    pytest.importorskip("asyncpg")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2092,8 +2405,11 @@ def adk_store_cockroach_asyncpg(cockroachdb_service: CockroachDBService) -> Call
 
 
 @pytest.fixture
-def adk_store_cockroach_psycopg_async(cockroachdb_service: CockroachDBService) -> Callable[..., Any]:
+def adk_store_cockroach_psycopg_async(cockroachdb_service: CockroachDBService) -> "Callable[..., Any]":
     """Build a fresh CockroachDB psycopg async ADK store with isolated tables per call."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2107,8 +2423,11 @@ def adk_store_cockroach_psycopg_async(cockroachdb_service: CockroachDBService) -
 
 
 @pytest.fixture
-def adk_store_cockroach_psycopg_sync(cockroachdb_service: CockroachDBService) -> Callable[..., Any]:
+def adk_store_cockroach_psycopg_sync(cockroachdb_service: CockroachDBService) -> "Callable[..., Any]":
     """Build a fresh CockroachDB psycopg sync ADK store with isolated tables per call."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2122,8 +2441,11 @@ def adk_store_cockroach_psycopg_sync(cockroachdb_service: CockroachDBService) ->
 
 
 @pytest.fixture
-def adk_store_adbc_sqlite(tmp_path: Path) -> Callable[..., Any]:
+def adk_store_adbc_sqlite(tmp_path: Path) -> "Callable[..., Any]":
     """Build a fresh ADBC SQLite ADK store with isolated tables per call."""
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2138,8 +2460,11 @@ def adk_store_adbc_sqlite(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_adbc_duckdb(tmp_path: Path) -> Callable[..., Any]:
+def adk_store_adbc_duckdb(tmp_path: Path) -> "Callable[..., Any]":
     """Build a fresh ADBC DuckDB ADK store with isolated tables per call."""
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2154,8 +2479,11 @@ def adk_store_adbc_duckdb(tmp_path: Path) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_adbc_postgres(postgres_service: PostgresService) -> Callable[..., Any]:
+def adk_store_adbc_postgres(postgres_service: PostgresService) -> "Callable[..., Any]":
     """Build a fresh ADBC PostgreSQL ADK store with isolated tables per call."""
+    pytest.importorskip("adbc_driver_manager")
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2170,8 +2498,11 @@ def adk_store_adbc_postgres(postgres_service: PostgresService) -> Callable[..., 
 
 
 @pytest.fixture
-def adk_store_arrow_odbc_mssql(mssql_service: MSSQLService) -> Callable[..., Any]:
+def adk_store_arrow_odbc_mssql(mssql_service: MSSQLService) -> "Callable[..., Any]":
     """Build a fresh arrow-odbc SQL Server ADK store with isolated tables per call."""
+    pytest.importorskip("arrow_odbc")
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2186,8 +2517,10 @@ def adk_store_arrow_odbc_mssql(mssql_service: MSSQLService) -> Callable[..., Any
 
 
 @pytest.fixture
-def adk_store_mssql_python(mssql_service: MSSQLService) -> Callable[..., Any]:
+def adk_store_mssql_python(mssql_service: MSSQLService) -> "Callable[..., Any]":
     """Build a fresh mssql-python ADK store with isolated tables per call."""
+    pytest.importorskip("mssql_python")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2201,8 +2534,10 @@ def adk_store_mssql_python(mssql_service: MSSQLService) -> Callable[..., Any]:
 
 
 @pytest.fixture
-def adk_store_pymssql(mssql_service: MSSQLService) -> Callable[..., Any]:
+def adk_store_pymssql(mssql_service: MSSQLService) -> "Callable[..., Any]":
     """Build a fresh pymssql ADK store with isolated tables per call."""
+    pytest.importorskip("pymssql")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         suffix = uuid4().hex[:8]
@@ -2221,6 +2556,7 @@ def _resolve_adk_store_case(request: pytest.FixtureRequest, case: AdkStoreCase) 
 @pytest.fixture(params=ADK_STORE_PARAMS)
 def adk_store_case(request: pytest.FixtureRequest) -> AdkStoreCaseContext:
     """Resolve an ADK store contract case by factory fixture name."""
+    pytest.importorskip("google.adk")
     return _resolve_adk_store_case(request, request.param)
 
 
@@ -2249,7 +2585,9 @@ def _resolve_driver_case(request: pytest.FixtureRequest, case: DriverCase) -> Dr
 
 
 @pytest.fixture
-def sync_postgres_extension_case(request: pytest.FixtureRequest) -> Generator[PostgresExtensionCaseContext, None, None]:
+def sync_postgres_extension_case(
+    request: pytest.FixtureRequest,
+) -> "Generator[PostgresExtensionCaseContext, None, None]":
     """Resolve a sync PostgreSQL extension contract case."""
     case = request.param
     assert isinstance(case, PostgresExtensionCase)
@@ -2261,7 +2599,7 @@ def sync_postgres_extension_case(request: pytest.FixtureRequest) -> Generator[Po
 @pytest.fixture
 async def async_postgres_extension_case(
     request: pytest.FixtureRequest,
-) -> AsyncGenerator[PostgresExtensionCaseContext, None]:
+) -> "AsyncGenerator[PostgresExtensionCaseContext, None]":
     """Resolve an async PostgreSQL extension contract case."""
     case = request.param
     assert isinstance(case, PostgresExtensionCase)
@@ -2328,21 +2666,22 @@ _DB2_CONTRACT_TABLE_EXISTS_SQL = (
 )
 
 
-def _drop_db2_contract_table(driver: Db2SyncDriver) -> None:
+def _drop_db2_contract_table(driver: "Db2SyncDriver") -> None:
     if driver.select_value(_DB2_CONTRACT_TABLE_EXISTS_SQL):
         driver.execute_script("DROP TABLE contract_items")
     driver.commit()
 
 
-async def _drop_db2_contract_table_async(driver: Db2AsyncDriver) -> None:
+async def _drop_db2_contract_table_async(driver: "Db2AsyncDriver") -> None:
     if await driver.select_value(_DB2_CONTRACT_TABLE_EXISTS_SQL):
         await driver.execute_script("DROP TABLE contract_items")
     await driver.commit()
 
 
 @pytest.fixture
-def contract_db2_sync_driver(db2_sync_config: Db2SyncConfig) -> Generator[Db2SyncDriver, None, None]:
+def contract_db2_sync_driver(db2_sync_config: "Db2SyncConfig") -> "Generator[Db2SyncDriver, None, None]":
     """Provide a fresh Db2 sync driver for contract tests."""
+    pytest.importorskip("ibm_db")
     with db2_sync_config.provide_session() as driver:
         _drop_db2_contract_table(driver)
         driver.execute_script(DB2_CONTRACT_TABLE.create_sql)
@@ -2353,8 +2692,9 @@ def contract_db2_sync_driver(db2_sync_config: Db2SyncConfig) -> Generator[Db2Syn
 
 
 @pytest.fixture
-async def contract_db2_async_driver(db2_async_config: Db2AsyncConfig) -> "AsyncGenerator[Db2AsyncDriver, None]":
+async def contract_db2_async_driver(db2_async_config: "Db2AsyncConfig") -> "AsyncGenerator[Db2AsyncDriver, None]":
     """Provide a fresh Db2 async driver for contract tests."""
+    pytest.importorskip("ibm_db")
     async with db2_async_config.provide_session() as driver:
         await _drop_db2_contract_table_async(driver)
         await driver.execute_script(DB2_CONTRACT_TABLE.create_sql)
@@ -2378,13 +2718,14 @@ def _db2_config_options(
 @pytest.fixture
 def lifecycle_config_db2_sync(db2_connection_config: "dict[str, Any]") -> "Callable[..., Db2SyncConfig]":
     """Build fresh Db2 sync configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("ibm_db")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "Db2DriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> Db2SyncConfig:
+    ) -> "Db2SyncConfig":
         return Db2SyncConfig(
             connection_config=dict(db2_connection_config), **_db2_config_options(driver_features, connection_instance)
         )
@@ -2395,13 +2736,14 @@ def lifecycle_config_db2_sync(db2_connection_config: "dict[str, Any]") -> "Calla
 @pytest.fixture
 def lifecycle_config_db2_async(db2_connection_config: "dict[str, Any]") -> "Callable[..., Db2AsyncConfig]":
     """Build fresh Db2 async configs for the pooling/connection-hook lifecycle contracts."""
+    pytest.importorskip("ibm_db")
 
     def make(
         *,
         pooled: bool = False,
         driver_features: "Db2DriverFeatures | None" = None,
         connection_instance: object | None = None,
-    ) -> Db2AsyncConfig:
+    ) -> "Db2AsyncConfig":
         return Db2AsyncConfig(
             connection_config=dict(db2_connection_config), **_db2_config_options(driver_features, connection_instance)
         )
@@ -2412,6 +2754,8 @@ def lifecycle_config_db2_async(db2_connection_config: "dict[str, Any]") -> "Call
 @pytest.fixture
 async def contract_db2_sync_store(db2_connection_config: "dict[str, Any]") -> "AsyncGenerator[Db2SyncStore, None]":
     """Provide a ready Db2 sync Litestar store for contract tests."""
+    pytest.importorskip("ibm_db")
+    pytest.importorskip("litestar")
     config = Db2SyncConfig(connection_config=dict(db2_connection_config), extension_config=_STORE_EXTENSION_CONFIG)
     store = Db2SyncStore(config)
     await store.create_table()
@@ -2425,6 +2769,8 @@ async def contract_db2_sync_store(db2_connection_config: "dict[str, Any]") -> "A
 @pytest.fixture
 async def contract_db2_async_store(db2_connection_config: "dict[str, Any]") -> "AsyncGenerator[Db2AsyncStore, None]":
     """Provide a ready Db2 async Litestar store for contract tests."""
+    pytest.importorskip("ibm_db")
+    pytest.importorskip("litestar")
     config = Db2AsyncConfig(connection_config=dict(db2_connection_config), extension_config=_STORE_EXTENSION_CONFIG)
     store = Db2AsyncStore(config)
     await store.create_table()
@@ -2436,8 +2782,10 @@ async def contract_db2_async_store(db2_connection_config: "dict[str, Any]") -> "
 
 
 @pytest.fixture
-def adk_store_db2_sync(db2_connection_config: "dict[str, Any]") -> Callable[..., Any]:
+def adk_store_db2_sync(db2_connection_config: "dict[str, Any]") -> "Callable[..., Any]":
     """Build a fresh Db2 sync ADK store with isolated tables per call."""
+    pytest.importorskip("ibm_db")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         config = Db2SyncConfig(
@@ -2449,8 +2797,10 @@ def adk_store_db2_sync(db2_connection_config: "dict[str, Any]") -> Callable[...,
 
 
 @pytest.fixture
-def adk_store_db2_async(db2_connection_config: "dict[str, Any]") -> Callable[..., Any]:
+def adk_store_db2_async(db2_connection_config: "dict[str, Any]") -> "Callable[..., Any]":
     """Build a fresh Db2 async ADK store with isolated tables per call."""
+    pytest.importorskip("ibm_db")
+    pytest.importorskip("google.adk")
 
     def make() -> "tuple[Any, Any]":
         config = Db2AsyncConfig(
@@ -2462,10 +2812,11 @@ def adk_store_db2_async(db2_connection_config: "dict[str, Any]") -> Callable[...
 
 
 @pytest.fixture
-def events_config_db2_sync(db2_connection_config: "dict[str, Any]", tmp_path: Path) -> Callable[..., Any]:
+def events_config_db2_sync(db2_connection_config: "dict[str, Any]", tmp_path: Path) -> "Callable[..., Any]":
     """Build Db2 sync event-channel configs for contract tests."""
+    pytest.importorskip("ibm_db")
 
-    def make(*, extension_config: "dict[str, Any]", suffix: str) -> Db2SyncConfig:
+    def make(*, extension_config: "dict[str, Any]", suffix: str) -> "Db2SyncConfig":
         return Db2SyncConfig(
             connection_config=dict(db2_connection_config),
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -2476,10 +2827,11 @@ def events_config_db2_sync(db2_connection_config: "dict[str, Any]", tmp_path: Pa
 
 
 @pytest.fixture
-def events_config_db2_async(db2_connection_config: "dict[str, Any]", tmp_path: Path) -> Callable[..., Any]:
+def events_config_db2_async(db2_connection_config: "dict[str, Any]", tmp_path: Path) -> "Callable[..., Any]":
     """Build Db2 async event-channel configs for contract tests."""
+    pytest.importorskip("ibm_db")
 
-    def make(*, extension_config: "dict[str, Any]", suffix: str) -> Db2AsyncConfig:
+    def make(*, extension_config: "dict[str, Any]", suffix: str) -> "Db2AsyncConfig":
         return Db2AsyncConfig(
             connection_config=dict(db2_connection_config),
             migration_config=_events_migration_config(tmp_path, suffix),
@@ -2490,10 +2842,11 @@ def events_config_db2_async(db2_connection_config: "dict[str, Any]", tmp_path: P
 
 
 @pytest.fixture
-def migration_config_db2_sync(db2_connection_config: "dict[str, Any]") -> Callable[..., Any]:
+def migration_config_db2_sync(db2_connection_config: "dict[str, Any]") -> "Callable[..., Any]":
     """Build Db2 sync configs for migration contract tests."""
+    pytest.importorskip("ibm_db")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> Db2SyncConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "Db2SyncConfig":
         return Db2SyncConfig(
             connection_config=dict(db2_connection_config),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
@@ -2503,10 +2856,11 @@ def migration_config_db2_sync(db2_connection_config: "dict[str, Any]") -> Callab
 
 
 @pytest.fixture
-def migration_config_db2_async(db2_connection_config: "dict[str, Any]") -> Callable[..., Any]:
+def migration_config_db2_async(db2_connection_config: "dict[str, Any]") -> "Callable[..., Any]":
     """Build Db2 async configs for migration contract tests."""
+    pytest.importorskip("ibm_db")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> Db2AsyncConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "Db2AsyncConfig":
         return Db2AsyncConfig(
             connection_config=dict(db2_connection_config),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
@@ -2516,10 +2870,11 @@ def migration_config_db2_async(db2_connection_config: "dict[str, Any]") -> Calla
 
 
 @pytest.fixture
-def migration_config_spanner_sync(spanner_service: SpannerService, spanner_database: Any) -> Callable[..., Any]:
+def migration_config_spanner_sync(spanner_service: SpannerService, spanner_database: Any) -> "Callable[..., Any]":
     """Build Spanner sync configs for migration contract tests."""
+    pytest.importorskip("google.cloud.spanner")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> SpannerSyncConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "SpannerSyncConfig":
         return SpannerSyncConfig(
             connection_config=build_spanner_connection_config(spanner_service),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
@@ -2529,10 +2884,11 @@ def migration_config_spanner_sync(spanner_service: SpannerService, spanner_datab
 
 
 @pytest.fixture
-def migration_config_spanner_async(spanner_service: SpannerService, spanner_database: Any) -> Callable[..., Any]:
+def migration_config_spanner_async(spanner_service: SpannerService, spanner_database: Any) -> "Callable[..., Any]":
     """Build Spanner async configs for migration contract tests."""
+    pytest.importorskip("google.cloud.spanner")
 
-    def make(*, script_location: str, version_table_name: str, suffix: str) -> SpannerAsyncConfig:
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> "SpannerAsyncConfig":
         return SpannerAsyncConfig(
             connection_config=build_spanner_connection_config(spanner_service),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},

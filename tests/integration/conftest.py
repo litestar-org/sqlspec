@@ -48,7 +48,10 @@ _FIXTURE_DRIVER_REQUIREMENTS: dict[str, tuple[tuple[str, ...], ...]] = {
 
 def pytest_configure(config: pytest.Config) -> None:
     """Import integration fixture plugins whose backing driver packages are installed."""
-    for module_info in sorted(pkgutil.iter_modules(fixtures_pkg.__path__), key=lambda item: item.name):
+    ordered_modules = sorted(
+        pkgutil.iter_modules(fixtures_pkg.__path__), key=lambda item: (item.name == "adapter_cases", item.name)
+    )
+    for module_info in ordered_modules:
         if module_info.name in _NON_PLUGIN_FIXTURE_MODULES:
             continue
         requirements = _FIXTURE_DRIVER_REQUIREMENTS.get(module_info.name)

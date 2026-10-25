@@ -2,20 +2,29 @@
 
 import tempfile
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore
-from sqlspec.extensions.adk import StoredMemory
+from sqlspec.utils.module_loader import import_optional_attr
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore
+    from sqlspec.extensions.adk import StoredMemory
+else:
+    SqliteADKMemoryStore = import_optional_attr("sqlspec.adapters.sqlite.adk", "SqliteADKMemoryStore")
+    StoredMemory = import_optional_attr("sqlspec.extensions.adk.memory._types", "StoredMemory")
+
+pytest.importorskip("google.adk")
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
 
 def _build_record(
     *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
-) -> StoredMemory:
+) -> "StoredMemory":
     now = datetime.now(UTC)
     return StoredMemory(
         id=str(uuid4()),

@@ -6,12 +6,19 @@ user foreign key columns for multi-tenant scenarios and referential integrity.
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteConnectionParams
-from sqlspec.adapters.sqlite.adk import SqliteADKStore
+from sqlspec.utils.module_loader import import_optional_attr
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.sqlite.adk import SqliteADKStore
+else:
+    SqliteADKStore = import_optional_attr("sqlspec.adapters.sqlite.adk", "SqliteADKStore")
+
+pytest.importorskip("google.adk")
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.sqlite, pytest.mark.integration]
 
@@ -340,8 +347,8 @@ def test_owner_id_column_ddl_extraction(sqlite_config: SqliteConfig) -> None:
     )
     store = SqliteADKStore(config_with_extension)
 
-    assert store._owner_id_column_name == "tenant_id"  # pyright: ignore[reportPrivateUsage]
-    assert store._owner_id_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"  # pyright: ignore[reportPrivateUsage]
+    assert store.owner_id_column_name == "tenant_id"
+    assert store.owner_id_column_ddl == "tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE"
 
 
 def test_create_session_without_fk_when_not_required(
