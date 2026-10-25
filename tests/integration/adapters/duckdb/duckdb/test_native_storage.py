@@ -18,7 +18,7 @@ from sqlspec.adapters.duckdb.core import _native_storage_eligible
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.storage import StorageFormat, StorageRegistry, SyncStoragePipeline
 from sqlspec.storage.registry import storage_registry
-from tests.fixtures.rustfs import ensure_rustfs_bucket, rustfs_filesystem, rustfs_obstore_kwargs
+from tests.fixtures.rustfs import rustfs_filesystem, rustfs_obstore_kwargs
 
 
 def test_registered_filesystem_transfers_without_cloud_extensions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,7 +167,7 @@ def _local_config(service: RustfsService, *, wrong_key: bool = False) -> DuckDBC
 def test_local_object_success_missing_and_auth_errors(
     rustfs_service: RustfsService, rustfs_bucket_name: str, tmp_path: Path
 ) -> None:
-    bucket = ensure_rustfs_bucket(rustfs_service, rustfs_bucket_name)
+    bucket = rustfs_bucket_name
     key = f"duckdb-native-probe/{uuid4().hex}.parquet"
     path = tmp_path / "source.parquet"
     pq.write_table(pa.table({"value": [1, 2]}), path)
@@ -202,7 +202,7 @@ def test_local_object_success_missing_and_auth_errors(
 def test_arrow_and_native_copy_replace_single_local_object(
     rustfs_service: RustfsService, rustfs_bucket_name: str, file_format: str
 ) -> None:
-    bucket = ensure_rustfs_bucket(rustfs_service, rustfs_bucket_name)
+    bucket = rustfs_bucket_name
     alias = f"duckdb_copy_{uuid4().hex}"
     key = f"duckdb-copy-probe/{uuid4().hex}.{file_format}"
     options = rustfs_obstore_kwargs(rustfs_service)
@@ -241,7 +241,7 @@ def test_arrow_and_native_copy_replace_single_local_object(
 def test_native_parquet_append_and_overwrite_fallback(
     rustfs_service: RustfsService, rustfs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bucket = ensure_rustfs_bucket(rustfs_service, rustfs_bucket_name)
+    bucket = rustfs_bucket_name
     alias = f"duckdb_import_{uuid4().hex}"
     key = f"duckdb-native-import/{uuid4().hex}.parquet"
     destination = f"alias://{alias}/{key}"
@@ -278,7 +278,7 @@ def test_native_parquet_append_and_overwrite_fallback(
 def test_native_export_does_not_materialize_arrow(
     rustfs_service: RustfsService, rustfs_bucket_name: str, file_format: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bucket = ensure_rustfs_bucket(rustfs_service, rustfs_bucket_name)
+    bucket = rustfs_bucket_name
     alias = f"duckdb_export_{uuid4().hex}"
     key = f"duckdb-native-export/{uuid4().hex}-quote'.{file_format}"
     storage_registry.register_alias(alias, f"s3://{bucket}", backend="obstore", **rustfs_obstore_kwargs(rustfs_service))

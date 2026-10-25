@@ -7,6 +7,14 @@ import pytest
 if TYPE_CHECKING:
     from pytest_databases.docker.rustfs import RustfsService
 
+__all__ = (
+    "rustfs_endpoint_url",
+    "rustfs_filesystem",
+    "rustfs_fsspec_kwargs",
+    "rustfs_object_size",
+    "rustfs_obstore_kwargs",
+)
+
 
 def rustfs_endpoint_url(rustfs_service: "RustfsService") -> str:
     """Return the S3 endpoint URL for a pytest-databases RustFS service."""
@@ -43,14 +51,6 @@ def rustfs_filesystem(rustfs_service: "RustfsService") -> Any:
     pytest.importorskip("s3fs", reason="s3fs is required for RustFS S3 test setup")
     fsspec = pytest.importorskip("fsspec", reason="fsspec is required for RustFS S3 test setup")
     return fsspec.filesystem("s3", anon=False, **rustfs_fsspec_kwargs(rustfs_service))
-
-
-def ensure_rustfs_bucket(rustfs_service: "RustfsService", bucket_name: str) -> str:
-    """Ensure the default RustFS bucket exists and return its name."""
-    fs = rustfs_filesystem(rustfs_service)
-    if not fs.exists(bucket_name):
-        fs.mkdir(bucket_name)
-    return bucket_name
 
 
 def rustfs_object_size(rustfs_service: "RustfsService", bucket_name: str, object_name: str) -> int:

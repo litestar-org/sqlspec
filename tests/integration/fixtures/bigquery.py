@@ -26,7 +26,7 @@ def _bigquery_connection_config(service: "BigQueryService", dataset_id: str | No
     return {
         "project": service.project,
         "dataset_id": dataset_id or f"`{service.project}`.`{service.dataset}`",
-        "client_options": ClientOptions(api_endpoint=f"http://{service.host}:{service.port}"),
+        "client_options": ClientOptions(api_endpoint=service.endpoint),
         "credentials": _anonymous_credentials(),
     }
 
