@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import cast
 
+import msgspec
+import pytest
 from _pytest.mark.structures import ParameterSet
 
 from tests.integration.adapters._shared._adk_cases import AdkStoreCase, adk_store_params_with
@@ -26,6 +28,7 @@ from tests.integration.adapters._shared._postgres_extension_cases import (
     ASYNC_POSTGRES_EXTENSION_CASES,
     SYNC_POSTGRES_EXTENSION_CASES,
 )
+from tests.integration.adapters.conftest import _case_family, pytest_collection_modifyitems
 
 MYSQL_ROW_LOCKING_CASE_IDS = {
     "aiomysql-async",
@@ -127,6 +130,7 @@ CONTRACT_OWNED_REMOVED_TEST_PATHS = {
     "oracledb/test_merge_bulk.py",
     "oracledb/test_stack.py",
     "oracledb/test_vector_functions.py",
+    "postgres/test_cockroach_retry.py",
     "psqlpy/test_data_dictionary.py",
     "psqlpy/test_merge_bulk.py",
     "psqlpy/test_migrations.py",
@@ -286,6 +290,84 @@ def test_parameter_style_params_are_method_filtered() -> None:
     assert {case.id for case in execute_cases} | {case.id for case in execute_many_cases} == {
         case.id for case in all_cases
     }
+
+
+def test_case_family_routes_adbc_dialects() -> None:
+    """ADBC case identifiers route to their backing database family instead of defaulting to postgres."""
+    expected_routes = {
+        "adbc-oracle": "oracle",
+        "adbc-db2": "db2",
+        "adbc-snowflake": "snowflake",
+        "adbc-bigquery": "bigquery",
+        "adbc-duckdb": "duckdb",
+        "adbc-sqlite": "sqlite",
+        "adbc-postgres": "postgres",
+        "adbc-pgvector": "postgres",
+        "adbc-gizmosql-duckdb": "gizmosql",
+    }
+    observed_routes = {case_id: _case_family(_StubCaseId(id=case_id)) for case_id in expected_routes}
+    assert observed_routes == expected_routes
+
+
+def test_collection_preserves_container_distinct_xdist_groups(
+    request: pytest.FixtureRequest, pytestconfig: pytest.Config
+) -> None:
+    """Container-distinct xdist_group markers survive family xdist normalization."""
+    adapters_root = Path(__file__).resolve().parents[1]
+    preserved_groups = (
+        ("postgres", "alloydb"),
+        ("gizmosql", "gizmosql_sqlite"),
+        ("mysql", "mariadb"),
+        ("oracle", "oracle_18c"),
+        ("oracle", "oracle_adb"),
+        ("postgres", "paradedb"),
+        ("postgres", "pgvector"),
+        ("snowflake", "snowflake"),
+    )
+    items: list[pytest.Item] = []
+    for family, group_name in preserved_groups:
+        item = _StubAdapterItem.from_parent(
+            request.session, name=f"test_{group_name}", path=adapters_root / family / f"test_{group_name}.py"
+        )
+        item.add_marker(pytest.mark.xdist_group(group_name))
+        items.append(item)
+
+    ungrouped_postgres = _StubAdapterItem.from_parent(
+        request.session, name="test_ungrouped_postgres", path=adapters_root / "postgres" / "test_driver.py"
+    )
+    overridden_postgres = _StubAdapterItem.from_parent(
+        request.session, name="test_overridden_postgres", path=adapters_root / "postgres" / "test_driver.py"
+    )
+    overridden_postgres.add_marker(pytest.mark.xdist_group("custom_transient_group"))
+    ungrouped_cockroach = _StubAdapterItem.from_parent(
+        request.session, name="test_ungrouped_cockroach", path=adapters_root / "cockroach" / "test_retry.py"
+    )
+    ungrouped_snowflake = _StubAdapterItem.from_parent(
+        request.session, name="test_ungrouped_snowflake", path=adapters_root / "snowflake" / "test_adbc.py"
+    )
+    items.extend((ungrouped_postgres, overridden_postgres, ungrouped_cockroach, ungrouped_snowflake))
+
+    pytest_collection_modifyitems(pytestconfig, items)
+
+    for item, (_, expected_group) in zip(items[: len(preserved_groups)], preserved_groups, strict=True):
+        assert _xdist_groups(item) == [expected_group]
+    assert _xdist_groups(ungrouped_postgres) == ["postgres"]
+    assert _xdist_groups(overridden_postgres) == ["postgres"]
+    assert _xdist_groups(ungrouped_cockroach) == ["cockroachdb"]
+    assert _xdist_groups(ungrouped_snowflake) == ["snowflake"]
+
+
+class _StubCaseId(msgspec.Struct, frozen=True, gc=False):
+    id: str
+
+
+class _StubAdapterItem(pytest.Item):
+    def runtest(self) -> None:
+        return None
+
+
+def _xdist_groups(item: pytest.Item) -> list[str]:
+    return [str(mark.args[0]) for mark in item.iter_markers(name="xdist_group") if mark.args]
 
 
 def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:

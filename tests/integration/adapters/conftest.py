@@ -14,17 +14,28 @@ _FAMILY_ADAPTERS = {
     "spanner": frozenset({"spanner"}),
     "sqlite": frozenset({"aiosqlite", "sqlite"}),
 }
-_SHARED_TEST_FAMILIES = frozenset((*_FAMILY_ADAPTERS, "gizmosql"))
+_SHARED_TEST_FAMILIES = frozenset((*_FAMILY_ADAPTERS, "gizmosql", "snowflake"))
 _FAMILY_XDIST_GROUPS = {family: "cockroachdb" if family == "cockroach" else family for family in _SHARED_TEST_FAMILIES}
+_PRESERVED_CONTAINER_XDIST_GROUPS: frozenset[str] = frozenset({
+    "alloydb",
+    "gizmosql_sqlite",
+    "mariadb",
+    "oracle_18c",
+    "oracle_adb",
+    "paradedb",
+    "pgvector",
+    "snowflake",
+})
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Keep shared cases in their family and serialize every family on one worker."""
+    """Keep shared cases in their family while preserving distinct container xdist groups."""
     retained: list[pytest.Item] = []
     deselected: list[pytest.Item] = []
     for item in items:
         item_family = next((part for part in item.path.parts if part in _SHARED_TEST_FAMILIES), None)
-        if item_family is not None:
+        if item_family is not None and not _has_preserved_container_xdist_group(item):
             item.own_markers[:] = [mark for mark in item.own_markers if mark.name != "xdist_group"]
             item.add_marker(pytest.mark.xdist_group(_FAMILY_XDIST_GROUPS[item_family]))
         if item.path.name != "test_shared.py" or item.path.parent.name not in _SHARED_TEST_FAMILIES:
@@ -41,6 +52,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if deselected:
         config.hook.pytest_deselected(items=deselected)
     items[:] = retained
+
+
+def _has_preserved_container_xdist_group(item: pytest.Item) -> bool:
+    return any(
+        mark.args and str(mark.args[0]) in _PRESERVED_CONTAINER_XDIST_GROUPS
+        for mark in item.iter_markers(name="xdist_group")
+    )
 
 
 def _case_family(value: object) -> str | None:
@@ -67,6 +85,12 @@ def _case_family(value: object) -> str | None:
             return "duckdb"
         if "bigquery" in identity:
             return "bigquery"
+        if "oracle" in identity:
+            return "oracle"
+        if "db2" in identity:
+            return "db2"
+        if "snowflake" in identity:
+            return "snowflake"
         return "postgres"
     for family, adapters in _FAMILY_ADAPTERS.items():
         if adapter in adapters:
