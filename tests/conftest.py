@@ -1,3 +1,6 @@
+"""Root pytest configuration and shared test hooks."""
+
+import functools
 import importlib.machinery
 import logging
 import os
@@ -24,37 +27,13 @@ for _logger_name, _level in {
 }.items():
     logging.getLogger(_logger_name).setLevel(_level)
 
-
-pytest_plugins = [
-    "pytest_databases.docker.postgres",
-    "pytest_databases.docker.oracle",
-    "pytest_databases.docker.mysql",
-    "pytest_databases.docker.mssql",
-    "pytest_databases.docker.bigquery",
-    "pytest_databases.docker.spanner",
-    "pytest_databases.docker.gizmosql",
-    "pytest_databases.docker.cockroachdb",
-    "pytest_databases.docker.rustfs",
-    "tests.plugins.db2",
-    "tests.integration.fixtures",
-    "tests.integration.fixtures.adapter_cases",
-    "tests.integration.fixtures.aiomysql_adk",
-    "tests.integration.fixtures.asyncmy_adk",
-    "tests.integration.fixtures.asyncpg_adk",
-    "tests.integration.fixtures.mysqlconnector_adk",
-    "tests.integration.fixtures.oracle_events",
-    "tests.integration.fixtures.spanner_adk",
-    "tests.integration.fixtures.spanner_events",
-    "tests.integration.fixtures.spanner_litestar",
-]
-
 pytestmark = pytest.mark.anyio
 here = Path(__file__).parent
-
 
 COMPILED_EXTENSION_SUFFIXES: tuple[str, ...] = tuple(
     dict.fromkeys((*importlib.machinery.EXTENSION_SUFFIXES, ".so", ".pyd"))
 )
+_TRUTHY_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
 
 
 def is_compiled() -> bool:
@@ -93,24 +72,18 @@ requires_patchable_internals = pytest.mark.skipif(
 )
 
 
-def _module_is_available(module: str) -> bool:
-    try:
-        return find_spec(module) is not None
-    except ModuleNotFoundError:
-        return False
-
-
-_MSSQL_PYTHON_AVAILABLE = _module_is_available("mssql_python")
-_SPANNER_AVAILABLE = _module_is_available("google.cloud.spanner_v1")
+def should_run_optional_cloud_suite(cli_enabled: bool, env_var: str) -> bool:
+    """Return True when an optional cloud emulator suite is enabled via CI, CLI flag, or env var."""
+    return os.getenv("CI") == "true" or bool(cli_enabled) or _env_flag_enabled(env_var)
 
 
 def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
     """Skip optional adapter unit trees before importing unavailable dependencies."""
     _ = config
     path = str(collection_path)
-    if "tests/unit/adapters/test_mssql_python" in path and not _MSSQL_PYTHON_AVAILABLE:
+    if "tests/unit/adapters/test_mssql_python" in path and not _module_is_available("mssql_python"):
         return True
-    if "tests/unit/adapters/test_spanner" in path and not _SPANNER_AVAILABLE:
+    if "tests/unit/adapters/test_spanner" in path and not _module_is_available("google.cloud.spanner_v1"):
         return True
     return None
 
@@ -121,29 +94,29 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--run-bigquery-tests",
         action="store_true",
         default=False,
-        help="Run BigQuery integration tests locally (enabled by default in CI; otherwise requires SQLSPEC_ENABLE_BIGQUERY_TESTS=1)",
+        help="Run BigQuery integration tests locally (enabled by default in CI; local runs accept --run-bigquery-tests or SQLSPEC_ENABLE_BIGQUERY_TESTS=1)",
     )
     parser.addoption(
         "--run-spanner-tests",
         action="store_true",
         default=False,
-        help="Run Spanner integration tests locally (enabled by default in CI; otherwise requires SQLSPEC_ENABLE_SPANNER_TESTS=1)",
+        help="Run Spanner integration tests locally (enabled by default in CI; local runs accept --run-spanner-tests or SQLSPEC_ENABLE_SPANNER_TESTS=1)",
     )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Apply environment-sensitive collection skips."""
-    bigquery_enabled = os.getenv("CI") == "true" or bool(
-        config.getoption("--run-bigquery-tests", default=False) and os.getenv("SQLSPEC_ENABLE_BIGQUERY_TESTS") == "1"
+    bigquery_enabled = should_run_optional_cloud_suite(
+        bool(config.getoption("--run-bigquery-tests", default=False)), "SQLSPEC_ENABLE_BIGQUERY_TESTS"
     )
-    spanner_enabled = os.getenv("CI") == "true" or bool(
-        config.getoption("--run-spanner-tests", default=False) and os.getenv("SQLSPEC_ENABLE_SPANNER_TESTS") == "1"
+    spanner_enabled = should_run_optional_cloud_suite(
+        bool(config.getoption("--run-spanner-tests", default=False)), "SQLSPEC_ENABLE_SPANNER_TESTS"
     )
     skip_bigquery = pytest.mark.skip(
-        reason="BigQuery integration tests run by default in CI; local runs require SQLSPEC_ENABLE_BIGQUERY_TESTS=1 and --run-bigquery-tests"
+        reason="BigQuery integration tests run by default in CI; local runs accept --run-bigquery-tests or SQLSPEC_ENABLE_BIGQUERY_TESTS=1"
     )
     skip_spanner = pytest.mark.skip(
-        reason="Spanner integration tests run by default in CI; local runs require SQLSPEC_ENABLE_SPANNER_TESTS=1 and --run-spanner-tests"
+        reason="Spanner integration tests run by default in CI; local runs accept --run-spanner-tests or SQLSPEC_ENABLE_SPANNER_TESTS=1"
     )
     for item in items:
         item_path = str(getattr(item, "path", getattr(item, "fspath", "")))
@@ -166,7 +139,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @pytest.fixture(scope="session", autouse=True)
-def disable_spanner_builtin_metrics() -> "Generator[None, None, None]":
+def disable_spanner_builtin_metrics() -> Generator[None, None, None]:
     """Disable Spanner built-in metrics export during tests."""
     if os.getenv("SPANNER_DISABLE_BUILTIN_METRICS") is None:
         os.environ["SPANNER_DISABLE_BUILTIN_METRICS"] = "true"
@@ -188,6 +161,7 @@ def anyio_backend() -> str:
 
 @pytest.fixture(autouse=True)
 def disable_sync_to_thread_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Suppress Litestar implicit sync-to-thread warnings during tests."""
     monkeypatch.setenv("LITESTAR_WARN_IMPLICIT_SYNC_TO_THREAD", "0")
 
 
@@ -197,3 +171,17 @@ def clear_sql_caches() -> Generator[None, None, None]:
     clear_all_caches()
     yield
     clear_all_caches()
+
+
+@functools.cache
+def _module_is_available(module: str) -> bool:
+    """Return True when a module specification can be resolved without importing it."""
+    try:
+        return find_spec(module) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an environment variable holds a truthy opt-in value."""
+    return os.getenv(name, "").strip().lower() in _TRUTHY_ENV_VALUES

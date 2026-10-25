@@ -1,11 +1,14 @@
 """Regression tests for import-time optional dependency leakage."""
 
 import ast
+import importlib
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests.conftest import should_run_optional_cloud_suite
 
 FORBIDDEN = (
     "pandas",
@@ -37,6 +40,7 @@ FORBIDDEN = (
     ],
 )
 def test_first_use_avoids_unrelated_imports(statement: str, unused: tuple[str, ...]) -> None:
+    """First-use imports of focused submodules avoid loading unrelated subsystems."""
     script = f"import sys\n{statement}\nassert not set({unused!r}).intersection(sys.modules)"
     subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
 
@@ -94,10 +98,28 @@ def test_import_sqlspec_does_not_import_heavy_optional_deps() -> None:
 @pytest.mark.skipif(any(name in sys.modules for name in FORBIDDEN), reason="forbidden deps already preloaded")
 def test_import_sqlspec_does_not_import_heavy_optional_deps_in_process() -> None:
     """Same-process import should also stay clean when the environment is pristine."""
-    import sqlspec  # noqa: F401
+    importlib.import_module("sqlspec")
 
     leaked = [name for name in FORBIDDEN if name in sys.modules]
     assert not leaked, f"import sqlspec eagerly imported: {leaked}"
+
+
+def test_unit_pytest_session_does_not_load_docker_or_integration_plugins() -> None:
+    """Collecting unit tests does not load Docker service providers or integration fixtures."""
+    script = """
+import sys
+import pytest
+
+exit_code = pytest.main(["--collect-only", "-q", "-p", "no:cacheprovider", "tests/unit/test_import_time.py"])
+assert exit_code == 0, f"pytest collection failed with exit code {exit_code}"
+leaked = [
+    name
+    for name in sorted(sys.modules)
+    if name.startswith(("pytest_databases.docker", "tests.integration", "tests.plugins"))
+]
+assert leaked == [], f"unit collection loaded integration plugins: {leaked}"
+"""
+    subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
 
 
 def test_adbc_import_does_not_require_or_load_duckdb() -> None:
@@ -167,3 +189,22 @@ def test_no_unintended_cross_adapter_imports() -> None:
                     )
 
     assert not violations, "Found cross-adapter imports:\n" + "\n".join(violations)
+
+
+def test_cloud_emulator_opt_in_accepts_cli_flag_or_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cloud emulator opt-in runs when CI is active or either CLI flag or env var is enabled."""
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("SQLSPEC_ENABLE_BIGQUERY_TESTS", raising=False)
+
+    assert should_run_optional_cloud_suite(False, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is False
+    assert should_run_optional_cloud_suite(True, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is True
+
+    monkeypatch.setenv("SQLSPEC_ENABLE_BIGQUERY_TESTS", "1")
+    assert should_run_optional_cloud_suite(False, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is True
+
+    monkeypatch.setenv("SQLSPEC_ENABLE_BIGQUERY_TESTS", "true")
+    assert should_run_optional_cloud_suite(False, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is True
+
+    monkeypatch.delenv("SQLSPEC_ENABLE_BIGQUERY_TESTS", raising=False)
+    monkeypatch.setenv("CI", "true")
+    assert should_run_optional_cloud_suite(False, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is True
