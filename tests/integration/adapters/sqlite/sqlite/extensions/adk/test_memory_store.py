@@ -22,27 +22,6 @@ pytest.importorskip("google.adk")
 pytestmark = pytest.mark.xdist_group("sqlite")
 
 
-def _build_record(
-    *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
-) -> "StoredMemory":
-    now = datetime.now(UTC)
-    return StoredMemory(
-        id=str(uuid4()),
-        session_id=session_id,
-        app_name="app",
-        user_id="user",
-        scope=scope,
-        event_id=event_id,
-        author="user",
-        timestamp=now,
-        content_json={"text": content_text},
-        content_text=content_text,
-        metadata_json=None,
-        inserted_at=inserted_at,
-        embedding=None,
-    )
-
-
 def test_sqlite_memory_store_insert_search_dedup() -> None:
     """Insert memory entries, search by text, and skip duplicates."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
@@ -238,3 +217,24 @@ def test_sqlite_memory_store_scoped_retention() -> None:
         remaining = store.search_entries(query="old", app_name="app", user_id="user")
         assert len(remaining) == 1
         assert remaining[0]["event_id"] == "evt-ao"
+
+
+def _build_record(
+    *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
+) -> "StoredMemory":
+    now = datetime.now(UTC)
+    return StoredMemory(
+        id=str(uuid4()),
+        session_id=session_id,
+        app_name="app",
+        user_id="user",
+        scope=scope,
+        event_id=event_id,
+        author="user",
+        timestamp=now,
+        content_json={"text": content_text},
+        content_text=content_text,
+        metadata_json=None,
+        inserted_at=inserted_at,
+        embedding=None,
+    )

@@ -31,27 +31,6 @@ pytest.importorskip("google.adk")
 pytestmark = pytest.mark.xdist_group("sqlite")
 
 
-def _build_memory_record(
-    *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
-) -> "StoredMemory":
-    now = datetime.now(UTC)
-    return StoredMemory(
-        id=str(uuid4()),
-        session_id=session_id,
-        app_name="agent_app",
-        user_id="user_1",
-        scope=scope,
-        event_id=event_id,
-        author="user",
-        timestamp=now,
-        content_json={"text": content_text},
-        content_text=content_text,
-        metadata_json=None,
-        inserted_at=inserted_at,
-        embedding=None,
-    )
-
-
 def test_sqlite_prune_sessions_and_scoped_memory() -> None:
     """Prune stale sessions and user-scoped memories while preserving app-scoped ones."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
@@ -164,3 +143,24 @@ def test_sqlite_prune_events_scopes_to_app_name() -> None:
     finally:
         config.close_pool()
         Path(db_path).unlink(missing_ok=True)
+
+
+def _build_memory_record(
+    *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
+) -> "StoredMemory":
+    now = datetime.now(UTC)
+    return StoredMemory(
+        id=str(uuid4()),
+        session_id=session_id,
+        app_name="agent_app",
+        user_id="user_1",
+        scope=scope,
+        event_id=event_id,
+        author="user",
+        timestamp=now,
+        content_json={"text": content_text},
+        content_text=content_text,
+        metadata_json=None,
+        inserted_at=inserted_at,
+        embedding=None,
+    )

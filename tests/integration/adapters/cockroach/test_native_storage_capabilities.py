@@ -1,5 +1,6 @@
 """Local server contracts required by CockroachDB native object storage."""
 
+from importlib.util import find_spec
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from uuid import uuid4
@@ -48,14 +49,10 @@ def native_storage_uri(
     try:
         yield f"s3://{rustfs_bucket_name}/{prefix}?{query}"
     finally:
-        filesystem = rustfs_filesystem(rustfs_service)
-        if filesystem.exists(f"{rustfs_bucket_name}/{prefix}"):
-            filesystem.rm(f"{rustfs_bucket_name}/{prefix}", recursive=True)
-
-
-def _file_uri(destination: str, filename: str) -> str:
-    parts = urlsplit(destination)
-    return urlunsplit(parts._replace(path=f"{parts.path}/{filename}"))
+        if find_spec("s3fs") is not None and find_spec("fsspec") is not None:
+            filesystem = rustfs_filesystem(rustfs_service)
+            if filesystem.exists(f"{rustfs_bucket_name}/{prefix}"):
+                filesystem.rm(f"{rustfs_bucket_name}/{prefix}", recursive=True)
 
 
 def test_native_storage_connection_baseline(
@@ -283,3 +280,8 @@ async def test_native_export_async_clients_bind_uri_and_query_values(
             rows = await cursor.fetchall()
             assert len(rows) == 1
             assert rows[0][1] == 1
+
+
+def _file_uri(destination: str, filename: str) -> str:
+    parts = urlsplit(destination)
+    return urlunsplit(parts._replace(path=f"{parts.path}/{filename}"))

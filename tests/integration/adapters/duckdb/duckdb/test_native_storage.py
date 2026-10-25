@@ -4,7 +4,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import duckdb
@@ -18,11 +18,17 @@ from sqlspec.adapters.duckdb.core import _native_storage_eligible
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.storage import StorageFormat, StorageRegistry, SyncStoragePipeline
 from sqlspec.storage.registry import storage_registry
+from sqlspec.utils.module_loader import import_optional_attr
 from tests.fixtures.rustfs import rustfs_filesystem, rustfs_obstore_kwargs
+
+if TYPE_CHECKING:
+    from fsspec.implementations.memory import MemoryFileSystem
+else:
+    MemoryFileSystem = import_optional_attr("fsspec.implementations.memory", "MemoryFileSystem")
 
 
 def test_registered_filesystem_transfers_without_cloud_extensions(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fsspec.implementations.memory import MemoryFileSystem
+    pytest.importorskip("fsspec")
 
     filesystem = MemoryFileSystem()
 
@@ -136,37 +142,10 @@ def test_best_effort_extension_failure_does_not_enable_native_storage(tmp_path: 
         config.close_pool()
 
 
-def _local_config(service: RustfsService, *, wrong_key: bool = False) -> DuckDBConfig:
-    return DuckDBConfig(
-        connection_config={
-            "database": f":memory:duckdb_storage_{uuid4().hex}",
-            "autoload_known_extensions": False,
-            "autoinstall_known_extensions": False,
-        },
-        driver_features={
-            "extensions": [{"name": "httpfs", "install": True, "required": True}],
-            "secrets": [
-                {
-                    "name": "local_storage",
-                    "secret_type": "s3",
-                    "required": True,
-                    "value": {
-                        "key_id": "invalid-local-key" if wrong_key else service.access_key,
-                        "secret": service.secret_key,
-                        "region": "us-east-1",
-                        "endpoint": service.endpoint,
-                        "use_ssl": service.secure,
-                        "url_style": "path",
-                    },
-                }
-            ],
-        },
-    )
-
-
 def test_local_object_success_missing_and_auth_errors(
     rustfs_service: RustfsService, rustfs_bucket_name: str, tmp_path: Path
 ) -> None:
+    pytest.importorskip("obstore")
     bucket = rustfs_bucket_name
     key = f"duckdb-native-probe/{uuid4().hex}.parquet"
     path = tmp_path / "source.parquet"
@@ -202,14 +181,15 @@ def test_local_object_success_missing_and_auth_errors(
 def test_arrow_and_native_copy_replace_single_local_object(
     rustfs_service: RustfsService, rustfs_bucket_name: str, file_format: str
 ) -> None:
+    pytest.importorskip("obstore")
     bucket = rustfs_bucket_name
     alias = f"duckdb_copy_{uuid4().hex}"
     key = f"duckdb-copy-probe/{uuid4().hex}.{file_format}"
     options = rustfs_obstore_kwargs(rustfs_service)
     storage_registry.register_alias(alias, f"s3://{bucket}", backend="obstore", **options)
+    store = storage_registry.get(alias)
     config = _local_config(rustfs_service)
     uri = f"s3://{bucket}/{key}"
-    fs = rustfs_filesystem(rustfs_service)
     try:
         with config.provide_session() as session:
             for value in [1, 2]:
@@ -234,20 +214,22 @@ def test_arrow_and_native_copy_replace_single_local_object(
                 assert session.connection.execute(read_sql, [uri]).fetchall() == [(value,)]
     finally:
         config.close_pool()
-        fs.rm(f"{bucket}/{key}")
+        if store.exists_sync(key):
+            store.delete_sync(key)
         storage_registry.clear_cache(alias)
 
 
 def test_native_parquet_append_and_overwrite_fallback(
     rustfs_service: RustfsService, rustfs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    pytest.importorskip("obstore")
     bucket = rustfs_bucket_name
     alias = f"duckdb_import_{uuid4().hex}"
     key = f"duckdb-native-import/{uuid4().hex}.parquet"
     destination = f"alias://{alias}/{key}"
     storage_registry.register_alias(alias, f"s3://{bucket}", backend="obstore", **rustfs_obstore_kwargs(rustfs_service))
+    store = storage_registry.get(alias)
     config = _local_config(rustfs_service)
-    fs = rustfs_filesystem(rustfs_service)
 
     def reject_arrow(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("native append must not materialize Arrow")
@@ -269,8 +251,8 @@ def test_native_parquet_append_and_overwrite_fallback(
             assert session.connection.execute('SELECT * FROM "target space"').fetchall() == [(1, None)]
     finally:
         config.close_pool()
-        if fs.exists(f"{bucket}/{key}"):
-            fs.rm(f"{bucket}/{key}")
+        if store.exists_sync(key):
+            store.delete_sync(key)
         storage_registry.clear_cache(alias)
 
 
@@ -278,12 +260,13 @@ def test_native_parquet_append_and_overwrite_fallback(
 def test_native_export_does_not_materialize_arrow(
     rustfs_service: RustfsService, rustfs_bucket_name: str, file_format: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    pytest.importorskip("obstore")
     bucket = rustfs_bucket_name
     alias = f"duckdb_export_{uuid4().hex}"
     key = f"duckdb-native-export/{uuid4().hex}-quote'.{file_format}"
     storage_registry.register_alias(alias, f"s3://{bucket}", backend="obstore", **rustfs_obstore_kwargs(rustfs_service))
+    store = storage_registry.get(alias)
     config = _local_config(rustfs_service)
-    fs = rustfs_filesystem(rustfs_service)
 
     def reject_arrow(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("native export must not materialize Arrow")
@@ -320,6 +303,34 @@ def test_native_export_does_not_materialize_arrow(
             ]
     finally:
         config.close_pool()
-        if fs.exists(f"{bucket}/{key}"):
-            fs.rm(f"{bucket}/{key}")
+        if store.exists_sync(key):
+            store.delete_sync(key)
         storage_registry.clear_cache(alias)
+
+
+def _local_config(service: RustfsService, *, wrong_key: bool = False) -> DuckDBConfig:
+    return DuckDBConfig(
+        connection_config={
+            "database": f":memory:duckdb_storage_{uuid4().hex}",
+            "autoload_known_extensions": False,
+            "autoinstall_known_extensions": False,
+        },
+        driver_features={
+            "extensions": [{"name": "httpfs", "install": True, "required": True}],
+            "secrets": [
+                {
+                    "name": "local_storage",
+                    "secret_type": "s3",
+                    "required": True,
+                    "value": {
+                        "key_id": "invalid-local-key" if wrong_key else service.access_key,
+                        "secret": service.secret_key,
+                        "region": "us-east-1",
+                        "endpoint": service.endpoint,
+                        "use_ssl": service.secure,
+                        "url_style": "path",
+                    },
+                }
+            ],
+        },
+    )

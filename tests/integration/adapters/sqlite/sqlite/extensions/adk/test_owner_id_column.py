@@ -23,55 +23,6 @@ pytest.importorskip("google.adk")
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.sqlite, pytest.mark.integration]
 
 
-def _make_shared_memory_db_name() -> str:
-    """Generate unique shared memory database URI for each test."""
-    return f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=shared"
-
-
-def _create_tenants_table(config: SqliteConfig) -> None:
-    """Create a tenants reference table for FK testing."""
-    with config.provide_connection() as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS tenants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE
-            )
-        """)
-        conn.commit()
-
-
-def _insert_tenant(config: SqliteConfig, tenant_name: str) -> int | None:
-    """Insert a tenant and return its ID."""
-    with config.provide_connection() as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        cursor = conn.execute("INSERT INTO tenants (name) VALUES (?)", (tenant_name,))
-        tenant_id = cursor.lastrowid
-        conn.commit()
-        return tenant_id
-
-
-def _create_users_table(config: SqliteConfig) -> None:
-    """Create a users reference table for FK testing with TEXT primary key."""
-    with config.provide_connection() as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                email TEXT NOT NULL UNIQUE
-            )
-        """)
-        conn.commit()
-
-
-def _insert_user(config: SqliteConfig, username: str, email: str) -> None:
-    """Insert a user."""
-    with config.provide_connection() as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("INSERT INTO users (username, email) VALUES (?, ?)", (username, email))
-        conn.commit()
-
-
 @pytest.fixture
 def sqlite_config() -> SqliteConfig:
     """Provide unique shared in-memory SQLite config for each test.
@@ -391,3 +342,52 @@ def test_owner_id_with_default_value(
     assert session["id"] == session_id
     retrieved = store.get_session(app_name, user_id, session_id)
     assert retrieved is not None
+
+
+def _make_shared_memory_db_name() -> str:
+    """Generate unique shared memory database URI for each test."""
+    return f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=shared"
+
+
+def _create_tenants_table(config: SqliteConfig) -> None:
+    """Create a tenants reference table for FK testing."""
+    with config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tenants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE
+            )
+        """)
+        conn.commit()
+
+
+def _insert_tenant(config: SqliteConfig, tenant_name: str) -> int | None:
+    """Insert a tenant and return its ID."""
+    with config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        cursor = conn.execute("INSERT INTO tenants (name) VALUES (?)", (tenant_name,))
+        tenant_id = cursor.lastrowid
+        conn.commit()
+        return tenant_id
+
+
+def _create_users_table(config: SqliteConfig) -> None:
+    """Create a users reference table for FK testing with TEXT primary key."""
+    with config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE
+            )
+        """)
+        conn.commit()
+
+
+def _insert_user(config: SqliteConfig, username: str, email: str) -> None:
+    """Insert a user."""
+    with config.provide_connection() as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("INSERT INTO users (username, email) VALUES (?, ?)", (username, email))
+        conn.commit()

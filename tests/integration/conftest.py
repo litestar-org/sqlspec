@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import tests.integration.fixtures as fixtures_pkg
+from tests.fixtures.rustfs import ensure_rustfs_bucket
 
 if TYPE_CHECKING:
     from pytest_databases.docker.rustfs import RustfsService
@@ -65,8 +66,7 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(scope="session")
 def rustfs_bucket_name(rustfs_service: "RustfsService", rustfs_default_bucket_name: str) -> str:
     """Return the verified RustFS bucket used by S3-compatible integration tests."""
-    _ = rustfs_service
-    return rustfs_default_bucket_name
+    return ensure_rustfs_bucket(rustfs_service, rustfs_default_bucket_name)
 
 
 def _package_available(package: str) -> bool:
