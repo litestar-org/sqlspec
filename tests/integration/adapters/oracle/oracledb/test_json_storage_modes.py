@@ -10,13 +10,7 @@ from sqlspec.utils.serializers import to_json
 pytestmark = pytest.mark.xdist_group("oracle")
 
 
-async def _drop_table(driver: "OracleAsyncDriver", table_name: str) -> None:
-    await driver.execute_script(
-        f"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {table_name}'; "
-        "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-    )
-
-
+@pytest.mark.xdist_group("oracle_18c")
 async def test_non_native_json_session_uses_oracle_18c(oracle_18c_async_session: "OracleAsyncDriver") -> None:
     """The non-native JSON lane must run against the real Oracle 18c service."""
     major = await oracle_18c_async_session.select_value(
@@ -56,6 +50,7 @@ async def test_native_json_round_trip_matrix(oracle_async_session: "OracleAsyncD
         await _drop_table(oracle_async_session, table_name)
 
 
+@pytest.mark.xdist_group("oracle_18c")
 async def test_blob_is_json_round_trip_on_oracle_18c(oracle_18c_async_session: "OracleAsyncDriver") -> None:
     """Oracle 18c routes single and array-DML Python JSON through BLOB IS JSON storage."""
     table_name = "json_modes_blob"
@@ -86,6 +81,7 @@ async def test_blob_is_json_round_trip_on_oracle_18c(oracle_18c_async_session: "
         await _drop_table(oracle_18c_async_session, table_name)
 
 
+@pytest.mark.xdist_group("oracle_18c")
 async def test_clob_is_json_round_trip_on_oracle_18c(oracle_18c_async_session: "OracleAsyncDriver") -> None:
     """Explicit CLOB storage still receives metadata-driven JSON decoding."""
     table_name = "json_modes_clob"
@@ -106,3 +102,10 @@ async def test_clob_is_json_round_trip_on_oracle_18c(oracle_18c_async_session: "
         assert isinstance(row["payload"]["number"], float)
     finally:
         await _drop_table(oracle_18c_async_session, table_name)
+
+
+async def _drop_table(driver: "OracleAsyncDriver", table_name: str) -> None:
+    await driver.execute_script(
+        f"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {table_name}'; "
+        "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
