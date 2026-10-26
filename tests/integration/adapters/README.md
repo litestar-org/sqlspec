@@ -1,9 +1,9 @@
 # Database-Family Adapter Tests
 
 Integration tests are organized by the database being exercised: `sqlite/`, `mysql/`, `postgres/`,
-`cockroach/`, `oracle/`, `mssql/`, `duckdb/`, `bigquery/`, `spanner/`, and `gizmosql/`. Each family
-collects its portable cases from `test_shared.py` and keeps irreducible driver behavior below
-`<family>/<driver>/`.
+`cockroach/`, `oracle/`, `mssql/`, `db2/`, `duckdb/`, `bigquery/`, `spanner/`, `gizmosql/`, and
+`snowflake/`. Each family collects its portable cases from `test_shared.py` and keeps irreducible
+driver behavior below `<family>/<driver>/`.
 
 Reusable test templates, behaviors, cases, assertions, and schema inputs live in the non-collected
 `_shared/` package. A behavior is implemented once and parametrized over every capable driver, while
@@ -208,16 +208,19 @@ Current residual inventory:
 
 | Area | Local files | Why they stay local |
 | --- | --- | --- |
-| Oracle type handlers | `oracle/oracledb/test_msgspec_clob.py`, `test_numpy_vectors.py`, `test_smart_lob_coercion.py`, `test_sparse_vectors.py`, `test_uuid_binary.py` | Oracle-specific LOB/CLOB/BLOB hydration, NumPy/vector type handlers, sparse vector passthrough, and RAW/VARCHAR UUID coexistence. Portable vector, UUID, result, JSON, PL/SQL, and StatementStack behavior is contract-owned. |
-| Oracle direct/load/driver specifics | `oracle/oracledb/test_direct_path_load.py`, `test_driver.py`, `test_execute_many.py`, `test_features.py`, `test_migrations.py` | Direct-path loading, shared sync/async Oracle locking behavior, native pool protocols, and Oracle-specific migration/feature surfaces that do not generalize without adapter-name conditionals. |
-| ADBC backend residuals | `sqlite/adbc/`, `duckdb/adbc/`, `postgres/adbc/`, `bigquery/adbc/` | Raw ADBC connection metadata, backend-native SQL, dialect fallback, and backend-specific recovery. The non-collected implementation lives in `_shared/adbc_*.py`; each database family imports only its own tests. |
-| GizmoSQL ADBC | `gizmosql/adbc/` | GizmoSQL FlightSQL service behavior, result streams, Arrow storage, migration, and dictionary behavior. |
-| BigQuery cloud/analytics specifics | `bigquery/bigquery/test_arrow.py`, `test_config.py`, `test_driver.py`, `test_parameter_variants.py`, `test_vector_functions.py` | Emulator/native BigQuery project-dataset setup, job controls, parameter forms, and vector/analytics behavior beyond the active BigQuery contract case. |
-| Spanner GoogleSQL | `spanner/spanner/test_arrow.py`, `test_batch_write_api.py`, `test_bytes_direct.py`, `test_crud_operations.py`, `test_driver.py`, `test_exceptions.py`, `test_execute_many.py`, `test_explain.py`, `test_load_from_arrow_mutations.py`, `test_parameter_variants.py`, `test_session_defaults.py` | Spanner needs admin-API DDL, separate read/write sessions, SDK BYTES encoding, mutation transports, and `query_mode=PLAN`; it remains deferred until the contract table fixture can preserve those semantics safely. |
-| Spangres placeholders | `spanner/spanner/test_spangres_driver.py`, `test_spangres_parameter_styles.py` | Runtime Spangres coverage needs PostgreSQL-dialect Spanner fixtures that do not exist yet. The files keep only executable dialect/default-style documentation assertions. |
-| Google Cloud asyncpg connectors | `postgres/asyncpg/test_cloud_connectors.py` | Cloud SQL and AlloyDB connector authentication, IAM, private-IP, and instance URI setup require real Google Cloud instances; shared contracts cover PostgreSQL behavior after a pool exists. |
-| PostgreSQL-family driver quirks | `postgres/asyncpg/test_driver.py`, `postgres/psqlpy/test_driver.py`, `postgres/psycopg/test_driver.py`, `postgres/psycopg/test_async_copy.py`, `*/extensions/events/test_listen_notify.py` | Driver-specific cursor/prepared statement/COPY behavior plus native LISTEN/NOTIFY concurrency and durable-hybrid regressions. Portable native delivery, metadata, backend selection, and ack behavior is contract-owned. |
-| Adapter extension storage details | `*/extensions/adk/test_owner_id_column.py`, `*/extensions/adk/test_memory_store.py`, `*/extensions/litestar/test_numpy_serialization.py`, `spanner/spanner/extensions/adk/test_adk_store.py`, `spanner/spanner/extensions/litestar/test_store.py`, `spanner/spanner/extensions/events/test_queue_backend.py` | Extension storage/serialization details and Spanner extension stores that need adapter-specific DDL/session fixtures; generic ADK/events/Litestar behavior is handled by the extension contracts for active cases. |
+| Oracle type handlers | `oracle/oracledb/test_json_storage_modes.py`, `oracle/oracledb/test_lob_fetch_parity.py`, `oracle/oracledb/test_msgspec_clob.py`, `oracle/oracledb/test_numpy_vectors.py`, `oracle/oracledb/test_smart_lob_coercion.py`, `oracle/oracledb/test_sparse_vectors.py`, `oracle/oracledb/test_uuid_binary.py` | Oracle-specific LOB/CLOB/BLOB hydration, 18c vs 23ai JSON storage rungs, NumPy/vector type handlers, sparse vector passthrough, and RAW/VARCHAR UUID coexistence. Portable vector, UUID, result, JSON, PL/SQL, and StatementStack behavior is contract-owned. |
+| Oracle direct/load/driver & ADB wallet | `oracle/oracledb/test_adb_wallet.py`, `oracle/oracledb/test_direct_path_load.py`, `oracle/oracledb/test_driver.py`, `oracle/oracledb/test_execute_many.py`, `oracle/oracledb/test_features.py`, `oracle/oracledb/test_migrations.py`, `oracle/oracledb/test_stack_transaction.py` | Autonomous Database Free 23ai mTLS `wallet_zip` (`ewallet.p12` to `ewallet.pem`) and `DBMS_CLOUD` checks, direct-path loading, shared sync/async Oracle locking behavior, native pool protocols, and Oracle-specific migration/feature surfaces. |
+| ADBC backend residuals | `sqlite/adbc/`, `duckdb/adbc/`, `postgres/adbc/`, `bigquery/adbc/`, `oracle/adbc/test_adbc_oracle.py`, `db2/adbc/test_adbc_db2.py`, `snowflake/adbc/test_adbc_snowflake.py` | Raw ADBC connection metadata, pure-Go enterprise ADBC drivers (`adbc-driver-oracle`, `adbc-driver-db2`, `adbc-driver-snowflake`), backend-native SQL, dialect fallback, and backend-specific recovery. Shared helpers live in `_shared/adbc_*.py`; each database family imports only its own tests. |
+| GizmoSQL ADBC | `gizmosql/adbc/` | GizmoSQL FlightSQL service behavior (`gizmosql_service` and `gizmosql_sqlite_service`), result streams, Arrow storage, migration, and dictionary behavior. |
+| IBM Db2 adapter residuals | `db2/test_adapter.py` | Db2 Community Edition catalog, CLI connection-keyword normalization, and dialect-specific lock/register behavior. |
+| MySQL & MariaDB residuals | `mysql/test_adk_residuals.py`, `mysql/test_column_metadata.py`, `mysql/test_features.py`, `mysql/test_mariadb.py`, `mysql/test_table_fixtures.py` | Consolidated MySQL ADK schema/precision/foreign-key residuals across all MySQL drivers, MariaDB 11.8 (`mariadb_118_service`) compatibility, and MySQL table-fixture/column-metadata details. |
+| CockroachDB residuals | `cockroach/test_column_metadata.py`, `cockroach/test_native_storage.py`, `cockroach/test_native_storage_capabilities.py`, `cockroach/test_retry.py`, `cockroach/test_table_fixtures.py` | CockroachDB `40001` serialization-failure retry isolation, native external storage bridges, and `unique_rowid()` sequence/metadata behavior. |
+| BigQuery cloud/analytics specifics | `bigquery/bigquery/test_arrow.py`, `bigquery/bigquery/test_config.py`, `bigquery/bigquery/test_driver.py`, `bigquery/bigquery/test_native_export.py`, `bigquery/bigquery/test_parameter_variants.py`, `bigquery/bigquery/test_vector_functions.py` | Emulator/native BigQuery project-dataset setup, native storage export, job controls, parameter forms, and vector/analytics behavior beyond the active BigQuery contract case. |
+| Spanner GoogleSQL | `spanner/spanner/test_arrow.py`, `spanner/spanner/test_async_driver.py`, `spanner/spanner/test_batch_write_api.py`, `spanner/spanner/test_crud_operations.py`, `spanner/spanner/test_driver.py`, `spanner/spanner/test_exceptions.py`, `spanner/spanner/test_execute_many.py`, `spanner/spanner/test_explain.py`, `spanner/spanner/test_load_from_arrow_mutations.py`, `spanner/spanner/test_parameter_variants.py`, `spanner/spanner/test_returning.py`, `spanner/spanner/test_session_defaults.py`, `spanner/spanner/test_transactions.py` | Spanner needs admin-API DDL, separate read/write sessions, SDK BYTES encoding, mutation transports, and `query_mode=PLAN`; it remains deferred until the contract table fixture can preserve those semantics safely. |
+| Spangres placeholders | `spanner/spanner/test_spangres_driver.py`, `spanner/spanner/test_spangres_parameter_styles.py` | Runtime Spangres coverage needs PostgreSQL-dialect Spanner fixtures that do not exist yet. The files keep only executable dialect/default-style documentation assertions. |
+| Google Cloud asyncpg & AlloyDB Omni | `postgres/asyncpg/test_cloud_connectors.py`, `postgres/test_alloydb_omni.py` | Cloud SQL and AlloyDB connector authentication plus AlloyDB Omni 18 (`alloydb_omni_18_service`) `enable_alloydb_columnar` session GUC verification across `asyncpg`, `psycopg`, and `psqlpy`. |
+| PostgreSQL-family driver quirks | `postgres/asyncpg/test_driver.py`, `postgres/psqlpy/test_driver.py`, `postgres/psycopg/test_driver.py`, `postgres/psycopg/test_async_copy.py`, `postgres/*/extensions/events/test_listen_notify.py` | Driver-specific cursor/prepared statement/COPY behavior plus native LISTEN/NOTIFY concurrency and durable-hybrid regressions. Portable native delivery, metadata, backend selection, and ack behavior is contract-owned. |
+| Adapter extension storage details | `*/*/extensions/adk/test_owner_id_column.py`, `*/*/extensions/adk/test_memory_store.py`, `sqlite/aiosqlite/extensions/litestar/test_numpy_serialization.py`, `spanner/spanner/extensions/adk/test_adk_artifact_store.py`, `spanner/spanner/extensions/adk/test_adk_store.py`, `spanner/spanner/extensions/litestar/test_store.py`, `spanner/spanner/extensions/events/test_queue_backend.py` | Extension storage/serialization details and Spanner extension stores (including GCS-backed ADK artifact version tracking against `floci_gcp_service`) that need adapter-specific DDL/session fixtures; generic ADK/events/Litestar behavior is handled by the extension contracts for active cases. |
 
 ## Adding A Case
 
@@ -237,13 +240,30 @@ Current residual inventory:
 # One database family
 uv run pytest tests/integration/adapters/sqlite
 
-# All shared family cases (service containers start through pytest-databases)
-uv run pytest tests/integration/adapters/*/test_shared.py
+# All shared family cases (service containers start through clientless pytest-databases)
+uv run pytest -n 2 --dist=loadgroup tests/integration/adapters/*/test_shared.py
+
+# Service-group integration shards (matching CI test-integration matrix)
+make test-integration-postgres-cockroach
+make test-integration-mysql-mariadb-embedded
+make test-integration-oracle
+make test-integration-mssql-db2
+make test-integration-cloud-adbc-storage
 ```
 
-Service-backed adapters keep their opt-in marks and xdist groups when they move from deferred to
-active rows. BigQuery integration runs in CI by default; local runs require
-`SQLSPEC_ENABLE_BIGQUERY_TESTS=1` and `--run-bigquery-tests`.
+`tests/integration/conftest.py` registers clientless `pytest_databases.docker.*` service plugins and
+imports only `tests/integration/fixtures/<family>.py` plugins whose required Python driver packages
+resolve through `_FIXTURE_DRIVER_REQUIREMENTS`.
 
-`suite_case_metadata_contract.py` includes a no-orphan guard for files removed by consolidation, so
-shared behavior cannot silently reappear in driver-local files.
+Under `pytest-xdist` (`--dist=loadgroup`), `tests/integration/adapters/conftest.py` normalizes each
+collected item to a single `xdist_group`: items carrying a dedicated secondary-container marker in
+`_PRESERVED_CONTAINER_XDIST_GROUPS` (`alloydb`, `gizmosql_sqlite`, `mariadb`, `oracle_18c`,
+`oracle_adb`, `paradedb`, `pgvector`, `snowflake`) keep that container group, while all other items
+group under their database family.
+
+BigQuery and Spanner emulator suites run automatically in CI (`CI=true`). Local runs opt in with
+either `--run-bigquery-tests` or `SQLSPEC_ENABLE_BIGQUERY_TESTS=1` for BigQuery, and either
+`--run-spanner-tests` or `SQLSPEC_ENABLE_SPANNER_TESTS=1` for Spanner.
+
+`suite_case_metadata_contract.py` includes a no-orphan guard (`CONTRACT_OWNED_REMOVED_TEST_PATHS`)
+for files removed by consolidation, so shared behavior cannot silently reappear in driver-local files.
