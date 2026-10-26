@@ -278,17 +278,17 @@ jobs:
         include:
           - shard: postgres-cockroach
             install_odbc: false
-            images: "postgres:18 pgvector/pgvector:pg18 paradedb/paradedb:latest-pg18 cockroachdb/cockroach:latest rustfs/rustfs:latest rustfs/rc:latest"
+            images: "postgres:18 pgvector/pgvector:pg18 paradedb/paradedb:latest-pg18 cockroachdb/cockroach:latest rustfs/rustfs:latest rustfs/rc:latest gcr.io/alloydb-omni/alloydbomni:18"
             pytest_targets: "tests/integration/adapters/postgres tests/integration/adapters/cockroach tests/integration/extensions tests/integration/observability"
             extra_pytest_flags: ""
           - shard: mysql-mariadb-embedded
             install_odbc: false
-            images: "mysql:8.4 rustfs/rustfs:latest rustfs/rc:latest"
+            images: "mysql:8.4 rustfs/rustfs:latest rustfs/rc:latest mariadb:11.8"
             pytest_targets: "tests/integration/adapters/mysql tests/integration/adapters/sqlite tests/integration/adapters/duckdb tests/integration/cli tests/integration/migrations"
             extra_pytest_flags: ""
           - shard: oracle
             install_odbc: false
-            images: "gvenzl/oracle-xe:18-slim-faststart gvenzl/oracle-free:23-slim-faststart"
+            images: "gvenzl/oracle-xe:18-slim-faststart gvenzl/oracle-free:23-slim-faststart container-registry.oracle.com/database/adb-free:latest-23ai"
             pytest_targets: "tests/integration/adapters/oracle"
             extra_pytest_flags: ""
           - shard: mssql-db2
@@ -298,8 +298,8 @@ jobs:
             extra_pytest_flags: ""
           - shard: cloud-adbc-storage
             install_odbc: false
-            images: "ghcr.io/goccy/bigquery-emulator:latest gcr.io/cloud-spanner-emulator/emulator:latest gizmodata/gizmosql:latest rustfs/rustfs:latest rustfs/rc:latest"
-            pytest_targets: "tests/integration/adapters/bigquery tests/integration/adapters/spanner tests/integration/adapters/gizmosql tests/integration/storage"
+            images: "ghcr.io/goccy/bigquery-emulator:latest gcr.io/cloud-spanner-emulator/emulator:latest gizmodata/gizmosql:latest rustfs/rustfs:latest rustfs/rc:latest floci/floci-gcp:latest floci/floci:latest mcr.microsoft.com/azure-storage/azurite:latest embucket/embucket:latest"
+            pytest_targets: "tests/integration/adapters/bigquery tests/integration/adapters/spanner tests/integration/adapters/gizmosql tests/integration/storage tests/integration/adapters/snowflake"
             extra_pytest_flags: "--run-bigquery-tests --run-spanner-tests"
     timeout-minutes: 30
     steps:

@@ -16,7 +16,7 @@ SHARD_POSTGRES_COCKROACH := tests/integration/adapters/postgres tests/integratio
 SHARD_MYSQL_MARIADB_EMBEDDED := tests/integration/adapters/mysql tests/integration/adapters/sqlite tests/integration/adapters/duckdb tests/integration/cli tests/integration/migrations
 SHARD_ORACLE := tests/integration/adapters/oracle
 SHARD_MSSQL_DB2 := tests/integration/adapters/mssql tests/integration/adapters/db2
-SHARD_CLOUD_ADBC_STORAGE := tests/integration/adapters/bigquery tests/integration/adapters/spanner tests/integration/adapters/gizmosql tests/integration/storage
+SHARD_CLOUD_ADBC_STORAGE := tests/integration/adapters/bigquery tests/integration/adapters/spanner tests/integration/adapters/gizmosql tests/integration/storage tests/integration/adapters/snowflake
 
 # -----------------------------------------------------------------------------
 # Display Formatting and Colors
@@ -216,7 +216,7 @@ test-integration-mssql-db2:                         ## Run SQL Server and Db2 in
 	@echo "${OK} mssql-db2 integration shard complete ✨"
 
 .PHONY: test-integration-cloud-adbc-storage
-test-integration-cloud-adbc-storage:                ## Run BigQuery, Spanner, GizmoSQL, and storage shard
+test-integration-cloud-adbc-storage:                ## Run BigQuery, Spanner, GizmoSQL, Snowflake, and storage shard
 	@echo "${INFO} Running cloud-adbc-storage integration shard... 🧪"
 	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup --run-bigquery-tests --run-spanner-tests $(SHARD_CLOUD_ADBC_STORAGE)
 	@echo "${OK} cloud-adbc-storage integration shard complete ✨"
