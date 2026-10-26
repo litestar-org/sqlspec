@@ -711,10 +711,15 @@ async def _assert_cloud_backend_operations(backend: "ObjectStoreProtocol", prefi
     backend.write_bytes_sync(sync_path, TEST_BINARY_CONTENT)
     assert backend.exists_sync(sync_path) is True
     assert backend.read_bytes_sync(sync_path) == TEST_BINARY_CONTENT
+    sync_meta = backend.get_metadata_sync(sync_path)
+    assert sync_meta["size"] == len(TEST_BINARY_CONTENT)
 
-    await backend.write_bytes_async(async_path, TEST_TEXT_CONTENT.encode("utf-8"))
+    encoded_text = TEST_TEXT_CONTENT.encode("utf-8")
+    await backend.write_bytes_async(async_path, encoded_text)
     assert await backend.exists_async(async_path) is True
-    assert await backend.read_bytes_async(async_path) == TEST_TEXT_CONTENT.encode("utf-8")
+    assert await backend.read_bytes_async(async_path) == encoded_text
+    async_meta = await backend.get_metadata_async(async_path)
+    assert async_meta["size"] == len(encoded_text)
 
     backend.copy_sync(sync_path, copy_path)
     assert backend.exists_sync(copy_path) is True

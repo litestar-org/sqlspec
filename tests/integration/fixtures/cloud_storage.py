@@ -4,7 +4,7 @@ import contextlib
 import email.utils
 import http.client
 import http.server
-import os
+import importlib
 import threading
 import time
 import urllib.error
@@ -16,11 +16,9 @@ import pytest
 from pytest_databases.docker.floci import FlociGCPService
 from pytest_databases.helpers import get_xdist_worker_num
 
-from sqlspec.utils.module_loader import import_optional, import_optional_attr
+from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json
 from tests.fixtures.rustfs import ensure_s3_bucket
-
-os.environ.setdefault("GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT", "false")
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -36,9 +34,6 @@ if TYPE_CHECKING:
 else:
     FSSpecBackend = import_optional_attr("sqlspec.storage.backends.fsspec", "FSSpecBackend")
     ObStoreBackend = import_optional_attr("sqlspec.storage.backends.obstore", "ObStoreBackend")
-
-fsspec_module: Any = import_optional("fsspec")
-CoreGCSFileSystem: Any = import_optional_attr("gcsfs.core", "GCSFileSystem")
 
 FLOCI_GCP_GATEWAY_PORT = 4588
 
@@ -118,13 +113,18 @@ def floci_gcs_obstore(floci_gcp_service: "FlociGCPService", floci_gcs_bucket_nam
 
 
 @pytest.fixture
-def floci_gcs_fsspec(floci_gcp_service: "FlociGCPService", floci_gcs_bucket_name: str) -> "ObjectStoreProtocol":
+def floci_gcs_fsspec(
+    floci_gcp_service: "FlociGCPService", floci_gcs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
+) -> "ObjectStoreProtocol":
     """Provide an FSSpecBackend connected to the Floci GCP Storage emulator."""
     pytest.importorskip("fsspec")
     pytest.importorskip("gcsfs")
-    if fsspec_module is not None and CoreGCSFileSystem is not None:
-        fsspec_module.register_implementation("gs", CoreGCSFileSystem, clobber=True)
-        fsspec_module.register_implementation("gcs", CoreGCSFileSystem, clobber=True)
+    monkeypatch.setenv("GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT", "false")
+    core_gcs_fs: Any = import_optional_attr("gcsfs.core", "GCSFileSystem")
+    fsspec_registry_mod: Any = importlib.import_module("fsspec.registry")
+    if core_gcs_fs is not None:
+        monkeypatch.setitem(fsspec_registry_mod._registry, "gs", core_gcs_fs)
+        monkeypatch.setitem(fsspec_registry_mod._registry, "gcs", core_gcs_fs)
     return FSSpecBackend(f"gs://{floci_gcs_bucket_name}", token="anon", endpoint_url=floci_gcp_service.endpoint_url)
 
 
@@ -285,7 +285,8 @@ class _FlociGCSHeaderProxyHandler(http.server.BaseHTTPRequestHandler):
                 headers["Content-Length"] = "0"
                 return "POST", copy_path, headers
         headers = {key: val for key, val in self.headers.items() if key.lower() not in excluded_headers}
-        return self.command, self.path, headers
+        upstream_method = "GET" if self.command == "HEAD" else self.command
+        return upstream_method, self.path, headers
 
     @staticmethod
     def _extract_etag(response_body: bytes) -> str:

@@ -47,6 +47,7 @@ __all__ = (
     "oracle_connection_config",
     "oracle_sync_config",
     "oracle_sync_session",
+    "resolve_oracle_adb_mtls_alias",
 )
 
 
@@ -234,6 +235,24 @@ async def oracle_adb_async_config(
         await config.close_pool()
 
 
+def resolve_oracle_adb_mtls_alias(oracle_adb_service: OracleADBService, wallet_dir: "Path") -> str:
+    """Select an mTLS TCPS alias from the extracted ADB wallet tnsnames.ora."""
+    entries = parse_tnsnames_ora(wallet_dir / "tnsnames.ora")
+    candidates = (
+        oracle_adb_service.service_name.lower(),
+        oracle_adb_service.service_name.lower().split(".", 1)[0],
+        *(alias.lower() for alias in oracle_adb_service.service_names),
+    )
+    for candidate in candidates:
+        descriptor = entries.get(candidate, "")
+        if "tcps" in descriptor.lower():
+            return candidate
+    for alias, descriptor in entries.items():
+        if "tcps" in descriptor.lower():
+            return alias
+    return oracle_adb_service.service_names[0]
+
+
 def _oracle_pool_params(oracle_service: OracleService) -> "OraclePoolParams":
     return cast(
         "OraclePoolParams",
@@ -254,7 +273,7 @@ def _oracle_pool_params(oracle_service: OracleService) -> "OraclePoolParams":
 def _oracle_adb_pool_params(
     oracle_adb_service: OracleADBService, wallet_dir: "Path", wallet_zip_path: "Path"
 ) -> "OraclePoolParams":
-    tns_alias = _resolve_oracle_adb_mtls_alias(oracle_adb_service, wallet_dir)
+    tns_alias = resolve_oracle_adb_mtls_alias(oracle_adb_service, wallet_dir)
     return cast(
         "OraclePoolParams",
         {
@@ -269,23 +288,6 @@ def _oracle_adb_pool_params(
             "retry_delay": 1,
         },
     )
-
-
-def _resolve_oracle_adb_mtls_alias(oracle_adb_service: OracleADBService, wallet_dir: "Path") -> str:
-    entries = parse_tnsnames_ora(wallet_dir / "tnsnames.ora")
-    candidates = (
-        oracle_adb_service.service_name.lower(),
-        oracle_adb_service.service_name.lower().split(".", 1)[0],
-        *(alias.lower() for alias in oracle_adb_service.service_names),
-    )
-    for candidate in candidates:
-        descriptor = entries.get(candidate, "")
-        if "tcps" in descriptor.lower():
-            return candidate
-    for alias, descriptor in entries.items():
-        if "tcps" in descriptor.lower():
-            return alias
-    return oracle_adb_service.service_names[0]
 
 
 def _load_or_synthesize_adb_p12_bytes(wallet_dir: "Path", wallet_password: str) -> bytes:

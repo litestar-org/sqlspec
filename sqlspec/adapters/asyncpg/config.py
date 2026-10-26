@@ -351,11 +351,12 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             features_dict["pgbouncer_mode"] = True
             if features_dict.get("pooler_mode") in {None, "session", "auto"}:
                 features_dict["pooler_mode"] = "transaction"
-        if features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
+        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
             features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
-        ):
+        )
+        if is_transaction_pooler:
             normalized_conn_cfg.setdefault("statement_cache_size", 0)
-        if bool(features_dict.get("enable_alloydb_columnar", False)) and features_dict.get("pooler_mode") == "session":
+        if bool(features_dict.get("enable_alloydb_columnar", False)) and not is_transaction_pooler:
             merged_settings = dict(self._explicit_server_settings) if self._explicit_server_settings is not None else {}
             merged_settings.setdefault("google_columnar_engine.enable_columnar_scan", "on")
             normalized_conn_cfg["server_settings"] = merged_settings

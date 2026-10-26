@@ -478,6 +478,21 @@ async def test_asyncpg_columnar_engine_session_vs_transaction() -> None:
         "google_columnar_engine.enable_columnar_scan": "on",
     }
 
+    auto_direct_config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test"},
+        driver_features={"pooler_mode": "auto", "enable_alloydb_columnar": True},
+    )
+    assert auto_direct_config.connection_config["server_settings"] == {
+        "google_columnar_engine.enable_columnar_scan": "on"
+    }
+
+    auto_pgbouncer_config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test"},
+        driver_features={"pooler_mode": "auto", "pgbouncer": True, "enable_alloydb_columnar": True},
+    )
+    assert auto_pgbouncer_config.driver_features["pooler_mode"] == "transaction"
+    assert "server_settings" not in auto_pgbouncer_config.connection_config
+
     tx_config = AsyncpgConfig(
         connection_config={"dsn": "postgresql://localhost/test"},
         driver_features={"pooler_mode": "transaction", "enable_alloydb_columnar": True},

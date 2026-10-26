@@ -285,7 +285,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        if bool(features_dict.get("enable_alloydb_columnar", False)) and features_dict.get("pooler_mode") == "session":
+        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
+            features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
+        )
+        if bool(features_dict.get("enable_alloydb_columnar", False)) and not is_transaction_pooler:
             columnar_opt = "-c google_columnar_engine.enable_columnar_scan=on"
             existing_options = connection_config.get("options")
             if isinstance(existing_options, str) and existing_options.strip():

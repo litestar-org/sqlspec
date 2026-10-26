@@ -748,6 +748,34 @@ async def test_psycopg_enable_alloydb_columnar_and_derive_direct_config() -> Non
     assert "-c google_columnar_engine.enable_columnar_scan=on" in session_sync.connection_config["options"]
     assert session_sync.derive_direct_config() is session_sync
 
+    auto_sync = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://localhost/db"},
+        driver_features={"enable_alloydb_columnar": True, "pooler_mode": "auto"},
+    )
+    assert "-c google_columnar_engine.enable_columnar_scan=on" in auto_sync.connection_config["options"]
+
+    auto_pgbouncer_sync = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://pooler:6432/db"},
+        driver_features={"enable_alloydb_columnar": True, "pooler_mode": "auto", "pgbouncer": True},
+    )
+    assert auto_pgbouncer_sync.driver_features["pooler_mode"] == "transaction"
+    assert auto_pgbouncer_sync.driver_features["pgbouncer"] is True
+    assert auto_pgbouncer_sync.driver_features["pgbouncer_mode"] is True
+    assert "options" not in auto_pgbouncer_sync.connection_config
+    assert auto_pgbouncer_sync.connection_config["prepare_threshold"] is None
+
+    with pytest.raises(ImproperConfigurationError, match="Invalid pooler_mode"):
+        PsycopgSyncConfig(
+            connection_config={"conninfo": "postgresql://localhost/db"},
+            driver_features=cast("Any", {"pooler_mode": "invalid"}),
+        )
+
+    with pytest.raises(ImproperConfigurationError, match="Invalid pooler_mode"):
+        PsycopgAsyncConfig(
+            connection_config={"conninfo": "postgresql://localhost/db"},
+            driver_features=cast("Any", {"pooler_mode": "invalid"}),
+        )
+
     txn_sync = PsycopgSyncConfig(
         connection_config={"conninfo": "postgresql://pooler:6432/db"},
         driver_features={

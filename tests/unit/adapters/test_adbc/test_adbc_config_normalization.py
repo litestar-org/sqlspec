@@ -773,6 +773,15 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
     assert cursor.execute.call_count == 4
     assert cursor.executemany.call_count == 5
 
+    class _ArrowStreamStub:
+        def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+            return requested_schema
+
+    arrow_stream = _ArrowStreamStub()
+    AdbcDriver._execute_db2_non_query(cursor, "INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
+    assert cursor.executemany.call_count == 6
+    assert cursor.executemany.call_args_list[5].args == ("INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
+
 
 def _resolve_driver_name(config: AdbcConfig) -> str:
     """Resolve driver name from configuration."""

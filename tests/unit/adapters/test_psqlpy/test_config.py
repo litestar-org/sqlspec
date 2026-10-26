@@ -1,6 +1,6 @@
 """Psqlpy configuration tests covering statement config builders."""
 
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,6 +15,7 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 class _ExtensionQueryResult:
@@ -327,6 +328,25 @@ async def test_psqlpy_derive_direct_config_and_columnar_engine() -> None:
     """derive_direct_config and enable_alloydb_columnar should configure session and transaction modes."""
     base_config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
     assert base_config.derive_direct_config() is base_config
+
+    auto_direct_config = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://localhost:5432/test"},
+        driver_features={"pooler_mode": "auto", "enable_alloydb_columnar": True},
+    )
+    assert auto_direct_config.connection_config["options"] == "-c google_columnar_engine.enable_columnar_scan=on"
+
+    auto_pgbouncer_config = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://pooler:6432/test"},
+        driver_features={"pooler_mode": "auto", "pgbouncer": True, "enable_alloydb_columnar": True},
+    )
+    assert auto_pgbouncer_config.driver_features["pooler_mode"] == "transaction"
+    assert "options" not in auto_pgbouncer_config.connection_config
+
+    with pytest.raises(ImproperConfigurationError, match="Invalid pooler_mode"):
+        PsqlpyConfig(
+            connection_config={"dsn": "postgresql://localhost:5432/test"},
+            driver_features=cast("Any", {"pooler_mode": "invalid"}),
+        )
 
     pooled_config = PsqlpyConfig(
         connection_config={"dsn": "postgresql://pooler:6432/test"},

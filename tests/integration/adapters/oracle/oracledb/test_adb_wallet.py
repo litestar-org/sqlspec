@@ -7,8 +7,8 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OraclePoolParams, OracleSyncConfig
-from sqlspec.adapters.oracledb.core import parse_tnsnames_ora
 from sqlspec.exceptions import SQLSpecError
+from tests.integration.fixtures.oracle import resolve_oracle_adb_mtls_alias
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -58,7 +58,7 @@ def test_oracle_adb_extracted_wallet_dir_service_name(
     oracle_adb_service: "OracleADBService", oracle_adb_wallet_dir: "Path"
 ) -> None:
     """Verify direct extracted wallet directory connection using TNS alias resolution."""
-    tns_alias = _resolve_mtls_alias(oracle_adb_service, oracle_adb_wallet_dir)
+    tns_alias = resolve_oracle_adb_mtls_alias(oracle_adb_service, oracle_adb_wallet_dir)
     config = OracleSyncConfig(
         connection_config=OraclePoolParams(
             dsn=tns_alias,
@@ -106,21 +106,3 @@ def test_oracle_adb_dbms_cloud_capability_probe(oracle_adb_sync_config: OracleSy
                 assert "DBMS_CLOUD" in error_text or "ORA-" in error_text or "PLS-" in error_text
         finally:
             driver.execute(f"DROP TABLE {table_name} PURGE")
-
-
-def _resolve_mtls_alias(oracle_adb_service: "OracleADBService", wallet_dir: "Path") -> str:
-    """Select an mTLS TCPS alias from the extracted ADB wallet tnsnames.ora."""
-    entries = parse_tnsnames_ora(wallet_dir / "tnsnames.ora")
-    candidates = (
-        oracle_adb_service.service_name.lower(),
-        oracle_adb_service.service_name.lower().split(".", 1)[0],
-        *(alias.lower() for alias in oracle_adb_service.service_names),
-    )
-    for candidate in candidates:
-        descriptor = entries.get(candidate, "")
-        if "tcps" in descriptor.lower():
-            return candidate
-    for alias, descriptor in entries.items():
-        if "tcps" in descriptor.lower():
-            return alias
-    return oracle_adb_service.service_names[0]

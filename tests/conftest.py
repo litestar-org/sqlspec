@@ -78,12 +78,14 @@ def should_run_optional_cloud_suite(cli_enabled: bool, env_var: str) -> bool:
 
 
 def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
-    """Skip optional adapter unit trees before importing unavailable dependencies."""
+    """Skip optional adapter trees before importing unavailable dependencies."""
     _ = config
     path = str(collection_path)
     if "tests/unit/adapters/test_mssql_python" in path and not _module_is_available("mssql_python"):
         return True
     if "tests/unit/adapters/test_spanner" in path and not _module_is_available("google.cloud.spanner_v1"):
+        return True
+    if "tests/integration/adapters/oracle/oracledb" in path and not _module_is_available("oracledb"):
         return True
     return None
 
