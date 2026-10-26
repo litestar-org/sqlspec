@@ -469,6 +469,8 @@ def driver_from_uri(uri: str) -> "str | None":
     for prefix, driver_path in _URI_PREFIX_DRIVER:
         if lowered.startswith(prefix):
             return driver_path
+    if _parse_db2_cli_dsn(uri) is not None:
+        return "adbc_driver_db2.dbapi.connect"
     return None
 
 
@@ -504,7 +506,7 @@ def driver_kind_from_uri(uri: str) -> "str | None":
         return "quack"
     if lowered.startswith("oracle://"):
         return "oracle"
-    if lowered.startswith("db2://"):
+    if lowered.startswith("db2://") or _parse_db2_cli_dsn(uri) is not None:
         return "db2"
     for prefix, driver_path in _URI_PREFIX_DRIVER:
         if lowered.startswith(prefix):
@@ -627,7 +629,7 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
             return "mssql"
         if lowered_uri.startswith("oracle://"):
             return "oracle"
-        if lowered_uri.startswith("db2://"):
+        if lowered_uri.startswith("db2://") or _parse_db2_cli_dsn(uri) is not None:
             return "db2"
         if driver_name is None and lowered_uri.startswith("grpc+tls://"):
             return "duckdb"
@@ -713,6 +715,8 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if isinstance(uri, str) and driver_kind == "duckdb" and uri.lower().startswith("duckdb://"):
         config["path"] = uri[9:]
         config.pop("uri", None)
+    if isinstance(uri, str) and driver_kind == "db2" and not uri.lower().startswith("db2://"):
+        _normalize_db2_cli_dsn(config, uri)
 
     legacy_entrypoint = config.pop("adbc_driver_manager_entrypoint", None)
     if legacy_entrypoint is not None:
@@ -2023,6 +2027,71 @@ def _lift_driver_specific_db_kwargs(
                 db_kwargs_dict.setdefault(field, config.pop(field))
         if db_kwargs_dict:
             config["db_kwargs"] = db_kwargs_dict
+
+
+def _parse_db2_cli_dsn(uri: str) -> "dict[str, str] | None":
+    """Parse a semicolon-delimited IBM Db2 CLI keyword DSN when valid."""
+    if "://" in uri or ";" not in uri:
+        return None
+    parsed: dict[str, str] = {}
+    for raw_segment in uri.split(";"):
+        segment = raw_segment.strip()
+        if not segment or "=" not in segment:
+            continue
+        key, value = segment.split("=", 1)
+        normalized_key = key.strip().lower()
+        normalized_val = value.strip()
+        if normalized_key and normalized_val:
+            parsed[normalized_key] = normalized_val
+    if "driver" in parsed:
+        return None
+    database = parsed.get("database") or parsed.get("dbalias")
+    host = parsed.get("hostname") or parsed.get("host")
+    if not database or not host:
+        return None
+    return parsed
+
+
+def _normalize_db2_cli_dsn(config: "dict[str, Any]", uri: str) -> None:
+    """Convert an IBM Db2 CLI keyword DSN into a db2:// URI, credentials, and db_kwargs."""
+    parsed = _parse_db2_cli_dsn(uri)
+    if parsed is None:
+        return
+    database = parsed.get("database") or parsed.get("dbalias") or ""
+    host = parsed.get("hostname") or parsed.get("host") or ""
+    port = parsed.get("port", "")
+    formatted_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    config["uri"] = f"db2://{formatted_host}:{port}/{database}" if port else f"db2://{formatted_host}/{database}"
+
+    uid = parsed.get("uid") or parsed.get("user")
+    if uid is not None:
+        config.setdefault("username", uid)
+    pwd = parsed.get("pwd") or parsed.get("password")
+    if pwd is not None:
+        config.setdefault("password", pwd)
+
+    existing_db_kwargs = config.get("db_kwargs")
+    db_kwargs_dict: dict[str, Any] = dict(existing_db_kwargs) if isinstance(existing_db_kwargs, dict) else {}
+    if "uri" in db_kwargs_dict and db_kwargs_dict.get("uri") == uri:
+        db_kwargs_dict.pop("uri", None)
+
+    security = parsed.get("security", "").lower()
+    if security in {"ssl", "tls"}:
+        db_kwargs_dict.setdefault("adbc.db2.tls", "true")
+    ssl_cert = parsed.get("sslservercertificate")
+    if ssl_cert is not None:
+        db_kwargs_dict.setdefault("adbc.db2.tls.ca_cert", ssl_cert)
+    current_schema = parsed.get("currentschema")
+    if current_schema is not None:
+        db_kwargs_dict.setdefault("adbc.db2.current_schema", current_schema)
+    connect_timeout = parsed.get("connecttimeout")
+    if connect_timeout is not None:
+        db_kwargs_dict.setdefault("adbc.db2.connect_timeout", connect_timeout)
+
+    if db_kwargs_dict:
+        config["db_kwargs"] = db_kwargs_dict
+    elif isinstance(existing_db_kwargs, dict) and "uri" in existing_db_kwargs:
+        config.pop("db_kwargs", None)
 
 
 def _apply_driver_manager_config(config: "dict[str, Any]", driver_kind: "str | None", driver_name: Any) -> None:
