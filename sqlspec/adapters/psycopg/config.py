@@ -358,7 +358,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
             existing_options = connection_config.get("options")
-            columnar_opt = "-c google_columnar_engine.enabled=on"
+            columnar_opt = "-c google_columnar_engine.enable_columnar_scan=on"
             if not existing_options:
                 connection_config["options"] = columnar_opt
             elif columnar_opt not in str(existing_options):
@@ -806,7 +806,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
             existing_options = connection_config.get("options")
-            columnar_opt = "-c google_columnar_engine.enabled=on"
+            columnar_opt = "-c google_columnar_engine.enable_columnar_scan=on"
             if not existing_options:
                 connection_config["options"] = columnar_opt
             elif columnar_opt not in str(existing_options):

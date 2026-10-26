@@ -233,7 +233,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         try:
             await transaction.start()
             if self._should_set_local_columnar():
-                await self.connection.execute("SET LOCAL google_columnar_engine.enabled = 'on'")
+                await self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
         except AsyncpgPostgresError as e:
             self._release_failed_transaction_claim(transaction)
             raise create_mapped_exception(e) from e

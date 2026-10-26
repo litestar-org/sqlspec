@@ -285,17 +285,20 @@ async def test_psqlpy_session_context_rolls_back_open_transaction_on_exit() -> N
 
 @pytest.mark.anyio
 async def test_psqlpy_pooler_mode_transaction_disables_prepared_statements() -> None:
-    """Transaction pooler mode should disable statement caching and pass prepared=False on execution."""
+    """Transaction pooler mode should construct a valid ConnectionPool and pass prepared=False on execution."""
     config = PsqlpyConfig(
         connection_config={"dsn": "postgresql://localhost:6432/test"}, driver_features={"pooler_mode": "transaction"}
     )
-    assert config.connection_config["max_cached_statement_lifetime"] == 0
+    assert config.driver_features["pooler_mode"] == "transaction"
+    pool = await config.create_pool()
+    pool.close()
 
     alias_config = PsqlpyConfig(
         connection_config={"dsn": "postgresql://localhost:6432/test"}, driver_features={"pgbouncer": True}
     )
     assert alias_config.driver_features["pooler_mode"] == "transaction"
-    assert alias_config.connection_config["max_cached_statement_lifetime"] == 0
+    alias_pool = await alias_config.create_pool()
+    alias_pool.close()
 
     conn = AsyncMock()
     conn.fetch.return_value = _ExtensionQueryResult(set())
@@ -338,10 +341,9 @@ async def test_psqlpy_derive_direct_config_and_columnar_engine() -> None:
     direct_config = pooled_config.derive_direct_config()
     assert direct_config is not pooled_config
     assert direct_config.connection_config["dsn"] == "postgresql://direct:5432/test"
-    assert "max_cached_statement_lifetime" not in direct_config.connection_config
     assert direct_config.driver_features["pooler_mode"] == "session"
     assert direct_config.driver_features["direct_dsn"] is None
-    assert direct_config.connection_config["options"] == "-c google_columnar_engine.enabled=on"
+    assert direct_config.connection_config["options"] == "-c google_columnar_engine.enable_columnar_scan=on"
 
     conn = AsyncMock()
     conn.in_transaction = False
@@ -352,4 +354,4 @@ async def test_psqlpy_derive_direct_config_and_columnar_engine() -> None:
     )
     await driver.begin()
     conn.execute.assert_any_await("BEGIN")
-    conn.execute.assert_any_await("SET LOCAL google_columnar_engine.enabled = 'on'")
+    conn.execute.assert_any_await("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")

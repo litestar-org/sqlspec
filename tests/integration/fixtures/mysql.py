@@ -13,6 +13,7 @@ from tests.integration.fixtures.cleanup import mysql_cleanup_statements
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
+    from pytest_databases.docker.mariadb import MariaDBService
     from pytest_databases.docker.mysql import MySQLService
 
     from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver
@@ -61,6 +62,7 @@ else:
     PyMysqlADKStore = import_optional_attr("sqlspec.adapters.pymysql.adk", "PyMysqlADKStore")
 
 __all__ = (
+    "MariadbDriverSession",
     "MysqlAdkResidualContext",
     "aiomysql_clean_driver",
     "aiomysql_config",
@@ -68,6 +70,7 @@ __all__ = (
     "asyncmy_clean_driver",
     "asyncmy_config",
     "asyncmy_driver",
+    "mariadb_driver_session",
     "mysql_adk_residual_context",
     "mysqlconnector_async_config",
     "mysqlconnector_async_driver",
@@ -153,6 +156,68 @@ class MysqlAdkResidualContext(msgspec.Struct, frozen=True, gc=False):
     async def execute_sql(self, config: Any, sql: str, **params: Any) -> None:
         """Execute a DML/DDL statement on the given MySQL config and commit."""
         await _execute_mysql_sql(config, sql, is_async=self.is_async, **params)
+
+
+class MariadbDriverSession(msgspec.Struct, frozen=True, gc=False):
+    """Cross-driver test harness for MariaDB 11.8 CRUD, transactions, JSON, and upsert checks."""
+
+    driver_mode: str
+    is_async: bool
+    config: Any
+    tx_config: Any
+    table_name: str
+
+    async def select_version(self) -> str:
+        """Return the active MariaDB server version string."""
+        if self.is_async:
+            async with self.config.provide_session() as driver:
+                return str(await driver.select_value("SELECT VERSION()"))
+        with self.config.provide_session() as driver:
+            return str(driver.select_value("SELECT VERSION()"))
+
+    async def execute_ddl(self, sql: str) -> None:
+        """Execute a DDL statement against MariaDB 11.8."""
+        await _execute_mysql_sql(self.config, sql, is_async=self.is_async)
+
+    async def execute_dml(self, sql: str, **params: Any) -> None:
+        """Execute a parameterized DML statement and commit."""
+        await _execute_mysql_sql(self.config, sql, is_async=self.is_async, **params)
+
+    async def select_rows(self, sql: str, **params: Any) -> list[dict[str, Any]]:
+        """Execute a parameterized SELECT statement and return dict rows."""
+        if self.is_async:
+            async with self.config.provide_session() as driver:
+                return cast("list[dict[str, Any]]", await driver.select(sql, **params))
+        with self.config.provide_session() as driver:
+            return cast("list[dict[str, Any]]", driver.select(sql, **params))
+
+    async def insert_and_rollback(self, table_name: str, *, row_id: int, name: str) -> None:
+        """Insert a row inside an explicit transaction and roll back."""
+        insert_sql = f"INSERT INTO {table_name} (id, name) VALUES (:id, :name)"
+        if self.is_async:
+            async with self.tx_config.provide_session() as driver:
+                await driver.begin()
+                await driver.execute(insert_sql, id=row_id, name=name)
+                await driver.rollback()
+            return
+        with self.tx_config.provide_session() as driver:
+            driver.begin()
+            driver.execute(insert_sql, id=row_id, name=name)
+            driver.rollback()
+
+    async def insert_and_commit(self, table_name: str, *, row_id: int, name: str) -> None:
+        """Insert a row inside an explicit transaction and commit."""
+        insert_sql = f"INSERT INTO {table_name} (id, name) VALUES (:id, :name)"
+        if self.is_async:
+            async with self.tx_config.provide_session() as driver:
+                await driver.begin()
+                await driver.execute(insert_sql, id=row_id, name=name)
+                await driver.commit()
+            return
+        with self.tx_config.provide_session() as driver:
+            driver.begin()
+            driver.execute(insert_sql, id=row_id, name=name)
+            driver.commit()
 
 
 @pytest.fixture(scope="session")
@@ -444,7 +509,31 @@ async def mysql_adk_residual_context(
         await _close_mysql_config(config, is_async=is_async)
 
 
-def _mysql_connection_config(mysql_service: "MySQLService", *, database_key: str = "database") -> "dict[str, Any]":
+@pytest.fixture(params=("aiomysql", "asyncmy", "mysqlconnector-async", "mysqlconnector-sync", "pymysql"))
+async def mariadb_driver_session(
+    request: pytest.FixtureRequest, mariadb_118_service: "MariaDBService"
+) -> "AsyncGenerator[MariadbDriverSession, None]":
+    """Provide isolated driver sessions explicitly targeting MariaDB 11.8 across MySQL drivers."""
+    driver_mode = str(request.param)
+    pytest.importorskip(_MYSQL_ADK_DRIVER_PACKAGES[driver_mode])
+
+    table_name = f"mariadb_compat_{uuid4().hex[:8]}"
+    is_async, config, tx_config = _build_mariadb_configs(mariadb_118_service, driver_mode)
+
+    try:
+        yield MariadbDriverSession(
+            driver_mode=driver_mode, is_async=is_async, config=config, tx_config=tx_config, table_name=table_name
+        )
+    finally:
+        await _close_mysql_config(tx_config, is_async=is_async)
+        with contextlib.suppress(Exception):
+            await _execute_mysql_sql(config, f"DROP TABLE IF EXISTS {table_name}", is_async=is_async)
+        await _close_mysql_config(config, is_async=is_async)
+
+
+def _mysql_connection_config(
+    mysql_service: "MySQLService | MariaDBService", *, database_key: str = "database"
+) -> "dict[str, Any]":
     return {
         "host": mysql_service.host,
         "port": mysql_service.port,
@@ -453,6 +542,60 @@ def _mysql_connection_config(mysql_service: "MySQLService", *, database_key: str
         database_key: mysql_service.db,
         "autocommit": True,
     }
+
+
+def _build_mariadb_configs(service: "MariaDBService", driver_mode: str) -> tuple[bool, Any, Any]:
+    if driver_mode == "aiomysql":
+        conn_cfg = _mysql_connection_config(service, database_key="db")
+        conn_cfg.update({"minsize": 1, "maxsize": 3})
+        tx_cfg = dict(conn_cfg)
+        tx_cfg["autocommit"] = False
+        return (
+            True,
+            AiomysqlConfig(connection_config=conn_cfg, statement_config=aiomysql_statement_config),
+            AiomysqlConfig(connection_config=tx_cfg, statement_config=aiomysql_statement_config),
+        )
+    if driver_mode == "asyncmy":
+        conn_cfg = _mysql_connection_config(service)
+        conn_cfg.update({"minsize": 1, "maxsize": 3})
+        tx_cfg = dict(conn_cfg)
+        tx_cfg["autocommit"] = False
+        return (
+            True,
+            AsyncmyConfig(connection_config=conn_cfg, statement_config=asyncmy_statement_config),
+            AsyncmyConfig(connection_config=tx_cfg, statement_config=asyncmy_statement_config),
+        )
+    if driver_mode == "mysqlconnector-async":
+        conn_cfg = _mysql_connection_config(service)
+        conn_cfg["use_pure"] = True
+        tx_cfg = dict(conn_cfg)
+        tx_cfg["autocommit"] = False
+        return (
+            True,
+            MysqlConnectorAsyncConfig(connection_config=conn_cfg, statement_config=mysqlconnector_statement_config),
+            MysqlConnectorAsyncConfig(connection_config=tx_cfg, statement_config=mysqlconnector_statement_config),
+        )
+    if driver_mode == "mysqlconnector-sync":
+        conn_cfg = _mysql_connection_config(service)
+        conn_cfg.update({"use_pure": True, "pool_size": 3})
+        tx_cfg = dict(conn_cfg)
+        tx_cfg["autocommit"] = False
+        return (
+            False,
+            MysqlConnectorSyncConfig(connection_config=conn_cfg, statement_config=mysqlconnector_statement_config),
+            MysqlConnectorSyncConfig(connection_config=tx_cfg, statement_config=mysqlconnector_statement_config),
+        )
+    if driver_mode == "pymysql":
+        conn_cfg = _mysql_connection_config(service)
+        tx_cfg = dict(conn_cfg)
+        tx_cfg["autocommit"] = False
+        return (
+            False,
+            PyMysqlConfig(connection_config=conn_cfg, statement_config=pymysql_statement_config),
+            PyMysqlConfig(connection_config=tx_cfg, statement_config=pymysql_statement_config),
+        )
+    msg = f"Unsupported MariaDB driver mode: {driver_mode}"
+    raise ValueError(msg)
 
 
 async def _run_async_cleanup(driver: Any, adapter_suffix: str, *, procedure_suffix: str | None = None) -> None:

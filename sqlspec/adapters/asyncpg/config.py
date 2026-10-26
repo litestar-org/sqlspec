@@ -357,7 +357,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             normalized_conn_cfg.setdefault("statement_cache_size", 0)
         if bool(features_dict.get("enable_alloydb_columnar", False)) and features_dict.get("pooler_mode") == "session":
             merged_settings = dict(self._explicit_server_settings) if self._explicit_server_settings is not None else {}
-            merged_settings.setdefault("google_columnar_engine.enabled", "on")
+            merged_settings.setdefault("google_columnar_engine.enable_columnar_scan", "on")
             normalized_conn_cfg["server_settings"] = merged_settings
         self._custom_type_codecs: list[dict[str, Any]] = list(features_dict.get("type_codecs") or [])
 

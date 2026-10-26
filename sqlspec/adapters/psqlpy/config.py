@@ -277,7 +277,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             **kwargs: Additional keyword arguments.
         """
         raw_conn_cfg = normalize_connection_config(connection_config)
-        self._explicit_max_cached_statement_lifetime = "max_cached_statement_lifetime" in raw_conn_cfg
         raw_options = raw_conn_cfg.get("options")
         self._explicit_options: str | None = raw_options if isinstance(raw_options, str) else None
         connection_config = build_connection_config(raw_conn_cfg)
@@ -286,15 +285,11 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        if features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
-            features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
-        ):
-            connection_config.setdefault("max_cached_statement_lifetime", 0)
         if bool(features_dict.get("enable_alloydb_columnar", False)) and features_dict.get("pooler_mode") == "session":
-            columnar_opt = "-c google_columnar_engine.enabled=on"
+            columnar_opt = "-c google_columnar_engine.enable_columnar_scan=on"
             existing_options = connection_config.get("options")
             if isinstance(existing_options, str) and existing_options.strip():
-                if "google_columnar_engine.enabled" not in existing_options:
+                if "google_columnar_engine.enable_columnar_scan" not in existing_options:
                     connection_config["options"] = f"{existing_options} {columnar_opt}"
             else:
                 connection_config["options"] = columnar_opt
@@ -402,8 +397,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         if not direct_dsn:
             return self
         conn_cfg: dict[str, Any] = dict(self.connection_config)
-        if not self._explicit_max_cached_statement_lifetime and conn_cfg.get("max_cached_statement_lifetime") == 0:
-            conn_cfg.pop("max_cached_statement_lifetime", None)
         if self._explicit_options is not None:
             conn_cfg["options"] = self._explicit_options
         else:

@@ -454,7 +454,7 @@ def test_asyncpg_derive_direct_config_uses_direct_dsn_and_session_mode() -> None
     assert "statement_cache_size" not in direct_config.connection_config
     assert direct_config.driver_features["pooler_mode"] == "session"
     assert direct_config.driver_features["direct_dsn"] is None
-    assert direct_config.connection_config["server_settings"] == {"google_columnar_engine.enabled": "on"}
+    assert direct_config.connection_config["server_settings"] == {"google_columnar_engine.enable_columnar_scan": "on"}
 
     mapping_config = AsyncpgConfig(
         connection_config={"host": "pooler.internal", "port": 6432, "database": "app"},
@@ -475,7 +475,7 @@ async def test_asyncpg_columnar_engine_session_vs_transaction() -> None:
     )
     assert session_config.connection_config["server_settings"] == {
         "application_name": "sqlspec",
-        "google_columnar_engine.enabled": "on",
+        "google_columnar_engine.enable_columnar_scan": "on",
     }
 
     tx_config = AsyncpgConfig(
@@ -493,4 +493,4 @@ async def test_asyncpg_columnar_engine_session_vs_transaction() -> None:
     )
     await driver.begin()
     tx_handle.start.assert_awaited_once()
-    conn.execute.assert_awaited_once_with("SET LOCAL google_columnar_engine.enabled = 'on'")
+    conn.execute.assert_awaited_once_with("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
