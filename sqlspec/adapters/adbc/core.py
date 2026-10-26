@@ -356,7 +356,7 @@ def detect_dialect(connection: Any, logger: Any | None = None, *, fallback_diale
         Detected dialect name, defaulting to ``postgres``.
     """
     try:
-        driver_info = connection.adbc_get_info()
+        driver_info = _get_adbc_driver_info(connection)
         vendor_name = driver_info.get("vendor_name", "").lower()
         vendor_version = driver_info.get("vendor_version", "").lower()
         driver_name = driver_info.get("driver_name", "").lower()
@@ -1960,12 +1960,31 @@ def _lift_flightsql_common_options(
                 db_kwargs_dict.setdefault(f"{_FLIGHTSQL_RPC_CALL_HEADER_PREFIX}{hdr_key}", str(hdr_val))
 
 
+def _get_adbc_driver_info(connection: Any) -> "dict[Any, Any]":
+    """Return per-connection ADBC driver metadata without class-level cache bleed."""
+    conn_type: Any = type(connection)
+    if "_get_info_cache" in conn_type.__dict__:
+        conn_dict = getattr(connection, "__dict__", None)
+        if isinstance(conn_dict, dict):
+            cached = conn_dict.get("_get_info_cache")
+            if isinstance(cached, dict):
+                return cached
+            for base_cls in conn_type.__mro__[1:]:
+                base_method = base_cls.__dict__.get("adbc_get_info")
+                if callable(base_method):
+                    info = cast("dict[Any, Any]", base_method(connection))
+                    conn_dict["_get_info_cache"] = info
+                    return info
+    return cast("dict[Any, Any]", connection.adbc_get_info())
+
+
 def _lift_native_gizmosql_db_kwargs(config: "dict[str, Any]") -> None:
     db_kwargs = config.pop("db_kwargs", None)
     db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
     _tls_skip_verify_key, authorization_header_key = _resolve_flightsql_db_kwargs_keys()
     _lift_flightsql_common_options(config, db_kwargs_dict, authorization_header_key)
     config.pop("gizmosql_backend", None)
+    config.setdefault("autocommit", False)
     if db_kwargs_dict:
         config["db_kwargs"] = db_kwargs_dict
 

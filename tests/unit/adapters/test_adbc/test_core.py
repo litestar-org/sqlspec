@@ -325,6 +325,37 @@ def test_detect_dialect_uses_gizmosql_sqlite_vendor_version() -> None:
     assert result == "sqlite"
 
 
+def test_detect_dialect_isolates_class_level_gizmosql_info_cache() -> None:
+    """Per-connection metadata must not inherit a class-level _get_info_cache from an earlier backend."""
+
+    class _BaseStubConnection:
+        def __init__(self, backend_label: str) -> None:
+            self._backend_label = backend_label
+
+        def adbc_get_info(self) -> dict[str, str]:
+            return {
+                "vendor_name": "GizmoSQL",
+                "vendor_version": f"GizmoSQL {self._backend_label} backend",
+                "driver_name": "ADBC Flight SQL Driver",
+            }
+
+    class _ClassCachingGizmoConnection(_BaseStubConnection):
+        _get_info_cache: dict[str, str] | None = None
+
+        def adbc_get_info(self) -> dict[str, str]:
+            if self._get_info_cache is None:
+                _ClassCachingGizmoConnection._get_info_cache = super().adbc_get_info()
+            return self._get_info_cache or {}
+
+    duckdb_conn = _ClassCachingGizmoConnection("DuckDB")
+    sqlite_conn = _ClassCachingGizmoConnection("SQLite")
+
+    assert duckdb_conn.adbc_get_info()["vendor_version"] == "GizmoSQL DuckDB backend"
+    assert adbc_core.detect_dialect(duckdb_conn) == "duckdb"
+    assert adbc_core.detect_dialect(sqlite_conn) == "sqlite"
+    assert sqlite_conn.adbc_get_info()["vendor_version"] == "GizmoSQL SQLite backend"
+
+
 def test_handle_postgres_rollback_issues_rollback_for_pgvector() -> None:
     """pgvector is PostgreSQL-compatible and must receive rollback handling."""
     executed: list[str] = []

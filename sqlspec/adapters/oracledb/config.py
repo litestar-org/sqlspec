@@ -31,6 +31,7 @@ from sqlspec.adapters.oracledb.core import (
     OracleTopologyConfig,
     apply_driver_features,
     build_connection_config,
+    build_wallet_ssl_context_if_needed,
     default_statement_config,
     execute_session_checkout_async,
     execute_session_checkout_sync,
@@ -586,6 +587,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
                 client_config["config_dir"] = config["config_dir"]
             oracledb.init_oracle_client(**client_config)
 
+        if oracledb.is_thin_mode() and "ssl_context" not in config:
+            wallet_ssl_ctx = build_wallet_ssl_context_if_needed(config.get("wallet_location"))
+            if wallet_ssl_ctx is not None:
+                config["ssl_context"] = wallet_ssl_ctx
+
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection
 
@@ -903,6 +909,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if thick_mode or lib_dir is not None:
             msg = "OracleAsyncConfig only supports Thin mode; use OracleSyncConfig for Thick mode."
             raise ImproperConfigurationError(msg)
+
+        if oracledb.is_thin_mode() and "ssl_context" not in config:
+            wallet_ssl_ctx = build_wallet_ssl_context_if_needed(config.get("wallet_location"))
+            if wallet_ssl_ctx is not None:
+                config["ssl_context"] = wallet_ssl_ctx
 
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection

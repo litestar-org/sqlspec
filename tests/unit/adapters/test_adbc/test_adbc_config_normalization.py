@@ -627,6 +627,12 @@ def test_gizmosql_prefers_native_driver_when_installed(monkeypatch: Any) -> None
     resolved = _get_connection_config_dict(config)
     assert resolved["auth_type"] == "external"
     assert resolved["tls_skip_verify"] is True
+    assert resolved["autocommit"] is False
+
+    explicit_autocommit = AdbcConfig(
+        connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "autocommit": True}
+    )
+    assert _get_connection_config_dict(explicit_autocommit)["autocommit"] is True
 
 
 def test_gizmosql_flightsql_fallback_lifts_auth_type_into_db_kwargs(monkeypatch: Any) -> None:
