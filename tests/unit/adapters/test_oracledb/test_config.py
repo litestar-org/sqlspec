@@ -768,17 +768,18 @@ async def test_oracle_wallet_ssl_context_relaxes_x509_strict_only_for_non_ca_sel
 
     created_sync_kwargs: list[dict[str, Any]] = []
     created_async_kwargs: list[dict[str, Any]] = []
+
+    def _fake_create_pool(**kwargs: Any) -> MagicMock:
+        created_sync_kwargs.append(kwargs)
+        return MagicMock()
+
+    def _fake_create_pool_async(**kwargs: Any) -> MagicMock:
+        created_async_kwargs.append(kwargs)
+        return MagicMock(close=AsyncMock())
+
     monkeypatch.setattr(oracle_config_module.oracledb, "is_thin_mode", lambda: True)
-    monkeypatch.setattr(
-        oracle_config_module.oracledb,
-        "create_pool",
-        lambda **kwargs: (created_sync_kwargs.append(kwargs), MagicMock())[1],
-    )
-    monkeypatch.setattr(
-        oracle_config_module.oracledb,
-        "create_pool_async",
-        lambda **kwargs: (created_async_kwargs.append(kwargs), MagicMock(close=AsyncMock()))[1],
-    )
+    monkeypatch.setattr(oracle_config_module.oracledb, "create_pool", _fake_create_pool)
+    monkeypatch.setattr(oracle_config_module.oracledb, "create_pool_async", _fake_create_pool_async)
 
     sync_self_signed = OracleSyncConfig(
         connection_config={
