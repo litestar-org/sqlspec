@@ -1,59 +1,59 @@
 # SQLSpec
 
-SQLSpec is a SQL-first database access library for Python with unified synchronous and asynchronous session APIs, dialect-aware parameter compilation, statement caching, schema migrations, Apache Arrow streaming, and typed row hydration across 20 database adapters.
+SQLSpec is a SQL-first database access library for Python with unified synchronous and asynchronous session APIs, dialect-aware parameter compilation, statement caching, schema migrations, Apache Arrow streaming, and typed row projection across 20 database adapters. Write plain SQL, load named queries from `.sql` files, or compose dialect-portable queries with SQLGlot while keeping full control over your SQL and database driver.
 
-## Installation
+## Install
 
-Install `sqlspec` with `uv` (SQLite is supported out of the box via Python's standard library):
+Install `sqlspec` with `uv`. Python's built-in `sqlite3` adapter works immediately with zero extra driver packages:
 
 ```bash
 uv add sqlspec
 ```
 
-Add database or serialization extras as needed:
+Add optional database driver, schema validation, or framework extras when connecting to external engines:
 
 ```bash
-uv add "sqlspec[asyncpg,msgspec]"
+uv add "sqlspec[asyncpg,msgspec,litestar]"
 ```
 
-## Quickstart
+## First Query
 
-Configure a database adapter, open a managed session, execute parameterized SQL, and hydrate results directly into Python dictionaries or typed models:
+Register an adapter configuration on `SQLSpec`, open a managed session, execute parameterized SQL, and read dictionary or typed model rows:
 
-```python
-from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
-
-spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-
-with spec.provide_session(config) as session:
-    session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
-    session.execute(
-        "INSERT INTO users (name, email) VALUES (:name, :email)", {"name": "Ada Lovelace", "email": "ada@example.org"}
-    )
-    user = session.select_one("SELECT id, name, email FROM users WHERE name = :name", {"name": "Ada Lovelace"})
+```{ .python title="docs/examples/quickstart/first_query.py" hl_lines="13 14 16 19 20" }
+--8<-- "docs/examples/quickstart/first_query.py"
 ```
 
-Try live queries directly in your browser in the [Interactive Playground](playground.md).
+Run live SQLite queries directly in your browser in the [Interactive Playground](playground.md).
+
+## Explore SQLSpec
+
+| Section | What You Will Find |
+| --- | --- |
+| **[Learn](learn/index.md)** | Progressive SQLite-first tutorials covering configuration, querying, parameters, typed schema mapping, transactions, `.sql` files, query builders, filtering, migrations, Arrow pipelines, observability, testing, and production recipes. |
+| **[Databases](/databases/)** | Central 20-adapter Capability Matrix plus concise setup, connection pool, type coercion, and dialect guides for PostgreSQL, CockroachDB, SQLite, MySQL, MariaDB, Oracle, SQL Server, Db2, DuckDB, BigQuery, Spanner, ADBC, and Arrow ODBC. |
+| **[Integrations](/integrations/)** | Unified plugin, dependency injection, session store, event queue, and agent memory guides for Litestar, Google ADK, Events, FastAPI, Starlette, Flask, Sanic, and Dishka. |
+| **[Playground](playground.md)** | Zero-install WebAssembly (Pyodide) SQLite environment running `SQLSpec` directly in your browser tab. |
+| **[Reference](/reference/)** | Focused API reference pages for `SQLSpec`, configurations, drivers, statements, builders, migrations, storage, data dictionaries, extensions, CLI commands, and adapter classes. |
 
 ## Core Capabilities
 
-| Capability | Description |
+| Capability | Summary |
 | --- | --- |
-| **SQL-First Execution** | Write raw SQL, load named queries from `.sql` files via `SQLFileLoader`, or compose statements with the fluent SQLGlot builder. |
-| **Unified Sync & Async Drivers** | Identical `execute`, `select`, `select_one`, `select_one_or_none`, `select_value`, and transaction APIs across synchronous and `asyncio` drivers. |
-| **Typed Row Hydration** | Project rows into `dict`, `msgspec.Struct`, Pydantic `BaseModel`, `dataclasses`, or `attrs` classes via `schema_type=...`. |
-| **Dialect & Parameter Compilation** | Bind `:named`, `$1`, `%s`, or `?` parameters consistently with automatic dialect translation and bounded LRU statement caching. |
-| **Apache Arrow & Bulk Storage** | Stream query results directly to `pyarrow.Table`, `polars`, or `pandas` and move data across local, S3/GCS (`fsspec`/`obstore`), and database storage pipelines. |
-| **Framework & AI Extensions** | First-party plugins and session/event stores for Litestar, FastAPI, Starlette, Flask, Sanic, Dishka, OpenTelemetry, Prometheus, and Google ADK. |
+| **SQL-First Execution** | Execute raw SQL strings, load named queries from `.sql` files with `SQLFileLoader`, or compose statements programmatically with `sql.select`, `sql.insert`, `sql.update`, `sql.delete`, and `sql.merge`. |
+| **Unified Sync and Async Drivers** | Consistent `execute`, `select`, `select_one`, `select_one_or_none`, `select_value`, `execute_many`, `select_stream`, and transaction APIs across synchronous and `asyncio` adapters. |
+| **Typed Row Mapping** | Decode rows directly into `msgspec.Struct`, `TypedDict`, `pydantic.BaseModel`, standard library `dataclasses`, or `attrs` models via `schema_type=...`. |
+| **Parameter Translation and Caching** | Bind `:named` or positional parameters uniformly while SQLSpec compiles dialect placeholders (`$1`, `%s`, `?`, `:1`, `@name`) and caches compiled AST plans across sessions. |
+| **Apache Arrow and Storage Pipelines** | Stream results into `pyarrow.Table`, `RecordBatchReader`, `polars`, or `pandas` via `select_to_arrow`, and read or write Parquet and JSONL across local paths, `obstore`, and `fsspec`. |
+| **Observability and Migrations** | Emit OpenTelemetry spans, Prometheus metrics, wire-level `sqlcommenter` trace tags, structured cloud logs, and manage sequential SQL or Python schema migrations from the CLI. |
 
 ## Architecture Overview
 
 ```mermaid
 flowchart LR
     SQL["Raw SQL / SQLFileLoader / Query Builder"] --> Compiler["SQL Statement & Parameter Compiler"]
-    Compiler --> Driver["Sync or Async Adapter Driver"]
+    Compiler --> Cache["Per-Config Statement & AST Cache"]
+    Cache --> Driver["Sync or Async Adapter Driver"]
     Driver --> DB[("PostgreSQL / SQLite / MySQL / Oracle / DuckDB / Spanner / BigQuery")]
-    Driver --> Hydration["Typed Hydration (dict / msgspec / Pydantic / Arrow)"]
+    Driver --> Output["dict / msgspec / Pydantic / Apache Arrow"]
 ```

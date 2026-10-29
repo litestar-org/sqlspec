@@ -1,0 +1,97 @@
+# Testing
+
+SQLSpec's thin session contract makes database code straightforward to test at two complementary levels: sub-millisecond unit and domain tests against isolated SQLite databases, and dialect-verified integration tests against containerized engines managed by `pytest-databases`.
+
+## Fast Isolated SQLite Test Fixtures
+
+For domain logic, parameter binding, `SQLFileLoader` validation, and service-layer workflows that use portable SQL, provision a fresh SQLite database per test:
+
+```{ .python title="docs/examples/patterns/integration_testing.py" hl_lines="13 15 16 20 31 32 33" }
+--8<-- "docs/examples/patterns/integration_testing.py"
+```
+
+In `pytest`, wrap `create_test_spec` inside a fixture using `tmp_path` (or `":memory:"` for single-connection tests) and close the pool in `finally:`:
+
+```python
+from collections.abc import Iterator
+from pathlib import Path
+import pytest
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+
+@pytest.fixture
+def db_config(tmp_path: Path) -> Iterator[SqliteConfig]:
+    spec = SQLSpec()
+    config = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "test.db")}))
+    try:
+        yield config
+    finally:
+        config.close_pool()
+```
+
+When testing `:memory:` SQLite across multiple pooled connections or threads, use a shared-cache URI (`"file:test_mem?mode=memory&cache=shared"` with `uri=True`) so every pooled checkout sees the same in-memory schema.
+
+## Containerized Dialect Tests with `pytest-databases`
+
+Dialect-specific features—such as PostgreSQL `JSONB` / `pgvector` / `LISTEN/NOTIFY`, Oracle 26ai `VECTOR`, Spanner `INTERLEAVE`, or DuckDB Parquet pipelines—should be verified against real database containers using [`pytest-databases`](https://github.com/litestar-org/pytest-databases):
+
+```bash
+uv add --dev pytest pytest-asyncio pytest-databases
+```
+
+```python
+import pytest
+from pytest_databases.docker.postgres import PostgresService
+
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+
+@pytest.mark.asyncio
+async def test_postgres_users(postgres_service: PostgresService) -> None:
+    config = AsyncpgConfig(
+        connection_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "database": postgres_service.database,
+        }
+    )
+    try:
+        async with config.provide_session() as session:
+            version = await session.select_value("SELECT current_setting('server_version_num')::int")
+            assert version >= 140000
+    finally:
+        await config.close_pool()
+```
+
+`pytest-databases` provides ready-to-use Docker/Podman service fixtures for PostgreSQL (`postgres_service`, `pgvector_service`, `paradedb_service`, `alloydb_omni_service`), MySQL, MariaDB, CockroachDB, Oracle (`oracle_23ai_service`), SQL Server, Db2, Spanner emulator, BigQuery emulator, MinIO/RustFS, and Floci cloud storage emulators.
+
+## Seeding Deterministic JSONL Fixtures
+
+Instead of maintaining brittle 200-line `INSERT` setup helpers in test files, store canonical seed rows in `tests/fixtures/<table>.jsonl` and load them with `load_table_fixtures_sync` or `load_table_fixtures_async`:
+
+- `conflict_keys={"users": "email"}` keeps repeated fixture loads idempotent.
+- `resync_sequences=True` advances PostgreSQL identity/serial sequences past explicit fixture primary keys so subsequent test inserts never collide on `id`.
+- `ignore_unknown_columns=True` and `exclude_update_columns` allow shared fixture files to evolve cleanly across schema branches.
+
+```python
+from pathlib import Path
+from sqlspec.utils.fixtures import load_table_fixtures_sync
+
+with spec.provide_session(config) as session:
+    load_table_fixtures_sync(
+        session,
+        fixtures_dir=Path("tests/fixtures"),
+        tables=["teams", "members"],
+        conflict_keys={"teams": "name", "members": "email"},
+    )
+```
+
+## Recap
+
+- Test portable query and service behavior against isolated per-test `SqliteConfig` or `AiosqliteConfig` instances for instant feedback.
+- Verify engine-specific SQL, pooler modes, and vector/JSON codecs against real containers with `pytest-databases`.
+- Always call `config.close_pool()` / `await config.close_pool()` in fixture teardown so background pool tasks exit cleanly.
