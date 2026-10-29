@@ -1,13 +1,16 @@
 """CockroachDB-specific data dictionary for metadata queries."""
 
+import re
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
+    DependencyEdge,
+    DependencyEdgeKind,
     ForeignKeyMetadata,
     IndexMetadata,
     MetadataCapability,
@@ -25,6 +28,7 @@ from sqlspec.data_dictionary import (
     VersionInfo,
     ensure_system_metadata_request,
     get_data_dictionary_loader,
+    sort_ddl_results,
     system_metadata_gated_result,
     unsupported_system_metadata_capability,
 )
@@ -146,7 +150,29 @@ class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
         prefer_native: bool = True,
         redact: bool = True,
     ) -> DDLResult:
-        """Get lossy CockroachDB DDL status without parameterized identifiers."""
+        """Get CockroachDB DDL from crdb_internal.tables and pg_catalog helpers."""
+        return self.get_object_ddl(
+            driver,
+            object_name,
+            schema=schema,
+            object_type=object_type,
+            include_dependencies=include_dependencies,
+            prefer_native=prefer_native,
+            redact=redact,
+        )
+
+    def get_object_ddl(
+        self,
+        driver: "CockroachPsycopgSyncDriver",
+        object_name: str,
+        *,
+        schema: str | None = None,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
+        """Get CockroachDB DDL for one object."""
         _ = include_dependencies, prefer_native, redact
         schema_name = self.resolve_schema(schema)
         resolved_object = self.resolve_identifier(object_name)
@@ -160,6 +186,35 @@ class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
             schema=schema_name,
             rows=result.items,
             warnings=result.warnings,
+        )
+
+    def get_schema_ddl(
+        self,
+        driver: "CockroachPsycopgSyncDriver",
+        schema: str | None = None,
+        *,
+        include_domains: Sequence[str] | None = None,
+        exclude_domains: Sequence[str] | None = None,
+        exclude_tables: Sequence[str] | None = ("ddl_migrations",),
+        direction: Literal["create", "drop"] = "create",
+        target_dialect: str | None = None,
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> MetadataResult:
+        """Get topologically sorted CockroachDB DDL for all schema objects."""
+        _ = include_domains, exclude_domains, target_dialect, prefer_native, redact
+        schema_name = self.resolve_schema(schema)
+        result = self._select_domain(driver, "ddl", "by_schema", schema_name=schema_name)
+        foreign_keys = self.get_foreign_keys(driver, schema=schema) if include_dependencies else []
+        return _cockroach_schema_ddl_from_rows(
+            dialect=type(self).dialect,
+            schema=schema_name,
+            rows=result.items,
+            foreign_keys=foreign_keys,
+            exclude_tables=exclude_tables,
+            direction=direction,
+            include_dependencies=include_dependencies,
         )
 
     def get_system_metadata(
@@ -382,7 +437,29 @@ class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
         prefer_native: bool = True,
         redact: bool = True,
     ) -> DDLResult:
-        """Get lossy CockroachDB DDL status without parameterized identifiers."""
+        """Get CockroachDB DDL from crdb_internal.tables and pg_catalog helpers."""
+        return await self.get_object_ddl(
+            driver,
+            object_name,
+            schema=schema,
+            object_type=object_type,
+            include_dependencies=include_dependencies,
+            prefer_native=prefer_native,
+            redact=redact,
+        )
+
+    async def get_object_ddl(
+        self,
+        driver: "CockroachPsycopgAsyncDriver",
+        object_name: str,
+        *,
+        schema: str | None = None,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> DDLResult:
+        """Get CockroachDB DDL for one object."""
         _ = include_dependencies, prefer_native, redact
         schema_name = self.resolve_schema(schema)
         resolved_object = self.resolve_identifier(object_name)
@@ -396,6 +473,35 @@ class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
             schema=schema_name,
             rows=result.items,
             warnings=result.warnings,
+        )
+
+    async def get_schema_ddl(
+        self,
+        driver: "CockroachPsycopgAsyncDriver",
+        schema: str | None = None,
+        *,
+        include_domains: Sequence[str] | None = None,
+        exclude_domains: Sequence[str] | None = None,
+        exclude_tables: Sequence[str] | None = ("ddl_migrations",),
+        direction: Literal["create", "drop"] = "create",
+        target_dialect: str | None = None,
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+    ) -> MetadataResult:
+        """Get topologically sorted CockroachDB DDL for all schema objects."""
+        _ = include_domains, exclude_domains, target_dialect, prefer_native, redact
+        schema_name = self.resolve_schema(schema)
+        result = await self._select_domain(driver, "ddl", "by_schema", schema_name=schema_name)
+        foreign_keys = await self.get_foreign_keys(driver, schema=schema) if include_dependencies else []
+        return _cockroach_schema_ddl_from_rows(
+            dialect=type(self).dialect,
+            schema=schema_name,
+            rows=result.items,
+            foreign_keys=foreign_keys,
+            exclude_tables=exclude_tables,
+            direction=direction,
+            include_dependencies=include_dependencies,
         )
 
     async def get_system_metadata(
@@ -612,12 +718,147 @@ def _cockroach_ddl_result_from_rows(
         dialect=dialect,
         source=MetadataSource.INFORMATION_SCHEMA,
     )
-    return DDLResult.lossy(
-        identity,
-        ddl=str(ddl) if ddl is not None else None,
-        source=MetadataSource.INFORMATION_SCHEMA,
-        warnings=result_warnings,
+    if ddl is not None:
+        row_fidelity = _row_value(row, "fidelity") if row is not None else None
+        return DDLResult(
+            identity=identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=str(row_fidelity) if row_fidelity is not None else MetadataFidelity.NATIVE,
+            source=MetadataSource.INFORMATION_SCHEMA,
+            ddl=str(ddl),
+            warnings=result_warnings,
+        )
+    return DDLResult.lossy(identity, ddl=None, source=MetadataSource.INFORMATION_SCHEMA, warnings=result_warnings)
+
+
+def _cockroach_schema_ddl_from_rows(
+    *,
+    dialect: str,
+    schema: str | None,
+    rows: tuple[object, ...],
+    foreign_keys: Sequence[ForeignKeyMetadata],
+    exclude_tables: Sequence[str] | None,
+    direction: Literal["create", "drop"],
+    include_dependencies: bool,
+) -> MetadataResult:
+    excluded = {name.lower() for name in (exclude_tables or ())}
+    filtered_rows: list[tuple[ObjectIdentity, str, str | None, str]] = []
+    table_identities: dict[str, ObjectIdentity] = {}
+    view_identities: dict[str, ObjectIdentity] = {}
+    sequence_identities: dict[str, ObjectIdentity] = {}
+
+    for row in rows:
+        object_name_val = _row_value(row, "object_name")
+        object_type_val = _row_value(row, "object_type")
+        table_name_val = _row_value(row, "table_name")
+        ddl_val = _row_value(row, "ddl")
+        fidelity_val = _row_value(row, "fidelity")
+        object_name = str(object_name_val) if object_name_val is not None else ""
+        object_type = str(object_type_val or "table").lower()
+        table_name = str(table_name_val) if table_name_val is not None else None
+        if not object_name or ddl_val is None:
+            continue
+        if object_name.lower() in excluded:
+            continue
+        if table_name is not None and table_name.lower() in excluded:
+            continue
+        row_schema = _row_value(row, "schema_name")
+        resolved_schema = str(row_schema) if row_schema is not None else schema
+        identity = ObjectIdentity(
+            name=object_name,
+            object_type=object_type,
+            schema=resolved_schema,
+            dialect=dialect,
+            source=MetadataSource.INFORMATION_SCHEMA,
+        )
+        fidelity = str(fidelity_val) if fidelity_val is not None else MetadataFidelity.NATIVE.value
+        filtered_rows.append((identity, str(ddl_val), table_name, fidelity))
+        if object_type == "table":
+            table_identities[object_name.lower()] = identity
+        elif object_type in {"view", "materialized_view"}:
+            view_identities[object_name.lower()] = identity
+        elif object_type == "sequence":
+            sequence_identities[object_name.lower()] = identity
+
+    fk_targets_by_table: dict[str, list[ObjectIdentity]] = {}
+    if include_dependencies:
+        for fk in foreign_keys:
+            fk_table = str(fk["table_name"] if isinstance(fk, Mapping) else fk.table_name)
+            fk_ref = str(fk["referenced_table"] if isinstance(fk, Mapping) else fk.referenced_table)
+            if fk_table.lower() == fk_ref.lower():
+                continue
+            ref_identity = table_identities.get(fk_ref.lower())
+            if ref_identity is not None:
+                fk_targets_by_table.setdefault(fk_table.lower(), []).append(ref_identity)
+
+    results: list[DDLResult] = []
+    rel_identities = {**table_identities, **view_identities}
+    for identity, ddl_text, table_name, fidelity in filtered_rows:
+        edges: list[DependencyEdge] = []
+        if include_dependencies:
+            obj_type = identity.object_type.lower()
+            if obj_type == "table":
+                edges.extend(
+                    DependencyEdge(
+                        identity, ref_identity, DependencyEdgeKind.FOREIGN_KEY, source=MetadataSource.INFORMATION_SCHEMA
+                    )
+                    for ref_identity in fk_targets_by_table.get(identity.name.lower(), ())
+                )
+                edges.extend(
+                    DependencyEdge(
+                        identity,
+                        seq_identity,
+                        DependencyEdgeKind.SEQUENCE_USE,
+                        source=MetadataSource.INFORMATION_SCHEMA,
+                    )
+                    for seq_identity in sequence_identities.values()
+                    if re.search(rf"\b{re.escape(seq_identity.name)}\b", ddl_text, re.IGNORECASE)
+                )
+            elif obj_type in {"index", "trigger"} and table_name is not None:
+                parent_identity = table_identities.get(table_name.lower())
+                if parent_identity is not None:
+                    edge_kind = (
+                        DependencyEdgeKind.TRIGGER_TARGET
+                        if obj_type == "trigger"
+                        else DependencyEdgeKind.INDEX_EXPRESSION
+                    )
+                    edges.append(
+                        DependencyEdge(identity, parent_identity, edge_kind, source=MetadataSource.INFORMATION_SCHEMA)
+                    )
+            elif obj_type in {"view", "materialized_view"}:
+                for ref_key, ref_identity in rel_identities.items():
+                    if ref_key == identity.name.lower():
+                        continue
+                    if re.search(rf"\b{re.escape(ref_identity.name)}\b", ddl_text, re.IGNORECASE):
+                        edges.append(
+                            DependencyEdge(
+                                identity,
+                                ref_identity,
+                                DependencyEdgeKind.VIEW_REFERENCE,
+                                source=MetadataSource.INFORMATION_SCHEMA,
+                            )
+                        )
+        results.append(
+            DDLResult(
+                identity=identity,
+                status=MetadataSupport.SUPPORTED,
+                fidelity=fidelity,
+                source=MetadataSource.INFORMATION_SCHEMA,
+                ddl=ddl_text,
+                dependencies=tuple(edges),
+            )
+        )
+
+    ordered = (
+        sort_ddl_results(results, order=direction, raise_on_cycles=False) if include_dependencies else tuple(results)
     )
+    capability = MetadataCapability(
+        domain="ddl",
+        support=MetadataSupport.SUPPORTED,
+        fidelity=MetadataFidelity.NATIVE,
+        source=MetadataSource.INFORMATION_SCHEMA,
+    )
+    return MetadataResult("ddl", capability=capability, items=ordered)
 
 
 def _cockroach_domain_sql(domain: str, query_name: str) -> "SQL":
