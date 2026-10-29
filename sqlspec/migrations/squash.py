@@ -5,9 +5,15 @@ into a single "release" migration file, following the Django-style squash workfl
 """
 
 import re
+from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import ParseError
 
 from sqlspec.exceptions import SquashValidationError
 from sqlspec.migrations._backup import create_backup, remove_backup, restore_backup
@@ -25,12 +31,662 @@ if TYPE_CHECKING:
     from sqlspec.migrations.runner import SyncMigrationRunner
     from sqlspec.migrations.templates import MigrationTemplateSettings
 
-__all__ = ("MigrationSquasher", "SquashPlan", "group_migrations_by_type", "parse_version_range")
+__all__ = (
+    "DDLStateFolder",
+    "MigrationSquasher",
+    "SquashPlan",
+    "fold_migration_ddl",
+    "group_migrations_by_type",
+    "parse_version_range",
+)
 
 logger = get_logger("sqlspec.migrations.squash")
 
 _TRANSACTIONAL_DIRECTIVE_RE = re.compile(r"^--\s*transactional:\s*(true|false)\s*$", re.MULTILINE | re.IGNORECASE)
 _SCHEMA_DIRECTIVE_RE = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
+_RENAME_TABLE_COMMAND_RE = re.compile(r"^\s*TABLE\s+([^\s;]+)\s+TO\s+([^\s;]+)\s*$", re.IGNORECASE)
+
+
+class DDLStateFolder:
+    """Fold a chronological sequence of SQL DDL statements into net schema DDL."""
+
+    __slots__ = (
+        "_comments",
+        "_dialect",
+        "_indexes",
+        "_post_ddl_statements",
+        "_schemas",
+        "_sequences",
+        "_tables",
+        "_views",
+    )
+
+    def __init__(self, dialect: str | None = None) -> None:
+        self._dialect = dialect
+        self._schemas: OrderedDict[str, exp.Create] = OrderedDict()
+        self._sequences: OrderedDict[str, exp.Create] = OrderedDict()
+        self._tables: OrderedDict[str, exp.Create] = OrderedDict()
+        self._indexes: OrderedDict[str, tuple[str, exp.Create]] = OrderedDict()
+        self._views: OrderedDict[str, exp.Create] = OrderedDict()
+        self._comments: OrderedDict[tuple[str, str], exp.Comment] = OrderedDict()
+        self._post_ddl_statements: list[tuple[str | None, str]] = []
+
+    def feed(self, statement: str) -> None:
+        """Parse and fold a SQL statement into the accumulated schema catalog.
+
+        Args:
+            statement: Raw SQL statement string (may contain one or more semicolon-delimited statements).
+        """
+        stripped = statement.strip()
+        if not stripped:
+            return
+        try:
+            parsed_expressions = sqlglot.parse(stripped, read=self._dialect)
+        except ParseError:
+            self._post_ddl_statements.append((None, self._ensure_semicolon(stripped)))
+            return
+
+        for expr in parsed_expressions:
+            if expr is None:
+                continue
+            self._apply_expression(expr)
+
+    def to_statements(self) -> tuple[list[str], list[str]]:
+        """Render the folded net UP DDL/DML statements and reverse-dependency DOWN DROP statements.
+
+        Returns:
+            Tuple of ``(up_statements, down_statements)``.
+        """
+        up_statements: list[str] = [self._render_expr(create_schema) for create_schema in self._schemas.values()]
+        down_statements: list[str] = []
+
+        up_statements.extend(self._render_expr(create_seq) for create_seq in self._sequences.values())
+
+        ordered_table_keys = self._topologically_order_tables()
+        up_statements.extend(self._render_expr(self._tables[table_key]) for table_key in ordered_table_keys)
+
+        for table_key, create_index in self._indexes.values():
+            if not table_key or table_key in self._tables:
+                up_statements.append(self._render_expr(create_index))
+
+        up_statements.extend(self._render_expr(create_view) for create_view in self._views.values())
+
+        for (comment_kind, target_key), comment_expr in self._comments.items():
+            if self._is_comment_target_alive(comment_kind, target_key):
+                up_statements.append(self._render_expr(comment_expr))
+
+        for target_table_key, raw_stmt in self._post_ddl_statements:
+            if target_table_key is None or target_table_key in self._tables:
+                up_statements.append(raw_stmt)
+
+        for create_view in reversed(list(self._views.values())):
+            view_kind = str(create_view.args.get("kind") or "VIEW").upper()
+            drop_view = self._build_drop_expr(create_view, view_kind)
+            if drop_view is not None:
+                down_statements.append(self._render_expr(drop_view))
+
+        for table_key in reversed(ordered_table_keys):
+            drop_table = self._build_drop_expr(self._tables[table_key], "TABLE")
+            if drop_table is not None:
+                down_statements.append(self._render_expr(drop_table))
+
+        for create_seq in reversed(list(self._sequences.values())):
+            drop_seq = self._build_drop_expr(create_seq, "SEQUENCE")
+            if drop_seq is not None:
+                down_statements.append(self._render_expr(drop_seq))
+
+        for create_schema in reversed(list(self._schemas.values())):
+            drop_schema = self._build_drop_expr(create_schema, "SCHEMA")
+            if drop_schema is not None:
+                down_statements.append(self._render_expr(drop_schema))
+
+        return up_statements, down_statements
+
+    def _apply_expression(self, expr: exp.Expr) -> None:
+        if isinstance(expr, exp.Create):
+            self._handle_create(expr)
+            return
+        if isinstance(expr, exp.Alter):
+            self._handle_alter(expr)
+            return
+        if isinstance(expr, exp.Drop):
+            self._handle_drop(expr)
+            return
+        if isinstance(expr, exp.Comment):
+            self._handle_comment(expr)
+            return
+        if isinstance(expr, exp.Command) and str(expr.this).upper() == "RENAME":
+            literal_text = expr.expression.name if isinstance(expr.expression, exp.Expr) else str(expr.expression or "")
+            match = _RENAME_TABLE_COMMAND_RE.match(literal_text)
+            if match is not None:
+                old_table = exp.to_table(match.group(1), dialect=self._dialect)
+                new_table = exp.to_table(match.group(2), dialect=self._dialect)
+                self._rename_table_in_catalog(old_table, new_table)
+                return
+
+        dml_table_key = self._extract_dml_target_table_key(expr)
+        self._post_ddl_statements.append((dml_table_key, self._render_expr(expr)))
+
+    def _handle_create(self, expr: exp.Create) -> None:
+        kind = str(expr.args.get("kind") or "").upper()
+        expr_copy = expr.copy()
+        if kind == "SCHEMA":
+            key = self._object_key(expr_copy.this)
+            if key:
+                self._schemas[key] = expr_copy
+            return
+        if kind == "SEQUENCE":
+            key = self._object_key(expr_copy.this)
+            if key:
+                self._sequences[key] = expr_copy
+            return
+        if kind == "TABLE":
+            key = self._object_key(expr_copy.this)
+            if key:
+                self._tables[key] = expr_copy
+            return
+        if kind == "INDEX":
+            index_node = expr_copy.this
+            index_key = self._index_key(index_node)
+            table_node = (
+                index_node.args.get("table") if isinstance(index_node, exp.Index) else expr_copy.find(exp.Table)
+            )
+            table_key = self._object_key(table_node) if isinstance(table_node, exp.Expr) else ""
+            if index_key:
+                self._indexes[index_key] = (table_key, expr_copy)
+            return
+        if kind in {"VIEW", "MATERIALIZED VIEW"}:
+            key = self._object_key(expr_copy.this)
+            if key:
+                if kind == "VIEW":
+                    expr_copy.set("replace", False)
+                self._views[key] = expr_copy
+            return
+        self._post_ddl_statements.append((None, self._render_expr(expr_copy)))
+
+    def _handle_drop(self, expr: exp.Drop) -> None:
+        kind = str(expr.args.get("kind") or "").upper()
+        targets: list[exp.Expr] = list(expr.args.get("tables") or [])
+        if expr.this is not None and isinstance(expr.this, exp.Expr):
+            targets.append(expr.this)
+
+        for target in targets:
+            key = self._object_key(target)
+            if not key:
+                continue
+            if kind == "TABLE":
+                self._tables.pop(key, None)
+                stale_indexes = [idx_key for idx_key, (tbl_key, _) in self._indexes.items() if tbl_key == key]
+                for idx_key in stale_indexes:
+                    self._indexes.pop(idx_key, None)
+                stale_comments = [
+                    c_key
+                    for c_key in self._comments
+                    if c_key == ("TABLE", key) or (c_key[0] == "COLUMN" and c_key[1].startswith(f"{key}."))
+                ]
+                for c_key in stale_comments:
+                    self._comments.pop(c_key, None)
+                self._post_ddl_statements = [
+                    (tbl_key, stmt) for tbl_key, stmt in self._post_ddl_statements if tbl_key != key
+                ]
+            elif kind == "INDEX":
+                unqualified = key.rsplit(".", 1)[-1]
+                self._indexes.pop(key, None)
+                self._indexes.pop(unqualified, None)
+            elif kind in {"VIEW", "MATERIALIZED VIEW"}:
+                self._views.pop(key, None)
+                self._comments.pop(("VIEW", key), None)
+            elif kind == "SEQUENCE":
+                self._sequences.pop(key, None)
+            elif kind == "SCHEMA":
+                self._schemas.pop(key, None)
+
+    def _handle_comment(self, expr: exp.Comment) -> None:
+        kind = str(expr.args.get("kind") or "").upper()
+        target = expr.this
+        if not isinstance(target, exp.Expr):
+            return
+        key = self._comment_target_key(kind, target)
+        if key:
+            self._comments[(kind, key)] = expr.copy()
+
+    def _handle_alter(self, expr: exp.Alter) -> None:
+        kind = str(expr.args.get("kind") or "TABLE").upper()
+        if kind != "TABLE" or not isinstance(expr.this, exp.Table):
+            self._post_ddl_statements.append((None, self._render_expr(expr)))
+            return
+
+        target_table = expr.this
+        table_key = self._object_key(target_table)
+        if table_key not in self._tables:
+            self._post_ddl_statements.append((table_key or None, self._render_expr(expr)))
+            return
+
+        actions = expr.args.get("actions") or []
+        for action in actions:
+            if not isinstance(action, exp.Expr):
+                continue
+            self._apply_alter_table_action(table_key, target_table, action)
+            table_key = self._object_key(target_table)
+
+    def _apply_alter_table_action(self, table_key: str, target_table: exp.Table, action: exp.Expr) -> None:
+        create_expr = self._tables.get(table_key)
+        if create_expr is None:
+            return
+
+        if isinstance(action, exp.AlterRename) or action.__class__.__name__ == "RenameTable":
+            new_table = action.this
+            if isinstance(new_table, exp.Table):
+                target_db = target_table.args.get("db")
+                if isinstance(target_db, exp.Expr) and not new_table.db:
+                    new_table = new_table.copy()
+                    new_table.set("db", target_db.copy())
+                self._rename_table_in_catalog(target_table, new_table)
+                target_table.set("this", new_table.args.get("this"))
+                target_table.set("db", new_table.args.get("db"))
+            return
+
+        schema_expr = self._ensure_table_schema(create_expr)
+        expressions: list[exp.Expr] = list(schema_expr.expressions)
+
+        if isinstance(action, exp.ColumnDef):
+            col_name = action.name.lower()
+            replaced = False
+            for idx, item in enumerate(expressions):
+                if isinstance(item, exp.ColumnDef) and item.name.lower() == col_name:
+                    expressions[idx] = action.copy()
+                    replaced = True
+                    break
+            if not replaced:
+                expressions.append(action.copy())
+            schema_expr.set("expressions", expressions)
+            return
+
+        if isinstance(action, exp.Drop):
+            drop_kind = str(action.args.get("kind") or "").upper()
+            drop_targets: list[exp.Expr] = list(action.args.get("tables") or [])
+            if action.this is not None and isinstance(action.this, exp.Expr):
+                drop_targets.append(action.this)
+            drop_names = {self._unqualified_name(t) for t in drop_targets if self._unqualified_name(t)}
+            if drop_kind == "COLUMN":
+                self._drop_columns_from_table(table_key, schema_expr, expressions, drop_names)
+            elif drop_kind == "CONSTRAINT":
+                filtered = [
+                    item
+                    for item in expressions
+                    if not (isinstance(item, exp.Constraint) and self._unqualified_name(item.this) in drop_names)
+                ]
+                schema_expr.set("expressions", filtered)
+            return
+
+        if isinstance(action, exp.RenameColumn):
+            old_name = self._unqualified_name(action.this)
+            new_target = action.args.get("to")
+            new_name = self._unqualified_name(new_target) if isinstance(new_target, exp.Expr) else ""
+            if old_name and new_name:
+                new_ident = self._extract_identifier(new_target, new_name)
+                self._rename_column_in_table(table_key, schema_expr, expressions, old_name, new_ident)
+            return
+
+        if isinstance(action, exp.AlterColumn):
+            self._alter_column_in_table(schema_expr, expressions, action)
+            return
+
+        if isinstance(action, exp.AddConstraint):
+            constraint_exprs = action.args.get("expressions") or ([action.this] if action.this is not None else [])
+            expressions.extend(
+                constraint_expr.copy() for constraint_expr in constraint_exprs if isinstance(constraint_expr, exp.Expr)
+            )
+            schema_expr.set("expressions", expressions)
+            return
+
+        if isinstance(action, (exp.Constraint, exp.PrimaryKey, exp.ForeignKey, exp.UniqueColumnConstraint)):
+            expressions.append(action.copy())
+            schema_expr.set("expressions", expressions)
+
+    def _drop_columns_from_table(
+        self, table_key: str, schema_expr: exp.Schema, expressions: list[exp.Expr], drop_names: set[str]
+    ) -> None:
+        new_expressions: list[exp.Expr] = []
+        for item in expressions:
+            if isinstance(item, exp.ColumnDef) and item.name.lower() in drop_names:
+                continue
+            if not isinstance(item, exp.ColumnDef):
+                referenced_cols = self._referenced_columns_in_constraint(item)
+                if referenced_cols and referenced_cols.issubset(drop_names):
+                    continue
+            new_expressions.append(item)
+        schema_expr.set("expressions", new_expressions)
+
+        stale_indexes: list[str] = []
+        for idx_key, (idx_table_key, idx_expr) in self._indexes.items():
+            if idx_table_key != table_key:
+                continue
+            idx_cols = self._referenced_columns_in_index(idx_expr)
+            if idx_cols and idx_cols.issubset(drop_names):
+                stale_indexes.append(idx_key)
+        for idx_key in stale_indexes:
+            self._indexes.pop(idx_key, None)
+
+        for col_name in drop_names:
+            self._comments.pop(("COLUMN", f"{table_key}.{col_name}"), None)
+
+    def _rename_column_in_table(
+        self,
+        table_key: str,
+        schema_expr: exp.Schema,
+        expressions: list[exp.Expr],
+        old_name: str,
+        new_ident: exp.Identifier,
+    ) -> None:
+        for item in expressions:
+            if isinstance(item, exp.ColumnDef) and item.name.lower() == old_name:
+                item.set("this", new_ident.copy())
+            elif not isinstance(item, exp.ColumnDef):
+                self._replace_column_identifier_in_tree(item, old_name, new_ident)
+        schema_expr.set("expressions", expressions)
+
+        for idx_table_key, idx_expr in self._indexes.values():
+            if idx_table_key == table_key:
+                params = idx_expr.this.args.get("params") if isinstance(idx_expr.this, exp.Index) else None
+                if isinstance(params, exp.Expr):
+                    self._replace_column_identifier_in_tree(params, old_name, new_ident)
+
+        old_comment_key = ("COLUMN", f"{table_key}.{old_name}")
+        if old_comment_key in self._comments:
+            comment_expr = self._comments.pop(old_comment_key)
+            if isinstance(comment_expr.this, exp.Column):
+                comment_expr.this.set("this", new_ident.copy())
+            self._comments[("COLUMN", f"{table_key}.{new_ident.name.lower()}")] = comment_expr
+
+    def _alter_column_in_table(
+        self, schema_expr: exp.Schema, expressions: list[exp.Expr], action: exp.AlterColumn
+    ) -> None:
+        col_name = action.name.lower()
+        target_col: exp.ColumnDef | None = None
+        for item in expressions:
+            if isinstance(item, exp.ColumnDef) and item.name.lower() == col_name:
+                target_col = item
+                break
+        if target_col is None:
+            return
+
+        dtype = action.args.get("dtype")
+        if isinstance(dtype, exp.DataType):
+            target_col.set("kind", dtype.copy())
+
+        constraints: list[exp.ColumnConstraint] = list(target_col.args.get("constraints") or [])
+        default_expr = action.args.get("default")
+        allow_null = action.args.get("allow_null")
+        is_drop = bool(action.args.get("drop"))
+
+        if isinstance(default_expr, exp.Expr):
+            constraints = [c for c in constraints if not isinstance(c.kind, exp.DefaultColumnConstraint)]
+            constraints.append(exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=default_expr.copy())))
+        elif is_drop and allow_null is None:
+            constraints = [c for c in constraints if not isinstance(c.kind, exp.DefaultColumnConstraint)]
+
+        if allow_null is False:
+            has_not_null = any(
+                isinstance(c.kind, exp.NotNullColumnConstraint) and not c.kind.args.get("allow_null")
+                for c in constraints
+            )
+            if not has_not_null:
+                constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
+        elif allow_null is True:
+            constraints = [
+                c
+                for c in constraints
+                if not (isinstance(c.kind, exp.NotNullColumnConstraint) and not c.kind.args.get("allow_null"))
+            ]
+
+        target_col.set("constraints", constraints)
+        schema_expr.set("expressions", expressions)
+
+    def _rename_table_in_catalog(self, old_table: exp.Table, new_table: exp.Table) -> None:
+        old_key = self._object_key(old_table)
+        new_key = self._object_key(new_table)
+        if not old_key or not new_key or old_key == new_key:
+            return
+
+        if old_key in self._tables:
+            rebuilt_tables: OrderedDict[str, exp.Create] = OrderedDict()
+            for key, create_expr in self._tables.items():
+                if key == old_key:
+                    self._set_create_table_node(create_expr, new_table.copy())
+                    rebuilt_tables[new_key] = create_expr
+                else:
+                    rebuilt_tables[key] = create_expr
+            self._tables = rebuilt_tables
+
+        rebuilt_indexes: OrderedDict[str, tuple[str, exp.Create]] = OrderedDict()
+        for idx_key, (tbl_key, idx_expr) in self._indexes.items():
+            if tbl_key == old_key:
+                if isinstance(idx_expr.this, exp.Index):
+                    idx_expr.this.set("table", new_table.copy())
+                rebuilt_indexes[idx_key] = (new_key, idx_expr)
+            else:
+                rebuilt_indexes[idx_key] = (tbl_key, idx_expr)
+        self._indexes = rebuilt_indexes
+
+        rebuilt_comments: OrderedDict[tuple[str, str], exp.Comment] = OrderedDict()
+        for (c_kind, c_target), comment_expr in self._comments.items():
+            if c_kind == "TABLE" and c_target == old_key:
+                comment_expr.set("this", new_table.copy())
+                rebuilt_comments[(c_kind, new_key)] = comment_expr
+            elif c_kind == "COLUMN" and c_target.startswith(f"{old_key}."):
+                col_suffix = c_target[len(old_key) + 1 :]
+                if isinstance(comment_expr.this, exp.Column):
+                    new_this = new_table.args.get("this")
+                    if isinstance(new_this, exp.Expr):
+                        comment_expr.this.set("table", new_this.copy())
+                    new_db = new_table.args.get("db")
+                    if isinstance(new_db, exp.Expr):
+                        comment_expr.this.set("db", new_db.copy())
+                rebuilt_comments[(c_kind, f"{new_key}.{col_suffix}")] = comment_expr
+            else:
+                rebuilt_comments[(c_kind, c_target)] = comment_expr
+        self._comments = rebuilt_comments
+
+        self._post_ddl_statements = [
+            (new_key if tbl_key == old_key else tbl_key, stmt) for tbl_key, stmt in self._post_ddl_statements
+        ]
+
+    def _topologically_order_tables(self) -> list[str]:
+        keys = list(self._tables.keys())
+        if len(keys) <= 1:
+            return keys
+
+        unqualified_map: dict[str, str] = {}
+        for key in keys:
+            short_name = key.rsplit(".", 1)[-1]
+            if short_name not in unqualified_map:
+                unqualified_map[short_name] = key
+
+        deps: dict[str, set[str]] = {key: set() for key in keys}
+        for key, create_expr in self._tables.items():
+            for ref in create_expr.find_all(exp.Reference):
+                ref_target = ref.this.this if isinstance(ref.this, exp.Schema) else ref.this
+                ref_key = self._object_key(ref_target) if isinstance(ref_target, exp.Expr) else ""
+                resolved_key = ref_key if ref_key in deps else unqualified_map.get(ref_key.rsplit(".", 1)[-1], "")
+                if resolved_key and resolved_key != key and resolved_key in deps:
+                    deps[key].add(resolved_key)
+
+        ordered: list[str] = []
+        visited: set[str] = set()
+        visiting: set[str] = set()
+
+        def _visit(node: str) -> None:
+            if node in visited or node in visiting:
+                return
+            visiting.add(node)
+            for parent in keys:
+                if parent in deps[node]:
+                    _visit(parent)
+            visiting.remove(node)
+            visited.add(node)
+            ordered.append(node)
+
+        for key in keys:
+            _visit(key)
+        return ordered
+
+    def _is_comment_target_alive(self, comment_kind: str, target_key: str) -> bool:
+        if comment_kind == "TABLE":
+            return target_key in self._tables
+        if comment_kind == "COLUMN":
+            table_key = target_key.rsplit(".", 1)[0] if "." in target_key else ""
+            return table_key in self._tables
+        if comment_kind in {"VIEW", "MATERIALIZED VIEW"}:
+            return target_key in self._views
+        if comment_kind == "INDEX":
+            return target_key in self._indexes
+        if comment_kind == "SEQUENCE":
+            return target_key in self._sequences
+        if comment_kind == "SCHEMA":
+            return target_key in self._schemas
+        return True
+
+    def _render_expr(self, expr: exp.Expr) -> str:
+        return self._ensure_semicolon(expr.sql(dialect=self._dialect))
+
+    @staticmethod
+    def _ensure_semicolon(sql_text: str) -> str:
+        stripped = sql_text.strip()
+        return stripped if stripped.endswith(";") else f"{stripped};"
+
+    @staticmethod
+    def _ensure_table_schema(create_expr: exp.Create) -> exp.Schema:
+        if isinstance(create_expr.this, exp.Schema):
+            return create_expr.this
+        schema_expr = exp.Schema(this=create_expr.this, expressions=[])
+        create_expr.set("this", schema_expr)
+        return schema_expr
+
+    @staticmethod
+    def _set_create_table_node(create_expr: exp.Create, new_table: exp.Table) -> None:
+        if isinstance(create_expr.this, exp.Schema):
+            create_expr.this.set("this", new_table)
+        else:
+            create_expr.set("this", new_table)
+
+    @staticmethod
+    def _build_drop_expr(create_expr: exp.Create, kind: str) -> exp.Drop | None:
+        target = create_expr.this.this if isinstance(create_expr.this, exp.Schema) else create_expr.this
+        if not isinstance(target, exp.Expr):
+            return None
+        return exp.Drop(this=target.copy(), tables=[target.copy()], kind=kind, exists=True)
+
+    @staticmethod
+    def _object_key(node: exp.Expr | None) -> str:
+        if node is None:
+            return ""
+        target = node.this if isinstance(node, exp.Schema) else node
+        if isinstance(target, exp.Table):
+            name = target.name.lower()
+            db = target.db.lower()
+            if db and name:
+                return f"{db}.{name}"
+            return name or db
+        if isinstance(target, exp.Index):
+            return target.name.lower()
+        return target.name.lower()
+
+    @classmethod
+    def _index_key(cls, node: exp.Expr | None) -> str:
+        if isinstance(node, exp.Index):
+            return node.name.lower()
+        return cls._object_key(node)
+
+    @classmethod
+    def _comment_target_key(cls, kind: str, target: exp.Expr) -> str:
+        if kind == "COLUMN" and isinstance(target, exp.Column):
+            col_name = target.name.lower()
+            table_name = target.table.lower()
+            db_arg = target.args.get("db")
+            db_name = str(db_arg.name).lower() if isinstance(db_arg, exp.Expr) else ""
+            table_key = f"{db_name}.{table_name}" if db_name and table_name else table_name
+            return f"{table_key}.{col_name}" if table_key and col_name else col_name
+        return cls._object_key(target)
+
+    @classmethod
+    def _extract_dml_target_table_key(cls, expr: exp.Expr) -> str | None:
+        if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)):
+            table_node = expr.this.this if isinstance(expr.this, exp.Schema) else expr.this
+            if isinstance(table_node, exp.Table):
+                key = cls._object_key(table_node)
+                return key or None
+        return None
+
+    @staticmethod
+    def _unqualified_name(node: exp.Expr | None) -> str:
+        if node is None:
+            return ""
+        return node.name.lower()
+
+    @staticmethod
+    def _extract_identifier(node: exp.Expr | None, fallback_name: str) -> exp.Identifier:
+        if isinstance(node, exp.Identifier):
+            return node.copy()
+        if isinstance(node, exp.Column) and isinstance(node.this, exp.Identifier):
+            return node.this.copy()
+        return exp.to_identifier(fallback_name)
+
+    @staticmethod
+    def _referenced_columns_in_constraint(node: exp.Expr) -> set[str]:
+        cols: set[str] = set()
+        for col in node.find_all(exp.Column):
+            if col.name:
+                cols.add(col.name.lower())
+        for ident in node.find_all(exp.Identifier):
+            parent = ident.parent
+            if isinstance(parent, (exp.Schema, exp.ForeignKey, exp.PrimaryKey, exp.UniqueColumnConstraint)) and (
+                parent is node or (isinstance(parent, exp.Schema) and parent.this is None)
+            ):
+                cols.add(ident.name.lower())
+        return cols
+
+    @staticmethod
+    def _referenced_columns_in_index(create_index: exp.Create) -> set[str]:
+        cols: set[str] = set()
+        index_node = create_index.this
+        params = index_node.args.get("params") if isinstance(index_node, exp.Index) else None
+        search_root = params if isinstance(params, exp.Expr) else create_index
+        for col in search_root.find_all(exp.Column):
+            if col.name:
+                cols.add(col.name.lower())
+        return cols
+
+    @staticmethod
+    def _replace_column_identifier_in_tree(node: exp.Expr, old_name: str, new_ident: exp.Identifier) -> None:
+        for col in node.find_all(exp.Column):
+            if col.name.lower() == old_name:
+                col.set("this", new_ident.copy())
+        for ident in node.find_all(exp.Identifier):
+            parent = ident.parent
+            if (
+                ident.name.lower() == old_name
+                and isinstance(parent, (exp.Schema, exp.ForeignKey, exp.PrimaryKey, exp.UniqueColumnConstraint))
+                and not isinstance(parent.parent, exp.Reference)
+            ):
+                ident.replace(new_ident.copy())
+
+
+def fold_migration_ddl(statements: Sequence[str], *, dialect: str | None = None) -> tuple[list[str], list[str]]:
+    """Fold a chronological sequence of migration SQL statements into net canonical DDL.
+
+    Args:
+        statements: Chronological sequence of SQL statements from ``up`` migrations.
+        dialect: Optional SQLGlot dialect name used to parse and render DDL.
+
+    Returns:
+        Tuple of ``(up_statements, down_statements)`` representing net schema DDL
+        and reverse-dependency ``DROP`` statements.
+    """
+    folder = DDLStateFolder(dialect=dialect)
+    for statement in statements:
+        folder.feed(statement)
+    return folder.to_statements()
 
 
 def parse_version_range(range_str: str) -> tuple[str, str]:
