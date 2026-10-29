@@ -269,31 +269,33 @@ check-all: lint coverage                            ## Run all checks (lint, tes
 .PHONY: docs-clean
 docs-clean:                                        ## Clean documentation build
 	@echo "${INFO} Cleaning documentation build assets... 🧹"
-	@rm -rf docs/_build
+	@rm -rf site docs/_build .cache
 	@echo "${OK} Documentation assets cleaned"
 
 .PHONY: docs-serve
 docs-serve: docs-clean                             ## Serve documentation locally
 	@echo "${INFO} Starting documentation server... 📚"
-	@uv run sphinx-autobuild docs docs/_build/ -j 1 --watch sqlspec --watch docs --watch tests --watch CONTRIBUTING.rst --port 8002
+	@uv run --no-sync zensical serve -a localhost:8002
 
 .PHONY: docs
 docs: docs-clean                                   ## Build documentation
 	@echo "${INFO} Building documentation... 📝"
-	@PYTHONWARNINGS="ignore::FutureWarning" uv run sphinx-build -M html docs docs/_build/ -E -a -j 1 -W
+	@uv run --no-sync zensical build --clean
+	@uv run --no-sync python -m tools.docs.postbuild --config zensical.toml --docs-dir docs --site-dir site
+	@uv run --no-sync python -m tools.docs.verify_docs_artifacts --site-dir site
 	@echo "${OK} Documentation built successfully"
 
+.PHONY: docs-check
+docs-check: docs                                   ## Build and verify documentation artifacts
+
 .PHONY: docs-linkcheck
-docs-linkcheck:                                    ## Check documentation links
+docs-linkcheck:                                    ## Check documentation links and anchors
 	@echo "${INFO} Checking documentation links... 🔗"
-	@uv run sphinx-build -b linkcheck ./docs ./docs/_build -D linkcheck_ignore='http://.*','https://.*'
+	@uv run --no-sync python -m tools.docs.verify_docs_artifacts --site-dir site
 	@echo "${OK} Link check complete"
 
 .PHONY: docs-linkcheck-full
-docs-linkcheck-full:                               ## Run full documentation link check
-	@echo "${INFO} Running full link check... 🔗"
-	@uv run sphinx-build -b linkcheck ./docs ./docs/_build -D linkcheck_anchors=0
-	@echo "${OK} Full link check complete"
+docs-linkcheck-full: docs-linkcheck                ## Run full documentation link check
 
 .PHONY: docs-demos
 docs-demos:                                        ## Generate CLI demo GIFs from VHS tapes

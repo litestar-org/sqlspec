@@ -1,0 +1,170 @@
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: #ffffff;
+  --md-default-bg-color--light: #f8fafc;
+  --md-default-fg-color: #0f172a;
+  --md-default-fg-color--light: #334155;
+  --md-default-fg-color--lighter: #475569;
+  --md-default-fg-color--lightest: rgba(15, 23, 42, 0.08);
+  --md-primary-fg-color: #0f172a;
+  --md-primary-fg-color--light: #1e293b;
+  --md-primary-fg-color--dark: #020617;
+  --md-primary-bg-color: #f8fafc;
+  --md-primary-bg-color--light: rgba(248, 250, 252, 0.78);
+  --md-typeset-color: #0f172a;
+  --md-typeset-a-color: #1d4ed8;
+  --md-accent-fg-color: #4338ca;
+  --md-accent-fg-color--transparent: rgba(67, 56, 202, 0.1);
+  --md-code-bg-color: #f8fafc;
+  --md-code-fg-color: #0f172a;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #0f172a;
+  --md-default-bg-color--light: #1e293b;
+  --md-default-fg-color: #f1f5f9;
+  --md-default-fg-color--light: #cbd5e1;
+  --md-default-fg-color--lighter: #94a3b8;
+  --md-default-fg-color--lightest: rgba(241, 245, 249, 0.08);
+  --md-primary-fg-color: #0f172a;
+  --md-primary-fg-color--light: #1e293b;
+  --md-primary-fg-color--dark: #020617;
+  --md-primary-bg-color: #f8fafc;
+  --md-primary-bg-color--light: rgba(248, 250, 252, 0.78);
+  --md-typeset-color: #f1f5f9;
+  --md-typeset-a-color: #60a5fa;
+  --md-accent-fg-color: #818cf8;
+  --md-accent-fg-color--transparent: rgba(129, 140, 248, 0.14);
+  --md-code-bg-color: #1e293b;
+  --md-code-fg-color: #f1f5f9;
+}
+
+.md-header,
+.md-tabs {
+  background-color: #0f172a;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.md-content__inner {
+  max-width: 46rem;
+  margin-inline: auto;
+}
+
+.md-typeset {
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+
+.md-typeset p,
+.md-typeset li {
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset a:not(.headerlink):not(.md-button):not(.tabbed-labels > label > a):not(.md-nav__link) {
+  color: var(--md-typeset-a-color);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.md-typeset a:not(.headerlink):not(.md-button):not(.tabbed-labels > label > a):not(.md-nav__link):hover {
+  color: var(--md-accent-fg-color);
+  text-decoration-thickness: 2px;
+}
+
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--secondary {
+    display: block;
+  }
+}
+
+.md-sidebar--secondary,
+.md-sidebar--secondary .md-sidebar__scrollwrap,
+.md-sidebar--secondary .md-sidebar__inner,
+.md-nav--secondary {
+  overflow-x: hidden;
+}
+
+.md-nav--secondary .md-nav__list {
+  padding-inline-end: 0.25rem;
+}
+
+.md-nav--secondary .md-nav__link {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  white-space: normal;
+  line-height: 1.35;
+  padding-block: 0.2rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-nav--secondary .md-nav__link--active,
+.md-nav--secondary .md-nav__link:hover {
+  color: var(--md-typeset-a-color);
+}
+
+.md-typeset code {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 4px;
+  padding: 0.08em 0.32em;
+}
+
+.md-typeset pre > code {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+}
+
+.md-typeset .doc-heading {
+  font-weight: 600;
+  margin-top: 1.6rem;
+}
+
+.md-typeset h3.doc-heading {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.md-typeset h4.doc-heading {
+  font-size: 0.92rem;
+  margin-top: 1.15rem;
+}
+
+.md-typeset .doc-contents {
+  padding-inline-start: 0.9rem;
+  border-inline-start: 2px solid var(--md-default-fg-color--lightest);
+  margin-bottom: 1.5rem;
+}
+
+.md-typeset .doc-contents:not(.first) {
+  padding-inline-start: 0.85rem;
+}
+
+.md-typeset .doc-symbol {
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.1rem 0.38rem;
+  vertical-align: middle;
+}
+
+[data-md-color-scheme="default"] .md-typeset .doc-symbol {
+  background-color: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .doc-symbol {
+  background-color: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+  border: 1px solid rgba(96, 165, 250, 0.32);
+}
+
+.md-typeset .doc-contents table:not([class]) {
+  font-size: 0.78rem;
+  display: table;
+  width: 100%;
+}
+
+.md-typeset .doc-contents table:not([class]) th,
+.md-typeset .doc-contents table:not([class]) td {
+  padding: 0.45rem 0.65rem;
+}

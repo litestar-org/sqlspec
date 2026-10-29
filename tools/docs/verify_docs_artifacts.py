@@ -22,8 +22,6 @@ _REQUIRED_ROOT_FILES: tuple[str, ...] = ("objects.inv", "llms.txt", "llms-full.t
 class DocsVerificationError(RuntimeError):
     """Raised when built documentation artifacts violate structural or hygiene gates."""
 
-    __slots__ = ("violations",)
-
     def __init__(self, violations: list[str]) -> None:
         self.violations = violations
         super().__init__("\n".join(violations))
@@ -130,14 +128,6 @@ def _is_toc_exempt(rel_posix: str) -> bool:
 
 class _PageArtifactParser(HTMLParser):
     """Single-pass HTML parser extracting element IDs, #fragment links, and secondary TOC counts."""
-
-    __slots__ = (
-        "_current_secondary_links",
-        "_secondary_nav_stack",
-        "_secondary_toc_counts",
-        "element_ids",
-        "same_page_fragments",
-    )
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
