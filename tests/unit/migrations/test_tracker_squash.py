@@ -6,6 +6,7 @@ Tests for:
 - is_squash_already_applied() method
 """
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
@@ -313,3 +314,258 @@ async def test_async_is_squash_already_applied_raises_on_partial_overlap() -> No
         await tracker.is_squash_already_applied(
             driver=driver, squashed_version="0009", replaced_versions=["0001", "0002"]
         )
+
+
+@pytest.mark.anyio
+async def test_runner_load_migration_extracts_replaces_from_sql_and_python_files(tmp_path: Path) -> None:
+    """Verify SyncMigrationRunner and AsyncMigrationRunner populate replaces from SQL and Python migrations."""
+    from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, extract_replaces_versions
+
+    sql_file = tmp_path / "0001_initial_schema.sql"
+    sql_file.write_text(
+        "-- SQLSpec Migration\n"
+        "-- Version: 0001\n"
+        "-- Description: initial_schema\n"
+        "-- Squashed from: 0001, 0002, 0003\n\n"
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);\n\n"
+        "-- name: migrate-0001-down\n"
+        "DROP TABLE IF EXISTS users;\n",
+        encoding="utf-8",
+    )
+
+    py_doc_file = tmp_path / "0002_py_squash.py"
+    py_doc_file.write_text(
+        '"""SQLSpec Migration.\n\n'
+        "Version: 0002\n"
+        "Description: py_squash\n"
+        "Squashed from: 20251011120000, 20251012130000\n"
+        '"""\n\n'
+        "def up() -> list[str]:\n"
+        "    return ['CREATE TABLE posts (id INTEGER PRIMARY KEY);']\n\n"
+        "def down() -> list[str]:\n"
+        "    return ['DROP TABLE IF EXISTS posts;']\n",
+        encoding="utf-8",
+    )
+
+    py_attr_file = tmp_path / "0003_py_replaces.py"
+    py_attr_file.write_text(
+        '"""Migration with __replaces__."""\n\n'
+        '__replaces__ = ["0003", "0004"]\n\n'
+        "def up() -> list[str]:\n"
+        "    return ['SELECT 1;']\n",
+        encoding="utf-8",
+    )
+
+    assert extract_replaces_versions(sql_file.read_text(encoding="utf-8")) == ["0001", "0002", "0003"]
+    assert extract_replaces_versions(py_doc_file.read_text(encoding="utf-8")) == ["20251011120000", "20251012130000"]
+    assert extract_replaces_versions(py_attr_file.read_text(encoding="utf-8")) == ["0003", "0004"]
+
+    sync_runner = SyncMigrationRunner(tmp_path)
+    sql_meta = sync_runner.load_migration(sql_file, "0001")
+    py_doc_meta = sync_runner.load_migration(py_doc_file, "0002")
+    py_attr_meta = sync_runner.load_migration(py_attr_file, "0003")
+
+    assert sql_meta["replaces"] == ["0001", "0002", "0003"]
+    assert py_doc_meta["replaces"] == ["20251011120000", "20251012130000"]
+    assert py_attr_meta["replaces"] == ["0003", "0004"]
+
+    async_runner = AsyncMigrationRunner(tmp_path)
+    async_sql_meta = await async_runner.load_migration(sql_file, "0001")
+    assert async_sql_meta["replaces"] == ["0001", "0002", "0003"]
+
+
+def test_sync_upgrade_fresh_db_records_replaces_metadata(tmp_path: Path) -> None:
+    """Verify upgrading a fresh database with a squashed migration populates the replaces column."""
+    from sqlspec.adapters.sqlite.config import SqliteConfig
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_initial_schema.sql").write_text(
+        "-- SQLSpec Migration\n"
+        "-- Version: 0001\n"
+        "-- Description: initial_schema\n"
+        "-- Squashed from: 0001, 0002, 0003\n\n"
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);\n\n"
+        "-- name: migrate-0001-down\n"
+        "DROP TABLE IF EXISTS users;\n",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "fresh.db"
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+    )
+    commands = SyncMigrationCommands(config)
+    commands.upgrade(echo=False)
+
+    with config.provide_session() as driver:
+        applied = commands.tracker.get_applied_migrations(driver)
+    assert len(applied) == 1
+    assert applied[0]["version_num"] == "0001"
+    assert applied[0]["replaces"] in {"0001,0002,0003", "0001, 0002, 0003"}
+
+    commands.upgrade(echo=False)
+    with config.provide_session() as driver:
+        applied_after = commands.tracker.get_applied_migrations(driver)
+    assert len(applied_after) == 1
+
+
+def test_sync_upgrade_reconciles_fully_applied_pre_squash_db_and_allows_downgrade(tmp_path: Path) -> None:
+    """Verify upgrade reconciles a pre-squash DB with 0001..0003 applied and downgrade succeeds."""
+    from sqlspec.adapters.sqlite.config import SqliteConfig
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_users.sql").write_text(
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);\n"
+        "-- name: migrate-0001-down\n"
+        "DROP TABLE users;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0002_email.sql").write_text(
+        "-- name: migrate-0002-up\n"
+        "ALTER TABLE users ADD COLUMN email TEXT;\n"
+        "-- name: migrate-0002-down\n"
+        "ALTER TABLE users DROP COLUMN email;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0003_posts.sql").write_text(
+        "-- name: migrate-0003-up\n"
+        "CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER);\n"
+        "-- name: migrate-0003-down\n"
+        "DROP TABLE posts;\n",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "staging.db"
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+    )
+    commands = SyncMigrationCommands(config)
+    commands.upgrade(echo=False)
+
+    with config.provide_session() as driver:
+        pre_applied = commands.tracker.get_applied_migrations(driver)
+    assert [row["version_num"] for row in pre_applied] == ["0001", "0002", "0003"]
+
+    commands.squash("0001", "0003", "initial_schema", update_database=False, yes=True)
+
+    reconcile_commands = SyncMigrationCommands(config)
+    reconcile_commands.upgrade(echo=False)
+
+    with config.provide_session() as driver:
+        post_applied = reconcile_commands.tracker.get_applied_migrations(driver)
+    assert len(post_applied) == 1
+    assert post_applied[0]["version_num"] == "0001"
+    assert post_applied[0]["replaces"] in {"0001,0002,0003", "0001, 0002, 0003"}
+
+    reconcile_commands.downgrade(revision="-1", echo=False)
+    with config.provide_session() as driver:
+        after_downgrade = reconcile_commands.tracker.get_applied_migrations(driver)
+    assert after_downgrade == []
+
+
+def test_sync_upgrade_raises_on_partially_applied_pre_squash_db(tmp_path: Path) -> None:
+    """Verify upgrade raises SquashValidationError when only a subset of replaced versions is applied."""
+    from sqlspec.adapters.sqlite.config import SqliteConfig
+    from sqlspec.exceptions import SquashValidationError
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_users.sql").write_text(
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);\n"
+        "-- name: migrate-0001-down\n"
+        "DROP TABLE users;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0002_email.sql").write_text(
+        "-- name: migrate-0002-up\n"
+        "ALTER TABLE users ADD COLUMN email TEXT;\n"
+        "-- name: migrate-0002-down\n"
+        "ALTER TABLE users DROP COLUMN email;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0003_posts.sql").write_text(
+        "-- name: migrate-0003-up\n"
+        "CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER);\n"
+        "-- name: migrate-0003-down\n"
+        "DROP TABLE posts;\n",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "partial.db"
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+    )
+    commands = SyncMigrationCommands(config)
+    commands.upgrade(revision="0001", echo=False)
+
+    commands.squash("0001", "0003", "initial_schema", update_database=False, yes=True)
+
+    partial_commands = SyncMigrationCommands(config)
+    with pytest.raises(SquashValidationError, match="0002"):
+        partial_commands.upgrade(echo=False)
+
+
+@pytest.mark.anyio
+async def test_async_upgrade_reconciles_fully_applied_and_rejects_partial_squash(tmp_path: Path) -> None:
+    """Verify AsyncMigrationCommands reconciles fully applied squash ranges and rejects partial states."""
+    from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+    from sqlspec.exceptions import SquashValidationError
+    from sqlspec.migrations.commands import AsyncMigrationCommands
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_users.sql").write_text(
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);\n"
+        "-- name: migrate-0001-down\n"
+        "DROP TABLE users;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0002_posts.sql").write_text(
+        "-- name: migrate-0002-up\n"
+        "CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT);\n"
+        "-- name: migrate-0002-down\n"
+        "DROP TABLE posts;\n",
+        encoding="utf-8",
+    )
+
+    full_db = tmp_path / "async_full.db"
+    partial_db = tmp_path / "async_partial.db"
+
+    full_config = AiosqliteConfig(
+        connection_config={"database": str(full_db)}, migration_config={"script_location": str(migrations_dir)}
+    )
+    partial_config = AiosqliteConfig(
+        connection_config={"database": str(partial_db)}, migration_config={"script_location": str(migrations_dir)}
+    )
+
+    await AsyncMigrationCommands(full_config).upgrade(echo=False)
+    await AsyncMigrationCommands(partial_config).upgrade(revision="0001", echo=False)
+
+    await AsyncMigrationCommands(full_config).squash("0001", "0002", "initial_schema", update_database=False, yes=True)
+
+    reconcile_full = AsyncMigrationCommands(full_config)
+    await reconcile_full.upgrade(echo=False)
+    async with full_config.provide_session() as driver:
+        applied = await reconcile_full.tracker.get_applied_migrations(driver)
+    assert len(applied) == 1
+    assert applied[0]["version_num"] == "0001"
+    assert applied[0]["replaces"] in {"0001,0002", "0001, 0002"}
+
+    await reconcile_full.downgrade(revision="-1", echo=False)
+    async with full_config.provide_session() as driver:
+        after_downgrade = await reconcile_full.tracker.get_applied_migrations(driver)
+    assert after_downgrade == []
+
+    reconcile_partial = AsyncMigrationCommands(partial_config)
+    with pytest.raises(SquashValidationError, match="0002"):
+        await reconcile_partial.upgrade(echo=False)

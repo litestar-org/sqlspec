@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from sqlspec.migrations.base import LoadedMigrationMetadata
     from sqlspec.observability import ObservabilityRuntime
 
-__all__ = ("AsyncMigrationRunner", "SyncMigrationRunner", "create_migration_runner")
+__all__ = ("AsyncMigrationRunner", "SyncMigrationRunner", "create_migration_runner", "extract_replaces_versions")
 
 logger = get_logger("sqlspec.migrations.runner")
 
@@ -116,7 +116,7 @@ class BaseMigrationRunner:
             flags=re.MULTILINE | re.IGNORECASE,
         )
 
-        return hashlib.md5(canonical_content.encode()).hexdigest()  # noqa: S324
+        return hashlib.md5(canonical_content.encode(), usedforsecurity=False).hexdigest()
 
     @abstractmethod
     def load_migration(self, file_path: Path) -> "LoadedMigrationMetadata | Awaitable[LoadedMigrationMetadata]":
@@ -366,6 +366,8 @@ class BaseMigrationRunner:
                 raise MigrationError(msg)
             schema = candidate_schema
 
+        replaces = extract_replaces_versions(content)
+
         metadata = cast(
             "LoadedMigrationMetadata",
             {
@@ -376,6 +378,7 @@ class BaseMigrationRunner:
                 "content": content,
                 "transactional": transactional,
                 "schema": schema,
+                "replaces": replaces,
             },
         )
         self._metadata_cache[cache_key] = _CachedMigrationMetadata(
@@ -1247,6 +1250,49 @@ def create_migration_runner(
     )
 
 
+def extract_replaces_versions(content: str) -> list[str]:
+    """Extract replaced version strings from a migration header or ``__replaces__`` attribute.
+
+    Args:
+        content: Raw migration file text.
+
+    Returns:
+        Ordered list of replaced version strings, or empty list when absent.
+    """
+    for line in content.splitlines():
+        stripped = line.strip()
+        for prefix in ("-- Squashed from:", "-- Replaces:", "Squashed from:", "Replaces:"):
+            if stripped.lower().startswith(prefix.lower()):
+                raw_versions = stripped[len(prefix) :].strip()
+                return [v.strip() for v in raw_versions.split(",") if v.strip()]
+    try:
+        module = ast.parse(content)
+    except SyntaxError:
+        return []
+    for node in module.body:
+        targets: list[ast.expr] = []
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        if value is None:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == "__replaces__":
+                if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+                    return [
+                        str(elt.value).strip()
+                        for elt in value.elts
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and elt.value.strip()
+                    ]
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    return [v.strip() for v in value.value.split(",") if v.strip()]
+    return []
+
+
 class _CachedMigrationMetadata:
     """Cached migration metadata keyed by file path."""
 
@@ -1258,7 +1304,10 @@ class _CachedMigrationMetadata:
         self.size = size
 
     def clone(self) -> "dict[str, Any]":
-        return dict(self.metadata)
+        cloned = dict(self.metadata)
+        if "replaces" in cloned and isinstance(cloned["replaces"], list):
+            cloned["replaces"] = list(cloned["replaces"])
+        return cloned
 
 
 class _MigrationFileEntry:

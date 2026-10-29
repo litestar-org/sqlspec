@@ -59,6 +59,8 @@ class LoadedMigrationMetadata(TypedDict):
     """Explicit per-migration transaction override, or ``None`` to use adapter defaults."""
     schema: NotRequired["str | None"]
     """Optional session schema directive parsed from ``-- schema: <name>``."""
+    replaces: NotRequired[list[str]]
+    """Prior migration version identifiers superseded by this squashed revision."""
     has_upgrade: NotRequired[bool]
     """Whether the migration defines an executable upgrade step."""
     has_downgrade: NotRequired[bool]

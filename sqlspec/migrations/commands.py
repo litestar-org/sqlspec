@@ -16,7 +16,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from sqlspec.builder import sql
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, SquashValidationError
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
@@ -930,6 +930,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         exec_time,
                         migration["checksum"],
                         commit=not use_txn,
+                        replaces=migration.get("replaces"),
                     )
                 else:
                     self.tracker.record_migration(
@@ -1078,9 +1079,18 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         claimed_versions = set(applied_map)
         reconciled_old_versions: set[str] = set()
 
-        conversion_map = generate_conversion_map(all_migrations)
+        updated_count = self._reconcile_squashed_migrations(
+            driver,
+            all_migrations,
+            applied_map,
+            claimed_versions,
+            reconciled_old_versions,
+            use_logger=use_logger,
+            echo=echo,
+            summary_only=summary_only,
+        )
 
-        updated_count = 0
+        conversion_map = generate_conversion_map(all_migrations)
         if conversion_map:
             for old_version, new_version in conversion_map.items():
                 if old_version in applied_map and new_version not in claimed_versions:
@@ -1142,6 +1152,51 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             elif echo:
                 console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
 
+        return updated_count
+
+    def _reconcile_squashed_migrations(
+        self,
+        driver: Any,
+        all_migrations: "list[tuple[str, Path]]",
+        applied_map: "dict[str, AppliedMigrationRecord]",
+        claimed_versions: "set[str]",
+        reconciled_old_versions: "set[str]",
+        *,
+        use_logger: bool = False,
+        echo: bool = True,
+        summary_only: bool = False,
+    ) -> int:
+        """Reconcile squashed migration files against applied database records."""
+        updated_count = 0
+        for target_version, candidate_path in all_migrations:
+            try:
+                migration = self.runner.load_migration(candidate_path, target_version)
+            except Exception as exc:
+                logger.debug("Skipping squash inspection for %s: %s", target_version, exc)
+                continue
+            if not isinstance(migration, dict):
+                continue
+            applied_replaces = _prepare_squash_replacement(
+                target_version, migration, applied_map, reconciled_old_versions
+            )
+            if applied_replaces is None:
+                continue
+            if isinstance(self.tracker, SyncMigrationTracker):
+                self.tracker.replace_with_squash(
+                    driver, target_version, applied_replaces, migration["description"], migration["checksum"]
+                )
+            _finalize_squash_replacement(
+                target_version,
+                migration,
+                applied_replaces,
+                applied_map,
+                claimed_versions,
+                reconciled_old_versions,
+                use_logger=use_logger,
+                echo=echo,
+                summary_only=summary_only,
+            )
+            updated_count += 1
         return updated_count
 
 
@@ -1943,6 +1998,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         exec_time,
                         migration["checksum"],
                         commit=not use_txn,
+                        replaces=migration.get("replaces"),
                     )
                 else:
                     await self.tracker.record_migration(
@@ -2091,9 +2147,18 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         claimed_versions = set(applied_map)
         reconciled_old_versions: set[str] = set()
 
-        conversion_map = generate_conversion_map(all_migrations)
+        updated_count = await self._reconcile_squashed_migrations(
+            driver,
+            all_migrations,
+            applied_map,
+            claimed_versions,
+            reconciled_old_versions,
+            use_logger=use_logger,
+            echo=echo,
+            summary_only=summary_only,
+        )
 
-        updated_count = 0
+        conversion_map = generate_conversion_map(all_migrations)
         if conversion_map:
             for old_version, new_version in conversion_map.items():
                 if old_version in applied_map and new_version not in claimed_versions:
@@ -2155,6 +2220,51 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             elif echo:
                 console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
 
+        return updated_count
+
+    async def _reconcile_squashed_migrations(
+        self,
+        driver: Any,
+        all_migrations: "list[tuple[str, Path]]",
+        applied_map: "dict[str, AppliedMigrationRecord]",
+        claimed_versions: "set[str]",
+        reconciled_old_versions: "set[str]",
+        *,
+        use_logger: bool = False,
+        echo: bool = True,
+        summary_only: bool = False,
+    ) -> int:
+        """Reconcile squashed migration files against applied database records."""
+        updated_count = 0
+        for target_version, candidate_path in all_migrations:
+            try:
+                migration = await self.runner.load_migration(candidate_path, target_version)
+            except Exception as exc:
+                logger.debug("Skipping squash inspection for %s: %s", target_version, exc)
+                continue
+            if not isinstance(migration, dict):
+                continue
+            applied_replaces = _prepare_squash_replacement(
+                target_version, migration, applied_map, reconciled_old_versions
+            )
+            if applied_replaces is None:
+                continue
+            if isinstance(self.tracker, AsyncMigrationTracker):
+                await self.tracker.replace_with_squash(
+                    driver, target_version, applied_replaces, migration["description"], migration["checksum"]
+                )
+            _finalize_squash_replacement(
+                target_version,
+                migration,
+                applied_replaces,
+                applied_map,
+                claimed_versions,
+                reconciled_old_versions,
+                use_logger=use_logger,
+                echo=echo,
+                summary_only=summary_only,
+            )
+            updated_count += 1
         return updated_count
 
 
@@ -2302,6 +2412,103 @@ def _report_no_pending_migrations(use_logger: bool, echo: bool, summary_only: bo
             "Already at latest version",
             rich_message="[green]Already at latest version[/]",
         )
+
+
+def _classify_squash_reconciliation(
+    target_version: str, migration: "LoadedMigrationMetadata", applied_map: "dict[str, AppliedMigrationRecord]"
+) -> "tuple[str, list[str], list[str]]":
+    """Classify squash reconciliation state for a loaded migration against applied database records.
+
+    Args:
+        target_version: Version of the squashed migration file.
+        migration: Loaded migration metadata dictionary.
+        applied_map: Mapping of applied ``version_num`` to ``AppliedMigrationRecord``.
+
+    Returns:
+        Tuple of ``(state, applied_replaces, missing_replaces)`` where ``state`` is one of
+        ``"none"``, ``"already_reconciled"``, ``"fresh"``, ``"replace"``, or ``"partial"``.
+    """
+    replaces = list(migration.get("replaces") or [])
+    if not replaces:
+        return "none", [], []
+
+    target_record = applied_map.get(target_version)
+    other_replaced_applied = [v for v in replaces if v != target_version and v in applied_map]
+    if (
+        target_record is not None
+        and not other_replaced_applied
+        and (
+            target_version not in replaces
+            or bool(target_record.get("replaces"))
+            or target_record.get("checksum") == migration.get("checksum")
+            or len(replaces) == 1
+        )
+    ):
+        return "already_reconciled", replaces, []
+
+    applied_replaces = [v for v in replaces if v in applied_map]
+    missing_replaces = [v for v in replaces if v not in applied_map]
+    if not applied_replaces:
+        return "fresh", [], missing_replaces
+    if not missing_replaces:
+        return "replace", applied_replaces, []
+    return "partial", applied_replaces, missing_replaces
+
+
+def _prepare_squash_replacement(
+    target_version: str,
+    migration: "LoadedMigrationMetadata",
+    applied_map: "dict[str, AppliedMigrationRecord]",
+    reconciled_old_versions: "set[str]",
+) -> "list[str] | None":
+    """Return replaced versions ready for database collapse, or None when no update is needed."""
+    state, applied_replaces, missing_replaces = _classify_squash_reconciliation(target_version, migration, applied_map)
+    if state in {"none", "fresh"}:
+        return None
+    if state == "already_reconciled":
+        reconciled_old_versions.update(applied_replaces)
+        return None
+    if state == "partial":
+        msg = (
+            f"Cannot reconcile squashed migration {target_version}: "
+            f"applied replaced versions {applied_replaces}, missing {missing_replaces}"
+        )
+        raise SquashValidationError(msg)
+    return applied_replaces
+
+
+def _finalize_squash_replacement(
+    target_version: str,
+    migration: "LoadedMigrationMetadata",
+    applied_replaces: "list[str]",
+    applied_map: "dict[str, AppliedMigrationRecord]",
+    claimed_versions: "set[str]",
+    reconciled_old_versions: "set[str]",
+    *,
+    use_logger: bool,
+    echo: bool,
+    summary_only: bool,
+) -> None:
+    """Update in-memory reconciliation sets and emit output after collapsing a squashed migration."""
+    for old_ver in applied_replaces:
+        applied_map.pop(old_ver, None)
+        claimed_versions.discard(old_ver)
+        reconciled_old_versions.add(old_ver)
+    applied_map[target_version] = cast(
+        "AppliedMigrationRecord",
+        {
+            "version_num": target_version,
+            "description": migration["description"],
+            "checksum": migration["checksum"],
+            "replaces": ",".join(applied_replaces),
+        },
+    )
+    claimed_versions.add(target_version)
+    if use_logger:
+        if not summary_only:
+            logger.info("Reconciled squashed migration: %s -> %s", ", ".join(applied_replaces), target_version)
+    elif echo:
+        console.print(f"  [dim]Reconciled squashed migration:[/] {', '.join(applied_replaces)} → {target_version}")
 
 
 def _bind_arguments(signature: inspect.Signature, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
