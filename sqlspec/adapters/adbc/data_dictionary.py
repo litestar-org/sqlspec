@@ -61,7 +61,7 @@ logger = get_logger("sqlspec.adapters.adbc")
 _pa: Any = import_optional("pyarrow")
 
 _NATIVE_TABLE_TYPES: Final = frozenset({"table", "base table"})
-_NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError)
+_NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError, AttributeError)
 _ADBC_METADATA_DOMAINS: Final = (
     "schemas",
     "objects",
@@ -484,18 +484,29 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult":
-        """Fail closed because ADBC metadata is not a lossless DDL source."""
-        _ = include_dependencies, prefer_native, redact
+        """Synthesize table DDL when requested, or fail closed for unsupported native DDL."""
+        _ = include_dependencies, redact
         dialect = self._normalize_dialect(driver)
         schema_name = self._resolve_schema(dialect, schema)
         identity = ObjectIdentity(
             name=object_name,
             object_type=object_type,
             schema=schema_name,
-            dialect=dialect,
+            dialect=target_dialect or dialect,
             source=MetadataSource.DRIVER_METADATA,
         )
+        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
+            synthesized = self._synthesize_table_ddl(
+                driver,
+                object_name,
+                schema=schema_name,
+                target_dialect=target_dialect or dialect,
+                warnings=(_ADBC_TRANSPORT_WARNING,),
+            )
+            if synthesized.status == MetadataSupport.SUPPORTED and synthesized.ddl:
+                return synthesized
         return DDLResult.unsupported(
             identity, source=MetadataSource.DRIVER_METADATA, warnings=(_ADBC_DDL_UNSUPPORTED_WARNING,)
         )

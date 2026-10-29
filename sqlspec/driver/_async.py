@@ -6,6 +6,7 @@ and ``AsyncExceptionHandler`` stores mapped exceptions on ``pending_exception``
 rather than raising inside ``__aexit__`` across C-extension ABI boundaries.
 """
 
+import contextlib
 import logging
 import sys
 from abc import abstractmethod
@@ -23,6 +24,7 @@ from sqlspec.data_dictionary import (
     DDLResult,
     MetadataCapabilityProfile,
     MetadataResult,
+    MetadataSupport,
     ObjectIdentity,
     ensure_system_metadata_request,
     system_metadata_capabilities_from_domains,
@@ -2069,6 +2071,63 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         """Get dependency metadata or an unsupported-domain result."""
         return self._unsupported_metadata("dependencies")
 
+    async def _synthesize_table_ddl(
+        self,
+        driver: Any,
+        table_name: str,
+        *,
+        schema: "str | None" = None,
+        target_dialect: "str | None" = None,
+        warnings: tuple[str, ...] = (),
+    ) -> "DDLResult":
+        """Synthesize table DDL from get_columns, get_constraints, get_foreign_keys, and get_indexes."""
+        resolved_schema: str | None = schema
+        resolved_table: str = table_name
+        if type(self).dialect not in {"generic", "unknown", ""} and hasattr(self, "resolve_schema"):
+            try:
+                resolved_schema = self.resolve_schema(schema)
+                resolved_table = self.resolve_identifier(table_name)
+            except Exception:
+                resolved_schema = schema
+                resolved_table = table_name
+        try:
+            columns = await self.get_columns(driver, table=resolved_table, schema=resolved_schema)
+        except Exception:
+            columns = []
+        if not columns:
+            return self._unsupported_ddl(resolved_table, schema=resolved_schema, object_type="table")
+
+        constraints: Sequence[Any] = ()
+        try:
+            constraints_res = await self.get_constraints(driver, table=resolved_table, schema=resolved_schema)
+            if constraints_res.capability.support == MetadataSupport.SUPPORTED:
+                constraints = constraints_res.items
+        except Exception:
+            constraints = ()
+
+        foreign_keys: Sequence[Any] = ()
+        try:
+            foreign_keys = await self.get_foreign_keys(driver, table=resolved_table, schema=resolved_schema)
+        except Exception:
+            foreign_keys = ()
+
+        indexes: Sequence[Any] = ()
+        try:
+            indexes = await self.get_indexes(driver, table=resolved_table, schema=resolved_schema)
+        except Exception:
+            indexes = ()
+
+        return self.build_synthesized_table_ddl(
+            resolved_table,
+            columns,
+            schema=resolved_schema,
+            constraints=constraints,
+            foreign_keys=foreign_keys,
+            indexes=indexes,
+            target_dialect=target_dialect,
+            warnings=warnings,
+        )
+
     async def get_ddl(
         self,
         driver: Any,
@@ -2103,6 +2162,22 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         redact: bool = True,
     ) -> "DDLResult":
         """Get one object's DDL or an explicit unsupported DDL result."""
+        if object_type.lower() == "table" and not prefer_native:
+            return await self._synthesize_table_ddl(driver, object_name, schema=schema)
+        if type(self).get_ddl is not AsyncDataDictionaryBase.get_ddl:
+            native_res = await self.get_ddl(
+                driver,
+                object_name,
+                schema=schema,
+                object_type=object_type,
+                include_dependencies=include_dependencies,
+                prefer_native=prefer_native,
+                redact=redact,
+            )
+            if native_res.status == MetadataSupport.SUPPORTED and native_res.ddl:
+                return native_res
+        if object_type.lower() == "table":
+            return await self._synthesize_table_ddl(driver, object_name, schema=schema)
         return self._unsupported_ddl(object_name, schema=schema, object_type=object_type)
 
     async def get_schema_ddl(
@@ -2112,12 +2187,92 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         *,
         include_domains: "Sequence[str] | None" = None,
         exclude_domains: "Sequence[str] | None" = None,
+        exclude_tables: "Sequence[str] | None" = ("ddl_migrations",),
+        direction: "Literal['create', 'drop']" = "create",
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "MetadataResult":
-        """Get schema DDL items or an unsupported-domain result."""
-        return self._unsupported_metadata("ddl")
+        """Get schema DDL items in topological dependency order."""
+        allowed_domains = {"sequences", "tables", "views"}
+        if include_domains is not None:
+            normalized_inc = {d.strip().lower().rstrip("s") + "s" for d in include_domains if d.strip()}
+            allowed_domains &= normalized_inc
+        if exclude_domains is not None:
+            normalized_exc = {d.strip().lower().rstrip("s") + "s" for d in exclude_domains if d.strip()}
+            allowed_domains -= normalized_exc
+
+        excluded_table_names = {t.strip().lower() for t in (exclude_tables or ()) if t and t.strip()}
+        ddl_results: list[DDLResult] = []
+        collected_fks: list[Any] = []
+
+        if "tables" in allowed_domains:
+            tables = await self.get_tables(driver, schema=schema)
+            for tbl_item in tables:
+                tbl_name, tbl_schema = self._extract_table_name_and_schema(tbl_item, default_schema=schema)
+                if not tbl_name or tbl_name.lower() in excluded_table_names:
+                    continue
+                if not prefer_native or target_dialect is not None:
+                    ddl_res = await self._synthesize_table_ddl(
+                        driver, tbl_name, schema=tbl_schema, target_dialect=target_dialect
+                    )
+                else:
+                    ddl_res = await self.get_object_ddl(
+                        driver,
+                        tbl_name,
+                        schema=tbl_schema,
+                        object_type="table",
+                        include_dependencies=include_dependencies,
+                        prefer_native=prefer_native,
+                        redact=redact,
+                    )
+                if ddl_res.status == MetadataSupport.SUPPORTED and ddl_res.ddl:
+                    ddl_results.append(ddl_res)
+
+        if "views" in allowed_domains:
+            try:
+                views_res = await self.get_views(driver, schema=schema)
+            except Exception:
+                views_res = self._unsupported_metadata("views")
+            if views_res.capability.support == MetadataSupport.SUPPORTED:
+                for view_row in views_res.items:
+                    view_ddl = self._build_view_ddl_from_row(
+                        view_row, default_schema=schema, target_dialect=target_dialect
+                    )
+                    if view_ddl is not None:
+                        ddl_results.append(view_ddl)
+
+        dependency_items: Sequence[Any] = ()
+        if include_dependencies:
+            with contextlib.suppress(Exception):
+                schema_fks = await self.get_foreign_keys(driver, table=None, schema=schema)
+                if schema_fks:
+                    collected_fks.extend(schema_fks)
+            if not collected_fks:
+                for item in ddl_results:
+                    if item.identity.object_type.lower() == "table":
+                        with contextlib.suppress(Exception):
+                            tbl_fks = await self.get_foreign_keys(
+                                driver, table=item.identity.name, schema=item.identity.schema
+                            )
+                            if tbl_fks:
+                                collected_fks.extend(tbl_fks)
+            try:
+                deps_res = await self.get_dependencies(driver, schema=schema)
+                if deps_res.capability.support == MetadataSupport.SUPPORTED:
+                    dependency_items = deps_res.items
+            except Exception:
+                dependency_items = ()
+
+        return self._finalize_schema_ddl_results(
+            ddl_results,
+            foreign_keys=collected_fks,
+            dependency_items=dependency_items,
+            exclude_tables=exclude_tables,
+            direction=direction,
+            target_dialect=target_dialect,
+        )
 
     async def get_system_metadata(
         self, driver: Any, request: "SystemMetadataRequest | str | None" = None, **kwargs: Any

@@ -154,15 +154,20 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: str | None = None,
     ) -> DDLResult:
-        """Get object DDL where PostgreSQL exposes native definition helpers."""
-        _ = include_dependencies, prefer_native, redact
+        """Get object DDL, synthesizing table DDL from catalog metadata when native helpers are absent."""
+        _ = include_dependencies, redact
         schema_name = self.resolve_schema(schema)
         resolved_object = self.resolve_identifier(object_name)
+        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
+            return self._synthesize_table_ddl(
+                driver, resolved_object, schema=schema_name, target_dialect=target_dialect
+            )
         result = self._select_domain(
             driver, "ddl", "by_object", schema_name=schema_name, object_name=resolved_object, object_type=object_type
         )
-        return _ddl_result_from_rows(
+        native_ddl = _ddl_result_from_rows(
             dialect=type(self).dialect,
             object_name=resolved_object,
             object_type=object_type,
@@ -170,6 +175,13 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
             rows=result.items,
             warnings=result.warnings,
         )
+        if native_ddl.ddl is not None and native_ddl.status == MetadataSupport.SUPPORTED:
+            return self._transpile_ddl_result(native_ddl, target_dialect=target_dialect)
+        if object_type.lower() == "table":
+            return self._synthesize_table_ddl(
+                driver, resolved_object, schema=schema_name, target_dialect=target_dialect, warnings=native_ddl.warnings
+            )
+        return native_ddl
 
     def get_system_metadata(
         self, driver: "PsycopgSyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
@@ -432,15 +444,20 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: str | None = None,
     ) -> DDLResult:
-        """Get object DDL where PostgreSQL exposes native definition helpers."""
-        _ = include_dependencies, prefer_native, redact
+        """Get object DDL, synthesizing table DDL from catalog metadata when native helpers are absent."""
+        _ = include_dependencies, redact
         schema_name = self.resolve_schema(schema)
         resolved_object = self.resolve_identifier(object_name)
+        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
+            return await self._synthesize_table_ddl(
+                driver, resolved_object, schema=schema_name, target_dialect=target_dialect
+            )
         result = await self._select_domain(
             driver, "ddl", "by_object", schema_name=schema_name, object_name=resolved_object, object_type=object_type
         )
-        return _ddl_result_from_rows(
+        native_ddl = _ddl_result_from_rows(
             dialect=type(self).dialect,
             object_name=resolved_object,
             object_type=object_type,
@@ -448,6 +465,13 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
             rows=result.items,
             warnings=result.warnings,
         )
+        if native_ddl.ddl is not None and native_ddl.status == MetadataSupport.SUPPORTED:
+            return self._transpile_ddl_result(native_ddl, target_dialect=target_dialect)
+        if object_type.lower() == "table":
+            return await self._synthesize_table_ddl(
+                driver, resolved_object, schema=schema_name, target_dialect=target_dialect, warnings=native_ddl.warnings
+            )
+        return native_ddl
 
     async def get_system_metadata(
         self, driver: "PsycopgAsyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any

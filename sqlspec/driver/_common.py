@@ -17,6 +17,7 @@ from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
+from sqlspec.builder._ddl import CreateView, DropIndex, DropSequence, DropTable, DropView, compile_table_ddl_results
 from sqlspec.core import (
     SQL,
     CachedStatement,
@@ -47,12 +48,22 @@ from sqlspec.core.result._base import RowFormat
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
 from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary import (
+    DDLResult,
+    DependencyEdge,
+    DependencyEdgeKind,
+    DependencyStrength,
     ForeignKeyMetadata,
+    MetadataCapability,
+    MetadataFidelity,
+    MetadataResult,
+    MetadataSource,
+    MetadataSupport,
     ObjectIdentity,
     VersionCacheResult,
     VersionInfo,
     dependency_edges_from_foreign_keys,
     get_data_dictionary_loader,
+    sort_ddl_results,
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import get_dialect_config
@@ -504,6 +515,409 @@ class DataDictionaryMixin:
         result = sort_dependencies(table_objects, dependency_edges_from_foreign_keys(foreign_keys, source="unknown"))
         result.raise_for_cycles()
         return [identity.name for identity in result.ordered]
+
+    def build_synthesized_table_ddl(
+        self,
+        table_name: str,
+        columns: "abc.Sequence[Any]",
+        *,
+        schema: str | None = None,
+        constraints: "abc.Sequence[Any] | None" = None,
+        foreign_keys: "abc.Sequence[Any] | None" = None,
+        indexes: "abc.Sequence[Any] | None" = None,
+        target_dialect: str | None = None,
+        warnings: tuple[str, ...] = (),
+    ) -> "DDLResult":
+        """Synthesize a table DDLResult from catalog metadata rows via sqlspec.builder."""
+        effective_dialect: str | None = target_dialect or type(self).dialect
+        if effective_dialect in {"generic", "unknown", ""}:
+            effective_dialect = None
+        return compile_table_ddl_results(
+            table_name,
+            columns,
+            schema=schema,
+            constraints=constraints,
+            foreign_keys=foreign_keys,
+            indexes=indexes,
+            dialect=effective_dialect,
+            warnings=warnings,
+        )
+
+    def _transpile_ddl_result(self, result: "DDLResult", target_dialect: str | None = None) -> "DDLResult":
+        """Transpile a DDLResult's SQL into target_dialect when requested."""
+        if not target_dialect or not result.ddl or result.status != MetadataSupport.SUPPORTED:
+            return result
+        source_dialect: str | None = result.identity.dialect or type(self).dialect
+        if source_dialect in {"generic", "unknown", ""}:
+            source_dialect = None
+        if source_dialect == target_dialect:
+            return result
+        try:
+            transpiled = sqlglot.transpile(result.ddl, read=source_dialect, write=target_dialect)
+            ddl_text = ";\n\n".join(stmt.rstrip(";").strip() for stmt in transpiled if stmt.strip())
+            if ddl_text:
+                ddl_text += ";"
+            else:
+                ddl_text = result.ddl
+        except Exception:
+            ddl_text = result.ddl
+        identity = ObjectIdentity(
+            name=result.identity.name,
+            object_type=result.identity.object_type,
+            catalog=result.identity.catalog,
+            schema=result.identity.schema,
+            dialect=target_dialect,
+            quoted_name=result.identity.quoted_name,
+            source=result.identity.source,
+        )
+        return DDLResult(
+            identity=identity,
+            status=result.status,
+            fidelity=result.fidelity,
+            source=result.source,
+            ddl=ddl_text,
+            dependencies=result.dependencies,
+            redactions=result.redactions,
+            context=result.context,
+            warnings=result.warnings,
+        )
+
+    def _build_drop_ddl_result(self, result: "DDLResult", target_dialect: str | None = None) -> "DDLResult":
+        """Build a DROP IF EXISTS DDLResult for a schema object."""
+        effective_dialect: str | None = target_dialect or result.identity.dialect or type(self).dialect
+        if effective_dialect in {"generic", "unknown", ""}:
+            effective_dialect = None
+        obj_type = result.identity.object_type.lower()
+        name = result.identity.name
+        schema = result.identity.schema
+        qualified = f"{schema}.{name}" if schema else name
+        drop_sql: str | None = None
+        try:
+            if obj_type in {"view", "materialized_view"}:
+                view_builder = DropView(qualified, dialect=effective_dialect).if_exists()
+                drop_sql = view_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
+            elif obj_type == "sequence":
+                seq_builder = DropSequence(qualified, dialect=effective_dialect).if_exists()
+                drop_sql = seq_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
+            elif obj_type == "index":
+                idx_builder = DropIndex(qualified, dialect=effective_dialect).if_exists()
+                drop_sql = idx_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
+            else:
+                tbl_builder = DropTable(qualified, dialect=effective_dialect).if_exists()
+                drop_sql = tbl_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
+        except Exception:
+            keyword = "VIEW" if "view" in obj_type else "SEQUENCE" if obj_type == "sequence" else "TABLE"
+            drop_sql = f"DROP {keyword} IF EXISTS {qualified};"
+
+        identity = ObjectIdentity(
+            name=result.identity.name,
+            object_type=result.identity.object_type,
+            catalog=result.identity.catalog,
+            schema=result.identity.schema,
+            dialect=target_dialect or result.identity.dialect,
+            quoted_name=result.identity.quoted_name,
+            source=result.identity.source,
+        )
+        return DDLResult(
+            identity=identity,
+            status=result.status,
+            fidelity=result.fidelity,
+            source=result.source,
+            ddl=drop_sql,
+            dependencies=result.dependencies,
+            redactions=result.redactions,
+            context=result.context,
+            warnings=result.warnings,
+        )
+
+    def _extract_table_name_and_schema(
+        self, item: Any, default_schema: str | None = None
+    ) -> tuple[str | None, str | None]:
+        """Extract table name and schema from a table metadata row or object."""
+        if isinstance(item, Mapping):
+            name = item.get("table_name") or item.get("name") or item.get("object_name")
+            tbl_schema = item.get("schema_name") or item.get("table_schema") or default_schema
+            return (str(name) if name else None, str(tbl_schema) if tbl_schema else default_schema)
+        ident = getattr(item, "identity", None)
+        if isinstance(ident, ObjectIdentity):
+            return (ident.name, ident.schema or default_schema)
+        name = getattr(item, "table_name", None) or getattr(item, "name", None)
+        tbl_schema = getattr(item, "schema_name", None) or default_schema
+        return (str(name) if name else None, str(tbl_schema) if tbl_schema else default_schema)
+
+    def _build_view_ddl_from_row(
+        self, row: Any, *, default_schema: str | None = None, target_dialect: str | None = None
+    ) -> "DDLResult | None":
+        """Build a DDLResult from a view metadata row when a definition is present."""
+        attrs: Mapping[str, Any]
+        ident = getattr(row, "identity", None)
+        raw_attrs = getattr(row, "attributes", None)
+        if isinstance(row, Mapping):
+            attrs = row
+            view_name_raw = (
+                attrs.get("view_name") or attrs.get("table_name") or attrs.get("object_name") or attrs.get("name")
+            )
+            view_schema_raw = attrs.get("schema_name") or attrs.get("table_schema") or default_schema
+        elif isinstance(ident, ObjectIdentity) and isinstance(raw_attrs, Mapping):
+            attrs = raw_attrs
+            view_name_raw = ident.name
+            view_schema_raw = ident.schema or default_schema
+        else:
+            return None
+
+        if not view_name_raw:
+            return None
+        view_name = str(view_name_raw)
+        view_schema = str(view_schema_raw) if view_schema_raw else default_schema
+        definition_raw = (
+            attrs.get("ddl") or attrs.get("view_definition") or attrs.get("definition") or attrs.get("text")
+        )
+        if not definition_raw or not str(definition_raw).strip():
+            return None
+
+        definition_text = str(definition_raw).strip()
+        effective_dialect: str | None = target_dialect or type(self).dialect
+        if effective_dialect in {"generic", "unknown", ""}:
+            effective_dialect = None
+
+        if definition_text.upper().startswith("CREATE"):
+            ddl_text = definition_text.rstrip(";").strip() + ";"
+        else:
+            qualified_view = f"{view_schema}.{view_name}" if view_schema else view_name
+            try:
+                view_builder = CreateView(qualified_view, dialect=effective_dialect).as_select(definition_text)
+                ddl_text = view_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
+            except Exception:
+                ddl_text = f"CREATE VIEW {qualified_view} AS {definition_text.rstrip(';')};"
+
+        result_ident = ObjectIdentity(
+            name=view_name,
+            object_type="view",
+            schema=view_schema,
+            dialect=effective_dialect or type(self).dialect,
+            source=MetadataSource.GENERATED,
+        )
+        return DDLResult(
+            identity=result_ident,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.GENERATED,
+            source=MetadataSource.GENERATED,
+            ddl=ddl_text,
+        )
+
+    def _resolve_schema_object_identity(
+        self,
+        lookup: "Mapping[tuple[str, str, str], ObjectIdentity]",
+        object_type: str | None,
+        schema: str | None,
+        name: str | None,
+    ) -> "ObjectIdentity | None":
+        """Resolve an object reference to its canonical ObjectIdentity in the schema DDL graph."""
+        if not name:
+            return None
+        t_key = (object_type or "").strip().lower()
+        s_key = (schema or "").strip().lower()
+        n_key = name.strip().lower()
+        for candidate in ((t_key, s_key, n_key), (t_key, "", n_key), ("", s_key, n_key), ("", "", n_key)):
+            found = lookup.get(candidate)
+            if found is not None:
+                return found
+        return None
+
+    def _extract_fk_endpoints(self, fk: Any) -> tuple[str | None, str | None, str | None, str | None]:
+        """Extract (table_name, schema, referenced_table, referenced_schema) from a foreign key item."""
+        if isinstance(fk, ForeignKeyMetadata):
+            return (fk.table_name, fk.schema, fk.referenced_table, fk.referenced_schema or fk.schema)
+        if isinstance(fk, Mapping):
+            t_name = fk.get("table_name")
+            s_name = fk.get("schema") or fk.get("schema_name") or fk.get("table_schema")
+            r_table = fk.get("referenced_table") or fk.get("references_table")
+            r_schema = fk.get("referenced_schema") or fk.get("references_schema") or s_name
+            return (
+                str(t_name) if t_name else None,
+                str(s_name) if s_name else None,
+                str(r_table) if r_table else None,
+                str(r_schema) if r_schema else None,
+            )
+        return (None, None, None, None)
+
+    def _extract_dependency_endpoints(
+        self, dep: Any
+    ) -> tuple[str | None, str | None, str | None, str | None, str | None, str | None]:
+        """Extract (from_type, from_schema, from_name, to_type, to_schema, to_name) from a dependency item."""
+        ident = getattr(dep, "identity", None)
+        raw_attrs = getattr(dep, "attributes", None)
+        attrs: Mapping[str, Any]
+        if isinstance(dep, Mapping):
+            attrs = dep
+            from_name = (
+                attrs.get("object_name")
+                or attrs.get("dependent_name")
+                or attrs.get("referencing_entity_name")
+                or attrs.get("name")
+            )
+            from_schema = (
+                attrs.get("schema_name") or attrs.get("dependent_schema") or attrs.get("referencing_schema_name")
+            )
+            from_type = attrs.get("object_type") or attrs.get("dependent_type")
+        elif isinstance(ident, ObjectIdentity) and isinstance(raw_attrs, Mapping):
+            attrs = raw_attrs
+            from_name = ident.name
+            from_schema = ident.schema
+            from_type = ident.object_type
+        else:
+            return (None, None, None, None, None, None)
+
+        to_name = (
+            attrs.get("referenced_name")
+            or attrs.get("referenced_object_name")
+            or attrs.get("referenced_entity_name")
+            or attrs.get("parent_name")
+        )
+        to_schema = (
+            attrs.get("referenced_schema")
+            or attrs.get("referenced_schema_name")
+            or attrs.get("parent_schema")
+            or from_schema
+        )
+        to_type = attrs.get("referenced_type") or attrs.get("referenced_object_type") or attrs.get("parent_type")
+        return (
+            str(from_type) if from_type else None,
+            str(from_schema) if from_schema else None,
+            str(from_name) if from_name else None,
+            str(to_type) if to_type else None,
+            str(to_schema) if to_schema else None,
+            str(to_name) if to_name else None,
+        )
+
+    def _finalize_schema_ddl_results(
+        self,
+        ddl_results: "abc.Sequence[DDLResult]",
+        *,
+        foreign_keys: "abc.Sequence[Any] | None" = None,
+        dependency_items: "abc.Sequence[Any] | None" = None,
+        exclude_tables: "abc.Sequence[str] | None" = ("ddl_migrations",),
+        direction: "Literal['create', 'drop']" = "create",
+        target_dialect: str | None = None,
+        capability: "MetadataCapability | None" = None,
+    ) -> "MetadataResult":
+        """Filter, attach dependency edges, topologically sort, and wrap schema DDL results."""
+        excluded_names = {t.strip().lower() for t in (exclude_tables or ()) if t and t.strip()}
+        filtered: list[DDLResult] = []
+        for item in ddl_results:
+            if item.status != MetadataSupport.SUPPORTED or not item.ddl:
+                continue
+            if item.identity.object_type.lower() == "table" and item.identity.name.lower() in excluded_names:
+                continue
+            if target_dialect is not None and direction == "create":
+                item = self._transpile_ddl_result(item, target_dialect=target_dialect)
+            filtered.append(item)
+
+        identity_lookup: dict[tuple[str, str, str], ObjectIdentity] = {}
+        for item in filtered:
+            ident = item.identity
+            t_key = ident.object_type.lower()
+            s_key = (ident.schema or "").lower()
+            n_key = ident.name.lower()
+            identity_lookup[t_key, s_key, n_key] = ident
+            identity_lookup.setdefault((t_key, "", n_key), ident)
+            identity_lookup.setdefault(("", s_key, n_key), ident)
+            identity_lookup.setdefault(("", "", n_key), ident)
+
+        edges_by_source: dict[ObjectIdentity, list[DependencyEdge]] = {}
+        for item in filtered:
+            edges_by_source.setdefault(item.identity, [])
+            for edge in item.dependencies:
+                target_ident = self._resolve_schema_object_identity(
+                    identity_lookup, edge.to_object.object_type, edge.to_object.schema, edge.to_object.name
+                )
+                if target_ident is not None and target_ident != item.identity:
+                    edges_by_source[item.identity].append(
+                        DependencyEdge(
+                            item.identity,
+                            target_ident,
+                            edge.kind,
+                            strength=edge.strength,
+                            confidence=edge.confidence,
+                            source=item.identity.source,
+                        )
+                    )
+
+        for fk in foreign_keys or ():
+            fk_table, fk_schema, ref_table, ref_schema = self._extract_fk_endpoints(fk)
+            if not fk_table or not ref_table:
+                continue
+            from_ident = self._resolve_schema_object_identity(identity_lookup, "table", fk_schema, fk_table)
+            to_ident = self._resolve_schema_object_identity(
+                identity_lookup, "table", ref_schema or fk_schema, ref_table
+            )
+            if from_ident is not None and to_ident is not None and from_ident != to_ident:
+                edges_by_source.setdefault(from_ident, []).append(
+                    DependencyEdge(
+                        from_ident,
+                        to_ident,
+                        DependencyEdgeKind.FOREIGN_KEY,
+                        strength=DependencyStrength.HARD,
+                        source=from_ident.source,
+                    )
+                )
+
+        for dep in dependency_items or ():
+            from_type, from_schema, from_name, to_type, to_schema, to_name = self._extract_dependency_endpoints(dep)
+            if not from_name or not to_name:
+                continue
+            from_ident = self._resolve_schema_object_identity(identity_lookup, from_type, from_schema, from_name)
+            to_ident = self._resolve_schema_object_identity(identity_lookup, to_type, to_schema or from_schema, to_name)
+            if from_ident is not None and to_ident is not None and from_ident != to_ident:
+                edge_kind = (
+                    DependencyEdgeKind.MATERIALIZED_VIEW
+                    if from_ident.object_type.lower() == "materialized_view"
+                    else DependencyEdgeKind.VIEW_REFERENCE
+                    if "view" in from_ident.object_type.lower()
+                    else DependencyEdgeKind.ROUTINE_REFERENCE
+                )
+                edges_by_source.setdefault(from_ident, []).append(
+                    DependencyEdge(
+                        from_ident, to_ident, edge_kind, strength=DependencyStrength.HARD, source=from_ident.source
+                    )
+                )
+
+        enriched: list[DDLResult] = [
+            DDLResult(
+                identity=item.identity,
+                status=item.status,
+                fidelity=item.fidelity,
+                source=item.source,
+                ddl=item.ddl,
+                dependencies=tuple(edges_by_source.get(item.identity, ())),
+                redactions=item.redactions,
+                context=item.context,
+                warnings=item.warnings,
+            )
+            for item in filtered
+        ]
+
+        sort_input = list(reversed(enriched)) if direction == "drop" else enriched
+        sorted_results = sort_ddl_results(sort_input, order=direction, raise_on_cycles=False)
+        if direction == "drop":
+            sorted_results = tuple(
+                self._build_drop_ddl_result(item, target_dialect=target_dialect) for item in sorted_results
+            )
+
+        resolved_capability = capability
+        if resolved_capability is None:
+            fidelities = {item.fidelity for item in sorted_results}
+            sources = {item.source for item in sorted_results}
+            agg_fidelity = (
+                MetadataFidelity.NATIVE if fidelities == {MetadataFidelity.NATIVE} else MetadataFidelity.GENERATED
+            )
+            agg_source = MetadataSource.CATALOG if sources == {MetadataSource.CATALOG} else MetadataSource.GENERATED
+            resolved_capability = MetadataCapability(
+                domain="ddl", support=MetadataSupport.SUPPORTED, fidelity=agg_fidelity, source=agg_source
+            )
+        return MetadataResult(
+            "ddl", capability=resolved_capability, items=tuple(sorted_results), warnings=resolved_capability.warnings
+        )
 
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
         """Log detected database version with db.system context."""
