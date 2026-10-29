@@ -19,7 +19,79 @@ conf.py
 extra_css = ["stylesheets/extra.css"]
 nav = [
   { "Home" = "index.md" },
+  { "Learn" = [
+    "learn/index.md",
+    { "Getting Started" = [
+      { "Installation" = "learn/installation.md" },
+      { "Quickstart" = "learn/quickstart.md" },
+      { "Configuration" = "learn/configuration.md" },
+    ] },
+    { "Core Execution" = [
+      { "Querying" = "learn/querying.md" },
+      { "Parameters" = "learn/parameters.md" },
+      { "Schema Mapping" = "learn/schema-mapping.md" },
+      { "Transactions" = "learn/transactions.md" },
+    ] },
+    { "SQL Files & Builder" = [
+      { "SQL Files" = "learn/sql-files.md" },
+      { "Query Builder" = "learn/query-builder.md" },
+      { "Filtering & Pagination" = "learn/filtering-and-pagination.md" },
+    ] },
+    { "Operations & Analytics" = [
+      { "Migrations" = "learn/migrations.md" },
+      { "CLI" = "learn/cli.md" },
+      { "Arrow & Storage" = "learn/arrow-and-storage.md" },
+      { "Data Dictionary" = "learn/data-dictionary.md" },
+      { "Observability" = "learn/observability.md" },
+      { "Testing" = "learn/testing.md" },
+      { "Performance" = "learn/performance.md" },
+    ] },
+    { "Recipes" = [
+      "learn/recipes/index.md",
+      { "Service Layer" = "learn/recipes/service-layer.md" },
+      { "Multi-Tenancy" = "learn/recipes/multi-tenancy.md" },
+      { "Health Checks" = "learn/recipes/health-checks.md" },
+      { "ETL & Bulk Ingest" = "learn/recipes/etl-and-bulk-ingest.md" },
+    ] },
+  ] },
+  { "Databases" = [
+    "databases/index.md",
+    { "PostgreSQL" = [
+      "databases/postgres/index.md",
+      { "asyncpg" = "databases/postgres/asyncpg.md" },
+      { "psycopg" = "databases/postgres/psycopg.md" },
+      { "psqlpy" = "databases/postgres/psqlpy.md" },
+    ] },
+    { "CockroachDB" = "databases/cockroachdb.md" },
+    { "SQLite" = "databases/sqlite.md" },
+    { "MySQL & MariaDB" = "databases/mysql.md" },
+    { "Oracle Database" = "databases/oracledb.md" },
+    { "SQL Server" = "databases/mssql.md" },
+    { "IBM Db2" = "databases/db2.md" },
+    { "DuckDB" = "databases/duckdb.md" },
+    { "BigQuery" = "databases/bigquery.md" },
+    { "Cloud Spanner" = "databases/spanner.md" },
+    { "ADBC" = "databases/adbc.md" },
+    { "Arrow ODBC" = "databases/arrow-odbc.md" },
+  ] },
+  { "Integrations" = [
+    "integrations/index.md",
+    { "Litestar" = "integrations/litestar.md" },
+    { "Google ADK" = "integrations/adk.md" },
+    { "Events & Queues" = "integrations/events.md" },
+    { "FastAPI" = "integrations/fastapi.md" },
+    { "Starlette" = "integrations/starlette.md" },
+    { "Flask" = "integrations/flask.md" },
+    { "Sanic" = "integrations/sanic.md" },
+    { "Dishka" = "integrations/dishka.md" },
+  ] },
   { "Playground" = "playground.md" },
+  { "Project" = [
+    "contributing/index.md",
+    { "Creating Adapters" = "contributing/creating-adapters.md" },
+    { "Releases" = "releases.md" },
+    { "Changelog" = "changelog.md" },
+  ] },
 ]
 
 [project.theme]
