@@ -9,13 +9,15 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, cast
 from uuid import UUID
 
 import sqlglot
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.dialects.dialect import Dialect, NormalizationStrategy
+from sqlglot.errors import ParseError, TokenError
+from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import (
@@ -25,17 +27,9 @@ from sqlspec.builder._parsing_utils import (
     parse_order_expression,
 )
 from sqlspec.core import SQL
-from sqlspec.data_dictionary._registry import get_dialect_config
-from sqlspec.data_dictionary._types import (
-    DDLResult,
-    DialectConfig,
-    MetadataFidelity,
-    MetadataSource,
-    MetadataSupport,
-    ObjectIdentity,
-)
+from sqlspec.data_dictionary._types import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport, ObjectIdentity
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.arrow_helpers import sql_type_from_arrow_type
+from sqlspec.utils.arrow_helpers import sql_type_for_category, sql_type_from_arrow_type
 from sqlspec.utils.type_guards import has_sqlglot_expression
 
 if TYPE_CHECKING:
@@ -66,6 +60,7 @@ __all__ = (
     "RenameTable",
     "Truncate",
     "compile_table_ddl_results",
+    "truthy_metadata_flag",
 )
 
 CONSTRAINT_TYPE_PRIMARY_KEY = "PRIMARY KEY"
@@ -126,6 +121,136 @@ _ISO_DATETIME_STR_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$", re.IGNORECASE
 )
 _ISO_DATE_STR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_OFFSET_SUFFIX_RE = re.compile(r"(?:Z|[+-]\d{2}:?\d{2})$", re.IGNORECASE)
+_DEFAULT_INFERRED_DECIMAL_PRECISION = 38
+_DEFAULT_INFERRED_DECIMAL_SCALE = 9
+_ORACLE_NUMBER_MAX_PRECISION = 38
+_BARE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_VERBATIM_TYPE_NAME_RE = re.compile(
+    r"^[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*(?:\s*\(\s*(?:\d+|MAX)(?:\s*,\s*\d+)?\s*\))?$", re.IGNORECASE
+)
+_QUOTED_IDENTIFIER_RE = re.compile(r'^(?:"(?:[^"]|"")+"|`(?:[^`]|``)+`|\[(?:[^\]]|\]\])+\])$')
+_INDEX_EXPRESSION_CHARS_RE = re.compile(r"[()+\-*/%|<>=!:,']")
+_INDEX_PLACEHOLDER_RE = re.compile(r"^<[^<>]*>$")
+_NATIVE_INDEX_SQL_RE = re.compile(r"^\s*CREATE\s+(?:UNIQUE\s+)?(?:\w+\s+)*INDEX\b", re.IGNORECASE)
+_NUMERIC_LITERAL_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+_MYSQL_KEYWORD_DEFAULT_RE = re.compile(
+    r"^(?:CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP|CURRENT_DATE|CURRENT_TIME|CURDATE|CURTIME|UTC_TIMESTAMP)"
+    r"(?:\(\s*\d*\s*\))?$",
+    re.IGNORECASE,
+)
+_MYSQL_BIT_HEX_LITERAL_RE = re.compile(r"^[bBxX]'[0-9a-fA-F]*'$")
+_UNPARSEABLE_DEFAULT: Final[object] = object()
+_RESERVED_IDENTIFIER_WORDS = frozenset({
+    "ACCESS",
+    "ADD",
+    "ALL",
+    "ALTER",
+    "AND",
+    "ANY",
+    "AS",
+    "ASC",
+    "AUDIT",
+    "BETWEEN",
+    "BY",
+    "CHAR",
+    "CHECK",
+    "CLUSTER",
+    "COLUMN",
+    "COMMENT",
+    "COMPRESS",
+    "CONNECT",
+    "CREATE",
+    "CURRENT",
+    "DATE",
+    "DECIMAL",
+    "DEFAULT",
+    "DELETE",
+    "DESC",
+    "DISTINCT",
+    "DROP",
+    "ELSE",
+    "EXCLUSIVE",
+    "EXISTS",
+    "FILE",
+    "FLOAT",
+    "FOR",
+    "FROM",
+    "GRANT",
+    "GROUP",
+    "HAVING",
+    "IDENTIFIED",
+    "IMMEDIATE",
+    "IN",
+    "INCREMENT",
+    "INDEX",
+    "INITIAL",
+    "INSERT",
+    "INTEGER",
+    "INTERSECT",
+    "INTO",
+    "IS",
+    "LEVEL",
+    "LIKE",
+    "LOCK",
+    "LONG",
+    "MAXEXTENTS",
+    "MINUS",
+    "MLSLABEL",
+    "MODE",
+    "MODIFY",
+    "NOAUDIT",
+    "NOCOMPRESS",
+    "NOT",
+    "NOWAIT",
+    "NULL",
+    "NUMBER",
+    "OF",
+    "OFFLINE",
+    "ON",
+    "ONLINE",
+    "OPTION",
+    "OR",
+    "ORDER",
+    "PCTFREE",
+    "PRIOR",
+    "PUBLIC",
+    "RAW",
+    "RENAME",
+    "RESOURCE",
+    "REVOKE",
+    "ROW",
+    "ROWID",
+    "ROWNUM",
+    "ROWS",
+    "SELECT",
+    "SESSION",
+    "SET",
+    "SHARE",
+    "SIZE",
+    "SMALLINT",
+    "START",
+    "SUCCESSFUL",
+    "SYNONYM",
+    "SYSDATE",
+    "TABLE",
+    "THEN",
+    "TO",
+    "TRIGGER",
+    "UID",
+    "UNION",
+    "UNIQUE",
+    "UPDATE",
+    "USER",
+    "VALIDATE",
+    "VALUES",
+    "VARCHAR",
+    "VARCHAR2",
+    "VIEW",
+    "WHENEVER",
+    "WHERE",
+    "WITH",
+})
 _CHAR_LENGTH_TYPES = frozenset({
     "binary",
     "bit",
@@ -150,6 +275,14 @@ _CHAR_LENGTH_TYPES = frozenset({
 _UNICODE_CHAR_TYPES = frozenset({"nchar", "nvarchar", "national character", "national character varying"})
 _DECIMAL_TYPES = frozenset({"dec", "decimal", "number", "numeric"})
 _TEMPORAL_SCALE_TYPES = frozenset({"datetime2", "datetimeoffset", "time"})
+_ORACLE_ON_DELETE_ACTIONS = frozenset({FOREIGN_KEY_ACTION_CASCADE, FOREIGN_KEY_ACTION_SET_NULL})
+_NO_CASCADE_SEQUENCE_DIALECTS = frozenset({"tsql", "oracle", "spanner", "bigquery", "db2"})
+_PARENTHESIZED_DEFAULT_DIALECTS = frozenset({"sqlite", "mysql", "spanner"})
+_SELF_PARENTHESIZED_GENERATED_DIALECTS = frozenset({"postgres", "mysql", "sqlite"})
+_GENERIC_NORMALIZATION_DIALECTS = frozenset({"oracle", "db2", "snowflake"})
+_AUTO_INCREMENT_IDENTITY_DIALECTS = frozenset({"mysql", "sqlite", "duckdb"})
+_VIRTUAL_ONLY_GENERATED_DIALECTS = frozenset({"duckdb", "oracle"})
+_STORED_GENERATED_DEFAULT_DIALECTS = frozenset({"postgres", "spanner"})
 _MSSQL_STORAGE_INDEX_TYPES = frozenset({
     "CLUSTERED",
     "NONCLUSTERED",
@@ -166,53 +299,57 @@ _MSSQL_STORAGE_INDEX_TYPES = frozenset({
 def build_column_expression(
     col: "ColumnDefinition", dialect: "DialectType | None" = None, *, include_primary_key: bool = True
 ) -> "exp.Expr":
-    """Build SQLGlot expression for a column definition."""
+    """Build SQLGlot expression for a column definition.
+
+    Raises:
+        SQLBuilderError: When the column uses an identity or auto-increment feature the
+            target dialect cannot express.
+    """
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
     col_def = exp.ColumnDef(
         this=_parse_ddl_identifier(col.name, dialect=dialect), kind=_parse_column_type(col.name, col.dtype, dialect)
     )
+    inline_primary_key = col.primary_key and include_primary_key
 
     constraints: list[exp.ColumnConstraint] = []
 
     if col.not_null:
         constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
 
-    if col.primary_key and include_primary_key:
+    if inline_primary_key:
         constraints.append(exp.ColumnConstraint(kind=exp.PrimaryKeyColumnConstraint()))
 
     if col.unique:
         constraints.append(exp.ColumnConstraint(kind=exp.UniqueColumnConstraint()))
 
-    if col.auto_increment:
+    identity_constraint = _build_identity_column_constraint(col, dialect=dialect)
+    use_auto_increment = col.auto_increment or (
+        identity_constraint is not None and norm_dialect in _AUTO_INCREMENT_IDENTITY_DIALECTS
+    )
+    if use_auto_increment:
+        if norm_dialect == "duckdb":
+            msg = (
+                f"Column {col.name!r}: DuckDB has no AUTO_INCREMENT or identity columns; "
+                "create a sequence with CreateSequence and use DEFAULT nextval('<sequence>') instead"
+            )
+            raise SQLBuilderError(msg)
+        if norm_dialect == "sqlite" and not inline_primary_key:
+            msg = f"Column {col.name!r}: SQLite AUTOINCREMENT requires an inline INTEGER PRIMARY KEY column"
+            raise SQLBuilderError(msg)
         constraints.append(exp.ColumnConstraint(kind=exp.AutoIncrementColumnConstraint(this=False)))
+    elif identity_constraint is not None:
+        constraints.append(identity_constraint)
 
     if col.default is not None:
-        default_expr: exp.Expr | None = None
-        if isinstance(col.default, str):
-            default_upper = col.default.upper()
-            if default_upper == CURRENT_TIMESTAMP_KEYWORD:
-                default_expr = exp.CurrentTimestamp()
-            elif default_upper == CURRENT_DATE_KEYWORD:
-                default_expr = exp.CurrentDate()
-            elif default_upper == CURRENT_TIME_KEYWORD:
-                default_expr = exp.CurrentTime()
-            elif "(" in col.default:
-                default_expr = exp.maybe_parse(col.default)
-            else:
-                default_expr = exp.convert(col.default)
-        else:
-            default_expr = exp.convert(col.default)
-
-        constraints.append(exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=default_expr)))
+        constraints.append(
+            exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=_build_default_expression(col.default, dialect)))
+        )
 
     if col.check:
-        constraints.append(exp.ColumnConstraint(kind=exp.Check(this=exp.maybe_parse(col.check))))
+        constraints.append(exp.ColumnConstraint(kind=exp.Check(this=exp.maybe_parse(col.check, dialect=norm_dialect))))
 
     if col.comment:
         constraints.append(exp.ColumnConstraint(kind=exp.CommentColumnConstraint(this=exp.convert(col.comment))))
-
-    identity_constraint = _build_identity_column_constraint(col)
-    if identity_constraint is not None:
-        constraints.append(identity_constraint)
 
     computed_constraint = _build_computed_column_constraint(col, dialect=dialect)
     if computed_constraint is not None:
@@ -251,10 +388,11 @@ def build_constraint_expression(
                 fk_options.append("DEFERRABLE INITIALLY IMMEDIATE")
 
         reference_options: list[str] = []
-        if constraint.on_delete:
-            reference_options.append(f"ON DELETE {constraint.on_delete}")
-        if constraint.on_update:
-            reference_options.append(f"ON UPDATE {constraint.on_update}")
+        on_delete, on_update = _dialect_foreign_key_actions(constraint, dialect)
+        if on_delete:
+            reference_options.append(f"ON DELETE {on_delete}")
+        if on_update:
+            reference_options.append(f"ON UPDATE {on_update}")
 
         fk_constraint = exp.ForeignKey(
             expressions=[_parse_ddl_identifier(col, dialect=dialect) for col in constraint.columns],
@@ -327,6 +465,25 @@ class DDLBuilder(QueryBuilder):
     def _require(self, value: object, message: str) -> None:
         if not value:
             self._raise_builder_error(message)
+
+    def _optimize_expression(
+        self, expression: exp.Expr, *, force: bool = False, dialect: "DialectType" = None
+    ) -> exp.Expr:
+        """Normalize DDL identifiers without disturbing explicitly quoted names.
+
+        Statements without an embedded query only need identifier normalization. SQLGlot
+        folds even quoted identifiers on case-insensitive dialects (T-SQL, SQLite, DuckDB),
+        which would rename catalog objects, so identifiers carrying an explicit quote marker
+        are left exactly as supplied. Statements embedding a query (CTAS, views) keep the
+        full query optimizer.
+        """
+        if not force and not self.enable_optimization:
+            return expression
+        if expression.find(exp.Query) is not None:
+            return super()._optimize_expression(expression, force=force, dialect=dialect)
+        target_dialect = _normalize_dialect(dialect) if dialect is not None else self.dialect_name
+        normalizer = Dialect.get_or_raise(None if target_dialect in _GENERIC_NORMALIZATION_DIALECTS else target_dialect)
+        return expression.transform(lambda node: _normalize_ddl_identifier(node, normalizer), copy=True)
 
     def _resolve_select_query(self, query: object, context: str, *, require_select_type: bool = True) -> exp.Expr:
         effective_dialect = self._expression_dialect or self.dialect_name
@@ -430,7 +587,7 @@ class ColumnDefinition:
         collate: "str | None" = None,
         identity: "str | bool | None" = None,
         generated_expression: "str | exp.Expr | None" = None,
-        persisted: bool = True,
+        persisted: "bool | None" = None,
     ) -> None:
         self.name = name
         self.dtype = dtype
@@ -574,7 +731,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         collate: "str | None" = None,
         identity: "str | bool | None" = None,
         generated_expression: "str | exp.Expr | None" = None,
-        persisted: bool = True,
+        persisted: "bool | None" = None,
     ) -> "Self":
         """Add a column definition to the table."""
         if not name:
@@ -734,15 +891,46 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         schema: "str | None" = None,
         if_not_exists: bool = False,
         dialect: "DialectType" = None,
+        *,
+        source_dialect: "DialectType" = None,
+        warnings: "list[str] | None" = None,
     ) -> "CreateTable":
-        """Build a CreateTable builder from structured data_dictionary metadata rows."""
-        builder = cls(table_name, dialect=dialect)
+        """Build a CreateTable builder from structured data_dictionary metadata rows.
+
+        Names are raw catalog identifiers and are quoted whenever the bare spelling would
+        not resolve to the exact catalog name in ``dialect``. Catalog SQL fragments
+        (defaults, CHECK and generated expressions) are parsed with ``source_dialect``
+        (defaults to ``dialect``).
+
+        Args:
+            table_name: Raw catalog table name.
+            columns: Column metadata rows.
+            constraints: Constraint metadata rows.
+            foreign_keys: Foreign key metadata rows.
+            schema: Raw catalog schema name.
+            if_not_exists: Whether to emit ``IF NOT EXISTS``.
+            dialect: Target dialect for the generated DDL.
+            source_dialect: Dialect the catalog SQL fragments are written in.
+            warnings: Collector for metadata that cannot be reproduced faithfully. When
+                omitted, any such loss raises instead of being dropped.
+
+        Returns:
+            Configured CreateTable builder.
+
+        Raises:
+            SQLBuilderError: When metadata cannot be reproduced and no ``warnings`` collector is given.
+        """
+        collected: list[str] = []
+        fragment_dialect = source_dialect if source_dialect is not None else dialect
+        builder = cls(_catalog_name(table_name, dialect, fragment_dialect), dialect=dialect)
         if schema:
-            builder.in_schema(schema)
+            builder.in_schema(_catalog_name(schema, dialect, fragment_dialect))
         if if_not_exists:
             builder.if_not_exists()
 
-        norm_columns = [_normalize_metadata_row(col) for col in columns]
+        norm_columns = [
+            row for row in (_normalize_metadata_row(col) for col in columns) if not _is_hidden_metadata_column(row)
+        ]
         if any(row.get("ordinal_position") is not None for row in norm_columns):
             indexed_cols = list(enumerate(norm_columns))
             indexed_cols.sort(key=lambda item: (_safe_int(item[1].get("ordinal_position"), item[0] + 1), item[0]))
@@ -770,7 +958,10 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
                 continue
             uq_name = _first_non_empty_str(c_row, "constraint_name", "name")
             uq_cols = _extract_constraint_columns(c_row)
-            if not uq_cols or tuple(uq_cols) == tuple(pk_cols) or tuple(uq_cols) in seen_unique_cols:
+            if not uq_cols:
+                collected.append(f"UNIQUE constraint {uq_name or '<unnamed>'} has no catalog columns and was omitted")
+                continue
+            if tuple(uq_cols) == tuple(pk_cols) or tuple(uq_cols) in seen_unique_cols:
                 continue
             seen_unique_cols.add(tuple(uq_cols))
             unique_specs.append((uq_name, uq_cols))
@@ -779,52 +970,30 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             col_name = _first_non_empty_str(row, "column_name", "name")
             if not col_name:
                 continue
-            dtype = _resolve_metadata_column_type(row, dialect=dialect)
-            not_null = _resolve_metadata_not_null(row)
-            computed_expr, persisted = _resolve_metadata_computed(row)
-            identity_val = None if computed_expr is not None else _resolve_metadata_identity(row)
-            auto_increment = (
-                False
-                if (computed_expr is not None or identity_val is not None)
-                else _resolve_metadata_auto_increment(row)
-            )
-            raw_default = (
-                None
-                if (computed_expr is not None or identity_val is not None or auto_increment)
-                else (
-                    _first_present(row, "column_default", "default", "default_value")
-                    or default_constraint_map.get(col_name)
-                )
-            )
-            default_val = _parse_metadata_default(raw_default, dialect=dialect)
-            collate_val = _first_non_empty_str(row, "collate", "collation", "collation_name")
-            check_val = _first_non_empty_str(row, "check")
-            is_col_pk = use_inline_pk and col_name == pk_cols[0]
-            is_col_unique = (
-                _truthy(_first_present(row, "is_unique", "unique"))
+            builder._add_metadata_column(
+                row,
+                col_name,
+                dialect=dialect,
+                fragment_dialect=fragment_dialect,
+                primary_key=use_inline_pk and col_name == pk_cols[0],
+                unique=truthy_metadata_flag(_first_present(row, "is_unique", "unique"))
                 and col_name not in pk_cols
-                and (col_name,) not in seen_unique_cols
-            )
-            builder.column(
-                name=col_name,
-                dtype=dtype,
-                default=default_val,
-                not_null=not_null,
-                primary_key=is_col_pk,
-                unique=is_col_unique,
-                auto_increment=auto_increment,
-                check=check_val,
-                collate=collate_val,
-                identity=identity_val,
-                generated_expression=computed_expr,
-                persisted=persisted,
+                and (col_name,) not in seen_unique_cols,
+                fallback_default=default_constraint_map.get(col_name),
+                warnings=collected,
             )
 
         if pk_cols and not use_inline_pk:
-            builder.primary_key_constraint(pk_cols, name=pk_name)
+            builder.primary_key_constraint(
+                [_catalog_name(col, dialect, fragment_dialect) for col in pk_cols],
+                name=_catalog_name(pk_name, dialect, fragment_dialect) if pk_name else None,
+            )
 
         for uq_name, uq_cols in unique_specs:
-            builder.unique_constraint(uq_cols, name=uq_name)
+            builder.unique_constraint(
+                [_catalog_name(col, dialect, fragment_dialect) for col in uq_cols],
+                name=_catalog_name(uq_name, dialect, fragment_dialect) if uq_name else None,
+            )
 
         seen_checks: set[str] = set()
         for c_row in norm_constraints:
@@ -834,25 +1003,51 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             raw_cond = _first_non_empty_str(c_row, "check_clause", "condition", "definition", "expression")
             cond = _strip_check_wrapper(raw_cond) if raw_cond else None
             if not cond:
+                collected.append(
+                    f"CHECK constraint {chk_name or '<unnamed>'} has no catalog expression and was omitted"
+                )
                 continue
             dedup_key = chk_name or cond
             if dedup_key in seen_checks:
                 continue
             seen_checks.add(dedup_key)
-            builder.check_constraint(cond, name=chk_name)
+            cond_expr = _parse_catalog_fragment(cond, fragment_dialect)
+            if cond_expr is None:
+                collected.append(
+                    f"CHECK constraint {chk_name or '<unnamed>'} could not be parsed and was omitted: {cond}"
+                )
+                continue
+            builder._constraints.append(
+                ConstraintDefinition(
+                    constraint_type=CONSTRAINT_TYPE_CHECK,
+                    name=_catalog_name(chk_name, dialect, fragment_dialect) if chk_name else None,
+                    condition_expr=cond_expr,
+                )
+            )
 
-        for fk_spec in _extract_metadata_foreign_keys(norm_constraints, norm_fks, table_schema=schema):
+        for fk_spec in _extract_metadata_foreign_keys(
+            norm_constraints,
+            norm_fks,
+            table_schema=schema,
+            dialect=dialect,
+            source_dialect=fragment_dialect,
+            warnings=collected,
+        ):
+            on_delete, on_update = _supported_foreign_key_actions(
+                fk_spec["on_delete"], fk_spec["on_update"], dialect, name=fk_spec["name"], warnings=collected
+            )
             builder.foreign_key_constraint(
                 columns=fk_spec["columns"],
                 references_table=fk_spec["ref_table"],
                 references_columns=fk_spec["ref_columns"],
                 name=fk_spec["name"],
-                on_delete=fk_spec["on_delete"],
-                on_update=fk_spec["on_update"],
+                on_delete=on_delete,
+                on_update=on_update,
                 deferrable=fk_spec["deferrable"],
                 initially_deferred=fk_spec["initially_deferred"],
             )
 
+        _deliver_metadata_warnings(collected, warnings, context=f"table {table_name!r}")
         return builder
 
     @classmethod
@@ -882,16 +1077,24 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         pk_cols = [primary_key] if isinstance(primary_key, str) else [str(col) for col in (primary_key or ()) if col]
         use_inline_pk = len(pk_cols) == 1
         dialect_str = _normalize_dialect(dialect) if dialect else None
+        text_type = sql_type_for_category("text", dialect_str)
 
         for field in fields:
             col_name = str(field.name)
             dtype = sql_type_from_arrow_type(field.type, dialect=dialect_str)
             is_pk_member = col_name in pk_cols
+            if is_pk_member and dtype == text_type:
+                dtype = sql_type_for_category("key_text", dialect_str)
             not_null = is_pk_member or not bool(getattr(field, "nullable", True))
-            builder.column(name=col_name, dtype=dtype, not_null=not_null, primary_key=use_inline_pk and is_pk_member)
+            builder.column(
+                name=_record_field_name(col_name, dialect_str),
+                dtype=dtype,
+                not_null=not_null,
+                primary_key=use_inline_pk and is_pk_member,
+            )
 
         if len(pk_cols) > 1:
-            builder.primary_key_constraint(pk_cols)
+            builder.primary_key_constraint([_record_field_name(col, dialect_str) for col in pk_cols])
 
         return builder
 
@@ -946,11 +1149,16 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
             is_pk_member = col_name in pk_cols
             not_null = is_pk_member or not has_null
-            dtype = _infer_sql_type_from_values(values, dialect=dialect_str)
-            builder.column(name=col_name, dtype=dtype, not_null=not_null, primary_key=use_inline_pk and is_pk_member)
+            dtype = _infer_sql_type_from_values(values, dialect=dialect_str, key=is_pk_member)
+            builder.column(
+                name=_record_field_name(col_name, dialect_str),
+                dtype=dtype,
+                not_null=not_null,
+                primary_key=use_inline_pk and is_pk_member,
+            )
 
         if len(pk_cols) > 1:
-            builder.primary_key_constraint(pk_cols)
+            builder.primary_key_constraint([_record_field_name(col, dialect_str) for col in pk_cols])
 
         return builder
 
@@ -959,7 +1167,8 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         self._require(self._columns or self._like_table, "Table must have at least one column or use LIKE clause")
 
         effective_dialect = self._expression_dialect or self.dialect_name
-        has_table_level_pk = any(
+        primary_key_after_schema = _normalize_dialect(effective_dialect) == "spanner"
+        has_table_level_pk = primary_key_after_schema or any(
             c.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY and not self._is_redundant_single_column_primary_key(c)
             for c in self._constraints
         )
@@ -971,6 +1180,8 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             column_defs.append(col_expr)
 
         for constraint in self._constraints:
+            if primary_key_after_schema and constraint.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY:
+                continue
             if self._is_redundant_single_column_primary_key(constraint):
                 continue
 
@@ -978,7 +1189,17 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             if constraint_expr:
                 column_defs.append(constraint_expr)
 
-        props: list[exp.Property] = []
+        props: list[exp.Expr] = []
+        primary_key_constraint = self._find_primary_key_constraint()
+        if primary_key_after_schema and primary_key_constraint is not None:
+            props.append(
+                exp.PrimaryKey(
+                    expressions=[
+                        exp.Ordered(this=_parse_ddl_identifier(col, dialect=effective_dialect), nulls_first=True)
+                        for col in primary_key_constraint.columns
+                    ]
+                )
+            )
         if self._table_options.get("engine"):
             props.append(
                 exp.Property(
@@ -1034,6 +1255,86 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
         col_name = constraint.columns[0]
         return any(c.name == col_name and c.primary_key for c in self._columns)
+
+    def _add_metadata_column(
+        self,
+        row: "Mapping[str, Any]",
+        col_name: str,
+        *,
+        dialect: "DialectType",
+        fragment_dialect: "DialectType",
+        primary_key: bool,
+        unique: bool,
+        fallback_default: Any,
+        warnings: "list[str]",
+    ) -> None:
+        """Add one catalog column, recording any attribute that cannot be reproduced in ``warnings``."""
+        computed_source, persisted, is_generated = _resolve_metadata_computed(row)
+        computed_expr: exp.Expr | None = None
+        if computed_source is not None:
+            computed_expr = (
+                computed_source
+                if isinstance(computed_source, exp.Expr)
+                else _parse_catalog_fragment(computed_source, fragment_dialect)
+            )
+            if computed_expr is None:
+                warnings.append(
+                    f"Column {col_name!r} generated expression could not be parsed; emitted as a plain column: "
+                    f"{computed_source}"
+                )
+        elif is_generated:
+            warnings.append(
+                f"Column {col_name!r} is a generated column but the catalog did not report its expression; "
+                "emitted as a plain column"
+            )
+        norm_dialect = _normalize_dialect(dialect) if dialect else None
+        if computed_expr is not None and persisted and norm_dialect in _VIRTUAL_ONLY_GENERATED_DIALECTS:
+            warnings.append(
+                f"Column {col_name!r} is a stored generated column; {norm_dialect} supports only virtual generated "
+                "columns, so it is emitted as virtual"
+            )
+            persisted = False
+        is_computed = computed_expr is not None or is_generated
+        identity_val = None if is_computed else _resolve_metadata_identity(row)
+        auto_increment = False if (is_computed or identity_val is not None) else _resolve_metadata_auto_increment(row)
+        if (identity_val is not None or auto_increment) and (
+            norm_dialect == "duckdb" or (norm_dialect == "sqlite" and not primary_key)
+        ):
+            warnings.append(
+                f"Column {col_name!r} is an identity/auto-increment column; {norm_dialect} cannot express it on this "
+                "column, so it is emitted without automatic value generation"
+            )
+            identity_val = None
+            auto_increment = False
+        raw_default = (
+            None
+            if (is_computed or identity_val is not None or auto_increment)
+            else (_first_present(row, "column_default", "default", "default_value") or fallback_default)
+        )
+        default_val: Any = None
+        if raw_default is not None:
+            default_val = _parse_metadata_default(
+                raw_default, source_dialect=fragment_dialect, extra=str(row.get("extra") or "")
+            )
+            if default_val is _UNPARSEABLE_DEFAULT:
+                warnings.append(f"Column {col_name!r} default could not be parsed and was omitted: {raw_default}")
+                default_val = None
+        self.column(
+            name=_catalog_name(col_name, dialect, fragment_dialect),
+            dtype=_translate_catalog_type(
+                _resolve_metadata_column_type(row, dialect=fragment_dialect), fragment_dialect, dialect
+            ),
+            default=default_val,
+            not_null=_resolve_metadata_not_null(row),
+            primary_key=primary_key,
+            unique=unique,
+            auto_increment=auto_increment,
+            check=_first_non_empty_str(row, "check"),
+            collate=_first_non_empty_str(row, "collate", "collation", "collation_name"),
+            identity=identity_val,
+            generated_expression=computed_expr,
+            persisted=persisted,
+        )
 
 
 class _SingleObjectDropBuilder(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDDLMixin):
@@ -1204,6 +1505,7 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE [UNIQUE] INDEX [IF NOT EXISTS] ... ON ... (...)."""
 
     __slots__ = (
+        "_clustered",
         "_columns",
         "_if_not_exists",
         "_include_columns",
@@ -1240,6 +1542,7 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         self._if_not_exists = False
         self._using: str | None = None
         self._where: str | exp.Expr | None = None
+        self._clustered: bool | None = None
 
     def name(self, index_name: str) -> Self:
         self._index_name = index_name
@@ -1286,6 +1589,14 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         self._where = condition
         return self
 
+    def clustered(self, value: bool = True) -> Self:
+        """Mark the index ``CLUSTERED`` (or ``NONCLUSTERED`` when ``value`` is false) on T-SQL.
+
+        Other dialects have no clustered-index DDL and ignore the setting.
+        """
+        self._clustered = value
+        return self
+
     @classmethod
     def from_metadata(
         cls,
@@ -1294,12 +1605,62 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         table_name: "str | None" = None,
         schema: "str | None" = None,
         dialect: "DialectType" = None,
+        source_dialect: "DialectType" = None,
+        known_columns: "Sequence[str] | None" = None,
+        warnings: "list[str] | None" = None,
     ) -> "CreateIndex | None":
-        """Build a CreateIndex builder from a structured index metadata row or IndexDetails object."""
-        row = _normalize_metadata_row(index)
-        if _truthy(_first_present(row, "is_primary", "is_primary_key", "primary_key")):
+        """Build a CreateIndex builder from a structured index metadata row or IndexDetails object.
+
+        Native index SQL reported by the catalog (``native_sql`` or a ``CREATE ... INDEX``
+        ``definition``) is parsed for key expressions, sort order, and the partial-index
+        predicate. Otherwise the catalog column list is used; entries that match
+        ``known_columns`` or are not expression-like are treated as identifiers.
+
+        Args:
+            index: Index metadata row.
+            table_name: Raw catalog table name (defaults to the row's table name).
+            schema: Raw catalog schema name (defaults to the row's schema).
+            dialect: Target dialect for the generated DDL.
+            source_dialect: Dialect of catalog SQL fragments (defaults to ``dialect``).
+            known_columns: Raw names of the table's columns.
+            warnings: Collector for indexes that cannot be reproduced faithfully. When
+                omitted, such an index raises instead of being dropped.
+
+        Returns:
+            Configured builder, or ``None`` for primary-key, unique-constraint, and
+            internal indexes (and for unreproducible indexes when ``warnings`` is given).
+
+        Raises:
+            SQLBuilderError: When the index cannot be reproduced and no ``warnings`` collector is given.
+        """
+        collected: list[str] = []
+        builder = cls._from_metadata_row(
+            _normalize_metadata_row(index),
+            table_name=table_name,
+            schema=schema,
+            dialect=dialect,
+            source_dialect=source_dialect,
+            known_columns=known_columns,
+            warnings=collected,
+        )
+        _deliver_metadata_warnings(collected, warnings, context="index")
+        return builder
+
+    @classmethod
+    def _from_metadata_row(
+        cls,
+        row: "Mapping[str, Any]",
+        *,
+        table_name: "str | None",
+        schema: "str | None",
+        dialect: "DialectType",
+        source_dialect: "DialectType",
+        known_columns: "Sequence[str] | None",
+        warnings: "list[str]",
+    ) -> "CreateIndex | None":
+        if truthy_metadata_flag(_first_present(row, "is_primary", "is_primary_key", "primary_key")):
             return None
-        if _truthy(row.get("is_unique_constraint")):
+        if truthy_metadata_flag(row.get("is_unique_constraint")):
             return None
 
         index_name = _first_non_empty_str(row, "index_name", "name")
@@ -1310,27 +1671,63 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         resolved_schema = (
             schema if schema is not None else _first_non_empty_str(row, "schema_name", "schema", "table_schema")
         )
-        cols = _split_metadata_columns(_first_present(row, "columns", "column_names", "column_name"))
-        if not resolved_table or not cols:
+        if not resolved_table:
             return None
 
-        builder = cls(index_name, dialect=dialect)
-        if resolved_schema:
-            builder.in_schema(resolved_schema)
-        builder.on(resolved_table, *cols)
+        fragment_dialect = source_dialect if source_dialect is not None else dialect
+        storage_type = str(row.get("type_desc") or "").strip().upper().replace("_", " ")
+        if storage_type and storage_type not in {"CLUSTERED", "NONCLUSTERED", "HEAP"}:
+            warnings.append(f"Index {index_name}: {storage_type} indexes are not reproduced; index omitted")
+            return None
 
-        if _truthy(_first_present(row, "is_unique", "unique")):
+        key_exprs: list[exp.Expr] | None = None
+        where_expr: exp.Expr | None = None
+        native_sql = _native_index_sql(row)
+        if native_sql is not None:
+            native_parts = _parse_native_index_sql(native_sql, fragment_dialect)
+            if native_parts is not None:
+                key_exprs, where_expr = native_parts
+
+        if key_exprs is None:
+            key_exprs = _metadata_index_key_expressions(
+                row,
+                index_name,
+                dialect=dialect,
+                fragment_dialect=fragment_dialect,
+                known_columns=known_columns,
+                warnings=warnings,
+            )
+            if key_exprs is None:
+                return None
+            where_text = _first_non_empty_str(row, "where", "filter_definition", "predicate")
+            has_filter_val = row.get("has_filter")
+            is_partial = truthy_metadata_flag(has_filter_val) or truthy_metadata_flag(row.get("is_partial"))
+            if where_text and (has_filter_val is None or truthy_metadata_flag(has_filter_val)):
+                where_expr = _parse_catalog_fragment(where_text, fragment_dialect)
+                if where_expr is None:
+                    warnings.append(f"Index {index_name}: predicate could not be parsed ({where_text}); index omitted")
+                    return None
+            elif is_partial:
+                warnings.append(f"Index {index_name} is partial but the catalog did not report its predicate; omitted")
+                return None
+
+        builder = cls(_catalog_name(index_name, dialect, fragment_dialect), dialect=dialect)
+        if resolved_schema:
+            builder.in_schema(_catalog_name(resolved_schema, dialect, fragment_dialect))
+        builder.on(_catalog_name(resolved_table, dialect, fragment_dialect), *key_exprs)
+
+        if truthy_metadata_flag(_first_present(row, "is_unique", "unique")):
             builder.unique()
 
         inc_cols = _split_metadata_columns(_first_present(row, "included_columns", "include", "include_columns"))
         if inc_cols:
-            builder.include(*inc_cols)
+            builder.include(*(_catalog_name(col, dialect, fragment_dialect) for col in inc_cols))
 
-        has_filter_val = row.get("has_filter")
-        if has_filter_val is None or _truthy(has_filter_val):
-            where_clause = _first_non_empty_str(row, "where", "filter_definition", "predicate")
-            if where_clause:
-                builder.where(where_clause)
+        if where_expr is not None:
+            builder.where(where_expr)
+
+        if storage_type in {"CLUSTERED", "NONCLUSTERED"}:
+            builder.clustered(storage_type == "CLUSTERED")
 
         using_method = _first_non_empty_str(row, "using", "index_type", "access_method")
         if using_method:
@@ -1346,32 +1743,19 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
     def _create_base_expression(self) -> exp.Expr:
         """Build the CREATE INDEX expression for this builder.
 
-        Columns are turned into raw expressions (not ``Ordered``) unless explicit ordering
-        is specified, string ``where`` clauses become expressions, and the final ``exp.Index``
-        is wrapped in an ``exp.Create`` with the configured flags.
+        String columns become identifiers unless they are expression-like (parentheses,
+        operators, literals) or carry an explicit ASC/DESC suffix; names that are not bare
+        identifiers (for example ``Customer Id``) are quoted rather than parsed. String
+        ``where`` clauses are parsed with the target dialect.
         """
         self._require(self._index_name and self._table_name, "Index name and table name must be set for CREATE INDEX.")
 
         effective_dialect = self._expression_dialect or self.dialect_name
-        cols: list[exp.Expr] = []
-        for col in self._columns:
-            if isinstance(col, str):
-                stripped = col.strip()
-                if _ORDER_DIRECTION_SUFFIX_RE.search(stripped):
-                    cols.append(parse_order_expression(stripped))
-                elif _is_simple_identifier(stripped) or (
-                    stripped[:1] in {'"', "`", "["} and "(" not in stripped and " " not in stripped[1:-1]
-                ):
-                    cols.append(exp.Column(this=_parse_ddl_identifier(stripped, dialect=effective_dialect)))
-                else:
-                    parsed_col: exp.Expr | None = exp.maybe_parse(stripped, dialect=effective_dialect)
-                    cols.append(
-                        parsed_col
-                        if parsed_col is not None
-                        else exp.Column(this=_parse_ddl_identifier(stripped, dialect=effective_dialect))
-                    )
-            else:
-                cols.append(col.copy())
+        norm_dialect = _normalize_dialect(effective_dialect) if effective_dialect else None
+        cols: list[exp.Expr] = [
+            _index_column_expression(col, effective_dialect) if isinstance(col, str) else col.copy()
+            for col in self._columns
+        ]
 
         include_cols: list[exp.Expr] = []
         for inc_col in self._include_columns:
@@ -1380,9 +1764,11 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
             else:
                 include_cols.append(inc_col.copy())
 
-        where_expr = None
-        if self._where:
-            where_expr = exp.condition(self._where) if isinstance(self._where, str) else self._where
+        where_expr: exp.Expr | None = None
+        if self._where is not None:
+            where_expr = (
+                exp.condition(self._where, dialect=norm_dialect) if isinstance(self._where, str) else self._where.copy()
+            )
 
         index_params = exp.IndexParameters(columns=cols) if cols else None
 
@@ -1396,7 +1782,7 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
                 index_params = exp.IndexParameters()
             index_params.set("using", exp.Var(this=self._using))
 
-        if where_expr:
+        if where_expr is not None:
             if index_params is None:
                 index_params = exp.IndexParameters()
             index_params.set("where", exp.Where(this=where_expr))
@@ -1407,7 +1793,10 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
             params=index_params,
         )
 
-        return exp.Create(kind="INDEX", this=index_expr, unique=self._unique, exists=self._if_not_exists)
+        kind = "INDEX"
+        if self._clustered is not None and norm_dialect == "tsql":
+            kind = "CLUSTERED INDEX" if self._clustered else "NONCLUSTERED INDEX"
+        return exp.Create(kind=kind, this=index_expr, unique=self._unique, exists=self._if_not_exists)
 
     def _optimize_expression(
         self, expression: exp.Expr, *, force: bool = False, dialect: "DialectType" = None
@@ -2302,10 +2691,50 @@ class CreateSequence(DDLBuilder):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        """Build the SQLGlot Create expression for this sequence."""
+        """Build the SQLGlot Create expression for this sequence.
+
+        Raises:
+            SQLBuilderError: On SQLite (no sequences), or when Spanner is asked for options
+                other than a start counter (Spanner sequences are bit-reversed and accept only
+                ``start_with_counter``).
+        """
         self._require(self._sequence_name, "Sequence name must be set for CREATE SEQUENCE.")
         effective_dialect = self._expression_dialect or self.dialect_name
+        norm_dialect = _normalize_dialect(effective_dialect) if effective_dialect else None
+        if norm_dialect == "sqlite":
+            self._raise_builder_error("SQLite has no sequences; use an INTEGER PRIMARY KEY column instead.")
         table_expr = _parse_ddl_table(self._sequence_name, schema=self._schema, dialect=effective_dialect)
+
+        if norm_dialect == "spanner":
+            unsupported = [
+                option
+                for option, value in (
+                    ("INCREMENT BY", self._increment_by),
+                    ("MINVALUE", self._min_value),
+                    ("MAXVALUE", self._max_value),
+                    ("CACHE", self._cache),
+                )
+                if value is not None
+            ]
+            if self._cycle:
+                unsupported.append("CYCLE")
+            if unsupported:
+                self._raise_builder_error(
+                    f"Spanner sequences do not support {', '.join(unsupported)}; only start_with is available."
+                )
+            spanner_options: list[exp.Expr] = [
+                exp.Property(this=exp.Var(this="sequence_kind"), value=exp.Literal.string("bit_reversed_positive"))
+            ]
+            if self._start_with is not None:
+                spanner_options.append(
+                    exp.Property(this=exp.Var(this="start_with_counter"), value=exp.Literal.number(self._start_with))
+                )
+            return exp.Create(
+                this=table_expr,
+                kind="SEQUENCE",
+                exists=self._if_not_exists,
+                properties=exp.Properties(expressions=spanner_options),
+            )
 
         options: list[exp.Expr] = [exp.Var(this="CYCLE")] if self._cycle else []
         has_seq_props = any(
@@ -2368,9 +2797,19 @@ class DropSequence(DDLBuilder):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
-        """Build the SQLGlot Drop expression for this sequence."""
+        """Build the SQLGlot Drop expression for this sequence.
+
+        Raises:
+            SQLBuilderError: On SQLite (no sequences), or when ``CASCADE`` is requested on a
+                dialect whose ``DROP SEQUENCE`` has no ``CASCADE`` option.
+        """
         self._require(self._sequence_name, "Sequence name must be set for DROP SEQUENCE.")
         effective_dialect = self._expression_dialect or self.dialect_name
+        norm_dialect = _normalize_dialect(effective_dialect) if effective_dialect else None
+        if norm_dialect == "sqlite":
+            self._raise_builder_error("SQLite has no sequences.")
+        if self._cascade and norm_dialect in _NO_CASCADE_SEQUENCE_DIALECTS:
+            self._raise_builder_error(f"DROP SEQUENCE ... CASCADE is not supported by {norm_dialect}.")
         table_expr = _parse_ddl_table(self._sequence_name, schema=self._schema, dialect=effective_dialect)
         return exp.Drop(
             this=table_expr, tables=[table_expr.copy()], kind="SEQUENCE", exists=self._if_exists, cascade=self._cascade
@@ -2388,10 +2827,34 @@ def compile_table_ddl_results(
     table_comment: "str | None" = None,
     column_comments: "Mapping[str, str] | None" = None,
     dialect: "DialectType" = None,
+    source_dialect: "DialectType" = None,
     object_type: str = "table",
     warnings: tuple[str, ...] = (),
 ) -> DDLResult:
-    """Compile structured catalog metadata into a generated DDLResult for a table."""
+    """Compile structured catalog metadata into a generated DDLResult for a table.
+
+    Catalog attributes that cannot be reproduced on ``dialect`` (unreported generated
+    expressions, partial-index predicates, expression index keys, unsupported referential
+    actions, unparseable defaults) are listed in ``DDLResult.warnings`` and the result's
+    fidelity becomes ``LOSSY`` instead of ``GENERATED``.
+
+    Args:
+        table_name: Raw catalog table name.
+        columns: Column metadata rows.
+        schema: Raw catalog schema name.
+        constraints: Constraint metadata rows.
+        foreign_keys: Foreign key metadata rows.
+        indexes: Index metadata rows.
+        table_comment: Optional table comment.
+        column_comments: Optional column comments keyed by raw column name.
+        dialect: Target dialect for the generated DDL.
+        source_dialect: Dialect of catalog SQL fragments (defaults to ``dialect``).
+        object_type: Object type recorded on the result identity.
+        warnings: Caller warnings to carry on the result.
+
+    Returns:
+        Generated DDL result.
+    """
     dialect_str = _normalize_dialect(dialect) if dialect else None
     identity = ObjectIdentity(
         name=table_name, object_type=object_type, schema=schema, dialect=dialect_str, source=MetadataSource.GENERATED
@@ -2403,25 +2866,48 @@ def compile_table_ddl_results(
             warnings=warnings or (f"No catalog columns found for {schema or '<default>'}.{table_name}",),
         )
 
+    lossy: list[str] = []
     table_builder = CreateTable.from_metadata(
-        table_name, columns, constraints=constraints, foreign_keys=foreign_keys, schema=schema, dialect=dialect
+        table_name,
+        columns,
+        constraints=constraints,
+        foreign_keys=foreign_keys,
+        schema=schema,
+        dialect=dialect,
+        source_dialect=source_dialect,
+        warnings=lossy,
     )
     statements: list[str] = [table_builder.build(dialect=dialect).sql.rstrip(";").strip()]
 
+    normalized_columns = [_normalize_metadata_row(col) for col in columns]
+    known_columns = [
+        col_name
+        for col_name in (_first_non_empty_str(row, "column_name", "name") for row in normalized_columns)
+        if col_name
+    ]
     for index_row in _group_metadata_index_rows(indexes or ()):
-        idx_builder = CreateIndex.from_metadata(index_row, table_name=table_name, schema=schema, dialect=dialect)
+        idx_builder = CreateIndex.from_metadata(
+            index_row,
+            table_name=table_name,
+            schema=schema,
+            dialect=dialect,
+            source_dialect=source_dialect,
+            known_columns=known_columns,
+            warnings=lossy,
+        )
         if idx_builder is not None:
             statements.append(idx_builder.build(dialect=dialect).sql.rstrip(";").strip())
 
+    quoted_table = _catalog_name(table_name, dialect, source_dialect)
+    quoted_schema = _catalog_name(schema, dialect, source_dialect) if schema else None
     if table_comment:
-        tbl_comment = CommentOn(dialect=dialect).on_table(table_name).is_(table_comment)
-        if schema:
-            tbl_comment.in_schema(schema)
+        tbl_comment = CommentOn(dialect=dialect).on_table(quoted_table).is_(table_comment)
+        if quoted_schema:
+            tbl_comment.in_schema(quoted_schema)
         statements.append(tbl_comment.build(dialect=dialect).sql.rstrip(";").strip())
 
     merged_column_comments: dict[str, str] = {}
-    for col in columns:
-        row = _normalize_metadata_row(col)
+    for row in normalized_columns:
         col_name = _first_non_empty_str(row, "column_name", "name")
         col_comment = _first_non_empty_str(row, "comment", "column_comment", "description")
         if col_name and col_comment:
@@ -2432,20 +2918,42 @@ def compile_table_ddl_results(
         })
 
     for col_name, col_comment in merged_column_comments.items():
-        col_comment_builder = CommentOn(dialect=dialect).on_column(table_name, col_name).is_(col_comment)
-        if schema:
-            col_comment_builder.in_schema(schema)
+        col_comment_builder = (
+            CommentOn(dialect=dialect)
+            .on_column(quoted_table, _catalog_name(col_name, dialect, source_dialect))
+            .is_(col_comment)
+        )
+        if quoted_schema:
+            col_comment_builder.in_schema(quoted_schema)
         statements.append(col_comment_builder.build(dialect=dialect).sql.rstrip(";").strip())
 
     ddl_text = ";\n\n".join(stmt for stmt in statements if stmt) + ";"
     return DDLResult(
         identity=identity,
         status=MetadataSupport.SUPPORTED,
-        fidelity=MetadataFidelity.GENERATED,
+        fidelity=MetadataFidelity.LOSSY if lossy else MetadataFidelity.GENERATED,
         source=MetadataSource.GENERATED,
         ddl=ddl_text,
-        warnings=warnings,
+        warnings=(*warnings, *lossy),
     )
+
+
+def truthy_metadata_flag(value: Any) -> bool:
+    """Interpret a catalog flag value (bool, number, or ``yes``/``true``/``1`` text) as a boolean.
+
+    Args:
+        value: Raw catalog flag value.
+
+    Returns:
+        Whether the flag is set.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
 
 
 def _normalize_metadata_row(item: Any) -> dict[str, Any]:
@@ -2483,18 +2991,12 @@ def _normalize_metadata_row(item: Any) -> dict[str, Any]:
         if isinstance(asdict_res, Mapping):
             return {str(k): v for k, v in asdict_res.items()}
 
-    slots = getattr(type(item), "__slots__", None)
-    if slots and isinstance(slots, (tuple, list)):
-        slot_dict: dict[str, Any] = {}
-        for key in slots:
-            if isinstance(key, str) and hasattr(item, key):
-                slot_dict[key] = getattr(item, key)
-        if slot_dict:
-            return slot_dict
+    field_names = getattr(type(item), "__struct_fields__", None) or getattr(type(item), "__slots__", None)
+    if isinstance(field_names, (tuple, list)):
+        return {key: getattr(item, key) for key in field_names if isinstance(key, str) and hasattr(item, key)}
 
-    return {
-        key: getattr(item, key) for key in dir(item) if not key.startswith("_") and not callable(getattr(item, key))
-    }
+    msg = f"Unsupported catalog metadata row type: {type(item).__name__}"
+    raise SQLBuilderError(msg)
 
 
 def _first_present(row: Mapping[str, Any], *keys: str) -> Any:
@@ -2513,16 +3015,6 @@ def _first_non_empty_str(row: Mapping[str, Any], *keys: str) -> str | None:
             if text:
                 return text
     return None
-
-
-def _truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
-    return bool(value)
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -2576,7 +3068,7 @@ def _resolve_metadata_column_type(row: Mapping[str, Any], dialect: "DialectType 
         if max_length is not None:
             raw_len = _safe_int(max_length, 0)
             if raw_len > 0:
-                is_mssql_bytes = _truthy(row.get("from_mssql_byte_length")) or (
+                is_mssql_bytes = truthy_metadata_flag(row.get("from_mssql_byte_length")) or (
                     char_len is None
                     and (
                         norm_dialect in {"tsql", "mssql"}
@@ -2599,11 +3091,12 @@ def _resolve_metadata_column_type(row: Mapping[str, Any], dialect: "DialectType 
                 return f"{raw_type}({raw_len})"
 
     if normalized in _DECIMAL_TYPES:
-        eff_precision = precision if precision is not None else (max_length if scale is not None else None)
-        if eff_precision is not None and scale is not None:
-            return f"{raw_type}({_safe_int(eff_precision)},{_safe_int(scale)})"
-        if eff_precision is not None:
-            return f"{raw_type}({_safe_int(eff_precision)})"
+        if precision is not None and scale is not None:
+            return f"{raw_type}({_safe_int(precision)},{_safe_int(scale)})"
+        if precision is not None:
+            return f"{raw_type}({_safe_int(precision)})"
+        if normalized == "number" and scale is not None and _safe_int(scale, -1) == 0:
+            return f"{raw_type}({_ORACLE_NUMBER_MAX_PRECISION},0)"
 
     if normalized in _TEMPORAL_SCALE_TYPES and scale is not None:
         return f"{raw_type}({_safe_int(scale)})"
@@ -2611,9 +3104,22 @@ def _resolve_metadata_column_type(row: Mapping[str, Any], dialect: "DialectType 
     return raw_type
 
 
+def _translate_catalog_type(
+    dtype: str, source_dialect: "DialectType | None", target_dialect: "DialectType | None"
+) -> str:
+    """Render a catalog type written in ``source_dialect`` as type text for ``target_dialect``."""
+    norm_source = _normalize_dialect(source_dialect) if source_dialect else None
+    norm_target = _normalize_dialect(target_dialect) if target_dialect else None
+    if norm_source is None or norm_source == norm_target:
+        return dtype
+    with contextlib.suppress(ParseError):
+        return exp.DataType.build(dtype, dialect=norm_source).sql(dialect=norm_target)
+    return dtype
+
+
 def _resolve_metadata_not_null(row: Mapping[str, Any]) -> bool:
     if row.get("not_null") is not None:
-        return _truthy(row["not_null"])
+        return truthy_metadata_flag(row["not_null"])
     nullable_val = _first_present(row, "is_nullable", "nullable")
     if nullable_val is None:
         return False
@@ -2630,39 +3136,51 @@ def _resolve_metadata_not_null(row: Mapping[str, Any]) -> bool:
     return not bool(nullable_val)
 
 
-def _resolve_metadata_computed(row: Mapping[str, Any]) -> tuple[str | exp.Expr | None, bool]:
+def _resolve_metadata_computed(row: Mapping[str, Any]) -> tuple[str | exp.Expr | None, bool | None, bool]:
+    """Return the generated-column expression, storage (``None`` when unknown), and generated flag."""
+    generated_kind = str(row.get("generated_kind") or "").strip().lower()
+    extra = str(row.get("extra") or "").strip().lower()
     persisted_val = _first_present(row, "is_persisted_computed", "is_stored", "persisted")
+    persisted: bool | None
     if persisted_val is not None:
-        persisted = _truthy(persisted_val)
-    elif (
-        str(row.get("generated_kind") or "").strip().lower() in {"v", "virtual"}
-        or "virtual" in str(row.get("extra") or "").lower()
-        or ("is_persisted_computed" in row and row.get("is_persisted_computed") is None)
-    ):
+        persisted = truthy_metadata_flag(persisted_val)
+    elif generated_kind in {"v", "virtual"} or "virtual generated" in extra:
         persisted = False
-    else:
+    elif generated_kind in {"s", "stored"} or "stored generated" in extra:
         persisted = True
+    else:
+        persisted = None
+
+    is_generated = (
+        truthy_metadata_flag(row.get("is_computed"))
+        or truthy_metadata_flag(row.get("is_generated"))
+        or truthy_metadata_flag(row.get("virtual_column"))
+        or generated_kind in {"s", "v", "stored", "virtual"}
+        or extra in {"generated", "virtual generated", "stored generated"}
+    )
 
     expr_val = _first_present(row, "computed_definition", "generation_expression", "generated_expression")
     if expr_val is not None and str(expr_val).strip():
-        return (expr_val if isinstance(expr_val, exp.Expr) else str(expr_val).strip(), persisted)
+        return (expr_val if isinstance(expr_val, exp.Expr) else str(expr_val).strip(), persisted, True)
 
     gen_val = row.get("generated")
     if isinstance(gen_val, str) and gen_val.strip() and gen_val.strip().upper() not in _IDENTITY_KEYWORDS:
-        return (gen_val.strip(), persisted)
+        return (gen_val.strip(), persisted, True)
 
-    is_gen = (
-        _truthy(row.get("is_computed"))
-        or _truthy(row.get("is_generated"))
-        or str(row.get("generated_kind") or "").strip().lower() in {"s", "v", "stored", "virtual"}
-        or str(row.get("extra") or "").strip().lower() == "generated"
-    )
-    if is_gen:
+    if is_generated:
         fallback_expr = _first_non_empty_str(row, "column_default", "default")
         if fallback_expr:
-            return (fallback_expr, persisted)
+            return (fallback_expr, persisted, True)
 
-    return (None, persisted)
+    return (None, persisted, is_generated)
+
+
+def _is_hidden_metadata_column(row: Mapping[str, Any]) -> bool:
+    """Return whether a catalog column is a system-generated hidden column (Oracle ``SYS_NC*`` columns)."""
+    if not truthy_metadata_flag(row.get("hidden_column")):
+        return False
+    name = _first_non_empty_str(row, "column_name", "name") or ""
+    return name.upper().startswith("SYS_")
 
 
 def _resolve_metadata_identity(row: Mapping[str, Any]) -> str | None:
@@ -2679,7 +3197,7 @@ def _resolve_metadata_identity(row: Mapping[str, Any]) -> str | None:
         if ident_clean not in {"", "N", "NO", "NONE", "FALSE", "0", "NOT_APPLICABLE"}:
             return ident_clean
 
-    if _truthy(row.get("is_identity")):
+    if truthy_metadata_flag(row.get("is_identity")) or truthy_metadata_flag(row.get("identity_column")):
         seed = row.get("identity_seed")
         inc = row.get("identity_increment")
         if seed is not None and inc is not None:
@@ -2693,13 +3211,25 @@ def _resolve_metadata_identity(row: Mapping[str, Any]) -> str | None:
 
 
 def _resolve_metadata_auto_increment(row: Mapping[str, Any]) -> bool:
-    if _truthy(row.get("auto_increment")):
+    if truthy_metadata_flag(row.get("auto_increment")):
         return True
     extra = str(row.get("extra") or "").lower()
     return "auto_increment" in extra or "autoincrement" in extra
 
 
-def _parse_metadata_default(value: Any, dialect: "DialectType | None" = None) -> Any:
+def _parse_metadata_default(value: Any, *, source_dialect: "DialectType | None" = None, extra: str = "") -> Any:
+    """Convert a raw catalog default into a builder default value.
+
+    MySQL ``information_schema`` reports literal defaults unquoted (``hello world``,
+    ``2024-01-01``), so on MySQL raw defaults are string literals unless they are numeric,
+    ``NULL``, a ``CURRENT_TIMESTAMP``-family keyword, a bit/hex literal, or the column's
+    ``EXTRA`` marks an expression default (``DEFAULT_GENERATED``). Other engines report
+    SQL text, which is parsed; non-literal expressions are parenthesized because engines
+    such as SQLite and MySQL require ``DEFAULT (expr)`` (added when the column is rendered).
+
+    Returns:
+        ``None`` for no default, a keyword string, an expression, or ``_UNPARSEABLE_DEFAULT``.
+    """
     if value is None or isinstance(value, exp.Expr):
         return value
     if not isinstance(value, str):
@@ -2711,15 +3241,77 @@ def _parse_metadata_default(value: Any, dialect: "DialectType | None" = None) ->
     if normalized_kw in {CURRENT_TIMESTAMP_KEYWORD, CURRENT_DATE_KEYWORD, CURRENT_TIME_KEYWORD}:
         return normalized_kw
 
-    norm_dialect = _normalize_dialect(dialect) if dialect else None
-    parsed: exp.Expr | None = exp.maybe_parse(stripped, dialect=norm_dialect)
+    raw_source = source_dialect.lower() if isinstance(source_dialect, str) else None
+    norm_source = _normalize_dialect(source_dialect) if source_dialect else None
+    if norm_source == "mysql" and raw_source != "mariadb" and "default_generated" not in extra.lower():
+        if _NUMERIC_LITERAL_RE.fullmatch(stripped):
+            return exp.Literal.number(stripped)
+        if not _MYSQL_KEYWORD_DEFAULT_RE.fullmatch(stripped) and not _MYSQL_BIT_HEX_LITERAL_RE.fullmatch(stripped):
+            return exp.Literal.string(stripped)
+
+    parsed = _parse_catalog_fragment(stripped, source_dialect)
     if parsed is None:
-        return stripped
+        return _UNPARSEABLE_DEFAULT
     while isinstance(parsed, exp.Paren):
         parsed = parsed.this
     if isinstance(parsed, exp.Column) and not parsed.table:
-        return stripped
+        return exp.Literal.string(parsed.name)
     return parsed
+
+
+def _is_literal_default(expression: "exp.Expr | None") -> bool:
+    """Return whether a default expression is a literal or keyword that needs no parentheses."""
+    if isinstance(expression, exp.Neg):
+        expression = expression.this
+    return isinstance(
+        expression,
+        (
+            exp.Literal,
+            exp.Null,
+            exp.Boolean,
+            exp.BitString,
+            exp.HexString,
+            exp.CurrentTimestamp,
+            exp.CurrentDate,
+            exp.CurrentTime,
+        ),
+    )
+
+
+def _parse_catalog_fragment(text: str, dialect: "DialectType | None") -> exp.Expr | None:
+    """Parse a catalog SQL fragment, returning ``None`` when it is not valid SQL for ``dialect``.
+
+    Catalogs wrap stored expressions in redundant parentheses (T-SQL reports
+    ``([Total]>=(0))``); those around the whole fragment and around single literals or
+    columns are removed. Identifiers the catalog quoted are marked explicit so case
+    normalization keeps their spelling.
+    """
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    try:
+        parsed = sqlglot.parse_one(text, read=norm_dialect)
+    except (ParseError, TokenError):
+        return None
+    if isinstance(parsed, exp.Paren):
+        parsed = parsed.unnest()
+    return parsed.transform(_simplify_catalog_fragment_node, copy=False)
+
+
+def _simplify_catalog_fragment_node(node: exp.Expr) -> exp.Expr:
+    if isinstance(node, exp.Paren) and isinstance(node.this, (exp.Literal, exp.Column, exp.Null, exp.Boolean)):
+        return node.this
+    if isinstance(node, exp.Identifier) and node.quoted:
+        node.meta["sqlspec_explicit_table_quote"] = True
+    return node
+
+
+def _deliver_metadata_warnings(collected: "list[str]", warnings: "list[str] | None", *, context: str) -> None:
+    """Hand lossy-metadata findings to the caller's collector, or raise when none was supplied."""
+    if not collected:
+        return
+    if warnings is None:
+        msg = f"Cannot reproduce catalog metadata for {context} faithfully: " + "; ".join(collected)
+        raise SQLBuilderError(msg)
+    warnings.extend(collected)
 
 
 def _normalize_constraint_type(row: Mapping[str, Any]) -> str | None:
@@ -2775,7 +3367,7 @@ def _extract_metadata_primary_key(
         is_pk_val = _first_present(row, "is_primary", "is_primary_key", "primary_key")
         if isinstance(is_pk_val, int) and not isinstance(is_pk_val, bool) and is_pk_val > 0:
             pk_candidates.append((is_pk_val, idx, col_name))
-        elif _truthy(is_pk_val) or str(row.get("column_key") or "").strip().upper() == "PRI":
+        elif truthy_metadata_flag(is_pk_val) or str(row.get("column_key") or "").strip().upper() == "PRI":
             pk_candidates.append((idx + 1, idx, col_name))
 
     pk_candidates.sort(key=lambda item: (item[0], item[1]))
@@ -2801,7 +3393,49 @@ def _normalize_fk_action(action: str | None) -> str | None:
     if not action:
         return None
     cleaned = re.sub(r"[\s_]+", " ", action.strip().upper())
+    if cleaned == FOREIGN_KEY_ACTION_NO_ACTION:
+        return None
     return cleaned if cleaned in VALID_FOREIGN_KEY_ACTIONS else None
+
+
+def _supported_foreign_key_actions(
+    on_delete: str | None,
+    on_update: str | None,
+    dialect: "DialectType | None",
+    *,
+    name: str | None,
+    warnings: "list[str]",
+) -> tuple[str | None, str | None]:
+    """Drop referential actions the target dialect rejects, recording each semantic loss."""
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    label = name or "<unnamed>"
+    if norm_dialect == "oracle":
+        resolved_delete = on_delete if on_delete in _ORACLE_ON_DELETE_ACTIONS else None
+        if on_delete and resolved_delete is None and on_delete != FOREIGN_KEY_ACTION_RESTRICT:
+            warnings.append(f"Foreign key {label}: Oracle does not support ON DELETE {on_delete}; action omitted")
+        if on_update and on_update != FOREIGN_KEY_ACTION_RESTRICT:
+            warnings.append(f"Foreign key {label}: Oracle does not support ON UPDATE {on_update}; action omitted")
+        return resolved_delete, None
+    if norm_dialect == "tsql":
+        return (
+            None if on_delete == FOREIGN_KEY_ACTION_RESTRICT else on_delete,
+            None if on_update == FOREIGN_KEY_ACTION_RESTRICT else on_update,
+        )
+    return on_delete, on_update
+
+
+def _metadata_fk_actions(row: Mapping[str, Any], definition: str | None) -> tuple[str | None, str | None]:
+    """Return the ON DELETE / ON UPDATE actions from FK metadata keys, falling back to its definition text."""
+    on_delete = _normalize_fk_action(_first_non_empty_str(row, "on_delete", "delete_rule"))
+    on_update = _normalize_fk_action(_first_non_empty_str(row, "on_update", "update_rule"))
+    if definition:
+        if on_delete is None:
+            del_match = _FK_ON_DELETE_RE.search(definition)
+            on_delete = _normalize_fk_action(del_match.group(1)) if del_match else None
+        if on_update is None:
+            upd_match = _FK_ON_UPDATE_RE.search(definition)
+            on_update = _normalize_fk_action(upd_match.group(1)) if upd_match else None
+    return on_delete, on_update
 
 
 def _extract_metadata_foreign_keys(
@@ -2809,7 +3443,11 @@ def _extract_metadata_foreign_keys(
     foreign_keys: Sequence[Mapping[str, Any]],
     *,
     table_schema: str | None = None,
+    dialect: "DialectType | None" = None,
+    source_dialect: "DialectType | None" = None,
+    warnings: "list[str] | None" = None,
 ) -> list[dict[str, Any]]:
+    """Merge FK metadata rows into specs whose names are already quoted for ``dialect``."""
     raw_items: list[Mapping[str, Any]] = [
         c_row for c_row in constraints if _normalize_constraint_type(c_row) == CONSTRAINT_TYPE_FOREIGN_KEY
     ]
@@ -2819,10 +3457,13 @@ def _extract_metadata_foreign_keys(
     for row in raw_items:
         name = _first_non_empty_str(row, "constraint_name", "name")
         cols = _split_metadata_columns(_first_present(row, "columns", "column_names", "column_name"))
-        ref_table = _first_non_empty_str(row, "referenced_table", "references_table")
+        ref_table = _first_non_empty_str(row, "referenced_table", "references_table", "referenced_table_name")
         ref_cols = _split_metadata_columns(
-            _first_present(row, "referenced_columns", "references_columns", "referenced_column")
+            _first_present(
+                row, "referenced_columns", "references_columns", "referenced_column", "referenced_column_name"
+            )
         )
+        ref_is_catalog_name = ref_table is not None
         defn = _first_non_empty_str(row, "definition")
         if defn and (not cols or not ref_table or not ref_cols):
             fk_match = _FK_DEF_RE.search(defn)
@@ -2835,46 +3476,49 @@ def _extract_metadata_foreign_keys(
                     ref_cols = _split_metadata_columns(fk_match.group("ref_cols"))
 
         if not cols or not ref_table or not ref_cols:
+            if warnings is not None:
+                warnings.append(f"Foreign key {name or '<unnamed>'} metadata is incomplete and was omitted")
             continue
 
         ref_schema = _first_non_empty_str(row, "referenced_schema", "references_schema")
-        if ref_schema and table_schema and ref_schema != table_schema and "." not in ref_table:
-            ref_table = f"{ref_schema}.{ref_table}"
+        qualify_ref = bool(ref_schema and table_schema and ref_schema != table_schema)
+        if ref_is_catalog_name:
+            ref_table = _catalog_qualified_name(ref_table, ref_schema if qualify_ref else None, dialect, source_dialect)
+        elif qualify_ref and ref_schema and "." not in ref_table:
+            ref_table = f"{_catalog_name(ref_schema, dialect, source_dialect)}.{ref_table}"
 
-        on_delete = _normalize_fk_action(_first_non_empty_str(row, "on_delete", "delete_rule"))
-        on_update = _normalize_fk_action(_first_non_empty_str(row, "on_update", "update_rule"))
-        if defn:
-            if not on_delete:
-                del_match = _FK_ON_DELETE_RE.search(defn)
-                if del_match:
-                    on_delete = _normalize_fk_action(del_match.group(1))
-            if not on_update:
-                upd_match = _FK_ON_UPDATE_RE.search(defn)
-                if upd_match:
-                    on_update = _normalize_fk_action(upd_match.group(1))
-
-        deferrable = _truthy(_first_present(row, "deferrable", "is_deferrable"))
-        initially_deferred = _truthy(row.get("initially_deferred"))
+        on_delete, on_update = _metadata_fk_actions(row, defn)
+        deferrable = truthy_metadata_flag(_first_present(row, "deferrable", "is_deferrable"))
+        initially_deferred = truthy_metadata_flag(row.get("initially_deferred"))
+        quoted_cols = [_catalog_name(col, dialect, source_dialect) for col in cols]
+        quoted_ref_cols = (
+            [_catalog_name(col, dialect, source_dialect) for col in ref_cols] if ref_is_catalog_name else ref_cols
+        )
+        quoted_name = _catalog_name(name, dialect, source_dialect) if name else None
 
         matched_existing: dict[str, Any] | None = None
         for existing in merged:
-            if name and existing["name"] == name:
+            if quoted_name and existing["name"] == quoted_name:
                 matched_existing = existing
                 break
             if (
-                tuple(existing["columns"]) == tuple(cols)
+                tuple(existing["columns"]) == tuple(quoted_cols)
                 and existing["ref_table"] == ref_table
-                and tuple(existing["ref_columns"]) == tuple(ref_cols)
+                and tuple(existing["ref_columns"]) == tuple(quoted_ref_cols)
             ):
                 matched_existing = existing
                 break
 
         if matched_existing is not None:
-            if len(cols) == 1 and len(ref_cols) == 1 and cols[0] not in matched_existing["columns"]:
-                matched_existing["columns"].append(cols[0])
-                matched_existing["ref_columns"].append(ref_cols[0])
-            if not matched_existing["name"] and name:
-                matched_existing["name"] = name
+            if (
+                len(quoted_cols) == 1
+                and len(quoted_ref_cols) == 1
+                and quoted_cols[0] not in matched_existing["columns"]
+            ):
+                matched_existing["columns"].append(quoted_cols[0])
+                matched_existing["ref_columns"].append(quoted_ref_cols[0])
+            if not matched_existing["name"] and quoted_name:
+                matched_existing["name"] = quoted_name
             if not matched_existing["on_delete"] and on_delete:
                 matched_existing["on_delete"] = on_delete
             if not matched_existing["on_update"] and on_update:
@@ -2886,10 +3530,10 @@ def _extract_metadata_foreign_keys(
             continue
 
         merged.append({
-            "name": name,
-            "columns": list(cols),
+            "name": quoted_name,
+            "columns": list(quoted_cols),
             "ref_table": ref_table,
-            "ref_columns": list(ref_cols),
+            "ref_columns": list(quoted_ref_cols),
             "on_delete": on_delete,
             "on_update": on_update,
             "deferrable": deferrable,
@@ -2897,6 +3541,151 @@ def _extract_metadata_foreign_keys(
         })
 
     return [item for item in merged if len(item["columns"]) == len(item["ref_columns"])]
+
+
+def _native_index_sql(row: Mapping[str, Any]) -> str | None:
+    """Return the catalog's native ``CREATE INDEX`` text when the row carries it."""
+    native = _first_non_empty_str(row, "native_sql", "index_sql")
+    if native is not None:
+        return native
+    definition = _first_non_empty_str(row, "definition", "indexdef")
+    if definition is not None and _NATIVE_INDEX_SQL_RE.match(definition):
+        return definition
+    return None
+
+
+def _parse_native_index_sql(
+    native_sql: str, dialect: "DialectType | None"
+) -> tuple[list[exp.Expr], exp.Expr | None] | None:
+    """Return the key expressions and predicate of a native ``CREATE INDEX`` statement."""
+    parsed = _parse_catalog_fragment(native_sql.strip().rstrip(";"), dialect)
+    if parsed is None and dialect is not None:
+        parsed = _parse_catalog_fragment(native_sql.strip().rstrip(";"), None)
+    if not isinstance(parsed, exp.Create) or not isinstance(parsed.this, exp.Index):
+        return None
+    params = parsed.this.args.get("params")
+    if not isinstance(params, exp.IndexParameters):
+        return None
+    key_exprs = [_strip_default_ordering(col) for col in params.args.get("columns") or []]
+    if not key_exprs:
+        return None
+    where_node = params.args.get("where")
+    where_expr = where_node.this if isinstance(where_node, exp.Where) else None
+    return key_exprs, where_expr
+
+
+def _strip_default_ordering(column: exp.Expr) -> exp.Expr:
+    """Drop the implicit ascending wrapper SQLGlot adds to parsed index keys, keeping DESC."""
+    if isinstance(column, exp.Ordered) and not column.args.get("desc"):
+        inner: exp.Expr = column.this
+        return inner
+    return column
+
+
+def _metadata_index_key_expressions(
+    row: Mapping[str, Any],
+    index_name: str,
+    *,
+    dialect: "DialectType | None",
+    fragment_dialect: "DialectType | None",
+    known_columns: "Sequence[str] | None",
+    warnings: "list[str]",
+) -> list[exp.Expr] | None:
+    """Build index key expressions from the catalog column list and per-column sort order."""
+    cols = _split_metadata_columns(_first_present(row, "columns", "column_names", "column_name"))
+    if not cols:
+        warnings.append(f"Index {index_name} has no catalog key columns; index omitted")
+        return None
+    known = set(known_columns or ())
+    descending = _metadata_index_descending_flags(row, len(cols))
+    key_exprs: list[exp.Expr] = []
+    for position, col in enumerate(cols):
+        key_expr: exp.Expr
+        if col in known:
+            key_expr = exp.Column(this=_explicit_or_bare_identifier(col, dialect, fragment_dialect))
+        elif _ORDER_DIRECTION_SUFFIX_RE.search(col) and not _INDEX_EXPRESSION_CHARS_RE.search(col):
+            base_name = _ORDER_DIRECTION_SUFFIX_RE.sub("", col).strip()
+            descending[position] = descending[position] or "DESC" in col[len(base_name) :].upper()
+            key_expr = exp.Column(this=_explicit_or_bare_identifier(base_name, dialect, fragment_dialect))
+        elif _INDEX_PLACEHOLDER_RE.fullmatch(col):
+            warnings.append(f"Index {index_name} uses an expression the catalog did not report; index omitted")
+            return None
+        elif _INDEX_EXPRESSION_CHARS_RE.search(col):
+            parsed_key = _parse_catalog_fragment(col, fragment_dialect)
+            if parsed_key is None:
+                warnings.append(f"Index {index_name}: key expression could not be parsed ({col}); index omitted")
+                return None
+            key_expr = parsed_key
+        else:
+            key_expr = exp.Column(this=_explicit_or_bare_identifier(col, dialect, fragment_dialect))
+        key_exprs.append(_descending_key(key_expr, dialect) if descending[position] else key_expr)
+    return key_exprs
+
+
+def _metadata_index_descending_flags(row: Mapping[str, Any], count: int) -> list[bool]:
+    """Return per-key descending flags from ``column_orders`` (``A``/``D``) or ``is_descending`` metadata."""
+    raw_orders = _first_present(row, "column_orders", "descending", "is_descending")
+    if raw_orders is None:
+        return [False] * count
+    values: list[Any] = (
+        raw_orders.split(",")
+        if isinstance(raw_orders, str)
+        else list(raw_orders)
+        if isinstance(raw_orders, Sequence)
+        else [raw_orders]
+    )
+    flags = [
+        str(value).strip().upper() in {"D", "DESC"} or (not isinstance(value, str) and truthy_metadata_flag(value))
+        for value in values
+    ]
+    return (flags + [False] * count)[:count]
+
+
+def _descending_key(expression: exp.Expr, dialect: "DialectType | None") -> exp.Ordered:
+    """Wrap an index key as DESC using the dialect's default null ordering (no explicit NULLS clause)."""
+    null_ordering = Dialect.get_or_raise(_normalize_dialect(dialect) if dialect else None).NULL_ORDERING
+    return exp.Ordered(
+        this=expression, desc=True, nulls_first=null_ordering not in {"nulls_are_small", "nulls_are_last"}
+    )
+
+
+def _explicit_or_bare_identifier(
+    name: str, dialect: "DialectType | None", source_dialect: "DialectType | None" = None
+) -> exp.Identifier:
+    """Return an identifier for a raw catalog name, explicitly quoted when its spelling requires it."""
+    if not _catalog_name_needs_quotes(name, dialect, source_dialect):
+        return exp.to_identifier(name)
+    return _explicit_identifier(name)
+
+
+def _explicit_identifier(name: str) -> exp.Identifier:
+    """Return a quoted identifier marked so normalization and unquoting passes keep it verbatim."""
+    identifier = exp.Identifier(this=name, quoted=True)
+    identifier.meta["sqlspec_explicit_table_quote"] = True
+    return identifier
+
+
+def _index_column_expression(text: str, dialect: "DialectType | None") -> exp.Expr:
+    """Turn a user-supplied index column string into an identifier, ordered key, or expression."""
+    stripped = text.strip()
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    base = _ORDER_DIRECTION_SUFFIX_RE.sub("", stripped).strip()
+    has_order_suffix = base != stripped
+    base_is_name = _is_simple_identifier(base) or bool(_QUOTED_IDENTIFIER_RE.fullmatch(base))
+    if has_order_suffix and (base_is_name or _INDEX_EXPRESSION_CHARS_RE.search(base)):
+        ordered: exp.Expr = parse_order_expression(stripped)
+        return ordered
+    if _is_simple_identifier(stripped) or _QUOTED_IDENTIFIER_RE.fullmatch(stripped):
+        return exp.Column(this=_parse_ddl_identifier(stripped, dialect=dialect))
+    if _INDEX_EXPRESSION_CHARS_RE.search(stripped):
+        parsed: exp.Expr | None = exp.maybe_parse(stripped, dialect=norm_dialect)
+        if parsed is not None:
+            return parsed
+    if has_order_suffix:
+        suffix = stripped[len(base) :].upper()
+        column = exp.Column(this=_explicit_identifier(base))
+        return _descending_key(column, dialect) if "DESC" in suffix else column
+    return exp.Column(this=_explicit_identifier(stripped))
 
 
 def _group_metadata_index_rows(indexes: Sequence[Mapping[str, Any] | Any]) -> list[dict[str, Any]]:
@@ -2941,23 +3730,37 @@ def _build_optional_column_schema(columns: list[str], dialect: "DialectType | No
     )
 
 
-def _wrap_properties(properties: list[exp.Property]) -> exp.Properties | None:
-    return exp.Properties(expressions=properties) if properties else None
+def _wrap_properties(properties: "Sequence[exp.Expr]") -> exp.Properties | None:
+    return exp.Properties(expressions=list(properties)) if properties else None
 
 
 def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | None") -> exp.DataType:
+    """Parse a column type for ``dialect``.
+
+    SQLite derives column affinity from the declared type name, so SQLite keeps the type
+    text verbatim (``NUMERIC(12,2)`` must not become ``REAL``). Types SQLGlot cannot parse
+    (for example Oracle ``RAW(16)``) are kept verbatim as user-defined types.
+    """
     target_dialect = dialect
     norm_dialect = _normalize_dialect(dialect) if dialect else None
+    if norm_dialect == "sqlite":
+        declared = dtype.strip()
+        with contextlib.suppress(ParseError):
+            built = exp.DataType.build(declared, dialect=target_dialect)
+            if _sqlite_type_affinity(built.sql(dialect="sqlite")) == _sqlite_type_affinity(declared):
+                return built
+        return exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=declared)
     if norm_dialect in ("tsql", "mssql") and dtype.strip().upper().startswith("TIMESTAMP"):
         target_dialect = None
-    try:
+    with contextlib.suppress(ParseError):
         return exp.DataType.build(dtype, dialect=target_dialect)
-    except ParseError as exc:
-        if target_dialect is not None:
-            with contextlib.suppress(ParseError):
-                return exp.DataType.build(dtype)
-        msg = f"Column {name!r}: cannot parse type {dtype!r} for dialect {dialect!r}"
-        raise SQLBuilderError(msg) from exc
+    if target_dialect is not None:
+        with contextlib.suppress(ParseError):
+            return exp.DataType.build(dtype)
+        if _VERBATIM_TYPE_NAME_RE.fullmatch(dtype.strip()):
+            return exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=dtype.strip())
+    msg = f"Column {name!r}: cannot parse type {dtype!r} for dialect {dialect!r}"
+    raise SQLBuilderError(msg)
 
 
 def _parse_ddl_identifier(name: str, dialect: "DialectType | None" = None) -> exp.Identifier:
@@ -2979,8 +3782,109 @@ def _parse_ddl_table(table_name: str, schema: "str | None" = None, dialect: "Dia
     return table
 
 
-def _build_identity_column_constraint(col: "ColumnDefinition") -> exp.ColumnConstraint | None:
-    """Build an identity ColumnConstraint for a ColumnDefinition when configured."""
+def _sqlite_type_affinity(type_text: str) -> str:
+    """Return the SQLite column affinity for a declared type name (SQLite datatype rules 3.1)."""
+    upper = type_text.upper()
+    if "INT" in upper:
+        return "INTEGER"
+    if "CHAR" in upper or "CLOB" in upper or "TEXT" in upper:
+        return "TEXT"
+    if "BLOB" in upper or not upper.strip():
+        return "BLOB"
+    if "REAL" in upper or "FLOA" in upper or "DOUB" in upper:
+        return "REAL"
+    return "NUMERIC"
+
+
+def _catalog_name(name: str, dialect: "DialectType | None", source_dialect: "DialectType | None" = None) -> str:
+    """Return SQL text that resolves to exactly the catalog-supplied identifier ``name``.
+
+    Catalog identifiers are stored with their real case. When the bare spelling would be
+    folded by the dialect's normalization strategy, collides with a keyword, or contains
+    characters outside the bare identifier alphabet, the name is returned in the
+    dialect's quoted spelling so the builder marks it as explicitly quoted.
+    """
+    if not _catalog_name_needs_quotes(name, dialect, source_dialect):
+        return name
+    return exp.Identifier(this=name, quoted=True).sql(dialect=_normalize_dialect(dialect))
+
+
+def _catalog_name_needs_quotes(
+    name: str, dialect: "DialectType | None", source_dialect: "DialectType | None" = None
+) -> bool:
+    """Return whether a raw catalog identifier must be quoted to keep its exact spelling.
+
+    Case is judged against the catalog's own (``source_dialect``) folding: a name already in
+    the source's folded form was created unquoted and stays unquoted in the target, so it
+    follows the target's folding. Keywords are judged against the target dialect.
+    """
+    if not _BARE_IDENTIFIER_RE.fullmatch(name):
+        return True
+    norm_dialect = _normalize_dialect(dialect)
+    sqlglot_dialect = Dialect.get_or_raise(norm_dialect)
+    case_dialect = (
+        sqlglot_dialect if source_dialect is None else Dialect.get_or_raise(_normalize_dialect(source_dialect))
+    )
+    strategy = case_dialect.normalization_strategy
+    if strategy in {NormalizationStrategy.UPPERCASE, NormalizationStrategy.CASE_INSENSITIVE_UPPERCASE}:
+        folded = name.upper()
+    elif strategy is NormalizationStrategy.CASE_SENSITIVE:
+        folded = name
+    else:
+        folded = name.lower()
+    if folded != name:
+        return True
+    if name.lower() in sqlglot_dialect.generator_class.RESERVED_KEYWORDS or name.upper() in _RESERVED_IDENTIFIER_WORDS:
+        return True
+    tokens = sqlglot_dialect.tokenize(name)
+    return len(tokens) != 1 or tokens[0].token_type is not TokenType.VAR
+
+
+def _record_field_name(name: str, dialect: "DialectType | None") -> str:
+    """Return SQL text for a record or Arrow field name.
+
+    Single-case bare names (``id``, ``ID``) are left unquoted so they follow the
+    dialect's normal case folding; mixed-case names, keywords, and names with other
+    characters are quoted so ``UserName`` stays ``UserName``.
+    """
+    if _BARE_IDENTIFIER_RE.fullmatch(name) and (name.islower() or name.isupper()):
+        bare_spelling = name.lower() if name.islower() else name.upper()
+        if not _catalog_name_needs_quotes(bare_spelling, None) and name.upper() not in _RESERVED_IDENTIFIER_WORDS:
+            return name
+    return _catalog_name(name, dialect)
+
+
+def _catalog_qualified_name(
+    name: str, schema: "str | None", dialect: "DialectType | None", source_dialect: "DialectType | None" = None
+) -> str:
+    """Return a schema-qualified SQL reference built from raw catalog identifiers."""
+    quoted_name = _catalog_name(name, dialect, source_dialect)
+    return f"{_catalog_name(schema, dialect, source_dialect)}.{quoted_name}" if schema else quoted_name
+
+
+def _build_identity_column_constraint(
+    col: "ColumnDefinition", dialect: "DialectType | None" = None
+) -> exp.ColumnConstraint | None:
+    """Build an identity ColumnConstraint for a ColumnDefinition when configured.
+
+    Raises:
+        SQLBuilderError: When identity is requested on SQLite, which has no identity columns.
+    """
+    constraint = _identity_constraint_from_spec(col)
+    if constraint is None:
+        return None
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    if norm_dialect == "sqlite" and not col.primary_key:
+        msg = (
+            f"Column {col.name!r}: SQLite has no identity columns; "
+            "use an INTEGER PRIMARY KEY column (optionally AUTOINCREMENT) instead"
+        )
+        raise SQLBuilderError(msg)
+    return constraint
+
+
+def _identity_constraint_from_spec(col: "ColumnDefinition") -> exp.ColumnConstraint | None:
+    """Translate the identity / generated identity settings of a column into a constraint node."""
     if col.identity is not None and col.identity is not False:
         start_lit: exp.Expr | None = None
         inc_lit: exp.Expr | None = None
@@ -3027,7 +3931,17 @@ def _build_identity_column_constraint(col: "ColumnDefinition") -> exp.ColumnCons
 def _build_computed_column_constraint(
     col: "ColumnDefinition", dialect: "DialectType | None" = None
 ) -> exp.ColumnConstraint | None:
-    """Build a computed ColumnConstraint for a ColumnDefinition when configured."""
+    """Build a generated (computed) column constraint using the dialect's valid syntax.
+
+    PostgreSQL, MySQL, and SQLite render ``GENERATED ALWAYS AS (expr) STORED|VIRTUAL``;
+    DuckDB and Oracle render ``GENERATED ALWAYS AS (expr)`` (virtual only); T-SQL renders
+    ``AS (expr) [PERSISTED]``; Spanner renders ``AS (expr) STORED``. ``persisted=None``
+    selects the dialect default storage.
+
+    Raises:
+        SQLBuilderError: When a stored generated column is requested on a dialect that only
+            supports virtual generated columns.
+    """
     computed_source: str | exp.Expr | None = col.generated_expression
     if (
         computed_source is None
@@ -3039,14 +3953,55 @@ def _build_computed_column_constraint(
     if computed_source is None:
         return None
 
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
     if isinstance(computed_source, exp.Expr):
         parsed_computed: exp.Expr = computed_source.copy()
     else:
-        norm_dialect = _normalize_dialect(dialect) if dialect else None
         parsed_computed = sqlglot.parse_one(str(computed_source), read=norm_dialect)
-    if isinstance(parsed_computed, exp.Paren):
-        parsed_computed = parsed_computed.unnest()
-    return exp.ColumnConstraint(kind=exp.ComputedColumnConstraint(this=parsed_computed, persisted=col.persisted))
+    parsed_computed = parsed_computed.unnest() if isinstance(parsed_computed, exp.Paren) else parsed_computed
+    persisted = col.persisted if col.persisted is not None else norm_dialect in _STORED_GENERATED_DEFAULT_DIALECTS
+
+    if norm_dialect in _VIRTUAL_ONLY_GENERATED_DIALECTS:
+        if persisted:
+            msg = f"Column {col.name!r}: {norm_dialect} supports only virtual generated columns, not STORED"
+            raise SQLBuilderError(msg)
+        return exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=True, expression=parsed_computed))
+    if norm_dialect == "spanner":
+        persisted = True
+    computed_body = (
+        parsed_computed if norm_dialect in _SELF_PARENTHESIZED_GENERATED_DIALECTS else exp.Paren(this=parsed_computed)
+    )
+    return exp.ColumnConstraint(kind=exp.ComputedColumnConstraint(this=computed_body, persisted=persisted))
+
+
+def _build_default_expression(default: Any, dialect: "DialectType | None") -> exp.Expr:
+    """Convert a column default (literal value, keyword string, SQL text, or expression) to an expression.
+
+    Expression defaults are parenthesized on engines that only accept ``DEFAULT (expr)``
+    for non-literal defaults (SQLite, MySQL, Spanner).
+    """
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    if isinstance(default, exp.Expr):
+        default_expr: exp.Expr = default.copy()
+    elif not isinstance(default, str):
+        return exp.convert(default)
+    elif default.upper() == CURRENT_TIMESTAMP_KEYWORD:
+        return exp.CurrentTimestamp()
+    elif default.upper() == CURRENT_DATE_KEYWORD:
+        return exp.CurrentDate()
+    elif default.upper() == CURRENT_TIME_KEYWORD:
+        return exp.CurrentTime()
+    elif "(" in default:
+        default_expr = exp.maybe_parse(default, dialect=norm_dialect)
+    else:
+        return exp.convert(default)
+    if (
+        norm_dialect in _PARENTHESIZED_DEFAULT_DIALECTS
+        and not isinstance(default_expr, exp.Paren)
+        and not _is_literal_default(default_expr)
+    ):
+        return exp.Paren(this=default_expr)
+    return default_expr
 
 
 def _build_collate_column_constraint(collate: str, dialect: "DialectType | None" = None) -> exp.ColumnConstraint:
@@ -3058,14 +4013,6 @@ def _build_collate_column_constraint(collate: str, dialect: "DialectType | None"
         collate_ident.set("quoted", True)
         collate_ident.meta["_explicit_quoted"] = True
     return exp.ColumnConstraint(kind=exp.CollateColumnConstraint(this=collate_ident))
-
-
-def _resolve_ddl_dialect_config(dialect: str | None) -> "DialectConfig | None":
-    if not dialect:
-        return None
-    with contextlib.suppress(ValueError):
-        return get_dialect_config(dialect)
-    return None
 
 
 def _is_uuid_string(value: Any) -> bool:
@@ -3095,50 +4042,112 @@ def _is_iso_date_string(value: Any) -> bool:
     return True
 
 
-def _infer_sql_type_from_values(values: "Sequence[Any]", dialect: str | None = None) -> str:
-    """Infer a dialect-aware SQL column type string from observed non-null Python values."""
-    config = _resolve_ddl_dialect_config(dialect)
+def _infer_sql_type_from_values(values: "Sequence[Any]", dialect: str | None = None, *, key: bool = False) -> str:
+    """Infer a dialect-aware SQL column type string from observed non-null Python values.
+
+    Args:
+        values: Observed non-null values for one column.
+        dialect: Optional target dialect name.
+        key: Whether the column participates in a primary key, which bounds text types
+            on engines that cannot index unbounded text.
+
+    Returns:
+        SQL type string resolved through the shared category mapping.
+    """
+    category = _infer_value_category(values)
+    if key and category == "text":
+        category = "key_text"
+    if category == "decimal":
+        precision, scale = _decimal_values_precision(values)
+        return sql_type_for_category("decimal", dialect, precision=precision, scale=scale)
+    return sql_type_for_category(category, dialect)
+
+
+def _infer_value_category(values: "Sequence[Any]") -> str:
+    """Map observed non-null Python values to a neutral SQL type category."""
     if not values:
-        return config.get_optimal_type("text") if config is not None else "TEXT"
-
+        return "text"
     if all(isinstance(val, bool) for val in values):
-        return config.get_optimal_type("boolean") if config is not None else "BOOLEAN"
-
+        return "boolean"
     if all(isinstance(val, (int, float, Decimal)) and not isinstance(val, bool) for val in values):
         if any(isinstance(val, Decimal) for val in values):
-            return "DECIMAL(38, 9)"
+            return "decimal"
         if any(isinstance(val, float) for val in values):
-            if config is not None and config.name in {"duckdb", "mysql", "mariadb"}:
-                return "DOUBLE"
-            if config is not None and config.name in {"bigquery", "spanner"}:
-                return config.get_optimal_type("float")
-            return "DOUBLE PRECISION"
-        return "BIGINT"
-
+            return "double"
+        return "bigint"
     if all(isinstance(val, UUID) or _is_uuid_string(val) for val in values):
-        return config.get_optimal_type("uuid") if config is not None else "UUID"
-
+        return "uuid"
     if all(isinstance(val, datetime) or _is_iso_datetime_string(val) for val in values):
-        return config.get_optimal_type("timestamp") if config is not None else "TIMESTAMP WITH TIME ZONE"
-
+        return "timestamptz" if any(_is_timezone_aware(val) for val in values) else "timestamp"
     if all((isinstance(val, date) and not isinstance(val, datetime)) or _is_iso_date_string(val) for val in values):
-        return "DATE"
-
+        return "date"
     if all(
         isinstance(val, (date, datetime)) or _is_iso_date_string(val) or _is_iso_datetime_string(val) for val in values
     ):
-        return config.get_optimal_type("timestamp") if config is not None else "TIMESTAMP WITH TIME ZONE"
-
+        return "timestamptz" if any(_is_timezone_aware(val) for val in values) else "timestamp"
     if all(isinstance(val, time) for val in values):
-        return "TIME"
-
+        return "time"
     if all(isinstance(val, timedelta) for val in values):
-        return "INTERVAL"
-
+        return "interval"
     if all(isinstance(val, (bytes, bytearray, memoryview)) for val in values):
-        return config.get_optimal_type("blob") if config is not None else "BLOB"
-
+        return "blob"
     if all(isinstance(val, (Mapping, list, tuple)) for val in values):
-        return config.get_optimal_type("json") if config is not None else "JSON"
+        return "json"
+    return "text"
 
-    return config.get_optimal_type("text") if config is not None else "TEXT"
+
+def _is_timezone_aware(value: Any) -> bool:
+    """Return whether a datetime or ISO datetime string carries a UTC offset."""
+    if isinstance(value, datetime):
+        return value.tzinfo is not None and value.utcoffset() is not None
+    if isinstance(value, str) and _is_iso_datetime_string(value):
+        return bool(_ISO_OFFSET_SUFFIX_RE.search(value.strip()))
+    return False
+
+
+def _decimal_values_precision(values: "Sequence[Any]") -> tuple[int, int]:
+    """Return a decimal precision and scale wide enough for every observed numeric value."""
+    integer_digits = 1
+    scale = _DEFAULT_INFERRED_DECIMAL_SCALE
+    for val in values:
+        if isinstance(val, Decimal) and val.is_finite():
+            integer_digits = max(integer_digits, val.adjusted() + 1)
+            scale = max(scale, -int(val.as_tuple().exponent))
+        elif isinstance(val, int):
+            integer_digits = max(integer_digits, len(str(abs(val))))
+    return max(_DEFAULT_INFERRED_DECIMAL_PRECISION, integer_digits + scale), scale
+
+
+def _normalize_ddl_identifier(node: exp.Expr, normalizer: Dialect) -> exp.Expr:
+    """Case-normalize and quote one DDL identifier unless it carries an explicit quote marker."""
+    if not isinstance(node, exp.Identifier):
+        return node
+    if not node.meta.get("sqlspec_explicit_table_quote"):
+        normalizer.normalize_identifier(node)
+    node.set("quoted", True)
+    return node
+
+
+def _dialect_foreign_key_actions(
+    constraint: "ConstraintDefinition", dialect: "DialectType | None"
+) -> tuple[str | None, str | None]:
+    """Return the referential actions to render, rejecting actions the dialect cannot express.
+
+    Oracle accepts only ``ON DELETE CASCADE`` and ``ON DELETE SET NULL``; ``NO ACTION`` and
+    ``RESTRICT`` are its default behaviour and are omitted.
+
+    Raises:
+        SQLBuilderError: When an action has no equivalent on the target dialect.
+    """
+    on_delete = constraint.on_delete
+    on_update = constraint.on_update
+    if (_normalize_dialect(dialect) if dialect else None) != "oracle":
+        return on_delete, on_update
+    implicit_actions = {FOREIGN_KEY_ACTION_NO_ACTION, FOREIGN_KEY_ACTION_RESTRICT}
+    if on_update and on_update not in implicit_actions:
+        msg = f"Oracle does not support ON UPDATE {on_update} on foreign keys"
+        raise SQLBuilderError(msg)
+    if on_delete and on_delete not in implicit_actions and on_delete not in _ORACLE_ON_DELETE_ACTIONS:
+        msg = f"Oracle does not support ON DELETE {on_delete} on foreign keys"
+        raise SQLBuilderError(msg)
+    return (on_delete if on_delete in _ORACLE_ON_DELETE_ACTIONS else None), None

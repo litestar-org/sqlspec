@@ -1,10 +1,12 @@
 """Unit tests for Arrow schema and Python record DDL inference."""
 
+import sqlite3
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+import duckdb
 import pyarrow as pa
 import pytest
 
@@ -40,8 +42,15 @@ from sqlspec.utils.arrow_helpers import sql_type_from_arrow_type
         (pa.time64("us"), "postgres", "TIME"),
         (pa.timestamp("us"), "postgres", "TIMESTAMP"),
         (pa.timestamp("us", tz="UTC"), "postgres", "TIMESTAMP WITH TIME ZONE"),
-        (pa.timestamp("us", tz="UTC"), "mssql", "DATETIME2(6)"),
-        (pa.timestamp("us", tz="UTC"), "duckdb", "TIMESTAMP"),
+        (pa.timestamp("us"), "mssql", "DATETIME2(6)"),
+        (pa.timestamp("us", tz="UTC"), "mssql", "DATETIMEOFFSET(6)"),
+        (pa.timestamp("us"), "duckdb", "TIMESTAMP"),
+        (pa.timestamp("us", tz="UTC"), "duckdb", "TIMESTAMP WITH TIME ZONE"),
+        (pa.timestamp("us"), "bigquery", "DATETIME"),
+        (pa.timestamp("us", tz="UTC"), "bigquery", "TIMESTAMP"),
+        (pa.decimal256(50, 4), "postgres", "DECIMAL(50, 4)"),
+        (pa.decimal128(38, 9), "spanner", "NUMERIC"),
+        (pa.decimal256(60, 10), "bigquery", "BIGNUMERIC(60, 10)"),
         (pa.duration("us"), "postgres", "INTERVAL"),
         (pa.binary(), "postgres", "BYTEA"),
         (pa.binary(), "sqlite", "BLOB"),
@@ -194,3 +203,113 @@ def test_create_table_from_records_composite_primary_key_and_empty_error() -> No
     assert '"org_id" TEXT NOT NULL' in sql
     assert '"user_id" TEXT NOT NULL' in sql
     assert 'PRIMARY KEY ("org_id", "user_id")' in sql
+
+
+INFERENCE_RECORDS: list[dict[str, Any]] = [
+    {
+        "code": "A-1",
+        "UserName": "ann",
+        "created": datetime(2024, 1, 2, 3, 4, 5),
+        "updated": datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC),
+        "amount": Decimal("1234.5"),
+        "token": "0b5f7c9e-8a1d-4c38-9a8e-1f0d5b7c2e11",
+    },
+    {
+        "code": "B-2",
+        "UserName": "bob",
+        "created": datetime(2024, 2, 3, 4, 5, 6),
+        "updated": datetime(2024, 2, 3, 4, 5, 6, tzinfo=UTC),
+        "amount": Decimal("1.25"),
+        "token": "6f1c2d3e-4b5a-4c6d-8e7f-901a2b3c4d5e",
+    },
+]
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "duckdb"])
+def test_from_records_executes_and_preserves_names_and_timestamp_kinds(dialect: str) -> None:
+    """Inferred DDL executes, keeps ``UserName`` spelling, and separates naive from aware timestamps."""
+    sql_text = CreateTable.from_records("people", INFERENCE_RECORDS, primary_key="code", dialect=dialect).build().sql
+    connection: Any = sqlite3.connect(":memory:") if dialect == "sqlite" else duckdb.connect(":memory:")
+    connection.execute(sql_text)
+    if dialect == "sqlite":
+        declared = {row[1]: row[2] for row in connection.execute("SELECT * FROM pragma_table_info('people')")}
+        assert declared == {
+            "code": "TEXT",
+            "UserName": "TEXT",
+            "created": "TIMESTAMP",
+            "updated": "TIMESTAMP",
+            "amount": "DECIMAL(38, 9)",
+            "token": "TEXT",
+        }
+    else:
+        declared = dict(
+            connection.execute(
+                "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'people' "
+                "ORDER BY ordinal_position"
+            ).fetchall()
+        )
+        assert declared == {
+            "code": "VARCHAR",
+            "UserName": "VARCHAR",
+            "created": "TIMESTAMP",
+            "updated": "TIMESTAMP WITH TIME ZONE",
+            "amount": "DECIMAL(38,9)",
+            "token": "UUID",
+        }
+
+
+def test_from_records_full_statements_for_server_dialects() -> None:
+    """Key columns use bounded text, Oracle UUID strings use RAW(16), and Spanner places the key after the columns."""
+    records = [{"code": "A-1", "Tenant": "t1", "token": "0b5f7c9e-8a1d-4c38-9a8e-1f0d5b7c2e11", "qty": 1}]
+    assert CreateTable.from_records("items", records, primary_key="code", dialect="oracle").build().sql == (
+        "CREATE TABLE items (\n"
+        "  code VARCHAR2(255) NOT NULL PRIMARY KEY,\n"
+        '  "Tenant" CLOB NOT NULL,\n'
+        "  token RAW(16) NOT NULL,\n"
+        "  qty INT NOT NULL\n"
+        ")"
+    )
+    assert CreateTable.from_records("items", records, primary_key="code", dialect="tsql").build().sql == (
+        "CREATE TABLE [items] (\n"
+        "  [code] NVARCHAR(255) NOT NULL PRIMARY KEY,\n"
+        "  [Tenant] NVARCHAR(MAX) NOT NULL,\n"
+        "  [token] UNIQUEIDENTIFIER NOT NULL,\n"
+        "  [qty] BIGINT NOT NULL\n"
+        ")"
+    )
+    assert CreateTable.from_records("items", records, primary_key="code", dialect="mysql").build().sql == (
+        "CREATE TABLE `items` (\n"
+        "  `code` VARCHAR(255) NOT NULL PRIMARY KEY,\n"
+        "  `Tenant` TEXT NOT NULL,\n"
+        "  `token` VARCHAR(36) NOT NULL,\n"
+        "  `qty` BIGINT NOT NULL\n"
+        ")"
+    )
+    spanner_records = [{"code": "A-1", "price": Decimal("1.50")}]
+    assert CreateTable.from_records("items", spanner_records, primary_key="code", dialect="spanner").build().sql == (
+        "CREATE TABLE `items` (\n  `code` STRING(MAX) NOT NULL,\n  `price` NUMERIC NOT NULL\n)\nPRIMARY KEY (`code`)"
+    )
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "duckdb"])
+def test_from_arrow_schema_executes_with_timestamp_kinds_and_wide_decimals(dialect: str) -> None:
+    """Arrow-derived DDL executes; decimal256 beyond the engine maximum raises instead of overflowing."""
+    fields: list[pa.Field[Any]] = [
+        pa.field("Id", pa.int64(), nullable=False),
+        pa.field("naive_ts", pa.timestamp("us")),
+        pa.field("aware_ts", pa.timestamp("us", tz="UTC")),
+        pa.field("money", pa.decimal128(18, 4)),
+    ]
+    schema = pa.schema(fields)
+    connection: Any = sqlite3.connect(":memory:") if dialect == "sqlite" else duckdb.connect(":memory:")
+    connection.execute(CreateTable.from_arrow_schema("events", schema, primary_key="Id", dialect=dialect).build().sql)
+    connection.execute('INSERT INTO events ("Id", money) VALUES (1, 2.5)')
+    assert connection.execute('SELECT "Id" FROM events').fetchall() == [(1,)]
+
+    wide = pa.schema([pa.field("big", pa.decimal256(50, 4))])
+    if dialect == "duckdb":
+        with pytest.raises(SQLBuilderError, match="exceeds the maximum precision 38 supported by duckdb"):
+            CreateTable.from_arrow_schema("wide", wide, dialect=dialect)
+    else:
+        connection.execute(CreateTable.from_arrow_schema("wide", wide, dialect=dialect).build().sql)
+        assert connection.execute("SELECT type FROM pragma_table_info('wide')").fetchall() == [("DECIMAL(50, 4)",)]

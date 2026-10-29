@@ -1,6 +1,7 @@
 """SQL Server dialect static configuration and reflection helpers."""
 
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.builder._ddl import compile_table_ddl_results
@@ -484,7 +485,6 @@ def build_mssql_table_ddl_result(
             warnings=(f"No SQL Server catalog columns found for {schema or '<default>'}.{table_name}",),
         )
 
-    effective_dialect = target_dialect or "tsql"
     compiled = compile_table_ddl_results(
         table_name,
         column_rows,
@@ -492,23 +492,17 @@ def build_mssql_table_ddl_result(
         constraints=constraint_rows,
         foreign_keys=foreign_key_rows,
         indexes=index_rows,
-        dialect=effective_dialect,
+        dialect=target_dialect or "tsql",
+        source_dialect="tsql",
         object_type=object_type,
         warnings=(MSSQL_DDL_WARNING,),
     )
-    ddl_text = compiled.ddl
-    if ddl_text is not None and effective_dialect in {"tsql", "mssql"}:
-        ddl_text = re.sub(
-            r"(\[[^\]]+\])\s+INTEGER\s+NOT NULL\s+IDENTITY\((\d+),\s*(\d+)\)",
-            r"\1 int IDENTITY(\2,\3) NOT NULL",
-            ddl_text,
-        )
     return DDLResult(
         identity,
         compiled.status,
         fidelity=compiled.fidelity,
         source=compiled.source,
-        ddl=ddl_text,
+        ddl=compiled.ddl,
         dependencies=compiled.dependencies,
         redactions=compiled.redactions,
         context=compiled.context,
@@ -539,11 +533,12 @@ def merge_mssql_table_lists(ordered: "list[TableMetadata]", all_rows: "list[Tabl
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
-    if isinstance(row, dict):
+    if isinstance(row, Mapping):
         return dict(row)
     if hasattr(row, "_asdict"):
         return dict(row._asdict())
-    return {key: getattr(row, key) for key in dir(row) if not key.startswith("_") and not callable(getattr(row, key))}
+    msg = f"Unsupported SQL Server catalog row type: {type(row).__name__}"
+    raise TypeError(msg)
 
 
 def _quote_mssql_identifier(value: str) -> str:

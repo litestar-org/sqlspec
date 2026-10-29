@@ -5,9 +5,9 @@ from typing import Any
 
 import pytest
 
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import MissingDependencyError, SQLBuilderError
 from sqlspec.typing import PYARROW_INSTALLED
-from sqlspec.utils.arrow_helpers import coerce_arrow_table, convert_dict_to_arrow
+from sqlspec.utils.arrow_helpers import coerce_arrow_table, convert_dict_to_arrow, sql_type_for_category
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 
@@ -326,3 +326,40 @@ def test_deferred_close_batch_iterator_closes_on_explicit_close_or_gc() -> None:
     assert closed == [True]
     iterator.close()
     assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    ("category", "dialect", "expected"),
+    [
+        ("double", "duckdb", "DOUBLE"),
+        ("double", "spanner", "FLOAT64"),
+        ("double", None, "DOUBLE PRECISION"),
+        ("timestamp", "postgres", "TIMESTAMP"),
+        ("timestamptz", "postgres", "TIMESTAMP WITH TIME ZONE"),
+        ("timestamp", "mssql", "DATETIME2(6)"),
+        ("timestamptz", "mssql", "DATETIMEOFFSET(6)"),
+        ("timestamptz", "sqlite", "TIMESTAMP"),
+        ("key_text", "mysql", "VARCHAR(255)"),
+        ("key_text", "oracle", "VARCHAR2(255)"),
+        ("key_text", "mssql", "NVARCHAR(255)"),
+        ("key_text", "postgres", "TEXT"),
+        ("text", "oracle", "CLOB"),
+    ],
+)
+def test_sql_type_for_category_is_shared_by_arrow_and_value_inference(
+    category: str, dialect: "str | None", expected: str
+) -> None:
+    """The neutral category mapping resolves engine-specific types for both inference paths."""
+    assert sql_type_for_category(category, dialect) == expected
+
+
+def test_sql_type_for_category_decimal_limits() -> None:
+    """Decimals keep exact precision, collapse to Spanner NUMERIC, and refuse widths an engine cannot store."""
+    assert sql_type_for_category("decimal", "postgres", precision=50, scale=4) == "DECIMAL(50, 4)"
+    assert sql_type_for_category("decimal", "spanner", precision=38, scale=9) == "NUMERIC"
+    with pytest.raises(SQLBuilderError, match="maximum precision 38 supported by duckdb"):
+        sql_type_for_category("decimal", "duckdb", precision=50, scale=4)
+    with pytest.raises(SQLBuilderError, match="does not fit Spanner NUMERIC"):
+        sql_type_for_category("decimal", "spanner", precision=50, scale=4)
+    with pytest.raises(SQLBuilderError, match="Unknown SQL type category"):
+        sql_type_for_category("geometry", "postgres")

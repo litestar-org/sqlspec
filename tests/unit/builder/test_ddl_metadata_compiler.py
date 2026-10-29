@@ -1,10 +1,12 @@
 """Unit tests for the Metadata-to-DDL compiler in sqlspec.builder."""
 
+import sqlite3
 from typing import Any
 
+import duckdb
 import pytest
 
-from sqlspec.builder import CreateIndex, CreateTable, compile_table_ddl_results
+from sqlspec.builder import CreateIndex, CreateSequence, CreateTable, DropSequence, compile_table_ddl_results
 from sqlspec.data_dictionary import (
     ColumnDetails,
     ConstraintMetadata,
@@ -16,6 +18,7 @@ from sqlspec.data_dictionary import (
     MetadataSupport,
     ObjectIdentity,
 )
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_create_table_from_metadata_composite_pk_fk_check_unique_defaults_and_computed() -> None:
@@ -38,12 +41,7 @@ def test_create_table_from_metadata_composite_pk_fk_check_unique_defaults_and_co
             "primary_key_ordinal": 2,
             "primary_key_name": "pk_orders",
         },
-        {
-            "column_name": "customer_id",
-            "data_type": "UUID",
-            "is_nullable": "NO",
-            "ordinal_position": 3,
-        },
+        {"column_name": "customer_id", "data_type": "UUID", "is_nullable": "NO", "ordinal_position": 3},
         {
             "column_name": "order_code",
             "data_type": "VARCHAR",
@@ -95,11 +93,7 @@ def test_create_table_from_metadata_composite_pk_fk_check_unique_defaults_and_co
         },
     ]
     constraints: list[dict[str, Any]] = [
-        {
-            "constraint_name": "pk_orders",
-            "constraint_type": "PRIMARY KEY",
-            "columns": ["tenant_id", "id"],
-        },
+        {"constraint_name": "pk_orders", "constraint_type": "PRIMARY KEY", "columns": ["tenant_id", "id"]},
         {
             "constraint_name": "uq_orders_tenant_code",
             "constraint_type": "UNIQUE",
@@ -193,40 +187,21 @@ def test_create_table_from_metadata_struct_objects_and_mssql_types() -> None:
         ),
         ColumnDetails(
             ObjectIdentity(name="payload", object_type="column", schema="dbo", dialect="mssql"),
-            attributes={
-                "data_type": "nvarchar",
-                "max_length": -1,
-                "is_nullable": True,
-                "ordinal_position": 3,
-            },
+            attributes={"data_type": "nvarchar", "max_length": -1, "is_nullable": True, "ordinal_position": 3},
         ),
         ColumnDetails(
             ObjectIdentity(name="event_time", object_type="column", schema="dbo", dialect="mssql"),
-            attributes={
-                "data_type": "datetime2",
-                "numeric_scale": 3,
-                "is_nullable": False,
-                "ordinal_position": 4,
-            },
+            attributes={"data_type": "datetime2", "numeric_scale": 3, "is_nullable": False, "ordinal_position": 4},
         ),
     ]
     constraints = [
         ConstraintMetadata(
             ObjectIdentity(name="chk_display_name", object_type="constraint", schema="dbo", dialect="mssql"),
-            attributes={
-                "constraint_type": "CHECK_CONSTRAINT",
-                "definition": "([display_name]<>'')",
-            },
+            attributes={"constraint_type": "CHECK_CONSTRAINT", "definition": "([display_name]<>'')"},
         )
     ]
 
-    builder = CreateTable.from_metadata(
-        "accounts",
-        columns,
-        constraints=constraints,
-        schema="dbo",
-        dialect="tsql",
-    )
+    builder = CreateTable.from_metadata("accounts", columns, constraints=constraints, schema="dbo", dialect="tsql")
     sql = builder.build().sql
 
     assert "CREATE TABLE [dbo].[accounts]" in sql
@@ -270,11 +245,10 @@ def test_create_index_from_metadata_skips_primary_and_builds_secondary_indexes()
     idx_builder = CreateIndex.from_metadata(covering_partial, dialect="postgres")
     assert idx_builder is not None
     idx_sql = idx_builder.build().sql
-    assert (
+    assert idx_sql == (
         'CREATE UNIQUE INDEX "idx_users_email_active" ON "public"."users"'
-        '("email" ASC, "tenant_id" DESC) INCLUDE ("display_name", "created_at")'
-    ) in idx_sql
-    assert 'WHERE\n  "is_active" = TRUE' in idx_sql or 'WHERE "is_active" = TRUE' in idx_sql
+        '("email", "tenant_id" DESC) INCLUDE ("display_name", "created_at")\nWHERE\n  "is_active" = TRUE'
+    )
 
     details = IndexDetails(
         ObjectIdentity(name="idx_posts_tags", object_type="index", schema="public", dialect="postgres"),
@@ -334,13 +308,7 @@ def test_compile_table_ddl_results_cross_dialect(
             "ordinal_position": 1,
             "comment": "Primary invoice identifier",
         },
-        {
-            "column_name": "code",
-            "data_type": "VARCHAR",
-            "max_length": 40,
-            "is_nullable": "NO",
-            "ordinal_position": 2,
-        },
+        {"column_name": "code", "data_type": "VARCHAR", "max_length": 40, "is_nullable": "NO", "ordinal_position": 2},
         {
             "column_name": "total",
             "data_type": "DECIMAL",
@@ -377,6 +345,7 @@ def test_compile_table_ddl_results_cross_dialect(
         table_comment="Customer invoices",
         column_comments={"code": "External invoice code"},
         dialect=dialect,
+        source_dialect="postgres",
     )
 
     assert isinstance(result, DDLResult)
@@ -461,11 +430,7 @@ def test_compile_table_ddl_results_composite_fk_rows_and_per_column_index_rows()
     ]
 
     result = compile_table_ddl_results(
-        "order_items",
-        columns,
-        foreign_keys=foreign_keys,
-        indexes=indexes,
-        dialect="postgres",
+        "order_items", columns, foreign_keys=foreign_keys, indexes=indexes, dialect="postgres"
     )
 
     assert result.ddl is not None
@@ -477,3 +442,498 @@ def test_compile_table_ddl_results_composite_fk_rows_and_per_column_index_rows()
     assert '"slug" VARCHAR(64) GENERATED ALWAYS AS (LOWER("sku")) STORED' in result.ddl
     assert 'CREATE INDEX "idx_order_items_tenant_sku" ON "order_items"("tenant_id", "sku")' in result.ddl
 
+
+def _execute_script(connection: Any, ddl: str) -> None:
+    """Execute every statement of a generated DDL script on a DB-API connection."""
+    for statement in ddl.split(";\n\n"):
+        text = statement.strip().rstrip(";")
+        if text:
+            connection.execute(text)
+
+
+SQLITE_CATALOG_COLUMNS: list[dict[str, Any]] = [
+    {
+        "schema_name": "main",
+        "table_name": "Order Items",
+        "column_name": "Id",
+        "data_type": "INTEGER",
+        "is_nullable": "YES",
+        "column_default": None,
+        "ordinal_position": 1,
+        "is_primary": 1,
+        "extra": None,
+        "auto_increment": True,
+    },
+    {
+        "schema_name": "main",
+        "table_name": "Order Items",
+        "column_name": "order",
+        "data_type": "INTEGER",
+        "is_nullable": "NO",
+        "column_default": None,
+        "ordinal_position": 2,
+        "is_primary": 0,
+        "extra": None,
+    },
+    {
+        "schema_name": "main",
+        "table_name": "Order Items",
+        "column_name": "Unit Price",
+        "data_type": "NUMERIC(12,2)",
+        "is_nullable": "NO",
+        "column_default": "0",
+        "ordinal_position": 3,
+        "is_primary": 0,
+        "extra": None,
+    },
+    {
+        "schema_name": "main",
+        "table_name": "Order Items",
+        "column_name": "Status",
+        "data_type": "TEXT",
+        "is_nullable": "NO",
+        "column_default": "'new'",
+        "ordinal_position": 4,
+        "is_primary": 0,
+        "extra": None,
+    },
+    {
+        "schema_name": "main",
+        "table_name": "Order Items",
+        "column_name": "Code",
+        "data_type": "TEXT",
+        "is_nullable": "YES",
+        "column_default": "lower('ABC')",
+        "ordinal_position": 5,
+        "is_primary": 0,
+        "extra": None,
+    },
+    {
+        "schema_name": "main",
+        "table_name": "Order Items",
+        "column_name": "Doubled",
+        "data_type": "NUMERIC",
+        "is_nullable": "YES",
+        "column_default": None,
+        "ordinal_position": 6,
+        "is_primary": 0,
+        "extra": "generated",
+        "generation_expression": '"Unit Price" * 2',
+        "is_stored": True,
+    },
+]
+SQLITE_CATALOG_CONSTRAINTS: list[dict[str, Any]] = [
+    {"constraint_name": "ck_price", "constraint_type": "CHECK", "check_clause": '"Unit Price" >= 0'}
+]
+SQLITE_CATALOG_FOREIGN_KEYS: list[dict[str, Any]] = [
+    {
+        "table_name": "Order Items",
+        "column_name": "order",
+        "referenced_table": "Orders",
+        "referenced_column": "Id",
+        "constraint_name": "fk_order",
+        "on_delete": "CASCADE",
+        "on_update": "NO ACTION",
+    }
+]
+SQLITE_CATALOG_INDEXES: list[dict[str, Any]] = [
+    {
+        "index_name": "ix_open_status",
+        "table_name": "Order Items",
+        "columns": ["Status", "order"],
+        "is_unique": 1,
+        "is_primary": False,
+        "is_partial": 1,
+        "native_sql": 'CREATE UNIQUE INDEX "ix_open_status" ON "Order Items" ("Status" DESC, "order") '
+        "WHERE \"Status\" <> 'closed'",
+    },
+    {
+        "index_name": "ix_lower_code",
+        "table_name": "Order Items",
+        "columns": ["<expression>"],
+        "is_unique": 0,
+        "is_primary": False,
+        "is_partial": 0,
+        "native_sql": 'CREATE INDEX "ix_lower_code" ON "Order Items" (lower("Code"))',
+    },
+    {
+        "index_name": "ix_unreported",
+        "table_name": "Order Items",
+        "columns": ["<expression>"],
+        "is_unique": 0,
+        "is_primary": False,
+        "is_partial": 0,
+    },
+    {
+        "index_name": "ix_partial_unknown",
+        "table_name": "Order Items",
+        "columns": ["Status"],
+        "is_unique": 1,
+        "is_primary": False,
+        "is_partial": 1,
+    },
+]
+
+
+def test_compile_table_ddl_results_sqlite_round_trip_preserves_catalog_semantics() -> None:
+    """Generated SQLite DDL executes on a fresh database and keeps every reported catalog attribute."""
+    result = compile_table_ddl_results(
+        "Order Items",
+        SQLITE_CATALOG_COLUMNS,
+        constraints=SQLITE_CATALOG_CONSTRAINTS,
+        foreign_keys=SQLITE_CATALOG_FOREIGN_KEYS,
+        indexes=SQLITE_CATALOG_INDEXES,
+        dialect="sqlite",
+    )
+
+    assert result.ddl is not None
+    assert result.fidelity == MetadataFidelity.LOSSY
+    assert result.warnings == (
+        "Index ix_unreported uses an expression the catalog did not report; index omitted",
+        "Index ix_partial_unknown is partial but the catalog did not report its predicate; omitted",
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute('CREATE TABLE "Orders" ("Id" INTEGER PRIMARY KEY)')
+    _execute_script(connection, result.ddl)
+
+    columns = {row[1]: row for row in connection.execute("SELECT * FROM pragma_table_xinfo('Order Items')").fetchall()}
+    assert list(columns) == ["Id", "order", "Unit Price", "Status", "Code", "Doubled"]
+    assert columns["Unit Price"][2] == "NUMERIC(12,2)"
+    assert columns["Doubled"][6] == 3
+    assert connection.execute(
+        "SELECT sql LIKE '%AUTOINCREMENT%' FROM sqlite_schema WHERE name = 'Order Items'"
+    ).fetchone() == (1,)
+    assert connection.execute(
+        'SELECT "table", "from", "to", on_delete FROM pragma_foreign_key_list(\'Order Items\')'
+    ).fetchall() == [("Orders", "order", "Id", "CASCADE")]
+    assert connection.execute(
+        "SELECT name, \"unique\", partial FROM pragma_index_list('Order Items') ORDER BY name"
+    ).fetchall() == [("ix_lower_code", 0, 0), ("ix_open_status", 1, 1)]
+    assert connection.execute(
+        "SELECT name, desc FROM pragma_index_xinfo('ix_open_status') WHERE key = 1"
+    ).fetchall() == [("Status", 1), ("order", 0)]
+
+    connection.execute('INSERT INTO "Orders" ("Id") VALUES (1)')
+    connection.execute('INSERT INTO "Order Items" ("order", "Unit Price", "Status") VALUES (1, 2.5, \'closed\')')
+    connection.execute('INSERT INTO "Order Items" ("order", "Unit Price", "Status") VALUES (1, 3, \'closed\')')
+    assert connection.execute('SELECT "Doubled", "Code" FROM "Order Items" ORDER BY "Id"').fetchall() == [
+        (5, "abc"),
+        (6, "abc"),
+    ]
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute('INSERT INTO "Order Items" ("order", "Unit Price", "Status") VALUES (1, -1, \'open\')')
+    connection.commit()
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute('DELETE FROM "Orders" WHERE "Id" = 1')
+    assert connection.execute('SELECT COUNT(*) FROM "Order Items"').fetchone() == (0,)
+
+    fresh = sqlite3.connect(":memory:")
+    fresh.execute('CREATE TABLE "Orders" ("Id" INTEGER PRIMARY KEY)')
+    _execute_script(fresh, result.ddl)
+    assert fresh.execute("SELECT COUNT(*) FROM sqlite_schema WHERE tbl_name = 'Order Items'").fetchone() == (3,)
+
+
+def test_compile_table_ddl_results_without_collector_raises_for_unreproducible_index() -> None:
+    """CreateIndex.from_metadata raises instead of dropping an index it cannot reproduce."""
+    with pytest.raises(SQLBuilderError, match="ix_unreported uses an expression"):
+        CreateIndex.from_metadata(SQLITE_CATALOG_INDEXES[2], dialect="sqlite")
+
+
+DUCKDB_CATALOG_COLUMNS: list[dict[str, Any]] = [
+    {
+        "schema_name": "main",
+        "table_name": "LineItems",
+        "column_name": "Id",
+        "data_type": "BIGINT",
+        "is_nullable": "NO",
+        "column_default": "nextval('line_items_seq')",
+        "ordinal_position": 1,
+        "is_primary": True,
+        "is_generated": False,
+    },
+    {
+        "schema_name": "main",
+        "table_name": "LineItems",
+        "column_name": "select",
+        "data_type": "VARCHAR",
+        "is_nullable": "YES",
+        "column_default": "'x'",
+        "ordinal_position": 2,
+        "is_primary": False,
+        "is_generated": False,
+    },
+    {
+        "schema_name": "main",
+        "table_name": "LineItems",
+        "column_name": "Price",
+        "data_type": "DECIMAL(12,2)",
+        "is_nullable": "NO",
+        "column_default": None,
+        "ordinal_position": 3,
+        "is_primary": False,
+        "is_generated": False,
+    },
+    {
+        "schema_name": "main",
+        "table_name": "LineItems",
+        "column_name": "Price With Tax",
+        "data_type": "DOUBLE",
+        "is_nullable": "YES",
+        "column_default": 'CAST(("Price" * 1.2) AS DOUBLE)',
+        "ordinal_position": 4,
+        "is_primary": False,
+        "is_generated": True,
+    },
+]
+DUCKDB_CATALOG_CONSTRAINTS: list[dict[str, Any]] = [
+    {
+        "constraint_name": "LineItems_Price_check",
+        "constraint_type": "CHECK",
+        "expression": '("Price" > 0)',
+        "constraint_column_names": ["Price"],
+    }
+]
+DUCKDB_CATALOG_INDEXES: list[dict[str, Any]] = [
+    {
+        "index_name": "ix_select",
+        "table_name": "LineItems",
+        "columns": None,
+        "is_unique": False,
+        "is_primary": False,
+        "native_sql": 'CREATE INDEX ix_select ON "LineItems"("select");',
+    }
+]
+
+
+def test_compile_table_ddl_results_duckdb_round_trip_preserves_generated_and_quoted_names() -> None:
+    """Generated DuckDB DDL executes and keeps mixed-case/reserved names and virtual generated columns."""
+    result = compile_table_ddl_results(
+        "LineItems",
+        DUCKDB_CATALOG_COLUMNS,
+        constraints=DUCKDB_CATALOG_CONSTRAINTS,
+        indexes=DUCKDB_CATALOG_INDEXES,
+        dialect="duckdb",
+    )
+
+    assert result.ddl is not None
+    assert result.fidelity == MetadataFidelity.GENERATED
+    assert result.ddl == (
+        'CREATE TABLE "LineItems" (\n'
+        "  \"Id\" BIGINT NOT NULL PRIMARY KEY DEFAULT NEXTVAL('line_items_seq'),\n"
+        "  \"select\" TEXT DEFAULT 'x',\n"
+        '  "Price" DECIMAL(12, 2) NOT NULL,\n'
+        '  "Price With Tax" DOUBLE GENERATED ALWAYS AS (CAST((\n    "Price" * 1.2\n  ) AS DOUBLE)),\n'
+        '  CONSTRAINT "LineItems_Price_check" CHECK ("Price" > 0)\n'
+        ");\n\n"
+        'CREATE INDEX "ix_select" ON "LineItems"("select");'
+    )
+    for _ in range(2):
+        connection = duckdb.connect(":memory:")
+        connection.execute("CREATE SEQUENCE line_items_seq")
+        _execute_script(connection, result.ddl)
+        connection.execute('INSERT INTO "LineItems" ("Price") VALUES (10)')
+        assert connection.execute('SELECT "Id", "select", "Price With Tax" FROM "LineItems"').fetchall() == [
+            (1, "x", 12.0)
+        ]
+        assert connection.execute(
+            "SELECT column_name FROM duckdb_columns() WHERE table_name = 'LineItems' ORDER BY column_index"
+        ).fetchall() == [("Id",), ("select",), ("Price",), ("Price With Tax",)]
+        with pytest.raises(duckdb.ConstraintException):
+            connection.execute('INSERT INTO "LineItems" ("Price") VALUES (-1)')
+
+
+def test_compile_table_ddl_results_quotes_catalog_identifiers_per_dialect() -> None:
+    """Catalog names keep their exact spelling: mixed case, reserved words, and spaces are quoted."""
+    columns = [
+        {"column_name": "ID", "data_type": "NUMBER", "numeric_precision": 10, "numeric_scale": 0, "is_nullable": "N"},
+        {"column_name": "ORDER", "data_type": "VARCHAR2", "max_length": 30, "is_nullable": "Y"},
+        {"column_name": "CamelName", "data_type": "VARCHAR2", "max_length": 30, "is_nullable": "Y"},
+        {"column_name": "QTY", "data_type": "NUMBER", "numeric_precision": None, "numeric_scale": 0, "max_length": 22},
+    ]
+    oracle = compile_table_ddl_results("SELECT", columns, schema="APP", dialect="oracle")
+    assert oracle.ddl == (
+        'CREATE TABLE app."SELECT" (\n'
+        "  id NUMBER(10, 0) NOT NULL,\n"
+        '  "ORDER" VARCHAR2(30),\n'
+        '  "CamelName" VARCHAR2(30),\n'
+        "  qty NUMBER(38, 0)\n"
+        ");"
+    )
+
+    pg_columns = [
+        {"column_name": "Id", "data_type": "integer", "is_nullable": "NO", "is_primary": True},
+        {"column_name": "user name", "data_type": "text", "is_nullable": "YES"},
+    ]
+    postgres = compile_table_ddl_results("MixedCase", pg_columns, schema="App", dialect="postgres")
+    assert postgres.ddl == (
+        'CREATE TABLE "App"."MixedCase" (\n  "Id" INT NOT NULL PRIMARY KEY,\n  "user name" TEXT\n);'
+    )
+    tsql = compile_table_ddl_results("MixedCase", pg_columns, schema="App", dialect="tsql")
+    assert (
+        tsql.ddl
+        == "CREATE TABLE [App].[MixedCase] (\n  [Id] INTEGER NOT NULL PRIMARY KEY,\n  [user name] VARCHAR(MAX)\n);"
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw_default", "extra", "expected"),
+    [
+        ("2024-01-01", "", "DEFAULT '2024-01-01'"),
+        ("hello world", "", "DEFAULT 'hello world'"),
+        ("a-b", "", "DEFAULT 'a-b'"),
+        ("it's", "", "DEFAULT 'it''s'"),
+        ("42", "", "DEFAULT 42"),
+        ("-1.5", "", "DEFAULT -1.5"),
+        ("CURRENT_TIMESTAMP", "DEFAULT_GENERATED", "DEFAULT CURRENT_TIMESTAMP()"),
+        ("b'1'", "", "DEFAULT b'1'"),
+        ("lower('ABC')", "DEFAULT_GENERATED", "DEFAULT (\n    LOWER('ABC')\n  )"),
+    ],
+)
+def test_compile_table_ddl_results_mysql_raw_defaults(raw_default: str, extra: str, expected: str) -> None:
+    """MySQL information_schema defaults are literals unless numeric, keywords, or DEFAULT_GENERATED expressions."""
+    result = compile_table_ddl_results(
+        "t",
+        [{"column_name": "c", "data_type": "varchar", "max_length": 20, "column_default": raw_default, "extra": extra}],
+        dialect="mysql",
+    )
+    assert result.ddl == f"CREATE TABLE `t` (\n  `c` VARCHAR(20) {expected}\n);"
+
+
+def test_compile_table_ddl_results_oracle_drops_unsupported_fk_actions_with_warning() -> None:
+    """Oracle never receives ON UPDATE or ON DELETE NO ACTION; dropping a real action is reported."""
+    result = compile_table_ddl_results(
+        "CHILD",
+        [{"column_name": "PARENT_ID", "data_type": "NUMBER", "numeric_precision": 10, "numeric_scale": 0}],
+        foreign_keys=[
+            {
+                "constraint_name": "FK_PARENT",
+                "column_name": "PARENT_ID",
+                "referenced_table": "PARENT",
+                "referenced_column": "ID",
+                "on_delete": "NO ACTION",
+                "on_update": "CASCADE",
+            }
+        ],
+        dialect="oracle",
+    )
+    assert result.ddl == (
+        "CREATE TABLE child (\n"
+        "  parent_id NUMBER(10, 0),\n"
+        "  CONSTRAINT fk_parent FOREIGN KEY (parent_id) REFERENCES parent(id)\n"
+        ");"
+    )
+    assert result.fidelity == MetadataFidelity.LOSSY
+    assert result.warnings == ("Foreign key FK_PARENT: Oracle does not support ON UPDATE CASCADE; action omitted",)
+
+    with pytest.raises(SQLBuilderError, match="Oracle does not support ON UPDATE CASCADE"):
+        CreateTable("c", dialect="oracle").column("p", "INT").foreign_key_constraint(
+            "p", "parent", "id", on_update="CASCADE"
+        ).build()
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("postgres", '"total" INT GENERATED ALWAYS AS ("price" * 2) STORED'),
+        ("mysql", "`total` INT GENERATED ALWAYS AS (`price` * 2) VIRTUAL"),
+        ("oracle", "total INT GENERATED ALWAYS AS (price * 2)"),
+        ("tsql", "[total] AS (\n    [price] * 2\n  )"),
+        ("spanner", "`total` INT64 AS (\n    `price` * 2\n  ) STORED"),
+    ],
+)
+def test_generated_columns_render_valid_syntax_per_dialect(dialect: str, expected: str) -> None:
+    """Generated columns use each engine's valid syntax and default storage."""
+    sql_text = (
+        CreateTable("t", dialect=dialect)
+        .column("price", "INT")
+        .column("total", "INT", generated_expression="price * 2")
+        .build()
+        .sql
+    )
+    assert expected in sql_text
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "duckdb"])
+def test_generated_columns_execute_on_sqlite_and_duckdb(dialect: str) -> None:
+    """Virtual and (where supported) stored generated columns execute on SQLite and DuckDB."""
+    builder = (
+        CreateTable("t", dialect=dialect)
+        .column("price", "INTEGER")
+        .column("doubled", "INTEGER", generated_expression="(price * 2)", persisted=False)
+    )
+    if dialect == "sqlite":
+        builder.column("tripled", "INTEGER", generated_expression="price * 3", persisted=True)
+    connection: Any = sqlite3.connect(":memory:") if dialect == "sqlite" else duckdb.connect(":memory:")
+    connection.execute(builder.build().sql)
+    connection.execute("INSERT INTO t (price) VALUES (4)")
+    expected = (4, 8, 12) if dialect == "sqlite" else (4, 8)
+    assert connection.execute("SELECT * FROM t").fetchall() == [expected]
+
+    with pytest.raises(SQLBuilderError, match="supports only virtual generated columns"):
+        CreateTable("t", dialect="duckdb").column("a", "INT").column(
+            "b", "INT", generated_expression="a + 1", persisted=True
+        ).build()
+
+
+def test_create_index_on_name_with_space_is_an_identifier_and_executes() -> None:
+    """A column name containing a space is quoted, not parsed as ``column AS alias``."""
+    built = (
+        CreateIndex("ix_customer")
+        .on("Orders", "Customer Id", "Customer Id2 DESC", "lower(Email)")
+        .build(dialect="sqlite")
+    )
+    assert built.sql == 'CREATE INDEX "ix_customer" ON "orders"("Customer Id", "Customer Id2" DESC, LOWER("email"))'
+    connection = sqlite3.connect(":memory:")
+    connection.execute('CREATE TABLE orders ("Customer Id" INT, "Customer Id2" INT, email TEXT)')
+    connection.execute(built.sql)
+    assert connection.execute("SELECT name FROM pragma_index_info('ix_customer')").fetchall() == [
+        ("Customer Id",),
+        ("Customer Id2",),
+        (None,),
+    ]
+
+
+def test_create_sequence_and_drop_sequence_execute_on_duckdb() -> None:
+    """CreateSequence/DropSequence output runs on DuckDB; unsupported engine forms raise."""
+    connection = duckdb.connect(":memory:")
+    create_sql = CreateSequence("seq_orders", start_with=5, increment_by=2, dialect="duckdb").build().sql
+    connection.execute(create_sql)
+    assert connection.execute("SELECT nextval('seq_orders'), nextval('seq_orders')").fetchall() == [(5, 7)]
+    connection.execute(DropSequence("seq_orders", if_exists=True, cascade=True, dialect="duckdb").build().sql)
+    assert connection.execute("SELECT COUNT(*) FROM duckdb_sequences()").fetchone() == (0,)
+
+    assert (
+        CreateSequence("s", start_with=5, dialect="spanner").build().sql
+        == "CREATE SEQUENCE `s` OPTIONS (sequence_kind = 'bit_reversed_positive', start_with_counter = 5)"
+    )
+    with pytest.raises(SQLBuilderError, match="SQLite has no sequences"):
+        CreateSequence("s", start_with=1, dialect="sqlite").build()
+    with pytest.raises(SQLBuilderError, match="not supported by tsql"):
+        DropSequence("s", cascade=True, dialect="tsql").build()
+    with pytest.raises(SQLBuilderError, match="DuckDB has no AUTO_INCREMENT or identity"):
+        CreateTable("t", dialect="duckdb").column("id", "BIGINT", identity=True).build()
+    assert CreateTable("t", dialect="mysql").column("id", "BIGINT", identity=True, primary_key=True).build().sql == (
+        "CREATE TABLE `t` (\n  `id` BIGINT PRIMARY KEY AUTO_INCREMENT\n)"
+    )
+
+
+def test_from_metadata_rejects_unsupported_row_objects() -> None:
+    """Metadata rows must be mappings or field-declaring objects; arbitrary objects are not reflected."""
+    with pytest.raises(SQLBuilderError, match="Unsupported catalog metadata row type: object"):
+        CreateTable.from_metadata("t", [object()])
+
+
+def test_from_metadata_without_collector_raises_for_unreported_generated_expression() -> None:
+    """A generated column without its expression is reported rather than silently emitted as a plain column."""
+    rows = [
+        {"column_name": "a", "data_type": "INTEGER"},
+        {"column_name": "b", "data_type": "INTEGER", "extra": "generated"},
+    ]
+    with pytest.raises(SQLBuilderError, match="'b' is a generated column but the catalog did not report"):
+        CreateTable.from_metadata("t", rows, dialect="sqlite")
+    collected: list[str] = []
+    builder = CreateTable.from_metadata("t", rows, dialect="sqlite", warnings=collected)
+    assert builder.build().sql == 'CREATE TABLE "t" (\n  "a" INTEGER,\n  "b" INTEGER\n)'
+    assert collected == [
+        "Column 'b' is a generated column but the catalog did not report its expression; emitted as a plain column"
+    ]

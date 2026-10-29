@@ -140,11 +140,10 @@ def test_create_sequence_and_drop_sequence_across_dialects(dialect: str) -> None
     assert "CACHE 20" in create_sql
     assert "CYCLE" in create_sql
 
-    drop_sql = DropSequence("users_id_seq", schema="public", if_exists=True, cascade=True, dialect=dialect).build().sql
-    assert "DROP SEQUENCE" in drop_sql
-    assert "IF EXISTS" in drop_sql
+    drop_sql = DropSequence("users_id_seq", schema="public", if_exists=True, dialect=dialect).build().sql
+    assert "DROP SEQUENCE IF EXISTS" in drop_sql
     assert "users_id_seq" in drop_sql
-    assert "CASCADE" in drop_sql
+    assert "CASCADE" not in drop_sql
 
 
 def test_sequence_builders_fluent_api_and_sql_factory() -> None:
