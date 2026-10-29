@@ -849,7 +849,7 @@ def test_upgrade_failure_logs_failed_summary_and_records_partial_metrics(tmp_pat
 
 
 def test_synchronize_version_records_reconciles_with_pending_timestamp_present(tmp_path: Path) -> None:
-    """Verify _synchronize_version_records reconciles fixed migrations even when another timestamp exists."""
+    """Verify upgrade reconciliation renames fixed migrations even when another timestamp exists."""
     f1 = tmp_path / "0001_init.sql"
     f1.write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);\n", encoding="utf-8")
     f2 = tmp_path / "20251011150000_new.sql"
@@ -863,14 +863,17 @@ def test_synchronize_version_records_reconciles_with_pending_timestamp_present(t
 
     commands = SyncMigrationCommands(config)
     checksum_0001 = commands.runner.calculate_checksum(f1.read_text(encoding="utf-8"))
+    commands.tracker.ensure_tracking_table = MagicMock()
     commands.tracker.get_applied_migrations = MagicMock(
         return_value=[{"version_num": "20251011120000", "checksum": checksum_0001}]
     )
     commands.tracker.update_version_record = MagicMock()
 
-    updated = commands._synchronize_version_records(MagicMock(), echo=False)
-    assert updated == 1
+    commands._synchronized_applied_versions(
+        MagicMock(), auto_sync=True, dry_run=False, use_logger=False, echo=False, summary_only=False
+    )
     commands.tracker.update_version_record.assert_called_once()
+    assert commands.tracker.update_version_record.call_args.args[1:] == ("20251011120000", "0001")
 
 
 def test_squash_when_target_filename_matches_first_source_file(tmp_path: Path) -> None:

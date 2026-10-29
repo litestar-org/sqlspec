@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import rich_click as click
-from click.core import ParameterSource
 from rich import get_console
 from rich.markup import escape
 from rich.prompt import Confirm, Prompt
@@ -330,6 +329,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     def _dispatch_migration_call(config: Any, method_name: str, **kwargs: Any) -> Any:
         """Run a migration command method with sync/async dispatch for one config.
 
+        SQLSpec errors become ``click.ClickException`` so the CLI exits non-zero with the message instead of a
+        traceback.
+
         Args:
             config: The database configuration.
             method_name: Name of the migration command method to invoke.
@@ -337,6 +339,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         Returns:
             The result of the command method.
+
+        Raises:
+            click.ClickException: When the command raises a SQLSpec error.
         """
         from sqlspec.migrations.commands import create_migration_commands
 
@@ -351,7 +356,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         async def _async_call() -> Any:
             return await method(**kwargs)
 
-        return _execute_for_config(config, _sync_call, _async_call)
+        try:
+            return _execute_for_config(config, _sync_call, _async_call)
+        except SQLSpecError as exc:
+            raise click.ClickException(str(exc)) from exc
 
     async def _dispatch_migration_call_async(config: Any, method_name: str, **kwargs: Any) -> Any:
         """Await a migration command method inside an already-running event loop.
@@ -363,13 +371,19 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         Returns:
             The result of the command method.
+
+        Raises:
+            click.ClickException: When the command raises a SQLSpec error.
         """
         from sqlspec.migrations.commands import create_migration_commands
 
         migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
             config=config
         )
-        return await getattr(migration_commands, method_name)(**kwargs)
+        try:
+            return await getattr(migration_commands, method_name)(**kwargs)
+        except SQLSpecError as exc:
+            raise click.ClickException(str(exc)) from exc
 
     def _partition_configs_by_async(
         configs: "list[tuple[str, Any]]",
@@ -701,14 +715,13 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         )
         upgrade_kwargs: dict[str, Any] = {
             "revision": revision,
+            "allow_missing": allow_missing,
             "auto_sync": not no_auto_sync,
             "dry_run": dry_run,
             "use_logger": use_logger,
             "echo": echo_setting,
             "summary_only": summary_setting,
         }
-        if allow_missing:
-            upgrade_kwargs["allow_missing"] = True
 
         def _upgrade_for_config(config: Any) -> None:
             """Upgrade a single config with sync/async dispatch."""
@@ -841,7 +854,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         "--from-data",
         default=None,
         type=str,
-        help="Bootstrap migration DDL from a data file or existing staging table.",
+        help=(
+            "Bootstrap migration DDL from a data file or existing staging table. Values containing a path separator "
+            "or ending in a data suffix are files; other values are table names."
+        ),
     )
     @click.option("--schema", default=None, type=str, help="Database schema name for --from-schema or --from-data.")
     @click.option("--target-table", default=None, type=str, help="Target table name when bootstrapping from data.")
@@ -867,21 +883,16 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             )
 
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        param_source = ctx.get_parameter_source("file_format")
-        effective_format = None if param_source is ParameterSource.DEFAULT else file_format
-        revision_kwargs: dict[str, Any] = {"message": message_text, "file_type": effective_format}
-        if from_schema:
-            revision_kwargs["from_schema"] = True
-        if from_data is not None:
-            revision_kwargs["from_data"] = from_data
-        if schema is not None:
-            revision_kwargs["schema"] = schema
-        if target_table is not None:
-            revision_kwargs["target_table"] = target_table
-        try:
-            _dispatch_migration_call(sqlspec_config, "revision", **revision_kwargs)
-        except SQLSpecError as exc:
-            raise click.ClickException(str(exc)) from exc
+        _dispatch_migration_call(
+            sqlspec_config,
+            "revision",
+            message=message_text,
+            file_type=file_format,
+            from_schema=from_schema,
+            from_data=from_data,
+            schema=schema,
+            target_table=target_table,
+        )
 
     @database_group.command(name="fix", help="Convert timestamp migrations to sequential format.")
     @bind_key_option
@@ -963,8 +974,12 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @click.option(
         "--strategy",
         type=click.Choice(["ddl", "schema", "concat"], case_sensitive=False),
-        default="ddl",
-        help="Squash strategy: canonical AST DDL folding (ddl), live schema reflection (schema), or raw concatenation (concat).",
+        default="concat",
+        show_default=True,
+        help=(
+            "Squash strategy: keep every statement in order (concat), fold DDL into its final shape and refuse "
+            "ranges that cannot be folded faithfully (ddl), or reflect the live database schema (schema)."
+        ),
     )
     def squash_migrations(
         bind_key: str | None,
@@ -1008,9 +1023,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             "yes": skip_prompt,
             "allow_gaps": allow_gaps,
             "output_format": output_format.lower(),
+            "strategy": strategy.lower(),
         }
-        if ctx.get_parameter_source("strategy") is not ParameterSource.DEFAULT:
-            squash_kwargs["strategy"] = strategy.lower()
 
         def _squash_for_config(config: Any) -> None:
             _dispatch_migration_call(config, "squash", **squash_kwargs)
@@ -1074,37 +1088,46 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         exclude: "tuple[str, ...]",
         no_echo: bool,
     ) -> None:
-        """Export current database schema DDL."""
+        """Export current database schema DDL.
+
+        Without ``--output`` the DDL is written to stdout byte-for-byte (no Rich markup or wrapping) so it can be
+        redirected to a file.
+        """
         ctx = _ensure_click_context()
         echo_value = not no_echo
 
+        def _write_ddl(rendered: str) -> None:
+            if output is None and echo_value:
+                sys.stdout.write(rendered)
+                sys.stdout.flush()
+
         def _dump_for_config(config: Any) -> None:
-            rendered = _dispatch_migration_call(
-                config,
-                "dump_schema",
-                output_path=output,
-                schema=schema,
-                include_migrations_table=include_migrations_table,
-                prefer_native=prefer_native,
-                target_dialect=target_dialect,
-                echo=echo_value,
+            _write_ddl(
+                _dispatch_migration_call(
+                    config,
+                    "dump_schema",
+                    output_path=output,
+                    schema=schema,
+                    include_migrations_table=include_migrations_table,
+                    prefer_native=prefer_native,
+                    target_dialect=target_dialect,
+                    echo=echo_value,
+                )
             )
-            if output is None and echo_value and isinstance(rendered, str):
-                console.print(rendered)
 
         async def _async_dump(config: Any) -> None:
-            rendered = await _dispatch_migration_call_async(
-                config,
-                "dump_schema",
-                output_path=output,
-                schema=schema,
-                include_migrations_table=include_migrations_table,
-                prefer_native=prefer_native,
-                target_dialect=target_dialect,
-                echo=echo_value,
+            _write_ddl(
+                await _dispatch_migration_call_async(
+                    config,
+                    "dump_schema",
+                    output_path=output,
+                    schema=schema,
+                    include_migrations_table=include_migrations_table,
+                    prefer_native=prefer_native,
+                    target_dialect=target_dialect,
+                    echo=echo_value,
+                )
             )
-            if output is None and echo_value and isinstance(rendered, str):
-                console.print(rendered)
 
         configs_to_process = process_multiple_configs(
             ctx, bind_key, include, exclude, dry_run=False, operation_name="dump schema", echo=echo_value
@@ -1133,8 +1156,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         "--strict",
         is_flag=True,
         default=False,
-        help="Exit non-zero on checksum mismatch, orphaned applied migration, or pending migration.",
+        help="Exit non-zero on checksum mismatch, orphaned applied migration, or partially applied squash.",
     )
+    @click.option("--fail-on-pending", is_flag=True, default=False, help="Exit non-zero when migrations are pending.")
     @bind_key_option
     @include_option
     @exclude_option
@@ -1142,45 +1166,31 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @no_echo_option
     def verify_migrations_cmd(
         strict: bool,
+        fail_on_pending: bool,
         bind_key: str | None,
         include: "tuple[str, ...]",
         exclude: "tuple[str, ...]",
         use_logger: bool,
         no_echo: bool,
     ) -> None:
-        """Verify database migration tracking records against migration files on disk."""
+        """Verify database migration tracking records against migration files on disk.
+
+        Verification is read-only and never creates the tracking table.
+        """
         ctx = _ensure_click_context()
         echo_setting, _, echo_enabled, _should_echo = _create_echo_settings(no_echo, False, use_logger)
+        verify_kwargs: dict[str, Any] = {
+            "strict": strict,
+            "fail_on_pending": fail_on_pending,
+            "use_logger": use_logger,
+            "echo": echo_setting,
+        }
 
         def _verify_for_config(config: Any) -> None:
-            try:
-                report = _dispatch_migration_call(
-                    config, "verify", strict=strict, use_logger=use_logger, echo=echo_setting
-                )
-            except SQLSpecError as exc:
-                raise click.ClickException(str(exc)) from exc
-            if (
-                strict
-                and isinstance(report, dict)
-                and (not report.get("valid", True) or report.get("pending_versions"))
-            ):
-                msg = "Migration verification failed in strict mode."
-                raise click.ClickException(msg)
+            _dispatch_migration_call(config, "verify", **verify_kwargs)
 
         async def _async_verify(config: Any) -> None:
-            try:
-                report = await _dispatch_migration_call_async(
-                    config, "verify", strict=strict, use_logger=use_logger, echo=echo_setting
-                )
-            except SQLSpecError as exc:
-                raise click.ClickException(str(exc)) from exc
-            if (
-                strict
-                and isinstance(report, dict)
-                and (not report.get("valid", True) or report.get("pending_versions"))
-            ):
-                msg = "Migration verification failed in strict mode."
-                raise click.ClickException(msg)
+            await _dispatch_migration_call_async(config, "verify", **verify_kwargs)
 
         configs_to_process = process_multiple_configs(
             ctx, bind_key, include, exclude, dry_run=False, operation_name="verify migrations", echo=echo_enabled

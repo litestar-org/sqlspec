@@ -278,7 +278,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.revision.assert_called_once_with(message="test migration", file_type=None)
+    mock_commands.revision.assert_called_once_with(
+        message="test migration", file_type=None, from_schema=False, from_data=None, schema=None, target_table=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -310,7 +312,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.revision.assert_called_once_with(message="test migration", file_type=None)
+    mock_commands.revision.assert_called_once_with(
+        message="test migration", file_type=None, from_schema=False, from_data=None, schema=None, target_table=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -350,7 +354,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.revision.assert_called_once_with(message="test migration", file_type="py")
+    mock_commands.revision.assert_called_once_with(
+        message="test migration", file_type="py", from_schema=False, from_data=None, schema=None, target_table=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -390,7 +396,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.revision.assert_called_once_with(message="test migration", file_type="sql")
+    mock_commands.revision.assert_called_once_with(
+        message="test migration", file_type="sql", from_schema=False, from_data=None, schema=None, target_table=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -422,7 +430,13 @@ def get_config():
 
     assert result.exit_code == 0
     mock_commands.upgrade.assert_called_once_with(
-        revision="head", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
+        revision="head",
+        allow_missing=False,
+        auto_sync=True,
+        dry_run=False,
+        use_logger=False,
+        echo=None,
+        summary_only=None,
     )
 
 
@@ -455,7 +469,13 @@ def get_config():
 
     assert result.exit_code == 0
     mock_commands.upgrade.assert_called_once_with(
-        revision="abc123", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
+        revision="abc123",
+        allow_missing=False,
+        auto_sync=True,
+        dry_run=False,
+        use_logger=False,
+        echo=None,
+        summary_only=None,
     )
 
 
@@ -762,7 +782,13 @@ def get_multi_configs():
     assert result.exit_code == 0
     # Should only process the analytics_db config
     mock_commands.upgrade.assert_called_once_with(
-        revision="head", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
+        revision="head",
+        allow_missing=False,
+        auto_sync=True,
+        dry_run=False,
+        use_logger=False,
+        echo=None,
+        summary_only=None,
     )
 
 
@@ -788,6 +814,7 @@ def test_squash_version_range_formats(version_range: str) -> None:
         yes=True,
         allow_gaps=False,
         output_format="sql",
+        strategy="concat",
     )
 
 

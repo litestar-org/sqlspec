@@ -5,7 +5,9 @@ Tests for:
 - AsyncMigrationCommands.squash()
 """
 
+import sqlite3
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -190,7 +192,10 @@ def test_sync_squash_defaults_squash_no_migrations_returns_early(tmp_path: Path)
 
 
 def test_sync_squash_auto_discovers_timestamp_migrations_and_defaults_description_with_yes(tmp_path: Path) -> None:
-    """Omitting range and description with yes=True should squash timestamped migrations into 0001_initial_schema.sql."""
+    """Omitting range and description with yes=True squashes timestamped migrations into 0001_initial_schema.sql.
+
+    The default ``concat`` strategy keeps every statement in order, so the squashed UP replays to the same schema.
+    """
     from sqlspec.migrations.commands import SyncMigrationCommands
 
     (tmp_path / "20251011120000_init.sql").write_text(
@@ -211,9 +216,121 @@ def test_sync_squash_auto_discovers_timestamp_migrations_and_defaults_descriptio
         commands.squash(yes=True, update_database=False)
         mock_prompt.assert_not_called()
 
-    target_file = tmp_path / "0001_initial_schema.sql"
-    assert target_file.exists()
-    content = target_file.read_text(encoding="utf-8")
-    assert "CREATE TABLE widgets" in content
-    assert "label VARCHAR(80)" in content
-    assert "ALTER TABLE" not in content
+    assert sorted(p.name for p in tmp_path.glob("*.sql")) == ["0001_initial_schema.sql"]
+    content = (tmp_path / "0001_initial_schema.sql").read_text(encoding="utf-8")
+    up_body = content.split("-- name: migrate-0001-up", 1)[1].split("-- name:", 1)[0]
+    with sqlite3.connect(":memory:") as replay:
+        replay.executescript(up_body)
+        assert [row[1] for row in replay.execute("PRAGMA table_info(widgets)")] == ["id", "label"]
+
+
+def _write_users_posts_migrations(migrations_dir: Path) -> None:
+    migrations_dir.mkdir(exist_ok=True)
+    (migrations_dir / "0001_users.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);\n"
+        "INSERT INTO users (id, name) VALUES (1, 'seed');\n\n"
+        "-- name: migrate-0001-down\nDROP TABLE users;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0002_email.sql").write_text(
+        "-- name: migrate-0002-up\nALTER TABLE users ADD COLUMN email TEXT;\n"
+        "UPDATE users SET email = 'seed@example.com';\n\n"
+        "-- name: migrate-0002-down\nALTER TABLE users DROP COLUMN email;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0003_posts.sql").write_text(
+        "-- name: migrate-0003-up\n"
+        "CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id), body TEXT);\n\n"
+        "-- name: migrate-0003-down\nDROP TABLE posts;\n",
+        encoding="utf-8",
+    )
+
+
+def _schema_and_rows(db_path: Path) -> "tuple[list[tuple[str, str]], list[tuple[str, str | None]], list[Any]]":
+    with sqlite3.connect(db_path) as connection:
+        schema = connection.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='table' AND name != 'ddl_migrations' ORDER BY name"
+        ).fetchall()
+        tracking = connection.execute(
+            "SELECT version_num, replaces FROM ddl_migrations ORDER BY version_num"
+        ).fetchall()
+        users = connection.execute("SELECT id, name, email FROM users").fetchall()
+    return schema, tracking, users
+
+
+def test_sync_default_concat_squash_round_trip(tmp_path: Path) -> None:
+    """Default squash keeps DML and DDL order; fresh, fully applied, and partially applied databases behave correctly."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.exceptions import SquashValidationError
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    migrations_dir = tmp_path / "migrations"
+    _write_users_posts_migrations(migrations_dir)
+
+    def commands_for(name: str) -> SyncMigrationCommands:
+        return SyncMigrationCommands(
+            SqliteConfig(
+                connection_config={"database": str(tmp_path / f"{name}.db")},
+                migration_config={"script_location": str(migrations_dir), "enabled": True},
+            )
+        )
+
+    reference = commands_for("reference")
+    reference.upgrade(echo=False)
+    expected_schema, _, expected_users = _schema_and_rows(tmp_path / "reference.db")
+    commands_for("full").upgrade(echo=False)
+    commands_for("partial").upgrade(revision="0002", echo=False)
+
+    reference.squash(yes=True)
+    assert sorted(p.name for p in migrations_dir.glob("*.sql")) == ["0001_initial_schema.sql"]
+    assert _schema_and_rows(tmp_path / "reference.db")[1] == [("0001", "0001,0002,0003")]
+
+    commands_for("fresh").upgrade(echo=False)
+    fresh_schema, fresh_tracking, fresh_users = _schema_and_rows(tmp_path / "fresh.db")
+    assert fresh_schema == expected_schema
+    assert fresh_users == expected_users == [(1, "seed", "seed@example.com")]
+    assert fresh_tracking == [("0001", "0001,0002,0003")]
+
+    commands_for("full").upgrade(echo=False)
+    full_schema, full_tracking, _ = _schema_and_rows(tmp_path / "full.db")
+    assert full_schema == expected_schema
+    assert full_tracking == [("0001", "0001,0002,0003")]
+
+    with pytest.raises(SquashValidationError, match="Cannot reconcile squashed migration 0001"):
+        commands_for("partial").upgrade(echo=False)
+    assert _schema_and_rows(tmp_path / "partial.db")[1] == [("0001", None), ("0002", None)]
+
+    commands_for("fresh").downgrade(revision="base", echo=False)
+    with sqlite3.connect(tmp_path / "fresh.db") as connection:
+        remaining = connection.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+    assert remaining == [("ddl_migrations",)]
+
+
+@pytest.mark.anyio
+async def test_async_default_concat_squash_round_trip(tmp_path: Path) -> None:
+    """Async squash with the default strategy reconciles a fully applied database and rebuilds a fresh one."""
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.migrations.commands import AsyncMigrationCommands
+
+    migrations_dir = tmp_path / "migrations"
+    _write_users_posts_migrations(migrations_dir)
+
+    def config_for(name: str) -> AiosqliteConfig:
+        return AiosqliteConfig(
+            connection_config={"database": str(tmp_path / f"{name}.db")},
+            migration_config={"script_location": str(migrations_dir), "enabled": True},
+        )
+
+    author_config = config_for("author")
+    author = AsyncMigrationCommands(author_config)
+    await author.upgrade(echo=False)
+    expected_schema, _, expected_users = _schema_and_rows(tmp_path / "author.db")
+    await author.squash(yes=True)
+    await author_config.close_pool()
+
+    fresh_config = config_for("fresh")
+    await AsyncMigrationCommands(fresh_config).upgrade(echo=False)
+    await fresh_config.close_pool()
+
+    assert _schema_and_rows(tmp_path / "author.db")[1] == [("0001", "0001,0002,0003")]
+    assert _schema_and_rows(tmp_path / "fresh.db") == (expected_schema, [("0001", "0001,0002,0003")], expected_users)
