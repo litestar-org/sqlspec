@@ -63,7 +63,7 @@ class StorageCapabilities(TypedDict):
     parquet_import_enabled: bool
     """Whether direct or staged Parquet ingestion is available."""
     partition_strategies: "list[str]"
-    """Supported partition fan-out strategy names (such as ``chunk`` or ``hash``)."""
+    """Supported partition fan-out strategy names (such as ``fixed``, ``rows_per_chunk``, or ``manifest``)."""
     default_storage_profile: NotRequired[str | None]
     """Named storage registry profile used when callers omit an explicit backend URI."""
 
@@ -72,7 +72,7 @@ class PartitionStrategyConfig(TypedDict, total=False):
     """Configuration for partition fan-out strategies."""
 
     kind: str
-    """Partitioning strategy identifier (such as ``rows``, ``hash``, or ``column``)."""
+    """Partitioning strategy identifier (``fixed``, ``rows_per_chunk``, or ``manifest``)."""
     partitions: int
     """Target number of output partitions to produce."""
     rows_per_chunk: int

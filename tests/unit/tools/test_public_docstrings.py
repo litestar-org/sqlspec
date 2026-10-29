@@ -39,6 +39,12 @@ def test_scan_public_docstring_leaks_detects_compiler_and_layout_leaks(tmp_path:
         '    """Prevent segmentation fault crashes."""\n\n'
         "def segfault_fn() -> None:\n"
         '    """Avoid a segfault during lookup."""\n\n'
+        "class LeakySchema:\n"
+        '    """Public schema with field docstrings."""\n\n'
+        "    leaky_field: str\n"
+        '    """Avoid mypyc ABI boundary issue."""\n'
+        "    _private_field: str\n"
+        '    """Internal mypyc note."""\n\n'
         "class _PrivateHelper:\n"
         '    """Private class mentioning mypyc ABI boundary."""\n',
         encoding="utf-8",
@@ -53,7 +59,7 @@ def test_scan_public_docstring_leaks_detects_compiler_and_layout_leaks(tmp_path:
     violations = scan_public_docstring_leaks([tmp_path])
     messages = [item.format() for item in violations]
 
-    assert len(violations) == 5
+    assert len(violations) == 6
     assert any(
         "LeakyBase" in msg and "cross-trait attribute" in msg.lower() and "private/internal methods" in msg.lower()
         for msg in messages
@@ -62,6 +68,8 @@ def test_scan_public_docstring_leaks_detects_compiler_and_layout_leaks(tmp_path:
     assert any("leaky_helper" in msg and "mypyc" in msg.lower() for msg in messages)
     assert any("CrashPool" in msg and "segmentation fault" in msg.lower() for msg in messages)
     assert any("segfault_fn" in msg and "segfault" in msg.lower() for msg in messages)
+    assert any("LeakySchema.leaky_field" in msg and "mypyc" in msg.lower() for msg in messages)
+    assert not any("LeakySchema._private_field" in msg for msg in messages)
     assert not any("SampleSessionContext" in msg for msg in messages)
     assert not any("_PrivateHelper" in msg for msg in messages)
     assert not any("_internal" in msg for msg in messages)

@@ -124,11 +124,11 @@ class LifecycleConfig(TypedDict):
     on_session_end: NotRequired[list[Callable[[Any], None]]]
     """Callbacks invoked when a driver session context exits."""
     on_query_start: NotRequired[list[Callable[[str, dict[str, Any]], None]]]
-    """Callbacks receiving the SQL text and bound parameters before statement execution."""
+    """Callbacks invoked before statement execution with a ``LifecycleContext`` mapping (``sql``, ``parameters``, ``driver``, ``operation``)."""
     on_query_complete: NotRequired[list[Callable[[str, dict[str, Any], Any], None]]]
-    """Callbacks receiving the SQL text, bound parameters, and execution result on completion."""
+    """Callbacks invoked on completion with a ``LifecycleContext`` mapping (including ``rows_affected``, ``sql``, ``parameters``, ``driver``, ``operation``)."""
     on_error: NotRequired[list[Callable[[Exception, str, dict[str, Any]], None]]]
-    """Callbacks receiving the raised exception, SQL text, and bound parameters on query failure."""
+    """Callbacks invoked on query failure with a ``LifecycleContext`` mapping (including ``exception``, ``sql``, ``parameters``, ``driver``, ``operation``)."""
 
 
 class SQLTemplateOverride(TypedDict):

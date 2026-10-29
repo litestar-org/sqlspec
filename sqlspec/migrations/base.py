@@ -77,7 +77,7 @@ class AppliedMigrationRecord(TypedDict):
     version_num: str
     """Applied migration version identifier stored in ``ddl_migrations``."""
     version_type: str
-    """Version format classification (such as ``sequential``, ``timestamp``, or ``extension``)."""
+    """Persisted migration version format (``sequential`` or ``timestamp``)."""
     execution_sequence: int
     """Monotonic ordinal recording the order in which migrations were applied."""
     description: str

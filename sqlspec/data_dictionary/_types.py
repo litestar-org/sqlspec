@@ -1519,7 +1519,7 @@ class TableStatisticsMetadata(TypedDict, total=False):
     statistic_key: int
     """Driver-defined numeric statistic identifier (such as ADBC statistic key codes)."""
     statistic_name: str
-    """Canonical human-readable statistic name (such as ``row_count`` or ``byte_width``)."""
+    """Canonical statistic identifier (such as ``adbc.statistic.row_count`` or ``adbc.statistic.byte_width``)."""
     statistic_value: int | float | str | bytes | None
     """Observed or estimated statistic value reported by the engine."""
     is_approximate: bool

@@ -187,24 +187,49 @@ def _scan_module_leaks(file_path: Path) -> list[DocstringLeakViolation]:
                 violations.append(
                     DocstringLeakViolation(path=file_path, line=node.lineno, symbol=node.name, matched_patterns=matched)
                 )
-            violations.extend(_scan_class_method_leaks(file_path, node))
+            violations.extend(_scan_class_member_leaks(file_path, node))
 
     return violations
 
 
-def _scan_class_method_leaks(file_path: Path, class_node: ast.ClassDef) -> list[DocstringLeakViolation]:
-    """Inspect public methods of class_node for docstring leaks."""
+def _scan_class_member_leaks(file_path: Path, class_node: ast.ClassDef) -> list[DocstringLeakViolation]:
+    """Inspect public methods and inline attribute docstrings of class_node for docstring leaks."""
     violations: list[DocstringLeakViolation] = []
-    for item in class_node.body:
-        if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) or item.name.startswith("_"):
-            continue
-        matched = _match_leak_patterns(ast.get_docstring(item))
-        if matched:
-            violations.append(
-                DocstringLeakViolation(
-                    path=file_path, line=item.lineno, symbol=f"{class_node.name}.{item.name}", matched_patterns=matched
+    statements = class_node.body
+    for idx, item in enumerate(statements):
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and not item.name.startswith("_"):
+            matched = _match_leak_patterns(ast.get_docstring(item))
+            if matched:
+                violations.append(
+                    DocstringLeakViolation(
+                        path=file_path,
+                        line=item.lineno,
+                        symbol=f"{class_node.name}.{item.name}",
+                        matched_patterns=matched,
+                    )
                 )
-            )
+        elif (
+            isinstance(item, ast.AnnAssign)
+            and isinstance(item.target, ast.Name)
+            and not item.target.id.startswith("_")
+            and idx + 1 < len(statements)
+        ):
+            next_stmt = statements[idx + 1]
+            if (
+                isinstance(next_stmt, ast.Expr)
+                and isinstance(next_stmt.value, ast.Constant)
+                and isinstance(next_stmt.value.value, str)
+            ):
+                matched = _match_leak_patterns(next_stmt.value.value)
+                if matched:
+                    violations.append(
+                        DocstringLeakViolation(
+                            path=file_path,
+                            line=next_stmt.lineno,
+                            symbol=f"{class_node.name}.{item.target.id}",
+                            matched_patterns=matched,
+                        )
+                    )
     return violations
 
 
