@@ -83,7 +83,8 @@ def test_sqlite_table_xinfo_includes_generated_columns() -> None:
 
         columns_by_name = {column["column_name"]: column for column in columns}
         assert {"id", "price", "quantity", "total"} <= set(columns_by_name)
-        assert columns_by_name["total"]["extra"] == "generated"
+        assert columns_by_name["total"]["extra"] == "virtual generated"
+        assert columns_by_name["total"]["generation_expression"] == "price * quantity"
     finally:
         connection.close()
 
@@ -264,10 +265,10 @@ def test_sqlite_columns_report_generated_columns() -> None:
 
         columns = driver.data_dictionary.get_columns(driver, table="gen")
 
-    assert [(column["column_name"], column["extra"]) for column in columns] == [
-        ("id", None),
-        ("v", "generated"),
-        ("s", "generated"),
+    assert [(column["column_name"], column["extra"], column.get("generation_expression")) for column in columns] == [
+        ("id", None, None),
+        ("v", "virtual generated", "id * 2"),
+        ("s", "stored generated", "id * 3"),
     ]
     config.close_pool()
 

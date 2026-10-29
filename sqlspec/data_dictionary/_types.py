@@ -1,7 +1,7 @@
 """Data dictionary metadata types, capabilities, and redaction policies."""
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary._dependencies import DependencyEdge
 
 __all__ = (
+    "DDL_PARENT_TABLE_CONTEXT_KEY",
     "ColumnDetails",
     "ColumnMetadata",
     "ColumnProfileMetadata",
@@ -53,6 +54,9 @@ __all__ = (
     "VersionInfo",
     "ViewMetadata",
 )
+
+DDL_PARENT_TABLE_CONTEXT_KEY: Final = "parent_table"
+"""``DDLResult.context`` key naming the table an index or trigger belongs to."""
 
 
 class MetadataSupport(StrEnum):
@@ -1272,11 +1276,17 @@ class IndexMetadata(TypedDict, total=False):
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ForeignKeyMetadata:
-    """Metadata for a foreign key constraint."""
+    """Metadata for one column of a foreign key constraint.
+
+    ``on_delete`` and ``on_update`` hold the referential action (``CASCADE``, ``SET NULL``,
+    ``SET DEFAULT``, ``RESTRICT``, ``NO ACTION``) when the catalog exposes it, otherwise ``None``.
+    """
 
     __slots__ = (
         "column_name",
         "constraint_name",
+        "on_delete",
+        "on_update",
         "referenced_column",
         "referenced_schema",
         "referenced_table",
@@ -1293,6 +1303,8 @@ class ForeignKeyMetadata:
         constraint_name: str | None = None,
         schema: str | None = None,
         referenced_schema: str | None = None,
+        on_delete: str | None = None,
+        on_update: str | None = None,
     ) -> None:
         self.table_name = table_name
         self.column_name = column_name
@@ -1301,30 +1313,63 @@ class ForeignKeyMetadata:
         self.constraint_name = constraint_name
         self.schema = schema
         self.referenced_schema = referenced_schema
+        self.on_delete = on_delete
+        self.on_update = on_update
 
     def __repr__(self) -> str:
         return (
             f"ForeignKeyMetadata(table_name={self.table_name!r}, column_name={self.column_name!r}, "
             f"referenced_table={self.referenced_table!r}, referenced_column={self.referenced_column!r}, "
             f"constraint_name={self.constraint_name!r}, schema={self.schema!r}, "
-            f"referenced_schema={self.referenced_schema!r})"
+            f"referenced_schema={self.referenced_schema!r}, on_delete={self.on_delete!r}, "
+            f"on_update={self.on_update!r})"
         )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ForeignKeyMetadata):
             return NotImplemented
-        return (
-            self.table_name == other.table_name
-            and self.column_name == other.column_name
-            and self.referenced_table == other.referenced_table
-            and self.referenced_column == other.referenced_column
-            and self.constraint_name == other.constraint_name
-            and self.schema == other.schema
-            and self.referenced_schema == other.referenced_schema
-        )
+        return self._key() == other._key()
 
     def __hash__(self) -> int:
-        return hash((
+        return hash(self._key())
+
+    def __reduce__(
+        self,
+    ) -> "tuple[type[ForeignKeyMetadata], tuple[str, str, str, str, str | None, str | None, str | None, str | None, str | None]]":
+        return (self.__class__, self._key())
+
+    @classmethod
+    def from_row(cls, row: "Mapping[str, Any]") -> "ForeignKeyMetadata":
+        """Build foreign key metadata from a catalog row.
+
+        Accepts the column aliases emitted by the dialect ``foreign_keys`` query packs
+        (``referenced_table_name``, ``referenced_column_name``, ``table_schema``,
+        ``referenced_table_schema``, ``delete_rule``, ``update_rule``). Referential actions
+        are normalized to upper-case words separated by single spaces.
+
+        Args:
+            row: Catalog row mapping.
+
+        Returns:
+            Foreign key metadata.
+        """
+        constraint_name = row.get("constraint_name")
+        schema = row.get("schema") or row.get("table_schema") or row.get("schema_name")
+        referenced_schema = row.get("referenced_schema") or row.get("referenced_table_schema")
+        return cls(
+            table_name=str(row.get("table_name") or row.get("table") or ""),
+            column_name=str(row.get("column_name") or row.get("column") or ""),
+            referenced_table=str(row.get("referenced_table") or row.get("referenced_table_name") or ""),
+            referenced_column=str(row.get("referenced_column") or row.get("referenced_column_name") or ""),
+            constraint_name=str(constraint_name) if constraint_name is not None else None,
+            schema=str(schema) if schema is not None else None,
+            referenced_schema=str(referenced_schema) if referenced_schema is not None else None,
+            on_delete=_normalize_referential_action(row.get("on_delete") or row.get("delete_rule")),
+            on_update=_normalize_referential_action(row.get("on_update") or row.get("update_rule")),
+        )
+
+    def _key(self) -> "tuple[str, str, str, str, str | None, str | None, str | None, str | None, str | None]":
+        return (
             self.table_name,
             self.column_name,
             self.referenced_table,
@@ -1332,22 +1377,8 @@ class ForeignKeyMetadata:
             self.constraint_name,
             self.schema,
             self.referenced_schema,
-        ))
-
-    def __reduce__(
-        self,
-    ) -> "tuple[type[ForeignKeyMetadata], tuple[str, str, str, str, str | None, str | None, str | None]]":
-        return (
-            self.__class__,
-            (
-                self.table_name,
-                self.column_name,
-                self.referenced_table,
-                self.referenced_column,
-                self.constraint_name,
-                self.schema,
-                self.referenced_schema,
-            ),
+            self.on_delete,
+            self.on_update,
         )
 
 
@@ -1805,3 +1836,11 @@ def _looks_like_connection_string(value: object) -> bool:
     if "password=" in lowered or "pwd=" in lowered:
         return True
     return "user id=" in lowered and ("server=" in lowered or "host=" in lowered)
+
+
+def _normalize_referential_action(value: object) -> "str | None":
+    """Normalize a catalog referential action to upper-case words separated by single spaces."""
+    if value is None:
+        return None
+    normalized = " ".join(str(value).replace("_", " ").split()).upper()
+    return normalized or None

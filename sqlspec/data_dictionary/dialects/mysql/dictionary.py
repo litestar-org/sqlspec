@@ -135,35 +135,6 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         schema_name = self._resolve_metadata_schema(schema)
         return await self._select_domain_result(driver, dialect, "privileges", "by_schema", schema_name=schema_name)
 
-    async def get_ddl(
-        self,
-        driver: "AsyncDriverAdapterBase",
-        object_name: str,
-        schema: "str | None" = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> "DDLResult":
-        """Get native SHOW CREATE output and replay-sensitive context for a table."""
-        _ = include_dependencies, prefer_native, redact
-        schema_name = self._resolve_metadata_schema(schema)
-        raw_version = await driver.select_value_or_none(self.get_query_text("version", "current"))
-        sql_mode = await driver.select_value_or_none("SELECT @@sql_mode")
-        sql_quote_show_create = await driver.select_value_or_none("SELECT @@sql_quote_show_create")
-        statement = build_mysql_show_create_statement(object_name, schema_name, object_type)
-        row = await driver.select_one(statement, schema_type=dict)
-        return make_mysql_ddl_result(
-            object_name,
-            schema_name,
-            object_type,
-            row,
-            str(raw_version) if raw_version is not None else None,
-            str(sql_mode) if sql_mode is not None else None,
-            str(sql_quote_show_create) if sql_quote_show_create is not None else None,
-        )
-
     async def get_system_metadata(
         self, driver: "AsyncDriverAdapterBase", request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
     ) -> "SystemMetadataResult":
@@ -258,6 +229,33 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
             table_name=table,
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,
+        )
+
+    async def _get_native_object_ddl(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return native SHOW CREATE output and replay-sensitive context for an object."""
+        _ = include_dependencies, redact
+        raw_version = await driver.select_value_or_none(self.get_query_text("version", "current"))
+        sql_mode = await driver.select_value_or_none("SELECT @@sql_mode")
+        sql_quote_show_create = await driver.select_value_or_none("SELECT @@sql_quote_show_create")
+        statement = build_mysql_show_create_statement(object_name, schema, object_type)
+        row = await driver.select_one(statement, schema_type=dict)
+        return make_mysql_ddl_result(
+            object_name,
+            schema,
+            object_type,
+            row,
+            str(raw_version) if raw_version is not None else None,
+            str(sql_mode) if sql_mode is not None else None,
+            str(sql_quote_show_create) if sql_quote_show_create is not None else None,
         )
 
     def _resolve_metadata_schema(self, schema: "str | None") -> "str | None":
@@ -400,35 +398,6 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
         schema_name = self._resolve_metadata_schema(schema)
         return self._select_domain_result(driver, dialect, "privileges", "by_schema", schema_name=schema_name)
 
-    def get_ddl(
-        self,
-        driver: "SyncDriverAdapterBase",
-        object_name: str,
-        schema: "str | None" = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> "DDLResult":
-        """Get native SHOW CREATE output and replay-sensitive context for a table."""
-        _ = include_dependencies, prefer_native, redact
-        schema_name = self._resolve_metadata_schema(schema)
-        raw_version = driver.select_value_or_none(self.get_query_text("version", "current"))
-        sql_mode = driver.select_value_or_none("SELECT @@sql_mode")
-        sql_quote_show_create = driver.select_value_or_none("SELECT @@sql_quote_show_create")
-        statement = build_mysql_show_create_statement(object_name, schema_name, object_type)
-        row = driver.select_one(statement, schema_type=dict)
-        return make_mysql_ddl_result(
-            object_name,
-            schema_name,
-            object_type,
-            row,
-            str(raw_version) if raw_version is not None else None,
-            str(sql_mode) if sql_mode is not None else None,
-            str(sql_quote_show_create) if sql_quote_show_create is not None else None,
-        )
-
     def get_system_metadata(
         self, driver: "SyncDriverAdapterBase", request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
     ) -> "SystemMetadataResult":
@@ -523,6 +492,33 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
             table_name=table,
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,
+        )
+
+    def _get_native_object_ddl(
+        self,
+        driver: "SyncDriverAdapterBase",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return native SHOW CREATE output and replay-sensitive context for an object."""
+        _ = include_dependencies, redact
+        raw_version = driver.select_value_or_none(self.get_query_text("version", "current"))
+        sql_mode = driver.select_value_or_none("SELECT @@sql_mode")
+        sql_quote_show_create = driver.select_value_or_none("SELECT @@sql_quote_show_create")
+        statement = build_mysql_show_create_statement(object_name, schema, object_type)
+        row = driver.select_one(statement, schema_type=dict)
+        return make_mysql_ddl_result(
+            object_name,
+            schema,
+            object_type,
+            row,
+            str(raw_version) if raw_version is not None else None,
+            str(sql_mode) if sql_mode is not None else None,
+            str(sql_quote_show_create) if sql_quote_show_create is not None else None,
         )
 
     def _resolve_metadata_schema(self, schema: "str | None") -> "str | None":

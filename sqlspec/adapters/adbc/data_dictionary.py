@@ -47,7 +47,7 @@ from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import OperationalError, SQLFileNotFoundError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
-from sqlspec.utils.text import normalize_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -474,42 +474,23 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             warnings=capability.warnings,
         )
 
-    def get_ddl(
-        self,
-        driver: "AdbcDriver",
-        object_name: str,
-        schema: "str | None" = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-        target_dialect: "str | None" = None,
-    ) -> "DDLResult":
-        """Synthesize table DDL when requested, or fail closed for unsupported native DDL."""
-        _ = include_dependencies, redact
+    def resolve_ddl_dialect(self, driver: "AdbcDriver") -> "str | None":
+        """Return the dialect detected from the ADBC driver for parsing and rendering DDL."""
         dialect = self._normalize_dialect(driver)
-        schema_name = self._resolve_schema(dialect, schema)
-        identity = ObjectIdentity(
-            name=object_name,
-            object_type=object_type,
-            schema=schema_name,
-            dialect=target_dialect or dialect,
-            source=MetadataSource.DRIVER_METADATA,
-        )
-        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
-            synthesized = self._synthesize_table_ddl(
-                driver,
-                object_name,
-                schema=schema_name,
-                target_dialect=target_dialect or dialect,
-                warnings=(_ADBC_TRANSPORT_WARNING,),
-            )
-            if synthesized.status == MetadataSupport.SUPPORTED and synthesized.ddl:
-                return synthesized
-        return DDLResult.unsupported(
-            identity, source=MetadataSource.DRIVER_METADATA, warnings=(_ADBC_DDL_UNSUPPORTED_WARNING,)
-        )
+        return None if dialect in {"", "generic", "unknown"} else dialect
+
+    def resolve_ddl_object_name(
+        self, driver: "AdbcDriver", object_name: str, schema: "str | None"
+    ) -> "tuple[str, str | None]":
+        """Resolve a DDL object name against the dialect detected from the ADBC driver."""
+        dialect = self._normalize_dialect(driver)
+        return (self._resolve_identifier(dialect, object_name), self._resolve_schema(dialect, schema))
+
+    def exact_catalog_identifier(self, driver: "AdbcDriver", name: str) -> str:
+        """Return ``name`` in the form ADBC metadata getters resolve back to the exact catalog name."""
+        if self._resolve_identifier(self._normalize_dialect(driver), name) == name:
+            return name
+        return quote_identifier(name)
 
     def get_system_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None
@@ -548,6 +529,31 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         rows = tuple(cast("dict[str, object]", entry) for entry in statistics)
         return SystemMetadataResult.from_rows(
             metadata_request, capability, rows=rows, source=MetadataSource.DRIVER_METADATA
+        )
+
+    def _get_native_object_ddl(
+        self,
+        driver: "AdbcDriver",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Fail closed because ADBC metadata is not a lossless DDL source; tables fall back to synthesis."""
+        _ = include_dependencies, redact
+        identity = ObjectIdentity(
+            name=object_name,
+            object_type=object_type,
+            schema=schema,
+            dialect=self._normalize_dialect(driver),
+            source=MetadataSource.DRIVER_METADATA,
+        )
+        return DDLResult.unsupported(
+            identity,
+            source=MetadataSource.DRIVER_METADATA,
+            warnings=(_ADBC_DDL_UNSUPPORTED_WARNING, _ADBC_TRANSPORT_WARNING),
         )
 
     def _system_metadata_capability(self, domain: str) -> "SystemMetadataCapability":

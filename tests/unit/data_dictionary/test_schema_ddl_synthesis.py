@@ -1,4 +1,4 @@
-"""Unit tests for shared builder-backed table DDL synthesis and topological schema DDL."""
+"""Builder-backed table DDL synthesis, schema DDL ordering, exact catalog names, and profiling SQL."""
 
 from typing import Any, cast
 
@@ -9,461 +9,518 @@ from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.adapters.db2.data_dictionary import Db2AsyncDataDictionary, Db2SyncDataDictionary
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
-from sqlspec.data_dictionary import DDLResult, ForeignKeyMetadata, MetadataFidelity, MetadataSource, MetadataSupport
-from sqlspec.data_dictionary.dialects.mssql.config import build_mssql_table_ddl_result
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.data_dictionary import (
+    DDLResult,
+    ForeignKeyMetadata,
+    MetadataFidelity,
+    MetadataResult,
+    MetadataSource,
+    MetadataSupport,
+    get_data_dictionary_loader,
+)
+
+_ROUTED_DOMAINS = (
+    "tables",
+    "columns",
+    "constraints",
+    "indexes",
+    "views",
+    "sequences",
+    "ddl",
+    "dependencies",
+    "foreign_keys",
+)
+_ROUTED_QUERIES = ("by_schema", "by_table", "by_object", "all_by_schema")
 
 
-def _sample_orders_columns(schema: str = "public") -> list[dict[str, Any]]:
-    return [
-        {
-            "schema_name": schema,
-            "table_name": "orders",
-            "column_name": "id",
-            "data_type": "BIGINT",
-            "is_nullable": "NO",
-            "ordinal_position": 1,
-            "is_primary": True,
-        },
-        {
-            "schema_name": schema,
-            "table_name": "orders",
-            "column_name": "customer_id",
-            "data_type": "BIGINT",
-            "is_nullable": "NO",
-            "ordinal_position": 2,
-        },
-        {
-            "schema_name": schema,
-            "table_name": "orders",
-            "column_name": "order_code",
-            "data_type": "VARCHAR",
-            "max_length": 64,
-            "is_nullable": "NO",
-            "ordinal_position": 3,
-        },
-        {
-            "schema_name": schema,
-            "table_name": "orders",
-            "column_name": "total_cents",
-            "data_type": "INTEGER",
-            "is_nullable": "NO",
-            "column_default": "0",
-            "ordinal_position": 4,
-        },
-    ]
+def _column(schema: str, table: str, name: str, data_type: str, position: int, **extra: Any) -> dict[str, Any]:
+    return {
+        "schema_name": schema,
+        "table_name": table,
+        "column_name": name,
+        "data_type": data_type,
+        "is_nullable": "NO",
+        "ordinal_position": position,
+        **extra,
+    }
 
 
-def _sample_orders_constraints(schema: str = "public") -> list[dict[str, Any]]:
-    return [
-        {
-            "schema_name": schema,
-            "table_name": "orders",
-            "constraint_name": "pk_orders",
-            "constraint_type": "PRIMARY KEY",
-            "columns": ["id"],
-        },
-        {
-            "schema_name": schema,
-            "table_name": "orders",
-            "constraint_name": "uq_orders_code",
-            "constraint_type": "UNIQUE",
-            "columns": ["order_code"],
-        },
-        {
-            "schema_name": schema,
-            "table_name": "orders",
-            "constraint_name": "chk_orders_total",
-            "constraint_type": "CHECK",
-            "definition": "CHECK (total_cents >= 0)",
-        },
-    ]
+def _fk_row(schema: str, table: str, column: str, ref_table: str, ref_column: str, name: str) -> dict[str, Any]:
+    return {
+        "table_name": table,
+        "column_name": column,
+        "referenced_table_name": ref_table,
+        "referenced_column_name": ref_column,
+        "constraint_name": name,
+        "table_schema": schema,
+        "referenced_table_schema": schema,
+        "on_delete": "CASCADE",
+        "on_update": "NO ACTION",
+    }
 
 
-def _sample_orders_fks(schema: str = "public") -> list[ForeignKeyMetadata]:
-    return [
-        ForeignKeyMetadata(
-            table_name="orders",
-            column_name="customer_id",
-            referenced_table="customers",
-            referenced_column="id",
-            constraint_name="fk_orders_customer",
-            schema=schema,
-            referenced_schema=schema,
-        )
-    ]
+def _empty_schema(**overrides: Any) -> dict[str, Any]:
+    schema: dict[str, Any] = {
+        "tables": [],
+        "columns": {},
+        "constraints": {},
+        "foreign_keys": [],
+        "indexes": {},
+        "views": [],
+        "dependencies": [],
+        "sequences": [],
+    }
+    schema.update(overrides)
+    return schema
 
 
-def _sample_orders_indexes(schema: str = "public") -> list[dict[str, Any]]:
-    return [
+POSTGRES_PUBLIC: dict[str, Any] = {
+    "tables": ["order_items", "orders", "customers", "ddl_migrations"],
+    "columns": {
+        "customers": [
+            _column("public", "customers", "id", "BIGINT", 1, is_primary=True),
+            _column("public", "customers", "email", "VARCHAR", 2, max_length=255),
+        ],
+        "orders": [
+            _column("public", "orders", "id", "BIGINT", 1, is_primary=True),
+            _column("public", "orders", "customer_id", "BIGINT", 2),
+            _column("public", "orders", "order_code", "VARCHAR", 3, max_length=64),
+            _column("public", "orders", "total_cents", "INTEGER", 4, column_default="0"),
+        ],
+        "order_items": [
+            _column("public", "order_items", "id", "BIGINT", 1, is_primary=True),
+            _column("public", "order_items", "order_id", "BIGINT", 2),
+        ],
+        "ddl_migrations": [
+            _column("public", "ddl_migrations", "version_num", "VARCHAR", 1, max_length=64, is_primary=True)
+        ],
+    },
+    "constraints": {
+        "orders": [
+            {"constraint_name": "pk_orders", "constraint_type": "PRIMARY KEY", "columns": ["id"]},
+            {"constraint_name": "uq_orders_code", "constraint_type": "UNIQUE", "columns": ["order_code"]},
+            {
+                "constraint_name": "chk_orders_total",
+                "constraint_type": "CHECK",
+                "definition": "CHECK (total_cents >= 0)",
+            },
+        ]
+    },
+    "foreign_keys": [
+        _fk_row("public", "orders", "customer_id", "customers", "id", "fk_orders_customer"),
+        _fk_row("public", "order_items", "order_id", "orders", "id", "fk_order_items_order"),
+    ],
+    "indexes": {
+        "orders": [
+            {
+                "schema_name": "public",
+                "table_name": "orders",
+                "index_name": "idx_orders_customer",
+                "columns": ["customer_id"],
+                "is_unique": False,
+                "is_primary": False,
+            }
+        ]
+    },
+    "views": [{"schema_name": "public", "view_name": "active_orders", "definition": " SELECT orders.id FROM orders;"}],
+    "dependencies": [
         {
-            "schema_name": schema,
-            "table_name": "orders",
-            "index_name": "idx_orders_customer",
-            "columns": ["customer_id"],
-            "is_unique": False,
-            "is_primary": False,
+            "schema_name": "public",
+            "object_name": "active_orders",
+            "object_type": "v",
+            "referenced_schema": "public",
+            "referenced_object": "orders",
+            "referenced_object_type": "r",
         }
-    ]
+    ],
+    "sequences": [
+        {
+            "schema_name": "public",
+            "sequence_name": "Order Code Seq",
+            "start_value": 100,
+            "minimum_value": 1,
+            "maximum_value": 9223372036854775807,
+            "increment": 5,
+            "cycles": True,
+            "is_identity_owned": False,
+            "is_extension_owned": False,
+        },
+        {
+            "schema_name": "public",
+            "sequence_name": "orders_id_seq",
+            "start_value": 1,
+            "minimum_value": 1,
+            "maximum_value": 9223372036854775807,
+            "increment": 1,
+            "cycles": False,
+            "is_identity_owned": True,
+            "is_extension_owned": False,
+        },
+    ],
+}
+
+POSTGRES_CATALOG: dict[str, dict[str, Any]] = {
+    "public": POSTGRES_PUBLIC,
+    "Sales": _empty_schema(
+        tables=["UserAccounts"],
+        columns={
+            "UserAccounts": [
+                _column("Sales", "UserAccounts", "Id", "BIGINT", 1, is_primary=True),
+                _column("Sales", "UserAccounts", "select", "TEXT", 2),
+            ]
+        },
+    ),
+}
 
 
 class FakeCatalogSyncDriver:
-    """Sync driver stub serving multi-table schema metadata for synthesis and topological sorting."""
+    """Sync driver stub routing data-dictionary queries by their exact query-pack text."""
 
-    def __init__(self, dialect: str = "postgres") -> None:
+    def __init__(self, dialect: str = "postgres", catalog: "dict[str, dict[str, Any]] | None" = None) -> None:
         self.dialect = dialect
+        self.catalog = POSTGRES_CATALOG if catalog is None else catalog
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+        loader = get_data_dictionary_loader()
+        self.routes: dict[str, tuple[str, str]] = {}
+        for domain in _ROUTED_DOMAINS:
+            for query_name in _ROUTED_QUERIES:
+                text = loader.get_domain_query_text(dialect, domain, query_name)
+                if text:
+                    self.routes[text.strip()] = (domain, query_name)
 
     def select(self, statement: Any, **kwargs: Any) -> list[Any]:
-        sql_text = getattr(statement, "raw_sql", str(statement))
-        schema = str(kwargs.get("schema_name") or "public")
+        sql_text = str(getattr(statement, "raw_sql", statement)).strip()
+        domain, query_name = self.routes[sql_text]
+        self.calls.append((domain, query_name, kwargs))
+        schema = self.catalog.get(str(kwargs.get("schema_name")), _empty_schema())
         table_name = kwargs.get("table_name")
-        object_name = kwargs.get("object_name")
-        object_type = kwargs.get("object_type")
-
-        if object_type == "view" or (object_name == "active_orders" and "pg_get_viewdef" in sql_text):
+        if domain == "tables":
+            return [{"schema_name": kwargs.get("schema_name"), "table_name": name} for name in schema["tables"]]
+        if domain in {"columns", "constraints", "indexes"}:
+            return list(schema[domain].get(table_name, ()))
+        if domain == "foreign_keys":
+            return [row for row in schema["foreign_keys"] if table_name is None or row["table_name"] == table_name]
+        if domain in {"views", "dependencies", "sequences"}:
+            return list(schema[domain])
+        if kwargs.get("object_type") == "view":
             return [
                 {
-                    "schema_name": schema,
-                    "object_name": object_name or "active_orders",
-                    "ddl": f"CREATE VIEW {schema}.active_orders AS SELECT id FROM {schema}.orders",
+                    "schema_name": kwargs.get("schema_name"),
+                    "object_name": kwargs.get("object_name"),
+                    "ddl": "CREATE VIEW public.active_orders AS SELECT orders.id FROM orders",
                     "fidelity": "native",
                 }
             ]
-
-        if "pg_get_viewdef" in sql_text and object_type == "table":
-            return [{"schema_name": schema, "object_name": object_name, "ddl": None, "fidelity": "unsupported"}]
-
-        if (
-            "information_schema.columns" in sql_text
-            or "a.attname::text AS column_name" in sql_text
-            or "FROM SYSCAT.COLUMNS" in sql_text
-        ):
-            t_lower = str(table_name or "").lower()
-            if t_lower == "orders":
-                return _sample_orders_columns(schema)
-            if t_lower == "customers":
-                return [
-                    {
-                        "schema_name": schema,
-                        "table_name": "customers",
-                        "column_name": "id",
-                        "data_type": "BIGINT",
-                        "is_nullable": "NO",
-                        "ordinal_position": 1,
-                        "is_primary": True,
-                    },
-                    {
-                        "schema_name": schema,
-                        "table_name": "customers",
-                        "column_name": "email",
-                        "data_type": "VARCHAR",
-                        "max_length": 255,
-                        "is_nullable": "NO",
-                        "ordinal_position": 2,
-                    },
-                ]
-            if t_lower == "order_items":
-                return [
-                    {
-                        "schema_name": schema,
-                        "table_name": "order_items",
-                        "column_name": "id",
-                        "data_type": "BIGINT",
-                        "is_nullable": "NO",
-                        "ordinal_position": 1,
-                        "is_primary": True,
-                    },
-                    {
-                        "schema_name": schema,
-                        "table_name": "order_items",
-                        "column_name": "order_id",
-                        "data_type": "BIGINT",
-                        "is_nullable": "NO",
-                        "ordinal_position": 2,
-                    },
-                ]
-            if t_lower == "ddl_migrations":
-                return [
-                    {
-                        "schema_name": schema,
-                        "table_name": "ddl_migrations",
-                        "column_name": "version_num",
-                        "data_type": "VARCHAR",
-                        "max_length": 64,
-                        "is_nullable": "NO",
-                        "ordinal_position": 1,
-                        "is_primary": True,
-                    }
-                ]
-            return []
-
-        if "pg_get_constraintdef" in sql_text or "FROM SYSCAT.TABCONST" in sql_text:
-            if table_name is not None and str(table_name).lower() == "orders":
-                return _sample_orders_constraints(schema)
-            return []
-
-        if (
-            "referenced_table_name" in sql_text
-            or "FROM SYSCAT.REFERENCES" in sql_text
-            or ("FOREIGN KEY" in sql_text and "pg_get_constraintdef" not in sql_text)
-        ):
-            all_fks = [
-                ForeignKeyMetadata(
-                    table_name="orders",
-                    column_name="customer_id",
-                    referenced_table="customers",
-                    referenced_column="id",
-                    constraint_name="fk_orders_customer",
-                    schema=schema,
-                    referenced_schema=schema,
-                ),
-                ForeignKeyMetadata(
-                    table_name="order_items",
-                    column_name="order_id",
-                    referenced_table="orders",
-                    referenced_column="id",
-                    constraint_name="fk_order_items_order",
-                    schema=schema,
-                    referenced_schema=schema,
-                ),
-            ]
-            if "SYSCAT.REFERENCES" in sql_text:
-                return [
-                    {
-                        "schema_name": fk.schema,
-                        "table_name": fk.table_name,
-                        "constraint_name": fk.constraint_name,
-                        "column_name": fk.column_name,
-                        "referenced_schema": fk.referenced_schema,
-                        "referenced_table": fk.referenced_table,
-                        "referenced_column": fk.referenced_column,
-                    }
-                    for fk in all_fks
-                    if table_name is None or fk.table_name.lower() == str(table_name).lower()
-                ]
-            if table_name is not None:
-                return [fk for fk in all_fks if fk.table_name.lower() == str(table_name).lower()]
-            return all_fks
-
-        if "pg_index" in sql_text or "FROM SYSCAT.INDEXES" in sql_text:
-            if table_name is not None and str(table_name).lower() == "orders":
-                if "SYSCAT.INDEXES" in sql_text:
-                    return [
-                        {
-                            "schema_name": schema,
-                            "table_name": "orders",
-                            "index_name": "idx_orders_customer",
-                            "column_name": "customer_id",
-                            "is_unique": 0,
-                            "is_primary": 0,
-                        }
-                    ]
-                return _sample_orders_indexes(schema)
-            return []
-
-        if "pg_views" in sql_text or "SYSCAT.VIEWS" in sql_text:
-            return []
-
-        if "pg_depend" in sql_text:
-            return []
-
-        return [
-            {"schema_name": schema, "table_name": "order_items"},
-            {"schema_name": schema, "table_name": "orders"},
-            {"schema_name": schema, "table_name": "customers"},
-            {"schema_name": schema, "table_name": "ddl_migrations"},
-        ]
+        return [{"schema_name": kwargs.get("schema_name"), "object_name": kwargs.get("object_name"), "ddl": None}]
 
 
 class FakeCatalogAsyncDriver:
     """Async driver stub delegating to FakeCatalogSyncDriver."""
 
-    def __init__(self, dialect: str = "postgres") -> None:
-        self._sync = FakeCatalogSyncDriver(dialect=dialect)
+    def __init__(self, dialect: str = "postgres", catalog: "dict[str, dict[str, Any]] | None" = None) -> None:
+        self.sync = FakeCatalogSyncDriver(dialect=dialect, catalog=catalog)
 
     async def select(self, statement: Any, **kwargs: Any) -> list[Any]:
-        return self._sync.select(statement, **kwargs)
+        return self.sync.select(statement, **kwargs)
+
+
+EXPECTED_ORDERS_DDL = (
+    'CREATE TABLE "public"."orders" (\n'
+    '  "id" BIGINT NOT NULL,\n'
+    '  "customer_id" BIGINT NOT NULL,\n'
+    '  "order_code" VARCHAR(64) NOT NULL,\n'
+    '  "total_cents" INT NOT NULL DEFAULT 0,\n'
+    '  CONSTRAINT "pk_orders" PRIMARY KEY ("id"),\n'
+    '  CONSTRAINT "uq_orders_code" UNIQUE ("order_code"),\n'
+    '  CONSTRAINT "chk_orders_total" CHECK ("total_cents" >= 0),\n'
+    '  CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "customers"("id") ON DELETE CASCADE\n'
+    ");\n\n"
+    'CREATE INDEX "idx_orders_customer" ON "public"."orders"("customer_id");'
+)
+
+
+DB2_CUSTOMERS_DDL = "CREATE TABLE app.customers (\n  id BIGINT NOT NULL PRIMARY KEY\n);"
+
+
+def _statements(result: MetadataResult) -> list[str]:
+    items = [item for item in result.items if isinstance(item, DDLResult)]
+    assert all(item.status == MetadataSupport.SUPPORTED and item.ddl for item in items)
+    return [str(item.ddl) for item in items]
 
 
 def test_postgres_sync_get_ddl_synthesizes_table_and_preserves_native_view() -> None:
-    """PsycopgSyncDataDictionary should synthesize table DDL and preserve native view DDL."""
+    """PostgreSQL synthesizes table DDL when the catalog has none and keeps native view DDL."""
     driver = FakeCatalogSyncDriver()
     dictionary = PsycopgSyncDataDictionary()
 
-    table_ddl = dictionary.get_ddl(cast("Any", driver), "orders", schema="public", object_type="table")
-    assert isinstance(table_ddl, DDLResult)
+    table_ddl = dictionary.get_ddl(cast("Any", driver), "orders", schema="public")
     assert table_ddl.status == MetadataSupport.SUPPORTED
     assert table_ddl.fidelity == MetadataFidelity.GENERATED
     assert table_ddl.source == MetadataSource.GENERATED
-    assert table_ddl.ddl is not None
-    assert 'CREATE TABLE "public"."orders"' in table_ddl.ddl
-    assert 'CONSTRAINT "pk_orders" PRIMARY KEY ("id")' in table_ddl.ddl
-    assert 'CONSTRAINT "uq_orders_code" UNIQUE ("order_code")' in table_ddl.ddl
-    assert 'CONSTRAINT "chk_orders_total" CHECK ("total_cents" >= 0)' in table_ddl.ddl
-    assert 'CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "customers"("id")' in table_ddl.ddl
-    assert 'CREATE INDEX "idx_orders_customer" ON "public"."orders"' in table_ddl.ddl
+    assert table_ddl.ddl == EXPECTED_ORDERS_DDL
 
     view_ddl = dictionary.get_ddl(cast("Any", driver), "active_orders", schema="public", object_type="view")
-    assert view_ddl.status == MetadataSupport.SUPPORTED
     assert view_ddl.fidelity == MetadataFidelity.NATIVE
-    assert view_ddl.ddl is not None
-    assert "CREATE VIEW public.active_orders" in view_ddl.ddl
+    assert view_ddl.ddl == "CREATE VIEW public.active_orders AS SELECT orders.id FROM orders"
 
 
+@pytest.mark.anyio
 @pytest.mark.parametrize("dictionary", [AsyncpgDataDictionary(), PsycopgAsyncDataDictionary(), PsqlpyDataDictionary()])
 async def test_postgres_async_get_ddl_synthesizes_table_ddl(dictionary: Any) -> None:
-    """Async PostgreSQL data dictionaries should synthesize table DDL when catalog ddl is None."""
-    driver = FakeCatalogAsyncDriver()
-
-    table_ddl = await dictionary.get_ddl(cast("Any", driver), "orders", schema="public", object_type="table")
-    assert table_ddl.status == MetadataSupport.SUPPORTED
+    """Async PostgreSQL dictionaries synthesize the same table DDL as the sync dictionary."""
+    table_ddl = await dictionary.get_ddl(cast("Any", FakeCatalogAsyncDriver()), "orders", schema="public")
     assert table_ddl.fidelity == MetadataFidelity.GENERATED
-    assert table_ddl.source == MetadataSource.GENERATED
-    assert table_ddl.ddl is not None
-    assert 'CREATE TABLE "public"."orders"' in table_ddl.ddl
-    assert 'CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "customers"("id")' in table_ddl.ddl
-    assert 'CREATE INDEX "idx_orders_customer" ON "public"."orders"' in table_ddl.ddl
+    assert table_ddl.ddl == EXPECTED_ORDERS_DDL
 
 
-def test_db2_and_adbc_synthesize_table_ddl() -> None:
-    """Db2SyncDataDictionary and AdbcDataDictionary should synthesize table DDL via shared builder helpers."""
-    db2_driver = FakeCatalogSyncDriver(dialect="db2")
-    db2_dict = Db2SyncDataDictionary()
-
-    db2_result = db2_dict.get_ddl(cast("Any", db2_driver), "orders", schema="APP", object_type="table")
-    assert db2_result.status == MetadataSupport.SUPPORTED
-    assert db2_result.fidelity == MetadataFidelity.GENERATED
-    assert db2_result.ddl is not None
-    assert "CREATE TABLE" in db2_result.ddl
-    assert "orders" in db2_result.ddl.lower()
-    assert "idx_orders_customer" in db2_result.ddl.lower()
-
-    adbc_dict = AdbcDataDictionary()
-    adbc_driver = FakeCatalogSyncDriver(dialect="postgres")
-    setattr(adbc_driver, "connection", object())
-    adbc_result = adbc_dict.get_ddl(
-        cast("Any", adbc_driver), "orders", schema="public", object_type="table", prefer_native=False
+def test_postgres_foreign_keys_carry_referential_actions() -> None:
+    """PostgreSQL foreign key metadata exposes ON DELETE / ON UPDATE actions from the catalog."""
+    foreign_keys = PsycopgSyncDataDictionary().get_foreign_keys(
+        cast("Any", FakeCatalogSyncDriver()), table="orders", schema="public"
     )
-    assert adbc_result.status == MetadataSupport.SUPPORTED
-    assert adbc_result.fidelity == MetadataFidelity.GENERATED
-    assert adbc_result.ddl is not None
-    assert "CREATE TABLE" in adbc_result.ddl
-
-
-def test_sync_get_schema_ddl_topological_ordering_and_exclude_tables() -> None:
-    """Sync get_schema_ddl should exclude ddl_migrations and order tables topologically for create and drop."""
-    driver = FakeCatalogSyncDriver()
-    dictionary = PsycopgSyncDataDictionary()
-
-    create_schema = dictionary.get_schema_ddl(cast("Any", driver), schema="public", direction="create")
-    assert create_schema.capability.support == MetadataSupport.SUPPORTED
-    create_items = [cast("DDLResult", item) for item in create_schema.items]
-    create_names = [item.identity.name for item in create_items]
-    assert "ddl_migrations" not in create_names
-    assert create_names == ["customers", "orders", "order_items"]
-    assert all(item.ddl is not None and "CREATE TABLE" in item.ddl for item in create_items)
-
-    drop_schema = dictionary.get_schema_ddl(cast("Any", driver), schema="public", direction="drop")
-    drop_items = [cast("DDLResult", item) for item in drop_schema.items]
-    drop_names = [item.identity.name for item in drop_items]
-    assert "ddl_migrations" not in drop_names
-    assert drop_names == ["order_items", "orders", "customers"]
-    assert all(item.ddl is not None and "DROP TABLE" in item.ddl for item in drop_items)
-
-    with_migrations = dictionary.get_schema_ddl(cast("Any", driver), schema="public", exclude_tables=())
-    all_names = [cast("DDLResult", item).identity.name for item in with_migrations.items]
-    assert "ddl_migrations" in all_names
-
-
-@pytest.mark.parametrize("dictionary", [AsyncpgDataDictionary(), Db2AsyncDataDictionary()])
-async def test_async_get_schema_ddl_topological_ordering_and_cross_dialect(dictionary: Any) -> None:
-    """Async get_schema_ddl should sort tables topologically and support target_dialect cross-compilation."""
-    driver = FakeCatalogAsyncDriver()
-
-    create_schema = await dictionary.get_schema_ddl(
-        cast("Any", driver), schema="public", direction="create", target_dialect="duckdb"
-    )
-    assert create_schema.capability.support == MetadataSupport.SUPPORTED
-    create_items = [cast("DDLResult", item) for item in create_schema.items]
-    create_names = [item.identity.name.lower() for item in create_items]
-    assert "ddl_migrations" not in create_names
-    assert create_names == ["customers", "orders", "order_items"]
-    assert all(item.identity.dialect == "duckdb" for item in create_items)
-
-    drop_schema = await dictionary.get_schema_ddl(cast("Any", driver), schema="public", direction="drop")
-    drop_names = [cast("DDLResult", item).identity.name.lower() for item in drop_schema.items]
-    assert drop_names == ["order_items", "orders", "customers"]
-
-
-def test_build_mssql_table_ddl_result_with_constraints_and_foreign_keys() -> None:
-    """build_mssql_table_ddl_result should delegate to sqlspec.builder with constraints and foreign keys."""
-    column_rows = [
-        {
-            "schema_name": "dbo",
-            "table_name": "orders",
-            "column_name": "id",
-            "data_type": "int",
-            "max_length": 4,
-            "numeric_precision": 10,
-            "numeric_scale": 0,
-            "is_nullable": False,
-            "ordinal_position": 1,
-            "is_identity": True,
-            "identity_seed": 1,
-            "identity_increment": 1,
-            "is_computed": False,
-            "computed_definition": None,
-            "column_default": None,
-            "primary_key_name": "pk_orders",
-            "primary_key_ordinal": 1,
-        },
-        {
-            "schema_name": "dbo",
-            "table_name": "orders",
-            "column_name": "customer_id",
-            "data_type": "int",
-            "is_nullable": False,
-            "ordinal_position": 2,
-        },
-        {
-            "schema_name": "dbo",
-            "table_name": "orders",
-            "column_name": "total",
-            "data_type": "decimal",
-            "numeric_precision": 10,
-            "numeric_scale": 2,
-            "is_nullable": False,
-            "ordinal_position": 3,
-        },
-    ]
-    constraint_rows = [
-        {"constraint_name": "chk_orders_total", "constraint_type": "CHECK_CONSTRAINT", "definition": "([total]>=(0))"}
-    ]
-    foreign_key_rows = [
+    assert foreign_keys == [
         ForeignKeyMetadata(
             table_name="orders",
             column_name="customer_id",
             referenced_table="customers",
             referenced_column="id",
             constraint_name="fk_orders_customer",
-            schema="dbo",
-            referenced_schema="dbo",
+            schema="public",
+            referenced_schema="public",
+            on_delete="CASCADE",
+            on_update="NO ACTION",
         )
     ]
-    index_rows = [
-        {"index_name": "idx_orders_customer", "columns": "customer_id", "is_unique": False, "type_desc": "NONCLUSTERED"}
-    ]
+    pg_text = get_data_dictionary_loader().get_domain_query_text("postgres", "foreign_keys", "by_schema") or ""
+    assert "con.confdeltype" in pg_text
+    assert "con.confupdtype" in pg_text
 
-    result = build_mssql_table_ddl_result(
-        "dbo", "orders", column_rows, index_rows, constraint_rows=constraint_rows, foreign_key_rows=foreign_key_rows
+
+def _db2_column(table: str, name: str, position: int, *, primary: bool = False) -> dict[str, Any]:
+    return {
+        "schema_name": "APP",
+        "table_name": table,
+        "column_name": name,
+        "data_type": "BIGINT",
+        "is_nullable": 0,
+        "ordinal_position": position,
+        "is_primary": 1 if primary else 0,
+    }
+
+
+def _db2_fk(table: str, column: str, ref_table: str, name: str) -> dict[str, Any]:
+    return {
+        "schema_name": "APP",
+        "table_name": table,
+        "constraint_name": name,
+        "column_name": column,
+        "referenced_schema": "APP",
+        "referenced_table": ref_table,
+        "referenced_column": "ID",
+    }
+
+
+DB2_CATALOG: dict[str, dict[str, Any]] = {
+    "APP": _empty_schema(
+        tables=["ORDER_ITEMS", "ORDERS", "CUSTOMERS"],
+        columns={
+            "CUSTOMERS": [_db2_column("CUSTOMERS", "ID", 1, primary=True)],
+            "ORDERS": [_db2_column("ORDERS", "ID", 1, primary=True), _db2_column("ORDERS", "CUSTOMER_ID", 2)],
+            "ORDER_ITEMS": [
+                _db2_column("ORDER_ITEMS", "ID", 1, primary=True),
+                _db2_column("ORDER_ITEMS", "ORDER_ID", 2),
+            ],
+        },
+        foreign_keys=[
+            _db2_fk("ORDERS", "CUSTOMER_ID", "CUSTOMERS", "FK_ORDERS_CUSTOMER"),
+            _db2_fk("ORDER_ITEMS", "ORDER_ID", "ORDERS", "FK_ORDER_ITEMS_ORDER"),
+        ],
+    )
+}
+
+
+def test_db2_and_adbc_synthesize_table_ddl() -> None:
+    """Db2 and ADBC synthesize table DDL from catalog metadata when no native DDL source exists."""
+    db2_result = Db2SyncDataDictionary().get_ddl(
+        cast("Any", FakeCatalogSyncDriver(dialect="db2", catalog=DB2_CATALOG)), "customers", schema="app"
+    )
+    assert db2_result.fidelity == MetadataFidelity.GENERATED
+    assert db2_result.identity.name == "CUSTOMERS"
+    assert db2_result.ddl == DB2_CUSTOMERS_DDL
+
+    adbc_driver = FakeCatalogSyncDriver(dialect="postgres")
+    setattr(adbc_driver, "connection", object())
+    adbc_result = AdbcDataDictionary().get_ddl(cast("Any", adbc_driver), "orders", schema="public", prefer_native=False)
+    assert adbc_result.fidelity == MetadataFidelity.GENERATED
+    assert adbc_result.ddl == (
+        'CREATE TABLE "public"."orders" (\n'
+        '  "id" BIGINT NOT NULL PRIMARY KEY,\n'
+        '  "customer_id" BIGINT NOT NULL,\n'
+        '  "order_code" VARCHAR(64) NOT NULL,\n'
+        '  "total_cents" INT NOT NULL DEFAULT 0,\n'
+        '  CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "customers"("id") ON DELETE CASCADE\n'
+        ");\n\n"
+        'CREATE INDEX "idx_orders_customer" ON "public"."orders"("customer_id");'
     )
 
-    assert result.status == MetadataSupport.SUPPORTED
-    assert result.fidelity == MetadataFidelity.GENERATED
-    assert result.source == MetadataSource.GENERATED
-    assert result.ddl is not None
-    assert "CREATE TABLE [dbo].[orders]" in result.ddl
-    assert "[id] int IDENTITY(1,1) NOT NULL" in result.ddl
-    assert "CONSTRAINT [pk_orders] PRIMARY KEY ([id])" in result.ddl
-    assert "CONSTRAINT [chk_orders_total] CHECK" in result.ddl
-    assert "CONSTRAINT [fk_orders_customer] FOREIGN KEY ([customer_id]) REFERENCES [customers]([id])" in result.ddl
-    assert "CREATE INDEX [idx_orders_customer] ON [dbo].[orders]([customer_id])" in result.ddl
+
+def test_sync_get_schema_ddl_orders_create_and_drop_with_sequences_and_views() -> None:
+    """Synthesized schema DDL collects sequences, tables, and views and emits complete DROP statements."""
+    dictionary = PsycopgSyncDataDictionary()
+
+    create = dictionary.get_schema_ddl(
+        cast("Any", FakeCatalogSyncDriver()), schema="public", prefer_native=False, exclude_tables=("ddl_migrations",)
+    )
+    names = [item.identity.name for item in create.items if isinstance(item, DDLResult)]
+    assert names == ["Order Code Seq", "customers", "orders", "order_items", "active_orders"]
+    statements = _statements(create)
+    assert statements[0] == (
+        'CREATE SEQUENCE "public"."Order Code Seq" START WITH 100 INCREMENT BY 5 MINVALUE 1 '
+        "MAXVALUE 9223372036854775807 CYCLE;"
+    )
+    assert statements[2] == EXPECTED_ORDERS_DDL
+    assert statements[4] == 'CREATE VIEW "public"."active_orders" AS SELECT orders.id FROM orders;'
+
+    drop = dictionary.get_schema_ddl(
+        cast("Any", FakeCatalogSyncDriver()),
+        schema="public",
+        direction="drop",
+        prefer_native=False,
+        exclude_tables=('"public"."DDL_MIGRATIONS"',),
+    )
+    assert _statements(drop) == [
+        'DROP VIEW IF EXISTS "public"."active_orders";',
+        'DROP TABLE IF EXISTS "public"."order_items";',
+        'DROP TABLE IF EXISTS "public"."orders";',
+        'DROP TABLE IF EXISTS "public"."customers";',
+        'DROP SEQUENCE IF EXISTS "public"."Order Code Seq";',
+    ]
+
+    with_migrations = dictionary.get_schema_ddl(cast("Any", FakeCatalogSyncDriver()), schema="public")
+    assert "ddl_migrations" in [item.identity.name for item in with_migrations.items if isinstance(item, DDLResult)]
+
+
+def test_postgres_mixed_case_identifiers_keep_exact_catalog_names() -> None:
+    """Catalog names that PostgreSQL would fold are looked up quoted and emitted with exact quoting."""
+    dictionary = PsycopgSyncDataDictionary()
+
+    create = dictionary.get_schema_ddl(cast("Any", FakeCatalogSyncDriver()), schema='"Sales"', prefer_native=False)
+    assert _statements(create) == [
+        'CREATE TABLE "Sales"."UserAccounts" (\n  "Id" BIGINT NOT NULL PRIMARY KEY,\n  "select" TEXT NOT NULL\n);'
+    ]
+
+    drop = dictionary.get_schema_ddl(cast("Any", FakeCatalogSyncDriver()), schema='"Sales"', direction="drop")
+    assert _statements(drop) == ['DROP TABLE IF EXISTS "Sales"."UserAccounts";']
+
+    driver = FakeCatalogSyncDriver()
+    single = dictionary.get_object_ddl(cast("Any", driver), '"UserAccounts"', schema='"Sales"')
+    assert single.identity.name == "UserAccounts"
+    assert single.identity.schema == "Sales"
+    column_lookups = [
+        (kwargs["schema_name"], kwargs["table_name"]) for domain, _, kwargs in driver.calls if domain == "columns"
+    ]
+    assert column_lookups == [("Sales", "UserAccounts")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("dictionary", [AsyncpgDataDictionary(), PsqlpyDataDictionary()])
+async def test_async_get_schema_ddl_topological_ordering_and_cross_dialect(dictionary: Any) -> None:
+    """Async schema DDL orders tables by foreign keys and renders the requested target dialect."""
+    tables_only = {**POSTGRES_PUBLIC, "views": [], "dependencies": [], "sequences": []}
+    driver = FakeCatalogAsyncDriver(catalog={"public": tables_only})
+
+    create = await dictionary.get_schema_ddl(
+        cast("Any", driver), schema="public", target_dialect="duckdb", exclude_tables=("ddl_migrations",)
+    )
+    items = [item for item in create.items if isinstance(item, DDLResult)]
+    assert [item.identity.name for item in items] == ["customers", "orders", "order_items"]
+    assert all(item.identity.dialect == "duckdb" for item in items)
+
+    drop = await dictionary.get_schema_ddl(
+        cast("Any", driver), schema="public", direction="drop", exclude_tables=("ddl_migrations",)
+    )
+    assert _statements(drop) == [
+        'DROP TABLE IF EXISTS "public"."order_items";',
+        'DROP TABLE IF EXISTS "public"."orders";',
+        'DROP TABLE IF EXISTS "public"."customers";',
+    ]
+
+
+@pytest.mark.anyio
+async def test_db2_async_schema_ddl_orders_tables_and_drops_them() -> None:
+    """Db2 async schema DDL synthesizes tables in foreign-key order and drops them in reverse."""
+    dictionary = Db2AsyncDataDictionary()
+    driver = FakeCatalogAsyncDriver(dialect="db2", catalog=DB2_CATALOG)
+
+    create = await dictionary.get_schema_ddl(cast("Any", driver), schema="APP", exclude_domains=("sequences",))
+    assert [item.identity.name for item in create.items if isinstance(item, DDLResult)] == [
+        "CUSTOMERS",
+        "ORDERS",
+        "ORDER_ITEMS",
+    ]
+    assert _statements(create)[0] == DB2_CUSTOMERS_DDL
+
+    drop = await dictionary.get_schema_ddl(cast("Any", driver), schema="APP", direction="drop")
+    assert _statements(drop) == [
+        'DROP TABLE IF EXISTS "APP"."ORDER_ITEMS";',
+        'DROP TABLE IF EXISTS "APP"."ORDERS";',
+        'DROP TABLE IF EXISTS "APP"."CUSTOMERS";',
+    ]
+
+
+def test_schema_ddl_reports_domains_the_dictionary_cannot_collect() -> None:
+    """Domains without data-dictionary support are reported as warnings instead of silently omitted."""
+    result = Db2SyncDataDictionary().get_schema_ddl(
+        cast("Any", FakeCatalogSyncDriver(dialect="db2", catalog={"APP": _empty_schema()})),
+        schema="APP",
+        prefer_native=False,
+    )
+    assert result.items == ()
+    assert result.warnings == ("db2 data dictionary does not expose sequences; sequences were omitted from schema DDL",)
+
+
+def test_table_profile_sql_quotes_exact_identifiers() -> None:
+    """Profiling and sampling SQL quote reserved and mixed-case identifiers."""
+    dictionary = PsycopgSyncDataDictionary()
+    profile_sql = dictionary._build_table_profile_sql("UserAccounts", [{"column_name": "select"}], schema="Public")
+    sample_sql = dictionary._build_table_sample_sql("UserAccounts", schema="Public", sample_size=5)
+    assert profile_sql.raw_sql == (
+        'SELECT COUNT(*) AS __row_count, COUNT("select") AS __non_null_0, COUNT(DISTINCT "select") AS __distinct_0, '
+        'MAX(LENGTH(CAST("select" AS VARCHAR))) AS __max_len_0 FROM "Public"."UserAccounts"'
+    )
+    assert sample_sql.raw_sql == 'SELECT * FROM "Public"."UserAccounts" LIMIT 5'
+
+
+def test_table_profile_executes_with_reserved_and_mixed_case_identifiers() -> None:
+    """SQLite profiling runs against tables and columns that require quoting."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.execute_script(
+                'CREATE TABLE "User Accounts" ("select" TEXT, "Order" INTEGER);'
+                "INSERT INTO \"User Accounts\" VALUES ('a', 1), ('b', 2), ('b', NULL);"
+            )
+            profiles = session.data_dictionary.get_table_profile(session, '"User Accounts"')
+    finally:
+        config.close_pool()
+
+    by_name = {profile.column_name: profile for profile in profiles}
+    assert by_name["select"].row_count == 3
+    assert by_name["select"].distinct_count == 2
+    assert by_name["Order"].null_count == 1
+
+
+def test_table_profile_propagates_query_errors() -> None:
+    """Profiling surfaces database errors instead of returning empty statistics."""
+
+    class DeniedDriver(FakeCatalogSyncDriver):
+        def select(self, statement: Any, **kwargs: Any) -> list[Any]:
+            sql_text = str(getattr(statement, "raw_sql", statement)).strip()
+            if sql_text.startswith("SELECT COUNT(*)"):
+                msg = "permission denied for table orders"
+                raise PermissionError(msg)
+            return super().select(statement, **kwargs)
+
+    with pytest.raises(PermissionError, match="permission denied"):
+        PsycopgSyncDataDictionary().get_table_profile(cast("Any", DeniedDriver()), "orders", schema="public")

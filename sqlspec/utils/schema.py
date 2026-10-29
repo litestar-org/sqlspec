@@ -278,19 +278,10 @@ def _convert_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
 
 
 def _coerce_foreign_key_item(data: Any, schema_type: Any) -> Any:
-    """Convert a single item to ForeignKeyMetadata."""
+    """Convert a single item to ForeignKeyMetadata via ``ForeignKeyMetadata.from_row``."""
     if not is_dict(data):
         return data
-    payload = {
-        "table_name": data.get("table_name") or data.get("table"),
-        "column_name": data.get("column_name") or data.get("column"),
-        "referenced_table": data.get("referenced_table") or data.get("referenced_table_name"),
-        "referenced_column": data.get("referenced_column") or data.get("referenced_column_name"),
-        "constraint_name": data.get("constraint_name"),
-        "schema": data.get("schema") or data.get("table_schema"),
-        "referenced_schema": data.get("referenced_schema") or data.get("referenced_table_schema"),
-    }
-    return schema_type(**payload)
+    return schema_type.from_row(data)
 
 
 def _convert_typed_dict(data: Any, schema_type: Any) -> Any:

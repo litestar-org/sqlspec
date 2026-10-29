@@ -92,7 +92,7 @@ def test_cockroach_replacement_stable_query_pack_is_available(domain: str, query
     assert query.dialect == "cockroachdb"
     assert query.domain == domain
     assert query.query_text is not None
-    assert "crdb_internal" not in query.query_text or domain == "ddl"
+    assert "crdb_internal" not in query.query_text
 
 
 def test_cockroach_crdb_internal_query_is_feature_gated_by_default() -> None:

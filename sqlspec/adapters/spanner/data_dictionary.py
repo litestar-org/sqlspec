@@ -284,19 +284,18 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
         )
         return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
 
-    def get_ddl(
+    def _get_native_object_ddl(
         self,
         driver: Any,
         object_name: str,
-        schema: "str | None" = None,
         *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Get Spanner DDL through the Database Admin API."""
-        _ = include_dependencies, prefer_native, redact
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return Spanner DDL through the Database Admin API."""
+        _ = include_dependencies, redact
         ddl_statements = _get_spanner_ddl_statements(driver)
         identity = ObjectIdentity(
             name=object_name,
@@ -535,19 +534,18 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
         )
         return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
 
-    async def get_ddl(
+    async def _get_native_object_ddl(
         self,
         driver: Any,
         object_name: str,
-        schema: "str | None" = None,
         *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Get Spanner DDL through the Database Admin API."""
-        _ = include_dependencies, prefer_native, redact
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return Spanner DDL through the Database Admin API."""
+        _ = include_dependencies, redact
         ddl_statements = await _get_spanner_ddl_statements_async(driver)
         identity = ObjectIdentity(
             name=object_name,

@@ -36,6 +36,7 @@ from sqlspec.data_dictionary.dialects.mssql import (
 )
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.text import normalize_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -64,6 +65,13 @@ class _MssqlDataDictionaryMixin:
             return schema
         current_schema = driver.select_value_or_none(self.get_domain_query("schemas", "current"))
         return str(current_schema) if current_schema else self.get_dialect_config().default_schema
+
+    def resolve_ddl_object_name(self, driver: Any, object_name: str, schema: str | None) -> tuple[str, str | None]:
+        """Resolve a DDL object name, defaulting the schema to the connection's current schema."""
+        return (
+            normalize_identifier(object_name, self.get_dialect_config().name),
+            self.resolve_connection_schema(driver, schema),
+        )
 
     def list_available_features(self) -> list[str]:
         """List available feature flags for this dialect."""
@@ -252,28 +260,6 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
             ),
         )
 
-    def get_ddl(
-        self,
-        driver: "PymssqlDriver",
-        object_name: str,
-        schema: str | None = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Generate SQL Server table DDL from sys catalog rows."""
-        _ = include_dependencies, prefer_native, redact
-        schema_name = self.resolve_connection_schema(driver, schema)
-        columns = driver.select(
-            self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema_name, table_name=object_name
-        )
-        indexes = driver.select(
-            self.get_domain_query("ddl", "index_inputs_by_table"), schema_name=schema_name, table_name=object_name
-        )
-        return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes, object_type=object_type)
-
     def get_system_metadata(
         self, driver: "PymssqlDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
     ) -> SystemMetadataResult:
@@ -290,6 +276,26 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
         query = self.get_domain_query("system", metadata_request.domain)
         rows = driver.select(query)
         return build_mssql_system_metadata_result(metadata_request, rows)
+
+    def _get_native_object_ddl(
+        self,
+        driver: "PymssqlDriver",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return SQL Server table DDL generated from sys catalog rows."""
+        _ = include_dependencies, redact
+        columns = driver.select(
+            self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema, table_name=object_name
+        )
+        indexes = driver.select(
+            self.get_domain_query("ddl", "index_inputs_by_table"), schema_name=schema, table_name=object_name
+        )
+        return build_mssql_table_ddl_result(schema, object_name, columns, indexes, object_type=object_type)
 
 
 def _row_value(row: object, *names: str) -> Any:

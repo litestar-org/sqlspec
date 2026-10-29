@@ -1,8 +1,6 @@
 """SQLite-specific data dictionary for metadata queries via aiosqlite."""
 
-import re
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -10,23 +8,22 @@ from sqlspec.adapters.aiosqlite.core import format_identifier
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
-    DependencyEdge,
-    DependencyEdgeKind,
     ForeignKeyMetadata,
     IndexMetadata,
-    MetadataCapability,
-    MetadataFidelity,
     MetadataResult,
-    MetadataSource,
-    MetadataSupport,
-    ObjectIdentity,
     TableMetadata,
     VersionInfo,
     get_data_dictionary_loader,
     get_dialect_config,
-    sort_ddl_results,
 )
 from sqlspec.data_dictionary.dialects.sqlite import list_sqlite_available_features, resolve_sqlite_json_type
+from sqlspec.data_dictionary.dialects.sqlite.config import (
+    sqlite_check_constraints,
+    sqlite_constraint_metadata,
+    sqlite_generated_expressions,
+    sqlite_object_ddl_result,
+    sqlite_schema_ddl_results,
+)
 from sqlspec.driver import AsyncDataDictionaryBase
 
 if TYPE_CHECKING:
@@ -131,17 +128,26 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
     async def get_columns(
         self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ColumnMetadata]":
-        """Get column information for a table or schema."""
+        """Get column information for a table or schema, including generated-column expressions."""
         schema_name = self.resolve_schema(schema)
         schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             query_text = self._get_domain_query_text("columns", "by_schema").format(schema_prefix=schema_prefix)
-            return await driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
-
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
-        query_text = self._get_domain_query_text("columns", "by_table").format(schema_prefix=schema_prefix)
-        return await driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
+            rows = await driver.select(query_text, schema_name=schema_name)
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+            query_text = self._get_domain_query_text("columns", "by_table").format(schema_prefix=schema_prefix)
+            rows = await driver.select(query_text, table_name=table, schema_name=schema_name)
+        if any(str(row.get("extra") or "").endswith("generated") for row in rows):
+            table_sql = await self._get_table_sql(driver, schema_name, table)
+            for row in rows:
+                if str(row.get("extra") or "").endswith("generated"):
+                    expressions = sqlite_generated_expressions(table_sql.get(str(row.get("table_name"))))
+                    expression = expressions.get(str(row.get("column_name")))
+                    if expression is not None:
+                        row["generation_expression"] = expression
+        return cast("list[ColumnMetadata]", rows)
 
     async def get_indexes(
         self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
@@ -164,119 +170,100 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
     async def get_foreign_keys(
         self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
-        """Get foreign key metadata."""
+        """Get foreign key metadata, including ON DELETE / ON UPDATE actions."""
         schema_name = self.resolve_schema(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
-            query_text = self._get_domain_query_text("foreign_keys", "by_schema")
-            return await driver.select(query_text, schema_name=schema_name, schema_type=ForeignKeyMetadata)
+            rows = await driver.select(
+                self._get_domain_query_text("foreign_keys", "by_schema"), schema_name=schema_name
+            )
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+            rows = await driver.select(
+                self._get_domain_query_text("foreign_keys", "by_table"), table_name=table, schema_name=schema_name
+            )
+        return [ForeignKeyMetadata.from_row(row) for row in rows]
 
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
-        query_text = self._get_domain_query_text("foreign_keys", "by_table")
-        return await driver.select(
-            query_text, table_name=table, schema_name=schema_name, schema_type=ForeignKeyMetadata
-        )
+    async def get_constraints(
+        self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult":
+        """Get PRIMARY KEY, UNIQUE, and CHECK constraint metadata.
 
-    async def get_ddl(
-        self,
-        driver: "AiosqliteDriver",
-        object_name: str,
-        schema: "str | None" = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-        target_dialect: "str | None" = None,
-    ) -> "DDLResult":
-        """Get native SQLite DDL for a database object from sqlite_schema."""
-        return await self.get_object_ddl(
-            driver,
-            object_name,
-            schema=schema,
-            object_type=object_type,
-            include_dependencies=include_dependencies,
-            prefer_native=prefer_native,
-            redact=redact,
-            target_dialect=target_dialect,
-        )
+        PRIMARY KEY and UNIQUE come from index pragmas; CHECK constraints are parsed from the
+        stored CREATE TABLE statement because SQLite exposes them nowhere else.
+        """
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            rows = await driver.select(
+                self._get_domain_query_text("constraints", "by_schema"), schema_name=schema_name, table_name=None
+            )
+        else:
+            rows = await driver.select(
+                self._get_domain_query_text("constraints", "by_table"), schema_name=schema_name, table_name=table
+            )
+        items: list[dict[str, Any]] = sqlite_constraint_metadata(rows)
+        warnings: list[str] = []
+        for table_name, create_sql in (await self._get_table_sql(driver, schema_name, table)).items():
+            checks, check_warnings = sqlite_check_constraints(table_name, create_sql, schema_name=schema_name)
+            items.extend(checks)
+            warnings.extend(check_warnings)
+        return MetadataResult("constraints", items=tuple(items), warnings=tuple(warnings))
 
-    async def get_object_ddl(
-        self,
-        driver: "AiosqliteDriver",
-        object_name: str,
-        *,
-        schema: "str | None" = None,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-        target_dialect: "str | None" = None,
-    ) -> "DDLResult":
-        """Get native SQLite DDL for a database object from sqlite_schema."""
-        _ = include_dependencies, redact
-        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
-            return await self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
+    async def get_views(self, driver: "AiosqliteDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Get view metadata including the stored CREATE VIEW statement."""
         schema_name = self.resolve_schema(schema)
         schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
-        query_text = self._get_domain_query_text("ddl", "by_object").format(schema_prefix=schema_prefix)
-        rows = await driver.select(
-            query_text, schema_name=schema_name, object_name=object_name, object_type=object_type
-        )
-        res = _sqlite_ddl_result_from_rows(
-            dialect=type(self).dialect, object_name=object_name, object_type=object_type, schema=schema_name, rows=rows
-        )
-        if target_dialect is not None:
-            return self._transpile_ddl_result(res, target_dialect=target_dialect)
-        return res
+        query_text = self._get_domain_query_text("views", "by_schema").format(schema_prefix=schema_prefix)
+        return MetadataResult("views", items=tuple(await driver.select(query_text, schema_name=schema_name)))
 
-    async def get_schema_ddl(
+    async def get_sequences(self, driver: "AiosqliteDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Return an empty sequence result because SQLite has no sequence objects."""
+        _ = driver, schema
+        return MetadataResult("sequences", items=())
+
+    async def _get_native_object_ddl(
         self,
         driver: "AiosqliteDriver",
-        schema: "str | None" = None,
+        object_name: str,
         *,
-        include_domains: "Sequence[str] | None" = None,
-        exclude_domains: "Sequence[str] | None" = None,
-        exclude_tables: "Sequence[str] | None" = ("ddl_migrations",),
-        direction: "Literal['create', 'drop']" = "create",
-        target_dialect: "str | None" = None,
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> "MetadataResult":
-        """Get topologically sorted native SQLite DDL for all schema objects."""
-        if (
-            not prefer_native
-            or target_dialect is not None
-            or include_domains is not None
-            or exclude_domains is not None
-        ):
-            return await super().get_schema_ddl(
-                driver,
-                schema=schema,
-                include_domains=include_domains,
-                exclude_domains=exclude_domains,
-                exclude_tables=exclude_tables,
-                direction=direction,
-                include_dependencies=include_dependencies,
-                prefer_native=prefer_native,
-                redact=redact,
-                target_dialect=target_dialect,
-            )
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return the stored SQL for an object from sqlite_schema."""
+        _ = include_dependencies, redact
+        schema_prefix = f"{format_identifier(schema)}." if schema else ""
+        query_text = self._get_domain_query_text("ddl", "by_object").format(schema_prefix=schema_prefix)
+        rows = await driver.select(query_text, schema_name=schema, object_name=object_name, object_type=object_type)
+        return sqlite_object_ddl_result(rows, object_name=object_name, object_type=object_type, schema=schema)
+
+    async def _get_native_schema_ddl(
+        self, driver: "AiosqliteDriver", schema: "str | None", *, include_dependencies: bool, redact: bool
+    ) -> "list[DDLResult] | None":
+        """Return the stored SQL for every sqlite_schema object."""
+        _ = include_dependencies, redact
         schema_name = self.resolve_schema(schema)
         schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         query_text = self._get_domain_query_text("ddl", "by_schema").format(schema_prefix=schema_prefix)
-        rows = await driver.select(query_text, schema_name=schema_name)
-        foreign_keys = await self.get_foreign_keys(driver, schema=schema) if include_dependencies else []
-        return _sqlite_schema_ddl_from_rows(
-            dialect=type(self).dialect,
-            schema=schema_name,
-            rows=rows,
-            foreign_keys=foreign_keys,
-            exclude_tables=exclude_tables,
-            direction=direction,
-            include_dependencies=include_dependencies,
-        )
+        return sqlite_schema_ddl_results(await driver.select(query_text, schema_name=schema_name), schema=schema_name)
+
+    async def _get_table_sql(
+        self, driver: "AiosqliteDriver", schema_name: "str | None", table: "str | None"
+    ) -> "dict[str, str]":
+        """Return stored CREATE TABLE statements keyed by table name for one table or the whole schema."""
+        schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+        if table is None:
+            query_text = self._get_domain_query_text("ddl", "by_schema").format(schema_prefix=schema_prefix)
+            rows = await driver.select(query_text, schema_name=schema_name)
+        else:
+            query_text = self._get_domain_query_text("ddl", "by_object").format(schema_prefix=schema_prefix)
+            rows = await driver.select(query_text, schema_name=schema_name, object_name=table, object_type="table")
+        return {
+            str(row["object_name"]): str(row["ddl"])
+            for row in rows
+            if str(row.get("object_type") or "").lower() == "table" and row.get("ddl") is not None
+        }
 
     def _get_domain_query_text(self, domain: str, query_name: str) -> str:
         """Return a required direct-domain query for SQLite."""
@@ -334,132 +321,3 @@ def _sqlite_index_rows_to_metadata(rows: "list[dict[str, Any]]", schema_name: "s
             columns.append("<expression>")
 
     return [cast("IndexMetadata", metadata) for metadata in grouped.values()]
-
-
-def _sqlite_ddl_result_from_rows(
-    *, dialect: str, object_name: str, object_type: str, schema: "str | None", rows: "Sequence[dict[str, Any]]"
-) -> DDLResult:
-    row = rows[0] if rows else None
-    resolved_schema = row.get("schema_name") if row is not None else schema
-    resolved_type = str(row.get("object_type") or object_type) if row is not None else object_type
-    ddl_value = (row.get("ddl") or row.get("native_sql")) if row is not None else None
-    identity = ObjectIdentity(
-        name=object_name,
-        object_type=resolved_type,
-        schema=str(resolved_schema) if resolved_schema is not None else None,
-        dialect=dialect,
-        source=MetadataSource.CATALOG,
-    )
-    if ddl_value is None:
-        return DDLResult.unsupported(identity, source=MetadataSource.CATALOG)
-    return DDLResult(
-        identity=identity,
-        status=MetadataSupport.SUPPORTED,
-        fidelity=MetadataFidelity.NATIVE,
-        source=MetadataSource.CATALOG,
-        ddl=str(ddl_value),
-    )
-
-
-def _sqlite_schema_ddl_from_rows(
-    *,
-    dialect: str,
-    schema: "str | None",
-    rows: "Sequence[dict[str, Any]]",
-    foreign_keys: "Sequence[ForeignKeyMetadata]",
-    exclude_tables: "Sequence[str] | None",
-    direction: "Literal['create', 'drop']",
-    include_dependencies: bool,
-) -> MetadataResult:
-    excluded = {name.lower() for name in (exclude_tables or ())}
-    filtered_rows: list[tuple[ObjectIdentity, str, str | None]] = []
-    table_identities: dict[str, ObjectIdentity] = {}
-    view_identities: dict[str, ObjectIdentity] = {}
-
-    for row in rows:
-        object_name = str(row.get("object_name") or "")
-        object_type = str(row.get("object_type") or "table").lower()
-        table_name_val = row.get("table_name")
-        table_name = str(table_name_val) if table_name_val is not None else None
-        ddl_value = row.get("ddl") or row.get("native_sql")
-        if not object_name or ddl_value is None:
-            continue
-        if object_name.lower() in excluded:
-            continue
-        if table_name is not None and table_name.lower() in excluded:
-            continue
-        row_schema = row.get("schema_name", schema)
-        identity = ObjectIdentity(
-            name=object_name,
-            object_type=object_type,
-            schema=str(row_schema) if row_schema is not None else None,
-            dialect=dialect,
-            source=MetadataSource.CATALOG,
-        )
-        filtered_rows.append((identity, str(ddl_value), table_name))
-        if object_type == "table":
-            table_identities[object_name.lower()] = identity
-        elif object_type == "view":
-            view_identities[object_name.lower()] = identity
-
-    fk_targets_by_table: dict[str, list[ObjectIdentity]] = {}
-    if include_dependencies:
-        for fk in foreign_keys:
-            fk_table = str(fk["table_name"] if isinstance(fk, Mapping) else fk.table_name)
-            fk_ref = str(fk["referenced_table"] if isinstance(fk, Mapping) else fk.referenced_table)
-            if fk_table.lower() == fk_ref.lower():
-                continue
-            ref_identity = table_identities.get(fk_ref.lower())
-            if ref_identity is not None:
-                fk_targets_by_table.setdefault(fk_table.lower(), []).append(ref_identity)
-
-    results: list[DDLResult] = []
-    rel_identities = {**table_identities, **view_identities}
-    for identity, ddl_text, table_name in filtered_rows:
-        edges: list[DependencyEdge] = []
-        if include_dependencies:
-            obj_type = identity.object_type.lower()
-            if obj_type == "table":
-                edges.extend(
-                    DependencyEdge(
-                        identity, ref_identity, DependencyEdgeKind.FOREIGN_KEY, source=MetadataSource.CATALOG
-                    )
-                    for ref_identity in fk_targets_by_table.get(identity.name.lower(), ())
-                )
-            elif obj_type in {"index", "trigger"} and table_name is not None:
-                parent_identity = table_identities.get(table_name.lower())
-                if parent_identity is not None:
-                    edge_kind = (
-                        DependencyEdgeKind.TRIGGER_TARGET
-                        if obj_type == "trigger"
-                        else DependencyEdgeKind.INDEX_EXPRESSION
-                    )
-                    edges.append(DependencyEdge(identity, parent_identity, edge_kind, source=MetadataSource.CATALOG))
-            elif obj_type == "view":
-                for ref_key, ref_identity in rel_identities.items():
-                    if ref_key == identity.name.lower():
-                        continue
-                    if re.search(rf"\b{re.escape(ref_identity.name)}\b", ddl_text, re.IGNORECASE):
-                        edges.append(
-                            DependencyEdge(
-                                identity, ref_identity, DependencyEdgeKind.VIEW_REFERENCE, source=MetadataSource.CATALOG
-                            )
-                        )
-        results.append(
-            DDLResult(
-                identity=identity,
-                status=MetadataSupport.SUPPORTED,
-                fidelity=MetadataFidelity.NATIVE,
-                source=MetadataSource.CATALOG,
-                ddl=ddl_text,
-                dependencies=tuple(edges),
-            )
-        )
-
-    ordered = (
-        sort_ddl_results(results, order=direction, raise_on_cycles=False) if include_dependencies else tuple(results)
-    )
-    capability = MetadataCapability(
-        domain="ddl", support=MetadataSupport.SUPPORTED, fidelity=MetadataFidelity.NATIVE, source=MetadataSource.CATALOG
-    )
-    return MetadataResult("ddl", capability=capability, items=ordered)

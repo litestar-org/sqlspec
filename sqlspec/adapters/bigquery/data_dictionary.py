@@ -1,8 +1,7 @@
 """BigQuery-specific data dictionary for metadata queries."""
 
 import re
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from mypy_extensions import mypyc_attr
 
@@ -16,7 +15,6 @@ from sqlspec.data_dictionary import (
     MetadataCapability,
     MetadataCapabilityProfile,
     MetadataFidelity,
-    MetadataResult,
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
@@ -24,7 +22,6 @@ from sqlspec.data_dictionary import (
     TableMetadata,
     VersionInfo,
     get_data_dictionary_loader,
-    sort_ddl_results,
 )
 from sqlspec.data_dictionary.dialects.bigquery import (
     format_bigquery_information_schema_tables,
@@ -33,6 +30,8 @@ from sqlspec.data_dictionary.dialects.bigquery import (
 from sqlspec.driver import SyncDataDictionaryBase
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
 __all__ = ("BigQueryDataDictionary", "BigQueryMetadataScope")
@@ -278,50 +277,20 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         capabilities = tuple(_bigquery_capability_for_domain(domain) for domain in requested_domains)
         return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
 
-    def get_ddl(
-        self,
-        driver: "BigQueryDriver",
-        object_name: str,
-        schema: "str | None" = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-        target_dialect: "str | None" = None,
-    ) -> "DDLResult":
-        """Get native BigQuery DDL for a table, view, or routine."""
-        return self.get_object_ddl(
-            driver,
-            object_name,
-            schema=schema,
-            object_type=object_type,
-            include_dependencies=include_dependencies,
-            prefer_native=prefer_native,
-            redact=redact,
-            target_dialect=target_dialect,
-        )
-
-    def get_object_ddl(
+    def _get_native_object_ddl(
         self,
         driver: "BigQueryDriver",
         object_name: str,
         *,
-        schema: "str | None" = None,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-        target_dialect: "str | None" = None,
-    ) -> "DDLResult":
-        """Get native BigQuery DDL for a table, view, or routine."""
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return native BigQuery DDL for a table, view, or routine from INFORMATION_SCHEMA."""
         _ = include_dependencies, redact
-        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
-            return self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
-        resolved_schema = _resolve_bigquery_schema(driver, schema)
-        scope = BigQueryMetadataScope.from_schema(resolved_schema)
-        normalized_type = object_type.lower()
-        if normalized_type in {"routine", "function", "procedure"}:
+        scope = BigQueryMetadataScope.from_schema(_resolve_bigquery_schema(driver, schema))
+        if object_type.lower() in {"routine", "function", "procedure"}:
             routines_table = scope.dataset_information_schema_table("ROUTINES")
             query_text = _get_domain_query_text("routines", "by_dataset").format(routines_table=routines_table)
             rows = driver.select(query_text, schema_name=scope.schema_name, routine_name=object_name)
@@ -329,64 +298,26 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
             tables_table = scope.dataset_information_schema_table("TABLES")
             query_text = _get_domain_query_text("ddl", "by_object").format(tables_table=tables_table)
             rows = driver.select(query_text, schema_name=scope.schema_name, table_name=object_name)
-        res = _bigquery_ddl_result_from_rows(
+        return _bigquery_ddl_result_from_rows(
             dialect=type(self).dialect,
             object_name=object_name,
             object_type=object_type,
             schema=scope.schema_name,
             rows=rows,
         )
-        if target_dialect is not None:
-            return self._transpile_ddl_result(res, target_dialect=target_dialect)
-        return res
 
-    def get_schema_ddl(
-        self,
-        driver: "BigQueryDriver",
-        schema: "str | None" = None,
-        *,
-        include_domains: "Sequence[str] | None" = None,
-        exclude_domains: "Sequence[str] | None" = None,
-        exclude_tables: "Sequence[str] | None" = ("ddl_migrations",),
-        direction: "Literal['create', 'drop']" = "create",
-        target_dialect: "str | None" = None,
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> "MetadataResult":
-        """Get topologically sorted native BigQuery DDL for all dataset objects."""
-        if (
-            not prefer_native
-            or target_dialect is not None
-            or include_domains is not None
-            or exclude_domains is not None
-        ):
-            return super().get_schema_ddl(
-                driver,
-                schema=schema,
-                include_domains=include_domains,
-                exclude_domains=exclude_domains,
-                exclude_tables=exclude_tables,
-                direction=direction,
-                include_dependencies=include_dependencies,
-                prefer_native=prefer_native,
-                redact=redact,
-                target_dialect=target_dialect,
-            )
+    def _get_native_schema_ddl(
+        self, driver: "BigQueryDriver", schema: "str | None", *, include_dependencies: bool, redact: bool
+    ) -> "list[DDLResult] | None":
+        """Return native BigQuery DDL for every dataset object."""
+        _ = include_dependencies, redact
         resolved_schema = _resolve_bigquery_schema(driver, schema)
         scope = BigQueryMetadataScope.from_schema(resolved_schema)
-        schema_prefix = format_bigquery_schema_prefix(resolved_schema)
-        query_text = _get_domain_query_text("ddl", "by_schema").format(schema_prefix=schema_prefix)
-        rows = driver.select(query_text, schema_name=scope.schema_name)
-        foreign_keys = self.get_foreign_keys(driver, schema=schema) if include_dependencies else []
-        return _bigquery_schema_ddl_from_rows(
-            dialect=type(self).dialect,
-            schema=scope.schema_name,
-            rows=rows,
-            foreign_keys=foreign_keys,
-            exclude_tables=exclude_tables,
-            direction=direction,
-            include_dependencies=include_dependencies,
+        query_text = _get_domain_query_text("ddl", "by_schema").format(
+            schema_prefix=format_bigquery_schema_prefix(resolved_schema)
+        )
+        return _bigquery_schema_ddl_results(
+            driver.select(query_text, schema_name=scope.schema_name), schema=scope.schema_name
         )
 
 
@@ -510,21 +441,10 @@ def _bigquery_ddl_result_from_rows(
     )
 
 
-def _bigquery_schema_ddl_from_rows(
-    *,
-    dialect: str,
-    schema: "str | None",
-    rows: "Sequence[dict[str, Any]]",
-    foreign_keys: "Sequence[ForeignKeyMetadata]",
-    exclude_tables: "Sequence[str] | None",
-    direction: "Literal['create', 'drop']",
-    include_dependencies: bool,
-) -> MetadataResult:
-    excluded = {name.lower() for name in (exclude_tables or ())}
-    filtered_rows: list[tuple[ObjectIdentity, str]] = []
-    table_identities: dict[str, ObjectIdentity] = {}
-    view_identities: dict[str, ObjectIdentity] = {}
-
+def _bigquery_schema_ddl_results(rows: "Sequence[dict[str, Any]]", *, schema: "str | None") -> "list[DDLResult]":
+    """Build native DDL results from ``ddl.sql`` ``by_schema`` rows with view reference edges."""
+    entries: list[tuple[ObjectIdentity, str]] = []
+    relations: dict[str, ObjectIdentity] = {}
     for row in rows:
         object_name = str(row.get("object_name") or row.get("table_name") or row.get("routine_name") or "")
         raw_type = row.get("object_type") or row.get("table_type") or row.get("routine_type") or "table"
@@ -536,8 +456,6 @@ def _bigquery_schema_ddl_from_rows(
         ddl_value = row.get("ddl") or row.get("routine_definition")
         if not object_name or ddl_value is None:
             continue
-        if object_name.lower() in excluded:
-            continue
         row_schema = row.get("schema_name") or row.get("table_schema") or row.get("routine_schema") or schema
         row_catalog = row.get("catalog_name") or row.get("table_catalog") or row.get("routine_catalog")
         identity = ObjectIdentity(
@@ -545,52 +463,25 @@ def _bigquery_schema_ddl_from_rows(
             object_type=normalized_type,
             catalog=str(row_catalog) if row_catalog is not None else None,
             schema=str(row_schema) if row_schema is not None else None,
-            dialect=dialect,
+            dialect="bigquery",
             source=MetadataSource.INFORMATION_SCHEMA,
         )
-        filtered_rows.append((identity, str(ddl_value)))
-        if normalized_type == "table":
-            table_identities[object_name.lower()] = identity
-        elif normalized_type in {"view", "materialized_view"}:
-            view_identities[object_name.lower()] = identity
-
-    fk_targets_by_table: dict[str, list[ObjectIdentity]] = {}
-    if include_dependencies:
-        for fk in foreign_keys:
-            fk_table = str(fk["table_name"] if isinstance(fk, Mapping) else fk.table_name)
-            fk_ref = str(fk["referenced_table"] if isinstance(fk, Mapping) else fk.referenced_table)
-            if fk_table.lower() == fk_ref.lower():
-                continue
-            ref_identity = table_identities.get(fk_ref.lower())
-            if ref_identity is not None:
-                fk_targets_by_table.setdefault(fk_table.lower(), []).append(ref_identity)
+        entries.append((identity, str(ddl_value)))
+        if normalized_type in {"table", "view", "materialized_view"}:
+            relations[object_name.lower()] = identity
 
     results: list[DDLResult] = []
-    rel_identities = {**table_identities, **view_identities}
-    for identity, ddl_text in filtered_rows:
+    for identity, ddl_text in entries:
         edges: list[DependencyEdge] = []
-        if include_dependencies:
-            obj_type = identity.object_type.lower()
-            if obj_type == "table":
-                edges.extend(
-                    DependencyEdge(
-                        identity, ref_identity, DependencyEdgeKind.FOREIGN_KEY, source=MetadataSource.INFORMATION_SCHEMA
-                    )
-                    for ref_identity in fk_targets_by_table.get(identity.name.lower(), ())
+        if identity.object_type in {"view", "materialized_view"}:
+            edges.extend(
+                DependencyEdge(
+                    identity, ref_identity, DependencyEdgeKind.VIEW_REFERENCE, source=MetadataSource.INFORMATION_SCHEMA
                 )
-            elif obj_type in {"view", "materialized_view"}:
-                for ref_key, ref_identity in rel_identities.items():
-                    if ref_key == identity.name.lower():
-                        continue
-                    if re.search(rf"\b{re.escape(ref_identity.name)}\b", ddl_text, re.IGNORECASE):
-                        edges.append(
-                            DependencyEdge(
-                                identity,
-                                ref_identity,
-                                DependencyEdgeKind.VIEW_REFERENCE,
-                                source=MetadataSource.INFORMATION_SCHEMA,
-                            )
-                        )
+                for ref_key, ref_identity in relations.items()
+                if ref_key != identity.name.lower()
+                and re.search(rf"(?<![\w$]){re.escape(ref_identity.name)}(?![\w$])", ddl_text, re.IGNORECASE)
+            )
         results.append(
             DDLResult(
                 identity=identity,
@@ -602,9 +493,4 @@ def _bigquery_schema_ddl_from_rows(
                 warnings=_BIGQUERY_INFORMATION_SCHEMA_WARNINGS,
             )
         )
-
-    ordered = (
-        sort_ddl_results(results, order=direction, raise_on_cycles=False) if include_dependencies else tuple(results)
-    )
-    capability = _bigquery_capability_for_domain("ddl")
-    return MetadataResult("ddl", capability=capability, items=ordered, warnings=capability.warnings)
+    return results

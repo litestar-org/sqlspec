@@ -238,3 +238,24 @@ def test_mariadb_complete_query_pack_and_mysql_single_version_probe() -> None:
     assert version.version_tuple == (8, 4, 0)
     assert version_again == version
     assert len(driver.statements) == 1
+
+
+def test_mysql_object_ddl_routes_through_native_hook() -> None:
+    """get_object_ddl and get_ddl use SHOW CREATE through the native hook; prefer_native=False skips it."""
+    native_driver = _SyncDDLDriver()
+    dictionary = PyMysqlDataDictionary()
+
+    object_ddl = dictionary.get_object_ddl(cast(Any, native_driver), "orders", schema="`shop`")
+    assert object_ddl.fidelity == MetadataFidelity.NATIVE
+    assert object_ddl.ddl == "CREATE TABLE `orders` (`id` int)"
+    assert native_driver.statements[-1] == "SHOW CREATE TABLE `shop`.`orders`"
+
+    class _EmptyCatalogDriver(_SyncDDLDriver):
+        def select(self, statement: str, *args: Any, **kwargs: Any) -> list[dict[str, object]]:
+            self.statements.append(str(statement))
+            return []
+
+    synth_driver = _EmptyCatalogDriver()
+    synthesized = dictionary.get_object_ddl(cast(Any, synth_driver), "orders", schema="shop", prefer_native=False)
+    assert synthesized.status == MetadataSupport.UNSUPPORTED
+    assert not any(statement.startswith("SHOW CREATE") for statement in synth_driver.statements)

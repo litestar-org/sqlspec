@@ -2,21 +2,30 @@
 -- dialect: duckdb
 WITH ddl_objects AS (
     SELECT
-        schema_name,
-        table_name AS object_name,
-        CASE WHEN temporary THEN 'temporary_table' ELSE 'table' END AS object_type,
-        table_name AS table_name,
-        sql
-    FROM duckdb_tables()
-    WHERE NOT internal
-      AND sql IS NOT NULL
+        t.schema_name,
+        t.table_name AS object_name,
+        CASE WHEN t.temporary THEN 'temporary_table' ELSE 'table' END AS object_type,
+        t.table_name AS table_name,
+        t.sql,
+        EXISTS (
+            SELECT 1
+            FROM duckdb_constraints() AS c
+            WHERE c.database_name = t.database_name
+              AND c.schema_name = t.schema_name
+              AND c.table_name = t.table_name
+              AND c.constraint_type = 'FOREIGN KEY'
+        ) AS has_foreign_keys
+    FROM duckdb_tables() AS t
+    WHERE NOT t.internal
+      AND t.sql IS NOT NULL
     UNION ALL
     SELECT
         schema_name,
         view_name AS object_name,
         'view' AS object_type,
         NULL AS table_name,
-        sql
+        sql,
+        FALSE AS has_foreign_keys
     FROM duckdb_views()
     WHERE NOT internal
       AND sql IS NOT NULL
@@ -26,7 +35,8 @@ WITH ddl_objects AS (
         index_name AS object_name,
         'index' AS object_type,
         table_name AS table_name,
-        sql
+        sql,
+        FALSE AS has_foreign_keys
     FROM duckdb_indexes()
     WHERE sql IS NOT NULL
     UNION ALL
@@ -35,9 +45,17 @@ WITH ddl_objects AS (
         sequence_name AS object_name,
         'sequence' AS object_type,
         NULL AS table_name,
-        sql
+        'CREATE SEQUENCE '
+            || CASE WHEN schema_name = 'main' THEN '' ELSE '"' || replace(schema_name, '"', '""') || '".' END
+            || '"' || replace(sequence_name, '"', '""') || '"'
+            || ' INCREMENT BY ' || increment_by
+            || ' MINVALUE ' || min_value
+            || ' MAXVALUE ' || max_value
+            || ' START WITH ' || start_value
+            || CASE WHEN cycle THEN ' CYCLE' ELSE ' NO CYCLE' END
+            || ';' AS sql,
+        FALSE AS has_foreign_keys
     FROM duckdb_sequences()
-    WHERE sql IS NOT NULL
     UNION ALL
     SELECT
         schema_name,
@@ -46,14 +64,20 @@ WITH ddl_objects AS (
         NULL AS table_name,
         CASE
             WHEN logical_type = 'ENUM' AND labels IS NOT NULL THEN
-                'CREATE TYPE ' || type_name || ' AS ENUM (' || array_to_string(
-                    list_transform(labels, lambda x: '''' || replace(x, '''', '''''') || ''''),
-                    ', '
-                ) || ');'
-            WHEN logical_type IS NOT NULL THEN
-                'CREATE TYPE ' || type_name || ' AS ' || logical_type || ';'
+                'CREATE TYPE '
+                    || CASE WHEN schema_name = 'main' THEN '' ELSE '"' || replace(schema_name, '"', '""') || '".' END
+                    || '"' || replace(type_name, '"', '""') || '" AS ENUM ('
+                    || array_to_string(
+                        list_transform(labels, lambda x: '''' || replace(x, '''', '''''') || ''''),
+                        ', '
+                    ) || ');'
+            WHEN logical_type NOT IN ('STRUCT', 'LIST', 'ARRAY', 'MAP', 'UNION') THEN
+                'CREATE TYPE '
+                    || CASE WHEN schema_name = 'main' THEN '' ELSE '"' || replace(schema_name, '"', '""') || '".' END
+                    || '"' || replace(type_name, '"', '""') || '" AS ' || logical_type || ';'
             ELSE NULL
-        END AS sql
+        END AS sql,
+        FALSE AS has_foreign_keys
     FROM duckdb_types()
     WHERE NOT internal
 )
@@ -63,10 +87,10 @@ SELECT
     object_type,
     table_name,
     sql AS ddl,
+    has_foreign_keys,
     'native' AS fidelity
 FROM ddl_objects
-WHERE sql IS NOT NULL
-  AND schema_name = COALESCE(:schema_name, current_schema())
+WHERE schema_name = COALESCE(:schema_name, current_schema())
   AND object_name = :object_name
   AND (:object_type IS NULL OR object_type = LOWER(:object_type))
 ORDER BY schema_name, object_type, object_name;
@@ -75,21 +99,30 @@ ORDER BY schema_name, object_type, object_name;
 -- dialect: duckdb
 WITH ddl_objects AS (
     SELECT
-        schema_name,
-        table_name AS object_name,
-        CASE WHEN temporary THEN 'temporary_table' ELSE 'table' END AS object_type,
-        table_name AS table_name,
-        sql
-    FROM duckdb_tables()
-    WHERE NOT internal
-      AND sql IS NOT NULL
+        t.schema_name,
+        t.table_name AS object_name,
+        CASE WHEN t.temporary THEN 'temporary_table' ELSE 'table' END AS object_type,
+        t.table_name AS table_name,
+        t.sql,
+        EXISTS (
+            SELECT 1
+            FROM duckdb_constraints() AS c
+            WHERE c.database_name = t.database_name
+              AND c.schema_name = t.schema_name
+              AND c.table_name = t.table_name
+              AND c.constraint_type = 'FOREIGN KEY'
+        ) AS has_foreign_keys
+    FROM duckdb_tables() AS t
+    WHERE NOT t.internal
+      AND t.sql IS NOT NULL
     UNION ALL
     SELECT
         schema_name,
         view_name AS object_name,
         'view' AS object_type,
         NULL AS table_name,
-        sql
+        sql,
+        FALSE AS has_foreign_keys
     FROM duckdb_views()
     WHERE NOT internal
       AND sql IS NOT NULL
@@ -99,7 +132,8 @@ WITH ddl_objects AS (
         index_name AS object_name,
         'index' AS object_type,
         table_name AS table_name,
-        sql
+        sql,
+        FALSE AS has_foreign_keys
     FROM duckdb_indexes()
     WHERE sql IS NOT NULL
     UNION ALL
@@ -108,9 +142,17 @@ WITH ddl_objects AS (
         sequence_name AS object_name,
         'sequence' AS object_type,
         NULL AS table_name,
-        sql
+        'CREATE SEQUENCE '
+            || CASE WHEN schema_name = 'main' THEN '' ELSE '"' || replace(schema_name, '"', '""') || '".' END
+            || '"' || replace(sequence_name, '"', '""') || '"'
+            || ' INCREMENT BY ' || increment_by
+            || ' MINVALUE ' || min_value
+            || ' MAXVALUE ' || max_value
+            || ' START WITH ' || start_value
+            || CASE WHEN cycle THEN ' CYCLE' ELSE ' NO CYCLE' END
+            || ';' AS sql,
+        FALSE AS has_foreign_keys
     FROM duckdb_sequences()
-    WHERE sql IS NOT NULL
     UNION ALL
     SELECT
         schema_name,
@@ -119,14 +161,20 @@ WITH ddl_objects AS (
         NULL AS table_name,
         CASE
             WHEN logical_type = 'ENUM' AND labels IS NOT NULL THEN
-                'CREATE TYPE ' || type_name || ' AS ENUM (' || array_to_string(
-                    list_transform(labels, lambda x: '''' || replace(x, '''', '''''') || ''''),
-                    ', '
-                ) || ');'
-            WHEN logical_type IS NOT NULL THEN
-                'CREATE TYPE ' || type_name || ' AS ' || logical_type || ';'
+                'CREATE TYPE '
+                    || CASE WHEN schema_name = 'main' THEN '' ELSE '"' || replace(schema_name, '"', '""') || '".' END
+                    || '"' || replace(type_name, '"', '""') || '" AS ENUM ('
+                    || array_to_string(
+                        list_transform(labels, lambda x: '''' || replace(x, '''', '''''') || ''''),
+                        ', '
+                    ) || ');'
+            WHEN logical_type NOT IN ('STRUCT', 'LIST', 'ARRAY', 'MAP', 'UNION') THEN
+                'CREATE TYPE '
+                    || CASE WHEN schema_name = 'main' THEN '' ELSE '"' || replace(schema_name, '"', '""') || '".' END
+                    || '"' || replace(type_name, '"', '""') || '" AS ' || logical_type || ';'
             ELSE NULL
-        END AS sql
+        END AS sql,
+        FALSE AS has_foreign_keys
     FROM duckdb_types()
     WHERE NOT internal
 )
@@ -136,10 +184,10 @@ SELECT
     object_type,
     table_name,
     sql AS ddl,
+    has_foreign_keys,
     'native' AS fidelity
 FROM ddl_objects
-WHERE sql IS NOT NULL
-  AND schema_name = COALESCE(:schema_name, current_schema())
+WHERE schema_name = COALESCE(:schema_name, current_schema())
 ORDER BY
     CASE object_type
         WHEN 'type' THEN 1

@@ -19,9 +19,10 @@ from uuid import UUID
 import sqlglot
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 from sqlspec.builder import QueryBuilder
-from sqlspec.builder._ddl import CreateView, DropIndex, DropSequence, DropTable, DropView, compile_table_ddl_results
+from sqlspec.builder._ddl import compile_table_ddl_results
 from sqlspec.core import (
     SQL,
     CachedStatement,
@@ -52,6 +53,7 @@ from sqlspec.core.result._base import RowFormat
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
 from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary import (
+    DDL_PARENT_TABLE_CONTEXT_KEY,
     ColumnProfileMetadata,
     DDLResult,
     DependencyEdge,
@@ -96,7 +98,7 @@ from sqlspec.protocols import StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.serializers import from_json as decode_json
-from sqlspec.utils.text import normalize_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import (
     has_asdict_method,
     has_cursor_metadata,
@@ -396,6 +398,44 @@ class DataDictionaryDialectMixin:
         """Return a dialect-normalized identifier value."""
         return normalize_identifier(identifier, self.get_dialect_config().name)
 
+    def resolve_ddl_object_name(self, driver: Any, object_name: str, schema: "str | None") -> "tuple[str, str | None]":
+        """Normalize a caller-supplied object name and schema into exact catalog names.
+
+        Unquoted names follow the dialect's identifier folding; quoted names are kept verbatim.
+        Multi-dialect data dictionaries override this to resolve against the dialect detected
+        from ``driver``.
+
+        Args:
+            driver: Database driver instance.
+            object_name: Caller-supplied object name.
+            schema: Caller-supplied schema name, or None for the dialect default.
+
+        Returns:
+            Exact catalog object name and schema name.
+        """
+        _ = driver
+        return (self.resolve_identifier(object_name), self.resolve_schema(schema))
+
+    def exact_catalog_identifier(self, driver: Any, name: str) -> str:
+        """Return ``name`` in the form metadata getters resolve back to the exact catalog name.
+
+        Metadata getters such as ``get_columns`` normalize their ``table``/``schema`` arguments
+        as caller input (for example PostgreSQL folds unquoted names to lower case). Names read
+        from the catalog are already exact, so any name that normalization would change is
+        passed quoted.
+
+        Args:
+            driver: Database driver instance.
+            name: Exact catalog identifier.
+
+        Returns:
+            Identifier text that round-trips through the dictionary's normalization unchanged.
+        """
+        _ = driver
+        if self.resolve_identifier(name) == name:
+            return name
+        return quote_identifier(name)
+
     def resolve_feature_flag(self, feature: str, version: "VersionInfo | None") -> bool:
         """Resolve a feature flag using dialect config and version info."""
         config = self.get_dialect_config()
@@ -532,12 +572,27 @@ class DataDictionaryMixin:
         foreign_keys: "abc.Sequence[Any] | None" = None,
         indexes: "abc.Sequence[Any] | None" = None,
         target_dialect: str | None = None,
+        source_dialect: str | None = None,
         warnings: tuple[str, ...] = (),
     ) -> "DDLResult":
-        """Synthesize a table DDLResult from catalog metadata rows via sqlspec.builder."""
-        effective_dialect: str | None = target_dialect or type(self).dialect
-        if effective_dialect in {"generic", "unknown", ""}:
-            effective_dialect = None
+        """Synthesize a table DDLResult from catalog metadata rows via sqlspec.builder.
+
+        Args:
+            table_name: Exact catalog table name.
+            columns: Column metadata rows.
+            schema: Exact catalog schema name.
+            constraints: Constraint metadata rows.
+            foreign_keys: Foreign key metadata rows.
+            indexes: Index metadata rows.
+            target_dialect: Dialect to render; defaults to the source dialect.
+            source_dialect: Dialect the catalog types, defaults, and expressions are written in;
+                defaults to this dictionary's dialect.
+            warnings: Warnings to attach to the result.
+
+        Returns:
+            Generated table DDL result.
+        """
+        resolved_source = _ddl_dialect_or_none(source_dialect or type(self).dialect)
         return compile_table_ddl_results(
             table_name,
             columns,
@@ -545,43 +600,66 @@ class DataDictionaryMixin:
             constraints=constraints,
             foreign_keys=foreign_keys,
             indexes=indexes,
-            dialect=effective_dialect,
+            dialect=_ddl_dialect_or_none(target_dialect) or resolved_source,
+            source_dialect=resolved_source,
             warnings=warnings,
         )
 
+    def resolve_ddl_dialect(self, driver: Any) -> "str | None":
+        """Return the SQLGlot dialect used to parse and render DDL for ``driver``.
+
+        Multi-dialect data dictionaries override this to report the dialect detected from the driver.
+
+        Args:
+            driver: Database driver instance.
+
+        Returns:
+            SQLGlot dialect name, or None for generic SQL.
+        """
+        _ = driver
+        return _ddl_dialect_or_none(type(self).dialect)
+
     def _transpile_ddl_result(self, result: "DDLResult", target_dialect: str | None = None) -> "DDLResult":
-        """Transpile a DDLResult's SQL into target_dialect when requested."""
+        """Transpile a supported DDLResult into ``target_dialect``.
+
+        Returns an explicit unsupported result carrying the parser error when SQLGlot cannot
+        transpile the statement, instead of returning untranslated SQL labelled as the target.
+        """
         if not target_dialect or not result.ddl or result.status != MetadataSupport.SUPPORTED:
             return result
-        source_dialect: str | None = result.identity.dialect or type(self).dialect
-        if source_dialect in {"generic", "unknown", ""}:
-            source_dialect = None
+        source_dialect = _ddl_dialect_or_none(result.identity.dialect or type(self).dialect)
         if source_dialect == target_dialect:
             return result
+        identity = self._copy_identity(result.identity, dialect=target_dialect)
         try:
-            transpiled = sqlglot.transpile(result.ddl, read=source_dialect, write=target_dialect)
-            ddl_text = ";\n\n".join(stmt.rstrip(";").strip() for stmt in transpiled if stmt.strip())
-            if ddl_text:
-                ddl_text += ";"
-            else:
-                ddl_text = result.ddl
-        except Exception:
-            ddl_text = result.ddl
-        identity = ObjectIdentity(
-            name=result.identity.name,
-            object_type=result.identity.object_type,
-            catalog=result.identity.catalog,
-            schema=result.identity.schema,
-            dialect=target_dialect,
-            quoted_name=result.identity.quoted_name,
-            source=result.identity.source,
-        )
+            transpiled = sqlglot.transpile(
+                result.ddl, read=_sqlglot_dialect(source_dialect), write=_sqlglot_dialect(target_dialect)
+            )
+        except SqlglotError as exc:
+            return DDLResult.unsupported(
+                identity,
+                source=result.source,
+                warnings=(
+                    *result.warnings,
+                    (
+                        f"Could not transpile {result.identity.object_type} {result.identity.name} DDL "
+                        f"from {source_dialect or 'generic'} to {target_dialect}: {exc}"
+                    ),
+                ),
+            )
+        statements = [stmt.rstrip(";").strip() for stmt in transpiled if stmt.strip()]
+        if not statements:
+            return DDLResult.unsupported(
+                identity,
+                source=result.source,
+                warnings=(*result.warnings, f"Transpiling {result.identity.name} DDL produced no statements"),
+            )
         return DDLResult(
             identity=identity,
             status=result.status,
             fidelity=result.fidelity,
             source=result.source,
-            ddl=ddl_text,
+            ddl=";\n\n".join(statements) + ";",
             dependencies=result.dependencies,
             redactions=result.redactions,
             context=result.context,
@@ -589,47 +667,34 @@ class DataDictionaryMixin:
         )
 
     def _build_drop_ddl_result(self, result: "DDLResult", target_dialect: str | None = None) -> "DDLResult":
-        """Build a DROP IF EXISTS DDLResult for a schema object."""
-        effective_dialect: str | None = target_dialect or result.identity.dialect or type(self).dialect
-        if effective_dialect in {"generic", "unknown", ""}:
-            effective_dialect = None
-        obj_type = result.identity.object_type.lower()
-        name = result.identity.name
-        schema = result.identity.schema
-        qualified = f"{schema}.{name}" if schema else name
-        drop_sql: str | None = None
-        try:
-            if obj_type in {"view", "materialized_view"}:
-                view_builder = DropView(qualified, dialect=effective_dialect).if_exists()
-                drop_sql = view_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
-            elif obj_type == "sequence":
-                seq_builder = DropSequence(qualified, dialect=effective_dialect).if_exists()
-                drop_sql = seq_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
-            elif obj_type == "index":
-                idx_builder = DropIndex(qualified, dialect=effective_dialect).if_exists()
-                drop_sql = idx_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
-            else:
-                tbl_builder = DropTable(qualified, dialect=effective_dialect).if_exists()
-                drop_sql = tbl_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
-        except Exception:
-            keyword = "VIEW" if "view" in obj_type else "SEQUENCE" if obj_type == "sequence" else "TABLE"
-            drop_sql = f"DROP {keyword} IF EXISTS {qualified};"
+        """Build a ``DROP <kind> IF EXISTS`` DDLResult for a schema object.
 
-        identity = ObjectIdentity(
-            name=result.identity.name,
-            object_type=result.identity.object_type,
-            catalog=result.identity.catalog,
-            schema=result.identity.schema,
-            dialect=target_dialect or result.identity.dialect,
-            quoted_name=result.identity.quoted_name,
-            source=result.identity.source,
+        Identifiers are always quoted so the statement targets the exact catalog name.
+        Object kinds without a portable DROP form return an explicit unsupported result.
+        """
+        identity = result.identity
+        dialect = _ddl_dialect_or_none(target_dialect or identity.dialect or type(self).dialect)
+        drop_identity = self._copy_identity(identity, dialect=dialect or identity.dialect)
+        drop_kind = _DROP_OBJECT_KINDS.get(identity.object_type.lower())
+        if drop_kind is None:
+            return DDLResult.unsupported(
+                drop_identity,
+                source=result.source,
+                warnings=(f"No DROP statement form is defined for {identity.object_type} {identity.name}",),
+            )
+        kind, materialized = drop_kind
+        drop_expr = exp.Drop(
+            tables=[self._quoted_table(identity.name, identity.schema, identity.catalog)],
+            kind=kind,
+            exists=True,
+            materialized=materialized,
         )
         return DDLResult(
-            identity=identity,
-            status=result.status,
+            identity=drop_identity,
+            status=MetadataSupport.SUPPORTED,
             fidelity=result.fidelity,
             source=result.source,
-            ddl=drop_sql,
+            ddl=f"{drop_expr.sql(dialect=_sqlglot_dialect(dialect))};",
             dependencies=result.dependencies,
             redactions=result.redactions,
             context=result.context,
@@ -662,9 +727,14 @@ class DataDictionaryMixin:
         return (resolved_name, resolved_schema)
 
     def _build_view_ddl_from_row(
-        self, row: Any, *, default_schema: str | None = None, target_dialect: str | None = None
+        self, row: Any, *, default_schema: str | None = None, dialect: str | None = None
     ) -> "DDLResult | None":
-        """Build a DDLResult from a view metadata row when a definition is present."""
+        """Build a view DDLResult from a view metadata row when a definition is present.
+
+        Full ``CREATE`` statements from the catalog are kept verbatim. Body-only definitions are
+        wrapped in ``CREATE VIEW`` with a quoted view name. The result identity carries the
+        source ``dialect`` so a later transpile step can convert it to a target dialect.
+        """
         attrs: Mapping[str, Any]
         ident = getattr(row, "identity", None)
         raw_attrs = getattr(row, "attributes", None)
@@ -686,39 +756,92 @@ class DataDictionaryMixin:
         view_name = str(view_name_raw)
         view_schema = str(view_schema_raw) if view_schema_raw else default_schema
         definition_raw = (
-            attrs.get("ddl") or attrs.get("view_definition") or attrs.get("definition") or attrs.get("text")
+            attrs.get("ddl")
+            or attrs.get("view_definition")
+            or attrs.get("definition")
+            or attrs.get("text")
+            or attrs.get("native_sql")
         )
         if not definition_raw or not str(definition_raw).strip():
             return None
 
-        definition_text = str(definition_raw).strip()
-        effective_dialect: str | None = target_dialect or type(self).dialect
-        if effective_dialect in {"generic", "unknown", ""}:
-            effective_dialect = None
-
-        if definition_text.upper().startswith("CREATE"):
-            ddl_text = definition_text.rstrip(";").strip() + ";"
+        definition_text = str(definition_raw).strip().rstrip(";").strip()
+        is_native_statement = definition_text.upper().startswith("CREATE")
+        if is_native_statement:
+            ddl_text = f"{definition_text};"
         else:
-            qualified_view = f"{view_schema}.{view_name}" if view_schema else view_name
-            try:
-                view_builder = CreateView(qualified_view, dialect=effective_dialect).as_select(definition_text)
-                ddl_text = view_builder.build(dialect=effective_dialect).sql.rstrip(";").strip() + ";"
-            except Exception:
-                ddl_text = f"CREATE VIEW {qualified_view} AS {definition_text.rstrip(';')};"
+            quoted_view = self._quoted_table(view_name, view_schema).sql(dialect=_sqlglot_dialect(dialect))
+            ddl_text = f"CREATE VIEW {quoted_view} AS {definition_text};"
+        source = MetadataSource.CATALOG if is_native_statement else MetadataSource.GENERATED
+        return DDLResult(
+            identity=ObjectIdentity(
+                name=view_name, object_type="view", schema=view_schema, dialect=dialect, source=source
+            ),
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE if is_native_statement else MetadataFidelity.GENERATED,
+            source=source,
+            ddl=ddl_text,
+        )
 
-        result_ident = ObjectIdentity(
-            name=view_name,
-            object_type="view",
-            schema=view_schema,
-            dialect=effective_dialect or type(self).dialect,
+    def _build_sequence_ddl_from_row(
+        self, row: Any, *, default_schema: str | None = None, dialect: str | None = None
+    ) -> "DDLResult | None":
+        """Build a ``CREATE SEQUENCE`` DDLResult from a sequence metadata row.
+
+        The sequence name is quoted and options are rendered through SQLGlot for ``dialect``.
+        Sequences owned by identity columns or extensions are skipped because their owner
+        recreates them. Dialects whose sequence options cannot be rebuilt from catalog rows
+        return an explicit unsupported result.
+        """
+        attrs: Mapping[str, Any]
+        ident = getattr(row, "identity", None)
+        raw_attrs = getattr(row, "attributes", None)
+        if isinstance(row, Mapping):
+            attrs = row
+            name_raw = attrs.get("sequence_name") or attrs.get("object_name") or attrs.get("name")
+            schema_raw = attrs.get("schema_name") or attrs.get("sequence_schema") or default_schema
+        elif isinstance(ident, ObjectIdentity) and isinstance(raw_attrs, Mapping):
+            attrs = raw_attrs
+            name_raw = ident.name
+            schema_raw = ident.schema or default_schema
+        else:
+            return None
+        if not name_raw or attrs.get("is_identity_owned") or attrs.get("is_extension_owned"):
+            return None
+        identity = ObjectIdentity(
+            name=str(name_raw),
+            object_type="sequence",
+            schema=str(schema_raw) if schema_raw else None,
+            dialect=dialect,
             source=MetadataSource.GENERATED,
         )
+        if dialect in _SEQUENCE_SYNTHESIS_UNSUPPORTED_DIALECTS:
+            return DDLResult.unsupported(
+                identity,
+                source=MetadataSource.GENERATED,
+                warnings=(f"{dialect} sequence options cannot be rebuilt from catalog rows",),
+            )
+        properties: dict[str, Any] = {}
+        for prop_name, keys in _SEQUENCE_NUMERIC_PROPERTIES:
+            value = next((attrs.get(key) for key in keys if attrs.get(key) is not None), None)
+            if value is not None:
+                properties[prop_name] = exp.Literal.number(str(value))
+        cycle_raw = next(
+            (attrs.get(key) for key in ("cycle", "cycles", "cycle_option") if attrs.get(key) is not None), None
+        )
+        cycles = str(cycle_raw).strip().upper() in {"TRUE", "YES", "1", "Y"} if cycle_raw is not None else False
+        properties["options"] = [exp.var("CYCLE" if cycles else "NO CYCLE")]
+        create_expr = exp.Create(
+            this=self._quoted_table(identity.name, identity.schema),
+            kind="SEQUENCE",
+            properties=exp.Properties(expressions=[exp.SequenceProperties(**properties)]),
+        )
         return DDLResult(
-            identity=result_ident,
+            identity=identity,
             status=MetadataSupport.SUPPORTED,
             fidelity=MetadataFidelity.GENERATED,
             source=MetadataSource.GENERATED,
-            ddl=ddl_text,
+            ddl=f"{create_expr.sql(dialect=_sqlglot_dialect(dialect))};",
         )
 
     def _resolve_schema_object_identity(
@@ -747,7 +870,7 @@ class DataDictionaryMixin:
         if isinstance(fk, Mapping):
             t_name = fk.get("table_name")
             s_name = fk.get("schema") or fk.get("schema_name") or fk.get("table_schema")
-            r_table = fk.get("referenced_table") or fk.get("references_table")
+            r_table = fk.get("referenced_table") or fk.get("references_table") or fk.get("referenced_table_name")
             r_schema = fk.get("referenced_schema") or fk.get("references_schema") or s_name
             return (
                 str(t_name) if t_name else None,
@@ -786,6 +909,7 @@ class DataDictionaryMixin:
 
         to_name = (
             attrs.get("referenced_name")
+            or attrs.get("referenced_object")
             or attrs.get("referenced_object_name")
             or attrs.get("referenced_entity_name")
             or attrs.get("parent_name")
@@ -806,28 +930,80 @@ class DataDictionaryMixin:
             str(to_name) if to_name else None,
         )
 
+    def _schema_ddl_collect_domains(
+        self, include_domains: "abc.Sequence[str] | None", exclude_domains: "abc.Sequence[str] | None"
+    ) -> "set[str]":
+        """Return the synthesizable schema DDL domains selected by include/exclude filters."""
+        allowed = {"sequences", "tables", "views"}
+        if include_domains is not None:
+            allowed &= self._normalize_schema_ddl_domains(include_domains)
+        if exclude_domains is not None:
+            allowed -= self._normalize_schema_ddl_domains(exclude_domains)
+        return allowed
+
+    def _replace_synthesized_table_dependents(
+        self, items: "abc.Sequence[DDLResult]", replaced_tables: "set[tuple[str, str]]"
+    ) -> "list[DDLResult]":
+        """Drop native index items whose parent table was replaced by synthesized DDL.
+
+        Synthesized table DDL already includes the table's indexes, so the native index
+        statements for that table would be duplicates.
+        """
+        kept: list[DDLResult] = []
+        for item in items:
+            parent = item.context.get(DDL_PARENT_TABLE_CONTEXT_KEY)
+            if (
+                item.identity.object_type.lower() == "index"
+                and parent is not None
+                and ((item.identity.schema or "").lower(), str(parent).lower()) in replaced_tables
+            ):
+                continue
+            kept.append(item)
+        return kept
+
     def _finalize_schema_ddl_results(
         self,
         ddl_results: "abc.Sequence[DDLResult]",
         *,
         foreign_keys: "abc.Sequence[Any] | None" = None,
         dependency_items: "abc.Sequence[Any] | None" = None,
-        exclude_tables: "abc.Sequence[str] | None" = ("ddl_migrations",),
+        include_domains: "abc.Sequence[str] | None" = None,
+        exclude_domains: "abc.Sequence[str] | None" = None,
+        exclude_tables: "abc.Sequence[str] | None" = (),
         direction: "Literal['create', 'drop']" = "create",
         target_dialect: str | None = None,
-        capability: "MetadataCapability | None" = None,
+        warnings: tuple[str, ...] = (),
     ) -> "MetadataResult":
-        """Filter, attach dependency edges, topologically sort, and wrap schema DDL results."""
-        excluded_names = {t.strip().lower() for t in (exclude_tables or ()) if t and t.strip()}
+        """Filter, attach dependency edges, topologically sort, and wrap schema DDL results.
+
+        ``exclude_tables`` entries are compared as bare, unquoted, case-insensitive names with any
+        schema qualification stripped; indexes and triggers of excluded tables are excluded too.
+        Objects without usable DDL are reported in the result warnings instead of being dropped
+        silently. For ``direction="drop"`` each object is converted into ``DROP ... IF EXISTS``
+        in reverse dependency order; indexes and triggers are omitted because dropping their
+        table removes them. Table-to-table ordering comes from ``foreign_keys``; catalog dependency
+        rows whose dependent is a table are ignored because engines such as DuckDB record foreign
+        keys there in the opposite direction.
+        """
+        excluded_names = self._normalize_excluded_table_names(exclude_tables)
+        included = self._normalize_schema_ddl_domains(include_domains) if include_domains is not None else None
+        excluded_domains = self._normalize_schema_ddl_domains(exclude_domains) if exclude_domains is not None else set()
+        result_warnings: list[str] = list(warnings)
         filtered: list[DDLResult] = []
         for item in ddl_results:
-            if item.status != MetadataSupport.SUPPORTED or not item.ddl:
+            object_type = item.identity.object_type.lower()
+            domain = _SCHEMA_DDL_OBJECT_DOMAINS.get(object_type, f"{object_type}s")
+            if (included is not None and domain not in included) or domain in excluded_domains:
                 continue
-            if item.identity.object_type.lower() == "table" and item.identity.name.lower() in excluded_names:
+            if self._is_excluded_schema_object(item, excluded_names):
                 continue
-            if target_dialect is not None and direction == "create":
-                item = self._transpile_ddl_result(item, target_dialect=target_dialect)
-            filtered.append(item)
+            candidate = item
+            if candidate.status == MetadataSupport.SUPPORTED and candidate.ddl and direction == "create":
+                candidate = self._transpile_ddl_result(candidate, target_dialect=target_dialect)
+            if candidate.status != MetadataSupport.SUPPORTED or not candidate.ddl:
+                result_warnings.append(self._skipped_schema_object_warning(candidate))
+                continue
+            filtered.append(candidate)
 
         identity_lookup: dict[tuple[str, str, str], ObjectIdentity] = {}
         for item in filtered:
@@ -884,7 +1060,12 @@ class DataDictionaryMixin:
                 continue
             from_ident = self._resolve_schema_object_identity(identity_lookup, from_type, from_schema, from_name)
             to_ident = self._resolve_schema_object_identity(identity_lookup, to_type, to_schema or from_schema, to_name)
-            if from_ident is not None and to_ident is not None and from_ident != to_ident:
+            if (
+                from_ident is not None
+                and to_ident is not None
+                and from_ident != to_ident
+                and not self._is_table_object_type(from_ident.object_type)
+            ):
                 edge_kind = (
                     DependencyEdgeKind.MATERIALIZED_VIEW
                     if from_ident.object_type.lower() == "materialized_view"
@@ -914,33 +1095,88 @@ class DataDictionaryMixin:
         ]
 
         sort_input = list(reversed(enriched)) if direction == "drop" else enriched
-        sorted_results = sort_ddl_results(sort_input, order=direction, raise_on_cycles=False)
+        sorted_results: tuple[DDLResult, ...] = sort_ddl_results(sort_input, order=direction, raise_on_cycles=False)
         if direction == "drop":
-            sorted_results = tuple(
-                self._build_drop_ddl_result(item, target_dialect=target_dialect) for item in sorted_results
-            )
+            drop_results: list[DDLResult] = []
+            for item in sorted_results:
+                if item.identity.object_type.lower() in _TABLE_DEPENDENT_OBJECT_TYPES:
+                    continue
+                drop_result = self._build_drop_ddl_result(item, target_dialect=target_dialect)
+                if drop_result.status != MetadataSupport.SUPPORTED:
+                    result_warnings.append(self._skipped_schema_object_warning(drop_result))
+                    continue
+                drop_results.append(drop_result)
+            sorted_results = tuple(drop_results)
 
-        resolved_capability = capability
-        if resolved_capability is None:
-            fidelities = {item.fidelity for item in sorted_results}
-            sources = {item.source for item in sorted_results}
-            agg_fidelity = (
-                MetadataFidelity.NATIVE if fidelities == {MetadataFidelity.NATIVE} else MetadataFidelity.GENERATED
-            )
-            agg_source = MetadataSource.CATALOG if sources == {MetadataSource.CATALOG} else MetadataSource.GENERATED
-            resolved_capability = MetadataCapability(
-                domain="ddl", support=MetadataSupport.SUPPORTED, fidelity=agg_fidelity, source=agg_source
-            )
-        return MetadataResult(
-            "ddl", capability=resolved_capability, items=tuple(sorted_results), warnings=resolved_capability.warnings
+        for item in sorted_results:
+            result_warnings.extend(item.warnings)
+        unique_warnings = tuple(dict.fromkeys(result_warnings))
+        fidelities = {item.fidelity for item in sorted_results}
+        sources = {item.source for item in sorted_results}
+        capability = MetadataCapability(
+            domain="ddl",
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE if fidelities == {MetadataFidelity.NATIVE} else MetadataFidelity.GENERATED,
+            source=next(iter(sources)) if len(sources) == 1 else MetadataSource.GENERATED,
+            warnings=unique_warnings,
+        )
+        return MetadataResult("ddl", capability=capability, items=sorted_results, warnings=unique_warnings)
+
+    def _is_table_object_type(self, object_type: str) -> bool:
+        """Return True when ``object_type`` names a table."""
+        return object_type.lower() in _TABLE_OBJECT_TYPES
+
+    def _uncollected_domain_warning(self, domain: str, dialect: str | None) -> str:
+        """Describe a schema DDL domain the data dictionary cannot collect."""
+        return f"{dialect or 'generic'} data dictionary does not expose {domain}; {domain} were omitted from schema DDL"
+
+    def _with_dependencies(self, result: "DDLResult", dependencies: "tuple[DependencyEdge, ...]") -> "DDLResult":
+        """Return ``result`` with ``dependencies`` re-anchored on its own identity."""
+        if not dependencies:
+            return result
+        return DDLResult(
+            identity=result.identity,
+            status=result.status,
+            fidelity=result.fidelity,
+            source=result.source,
+            ddl=result.ddl,
+            dependencies=tuple(
+                DependencyEdge(
+                    result.identity,
+                    edge.to_object,
+                    edge.kind,
+                    strength=edge.strength,
+                    confidence=edge.confidence,
+                    source=edge.source,
+                )
+                for edge in dependencies
+            ),
+            redactions=result.redactions,
+            context=result.context,
+            warnings=result.warnings,
         )
 
-    def _build_table_profile_sql(self, table: str, columns: "abc.Sequence[Any]", schema: str | None = None) -> SQL:
-        """Build a single-pass SQLGlot aggregate query for column profile statistics."""
-        effective_dialect: str | None = type(self).dialect
-        if effective_dialect in {"generic", "unknown", ""}:
-            effective_dialect = None
+    def _is_excluded_schema_object(self, item: "DDLResult", excluded_names: "set[str]") -> bool:
+        """Return True when the object or its parent table matches an excluded table name."""
+        if not excluded_names:
+            return False
+        if item.identity.object_type.lower() in _TABLE_OBJECT_TYPES and item.identity.name.lower() in excluded_names:
+            return True
+        parent = item.context.get(DDL_PARENT_TABLE_CONTEXT_KEY)
+        return parent is not None and str(parent).lower() in excluded_names
 
+    def _skipped_schema_object_warning(self, item: "DDLResult") -> str:
+        """Describe a schema object omitted from schema DDL output."""
+        qualified = f"{item.identity.schema}.{item.identity.name}" if item.identity.schema else item.identity.name
+        reason = "; ".join(item.warnings) if item.warnings else "no DDL is available"
+        return f"Omitted {item.identity.object_type} {qualified} from schema DDL: {reason}"
+
+    def _build_table_profile_sql(self, table: str, columns: "abc.Sequence[Any]", schema: str | None = None) -> SQL:
+        """Build a single-pass aggregate query for column profile statistics.
+
+        Table, schema, and column identifiers are exact catalog names and are always quoted.
+        """
+        effective_dialect = _ddl_dialect_or_none(type(self).dialect)
         projections: list[exp.Expr] = [
             exp.Alias(this=exp.Count(this=exp.Star()), alias=exp.to_identifier("__row_count"))
         ]
@@ -952,7 +1188,7 @@ class DataDictionaryMixin:
             )
             if not col_name:
                 continue
-            col_expr = exp.column(col_name)
+            col_expr = exp.column(col_name, quoted=True)
             projections.extend((
                 exp.Alias(this=exp.Count(this=col_expr.copy()), alias=exp.to_identifier(f"__non_null_{idx}")),
                 exp.Alias(
@@ -967,16 +1203,14 @@ class DataDictionaryMixin:
                 ),
             ))
 
-        select_expr = exp.select(*projections).from_(exp.table_(table, db=schema))
-        return SQL(select_expr.sql(dialect=effective_dialect))
+        select_expr = exp.select(*projections).from_(self._quoted_table(table, schema))
+        return SQL(select_expr.sql(dialect=_sqlglot_dialect(effective_dialect)))
 
     def _build_table_sample_sql(self, table: str, schema: str | None = None, sample_size: int = 1000) -> SQL:
-        """Build a SQLGlot query to sample rows from a table for data-driven type inference."""
-        effective_dialect: str | None = type(self).dialect
-        if effective_dialect in {"generic", "unknown", ""}:
-            effective_dialect = None
-        select_expr = exp.select(exp.Star()).from_(exp.table_(table, db=schema)).limit(max(1, sample_size))
-        return SQL(select_expr.sql(dialect=effective_dialect))
+        """Build a query sampling rows from a table, quoting the exact catalog identifiers."""
+        effective_dialect = _ddl_dialect_or_none(type(self).dialect)
+        select_expr = exp.select(exp.Star()).from_(self._quoted_table(table, schema)).limit(max(1, sample_size))
+        return SQL(select_expr.sql(dialect=_sqlglot_dialect(effective_dialect)))
 
     def _infer_column_type_from_sample(
         self, declared_type: str, values: "abc.Sequence[Any]", *, target_dialect: str | None = None
@@ -984,7 +1218,7 @@ class DataDictionaryMixin:
         """Infer a refined SQL column type from declared catalog type and sampled non-null values."""
         effective_dialect = target_dialect or type(self).dialect
         config = None
-        if effective_dialect and effective_dialect not in {"generic", "unknown", ""}:
+        if _ddl_dialect_or_none(effective_dialect) is not None:
             with contextlib.suppress(ValueError):
                 config = get_dialect_config(effective_dialect)
 
@@ -992,9 +1226,11 @@ class DataDictionaryMixin:
         base_declared = clean_declared.split("(", 1)[0].strip().upper()
         if base_declared not in _LOOSE_PROFILE_TYPES:
             if target_dialect and target_dialect != type(self).dialect:
-                src_dialect = None if type(self).dialect in {"generic", "unknown", ""} else type(self).dialect
-                with contextlib.suppress(Exception):
-                    return exp.DataType.build(clean_declared, dialect=src_dialect).sql(dialect=target_dialect)
+                src_dialect = _ddl_dialect_or_none(type(self).dialect)
+                with contextlib.suppress(SqlglotError):
+                    return exp.DataType.build(clean_declared, dialect=_sqlglot_dialect(src_dialect)).sql(
+                        dialect=_sqlglot_dialect(target_dialect)
+                    )
             return clean_declared or "TEXT"
 
         non_empty = [val for val in values if val is not None and (not isinstance(val, str) or val.strip() != "")]
@@ -1168,9 +1404,53 @@ class DataDictionaryMixin:
                 "is_primary": is_pk,
             })
 
-        effective_dialect = target_dialect or type(self).dialect
         return compile_table_ddl_results(
-            target_table or table_name, synthesized_columns, schema=schema, dialect=effective_dialect
+            target_table or table_name,
+            synthesized_columns,
+            schema=schema,
+            dialect=_ddl_dialect_or_none(target_dialect or type(self).dialect),
+        )
+
+    @staticmethod
+    def _normalize_schema_ddl_domains(domains: "abc.Sequence[str]") -> "set[str]":
+        """Normalize schema DDL domain names, accepting singular object types or plural domains."""
+        normalized: set[str] = set()
+        for domain in domains:
+            key = domain.strip().lower().replace(" ", "_")
+            if key:
+                normalized.add(_SCHEMA_DDL_OBJECT_DOMAINS.get(key, key))
+        return normalized
+
+    @staticmethod
+    def _normalize_excluded_table_names(exclude_tables: "abc.Sequence[str] | None") -> "set[str]":
+        """Normalize excluded table names to bare, unquoted, lower-case names without schema qualification."""
+        normalized: set[str] = set()
+        for name in exclude_tables or ():
+            parts = split_qualified_identifier(name) if name else ()
+            if parts and parts[-1]:
+                normalized.add(parts[-1].lower())
+        return normalized
+
+    @staticmethod
+    def _quoted_table(name: str, schema: str | None = None, catalog: str | None = None) -> "exp.Table":
+        """Build a table expression whose parts are quoted to preserve exact catalog names."""
+        return exp.Table(
+            this=exp.to_identifier(name, quoted=True),
+            db=exp.to_identifier(schema, quoted=True) if schema else None,
+            catalog=exp.to_identifier(catalog, quoted=True) if catalog else None,
+        )
+
+    @staticmethod
+    def _copy_identity(identity: "ObjectIdentity", *, dialect: str | None) -> "ObjectIdentity":
+        """Copy an ObjectIdentity with a different dialect."""
+        return ObjectIdentity(
+            name=identity.name,
+            object_type=identity.object_type,
+            catalog=identity.catalog,
+            schema=identity.schema,
+            dialect=dialect,
+            quoted_name=identity.quoted_name,
+            source=identity.source,
         )
 
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
@@ -3075,6 +3355,70 @@ def _check_declared_parameters(sql_statement: "SQL") -> None:
         _check_declared_named_row(declared, named_params)
 
 
+_GENERIC_DDL_DIALECTS: Final = frozenset({"", "generic", "unknown"})
+_SQLGLOT_DIALECT_ALIASES: Final[dict[str, str]] = {
+    "cockroach": "postgres",
+    "cockroachdb": "postgres",
+    "mariadb": "mysql",
+    "mssql": "tsql",
+    "postgresql": "postgres",
+}
+_TABLE_OBJECT_TYPES: Final = frozenset({"table", "temporary_table", "base table"})
+_TABLE_DEPENDENT_OBJECT_TYPES: Final = frozenset({"index", "trigger"})
+_SCHEMA_DDL_OBJECT_DOMAINS: Final[dict[str, str]] = {
+    "table": "tables",
+    "temporary_table": "tables",
+    "base table": "tables",
+    "index": "tables",
+    "trigger": "tables",
+    "view": "views",
+    "materialized_view": "views",
+    "materialized view": "views",
+    "sequence": "sequences",
+    "type": "types",
+    "routine": "routines",
+    "function": "routines",
+    "procedure": "routines",
+    "table function": "routines",
+}
+_DROP_OBJECT_KINDS: Final[dict[str, tuple[str, bool]]] = {
+    "table": ("TABLE", False),
+    "temporary_table": ("TABLE", False),
+    "base table": ("TABLE", False),
+    "view": ("VIEW", False),
+    "materialized_view": ("VIEW", True),
+    "materialized view": ("VIEW", True),
+    "sequence": ("SEQUENCE", False),
+    "type": ("TYPE", False),
+    "index": ("INDEX", False),
+    "function": ("FUNCTION", False),
+    "procedure": ("PROCEDURE", False),
+    "table function": ("TABLE FUNCTION", False),
+}
+_SEQUENCE_SYNTHESIS_UNSUPPORTED_DIALECTS: Final = frozenset({"spanner"})
+_SEQUENCE_NUMERIC_PROPERTIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("start", ("start_value", "start_with", "start")),
+    ("increment", ("increment_by", "increment")),
+    ("minvalue", ("min_value", "minimum_value")),
+    ("maxvalue", ("max_value", "maximum_value")),
+)
+
+
+def _ddl_dialect_or_none(dialect: str | None) -> str | None:
+    """Return ``dialect`` or None when it names generic SQL."""
+    if dialect is None or dialect in _GENERIC_DDL_DIALECTS:
+        return None
+    return dialect
+
+
+def _sqlglot_dialect(dialect: str | None) -> str | None:
+    """Map a data dictionary dialect name to the SQLGlot dialect used to parse and render it."""
+    resolved = _ddl_dialect_or_none(dialect)
+    if resolved is None:
+        return None
+    return _SQLGLOT_DIALECT_ALIASES.get(resolved, resolved)
+
+
 _LOOSE_PROFILE_TYPES: Final = frozenset({
     "",
     "TEXT",
@@ -3141,6 +3485,6 @@ def _is_valid_profile_json(value: Any) -> bool:
         return False
     try:
         parsed = decode_json(stripped)
-    except Exception:
+    except ValueError:
         return False
     return isinstance(parsed, (Mapping, list))

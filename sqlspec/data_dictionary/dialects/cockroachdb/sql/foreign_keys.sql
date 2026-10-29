@@ -8,7 +8,9 @@ SELECT
     tc.table_name::text AS table_name,
     tc.table_schema::text AS table_schema,
     pk_kcu.table_schema::text AS referenced_schema,
-    pk_kcu.table_schema::text AS referenced_table_schema
+    pk_kcu.table_schema::text AS referenced_table_schema,
+    rc.delete_rule::text AS on_delete,
+    rc.update_rule::text AS on_update
 FROM information_schema.table_constraints tc
 JOIN information_schema.key_column_usage kcu
   ON tc.constraint_catalog = kcu.constraint_catalog
@@ -38,7 +40,9 @@ SELECT
     tc.table_name::text AS table_name,
     tc.table_schema::text AS table_schema,
     pk_kcu.table_schema::text AS referenced_schema,
-    pk_kcu.table_schema::text AS referenced_table_schema
+    pk_kcu.table_schema::text AS referenced_table_schema,
+    rc.delete_rule::text AS on_delete,
+    rc.update_rule::text AS on_update
 FROM information_schema.table_constraints tc
 JOIN information_schema.key_column_usage kcu
   ON tc.constraint_catalog = kcu.constraint_catalog

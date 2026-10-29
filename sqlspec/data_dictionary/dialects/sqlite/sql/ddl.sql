@@ -24,7 +24,7 @@ SELECT
     sql AS ddl,
     'native' AS fidelity
 FROM {schema_prefix}sqlite_schema
-WHERE name NOT LIKE 'sqlite_%'
+WHERE name NOT LIKE 'sqlite\_%' ESCAPE '\'
   AND sql IS NOT NULL
 ORDER BY
     CASE type

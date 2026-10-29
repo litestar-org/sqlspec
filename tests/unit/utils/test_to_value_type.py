@@ -586,3 +586,32 @@ def test_attrs_converter_rejects_non_mapping_sequence_items() -> None:
     """_convert_attrs raises TypeError instead of crashing when given a sequence of non-mappings."""
     with pytest.raises(TypeError, match="Cannot convert"):
         to_schema(["not-a-mapping"], schema_type=UserAttrs)
+
+
+def test_foreign_key_metadata_conversion_reads_catalog_aliases_and_actions() -> None:
+    """Catalog alias keys and referential actions survive conversion to ForeignKeyMetadata."""
+    result = to_value_type(
+        {
+            "table_name": "orders",
+            "column_name": "user_id",
+            "referenced_table_name": "users",
+            "referenced_column_name": "id",
+            "constraint_name": "fk_orders_user",
+            "table_schema": "shop",
+            "referenced_table_schema": "auth",
+            "delete_rule": "SET_NULL",
+            "update_rule": "cascade",
+        },
+        ForeignKeyMetadata,
+    )
+    assert result == ForeignKeyMetadata(
+        table_name="orders",
+        column_name="user_id",
+        referenced_table="users",
+        referenced_column="id",
+        constraint_name="fk_orders_user",
+        schema="shop",
+        referenced_schema="auth",
+        on_delete="SET NULL",
+        on_update="CASCADE",
+    )

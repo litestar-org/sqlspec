@@ -7,7 +7,21 @@ SELECT
     ref_att.attname::text AS referenced_column_name,
     con.conname::text AS constraint_name,
     n.nspname::text AS table_schema,
-    ref_ns.nspname::text AS referenced_table_schema
+    ref_ns.nspname::text AS referenced_table_schema,
+    CASE con.confdeltype
+        WHEN 'a' THEN 'NO ACTION'
+        WHEN 'r' THEN 'RESTRICT'
+        WHEN 'c' THEN 'CASCADE'
+        WHEN 'n' THEN 'SET NULL'
+        WHEN 'd' THEN 'SET DEFAULT'
+    END AS on_delete,
+    CASE con.confupdtype
+        WHEN 'a' THEN 'NO ACTION'
+        WHEN 'r' THEN 'RESTRICT'
+        WHEN 'c' THEN 'CASCADE'
+        WHEN 'n' THEN 'SET NULL'
+        WHEN 'd' THEN 'SET DEFAULT'
+    END AS on_update
 FROM pg_catalog.pg_constraint AS con
 JOIN pg_catalog.pg_class AS c ON c.oid = con.conrelid
 JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
@@ -30,7 +44,21 @@ SELECT
     ref_att.attname::text AS referenced_column_name,
     con.conname::text AS constraint_name,
     n.nspname::text AS table_schema,
-    ref_ns.nspname::text AS referenced_table_schema
+    ref_ns.nspname::text AS referenced_table_schema,
+    CASE con.confdeltype
+        WHEN 'a' THEN 'NO ACTION'
+        WHEN 'r' THEN 'RESTRICT'
+        WHEN 'c' THEN 'CASCADE'
+        WHEN 'n' THEN 'SET NULL'
+        WHEN 'd' THEN 'SET DEFAULT'
+    END AS on_delete,
+    CASE con.confupdtype
+        WHEN 'a' THEN 'NO ACTION'
+        WHEN 'r' THEN 'RESTRICT'
+        WHEN 'c' THEN 'CASCADE'
+        WHEN 'n' THEN 'SET NULL'
+        WHEN 'd' THEN 'SET DEFAULT'
+    END AS on_update
 FROM pg_catalog.pg_constraint AS con
 JOIN pg_catalog.pg_class AS c ON c.oid = con.conrelid
 JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
