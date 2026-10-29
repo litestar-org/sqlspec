@@ -1,1 +1,3 @@
-"""Namespace package for runnable SQLSpec documentation examples."""
+"""Runnable SQLSpec documentation examples."""
+
+__all__ = ()

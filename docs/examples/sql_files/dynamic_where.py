@@ -1,44 +1,35 @@
-from pathlib import Path
+"""Append dynamic WHERE predicates onto a named base SQL statement."""
 
-__all__ = ("test_dynamic_where",)
+from typing import Any
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_dynamic_where(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
+def main() -> list[dict[str, Any]]:
+    """Chain where, where_eq, and where_like filters onto a named SQL query."""
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-
-    # Register a base query
-    spec.add_named_sql("list_users", "select id, name, status from users")
+    spec.add_named_sql("list_users", "SELECT id, name, status FROM users")
 
     with spec.provide_session(config) as session:
-        session.execute("create table users (id integer primary key, name text, status text)")
+        session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, status TEXT)")
         session.execute(
-            "insert into users (name, status) values ('Alice', 'active'), ('Bob', 'inactive'), ('Charlie', 'active')"
+            "INSERT INTO users (name, status) VALUES ('Alice', 'active'), ('Bob', 'inactive'), ('Charlie', 'active')"
         )
 
-        # Get the base SQL object and chain .where() calls
         base_query = spec.get_sql("list_users")
-
-        # Add a WHERE clause dynamically
-        active_query = base_query.where("status = 'active'")
-        active_users = session.select(active_query)
-        print(active_users)  # [{"id": 1, ...}, {"id": 3, ...}]
-
-        # Use typed where helpers
-        filtered = base_query.where_eq("name", "Bob")
-        bob = session.select(filtered)
-        print(bob)  # [{"id": 2, "name": "Bob", "status": "inactive"}]
-
-        # Chain multiple where conditions (AND)
-        specific = base_query.where_eq("status", "active").where_like("name", "A%")
-        result = session.select(specific)
-        print(result)  # [{"id": 1, "name": "Alice", "status": "active"}]
-    # end-example
+        active_users = session.select(base_query.where("status = 'active'"))
+        bob = session.select(base_query.where_eq("name", "Bob"))
+        alice_only = session.select(base_query.where_eq("status", "active").where_like("name", "A%"))
 
     assert len(active_users) == 2
     assert len(bob) == 1
-    assert len(result) == 1
+    assert alice_only == [{"id": 1, "name": "Alice", "status": "active"}]
+    return alice_only
+
+
+if __name__ == "__main__":
+    print(main())

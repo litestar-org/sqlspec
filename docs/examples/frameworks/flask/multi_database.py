@@ -1,29 +1,42 @@
-import pytest
+"""Access multiple named SQLSpec database sessions inside a Flask route."""
 
-__all__ = ("test_flask_multi_database",)
+from typing import Any
+
+from flask import Flask
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.extensions.flask import SQLSpecPlugin
+
+__all__ = ("create_app", "main")
 
 
-def test_flask_multi_database() -> None:
-    pytest.importorskip("flask")
-    # start-example
-    from flask import Flask
+def create_app(plugin: SQLSpecPlugin) -> Flask:
+    """Create a Flask application exposing a multi-database report endpoint."""
+    app = Flask(__name__)
+    plugin.init_app(app)
 
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-    from sqlspec.extensions.flask import SQLSpecPlugin
+    @app.get("/report")
+    def report() -> dict[str, list[dict[str, Any]]]:
+        db: SqliteDriver = plugin.get_session("db")
+        etl_db: SqliteDriver = plugin.get_session("etl_db")
+        users = db.select("SELECT 1 AS id, 'Alice' AS name")
+        metrics = etl_db.select("SELECT 'metric1' AS name, 100 AS value")
+        return {"users": users, "metrics": metrics}
 
-    sqlspec = SQLSpec()
+    return app
 
-    # Primary database
-    sqlspec.add_config(
+
+def main() -> Flask:
+    """Configure primary and ETL SQLite binds for Flask and return the app."""
+    spec = SQLSpec()
+    spec.add_config(
         SqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={"flask": {"session_key": "db", "connection_key": "db_connection", "pool_key": "db_pool"}},
         )
     )
-
-    # ETL database with custom keys
-    sqlspec.add_config(
+    spec.add_config(
         SqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={
@@ -31,25 +44,9 @@ def test_flask_multi_database() -> None:
             },
         )
     )
+    plugin = SQLSpecPlugin(spec)
+    return create_app(plugin)
 
-    plugin = SQLSpecPlugin(sqlspec)
 
-    def create_app() -> Flask:
-        app = Flask(__name__)
-        plugin.init_app(app)
-
-        @app.get("/report")
-        def report() -> dict[str, list]:
-            db: SqliteDriver = plugin.get_session("db")
-            etl_db: SqliteDriver = plugin.get_session("etl_db")
-
-            users = db.select("SELECT 1 as id, 'Alice' as name")
-            metrics = etl_db.select("SELECT 'metric1' as name, 100 as value")
-            return {"users": users, "metrics": metrics}
-
-        return app
-
-    app = create_app()
-    # end-example
-
-    assert app is not None
+if __name__ == "__main__":
+    print(main())

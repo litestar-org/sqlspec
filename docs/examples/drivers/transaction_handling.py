@@ -1,29 +1,32 @@
-from pathlib import Path
+"""Manage explicit begin, commit, and rollback transaction boundaries on a session."""
 
-__all__ = ("test_transaction_handling",)
+from typing import Any
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_transaction_handling(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_path = tmp_path / "transactions.db"
+def main() -> list[dict[str, Any]]:
+    """Commit one ledger entry, roll back a second entry, and verify persisted rows."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table if not exists ledger (id integer primary key, note text)")
+        session.execute("CREATE TABLE ledger (id INTEGER PRIMARY KEY, note TEXT)")
         session.begin()
-        session.execute("insert into ledger (note) values ('committed')")
+        session.execute("INSERT INTO ledger (note) VALUES ('committed')")
         session.commit()
 
         session.begin()
-        session.execute("insert into ledger (note) values ('rolled back')")
+        session.execute("INSERT INTO ledger (note) VALUES ('rolled back')")
         session.rollback()
 
-        result = session.execute("select note from ledger order by id")
-        print(result.all())
-    # end-example
+        rows = session.select("SELECT note FROM ledger ORDER BY id")
+        assert rows == [{"note": "committed"}]
+        return rows
 
-    assert result.all() == [{"note": "committed"}]
+
+if __name__ == "__main__":
+    print(main())

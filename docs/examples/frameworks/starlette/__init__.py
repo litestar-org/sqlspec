@@ -1,1 +1,3 @@
-"""Starlette integration examples."""
+"""Starlette integration documentation examples."""
+
+__all__ = ()

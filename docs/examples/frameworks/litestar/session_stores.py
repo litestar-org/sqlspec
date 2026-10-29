@@ -1,17 +1,16 @@
-import pytest
+"""Construct an asynchronous SQLSpec server-side session store for Litestar."""
 
-__all__ = ("test_litestar_session_stores",)
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
+
+__all__ = ("main",)
 
 
-def test_litestar_session_stores() -> None:
-    pytest.importorskip("litestar")
-    pytest.importorskip("aiosqlite")
-    # start-example
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
-
+def main() -> AiosqliteStore:
+    """Create an AiosqliteStore backed by an in-memory SQLite database."""
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
-    store = AiosqliteStore(config)
-    # end-example
+    return AiosqliteStore(config)
 
-    assert store is not None
+
+if __name__ == "__main__":
+    print(main())

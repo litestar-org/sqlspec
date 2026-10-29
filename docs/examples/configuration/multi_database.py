@@ -1,40 +1,44 @@
+"""Register multiple database configurations and load shared SQL files on one SQLSpec instance."""
+
+import tempfile
 from pathlib import Path
+from typing import Any
 
-__all__ = ("test_multi_database",)
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.observability import ObservabilityConfig, SamplingConfig
+
+__all__ = ("main",)
 
 
-def test_multi_database(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.observability import ObservabilityConfig, SamplingConfig
+def main() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Configure independent primary and analytics SQLite databases and run queries on each."""
+    spec = SQLSpec(observability_config=ObservabilityConfig(sampling=SamplingConfig(sample_rate=0.1), print_sql=False))
 
-    spec = SQLSpec(observability_config=ObservabilityConfig(sampling=SamplingConfig(sample_rate=0.1), print_sql=True))
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        base_dir = Path(tmp_dir)
+        primary = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "primary.db")}))
+        analytics = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "analytics.db")}))
 
-    # Primary database
-    primary = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "primary.db")}))
+        sql_dir = base_dir / "sql"
+        sql_dir.mkdir()
+        (sql_dir / "queries.sql").write_text("-- name: list_users\nSELECT id, name FROM users ORDER BY id;\n")
+        spec.load_sql_files(sql_dir)
 
-    # Analytics database
-    analytics = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "analytics.db")}))
+        with spec.provide_session(primary) as session:
+            session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            session.execute("INSERT INTO users (name) VALUES ('Alice')")
+            users = session.execute(spec.get_sql("list_users")).all()
 
-    # Load SQL files from multiple directories
-    sql_dir = tmp_path / "sql"
-    sql_dir.mkdir()
-    (sql_dir / "queries.sql").write_text("-- name: list_users\nselect id, name from users order by id;\n")
-    spec.load_sql_files(sql_dir)
+        with spec.provide_session(analytics) as session:
+            session.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, event TEXT)")
+            session.execute("INSERT INTO events (event) VALUES ('page_view')")
+            events = session.execute("SELECT id, event FROM events").all()
 
-    # Use each config independently
-    with spec.provide_session(primary) as session:
-        session.execute("create table users (id integer primary key, name text)")
-        session.execute("insert into users (name) values ('Alice')")
-        result = session.execute(spec.get_sql("list_users"))
-        print(result.all())
+    assert users == [{"id": 1, "name": "Alice"}]
+    assert events == [{"id": 1, "event": "page_view"}]
+    return users, events
 
-    with spec.provide_session(analytics) as session:
-        session.execute("create table events (id integer primary key, event text)")
-        session.execute("insert into events (event) values ('page_view')")
-        result = session.execute("select * from events")
-        print(result.all())
-    # end-example
 
-    assert result.all() == [{"id": 1, "event": "page_view"}]
+if __name__ == "__main__":
+    print(main())

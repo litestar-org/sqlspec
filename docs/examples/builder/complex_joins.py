@@ -1,22 +1,23 @@
-from pathlib import Path
+"""Execute a joined SELECT query built with the fluent SQL query builder."""
 
-__all__ = ("test_builder_complex_joins",)
+from typing import Any
+
+from sqlspec import SQLSpec, sql
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_builder_complex_joins(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec, sql
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_path = tmp_path / "builder_joins.db"
+def main() -> list[dict[str, Any]]:
+    """Run an inner join between orders and customers in SQLite."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table if not exists customers (id integer primary key, name text)")
-        session.execute("create table if not exists orders (id integer primary key, customer_id int)")
-        session.execute("insert into customers (name) values ('Ada')")
-        session.execute("insert into orders (customer_id) values (1)")
+        session.execute("CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT)")
+        session.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER)")
+        session.execute("INSERT INTO customers (name) VALUES ('Ada')")
+        session.execute("INSERT INTO orders (customer_id) VALUES (1)")
 
         query = (
             sql
@@ -24,8 +25,10 @@ def test_builder_complex_joins(tmp_path: Path) -> None:
             .from_("orders")
             .join("customers", "orders.customer_id = customers.id")
         )
-        result = session.execute(query)
-        print(result.all())
-    # end-example
+        rows = session.execute(query).all()
+        assert rows == [{"id": 1, "name": "Ada"}]
+        return rows
 
-    assert result.all() == [{"id": 1, "name": "Ada"}]
+
+if __name__ == "__main__":
+    print(main())

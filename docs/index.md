@@ -30,13 +30,9 @@ config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}
 with spec.provide_session(config) as session:
     session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
     session.execute(
-        "INSERT INTO users (name, email) VALUES (:name, :email)",
-        {"name": "Ada Lovelace", "email": "ada@example.org"},
+        "INSERT INTO users (name, email) VALUES (:name, :email)", {"name": "Ada Lovelace", "email": "ada@example.org"}
     )
-    user = session.select_one(
-        "SELECT id, name, email FROM users WHERE name = :name",
-        {"name": "Ada Lovelace"},
-    )
+    user = session.select_one("SELECT id, name, email FROM users WHERE name = :name", {"name": "Ada Lovelace"})
 ```
 
 Try live queries directly in your browser in the [Interactive Playground](playground.md).

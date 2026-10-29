@@ -1,1 +1,3 @@
-"""Extension-focused demos (ADK, framework hooks, etc.)."""
+"""Extension integration documentation examples."""
+
+__all__ = ()

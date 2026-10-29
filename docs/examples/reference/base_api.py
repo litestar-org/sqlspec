@@ -1,13 +1,18 @@
-__all__ = ("test_base_api",)
+"""Register and retrieve named SQL statements on the SQLSpec registry."""
+
+from sqlspec import SQL, SQLSpec
+
+__all__ = ("main",)
 
 
-def test_base_api() -> None:
-    # start-example
-    from sqlspec import SQLSpec
-
+def main() -> SQL:
+    """Register a named SQL query and retrieve its compiled SQL wrapper."""
     spec = SQLSpec()
-    spec.add_named_sql("health_check", "select 1 as ok")
+    spec.add_named_sql("health_check", "SELECT 1 AS ok")
     query = spec.get_sql("health_check")
-    # end-example
+    assert query.raw_sql == "SELECT 1 AS ok"
+    return query
 
-    assert query.raw_sql.startswith("select")
+
+if __name__ == "__main__":
+    print(main().raw_sql)

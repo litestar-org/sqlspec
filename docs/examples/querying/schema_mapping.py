@@ -1,45 +1,41 @@
-from pathlib import Path
+"""Map query results automatically into typed msgspec.Struct models with schema_type."""
 
-__all__ = ("test_schema_mapping",)
+import msgspec
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("User", "main")
 
 
-def test_schema_mapping(tmp_path: Path) -> None:
-    # start-example
-    from dataclasses import dataclass
+class User(msgspec.Struct, frozen=True, gc=False):
+    """Typed user row projection."""
 
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
+    id: int
+    name: str
 
-    @dataclass
-    class User:
-        id: int
-        name: str
 
-    db_path = tmp_path / "schema.db"
+def main() -> tuple[list[User], User, User | None]:
+    """Fetch dictionary rows and typed User structs via select, select_one, and select_one_or_none."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table users (id integer primary key, name text)")
-        session.execute("insert into users (name) values ('Alice'), ('Bob')")
+        session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+        session.execute("INSERT INTO users (name) VALUES ('Alice'), ('Bob')")
 
-        # select returns list of dicts by default
-        rows = session.select("select id, name from users order by id")
-        print(rows)  # [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+        raw_rows = session.select("SELECT id, name FROM users ORDER BY id")
+        assert raw_rows == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
 
-        # Use schema_type to map rows to dataclass instances
-        users = session.select("select id, name from users order by id", schema_type=User)
-        print(users)  # [User(id=1, name='Alice'), User(id=2, name='Bob')]
-
-        # select_one with schema_type
-        user = session.select_one("select id, name from users where name = ?", "Alice", schema_type=User)
-        print(user)  # User(id=1, name='Alice')
-
-        # select_one_or_none returns None if no match
-        maybe_user = session.select_one_or_none("select id, name from users where name = ?", "Nobody", schema_type=User)
-        print(maybe_user)  # None
-    # end-example
+        users = session.select("SELECT id, name FROM users ORDER BY id", schema_type=User)
+        alice = session.select_one("SELECT id, name FROM users WHERE name = ?", "Alice", schema_type=User)
+        nobody = session.select_one_or_none("SELECT id, name FROM users WHERE name = ?", "Nobody", schema_type=User)
 
     assert isinstance(users[0], User)
-    assert user.name == "Alice"
-    assert maybe_user is None
+    assert alice.name == "Alice"
+    assert nobody is None
+    return users, alice, nobody
+
+
+if __name__ == "__main__":
+    print(main())

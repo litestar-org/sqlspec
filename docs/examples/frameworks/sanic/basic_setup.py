@@ -1,37 +1,36 @@
-import pytest
+"""Register SQLSpecPlugin with a Sanic application and query an async SQLite session."""
 
-__all__ = ("test_sanic_basic_setup",)
+from sanic import Request, Sanic, response
+from sanic.response import HTTPResponse
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.extensions.sanic import SQLSpecPlugin
+
+__all__ = ("main",)
 
 
-def test_sanic_basic_setup() -> None:
-    pytest.importorskip("sanic")
-    pytest.importorskip("aiosqlite")
-    # start-example
-    from sanic import Request, Sanic, response
-    from sanic.response import HTTPResponse
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-    from sqlspec.extensions.sanic import SQLSpecPlugin
-
-    sqlspec = SQLSpec()
-    sqlspec.add_config(
+def main() -> Sanic:
+    """Create a Sanic application wired with SQLSpecPlugin."""
+    spec = SQLSpec()
+    spec.add_config(
         AiosqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={"sanic": {"commit_mode": "manual", "session_key": "db"}},
         )
     )
 
-    db_plugin = SQLSpecPlugin(sqlspec)
+    db_plugin = SQLSpecPlugin(spec)
     app = Sanic("SQLSpecSanicBasicExample")
 
     @app.get("/health")
     async def health(request: Request) -> HTTPResponse:
         db: AiosqliteDriver = db_plugin.get_session(request, "db")
-        result = await db.execute("select 1 as ok")
-        return response.json(result.one())
+        return response.json(await db.select_one("SELECT 1 AS ok"))
 
     db_plugin.init_app(app)
-    # end-example
+    return app
 
-    assert app is not None
+
+if __name__ == "__main__":
+    print(main())

@@ -1,46 +1,37 @@
-from pathlib import Path
+"""Execute batched inserts, scalar projections, and paginated queries in SQLSpec."""
 
-__all__ = ("test_batch_operations",)
+from typing import Any
+
+from sqlspec import SQL, SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_batch_operations(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_path = tmp_path / "batch.db"
+def main() -> tuple[list[dict[str, Any]], int]:
+    """Insert multiple users with execute_many and read scalar and paginated results."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table users (id integer primary key, name text, email text)")
-
-        # execute_many inserts multiple rows in a single call
+        session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
         session.execute_many(
-            "insert into users (name, email) values (?, ?)",
+            "INSERT INTO users (name, email) VALUES (?, ?)",
             [("Alice", "alice@example.com"), ("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")],
         )
 
-        # select_value returns a single scalar value
-        count = session.select_value("select count(*) from users")
-        print(count)  # 3
-
-        # select_value with type conversion
-        count_int = session.select_value("select count(*) from users", value_type=int)
-        print(count_int)  # 3
-
-        # select_value_or_none returns None when no rows match
-        email = session.select_value_or_none("select email from users where name = ?", "Nobody")
-        print(email)  # None
-
-        from sqlspec import SQL
-
-        query = SQL("select id, name from users").paginate(page=1, page_size=2)
+        count = session.select_value("SELECT COUNT(*) FROM users", value_type=int)
+        email = session.select_value_or_none("SELECT email FROM users WHERE name = ?", "Nobody")
+        query = SQL("SELECT id, name FROM users ORDER BY id").paginate(page=1, page_size=2)
         data, total = session.select_with_total(query)
-        print(f"Page has {len(data)} rows, total matching: {total}")
-    # end-example
 
     assert count == 3
     assert email is None
     assert total == 3
     assert len(data) == 2
+    return data, total
+
+
+if __name__ == "__main__":
+    page_rows, total_count = main()
+    print(f"Page has {len(page_rows)} rows, total matching: {total_count}")

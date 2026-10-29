@@ -1,1 +1,3 @@
-"""Litestar applications showcasing SQLSpec integration."""
+"""Litestar integration documentation examples."""
+
+__all__ = ()

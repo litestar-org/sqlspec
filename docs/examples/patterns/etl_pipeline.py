@@ -1,38 +1,44 @@
+"""Extract completed orders from a source database and load revenue totals into a target database."""
+
+import tempfile
 from pathlib import Path
 
-__all__ = ("test_etl_pipeline",)
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_etl_pipeline(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    # Simulate an ETL pipeline with two SQLite databases
+def main() -> float:
+    """Run a two-database SQLite ETL pipeline inside a temporary directory."""
     spec = SQLSpec()
-    source_config = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "source.db")}))
-    target_config = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "target.db")}))
 
-    # Step 1: Seed source data
-    with spec.provide_session(source_config) as session:
-        session.execute("create table orders (id integer primary key, amount real, status text)")
-        session.execute_many(
-            "insert into orders (amount, status) values (?, ?)",
-            [(100.0, "complete"), (50.0, "pending"), (200.0, "complete")],
-        )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        base_dir = Path(tmp_dir)
+        source_config = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "source.db")}))
+        target_config = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "target.db")}))
 
-    # Step 2: Extract from source
-    with spec.provide_session(source_config) as session:
-        completed = session.select("select id, amount from orders where status = ?", "complete")
+        with spec.provide_session(source_config) as session:
+            session.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, amount REAL, status TEXT)")
+            session.execute_many(
+                "INSERT INTO orders (amount, status) VALUES (?, ?)",
+                [(100.0, "complete"), (50.0, "pending"), (200.0, "complete")],
+            )
 
-    # Step 3: Load into target
-    with spec.provide_session(target_config) as session:
-        session.execute("create table revenue (order_id integer, amount real)")
-        session.execute_many(
-            "insert into revenue (order_id, amount) values (?, ?)", [(row["id"], row["amount"]) for row in completed]
-        )
-        total = session.select_value("select sum(amount) from revenue")
-        print(f"Total revenue: {total}")  # Total revenue: 300.0
-    # end-example
+        with spec.provide_session(source_config) as session:
+            completed = session.select("SELECT id, amount FROM orders WHERE status = ?", "complete")
+
+        with spec.provide_session(target_config) as session:
+            session.execute("CREATE TABLE revenue (order_id INTEGER, amount REAL)")
+            session.execute_many(
+                "INSERT INTO revenue (order_id, amount) VALUES (?, ?)",
+                [(row["id"], row["amount"]) for row in completed],
+            )
+            total = float(session.select_value("SELECT SUM(amount) FROM revenue"))
 
     assert total == 300.0
+    return total
+
+
+if __name__ == "__main__":
+    print(f"Total revenue: {main()}")

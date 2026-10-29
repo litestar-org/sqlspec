@@ -1,37 +1,36 @@
-import pytest
+"""Manage Sanic connection pools directly on app.ctx with per-request DI disabled."""
 
-__all__ = ("test_sanic_disable_di",)
+from sanic import Request, Sanic, response
+from sanic.response import HTTPResponse
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.extensions.sanic import SQLSpecPlugin
+
+__all__ = ("main",)
 
 
-def test_sanic_disable_di() -> None:
-    pytest.importorskip("sanic")
-    pytest.importorskip("aiosqlite")
-    # start-example
-    from sanic import Request, Sanic, response
-    from sanic.response import HTTPResponse
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.extensions.sanic import SQLSpecPlugin
-
-    sqlspec = SQLSpec()
+def main() -> Sanic:
+    """Create a Sanic application acquiring connections manually from app.ctx.db_pool."""
+    spec = SQLSpec()
     config = AiosqliteConfig(
-        connection_config={"database": "app.db"},
+        connection_config={"database": ":memory:"},
         extension_config={"sanic": {"disable_di": True, "pool_key": "db_pool"}},
     )
-    sqlspec.add_config(config)
+    spec.add_config(config)
 
-    db_plugin = SQLSpecPlugin(sqlspec)
+    db_plugin = SQLSpecPlugin(spec)
     app = Sanic("SQLSpecSanicDisableDIExample")
 
     @app.get("/health")
     async def health(request: Request) -> HTTPResponse:
         async with config.provide_connection(request.app.ctx.db_pool) as connection:
             db = config.driver_type(connection=connection, statement_config=config.statement_config)
-            result = await db.execute("select 1 as ok")
-            return response.json(result.one())
+            return response.json(await db.select_one("SELECT 1 AS ok"))
 
     db_plugin.init_app(app)
-    # end-example
+    return app
 
-    assert app is not None
+
+if __name__ == "__main__":
+    print(main())

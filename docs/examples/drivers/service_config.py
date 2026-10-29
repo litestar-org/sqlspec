@@ -1,17 +1,21 @@
-"""Config-built services keep helper sessions short and transactions explicit."""
+"""Use SQLSpecSyncService and SQLSpecAsyncService for short helper sessions and explicit transactions."""
 
+import asyncio
+import tempfile
 from pathlib import Path
+from typing import NoReturn
 
-__all__ = ("test_async_service_config", "test_sync_service_config")
+from sqlspec import SQLFileLoader, sql
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+
+__all__ = ("main", "run_async_service_example", "run_sync_service_example")
 
 
-def test_sync_service_config(tmp_path: Path) -> None:
-    # start-sync-example
-    from sqlspec import SQLFileLoader, sql
-    from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.service import SQLSpecSyncService
-
-    config = SqliteConfig(connection_config={"database": str(tmp_path / "users.sqlite")})
+def run_sync_service_example(db_path: Path) -> int:
+    """Execute synchronous service helpers and atomic transaction blocks."""
+    config = SqliteConfig(connection_config={"database": str(db_path)})
     service = SQLSpecSyncService(config=config, loader=SQLFileLoader())
     users = sql.select("name").from_("users")
 
@@ -20,17 +24,14 @@ def test_sync_service_config(tmp_path: Path) -> None:
             session.execute("CREATE TABLE users (name TEXT)")
             session.execute("INSERT INTO users VALUES (:name)", name="Ada")
 
-        # Each bare helper acquires and releases its own session.
         assert service.get_one(users) == {"name": "Ada"}
         assert service.exists(users)
         assert service.paginate(users).total == 1
 
-        # Explicit reuse borrows this session without starting a transaction.
         with service.provide_session() as session:
             assert service.exists(users, session=session)
             assert service.get_one(users, session=session) == {"name": "Ada"}
 
-        # Both helpers see the same uncommitted transaction.
         with service.begin_transaction() as session:
             session.execute("INSERT INTO users VALUES (:name)", name="Grace")
             assert service.exists(sql.select("name").from_("users").where_eq("name", "Grace"))
@@ -39,24 +40,20 @@ def test_sync_service_config(tmp_path: Path) -> None:
         try:
             with service.begin_transaction() as session:
                 session.execute("INSERT INTO users VALUES (:name)", name="Rolled back")
-                msg = "Cancel this change"
-                raise ValueError(msg)  # noqa: TRY301 - Demonstrate an application error rolling back the block.
+                _abort_transaction()
         except ValueError:
             pass
 
-        assert service.paginate(users).total == 2
+        total = service.paginate(users).total
+        assert total == 2
+        return total
     finally:
         config.close_pool()
-    # end-sync-example
 
 
-async def test_async_service_config(tmp_path: Path) -> None:
-    # start-async-example
-    from sqlspec import SQLFileLoader, sql
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.service import SQLSpecAsyncService
-
-    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "users.sqlite")})
+async def run_async_service_example(db_path: Path) -> int:
+    """Execute asynchronous service helpers and atomic transaction blocks."""
+    config = AiosqliteConfig(connection_config={"database": str(db_path)})
     service = SQLSpecAsyncService(config=config, loader=SQLFileLoader())
     users = sql.select("name").from_("users")
 
@@ -81,12 +78,31 @@ async def test_async_service_config(tmp_path: Path) -> None:
         try:
             async with service.begin_transaction() as session:
                 await session.execute("INSERT INTO users VALUES (:name)", name="Rolled back")
-                msg = "Cancel this change"
-                raise ValueError(msg)  # noqa: TRY301 - Demonstrate an application error rolling back the block.
+                _abort_transaction()
         except ValueError:
             pass
 
-        assert (await service.paginate(users)).total == 2
+        total = (await service.paginate(users)).total
+        assert total == 2
+        return total
     finally:
         await config.close_pool()
-    # end-async-example
+
+
+async def main() -> tuple[int, int]:
+    """Run both synchronous and asynchronous service examples in a temporary directory."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        base_dir = Path(tmp_dir)
+        sync_total = run_sync_service_example(base_dir / "sync_users.sqlite")
+        async_total = await run_async_service_example(base_dir / "async_users.sqlite")
+        return sync_total, async_total
+
+
+def _abort_transaction() -> NoReturn:
+    """Raise an error inside a transaction block to demonstrate automatic rollback."""
+    msg = "Cancel this change"
+    raise ValueError(msg)
+
+
+if __name__ == "__main__":
+    print(asyncio.run(main()))

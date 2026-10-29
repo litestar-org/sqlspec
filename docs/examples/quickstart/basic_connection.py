@@ -1,19 +1,25 @@
-__all__ = ("test_basic_connection",)
+"""Open a synchronous SQLite session and execute a parameterized query."""
+
+from typing import Any
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_basic_connection() -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
+def main() -> list[dict[str, Any]]:
+    """Insert and fetch a note in an in-memory SQLite database."""
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table if not exists notes (id integer primary key, body text)")
-        session.execute("insert into notes (body) values (?)", "Hello, SQLSpec!")
-        result = session.execute("select id, body from notes")
-        print(result.all())
-    # end-example
+        session.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+        session.execute("INSERT INTO notes (body) VALUES (?)", "Hello, SQLSpec")
+        rows = session.select("SELECT id, body FROM notes")
+        assert rows == [{"id": 1, "body": "Hello, SQLSpec"}]
+        return rows
 
-    assert result.all() == [{"id": 1, "body": "Hello, SQLSpec!"}]
+
+if __name__ == "__main__":
+    print(main())

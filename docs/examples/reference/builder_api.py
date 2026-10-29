@@ -1,11 +1,17 @@
-__all__ = ("test_builder_api",)
+"""Construct a filtered and paginated SELECT statement with the fluent sql factory."""
+
+from sqlspec import sql
+
+__all__ = ("main",)
 
 
-def test_builder_api() -> None:
-    # start-example
-    from sqlspec import sql
-
+def main() -> str:
+    """Build a SELECT query and render its SQL string."""
     query = sql.select("id", "name").from_("users").where_eq("status", "active").limit(10).offset(0)
-    # end-example
+    rendered = query.to_sql()
+    assert "SELECT" in rendered.upper()
+    return rendered
 
-    assert "select" in query.to_sql().lower()
+
+if __name__ == "__main__":
+    print(main())
