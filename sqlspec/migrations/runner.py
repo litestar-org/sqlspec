@@ -96,6 +96,17 @@ class BaseMigrationRunner:
         if self.context is not None:
             self.context.driver = driver
 
+    def clear_caches(self) -> None:
+        """Clear the SQL loader caches and the migration metadata cache.
+
+        Call after migration files are created, rewritten, renamed, or deleted on disk so the
+        next load re-reads them instead of resolving query names against stale paths.
+        """
+        self.loader.clear_cache()
+        for extension_loader in self._extension_sql_loaders.values():
+            extension_loader.clear_cache()
+        self._metadata_cache.clear()
+
     def calculate_checksum(self, content: str) -> str:
         """Calculate MD5 checksum of migration content.
 
@@ -366,7 +377,7 @@ class BaseMigrationRunner:
                 raise MigrationError(msg)
             schema = candidate_schema
 
-        replaces = extract_replaces_versions(content)
+        replaces = extract_replaces_versions(content, file_path.suffix)
 
         metadata = cast(
             "LoadedMigrationMetadata",
@@ -1250,47 +1261,101 @@ def create_migration_runner(
     )
 
 
-def extract_replaces_versions(content: str) -> list[str]:
-    """Extract replaced version strings from a migration header or ``__replaces__`` attribute.
+def extract_replaces_versions(content: str, suffix: str) -> list[str]:
+    """Extract the versions a squashed migration replaces.
+
+    Only the migration header is consulted, so comments in the migration body never change
+    tracking state. For ``.sql`` files the header is the leading contiguous block of ``--``
+    comment lines (blank lines allowed) that ends at the first statement or ``-- name:`` query
+    marker. For ``.py`` files a module-level ``__replaces__`` assignment takes precedence over a
+    ``Replaces:`` / ``Squashed from:`` line in the module docstring.
 
     Args:
         content: Raw migration file text.
+        suffix: Migration file suffix (``.sql`` or ``.py``).
 
     Returns:
-        Ordered list of replaced version strings, or empty list when absent.
+        Ordered list of replaced version strings, or an empty list when absent.
+
+    Raises:
+        MigrationError: If a listed version is not a valid migration version.
     """
+    if suffix == ".py":
+        return _python_replaces_versions(content)
+    return _header_replaces_versions(_sql_header_lines(content))
+
+
+def _sql_header_lines(content: str) -> list[str]:
+    """Return the comment text of the leading SQL comment header."""
+    header: list[str] = []
     for line in content.splitlines():
         stripped = line.strip()
-        for prefix in ("-- Squashed from:", "-- Replaces:", "Squashed from:", "Replaces:"):
-            if stripped.lower().startswith(prefix.lower()):
-                raw_versions = stripped[len(prefix) :].strip()
-                return [v.strip() for v in raw_versions.split(",") if v.strip()]
+        if not stripped:
+            continue
+        if not stripped.startswith("--"):
+            break
+        comment = stripped[2:].strip()
+        if comment.lower().startswith("name:"):
+            break
+        header.append(comment)
+    return header
+
+
+def _python_replaces_versions(content: str) -> list[str]:
+    """Return replaced versions from a module-level ``__replaces__`` or the module docstring."""
     try:
         module = ast.parse(content)
     except SyntaxError:
         return []
     for node in module.body:
-        targets: list[ast.expr] = []
-        value: ast.expr | None = None
         if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-            value = node.value
+            targets: list[ast.expr] = list(node.targets)
+            value: ast.expr | None = node.value
         elif isinstance(node, ast.AnnAssign):
             targets = [node.target]
             value = node.value
-        if value is None:
+        else:
             continue
-        for target in targets:
-            if isinstance(target, ast.Name) and target.id == "__replaces__":
-                if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
-                    return [
-                        str(elt.value).strip()
-                        for elt in value.elts
-                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and elt.value.strip()
-                    ]
-                if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                    return [v.strip() for v in value.value.split(",") if v.strip()]
+        if value is None or not any(isinstance(t, ast.Name) and t.id == "__replaces__" for t in targets):
+            continue
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return _parse_replaces_tokens(value.value)
+        if isinstance(value, (ast.List, ast.Tuple)) and all(
+            isinstance(elt, ast.Constant) and isinstance(elt.value, str) for elt in value.elts
+        ):
+            return _parse_replaces_tokens(",".join(str(cast("ast.Constant", elt).value) for elt in value.elts))
+        msg = "__replaces__ must be a string or a list/tuple of version strings"
+        raise MigrationError(msg)
+    docstring = ast.get_docstring(module)
+    if docstring is None:
+        return []
+    return _header_replaces_versions([line.strip() for line in docstring.splitlines()])
+
+
+def _header_replaces_versions(header_lines: list[str]) -> list[str]:
+    """Return versions from the first ``Replaces:`` or ``Squashed from:`` header line."""
+    for line in header_lines:
+        lowered = line.lower()
+        for prefix in ("squashed from:", "replaces:"):
+            if lowered.startswith(prefix):
+                return _parse_replaces_tokens(line[len(prefix) :])
     return []
+
+
+def _parse_replaces_tokens(raw_versions: str) -> list[str]:
+    """Split a comma-separated version list, strip trailing punctuation, and validate each version."""
+    versions: list[str] = []
+    for token in raw_versions.split(","):
+        version = token.strip().rstrip(";,").strip()
+        if not version:
+            continue
+        try:
+            parse_version(version)
+        except ValueError as error:
+            msg = f"Invalid version {version!r} in migration replaces header"
+            raise MigrationError(msg) from error
+        versions.append(version)
+    return versions
 
 
 class _CachedMigrationMetadata:

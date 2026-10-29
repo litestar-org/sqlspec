@@ -5,11 +5,10 @@ which can occur when branches with migrations merge in different orders across
 staging and production environments.
 """
 
+import importlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-
-from rich.console import Console
 
 from sqlspec.exceptions import OutOfOrderMigrationError, SquashValidationError
 from sqlspec.migrations.version import VersionType, parse_version
@@ -30,7 +29,6 @@ __all__ = (
     "validate_squash_range",
 )
 
-console = Console()
 logger = get_logger("sqlspec.migrations.validation")
 
 
@@ -184,6 +182,7 @@ def validate_migration_order(
         return
     if not echo:
         return
+    console = importlib.import_module("rich.console").Console()
     console.print("[yellow]Out-of-order migrations detected[/]")
     console.print(f"[yellow]{warning_message}[/]")
 

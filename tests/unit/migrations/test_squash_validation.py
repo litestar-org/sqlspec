@@ -295,3 +295,12 @@ def test_validate_squash_range_supports_timestamp_and_mixed_ranges() -> None:
     ]
     with pytest.raises(SquashValidationError, match="Gap detected"):
         validate_squash_range(gapped_mixed, "0001", "20251011120000")
+
+
+@pytest.mark.parametrize("range_str", ["1-", ":7", "1..", " - 7", "1: "])
+def test_parse_version_range_rejects_missing_endpoint(range_str: str) -> None:
+    """A range with an empty START or END fails instead of normalizing to version 0000."""
+    from sqlspec.migrations.squash import parse_version_range
+
+    with pytest.raises(ValueError, match="both START and END are required"):
+        parse_version_range(range_str)

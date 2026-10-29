@@ -357,9 +357,12 @@ async def test_runner_load_migration_extracts_replaces_from_sql_and_python_files
         encoding="utf-8",
     )
 
-    assert extract_replaces_versions(sql_file.read_text(encoding="utf-8")) == ["0001", "0002", "0003"]
-    assert extract_replaces_versions(py_doc_file.read_text(encoding="utf-8")) == ["20251011120000", "20251012130000"]
-    assert extract_replaces_versions(py_attr_file.read_text(encoding="utf-8")) == ["0003", "0004"]
+    assert extract_replaces_versions(sql_file.read_text(encoding="utf-8"), ".sql") == ["0001", "0002", "0003"]
+    assert extract_replaces_versions(py_doc_file.read_text(encoding="utf-8"), ".py") == [
+        "20251011120000",
+        "20251012130000",
+    ]
+    assert extract_replaces_versions(py_attr_file.read_text(encoding="utf-8"), ".py") == ["0003", "0004"]
 
     sync_runner = SyncMigrationRunner(tmp_path)
     sql_meta = sync_runner.load_migration(sql_file, "0001")
@@ -569,3 +572,71 @@ async def test_async_upgrade_reconciles_fully_applied_and_rejects_partial_squash
     reconcile_partial = AsyncMigrationCommands(partial_config)
     with pytest.raises(SquashValidationError, match="0002"):
         await reconcile_partial.upgrade(echo=False)
+
+
+def test_extract_replaces_versions_reads_only_the_sql_header() -> None:
+    """Only the leading SQL comment header declares replaced versions; trailing punctuation is stripped."""
+    from sqlspec.migrations.runner import extract_replaces_versions
+
+    header = "-- SQLSpec Migration\n\n-- Replaces: 0001, 0002;\n-- name: migrate-0003-up\nSELECT 1;\n"
+    body_comment = "-- name: migrate-0003-up\n-- Replaces: 0001\nCREATE TABLE t (id INT);\n"
+    after_statement = "CREATE TABLE t (id INT);\n-- Squashed from: 0001\n"
+
+    assert extract_replaces_versions(header, ".sql") == ["0001", "0002"]
+    assert extract_replaces_versions(body_comment, ".sql") == []
+    assert extract_replaces_versions(after_statement, ".sql") == []
+
+
+def test_extract_replaces_versions_reads_python_docstring_or_module_attribute() -> None:
+    """Python migrations use the module docstring or ``__replaces__``, never body comments or strings."""
+    from sqlspec.migrations.runner import extract_replaces_versions
+
+    attribute_wins = '"""Squashed from: 0001."""\n\n__replaces__ = ("0004", "0005")\n'
+    body_only = '"""Plain migration."""\n\n# Replaces: 0001\ndef up():\n    return ["-- Replaces: 0002"]\n'
+
+    assert extract_replaces_versions(attribute_wins, ".py") == ["0004", "0005"]
+    assert extract_replaces_versions(body_only, ".py") == []
+
+
+def test_extract_replaces_versions_rejects_invalid_versions() -> None:
+    """A malformed version in the header fails loudly instead of corrupting tracking rows."""
+    from sqlspec.exceptions import MigrationError
+    from sqlspec.migrations.runner import extract_replaces_versions
+
+    with pytest.raises(MigrationError, match="'see ticket 12'"):
+        extract_replaces_versions("-- Replaces: 0001, see ticket 12\n-- name: migrate-0002-up\nSELECT 1;\n", ".sql")
+    with pytest.raises(MigrationError, match="__replaces__"):
+        extract_replaces_versions("__replaces__ = VERSIONS\n", ".py")
+
+
+def test_sync_upgrade_ignores_replaces_comment_in_migration_body(tmp_path: Path) -> None:
+    """A ``-- Replaces:`` comment inside a migration body neither deletes nor rewrites tracking rows."""
+    from sqlspec.adapters.sqlite.config import SqliteConfig
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_users.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE users (id INTEGER PRIMARY KEY);\n"
+        "-- name: migrate-0001-down\nDROP TABLE users;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0002_posts.sql").write_text(
+        "-- name: migrate-0002-up\n-- Replaces: 0001\nCREATE TABLE posts (id INTEGER PRIMARY KEY);\n"
+        "-- name: migrate-0002-down\nDROP TABLE posts;\n",
+        encoding="utf-8",
+    )
+
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "body_comment.db")},
+        migration_config={"script_location": str(migrations_dir)},
+    )
+    commands = SyncMigrationCommands(config)
+    commands.upgrade(echo=False)
+    SyncMigrationCommands(config).upgrade(echo=False)
+
+    with config.provide_session() as driver:
+        applied = commands.tracker.get_applied_migrations(driver)
+        tables = {row["name"] for row in driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert [(row["version_num"], row["replaces"]) for row in applied] == [("0001", None), ("0002", None)]
+    assert {"users", "posts"} <= tables

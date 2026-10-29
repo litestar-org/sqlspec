@@ -2,19 +2,31 @@
 
 This module provides utilities to consolidate multiple sequential migrations
 into a single "release" migration file, following the Django-style squash workflow.
+
+Three strategies are available:
+
+- ``concat`` (default) keeps every original statement verbatim, in order, and
+  concatenates the original down migrations in reverse order.
+- ``ddl`` folds the chronological DDL into net ``CREATE`` statements. It refuses
+  with :class:`~sqlspec.exceptions.SquashValidationError` whenever the folded
+  output could not be faithful to sequential application.
+- ``schema`` emits DDL reflected from the live database data dictionary.
 """
 
 import re
-from collections import OrderedDict
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.dialects.dialect import Dialect
+from sqlglot.errors import ErrorLevel, ParseError, TokenError, UnsupportedError
+from sqlglot.tokenizer_core import Token, TokenType
 
+from sqlspec.data_dictionary._types import DDLResult
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SquashValidationError
 from sqlspec.migrations._backup import create_backup, remove_backup, restore_backup
 from sqlspec.migrations.loaders import _load_migration_sql
@@ -38,23 +50,79 @@ __all__ = (
     "fold_migration_ddl",
     "group_migrations_by_type",
     "parse_version_range",
+    "schema_ddl_statements",
 )
 
 logger = get_logger("sqlspec.migrations.squash")
 
 _TRANSACTIONAL_DIRECTIVE_RE = re.compile(r"^--\s*transactional:\s*(true|false)\s*$", re.MULTILINE | re.IGNORECASE)
 _SCHEMA_DIRECTIVE_RE = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
-_RENAME_TABLE_COMMAND_RE = re.compile(r"^\s*TABLE\s+([^\s;]+)\s+TO\s+([^\s;]+)\s*$", re.IGNORECASE)
+_RENAME_TABLE_COMMAND_RE = re.compile(r"^\s*TABLE\s+([^\s;,]+)\s+TO\s+([^\s;,]+)\s*$", re.IGNORECASE)
+_SQUASH_STRATEGIES = frozenset({"concat", "ddl", "schema"})
+_CONCAT_HINT = "Use --strategy concat to keep the original statements verbatim."
+_SNIPPET_LENGTH = 160
+_TEXT_TOKEN_TYPES = frozenset({
+    TokenType.VAR,
+    TokenType.IDENTIFIER,
+    TokenType.NUMBER,
+    TokenType.STRING,
+    TokenType.NATIONAL_STRING,
+    TokenType.HEREDOC_STRING,
+    TokenType.RAW_STRING,
+    TokenType.BIT_STRING,
+    TokenType.HEX_STRING,
+    TokenType.BYTE_STRING,
+    TokenType.UNICODE_STRING,
+})
+_CASE_SENSITIVE_TOKEN_TYPES = frozenset({
+    TokenType.IDENTIFIER,
+    TokenType.STRING,
+    TokenType.NATIONAL_STRING,
+    TokenType.HEREDOC_STRING,
+    TokenType.RAW_STRING,
+    TokenType.UNICODE_STRING,
+})
+_EQUIVALENT_TOKEN_TYPES: dict[TokenType, TokenType] = {
+    TokenType.KEY: TokenType.INDEX,
+    TokenType.CHARACTER_SET: TokenType.SET,
+}
+_DML_TYPES = (exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.TruncateTable)
+_TABLE_CONSTRAINT_TYPES = (exp.Constraint, exp.PrimaryKey, exp.ForeignKey, exp.UniqueColumnConstraint)
+_GENERATED_COLUMN_TYPES = (exp.ComputedColumnConstraint, exp.GeneratedAsIdentityColumnConstraint)
+_SUPPORTED_ALTER_COLUMN_ARGS = frozenset({"this", "dtype", "using", "default", "drop", "allow_null"})
 
 
 class DDLStateFolder:
-    """Fold a chronological sequence of SQL DDL statements into net schema DDL."""
+    """Fold a chronological sequence of SQL DDL statements into net schema DDL.
+
+    The folder keeps a catalog of every object created within the squash range and
+    applies later ``ALTER``/``DROP``/``RENAME``/``COMMENT`` statements to it. Objects
+    that are never rewritten are emitted with their original statement text; only
+    rewritten objects are re-rendered through SQLGlot.
+
+    The folder refuses (raises :class:`~sqlspec.exceptions.SquashValidationError`)
+    whenever the folded output could differ from applying the statements in order:
+    statements against objects created before the range, DML that a later structural
+    change would invalidate, unsupported statement kinds or ``ALTER`` actions,
+    procedural or unparseable statements, and rewrites of statements SQLGlot cannot
+    reproduce faithfully. The synthesized down statements drop exactly the objects the
+    folded up statements create, which restores the pre-range schema because nothing
+    outside the range may be touched.
+    """
 
     __slots__ = (
         "_comments",
+        "_ctas_sources",
+        "_current_faithful",
+        "_current_origin",
+        "_current_text",
         "_dialect",
+        "_dialect_impl",
+        "_dml",
+        "_dml_touched",
+        "_dml_written",
         "_indexes",
-        "_post_ddl_statements",
+        "_order",
         "_schemas",
         "_sequences",
         "_tables",
@@ -63,692 +131,1247 @@ class DDLStateFolder:
 
     def __init__(self, dialect: str | None = None) -> None:
         self._dialect = dialect
-        self._schemas: OrderedDict[str, exp.Create] = OrderedDict()
-        self._sequences: OrderedDict[str, exp.Create] = OrderedDict()
-        self._tables: OrderedDict[str, exp.Create] = OrderedDict()
-        self._indexes: OrderedDict[str, tuple[str, exp.Create]] = OrderedDict()
-        self._views: OrderedDict[str, exp.Create] = OrderedDict()
-        self._comments: OrderedDict[tuple[str, str], exp.Comment] = OrderedDict()
-        self._post_ddl_statements: list[tuple[str | None, str]] = []
+        self._dialect_impl: Dialect = Dialect.get_or_raise(dialect)
+        self._schemas: dict[str, _FoldedStatement] = {}
+        self._sequences: dict[str, _FoldedStatement] = {}
+        self._tables: dict[str, _FoldedStatement] = {}
+        self._views: dict[str, _FoldedStatement] = {}
+        self._indexes: dict[str, _FoldedStatement] = {}
+        self._comments: dict[tuple[str, str], _FoldedStatement] = {}
+        self._dml: list[_FoldedStatement] = []
+        self._dml_touched: dict[str, _FoldedStatement] = {}
+        self._dml_written: dict[str, _FoldedStatement] = {}
+        self._ctas_sources: dict[str, set[str]] = {}
+        self._order = 0
+        self._current_text = ""
+        self._current_origin: str | None = None
+        self._current_faithful = True
 
-    def feed(self, statement: str) -> None:
-        """Parse and fold a SQL statement into the accumulated schema catalog.
+    def feed(self, statement: str, *, origin: str | None = None) -> None:
+        """Parse and fold SQL text into the accumulated schema catalog.
 
         Args:
-            statement: Raw SQL statement string (may contain one or more semicolon-delimited statements).
-        """
-        stripped = statement.strip()
-        if not stripped:
-            return
-        try:
-            parsed_expressions = sqlglot.parse(stripped, read=self._dialect)
-        except ParseError:
-            self._post_ddl_statements.append((None, self._ensure_semicolon(stripped)))
-            return
+            statement: Raw SQL text that may contain one or more semicolon-delimited statements.
+            origin: Optional label (usually the migration version) used in refusal messages.
 
-        for expr in parsed_expressions:
-            if expr is None:
-                continue
+        Raises:
+            SquashValidationError: If any statement cannot be folded faithfully.
+        """
+        self._current_origin = origin
+        for text, expr in self._split_statements(statement):
+            self._current_text = text
+            self._current_faithful = self._is_faithful(text, expr)
             self._apply_expression(expr)
 
     def to_statements(self) -> tuple[list[str], list[str]]:
-        """Render the folded net UP DDL/DML statements and reverse-dependency DOWN DROP statements.
+        """Render the folded UP statements and the DOWN statements that reverse them.
 
         Returns:
             Tuple of ``(up_statements, down_statements)``.
+
+        Raises:
+            SquashValidationError: If the folded objects cannot be ordered or rendered faithfully.
         """
-        up_statements: list[str] = [self._render_expr(create_schema) for create_schema in self._schemas.values()]
+        relation_keys = self._ordered_relation_keys()
+        up_statements: list[str] = [self._render(entry) for entry in self._schemas.values()]
+        up_statements.extend(self._render(entry) for entry in self._sequences.values())
+        up_statements.extend(self._render(self._relation(key)) for key in relation_keys)
+        up_statements.extend(self._render(entry) for entry in self._indexes.values())
+        up_statements.extend(self._render(entry) for entry in self._comments.values())
+        up_statements.extend(self._render(entry) for entry in self._dml)
+
         down_statements: list[str] = []
-
-        up_statements.extend(self._render_expr(create_seq) for create_seq in self._sequences.values())
-
-        ordered_table_keys = self._topologically_order_tables()
-        up_statements.extend(self._render_expr(self._tables[table_key]) for table_key in ordered_table_keys)
-
-        for table_key, create_index in self._indexes.values():
-            if not table_key or table_key in self._tables:
-                up_statements.append(self._render_expr(create_index))
-
-        up_statements.extend(self._render_expr(create_view) for create_view in self._views.values())
-
-        for (comment_kind, target_key), comment_expr in self._comments.items():
-            if self._is_comment_target_alive(comment_kind, target_key):
-                up_statements.append(self._render_expr(comment_expr))
-
-        for target_table_key, raw_stmt in self._post_ddl_statements:
-            if target_table_key is None or target_table_key in self._tables:
-                up_statements.append(raw_stmt)
-
-        for create_view in reversed(list(self._views.values())):
-            view_kind = str(create_view.args.get("kind") or "VIEW").upper()
-            drop_view = self._build_drop_expr(create_view, view_kind)
-            if drop_view is not None:
-                down_statements.append(self._render_expr(drop_view))
-
-        for table_key in reversed(ordered_table_keys):
-            drop_table = self._build_drop_expr(self._tables[table_key], "TABLE")
-            if drop_table is not None:
-                down_statements.append(self._render_expr(drop_table))
-
-        for create_seq in reversed(list(self._sequences.values())):
-            drop_seq = self._build_drop_expr(create_seq, "SEQUENCE")
-            if drop_seq is not None:
-                down_statements.append(self._render_expr(drop_seq))
-
-        for create_schema in reversed(list(self._schemas.values())):
-            drop_schema = self._build_drop_expr(create_schema, "SCHEMA")
-            if drop_schema is not None:
-                down_statements.append(self._render_expr(drop_schema))
-
+        for key in reversed(relation_keys):
+            entry = self._relation(key)
+            if key in self._views:
+                down_statements.append(self._render_drop(entry, "VIEW", materialized=self._is_materialized(entry)))
+            else:
+                down_statements.append(self._render_drop(entry, "TABLE"))
+        down_statements.extend(self._render_drop(entry, "SEQUENCE") for entry in reversed(self._sequences.values()))
+        down_statements.extend(self._render_drop(entry, "SCHEMA") for entry in reversed(self._schemas.values()))
         return up_statements, down_statements
 
+    def _split_statements(self, sql: str) -> list[tuple[str, exp.Expr]]:
+        self._current_text = sql.strip()
+        try:
+            tokens = self._dialect_impl.tokenize(sql)
+        except TokenError as error:
+            msg = f"it could not be tokenized ({error})"
+            raise self._refusal(msg) from error
+
+        chunks: list[list[Token]] = [[]]
+        for token in tokens:
+            if token.token_type == TokenType.SEMICOLON:
+                chunks.append([])
+            else:
+                chunks[-1].append(token)
+
+        statements: list[tuple[str, exp.Expr]] = []
+        for chunk in chunks:
+            if not chunk:
+                continue
+            text = sql[chunk[0].start : chunk[-1].end + 1]
+            self._current_text = text
+            try:
+                parsed = self._dialect_impl.parser().parse(chunk, sql)
+            except ParseError as error:
+                msg = "SQLGlot cannot parse it"
+                raise self._refusal(msg) from error
+            statements.extend((text, expr) for expr in parsed if expr is not None)
+        return statements
+
     def _apply_expression(self, expr: exp.Expr) -> None:
-        if isinstance(expr, exp.Create):
-            self._handle_create(expr)
-            return
-        if isinstance(expr, exp.Alter):
-            self._handle_alter(expr)
-            return
-        if isinstance(expr, exp.Drop):
-            self._handle_drop(expr)
-            return
-        if isinstance(expr, exp.Comment):
-            self._handle_comment(expr)
-            return
-        if isinstance(expr, exp.Command) and str(expr.this).upper() == "RENAME":
-            literal_text = expr.expression.name if isinstance(expr.expression, exp.Expr) else str(expr.expression or "")
-            match = _RENAME_TABLE_COMMAND_RE.match(literal_text)
-            if match is not None:
-                old_table = exp.to_table(match.group(1), dialect=self._dialect)
-                new_table = exp.to_table(match.group(2), dialect=self._dialect)
-                self._rename_table_in_catalog(old_table, new_table)
-                return
+        if isinstance(expr, exp.Command):
+            self._apply_command(expr)
+        elif expr.find(exp.Command) is not None:
+            msg = "it contains syntax SQLGlot can only read as an opaque command"
+            raise self._refusal(msg)
+        elif isinstance(expr, exp.Create):
+            self._apply_create(expr)
+        elif isinstance(expr, exp.Alter):
+            self._apply_alter(expr)
+        elif isinstance(expr, exp.Drop):
+            self._apply_drop(expr)
+        elif isinstance(expr, exp.Comment):
+            self._apply_comment(expr)
+        elif isinstance(expr, _DML_TYPES):
+            self._apply_dml(expr)
+        else:
+            msg = f"{type(expr).__name__} statements are not supported"
+            raise self._refusal(msg)
 
-        dml_table_key = self._extract_dml_target_table_key(expr)
-        self._post_ddl_statements.append((dml_table_key, self._render_expr(expr)))
+    def _apply_command(self, expr: exp.Command) -> None:
+        keyword = str(expr.this).upper()
+        literal = expr.expression.name if isinstance(expr.expression, exp.Expr) else str(expr.expression or "")
+        match = _RENAME_TABLE_COMMAND_RE.match(literal) if keyword == "RENAME" else None
+        if match is None:
+            msg = "SQLGlot can only read it as an opaque command, so its effect on the schema is unknown"
+            raise self._refusal(msg)
+        old_table = exp.to_table(match.group(1), dialect=self._dialect)
+        new_table = exp.to_table(match.group(2), dialect=self._dialect)
+        old_key = self._object_key(old_table)
+        self._require_table(old_key, "RENAME TABLE")
+        self._assert_restructurable(old_key, "RENAME TABLE")
+        self._rename_table(old_key, new_table)
 
-    def _handle_create(self, expr: exp.Create) -> None:
+    def _apply_create(self, expr: exp.Create) -> None:
         kind = str(expr.args.get("kind") or "").upper()
-        expr_copy = expr.copy()
-        if kind == "SCHEMA":
-            key = self._object_key(expr_copy.this)
-            if key:
-                self._schemas[key] = expr_copy
-            return
-        if kind == "SEQUENCE":
-            key = self._object_key(expr_copy.this)
-            if key:
-                self._sequences[key] = expr_copy
-            return
+        if expr.find(exp.TemporaryProperty) is not None:
+            msg = "temporary objects are not part of the persistent schema"
+            raise self._refusal(msg)
         if kind == "TABLE":
-            key = self._object_key(expr_copy.this)
-            if key:
-                self._tables[key] = expr_copy
+            self._create_table(expr)
+        elif kind == "VIEW":
+            self._create_view(expr)
+        elif kind == "INDEX":
+            self._create_index(expr)
+        elif kind == "SCHEMA":
+            self._create_simple(expr, self._schemas, kind)
+        elif kind == "SEQUENCE":
+            self._create_simple(expr, self._sequences, kind)
+        else:
+            msg = f"CREATE {kind or 'statements of this kind'} cannot be folded"
+            raise self._refusal(msg)
+
+    def _create_simple(self, expr: exp.Create, catalog: "dict[str, _FoldedStatement]", kind: str) -> None:
+        key = self._object_key(expr.this)
+        if self._create_is_noop(expr, key, key in catalog, kind):
             return
-        if kind == "INDEX":
-            index_node = expr_copy.this
-            index_key = self._index_key(index_node)
-            table_node = (
-                index_node.args.get("table") if isinstance(index_node, exp.Index) else expr_copy.find(exp.Table)
+        catalog[key] = self._new_entry(expr)
+
+    def _create_table(self, expr: exp.Create) -> None:
+        key = self._object_key(expr.this)
+        if key in self._views:
+            msg = f"{key} is already a view created earlier in the squash range"
+            raise self._refusal(msg)
+        if self._create_is_noop(expr, key, key in self._tables, "TABLE"):
+            return
+        query = expr.expression
+        if isinstance(query, exp.Query):
+            sources = self._expand_dependencies(self._query_sources(query))
+            for source in sources:
+                writer = self._dml_written.get(source)
+                if writer is not None:
+                    msg = (
+                        f"CREATE TABLE AS SELECT reads {source}, which DML in migration "
+                        f"{writer.origin or '<unknown>'} modifies first; the folded migration would run it before that DML"
+                    )
+                    raise self._refusal(msg)
+            for source in sources:
+                self._ctas_sources.setdefault(source, set()).add(key)
+        elif not isinstance(expr.this, exp.Schema):
+            msg = "CREATE TABLE without a column list cannot be folded"
+            raise self._refusal(msg)
+        self._tables[key] = self._new_entry(expr)
+
+    def _create_view(self, expr: exp.Create) -> None:
+        key = self._object_key(expr.this)
+        if key in self._tables:
+            msg = f"{key} is already a table created earlier in the squash range"
+            raise self._refusal(msg)
+        if key in self._views and expr.args.get("replace"):
+            self._assert_restructurable(key, "CREATE OR REPLACE VIEW")
+            self._views[key] = self._new_entry(expr)
+            return
+        if self._create_is_noop(expr, key, key in self._views, "VIEW"):
+            return
+        self._views[key] = self._new_entry(expr)
+
+    def _create_index(self, expr: exp.Create) -> None:
+        index = expr.this
+        table = index.args.get("table") if isinstance(index, exp.Index) else None
+        if not isinstance(index, exp.Index) or not isinstance(table, exp.Table):
+            msg = "the index definition could not be read"
+            raise self._refusal(msg)
+        table_key = self._object_key(table)
+        view_entry = self._views.get(table_key)
+        if table_key not in self._tables and (view_entry is None or not self._is_materialized(view_entry)):
+            msg = f"CREATE INDEX targets {table_key}, which is not created within the squash range"
+            raise self._refusal(msg)
+        name = index.this
+        key = self._ident_key(name) if isinstance(name, exp.Identifier) else f"<unnamed index {self._order}>"
+        if key in self._indexes:
+            if expr.args.get("exists"):
+                return
+            msg = f"index {key} is already created earlier in the squash range"
+            raise self._refusal(msg)
+        self._indexes[key] = self._new_entry(expr, owner=table_key)
+
+    def _create_is_noop(self, expr: exp.Create, key: str, exists_in_range: bool, kind: str) -> bool:
+        if exists_in_range:
+            if expr.args.get("exists"):
+                return True
+            msg = f"{kind} {key} is already created earlier in the squash range"
+            raise self._refusal(msg)
+        if expr.args.get("exists"):
+            msg = (
+                f"CREATE {kind} IF NOT EXISTS cannot tell whether {key} existed before the squash range, "
+                "so the folded down migration could drop a pre-existing object"
             )
-            table_key = self._object_key(table_node) if isinstance(table_node, exp.Expr) else ""
-            if index_key:
-                self._indexes[index_key] = (table_key, expr_copy)
-            return
-        if kind in {"VIEW", "MATERIALIZED VIEW"}:
-            key = self._object_key(expr_copy.this)
-            if key:
-                if kind == "VIEW":
-                    expr_copy.set("replace", False)
-                self._views[key] = expr_copy
-            return
-        self._post_ddl_statements.append((None, self._render_expr(expr_copy)))
+            raise self._refusal(msg)
+        if expr.args.get("replace"):
+            msg = f"CREATE OR REPLACE {kind} may replace {key}, which could exist before the squash range"
+            raise self._refusal(msg)
+        return False
 
-    def _handle_drop(self, expr: exp.Drop) -> None:
-        kind = str(expr.args.get("kind") or "").upper()
-        targets: list[exp.Expr] = list(expr.args.get("tables") or [])
-        if expr.this is not None and isinstance(expr.this, exp.Expr):
-            targets.append(expr.this)
-
-        for target in targets:
-            key = self._object_key(target)
-            if not key:
-                continue
-            if kind == "TABLE":
-                self._tables.pop(key, None)
-                stale_indexes = [idx_key for idx_key, (tbl_key, _) in self._indexes.items() if tbl_key == key]
-                for idx_key in stale_indexes:
-                    self._indexes.pop(idx_key, None)
-                stale_comments = [
-                    c_key
-                    for c_key in self._comments
-                    if c_key == ("TABLE", key) or (c_key[0] == "COLUMN" and c_key[1].startswith(f"{key}."))
-                ]
-                for c_key in stale_comments:
-                    self._comments.pop(c_key, None)
-                self._post_ddl_statements = [
-                    (tbl_key, stmt) for tbl_key, stmt in self._post_ddl_statements if tbl_key != key
-                ]
-            elif kind == "INDEX":
-                unqualified = key.rsplit(".", 1)[-1]
-                self._indexes.pop(key, None)
-                self._indexes.pop(unqualified, None)
-            elif kind in {"VIEW", "MATERIALIZED VIEW"}:
-                self._views.pop(key, None)
-                self._comments.pop(("VIEW", key), None)
-            elif kind == "SEQUENCE":
-                self._sequences.pop(key, None)
-            elif kind == "SCHEMA":
-                self._schemas.pop(key, None)
-
-    def _handle_comment(self, expr: exp.Comment) -> None:
-        kind = str(expr.args.get("kind") or "").upper()
-        target = expr.this
-        if not isinstance(target, exp.Expr):
-            return
-        key = self._comment_target_key(kind, target)
-        if key:
-            self._comments[(kind, key)] = expr.copy()
-
-    def _handle_alter(self, expr: exp.Alter) -> None:
+    def _apply_alter(self, expr: exp.Alter) -> None:
         kind = str(expr.args.get("kind") or "TABLE").upper()
-        if kind != "TABLE" or not isinstance(expr.this, exp.Table):
-            self._post_ddl_statements.append((None, self._render_expr(expr)))
+        target = expr.this
+        if not isinstance(target, exp.Table):
+            msg = "the ALTER target could not be read"
+            raise self._refusal(msg)
+        if not self._current_faithful:
+            msg = "SQLGlot does not reproduce it faithfully, so it cannot be merged into a folded definition"
+            raise self._refusal(msg)
+        if expr.args.get("not_valid"):
+            msg = "NOT VALID constraints cannot be folded into CREATE TABLE"
+            raise self._refusal(msg)
+        actions = [action for action in expr.args.get("actions") or [] if isinstance(action, exp.Expr)]
+        if kind == "INDEX":
+            self._alter_index(target, actions)
             return
-
-        target_table = expr.this
-        table_key = self._object_key(target_table)
-        if table_key not in self._tables:
-            self._post_ddl_statements.append((table_key or None, self._render_expr(expr)))
-            return
-
-        actions = expr.args.get("actions") or []
+        if kind != "TABLE":
+            msg = f"ALTER {kind} cannot be folded"
+            raise self._refusal(msg)
+        table_key = self._object_key(target)
+        entry = self._require_table(table_key, "ALTER TABLE")
+        if isinstance(entry.expr.expression, exp.Query):
+            msg = f"{table_key} is created with CREATE TABLE AS SELECT, which cannot absorb ALTER TABLE"
+            raise self._refusal(msg)
         for action in actions:
-            if not isinstance(action, exp.Expr):
-                continue
-            self._apply_alter_table_action(table_key, target_table, action)
-            table_key = self._object_key(target_table)
+            table_key = self._apply_alter_action(table_key, target, action)
 
-    def _apply_alter_table_action(self, table_key: str, target_table: exp.Table, action: exp.Expr) -> None:
-        create_expr = self._tables.get(table_key)
-        if create_expr is None:
-            return
-
-        if isinstance(action, exp.AlterRename) or action.__class__.__name__ == "RenameTable":
+    def _apply_alter_action(self, table_key: str, target: exp.Table, action: exp.Expr) -> str:
+        label = f"ALTER TABLE {type(action).__name__}"
+        self._assert_restructurable(table_key, label)
+        entry = self._tables[table_key]
+        if isinstance(action, exp.AlterRename):
             new_table = action.this
-            if isinstance(new_table, exp.Table):
-                target_db = target_table.args.get("db")
-                if isinstance(target_db, exp.Expr) and not new_table.db:
-                    new_table = new_table.copy()
-                    new_table.set("db", target_db.copy())
-                self._rename_table_in_catalog(target_table, new_table)
-                target_table.set("this", new_table.args.get("this"))
-                target_table.set("db", new_table.args.get("db"))
-            return
-
-        schema_expr = self._ensure_table_schema(create_expr)
-        expressions: list[exp.Expr] = list(schema_expr.expressions)
-
+            if not isinstance(new_table, exp.Table):
+                msg = "the RENAME target could not be read"
+                raise self._refusal(msg)
+            target_db = target.args.get("db")
+            if isinstance(target_db, exp.Identifier) and not new_table.db:
+                new_table = new_table.copy()
+                new_table.set("db", target_db.copy())
+            return self._rename_table(table_key, new_table)
+        schema = self._table_schema(entry)
         if isinstance(action, exp.ColumnDef):
-            col_name = action.name.lower()
-            replaced = False
-            for idx, item in enumerate(expressions):
-                if isinstance(item, exp.ColumnDef) and item.name.lower() == col_name:
-                    expressions[idx] = action.copy()
-                    replaced = True
-                    break
-            if not replaced:
-                expressions.append(action.copy())
-            schema_expr.set("expressions", expressions)
-            return
+            self._add_column(table_key, entry, schema, action)
+        elif isinstance(action, exp.ModifyColumn):
+            self._modify_column(table_key, entry, schema, action)
+        elif isinstance(action, exp.Drop):
+            self._drop_from_table(table_key, entry, schema, action)
+        elif isinstance(action, exp.DropPrimaryKey):
+            self._drop_primary_key(table_key, entry, schema)
+        elif isinstance(action, exp.RenameColumn):
+            self._rename_column(table_key, entry, schema, action)
+        elif isinstance(action, exp.AlterColumn):
+            self._alter_column(table_key, entry, schema, action)
+        elif isinstance(action, exp.AddConstraint):
+            constraints = [item for item in action.expressions if isinstance(item, exp.Expr)]
+            self._add_constraints(entry, schema, constraints)
+        elif isinstance(action, _TABLE_CONSTRAINT_TYPES):
+            self._add_constraints(entry, schema, [action])
+        else:
+            msg = f"ALTER TABLE action {type(action).__name__} cannot be folded"
+            raise self._refusal(msg)
+        return table_key
 
-        if isinstance(action, exp.Drop):
-            drop_kind = str(action.args.get("kind") or "").upper()
-            drop_targets: list[exp.Expr] = list(action.args.get("tables") or [])
-            if action.this is not None and isinstance(action.this, exp.Expr):
-                drop_targets.append(action.this)
-            drop_names = {self._unqualified_name(t) for t in drop_targets if self._unqualified_name(t)}
+    def _alter_index(self, target: exp.Table, actions: list[exp.Expr]) -> None:
+        if len(actions) != 1 or not isinstance(actions[0], exp.AlterRename):
+            msg = "only ALTER INDEX ... RENAME TO can be folded"
+            raise self._refusal(msg)
+        old_key = self._name_key(target)
+        entry = self._indexes.get(old_key)
+        if entry is None or not isinstance(entry.expr.this, exp.Index):
+            msg = f"ALTER INDEX targets {old_key}, which is not created within the squash range"
+            raise self._refusal(msg)
+        new_node = actions[0].this
+        new_ident = new_node.this if isinstance(new_node, exp.Table) else None
+        if not isinstance(new_ident, exp.Identifier):
+            msg = "the RENAME target could not be read"
+            raise self._refusal(msg)
+        new_key = self._ident_key(new_ident)
+        if new_key in self._indexes:
+            msg = f"index {new_key} is already created earlier in the squash range"
+            raise self._refusal(msg)
+        self._mark_modified(entry)
+        entry.expr.this.set("this", new_ident.copy())
+        self._indexes = {(new_key if key == old_key else key): value for key, value in self._indexes.items()}
+        comment = self._comments.pop(("INDEX", old_key), None)
+        if comment is not None:
+            self._mark_modified(comment)
+            comment_target = comment.expr.this
+            if isinstance(comment_target, exp.Table):
+                comment_target.set("this", new_ident.copy())
+            self._comments["INDEX", new_key] = comment
+
+    def _add_column(self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, action: exp.ColumnDef) -> None:
+        column_key = self._name_key(action)
+        if self._find_column(schema, column_key) is not None:
+            if action.args.get("exists"):
+                return
+            msg = f"column {column_key} already exists on {table_key}"
+            raise self._refusal(msg)
+        if action.args.get("position") is not None:
+            msg = "column positioning (FIRST/AFTER) cannot be folded"
+            raise self._refusal(msg)
+        self._assert_views_allow(table_key, set(), "ADD COLUMN")
+        self._mark_modified(entry)
+        column = action.copy()
+        column.set("exists", None)
+        schema.set("expressions", [*schema.expressions, column])
+
+    def _modify_column(
+        self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, action: exp.ModifyColumn
+    ) -> None:
+        new_definition = action.this
+        if not isinstance(new_definition, exp.ColumnDef):
+            msg = "the MODIFY COLUMN definition could not be read"
+            raise self._refusal(msg)
+        if new_definition.args.get("position") is not None:
+            msg = "column positioning (FIRST/AFTER) cannot be folded"
+            raise self._refusal(msg)
+        rename_from = action.args.get("rename_from")
+        new_key = self._name_key(new_definition)
+        old_key = self._name_key(rename_from) if isinstance(rename_from, exp.Expr) else new_key
+        if self._find_column(schema, old_key) is None:
+            msg = f"column {old_key} does not exist on {table_key}"
+            raise self._refusal(msg)
+        if old_key != new_key:
+            if self._find_column(schema, new_key) is not None:
+                msg = f"column {new_key} already exists on {table_key}"
+                raise self._refusal(msg)
+            self._assert_views_allow(table_key, None, "CHANGE COLUMN")
+            self._mark_modified(entry)
+            new_ident = new_definition.this
+            if isinstance(new_ident, exp.Identifier):
+                self._rename_column_references(table_key, old_key, new_ident)
+        else:
+            self._assert_views_allow(table_key, {old_key}, "MODIFY COLUMN")
+            self._mark_modified(entry)
+        schema.set(
+            "expressions",
+            [
+                new_definition.copy() if isinstance(item, exp.ColumnDef) and self._name_key(item) == new_key else item
+                for item in schema.expressions
+            ],
+        )
+
+    def _drop_from_table(self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, action: exp.Drop) -> None:
+        drop_kind = str(action.args.get("kind") or "").upper()
+        if_exists = bool(action.args.get("exists"))
+        names = [self._name_key(node) for node in self._drop_targets(action)]
+        for name in names:
             if drop_kind == "COLUMN":
-                self._drop_columns_from_table(table_key, schema_expr, expressions, drop_names)
-            elif drop_kind == "CONSTRAINT":
-                filtered = [
-                    item
-                    for item in expressions
-                    if not (isinstance(item, exp.Constraint) and self._unqualified_name(item.this) in drop_names)
-                ]
-                schema_expr.set("expressions", filtered)
-            return
+                self._drop_column(table_key, entry, schema, name, if_exists=if_exists)
+            elif drop_kind in {"CONSTRAINT", "FOREIGN KEY"}:
+                self._drop_constraint(table_key, entry, schema, name, if_exists=if_exists)
+            elif drop_kind == "INDEX":
+                self._drop_table_index(table_key, entry, schema, name)
+            else:
+                msg = f"ALTER TABLE DROP {drop_kind or 'action'} cannot be folded"
+                raise self._refusal(msg)
 
-        if isinstance(action, exp.RenameColumn):
-            old_name = self._unqualified_name(action.this)
-            new_target = action.args.get("to")
-            new_name = self._unqualified_name(new_target) if isinstance(new_target, exp.Expr) else ""
-            if old_name and new_name:
-                new_ident = self._extract_identifier(new_target, new_name)
-                self._rename_column_in_table(table_key, schema_expr, expressions, old_name, new_ident)
-            return
-
-        if isinstance(action, exp.AlterColumn):
-            self._alter_column_in_table(schema_expr, expressions, action)
-            return
-
-        if isinstance(action, exp.AddConstraint):
-            constraint_exprs = action.args.get("expressions") or ([action.this] if action.this is not None else [])
-            expressions.extend(
-                constraint_expr.copy() for constraint_expr in constraint_exprs if isinstance(constraint_expr, exp.Expr)
-            )
-            schema_expr.set("expressions", expressions)
-            return
-
-        if isinstance(action, (exp.Constraint, exp.PrimaryKey, exp.ForeignKey, exp.UniqueColumnConstraint)):
-            expressions.append(action.copy())
-            schema_expr.set("expressions", expressions)
-
-    def _drop_columns_from_table(
-        self, table_key: str, schema_expr: exp.Schema, expressions: list[exp.Expr], drop_names: set[str]
+    def _drop_column(
+        self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, column_key: str, *, if_exists: bool
     ) -> None:
-        new_expressions: list[exp.Expr] = []
-        for item in expressions:
-            if isinstance(item, exp.ColumnDef) and item.name.lower() in drop_names:
-                continue
-            if not isinstance(item, exp.ColumnDef):
-                referenced_cols = self._referenced_columns_in_constraint(item)
-                if referenced_cols and referenced_cols.issubset(drop_names):
+        if self._find_column(schema, column_key) is None:
+            if if_exists:
+                return
+            msg = f"column {column_key} does not exist on {table_key}"
+            raise self._refusal(msg)
+        self._assert_views_allow(table_key, {column_key}, "DROP COLUMN")
+        for other_key, other in self._tables.items():
+            if other_key != table_key and column_key in self._referenced_columns(other.expr, table_key):
+                msg = f"column {column_key} on {table_key} is referenced by a foreign key on {other_key}"
+                raise self._refusal(msg)
+        self._mark_modified(entry)
+        kept: list[exp.Expr] = []
+        for item in schema.expressions:
+            if isinstance(item, exp.ColumnDef):
+                if self._name_key(item) == column_key:
                     continue
-            new_expressions.append(item)
-        schema_expr.set("expressions", new_expressions)
-
-        stale_indexes: list[str] = []
-        for idx_key, (idx_table_key, idx_expr) in self._indexes.items():
-            if idx_table_key != table_key:
+                self._strip_column_constraints(item, column_key, table_key)
+            elif column_key in self._local_column_keys(item, table_key):
                 continue
-            idx_cols = self._referenced_columns_in_index(idx_expr)
-            if idx_cols and idx_cols.issubset(drop_names):
-                stale_indexes.append(idx_key)
-        for idx_key in stale_indexes:
-            self._indexes.pop(idx_key, None)
+            kept.append(item)
+        schema.set("expressions", kept)
+        stale_indexes = [
+            index_key
+            for index_key, index_entry in self._indexes.items()
+            if index_entry.owner == table_key and column_key in self._index_column_keys(index_entry)
+        ]
+        for index_key in stale_indexes:
+            self._indexes.pop(index_key)
+            self._comments.pop(("INDEX", index_key), None)
+        self._comments.pop(("COLUMN", f"{table_key}.{column_key}"), None)
 
-        for col_name in drop_names:
-            self._comments.pop(("COLUMN", f"{table_key}.{col_name}"), None)
+    def _strip_column_constraints(self, column: exp.ColumnDef, column_key: str, table_key: str) -> None:
+        kept: list[exp.Expr] = []
+        for constraint in column.args.get("constraints") or []:
+            if column_key in self._local_column_keys(constraint, table_key):
+                if isinstance(constraint.args.get("kind"), _GENERATED_COLUMN_TYPES):
+                    msg = f"generated column {self._name_key(column)} depends on dropped column {column_key}"
+                    raise self._refusal(msg)
+                continue
+            kept.append(constraint)
+        column.set("constraints", kept)
 
-    def _rename_column_in_table(
-        self,
-        table_key: str,
-        schema_expr: exp.Schema,
-        expressions: list[exp.Expr],
-        old_name: str,
-        new_ident: exp.Identifier,
+    def _drop_constraint(
+        self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, name: str, *, if_exists: bool
     ) -> None:
-        for item in expressions:
-            if isinstance(item, exp.ColumnDef) and item.name.lower() == old_name:
-                item.set("this", new_ident.copy())
-            elif not isinstance(item, exp.ColumnDef):
-                self._replace_column_identifier_in_tree(item, old_name, new_ident)
-        schema_expr.set("expressions", expressions)
+        found = any(
+            isinstance(item, exp.Constraint) and self._name_key(item) == name for item in schema.expressions
+        ) or any(
+            isinstance(constraint.this, exp.Identifier) and self._ident_key(constraint.this) == name
+            for column in schema.expressions
+            if isinstance(column, exp.ColumnDef)
+            for constraint in column.args.get("constraints") or []
+        )
+        if not found:
+            if if_exists:
+                return
+            msg = f"constraint {name} is not defined by name on {table_key} within the squash range"
+            raise self._refusal(msg)
+        self._mark_modified(entry)
+        kept: list[exp.Expr] = []
+        for item in schema.expressions:
+            if isinstance(item, exp.Constraint) and self._name_key(item) == name:
+                continue
+            if isinstance(item, exp.ColumnDef):
+                item.set(
+                    "constraints",
+                    [
+                        constraint
+                        for constraint in item.args.get("constraints") or []
+                        if not (
+                            isinstance(constraint.this, exp.Identifier) and self._ident_key(constraint.this) == name
+                        )
+                    ],
+                )
+            kept.append(item)
+        schema.set("expressions", kept)
 
-        for idx_table_key, idx_expr in self._indexes.values():
-            if idx_table_key == table_key:
-                params = idx_expr.this.args.get("params") if isinstance(idx_expr.this, exp.Index) else None
-                if isinstance(params, exp.Expr):
-                    self._replace_column_identifier_in_tree(params, old_name, new_ident)
-
-        old_comment_key = ("COLUMN", f"{table_key}.{old_name}")
-        if old_comment_key in self._comments:
-            comment_expr = self._comments.pop(old_comment_key)
-            if isinstance(comment_expr.this, exp.Column):
-                comment_expr.this.set("this", new_ident.copy())
-            self._comments[("COLUMN", f"{table_key}.{new_ident.name.lower()}")] = comment_expr
-
-    def _alter_column_in_table(
-        self, schema_expr: exp.Schema, expressions: list[exp.Expr], action: exp.AlterColumn
-    ) -> None:
-        col_name = action.name.lower()
-        target_col: exp.ColumnDef | None = None
-        for item in expressions:
-            if isinstance(item, exp.ColumnDef) and item.name.lower() == col_name:
-                target_col = item
-                break
-        if target_col is None:
+    def _drop_table_index(self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, name: str) -> None:
+        index_entry = self._indexes.get(name)
+        if index_entry is not None and index_entry.owner == table_key:
+            self._indexes.pop(name)
+            self._comments.pop(("INDEX", name), None)
             return
+        inline = [
+            item
+            for item in schema.expressions
+            if isinstance(item, exp.IndexColumnConstraint)
+            and isinstance(item.this, exp.Identifier)
+            and self._ident_key(item.this) == name
+        ]
+        if not inline:
+            msg = f"index {name} is not defined on {table_key} within the squash range"
+            raise self._refusal(msg)
+        self._mark_modified(entry)
+        schema.set("expressions", [item for item in schema.expressions if item not in inline])
 
+    def _drop_primary_key(self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema) -> None:
+        kept: list[exp.Expr] = []
+        found = False
+        for item in schema.expressions:
+            if isinstance(item, exp.PrimaryKey) or (
+                isinstance(item, exp.Constraint) and any(isinstance(sub, exp.PrimaryKey) for sub in item.expressions)
+            ):
+                found = True
+                continue
+            if isinstance(item, exp.ColumnDef):
+                constraints = list(item.args.get("constraints") or [])
+                filtered = [
+                    c for c in constraints if not isinstance(c.args.get("kind"), exp.PrimaryKeyColumnConstraint)
+                ]
+                if len(filtered) != len(constraints):
+                    found = True
+                    item.set("constraints", filtered)
+            kept.append(item)
+        if not found:
+            msg = f"{table_key} has no primary key defined within the squash range"
+            raise self._refusal(msg)
+        self._mark_modified(entry)
+        schema.set("expressions", kept)
+
+    def _rename_column(
+        self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, action: exp.RenameColumn
+    ) -> None:
+        old_key = self._name_key(action.this)
+        new_node = action.args.get("to")
+        new_ident = new_node.this if isinstance(new_node, exp.Column) else new_node
+        if not isinstance(new_ident, exp.Identifier):
+            msg = "the RENAME COLUMN target could not be read"
+            raise self._refusal(msg)
+        if self._find_column(schema, old_key) is None:
+            if action.args.get("exists"):
+                return
+            msg = f"column {old_key} does not exist on {table_key}"
+            raise self._refusal(msg)
+        if self._find_column(schema, self._ident_key(new_ident)) is not None:
+            msg = f"column {self._ident_key(new_ident)} already exists on {table_key}"
+            raise self._refusal(msg)
+        self._assert_views_allow(table_key, None, "RENAME COLUMN")
+        self._mark_modified(entry)
+        self._rename_column_references(table_key, old_key, new_ident)
+
+    def _rename_column_references(self, table_key: str, old_key: str, new_ident: exp.Identifier) -> None:
+        schema = self._table_schema(self._tables[table_key])
+        for item in schema.expressions:
+            if isinstance(item, exp.ColumnDef) and self._name_key(item) == old_key:
+                item.set("this", new_ident.copy())
+            for ident in self._local_column_refs(item, table_key):
+                if self._ident_key(ident) == old_key:
+                    ident.replace(new_ident.copy())
+        for index_entry in self._indexes.values():
+            if index_entry.owner != table_key:
+                continue
+            index_refs = [ident for ident in self._index_column_refs(index_entry) if self._ident_key(ident) == old_key]
+            if index_refs:
+                self._mark_modified(index_entry)
+                for ident in index_refs:
+                    ident.replace(new_ident.copy())
+        for other_key, other in self._tables.items():
+            if other_key == table_key:
+                continue
+            foreign_refs = [
+                ident
+                for ident in self._foreign_reference_idents(other.expr, table_key)
+                if self._ident_key(ident) == old_key
+            ]
+            if foreign_refs:
+                self._mark_modified(other)
+                for ident in foreign_refs:
+                    ident.replace(new_ident.copy())
+        new_key = self._ident_key(new_ident)
+        comment = self._comments.get(("COLUMN", f"{table_key}.{old_key}"))
+        if comment is not None:
+            self._mark_modified(comment)
+            if isinstance(comment.expr.this, exp.Column):
+                comment.expr.this.set("this", new_ident.copy())
+            self._comments = {
+                (("COLUMN", f"{table_key}.{new_key}") if key == ("COLUMN", f"{table_key}.{old_key}") else key): value
+                for key, value in self._comments.items()
+            }
+
+    def _alter_column(
+        self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, action: exp.AlterColumn
+    ) -> None:
+        unsupported = sorted(
+            arg for arg, value in action.args.items() if value and arg not in _SUPPORTED_ALTER_COLUMN_ARGS
+        )
+        if unsupported:
+            msg = f"ALTER COLUMN with {', '.join(unsupported)} cannot be folded"
+            raise self._refusal(msg)
+        column_key = self._name_key(action)
+        column = self._find_column(schema, column_key)
+        if column is None:
+            msg = f"column {column_key} does not exist on {table_key}"
+            raise self._refusal(msg)
         dtype = action.args.get("dtype")
         if isinstance(dtype, exp.DataType):
-            target_col.set("kind", dtype.copy())
-
-        constraints: list[exp.ColumnConstraint] = list(target_col.args.get("constraints") or [])
+            self._assert_views_allow(table_key, {column_key}, "ALTER COLUMN TYPE")
+        self._mark_modified(entry)
+        if isinstance(dtype, exp.DataType):
+            column.set("kind", dtype.copy())
+        constraints: list[exp.ColumnConstraint] = list(column.args.get("constraints") or [])
         default_expr = action.args.get("default")
         allow_null = action.args.get("allow_null")
-        is_drop = bool(action.args.get("drop"))
-
         if isinstance(default_expr, exp.Expr):
             constraints = [c for c in constraints if not isinstance(c.kind, exp.DefaultColumnConstraint)]
             constraints.append(exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=default_expr.copy())))
-        elif is_drop and allow_null is None:
+        elif action.args.get("drop") and allow_null is None:
             constraints = [c for c in constraints if not isinstance(c.kind, exp.DefaultColumnConstraint)]
-
-        if allow_null is False:
-            has_not_null = any(
-                isinstance(c.kind, exp.NotNullColumnConstraint) and not c.kind.args.get("allow_null")
-                for c in constraints
-            )
-            if not has_not_null:
-                constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
+        if allow_null is False and not any(
+            isinstance(c.kind, exp.NotNullColumnConstraint) and not c.kind.args.get("allow_null") for c in constraints
+        ):
+            constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
         elif allow_null is True:
             constraints = [
                 c
                 for c in constraints
                 if not (isinstance(c.kind, exp.NotNullColumnConstraint) and not c.kind.args.get("allow_null"))
             ]
+        column.set("constraints", constraints)
 
-        target_col.set("constraints", constraints)
-        schema_expr.set("expressions", expressions)
+    def _add_constraints(self, entry: "_FoldedStatement", schema: exp.Schema, constraints: list[exp.Expr]) -> None:
+        if not constraints:
+            msg = "the added constraint could not be read"
+            raise self._refusal(msg)
+        self._mark_modified(entry)
+        schema.set("expressions", [*schema.expressions, *(constraint.copy() for constraint in constraints)])
 
-    def _rename_table_in_catalog(self, old_table: exp.Table, new_table: exp.Table) -> None:
-        old_key = self._object_key(old_table)
+    def _rename_table(self, old_key: str, new_table: exp.Table) -> str:
         new_key = self._object_key(new_table)
-        if not old_key or not new_key or old_key == new_key:
-            return
-
-        if old_key in self._tables:
-            rebuilt_tables: OrderedDict[str, exp.Create] = OrderedDict()
-            for key, create_expr in self._tables.items():
-                if key == old_key:
-                    self._set_create_table_node(create_expr, new_table.copy())
-                    rebuilt_tables[new_key] = create_expr
-                else:
-                    rebuilt_tables[key] = create_expr
-            self._tables = rebuilt_tables
-
-        rebuilt_indexes: OrderedDict[str, tuple[str, exp.Create]] = OrderedDict()
-        for idx_key, (tbl_key, idx_expr) in self._indexes.items():
-            if tbl_key == old_key:
-                if isinstance(idx_expr.this, exp.Index):
-                    idx_expr.this.set("table", new_table.copy())
-                rebuilt_indexes[idx_key] = (new_key, idx_expr)
-            else:
-                rebuilt_indexes[idx_key] = (tbl_key, idx_expr)
-        self._indexes = rebuilt_indexes
-
-        rebuilt_comments: OrderedDict[tuple[str, str], exp.Comment] = OrderedDict()
-        for (c_kind, c_target), comment_expr in self._comments.items():
-            if c_kind == "TABLE" and c_target == old_key:
-                comment_expr.set("this", new_table.copy())
-                rebuilt_comments[(c_kind, new_key)] = comment_expr
-            elif c_kind == "COLUMN" and c_target.startswith(f"{old_key}."):
-                col_suffix = c_target[len(old_key) + 1 :]
-                if isinstance(comment_expr.this, exp.Column):
-                    new_this = new_table.args.get("this")
-                    if isinstance(new_this, exp.Expr):
-                        comment_expr.this.set("table", new_this.copy())
+        if new_key == old_key:
+            return old_key
+        if new_key in self._tables or new_key in self._views:
+            msg = f"{new_key} already exists within the squash range"
+            raise self._refusal(msg)
+        self._assert_views_allow(old_key, None, "RENAME TABLE")
+        entry = self._tables[old_key]
+        referencing: list[tuple[_FoldedStatement, exp.Table]] = []
+        for other in self._tables.values():
+            for reference in other.expr.find_all(exp.Reference):
+                ref_table = self._reference_table(reference)
+                if ref_table is not None and self._resolve_reference_key(ref_table) == old_key:
+                    referencing.append((other, ref_table))
+        self._mark_modified(entry)
+        self._set_create_table_node(entry.expr, new_table.copy())
+        self._tables = {(new_key if key == old_key else key): value for key, value in self._tables.items()}
+        for other, ref_table in referencing:
+            self._mark_modified(other)
+            ref_table.replace(new_table.copy())
+        for index_entry in self._indexes.values():
+            if index_entry.owner == old_key and isinstance(index_entry.expr.this, exp.Index):
+                self._mark_modified(index_entry)
+                index_entry.expr.this.set("table", new_table.copy())
+                index_entry.owner = new_key
+        rebuilt_comments: dict[tuple[str, str], _FoldedStatement] = {}
+        for (comment_kind, comment_key), comment in self._comments.items():
+            if comment_kind == "TABLE" and comment_key == old_key:
+                self._mark_modified(comment)
+                comment.expr.set("this", new_table.copy())
+                rebuilt_comments[comment_kind, new_key] = comment
+            elif comment_kind == "COLUMN" and comment_key.startswith(f"{old_key}."):
+                self._mark_modified(comment)
+                column = comment.expr.this
+                if isinstance(column, exp.Column):
+                    column.set("table", new_table.this.copy() if isinstance(new_table.this, exp.Expr) else None)
                     new_db = new_table.args.get("db")
-                    if isinstance(new_db, exp.Expr):
-                        comment_expr.this.set("db", new_db.copy())
-                rebuilt_comments[(c_kind, f"{new_key}.{col_suffix}")] = comment_expr
+                    column.set("db", new_db.copy() if isinstance(new_db, exp.Expr) else None)
+                rebuilt_comments[comment_kind, f"{new_key}.{comment_key[len(old_key) + 1 :]}"] = comment
             else:
-                rebuilt_comments[(c_kind, c_target)] = comment_expr
+                rebuilt_comments[comment_kind, comment_key] = comment
         self._comments = rebuilt_comments
+        return new_key
 
-        self._post_ddl_statements = [
-            (new_key if tbl_key == old_key else tbl_key, stmt) for tbl_key, stmt in self._post_ddl_statements
+    def _apply_drop(self, expr: exp.Drop) -> None:
+        kind = str(expr.args.get("kind") or "").upper()
+        cascade = bool(expr.args.get("cascade"))
+        for target in self._drop_targets(expr):
+            if kind == "TABLE":
+                self._drop_table(self._object_key(target), cascade=cascade)
+            elif kind == "VIEW":
+                self._drop_view(self._object_key(target), cascade=cascade)
+            elif kind == "INDEX":
+                self._drop_index(self._name_key(target))
+            elif kind == "SEQUENCE":
+                self._drop_sequence(self._object_key(target))
+            elif kind == "SCHEMA":
+                self._drop_schema(self._object_key(target))
+            else:
+                msg = f"DROP {kind or 'statements of this kind'} cannot be folded"
+                raise self._refusal(msg)
+
+    def _drop_table(self, key: str, *, cascade: bool) -> None:
+        self._require_table(key, "DROP TABLE")
+        self._assert_restructurable(key, "DROP TABLE")
+        dependent_views = self._dependent_views(key)
+        referencing = [
+            other_key
+            for other_key, other in self._tables.items()
+            if other_key != key and self._references_table(other.expr, key)
         ]
+        if (dependent_views or referencing) and not cascade:
+            msg = f"DROP TABLE {key} without CASCADE while {', '.join([*dependent_views, *referencing])} depend on it"
+            raise self._refusal(msg)
+        for view_key in dependent_views:
+            if view_key in self._views:
+                self._drop_view(view_key, cascade=True)
+        for other_key in referencing:
+            self._strip_foreign_keys(other_key, key)
+        self._tables.pop(key)
+        self._forget_object(key)
+        for sources in self._ctas_sources.values():
+            sources.discard(key)
 
-    def _topologically_order_tables(self) -> list[str]:
-        keys = list(self._tables.keys())
-        if len(keys) <= 1:
-            return keys
+    def _drop_view(self, key: str, *, cascade: bool) -> None:
+        if key not in self._views:
+            msg = f"DROP VIEW targets {key}, which is not created within the squash range"
+            raise self._refusal(msg)
+        self._assert_restructurable(key, "DROP VIEW")
+        dependent_views = self._dependent_views(key)
+        if dependent_views and not cascade:
+            msg = f"DROP VIEW {key} without CASCADE while {', '.join(dependent_views)} depend on it"
+            raise self._refusal(msg)
+        for view_key in dependent_views:
+            if view_key in self._views:
+                self._drop_view(view_key, cascade=True)
+        self._views.pop(key)
+        self._forget_object(key)
 
-        unqualified_map: dict[str, str] = {}
-        for key in keys:
-            short_name = key.rsplit(".", 1)[-1]
-            if short_name not in unqualified_map:
-                unqualified_map[short_name] = key
+    def _drop_index(self, key: str) -> None:
+        if key not in self._indexes:
+            msg = f"DROP INDEX targets {key}, which is not created within the squash range"
+            raise self._refusal(msg)
+        self._indexes.pop(key)
+        self._comments.pop(("INDEX", key), None)
 
-        deps: dict[str, set[str]] = {key: set() for key in keys}
-        for key, create_expr in self._tables.items():
-            for ref in create_expr.find_all(exp.Reference):
-                ref_target = ref.this.this if isinstance(ref.this, exp.Schema) else ref.this
-                ref_key = self._object_key(ref_target) if isinstance(ref_target, exp.Expr) else ""
-                resolved_key = ref_key if ref_key in deps else unqualified_map.get(ref_key.rsplit(".", 1)[-1], "")
-                if resolved_key and resolved_key != key and resolved_key in deps:
-                    deps[key].add(resolved_key)
+    def _drop_sequence(self, key: str) -> None:
+        if key not in self._sequences:
+            msg = f"DROP SEQUENCE targets {key}, which is not created within the squash range"
+            raise self._refusal(msg)
+        self._sequences.pop(key)
+        self._comments.pop(("SEQUENCE", key), None)
 
+    def _drop_schema(self, key: str) -> None:
+        if key not in self._schemas:
+            msg = f"DROP SCHEMA targets {key}, which is not created within the squash range"
+            raise self._refusal(msg)
+        prefix = f"{key}."
+        contained = [
+            object_key
+            for object_key in [*self._tables, *self._views, *self._sequences]
+            if object_key.startswith(prefix)
+        ]
+        if contained:
+            msg = f"DROP SCHEMA {key} while {', '.join(contained)} still exist in it"
+            raise self._refusal(msg)
+        self._schemas.pop(key)
+        self._comments.pop(("SCHEMA", key), None)
+
+    def _strip_foreign_keys(self, table_key: str, target_key: str) -> None:
+        entry = self._tables[table_key]
+        schema = self._table_schema(entry)
+        self._mark_modified(entry)
+        kept: list[exp.Expr] = []
+        for item in schema.expressions:
+            if isinstance(item, exp.ColumnDef):
+                item.set(
+                    "constraints",
+                    [
+                        constraint
+                        for constraint in item.args.get("constraints") or []
+                        if not self._references_table(constraint, target_key)
+                    ],
+                )
+            elif self._references_table(item, target_key):
+                continue
+            kept.append(item)
+        schema.set("expressions", kept)
+
+    def _forget_object(self, key: str) -> None:
+        for index_key in [index_key for index_key, entry in self._indexes.items() if entry.owner == key]:
+            self._indexes.pop(index_key)
+            self._comments.pop(("INDEX", index_key), None)
+        prefix = f"{key}."
+        stale_comments = [
+            comment_key
+            for comment_key in self._comments
+            if (comment_key[0] != "COLUMN" and comment_key[1] == key)
+            or (comment_key[0] == "COLUMN" and comment_key[1].startswith(prefix))
+        ]
+        for comment_key in stale_comments:
+            self._comments.pop(comment_key)
+
+    def _apply_comment(self, expr: exp.Comment) -> None:
+        kind = str(expr.args.get("kind") or "").upper()
+        target = expr.this
+        if not isinstance(target, exp.Expr):
+            msg = "the COMMENT target could not be read"
+            raise self._refusal(msg)
+        if kind == "COLUMN" and isinstance(target, exp.Column):
+            table_key = self._object_key(
+                exp.Table(this=target.args.get("table"), db=target.args.get("db"), catalog=target.args.get("catalog"))
+            )
+            column_key = self._name_key(target)
+            table_entry = self._require_table(table_key, "COMMENT ON COLUMN")
+            if self._find_column(self._table_schema(table_entry), column_key) is None:
+                msg = f"column {column_key} does not exist on {table_key}"
+                raise self._refusal(msg)
+            key = f"{table_key}.{column_key}"
+        elif kind == "INDEX":
+            key = self._name_key(target)
+            if key not in self._indexes:
+                msg = f"COMMENT ON INDEX targets {key}, which is not created within the squash range"
+                raise self._refusal(msg)
+        else:
+            key = self._object_key(target)
+            catalogs = {
+                "TABLE": self._tables,
+                "VIEW": self._views,
+                "MATERIALIZED VIEW": self._views,
+                "SEQUENCE": self._sequences,
+                "SCHEMA": self._schemas,
+            }
+            catalog = catalogs.get(kind)
+            if catalog is None:
+                msg = f"COMMENT ON {kind or 'objects of this kind'} cannot be folded"
+                raise self._refusal(msg)
+            if key not in catalog:
+                msg = f"COMMENT ON {kind} targets {key}, which is not created within the squash range"
+                raise self._refusal(msg)
+        self._comments[kind, key] = self._new_entry(expr)
+
+    def _apply_dml(self, expr: exp.Expr) -> None:
+        targets = self._dml_targets(expr)
+        if not targets:
+            msg = "the DML target table could not be read"
+            raise self._refusal(msg)
+        target_keys: list[str] = []
+        for target in targets:
+            key = self._object_key(target)
+            if key not in self._tables:
+                msg = f"DML targets {key}, which is not a table created within the squash range"
+                raise self._refusal(msg)
+            target_keys.append(key)
+        target_ids = {id(target) for target in targets}
+        cte_names = self._cte_names(expr)
+        sources = [
+            self._object_key(table)
+            for table in expr.find_all(exp.Table)
+            if id(table) not in target_ids and self._is_relation_reference(table, cte_names)
+        ]
+        entry = self._new_entry(expr)
+        for key in self._expand_dependencies([*target_keys, *sources]):
+            if key in self._tables or key in self._views:
+                self._dml_touched.setdefault(key, entry)
+        for key in target_keys:
+            self._dml_written.setdefault(key, entry)
+        self._dml.append(entry)
+
+    def _assert_restructurable(self, key: str, label: str) -> None:
+        touched = self._dml_touched.get(key)
+        if touched is not None:
+            msg = (
+                f"{label} changes {key} after DML in migration {touched.origin or '<unknown>'} "
+                f"('{self._snippet(touched.text)}') uses it; the folded migration would replay that DML "
+                "against the final shape"
+            )
+            raise self._refusal(msg)
+        readers = self._ctas_sources.get(key)
+        if readers:
+            msg = f"{label} changes {key} after CREATE TABLE AS SELECT for {', '.join(sorted(readers))} reads it"
+            raise self._refusal(msg)
+
+    def _assert_views_allow(self, table_key: str, columns: set[str] | None, label: str) -> None:
+        for view_key in self._dependent_views(table_key):
+            query = self._views[view_key].expr.expression
+            if columns is None:
+                msg = f"{label} on {table_key} would have to rewrite view {view_key}, which depends on it"
+                raise self._refusal(msg)
+            if not isinstance(query, exp.Expr):
+                continue
+            uses_star = any(not isinstance(star.parent, exp.Count) for star in query.find_all(exp.Star))
+            if uses_star or self._column_names(query) & columns:
+                msg = f"{label} on {table_key} changes columns that view {view_key} selects"
+                raise self._refusal(msg)
+
+    def _require_table(self, key: str, label: str) -> "_FoldedStatement":
+        entry = self._tables.get(key)
+        if entry is None:
+            msg = f"{label} targets {key}, which is not a table created within the squash range"
+            raise self._refusal(msg)
+        return entry
+
+    def _new_entry(self, expr: exp.Expr, owner: str = "") -> "_FoldedStatement":
+        self._order += 1
+        return _FoldedStatement(
+            expr.copy(), self._current_text, self._current_origin, self._order, self._current_faithful, owner
+        )
+
+    def _mark_modified(self, entry: "_FoldedStatement") -> None:
+        if not entry.faithful:
+            msg = (
+                f"it rewrites the statement from migration {entry.origin or '<unknown>'} "
+                f"('{self._snippet(entry.text)}'), which SQLGlot does not reproduce faithfully"
+            )
+            raise self._refusal(msg)
+        entry.modified = True
+
+    def _ordered_relation_keys(self) -> list[str]:
+        entries: dict[str, _FoldedStatement] = {**self._tables, **self._views}
+        keys = sorted(entries, key=lambda key: entries[key].order)
+        dependencies = {key: self._relation_dependencies(key, entries) for key in keys}
         ordered: list[str] = []
-        visited: set[str] = set()
-        visiting: set[str] = set()
-
-        def _visit(node: str) -> None:
-            if node in visited or node in visiting:
-                return
-            visiting.add(node)
-            for parent in keys:
-                if parent in deps[node]:
-                    _visit(parent)
-            visiting.remove(node)
-            visited.add(node)
-            ordered.append(node)
-
-        for key in keys:
-            _visit(key)
+        state: dict[str, int] = {}
+        for root in keys:
+            if root in state:
+                continue
+            state[root] = 1
+            stack: list[tuple[str, int]] = [(root, 0)]
+            while stack:
+                node, position = stack[-1]
+                node_dependencies = dependencies[node]
+                if position < len(node_dependencies):
+                    stack[-1] = (node, position + 1)
+                    dependency = node_dependencies[position]
+                    dependency_state = state.get(dependency, 0)
+                    if dependency_state == 1:
+                        msg = (
+                            f"{node} and {dependency} depend on each other, which CREATE statements cannot express "
+                            "without separate ALTER statements"
+                        )
+                        raise self._refusal(msg, entries[node])
+                    if dependency_state == 0:
+                        state[dependency] = 1
+                        stack.append((dependency, 0))
+                else:
+                    stack.pop()
+                    state[node] = 2
+                    ordered.append(node)
         return ordered
 
-    def _is_comment_target_alive(self, comment_kind: str, target_key: str) -> bool:
-        if comment_kind == "TABLE":
-            return target_key in self._tables
-        if comment_kind == "COLUMN":
-            table_key = target_key.rsplit(".", 1)[0] if "." in target_key else ""
-            return table_key in self._tables
-        if comment_kind in {"VIEW", "MATERIALIZED VIEW"}:
-            return target_key in self._views
-        if comment_kind == "INDEX":
-            return target_key in self._indexes
-        if comment_kind == "SEQUENCE":
-            return target_key in self._sequences
-        if comment_kind == "SCHEMA":
-            return target_key in self._schemas
-        return True
+    def _relation_dependencies(self, key: str, entries: "dict[str, _FoldedStatement]") -> list[str]:
+        entry = entries[key]
+        found: list[str] = []
+        query = entry.expr.expression
+        if isinstance(query, exp.Query):
+            found.extend(self._query_sources(query))
+        if key in self._tables:
+            for reference in entry.expr.find_all(exp.Reference):
+                ref_table = self._reference_table(reference)
+                if ref_table is not None:
+                    found.append(self._resolve_reference_key(ref_table))
+        unique = {dependency for dependency in found if dependency != key and dependency in entries}
+        return sorted(unique, key=lambda dependency: entries[dependency].order)
 
-    def _render_expr(self, expr: exp.Expr) -> str:
-        return self._ensure_semicolon(expr.sql(dialect=self._dialect))
+    def _dependent_views(self, key: str) -> list[str]:
+        return [
+            view_key
+            for view_key, view in self._views.items()
+            if view_key != key
+            and isinstance(view.expr.expression, exp.Query)
+            and key in self._query_sources(view.expr.expression)
+        ]
+
+    def _expand_dependencies(self, keys: Iterable[str]) -> list[str]:
+        expanded: list[str] = []
+        pending = list(keys)
+        while pending:
+            key = pending.pop()
+            if key in expanded:
+                continue
+            expanded.append(key)
+            view = self._views.get(key)
+            if view is not None and isinstance(view.expr.expression, exp.Query):
+                pending.extend(self._query_sources(view.expr.expression))
+        return expanded
+
+    def _query_sources(self, query: exp.Expr) -> list[str]:
+        cte_names = self._cte_names(query)
+        sources: list[str] = []
+        for table in query.find_all(exp.Table):
+            if self._is_relation_reference(table, cte_names):
+                key = self._object_key(table)
+                if key not in sources:
+                    sources.append(key)
+        return sources
+
+    def _cte_names(self, node: exp.Expr) -> set[str]:
+        names: set[str] = set()
+        for cte in node.find_all(exp.CTE):
+            alias = cte.args.get("alias")
+            if isinstance(alias, exp.TableAlias) and isinstance(alias.this, exp.Identifier):
+                names.add(self._ident_key(alias.this))
+        return names
+
+    def _is_relation_reference(self, table: exp.Table, cte_names: set[str]) -> bool:
+        if not isinstance(table.this, exp.Identifier):
+            return False
+        return bool(table.args.get("db")) or self._ident_key(table.this) not in cte_names
+
+    def _references_table(self, node: exp.Expr, target_key: str) -> bool:
+        for reference in node.find_all(exp.Reference):
+            ref_table = self._reference_table(reference)
+            if ref_table is not None and self._resolve_reference_key(ref_table) == target_key:
+                return True
+        return False
+
+    def _referenced_columns(self, expr: exp.Expr, target_key: str) -> set[str]:
+        columns: set[str] = set()
+        for reference in expr.find_all(exp.Reference):
+            ref_table = self._reference_table(reference)
+            if ref_table is None or self._resolve_reference_key(ref_table) != target_key:
+                continue
+            ref_schema = reference.this
+            if isinstance(ref_schema, exp.Schema) and ref_schema.expressions:
+                columns.update(self._name_key(ident) for ident in ref_schema.expressions)
+            else:
+                columns.update(self._primary_key_columns(target_key))
+        return columns
+
+    def _foreign_reference_idents(self, expr: exp.Expr, target_key: str) -> list[exp.Identifier]:
+        idents: list[exp.Identifier] = []
+        for reference in expr.find_all(exp.Reference):
+            ref_table = self._reference_table(reference)
+            ref_schema = reference.this
+            if (
+                ref_table is not None
+                and isinstance(ref_schema, exp.Schema)
+                and self._resolve_reference_key(ref_table) == target_key
+            ):
+                idents.extend(ident for ident in ref_schema.expressions if isinstance(ident, exp.Identifier))
+        return idents
+
+    def _primary_key_columns(self, table_key: str) -> set[str]:
+        entry = self._tables.get(table_key)
+        if entry is None:
+            return set()
+        columns: set[str] = set()
+        for item in self._table_schema(entry).expressions:
+            if isinstance(item, exp.ColumnDef):
+                if any(
+                    isinstance(c.args.get("kind"), exp.PrimaryKeyColumnConstraint)
+                    for c in item.args.get("constraints") or []
+                ):
+                    columns.add(self._name_key(item))
+            elif isinstance(item, exp.PrimaryKey) or (
+                isinstance(item, exp.Constraint) and any(isinstance(sub, exp.PrimaryKey) for sub in item.expressions)
+            ):
+                columns.update(self._local_column_keys(item, table_key))
+        return columns
+
+    def _local_column_keys(self, node: exp.Expr, owner_key: str) -> set[str]:
+        return {self._ident_key(ident) for ident in self._local_column_refs(node, owner_key)}
+
+    def _local_column_refs(self, node: exp.Expr, owner_key: str) -> list[exp.Identifier]:
+        """Return identifiers inside a table item that name columns of the owning table.
+
+        Args:
+            node: A column definition, column constraint, or table-level constraint.
+            owner_key: Catalog key of the table that owns ``node``.
+
+        Returns:
+            Identifier nodes that refer to columns of ``owner_key``, including self-referencing
+            foreign key targets but excluding columns of other referenced tables.
+        """
+        refs: list[exp.Identifier] = []
+        for ident in node.find_all(exp.Identifier):
+            parent = ident.parent
+            if isinstance(parent, exp.Column):
+                if parent.this is ident and parent.find_ancestor(exp.Reference) is None:
+                    refs.append(ident)
+            elif isinstance(parent, exp.Schema):
+                if parent.this is None or (
+                    isinstance(parent.parent, exp.Reference)
+                    and isinstance(parent.this, exp.Table)
+                    and self._resolve_reference_key(parent.this) == owner_key
+                ):
+                    refs.append(ident)
+            elif isinstance(parent, (exp.ForeignKey, exp.PrimaryKey)) and ident.arg_key == "expressions":
+                refs.append(ident)
+        return refs
+
+    def _index_column_refs(self, entry: "_FoldedStatement") -> list[exp.Identifier]:
+        index = entry.expr.this
+        params = index.args.get("params") if isinstance(index, exp.Index) else None
+        if not isinstance(params, exp.Expr):
+            return []
+        return [column.this for column in params.find_all(exp.Column) if isinstance(column.this, exp.Identifier)]
+
+    def _index_column_keys(self, entry: "_FoldedStatement") -> set[str]:
+        return {self._ident_key(ident) for ident in self._index_column_refs(entry)}
+
+    def _column_names(self, node: exp.Expr) -> set[str]:
+        return {self._name_key(column) for column in node.find_all(exp.Column) if column.name}
+
+    def _find_column(self, schema: exp.Schema, column_key: str) -> exp.ColumnDef | None:
+        for item in schema.expressions:
+            if isinstance(item, exp.ColumnDef) and self._name_key(item) == column_key:
+                return item
+        return None
+
+    def _resolve_reference_key(self, table: exp.Table) -> str:
+        key = self._object_key(table)
+        if key in self._tables or table.args.get("db"):
+            return key
+        candidates = [candidate for candidate in self._tables if candidate.rsplit(".", 1)[-1] == key]
+        return candidates[0] if len(candidates) == 1 else key
+
+    def _relation(self, key: str) -> "_FoldedStatement":
+        entry = self._tables.get(key)
+        return entry if entry is not None else self._views[key]
+
+    def _render(self, entry: "_FoldedStatement") -> str:
+        if not entry.modified:
+            return _ensure_semicolon(entry.text)
+        return self._render_expr(entry.expr, entry)
+
+    def _render_drop(self, entry: "_FoldedStatement", kind: str, *, materialized: bool = False) -> str:
+        target = entry.expr.this.this if isinstance(entry.expr.this, exp.Schema) else entry.expr.this
+        if not isinstance(target, exp.Expr):
+            msg = "the dropped object name could not be read"
+            raise self._refusal(msg, entry)
+        drop = exp.Drop(tables=[target.copy()], kind=kind, exists=True, materialized=materialized)
+        return self._render_expr(drop, entry)
+
+    def _render_expr(self, expr: exp.Expr, entry: "_FoldedStatement") -> str:
+        try:
+            sql = expr.sql(dialect=self._dialect, unsupported_level=ErrorLevel.RAISE)
+        except UnsupportedError as error:
+            msg = f"SQLGlot cannot render it for this dialect ({error})"
+            raise self._refusal(msg, entry) from error
+        return _ensure_semicolon(sql)
+
+    def _is_faithful(self, text: str, expr: exp.Expr) -> bool:
+        """Return whether rendering ``expr`` reproduces the tokens of ``text``.
+
+        Every keyword token type of the original text must appear in the rendering (allowing a
+        small set of synonyms), and every identifier, literal, and non-function word must survive.
+        Function names may be canonicalized because SQLGlot maps them to equivalent spellings.
+
+        Args:
+            text: Original statement text.
+            expr: Parsed statement.
+
+        Returns:
+            True when the rendering is faithful to the original text.
+        """
+        try:
+            rendered = expr.sql(dialect=self._dialect, unsupported_level=ErrorLevel.IGNORE)
+            original_tokens = self._dialect_impl.tokenize(text)
+            rendered_tokens = self._dialect_impl.tokenize(rendered)
+        except TokenError:
+            return False
+        original_types, original_words = self._token_signature(original_tokens)
+        rendered_types, rendered_words = self._token_signature(rendered_tokens)
+        for token_type in original_types - rendered_types:
+            equivalent = _EQUIVALENT_TOKEN_TYPES.get(token_type)
+            if equivalent is None or equivalent not in rendered_types:
+                return False
+        return not original_words - rendered_words
+
+    def _refusal(self, reason: str, entry: "_FoldedStatement | None" = None) -> SquashValidationError:
+        text = entry.text if entry is not None else self._current_text
+        origin = entry.origin if entry is not None else self._current_origin
+        location = f"migration {origin} statement" if origin else "statement"
+        return SquashValidationError(
+            f"Cannot fold {location} '{self._snippet(text)}' with the ddl squash strategy: {reason}. {_CONCAT_HINT}"
+        )
+
+    def _object_key(self, node: exp.Expr | None) -> str:
+        target = node.this if isinstance(node, exp.Schema) else node
+        if target is None:
+            return ""
+        if isinstance(target, exp.Table):
+            parts = [target.args.get("catalog"), target.args.get("db"), target.this]
+            keys = [self._part_key(part) for part in parts if isinstance(part, exp.Expr)]
+            return ".".join(key for key in keys if key)
+        return self._part_key(target)
+
+    def _part_key(self, part: exp.Expr) -> str:
+        if isinstance(part, exp.Identifier):
+            return self._ident_key(part)
+        return part.name.lower()
+
+    def _name_key(self, node: exp.Expr | None) -> str:
+        if node is None:
+            return ""
+        if isinstance(node, exp.Identifier):
+            return self._ident_key(node)
+        if isinstance(node.this, exp.Identifier):
+            return self._ident_key(node.this)
+        return node.name.lower()
+
+    def _ident_key(self, ident: exp.Identifier) -> str:
+        return self._dialect_impl.normalize_identifier(ident.copy()).name
 
     @staticmethod
-    def _ensure_semicolon(sql_text: str) -> str:
-        stripped = sql_text.strip()
-        return stripped if stripped.endswith(";") else f"{stripped};"
+    def _token_signature(tokens: list[Token]) -> tuple[set[TokenType], "Counter[str]"]:
+        types: set[TokenType] = set()
+        words: Counter[str] = Counter()
+        for position, token in enumerate(tokens):
+            token_type = token.token_type
+            if token_type == TokenType.SEMICOLON:
+                continue
+            if token_type not in _TEXT_TOKEN_TYPES:
+                types.add(token_type)
+                continue
+            next_type = tokens[position + 1].token_type if position + 1 < len(tokens) else None
+            if token_type == TokenType.VAR and next_type == TokenType.L_PAREN:
+                continue
+            words[token.text if token_type in _CASE_SENSITIVE_TOKEN_TYPES else token.text.lower()] += 1
+        return types, words
 
     @staticmethod
-    def _ensure_table_schema(create_expr: exp.Create) -> exp.Schema:
-        if isinstance(create_expr.this, exp.Schema):
-            return create_expr.this
-        schema_expr = exp.Schema(this=create_expr.this, expressions=[])
-        create_expr.set("this", schema_expr)
-        return schema_expr
+    def _snippet(text: str) -> str:
+        collapsed = " ".join(text.split())
+        if len(collapsed) > _SNIPPET_LENGTH:
+            return f"{collapsed[: _SNIPPET_LENGTH - 3]}..."
+        return collapsed
 
     @staticmethod
-    def _set_create_table_node(create_expr: exp.Create, new_table: exp.Table) -> None:
+    def _table_schema(entry: "_FoldedStatement") -> exp.Schema:
+        schema = entry.expr.this
+        if not isinstance(schema, exp.Schema):
+            schema = exp.Schema(this=entry.expr.this, expressions=[])
+            entry.expr.set("this", schema)
+        return schema
+
+    @staticmethod
+    def _set_create_table_node(create_expr: exp.Expr, new_table: exp.Table) -> None:
         if isinstance(create_expr.this, exp.Schema):
             create_expr.this.set("this", new_table)
         else:
             create_expr.set("this", new_table)
 
     @staticmethod
-    def _build_drop_expr(create_expr: exp.Create, kind: str) -> exp.Drop | None:
-        target = create_expr.this.this if isinstance(create_expr.this, exp.Schema) else create_expr.this
-        if not isinstance(target, exp.Expr):
-            return None
-        return exp.Drop(this=target.copy(), tables=[target.copy()], kind=kind, exists=True)
+    def _reference_table(reference: exp.Reference) -> exp.Table | None:
+        target = reference.this.this if isinstance(reference.this, exp.Schema) else reference.this
+        return target if isinstance(target, exp.Table) else None
 
     @staticmethod
-    def _object_key(node: exp.Expr | None) -> str:
-        if node is None:
-            return ""
-        target = node.this if isinstance(node, exp.Schema) else node
-        if isinstance(target, exp.Table):
-            name = target.name.lower()
-            db = target.db.lower()
-            if db and name:
-                return f"{db}.{name}"
-            return name or db
-        if isinstance(target, exp.Index):
-            return target.name.lower()
-        return target.name.lower()
-
-    @classmethod
-    def _index_key(cls, node: exp.Expr | None) -> str:
-        if isinstance(node, exp.Index):
-            return node.name.lower()
-        return cls._object_key(node)
-
-    @classmethod
-    def _comment_target_key(cls, kind: str, target: exp.Expr) -> str:
-        if kind == "COLUMN" and isinstance(target, exp.Column):
-            col_name = target.name.lower()
-            table_name = target.table.lower()
-            db_arg = target.args.get("db")
-            db_name = str(db_arg.name).lower() if isinstance(db_arg, exp.Expr) else ""
-            table_key = f"{db_name}.{table_name}" if db_name and table_name else table_name
-            return f"{table_key}.{col_name}" if table_key and col_name else col_name
-        return cls._object_key(target)
-
-    @classmethod
-    def _extract_dml_target_table_key(cls, expr: exp.Expr) -> str | None:
-        if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)):
-            table_node = expr.this.this if isinstance(expr.this, exp.Schema) else expr.this
-            if isinstance(table_node, exp.Table):
-                key = cls._object_key(table_node)
-                return key or None
-        return None
+    def _is_materialized(entry: "_FoldedStatement") -> bool:
+        return entry.expr.find(exp.MaterializedProperty) is not None
 
     @staticmethod
-    def _unqualified_name(node: exp.Expr | None) -> str:
-        if node is None:
-            return ""
-        return node.name.lower()
+    def _drop_targets(expr: exp.Drop) -> list[exp.Expr]:
+        targets: list[exp.Expr] = [target for target in expr.args.get("tables") or [] if isinstance(target, exp.Expr)]
+        if isinstance(expr.this, exp.Expr) and all(target is not expr.this for target in targets):
+            targets.append(expr.this)
+        return targets
 
     @staticmethod
-    def _extract_identifier(node: exp.Expr | None, fallback_name: str) -> exp.Identifier:
-        if isinstance(node, exp.Identifier):
-            return node.copy()
-        if isinstance(node, exp.Column) and isinstance(node.this, exp.Identifier):
-            return node.this.copy()
-        return exp.to_identifier(fallback_name)
-
-    @staticmethod
-    def _referenced_columns_in_constraint(node: exp.Expr) -> set[str]:
-        cols: set[str] = set()
-        for col in node.find_all(exp.Column):
-            if col.name:
-                cols.add(col.name.lower())
-        for ident in node.find_all(exp.Identifier):
-            parent = ident.parent
-            if isinstance(parent, (exp.Schema, exp.ForeignKey, exp.PrimaryKey, exp.UniqueColumnConstraint)) and (
-                parent is node or (isinstance(parent, exp.Schema) and parent.this is None)
-            ):
-                cols.add(ident.name.lower())
-        return cols
-
-    @staticmethod
-    def _referenced_columns_in_index(create_index: exp.Create) -> set[str]:
-        cols: set[str] = set()
-        index_node = create_index.this
-        params = index_node.args.get("params") if isinstance(index_node, exp.Index) else None
-        search_root = params if isinstance(params, exp.Expr) else create_index
-        for col in search_root.find_all(exp.Column):
-            if col.name:
-                cols.add(col.name.lower())
-        return cols
-
-    @staticmethod
-    def _replace_column_identifier_in_tree(node: exp.Expr, old_name: str, new_ident: exp.Identifier) -> None:
-        for col in node.find_all(exp.Column):
-            if col.name.lower() == old_name:
-                col.set("this", new_ident.copy())
-        for ident in node.find_all(exp.Identifier):
-            parent = ident.parent
-            if (
-                ident.name.lower() == old_name
-                and isinstance(parent, (exp.Schema, exp.ForeignKey, exp.PrimaryKey, exp.UniqueColumnConstraint))
-                and not isinstance(parent.parent, exp.Reference)
-            ):
-                ident.replace(new_ident.copy())
-
-
-def fold_migration_ddl(statements: Sequence[str], *, dialect: str | None = None) -> tuple[list[str], list[str]]:
-    """Fold a chronological sequence of migration SQL statements into net canonical DDL.
-
-    Args:
-        statements: Chronological sequence of SQL statements from ``up`` migrations.
-        dialect: Optional SQLGlot dialect name used to parse and render DDL.
-
-    Returns:
-        Tuple of ``(up_statements, down_statements)`` representing net schema DDL
-        and reverse-dependency ``DROP`` statements.
-    """
-    folder = DDLStateFolder(dialect=dialect)
-    for statement in statements:
-        folder.feed(statement)
-    return folder.to_statements()
-
-
-def parse_version_range(range_str: str) -> tuple[str, str]:
-    """Parse a version range string into (start, end) tuple.
-
-    Accepts multiple formats: ``START:END``, ``START..END``, or ``START-END``.
-
-    Args:
-        range_str: Version range string.
-
-    Returns:
-        Tuple of (start_version, end_version) zero-padded to 4 digits.
-
-    Raises:
-        ValueError: If the format is not recognised.
-    """
-    for sep in (":", "..", "-"):
-        if sep in range_str:
-            parts = range_str.split(sep, 1)
-            start = _normalize_range_endpoint(parts[0].strip())
-            end = _normalize_range_endpoint(parts[1].strip())
-            return start, end
-    msg = f"Invalid VERSION_RANGE format: '{range_str}'. Use START:END, START..END, or START-END"
-    raise ValueError(msg)
-
-
-def group_migrations_by_type(migrations: list[tuple[str, Path]]) -> list[tuple[str, list[tuple[str, Path]]]]:
-    """Group consecutive migrations by file type (sql or py).
-
-    Partitions a list of migrations into groups where each group contains
-    consecutive migrations of the same type. This enables squashing mixed
-    SQL and Python migrations into separate output files.
-
-    Args:
-        migrations: List of (version, path) tuples to group.
-
-    Returns:
-        List of (type, migrations) tuples where type is "sql" or "py"
-        and migrations is the list of (version, path) for that group.
-    """
-    if not migrations:
-        return []
-
-    groups: list[tuple[str, list[tuple[str, Path]]]] = []
-    current_type: str | None = None
-    current_group: list[tuple[str, Path]] = []
-
-    for version, path in migrations:
-        file_type = "py" if path.suffix == ".py" else "sql"
-
-        if file_type != current_type:
-            if current_group and current_type is not None:
-                groups.append((current_type, current_group))
-            current_type = file_type
-            current_group = [(version, path)]
-        else:
-            current_group.append((version, path))
-
-    if current_group and current_type is not None:
-        groups.append((current_type, current_group))
-
-    return groups
+    def _dml_targets(expr: exp.Expr) -> list[exp.Table]:
+        if isinstance(expr, exp.TruncateTable):
+            return [table for table in expr.expressions if isinstance(table, exp.Table)]
+        target = expr.this.this if isinstance(expr.this, exp.Schema) else expr.this
+        return [target] if isinstance(target, exp.Table) else []
 
 
 @dataclass(slots=True)
@@ -763,7 +1386,7 @@ class SquashPlan:
         source_versions: List of version strings being replaced (for tracking table updates).
         transactional: Optional transactional directive preserved from source SQL migrations.
         schema: Optional schema directive preserved from source SQL migrations.
-        strategy: Squash strategy ("ddl", "schema", or "concat").
+        strategy: Squash strategy ("concat", "ddl", or "schema").
         schema_ddl_up: Optional pre-extracted schema CREATE DDL statements.
         schema_ddl_down: Optional pre-extracted schema DROP DDL statements.
         missing_down_versions: Optional list of source versions that lacked a down block.
@@ -776,7 +1399,7 @@ class SquashPlan:
     source_versions: list[str]
     transactional: bool | None = None
     schema: str | None = None
-    strategy: str = "ddl"
+    strategy: str = "concat"
     schema_ddl_up: list[str] | None = None
     schema_ddl_down: list[str] | None = None
     missing_down_versions: list[str] | None = None
@@ -789,7 +1412,15 @@ class MigrationSquasher:
     Combines multiple sequential or timestamped migrations into a single file.
     """
 
-    __slots__ = ("backup_path", "migrations_path", "runner", "schema_ddl", "strategy", "template_settings")
+    __slots__ = (
+        "backup_path",
+        "migrations_path",
+        "runner",
+        "schema_ddl",
+        "strategy",
+        "template_settings",
+        "version_table",
+    )
 
     def __init__(
         self,
@@ -797,8 +1428,9 @@ class MigrationSquasher:
         runner: "SyncMigrationRunner",
         template_settings: "MigrationTemplateSettings | None" = None,
         *,
-        strategy: str = "ddl",
+        strategy: str = "concat",
         schema_ddl: tuple[list[str], list[str]] | None = None,
+        version_table: str = "ddl_migrations",
     ) -> None:
         """Initialize the migration squasher.
 
@@ -806,19 +1438,17 @@ class MigrationSquasher:
             migrations_path: Path to the migrations directory.
             runner: SyncMigrationRunner instance for loading migrations.
             template_settings: Optional template settings for generating squashed file.
-            strategy: Default squash strategy ("ddl", "schema", or "concat").
+            strategy: Default squash strategy ("concat", "ddl", or "schema").
             schema_ddl: Optional pre-fetched (up_ddl, down_ddl) tuple for "schema" strategy.
+            version_table: Migration tracking table excluded from live "schema" extraction.
         """
-        resolved_strategy = strategy.lower()
-        if resolved_strategy not in {"ddl", "schema", "concat"}:
-            msg = f"Unsupported squash strategy: '{strategy}'. Expected 'ddl', 'schema', or 'concat'."
-            raise SquashValidationError(msg)
         self.migrations_path = migrations_path
         self.runner = runner
         self.template_settings = template_settings
         self.backup_path: Path | None = None
-        self.strategy = resolved_strategy
+        self.strategy = self._resolve_strategy(strategy)
         self.schema_ddl = schema_ddl
+        self.version_table = version_table
 
     def plan_squash(
         self,
@@ -840,18 +1470,14 @@ class MigrationSquasher:
             description: Description for the squashed migration file.
             allow_gaps: If True, allow gaps in version sequence.
             output_format: Output file format ("sql" or "py").
-            strategy: Squash strategy override ("ddl", "schema", or "concat").
+            strategy: Squash strategy override ("concat", "ddl", or "schema").
             single_file: When True, emit a single SquashPlan across mixed file types/directives.
             schema_ddl: Optional pre-fetched (up_ddl, down_ddl) tuple for "schema" strategy.
 
         Returns:
             List of SquashPlan objects with details of planned operations.
         """
-        resolved_strategy = (strategy or self.strategy or "ddl").lower()
-        if resolved_strategy not in {"ddl", "schema", "concat"}:
-            msg = f"Unsupported squash strategy: '{resolved_strategy}'. Expected 'ddl', 'schema', or 'concat'."
-            raise SquashValidationError(msg)
-
+        resolved_strategy = self._resolve_strategy(strategy or self.strategy)
         resolved_schema_ddl = schema_ddl if schema_ddl is not None else self.schema_ddl
         all_migrations = self.runner.get_migration_files()
         source_migrations = validate_squash_range(all_migrations, start_version, end_version, allow_gaps=allow_gaps)
@@ -929,8 +1555,8 @@ class MigrationSquasher:
 
         Args:
             migrations: List of (version, path) tuples to extract SQL from.
-            strategy: Optional strategy ("ddl", "schema", or "concat"). When None,
-                returns raw extracted UP and reverse DOWN statements.
+            strategy: Optional strategy ("concat", "ddl", or "schema"). When None,
+                returns the raw UP statements and the reversed raw DOWN statements.
             dialect: Optional SQLGlot dialect name for DDL folding.
             schema_ddl: Optional pre-fetched (up_ddl, down_ddl) tuple for "schema" strategy.
 
@@ -938,30 +1564,35 @@ class MigrationSquasher:
             Tuple of (up_statements, down_statements) lists.
         """
         if strategy is None:
-            up_statements, down_statements, _ = self._extract_raw_sql(migrations)
-            return up_statements, down_statements
+            up_entries, down_statements, _ = self._extract_raw_sql(migrations)
+            return [sql for _, sql in up_entries], down_statements
+        up_statements, down_statements, _ = self._extract_with_strategy(
+            migrations, self._resolve_strategy(strategy), dialect=dialect, schema_ddl=schema_ddl
+        )
+        return up_statements, down_statements
 
-        resolved_strategy = strategy.lower()
-        if resolved_strategy == "schema":
-            effective_schema_ddl = schema_ddl if schema_ddl is not None else self.schema_ddl
-            if effective_schema_ddl is not None:
-                return list(effective_schema_ddl[0]), list(effective_schema_ddl[1])
-            return self._extract_schema_ddl_from_context()
+    def extract_plan_sql(self, plan: SquashPlan) -> tuple[list[str], list[str]]:
+        """Extract the UP and DOWN SQL for a squash plan using the plan's strategy.
 
-        up_statements, down_statements, missing_downs = self._extract_raw_sql(migrations)
-        if resolved_strategy == "concat":
-            return up_statements, ([] if missing_downs else down_statements)
+        Records versions lacking a down block on ``plan.missing_down_versions`` when the
+        squashed migration is irreversible.
 
-        if resolved_strategy == "ddl":
-            if not up_statements:
-                return [], []
-            resolved_dialect = dialect if dialect is not None else self._resolve_dialect()
-            folded_up, folded_down = fold_migration_ddl(up_statements, dialect=resolved_dialect)
-            effective_down = folded_down or ([] if missing_downs else down_statements)
-            return folded_up, effective_down
+        Args:
+            plan: The SquashPlan to extract SQL for.
 
-        msg = f"Unsupported squash strategy: '{strategy}'. Expected 'ddl', 'schema', or 'concat'."
-        raise SquashValidationError(msg)
+        Returns:
+            Tuple of (up_statements, down_statements) lists.
+        """
+        plan_schema_ddl = (plan.schema_ddl_up, plan.schema_ddl_down or []) if plan.schema_ddl_up is not None else None
+        up_statements, down_statements, missing_downs = self._extract_with_strategy(
+            plan.source_migrations,
+            self._resolve_strategy(plan.strategy or self.strategy),
+            dialect=None,
+            schema_ddl=plan_schema_ddl,
+        )
+        if missing_downs:
+            plan.missing_down_versions = missing_downs
+        return up_statements, down_statements
 
     def generate_squashed_content(self, plan: SquashPlan, up_sql: list[str], down_sql: list[str]) -> str:
         """Generate the content for a squashed migration file.
@@ -1054,8 +1685,10 @@ class MigrationSquasher:
     def apply_squash(self, plans: list[SquashPlan], *, dry_run: bool = False, cleanup_backup: bool = True) -> None:
         """Apply the squash operation for one or more plans.
 
-        Creates backup, writes squashed files, deletes source migrations,
-        and cleans up backup on success. Rolls back on error.
+        Renders every squashed file before touching the filesystem, so a refusal from the
+        ``ddl`` strategy leaves the migrations directory unchanged. Then creates a backup,
+        writes squashed files, deletes source migrations, and cleans up the backup on
+        success. Rolls back on error.
 
         Args:
             plans: List of SquashPlan objects to execute.
@@ -1083,19 +1716,18 @@ class MigrationSquasher:
         if not ready_plans:
             return
 
+        planned_contents: list[tuple[SquashPlan, str]] = []
+        for plan in ready_plans:
+            up_sql, down_sql = self.extract_plan_sql(plan)
+            if plan.target_path.suffix == ".py":
+                content = self.generate_python_squash(plan, up_sql, down_sql)
+            else:
+                content = self.generate_squashed_content(plan, up_sql, down_sql)
+            planned_contents.append((plan, content))
+
         self._create_backup()
 
         try:
-            planned_contents: list[tuple[SquashPlan, str]] = []
-            for plan in ready_plans:
-                up_sql, down_sql = self._extract_plan_sql(plan)
-
-                if plan.target_path.suffix == ".py":
-                    content = self.generate_python_squash(plan, up_sql, down_sql)
-                else:
-                    content = self.generate_squashed_content(plan, up_sql, down_sql)
-                planned_contents.append((plan, content))
-
             for plan, content in planned_contents:
                 plan.target_path.write_text(content, encoding="utf-8")
                 logger.debug("Wrote squashed migration to %s", plan.target_path)
@@ -1114,14 +1746,62 @@ class MigrationSquasher:
                     logger.debug("Deleted source migration %s", source_path)
 
             if cleanup_backup:
-                self._cleanup_backup()
+                self.cleanup_backup()
 
         except Exception:
-            self._rollback_backup()
+            self.rollback_backup()
             raise
 
-    def _extract_raw_sql(self, migrations: list[tuple[str, Path]]) -> tuple[list[str], list[str], list[str]]:
-        up_statements: list[str] = []
+    def cleanup_backup(self) -> None:
+        """Remove the backup directory after a successful operation."""
+        if not self.backup_path or not self.backup_path.exists():
+            return
+
+        remove_backup(self.backup_path)
+        logger.debug("Cleaned up backup at %s", self.backup_path)
+        self.backup_path = None
+
+    def rollback_backup(self) -> None:
+        """Restore migration files from the backup directory after an error."""
+        if not self.backup_path or not self.backup_path.exists():
+            return
+
+        backup_dir = self.backup_path
+        restore_backup(self.migrations_path, backup_dir, delete_backup=True)
+        self.backup_path = None
+
+        logger.debug("Rolled back from backup at %s", backup_dir)
+
+    def _extract_with_strategy(
+        self,
+        migrations: list[tuple[str, Path]],
+        strategy: str,
+        *,
+        dialect: str | None,
+        schema_ddl: tuple[list[str], list[str]] | None,
+    ) -> tuple[list[str], list[str], list[str]]:
+        if strategy == "schema":
+            effective_schema_ddl = schema_ddl if schema_ddl is not None else self.schema_ddl
+            if effective_schema_ddl is not None:
+                return list(effective_schema_ddl[0]), list(effective_schema_ddl[1]), []
+            schema_up, schema_down = self._extract_schema_ddl_from_context()
+            return schema_up, schema_down, []
+
+        up_entries, down_statements, missing_downs = self._extract_raw_sql(migrations)
+        if strategy == "concat":
+            return [sql for _, sql in up_entries], ([] if missing_downs else down_statements), missing_downs
+
+        folded_up, folded_down = fold_migration_ddl(
+            [sql for _, sql in up_entries],
+            dialect=dialect if dialect is not None else self._resolve_dialect(),
+            origins=[version for version, _ in up_entries],
+        )
+        return folded_up, folded_down, []
+
+    def _extract_raw_sql(
+        self, migrations: list[tuple[str, Path]]
+    ) -> tuple[list[tuple[str, str]], list[str], list[str]]:
+        up_entries: list[tuple[str, str]] = []
         down_statements: list[str] = []
         missing_down_versions: list[str] = []
         migration_down_sql: list[list[str]] = []
@@ -1132,76 +1812,39 @@ class MigrationSquasher:
 
             up_sql = _load_migration_sql(loader, path, "up")
             if up_sql:
-                if isinstance(up_sql, list):
-                    up_statements.extend(up_sql)
-                else:
-                    up_statements.append(up_sql)
+                up_entries.extend((version, statement) for statement in up_sql)
 
-            down_sql = _load_migration_sql(loader, path, "down")
-            if down_sql:
-                if isinstance(down_sql, list):
-                    cleaned_down = [stmt for stmt in down_sql if isinstance(stmt, str) and stmt.strip()]
-                    if cleaned_down:
-                        migration_down_sql.append(cleaned_down)
-                    else:
-                        missing_down_versions.append(version)
-                        migration_down_sql.append([])
-                elif isinstance(down_sql, str) and down_sql.strip():
-                    migration_down_sql.append([down_sql])
-                else:
-                    missing_down_versions.append(version)
-                    migration_down_sql.append([])
-            else:
+            cleaned_down = [stmt for stmt in _load_migration_sql(loader, path, "down") or [] if stmt.strip()]
+            if not cleaned_down:
                 missing_down_versions.append(version)
-                migration_down_sql.append([])
+            migration_down_sql.append(cleaned_down)
 
         for down_sql_group in migration_down_sql[::-1]:
             down_statements.extend(down_sql_group)
 
-        return up_statements, down_statements, missing_down_versions
-
-    def _extract_plan_sql(self, plan: SquashPlan) -> tuple[list[str], list[str]]:
-        plan_strategy = (plan.strategy or self.strategy or "ddl").lower()
-        if plan_strategy == "schema":
-            plan_schema_ddl = (
-                (plan.schema_ddl_up, plan.schema_ddl_down or []) if plan.schema_ddl_up is not None else None
-            )
-            return self.extract_sql(plan.source_migrations, strategy="schema", schema_ddl=plan_schema_ddl)
-
-        raw_up, raw_down, missing_downs = self._extract_raw_sql(plan.source_migrations)
-        if plan_strategy == "concat":
-            if missing_downs:
-                plan.missing_down_versions = missing_downs
-                return raw_up, []
-            return raw_up, raw_down
-
-        if not raw_up:
-            return [], []
-        folded_up, folded_down = fold_migration_ddl(raw_up, dialect=self._resolve_dialect())
-        if not folded_down and missing_downs:
-            plan.missing_down_versions = missing_downs
-        effective_down = folded_down or ([] if missing_downs else raw_down)
-        return folded_up, effective_down
+        return up_entries, down_statements, missing_down_versions
 
     def _resolve_dialect(self) -> str | None:
-        context = getattr(self.runner, "context", None)
-        dialect = getattr(context, "dialect", None) if context is not None else None
-        if isinstance(dialect, str) and dialect and dialect not in {"generic", "unknown"}:
+        context = self.runner.context
+        dialect = context.dialect if context is not None else None
+        if dialect and dialect not in {"generic", "unknown"}:
             return dialect
         return None
 
     def _extract_schema_ddl_from_context(self) -> tuple[list[str], list[str]]:
-        context = getattr(self.runner, "context", None)
-        driver = getattr(context, "driver", None) if context is not None else None
-        data_dict = getattr(driver, "data_dictionary", None) if driver is not None else None
-        if driver is None or data_dict is None or not hasattr(data_dict, "get_schema_ddl"):
-            msg = "Schema squash strategy requires an active database driver with data_dictionary.get_schema_ddl"
+        context = self.runner.context
+        driver = context.driver if context is not None else None
+        if not isinstance(driver, SyncDriverAdapterBase):
+            msg = (
+                "Schema squash strategy requires an active synchronous database driver; "
+                "pass schema_ddl when reflecting through an async driver"
+            )
             raise SquashValidationError(msg)
-
-        excluded: tuple[str, ...] = ("ddl_migrations", "sqlspec_migrations")
-        create_res = data_dict.get_schema_ddl(driver, exclude_tables=excluded, direction="create")
-        drop_res = data_dict.get_schema_ddl(driver, exclude_tables=excluded, direction="drop")
-        return _normalize_schema_ddl_results(create_res, drop_res)
+        version_table = self.version_table.rsplit(".", 1)[-1].strip('"`[]')
+        data_dictionary = driver.data_dictionary
+        create_res = data_dictionary.get_schema_ddl(driver, exclude_tables=(version_table,), direction="create")
+        drop_res = data_dictionary.get_schema_ddl(driver, exclude_tables=(version_table,), direction="drop")
+        return schema_ddl_statements(create_res, drop_res)
 
     def _create_backup(self) -> Path:
         """Create timestamped backup directory with all migration files.
@@ -1213,62 +1856,169 @@ class MigrationSquasher:
         logger.debug("Created backup at %s", self.backup_path)
         return self.backup_path
 
-    def _cleanup_backup(self) -> None:
-        """Remove backup directory after successful operation."""
-        if not self.backup_path or not self.backup_path.exists():
-            return
-
-        remove_backup(self.backup_path)
-        logger.debug("Cleaned up backup at %s", self.backup_path)
-        self.backup_path = None
-
-    def _rollback_backup(self) -> None:
-        """Restore migration files from backup on error."""
-        if not self.backup_path or not self.backup_path.exists():
-            return
-
-        backup_dir = self.backup_path
-        restore_backup(self.migrations_path, backup_dir, delete_backup=True)
-        self.backup_path = None
-
-        logger.debug("Rolled back from backup at %s", backup_dir)
+    @staticmethod
+    def _resolve_strategy(strategy: str) -> str:
+        resolved = strategy.lower()
+        if resolved not in _SQUASH_STRATEGIES:
+            msg = f"Unsupported squash strategy: '{strategy}'. Expected 'concat', 'ddl', or 'schema'."
+            raise SquashValidationError(msg)
+        return resolved
 
 
-def _normalize_schema_ddl_results(create_res: Any, drop_res: Any) -> tuple[list[str], list[str]]:
-    """Convert get_schema_ddl create/drop results into semicolon-terminated UP and DOWN SQL lists."""
-    create_items: Sequence[Any] = getattr(create_res, "items", create_res) or ()
-    drop_items: Sequence[Any] = getattr(drop_res, "items", drop_res) or ()
-    up_ddl: list[str] = [
-        DDLStateFolder._ensure_semicolon(str(item.ddl)) for item in create_items if getattr(item, "ddl", None)
-    ]
-    down_ddl: list[str] = []
-    for item in drop_items:
-        ddl_raw = getattr(item, "ddl", None)
-        ident = getattr(item, "identity", None)
-        if isinstance(ddl_raw, str) and ddl_raw.strip().upper().startswith("DROP "):
-            down_ddl.append(DDLStateFolder._ensure_semicolon(ddl_raw))
-        elif ident is not None:
-            obj_type = str(getattr(ident, "object_type", "table") or "table").lower()
-            if obj_type in {"index", "trigger"}:
-                continue
-            name = str(getattr(ident, "name", "") or "")
-            schema = str(getattr(ident, "schema", "") or "")
-            if not name:
-                continue
-            qualified = f"{schema}.{name}" if schema and schema.lower() != "main" else name
-            keyword = (
-                "MATERIALIZED VIEW"
-                if obj_type == "materialized_view"
-                else "VIEW"
-                if "view" in obj_type
-                else "SEQUENCE"
-                if obj_type == "sequence"
-                else "SCHEMA"
-                if obj_type == "schema"
-                else "TABLE"
+def fold_migration_ddl(
+    statements: Sequence[str], *, dialect: str | None = None, origins: Sequence[str] | None = None
+) -> tuple[list[str], list[str]]:
+    """Fold a chronological sequence of migration SQL statements into net canonical DDL.
+
+    Args:
+        statements: Chronological sequence of SQL text from ``up`` migrations.
+        dialect: Optional SQLGlot dialect name used to parse and render DDL.
+        origins: Optional labels (usually migration versions) parallel to ``statements``,
+            used to name the offending migration in refusal messages.
+
+    Returns:
+        Tuple of ``(up_statements, down_statements)`` representing net schema DDL
+        and reverse-dependency ``DROP`` statements.
+
+    Raises:
+        SquashValidationError: If the statements cannot be folded faithfully.
+    """
+    folder = DDLStateFolder(dialect=dialect)
+    for position, statement in enumerate(statements):
+        folder.feed(statement, origin=origins[position] if origins is not None else None)
+    return folder.to_statements()
+
+
+def parse_version_range(range_str: str) -> tuple[str, str]:
+    """Parse a version range string into (start, end) tuple.
+
+    Accepts multiple formats: ``START:END``, ``START..END``, or ``START-END``.
+
+    Args:
+        range_str: Version range string.
+
+    Returns:
+        Tuple of (start_version, end_version) zero-padded to 4 digits.
+
+    Raises:
+        ValueError: If the format is not recognised or an endpoint is empty.
+    """
+    for sep in (":", "..", "-"):
+        if sep in range_str:
+            raw_start, raw_end = (part.strip() for part in range_str.split(sep, 1))
+            if not raw_start or not raw_end:
+                msg = f"Invalid VERSION_RANGE '{range_str}': both START and END are required"
+                raise ValueError(msg)
+            return _normalize_range_endpoint(raw_start), _normalize_range_endpoint(raw_end)
+    msg = f"Invalid VERSION_RANGE format: '{range_str}'. Use START:END, START..END, or START-END"
+    raise ValueError(msg)
+
+
+def group_migrations_by_type(migrations: list[tuple[str, Path]]) -> list[tuple[str, list[tuple[str, Path]]]]:
+    """Group consecutive migrations by file type (sql or py).
+
+    Partitions a list of migrations into groups where each group contains
+    consecutive migrations of the same type. This enables squashing mixed
+    SQL and Python migrations into separate output files.
+
+    Args:
+        migrations: List of (version, path) tuples to group.
+
+    Returns:
+        List of (type, migrations) tuples where type is "sql" or "py"
+        and migrations is the list of (version, path) for that group.
+    """
+    if not migrations:
+        return []
+
+    groups: list[tuple[str, list[tuple[str, Path]]]] = []
+    current_type: str | None = None
+    current_group: list[tuple[str, Path]] = []
+
+    for version, path in migrations:
+        file_type = "py" if path.suffix == ".py" else "sql"
+
+        if file_type != current_type:
+            if current_group and current_type is not None:
+                groups.append((current_type, current_group))
+            current_type = file_type
+            current_group = [(version, path)]
+        else:
+            current_group.append((version, path))
+
+    if current_group and current_type is not None:
+        groups.append((current_type, current_group))
+
+    return groups
+
+
+def schema_ddl_statements(create_res: Iterable[object], drop_res: Iterable[object]) -> tuple[list[str], list[str]]:
+    """Convert ``get_schema_ddl`` create/drop results into semicolon-terminated UP and DOWN SQL lists.
+
+    Args:
+        create_res: Result of ``get_schema_ddl(direction="create")``.
+        drop_res: Result of ``get_schema_ddl(direction="drop")``.
+
+    Returns:
+        Tuple of ``(up_ddl, down_ddl)`` statement lists.
+
+    Raises:
+        SquashValidationError: If any reflected object has no DDL text, since omitting it
+            would silently produce an incomplete schema.
+    """
+    return _ddl_texts(create_res, "create"), _ddl_texts(drop_res, "drop")
+
+
+def _ddl_texts(results: Iterable[object], direction: str) -> list[str]:
+    """Read the DDL text of each schema DDL result, refusing results without DDL."""
+    statements: list[str] = []
+    for item in results:
+        if not isinstance(item, DDLResult):
+            msg = f"Unexpected schema DDL result {item!r} in {direction} direction"
+            raise SquashValidationError(msg)
+        if not item.ddl:
+            identity = item.identity
+            qualified = f"{identity.schema}.{identity.name}" if identity.schema else identity.name
+            msg = (
+                f"The data dictionary returned no {direction} DDL for {identity.object_type} {qualified} "
+                f"(status {item.status}); the schema strategy cannot represent it"
             )
-            down_ddl.append(f"DROP {keyword} IF EXISTS {qualified};")
-    return up_ddl, down_ddl
+            raise SquashValidationError(msg)
+        statements.append(_ensure_semicolon(item.ddl))
+    return statements
+
+
+def _ensure_semicolon(sql_text: str) -> str:
+    """Return ``sql_text`` stripped and terminated by exactly one semicolon."""
+    stripped = sql_text.strip()
+    return stripped if stripped.endswith(";") else f"{stripped};"
+
+
+class _FoldedStatement:
+    """Mutable catalog entry for one statement tracked by :class:`DDLStateFolder`.
+
+    Attributes:
+        expr: Parsed statement, mutated in place as later statements are folded into it.
+        text: Original statement text, emitted verbatim while the entry is unmodified.
+        origin: Label of the migration that produced the statement.
+        order: Monotonic creation order used for deterministic output.
+        faithful: Whether SQLGlot reproduces ``text`` faithfully, required before rewriting.
+        owner: Catalog key of the owning table for indexes.
+        modified: Whether ``expr`` diverged from ``text`` and must be re-rendered.
+    """
+
+    __slots__ = ("expr", "faithful", "modified", "order", "origin", "owner", "text")
+
+    def __init__(
+        self, expr: exp.Expr, text: str, origin: str | None, order: int, faithful: bool, owner: str = ""
+    ) -> None:
+        self.expr = expr
+        self.text = text
+        self.origin = origin
+        self.order = order
+        self.faithful = faithful
+        self.owner = owner
+        self.modified = False
 
 
 def _normalize_range_endpoint(endpoint: str) -> str:

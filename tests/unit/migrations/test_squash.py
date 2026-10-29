@@ -7,12 +7,19 @@ Tests for:
 - Squashed file generation
 """
 
+import sqlite3
 from pathlib import Path
 
 import pytest
 
+from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.data_dictionary import DDLResult, ObjectIdentity
+from sqlspec.exceptions import SquashValidationError
+from sqlspec.migrations.commands import SyncMigrationCommands
+from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.loaders import _load_migration_sql
 from sqlspec.migrations.runner import SyncMigrationRunner
-from sqlspec.migrations.squash import MigrationSquasher
+from sqlspec.migrations.squash import MigrationSquasher, SquashPlan, schema_ddl_statements
 
 
 def test_squash_plan_squash_plan_instantiation(tmp_path: Path) -> None:
@@ -241,8 +248,10 @@ def test_extract_sql_extract_sql_up_statements_in_order(tmp_path: Path) -> None:
     runner = Mock()
     migration1 = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
     migration1["loader"].get_up_sql.return_value = ["CREATE TABLE users (id INT);"]
+    migration1["loader"].get_down_sql.return_value = None
     migration2 = {"version": "0002", "loader": Mock(), "file_path": tmp_path / "0002_posts.sql"}
     migration2["loader"].get_up_sql.return_value = ["CREATE TABLE posts (id INT);"]
+    migration2["loader"].get_down_sql.return_value = None
     runner.load_migration.side_effect = [migration1, migration2]
     squasher = MigrationSquasher(tmp_path, runner)
     migrations = [("0001", tmp_path / "0001_initial.sql"), ("0002", tmp_path / "0002_posts.sql")]
@@ -595,10 +604,7 @@ def test_apply_squash_apply_squash_creates_backup(tmp_path: Path) -> None:
 
 
 def test_apply_squash_strategy_ddl_folds_create_and_alter_into_net_ddl(tmp_path: Path) -> None:
-    """strategy='ddl' should fold CREATE TABLE + ALTER TABLE migrations into a single CREATE TABLE."""
-    from sqlspec.migrations.runner import SyncMigrationRunner
-    from sqlspec.migrations.squash import MigrationSquasher
-
+    """strategy='ddl' folds CREATE + ALTER into one CREATE TABLE whose up/down replay correctly on SQLite."""
     (tmp_path / "0001_initial.sql").write_text(
         "-- name: migrate-0001-up\n"
         "CREATE TABLE users (id INTEGER PRIMARY KEY, temp_col TEXT);\n\n"
@@ -608,33 +614,37 @@ def test_apply_squash_strategy_ddl_folds_create_and_alter_into_net_ddl(tmp_path:
     )
     (tmp_path / "0002_alter_users.sql").write_text(
         "-- name: migrate-0002-up\n"
-        "ALTER TABLE users ADD COLUMN email VARCHAR(255) NOT NULL;\n"
+        "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT '';\n"
         "ALTER TABLE users DROP COLUMN temp_col;\n",
         encoding="utf-8",
     )
+    sequential = sqlite3.connect(":memory:")
+    sequential.executescript("CREATE TABLE users (id INTEGER PRIMARY KEY, temp_col TEXT);")
+    sequential.executescript("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT '';")
+    sequential.executescript("ALTER TABLE users DROP COLUMN temp_col;")
 
-    runner = SyncMigrationRunner(tmp_path)
+    runner = SyncMigrationRunner(tmp_path, context=MigrationContext(dialect="sqlite"))
     squasher = MigrationSquasher(tmp_path, runner)
     plans = squasher.plan_squash("0001", "0002", "initial_schema", strategy="ddl")
     squasher.apply_squash(plans)
+    runner.clear_caches()
 
     target_file = tmp_path / "0001_initial_schema.sql"
-    assert target_file.exists()
-    content = target_file.read_text(encoding="utf-8")
-    assert "CREATE TABLE users" in content
-    assert "email VARCHAR(255) NOT NULL" in content
-    assert "temp_col" not in content
-    assert "ALTER TABLE" not in content
-    assert "DROP TABLE IF EXISTS users" in content
+    loaded = runner.load_migration(target_file, "0001")
+    up_sql = _load_migration_sql(loaded["loader"], target_file, "up") or []
+    down_sql = _load_migration_sql(loaded["loader"], target_file, "down") or []
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["0001_initial_schema.sql"]
+    assert "ALTER TABLE" not in target_file.read_text(encoding="utf-8")
+
+    folded = sqlite3.connect(":memory:")
+    folded.executescript("\n".join(up_sql))
+    assert _table_shape(folded, "users") == _table_shape(sequential, "users")
+    folded.executescript("\n".join(down_sql))
+    assert folded.execute("SELECT name FROM sqlite_master").fetchall() == []
 
 
 def test_apply_squash_strategy_schema_emits_live_database_ddl(tmp_path: Path) -> None:
-    """strategy='schema' should emit DDL reflected from the live database via data_dictionary.get_schema_ddl."""
-    from sqlspec.adapters.sqlite.config import SqliteConfig
-    from sqlspec.migrations.context import MigrationContext
-    from sqlspec.migrations.runner import SyncMigrationRunner
-    from sqlspec.migrations.squash import MigrationSquasher
-
+    """strategy='schema' emits live DDL that recreates the schema and whose down removes it, excluding the version table."""
     (tmp_path / "0001_initial.sql").write_text(
         "-- name: migrate-0001-up\nCREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n",
         encoding="utf-8",
@@ -648,25 +658,27 @@ def test_apply_squash_strategy_schema_emits_live_database_ddl(tmp_path: Path) ->
     config = SqliteConfig(connection_config={"database": str(db_path)})
     with config.provide_session() as driver:
         driver.execute_script(
-            "CREATE TABLE ddl_migrations (version_num VARCHAR(32) PRIMARY KEY);"
+            "CREATE TABLE custom_versions (version_num VARCHAR(32) PRIMARY KEY);"
             "CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL);"
             "CREATE TABLE invoices (id INTEGER PRIMARY KEY, account_id INTEGER REFERENCES accounts (id));"
         )
         context = MigrationContext.from_config(config)
         context.driver = driver
         runner = SyncMigrationRunner(tmp_path, context=context)
-        squasher = MigrationSquasher(tmp_path, runner, strategy="schema")
-        plans = squasher.plan_squash("0001", "0002", "schema_baseline", strategy="schema")
+        squasher = MigrationSquasher(tmp_path, runner, strategy="schema", version_table="custom_versions")
+        plans = squasher.plan_squash("0001", "0002", "schema_baseline")
+        up_sql, down_sql = squasher.extract_plan_sql(plans[0])
         squasher.apply_squash(plans)
 
-    target_file = tmp_path / "0001_schema_baseline.sql"
-    assert target_file.exists()
-    content = target_file.read_text(encoding="utf-8")
-    assert "CREATE TABLE accounts" in content
-    assert "CREATE TABLE invoices" in content
-    assert "ddl_migrations" not in content
-    assert "DROP TABLE IF EXISTS invoices" in content
-    assert "DROP TABLE IF EXISTS accounts" in content
+    live = sqlite3.connect(db_path)
+    replay = sqlite3.connect(":memory:")
+    replay.executescript("\n".join(up_sql))
+    for table in ("accounts", "invoices"):
+        assert _table_shape(replay, table) == _table_shape(live, table)
+    assert replay.execute("SELECT name FROM sqlite_master WHERE name = 'custom_versions'").fetchall() == []
+    replay.executescript("\n".join(down_sql))
+    assert replay.execute("SELECT name FROM sqlite_master").fetchall() == []
+    assert (tmp_path / "0001_schema_baseline.sql").exists()
 
 
 def test_apply_squash_strategy_concat_omits_down_when_constituent_is_irreversible(tmp_path: Path) -> None:
@@ -726,7 +738,7 @@ def test_plan_squash_timestamp_range_and_single_file_mixed_migrations(tmp_path: 
 
 
 def test_python_squash_emits_replaces_attribute_and_ddl_irreversible_note(tmp_path: Path) -> None:
-    """Python squashed migrations emit __replaces__ and DDL strategy marks irreversible statements."""
+    """Python squashes emit __replaces__; concat marks irreversible squashes and ddl refuses out-of-range DML."""
     py_dir = tmp_path / "py_migrations"
     py_dir.mkdir()
     (py_dir / "0001_init.py").write_text(
@@ -761,10 +773,141 @@ def test_python_squash_emits_replaces_attribute_and_ddl_irreversible_note(tmp_pa
 
     sql_runner = SyncMigrationRunner(sql_dir)
     sql_squasher = MigrationSquasher(sql_dir, sql_runner)
-    sql_plans = sql_squasher.plan_squash("0001", "0002", "ddl_irreversible", strategy="ddl")
-    sql_squasher.apply_squash(sql_plans)
+    with pytest.raises(SquashValidationError, match="audit_log, which is not a table created within the squash range"):
+        sql_squasher.apply_squash(sql_squasher.plan_squash("0001", "0002", "ddl_irreversible", strategy="ddl"))
+    assert sorted(path.name for path in sql_dir.iterdir()) == ["0001_seed.sql", "0002_cleanup.sql"]
 
-    sql_content = (sql_dir / "0001_ddl_irreversible.sql").read_text(encoding="utf-8")
+    sql_squasher.apply_squash(sql_squasher.plan_squash("0001", "0002", "concat_irreversible"))
+    sql_content = (sql_dir / "0001_concat_irreversible.sql").read_text(encoding="utf-8")
     assert "-- name: migrate-0001-up" in sql_content
     assert "-- name: migrate-0001-down" not in sql_content
     assert "Irreversible squash (missing down in 0001)" in sql_content
+
+
+def test_migration_squasher_defaults_to_concat_strategy(tmp_path: Path) -> None:
+    """MigrationSquasher and SquashPlan default to the verbatim concat strategy."""
+    runner = SyncMigrationRunner(tmp_path)
+    squasher = MigrationSquasher(tmp_path, runner)
+    plan = SquashPlan(
+        source_migrations=[], target_version="0001", target_path=tmp_path / "x.sql", description="x", source_versions=[]
+    )
+
+    assert squasher.strategy == "concat"
+    assert plan.strategy == "concat"
+    with pytest.raises(SquashValidationError, match="Expected 'concat', 'ddl', or 'schema'"):
+        MigrationSquasher(tmp_path, runner, strategy="fold")
+
+
+def test_concat_squash_preserves_trigger_and_round_trips_on_sqlite(tmp_path: Path) -> None:
+    """Concat keeps a SQLite trigger BEGIN...END body verbatim; the squash upgrades and downgrades cleanly."""
+    trigger_block = (
+        "CREATE TRIGGER trg_events_audit AFTER INSERT ON events\n"
+        "BEGIN\n"
+        "    INSERT INTO audit (event_id, note) VALUES (new.id, 'created');\n"
+        "    UPDATE events SET seen = 1 WHERE id = new.id;\n"
+        "END;"
+    )
+    (tmp_path / "0001_tables.sql").write_text(
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE events (id INTEGER PRIMARY KEY, seen INTEGER DEFAULT 0);\n"
+        "CREATE TABLE audit (event_id INTEGER, note TEXT);\n"
+        "-- name: migrate-0001-down\n"
+        "DROP TABLE audit;\n"
+        "DROP TABLE events;\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "0002_trigger.sql").write_text(
+        f"-- name: migrate-0002-up\n{trigger_block}\n-- name: migrate-0002-down\nDROP TRIGGER trg_events_audit;\n",
+        encoding="utf-8",
+    )
+
+    runner = SyncMigrationRunner(tmp_path)
+    squasher = MigrationSquasher(tmp_path, runner)
+    squasher.apply_squash(squasher.plan_squash("0001", "0002", "release"))
+    runner.clear_caches()
+
+    squashed = tmp_path / "0001_release.sql"
+    loaded = runner.load_migration(squashed, "0001")
+    up_sql = _load_migration_sql(loaded["loader"], squashed, "up") or []
+    assert trigger_block in "\n".join(up_sql)
+
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "concat.db")}, migration_config={"script_location": str(tmp_path)}
+    )
+    commands = SyncMigrationCommands(config)
+    commands.upgrade(echo=False)
+    with config.provide_session() as driver:
+        driver.execute("INSERT INTO events (id) VALUES (7)")
+        assert driver.select("SELECT event_id, note FROM audit") == [{"event_id": 7, "note": "created"}]
+        assert driver.select_value("SELECT seen FROM events WHERE id = 7") == 1
+    commands.downgrade(revision="base", echo=False)
+    with config.provide_session() as driver:
+        remaining = driver.select(
+            "SELECT name FROM sqlite_master WHERE name IN ('events', 'audit', 'trg_events_audit')"
+        )
+    assert remaining == []
+
+
+def test_concat_squash_preserves_plpgsql_function_byte_for_byte(tmp_path: Path) -> None:
+    """Concat output contains a dollar-quoted PL/pgSQL function and SERIAL column exactly as written."""
+    function_block = (
+        "CREATE OR REPLACE FUNCTION touch_updated_at() RETURNS trigger AS $$\n"
+        "BEGIN\n"
+        "    NEW.updated_at := now();\n"
+        "    RETURN NEW;\n"
+        "END;\n"
+        "$$ LANGUAGE plpgsql;"
+    )
+    table_block = "CREATE TABLE widgets (id SERIAL PRIMARY KEY, updated_at timestamptz);"
+    (tmp_path / "0001_widgets.sql").write_text(
+        f"-- name: migrate-0001-up\n{table_block}\n-- name: migrate-0001-down\nDROP TABLE widgets;\n", encoding="utf-8"
+    )
+    (tmp_path / "0002_function.sql").write_text(
+        f"-- name: migrate-0002-up\n{function_block}\n-- name: migrate-0002-down\nDROP FUNCTION touch_updated_at();\n",
+        encoding="utf-8",
+    )
+
+    runner = SyncMigrationRunner(tmp_path, context=MigrationContext(dialect="postgres"))
+    squasher = MigrationSquasher(tmp_path, runner)
+    squasher.apply_squash(squasher.plan_squash("0001", "0002", "release"))
+
+    content = (tmp_path / "0001_release.sql").read_text(encoding="utf-8")
+    assert f"-- name: migrate-0001-up\n{table_block}\n{function_block}\n" in content
+    assert "-- name: migrate-0001-down\nDROP FUNCTION touch_updated_at();\nDROP TABLE widgets;\n" in content
+
+
+def test_schema_ddl_statements_reads_ddl_and_refuses_missing_ddl() -> None:
+    """schema_ddl_statements returns DDL text as-is and fails loudly for objects without DDL."""
+    table = ObjectIdentity(name="Mixed Case", object_type="table")
+    create = DDLResult(table, "supported", ddl='CREATE TABLE "Mixed Case" (id INTEGER)')
+    drop = DDLResult(table, "supported", ddl='DROP TABLE IF EXISTS "Mixed Case";')
+
+    assert schema_ddl_statements([create], [drop]) == (
+        ['CREATE TABLE "Mixed Case" (id INTEGER);'],
+        ['DROP TABLE IF EXISTS "Mixed Case";'],
+    )
+    with pytest.raises(SquashValidationError, match=r'no drop DDL for table "?Mixed Case'):
+        schema_ddl_statements([create], [DDLResult(table, "unsupported")])
+
+
+def test_runner_clear_caches_reloads_rewritten_migration(tmp_path: Path) -> None:
+    """clear_caches drops cached query names so a replaced migration file can be loaded again."""
+    original = tmp_path / "0001_first.sql"
+    original.write_text("-- name: migrate-0001-up\nCREATE TABLE a (id INT);\n", encoding="utf-8")
+    runner = SyncMigrationRunner(tmp_path)
+    runner.load_migration(original, "0001")
+
+    original.unlink()
+    renamed = tmp_path / "0001_renamed.sql"
+    renamed.write_text("-- name: migrate-0001-up\nCREATE TABLE b (id INT);\n", encoding="utf-8")
+    runner.clear_caches()
+    loaded = runner.load_migration(renamed, "0001")
+
+    assert _load_migration_sql(loaded["loader"], renamed, "up") == ["CREATE TABLE b (id INT);"]
+
+
+def _table_shape(connection: sqlite3.Connection, table: str) -> tuple[object, object]:
+    return (
+        connection.execute(f'PRAGMA table_info("{table}")').fetchall(),
+        connection.execute(f'PRAGMA foreign_key_list("{table}")').fetchall(),
+    )
