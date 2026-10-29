@@ -5,12 +5,16 @@
 compiled mypyc callers re-raise outside the context-manager ABI boundary.
 """
 
+import contextlib
 import hashlib
 import logging
 import re
 from collections.abc import Mapping
+from datetime import date, datetime
+from decimal import Decimal
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, Self, cast, overload
+from uuid import UUID
 
 import sqlglot
 from mypy_extensions import mypyc_attr, trait
@@ -48,6 +52,7 @@ from sqlspec.core.result._base import RowFormat
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
 from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary import (
+    ColumnProfileMetadata,
     DDLResult,
     DependencyEdge,
     DependencyEdgeKind,
@@ -90,6 +95,7 @@ from sqlspec.observability import ObservabilityRuntime, get_trace_context, resol
 from sqlspec.protocols import StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
+from sqlspec.utils.serializers import from_json as decode_json
 from sqlspec.utils.text import normalize_identifier
 from sqlspec.utils.type_guards import (
     has_asdict_method,
@@ -917,6 +923,244 @@ class DataDictionaryMixin:
             )
         return MetadataResult(
             "ddl", capability=resolved_capability, items=tuple(sorted_results), warnings=resolved_capability.warnings
+        )
+
+    def _build_table_profile_sql(self, table: str, columns: "abc.Sequence[Any]", schema: str | None = None) -> SQL:
+        """Build a single-pass SQLGlot aggregate query for column profile statistics."""
+        effective_dialect: str | None = type(self).dialect
+        if effective_dialect in {"generic", "unknown", ""}:
+            effective_dialect = None
+
+        projections: list[exp.Expr] = [
+            exp.Alias(this=exp.Count(this=exp.Star()), alias=exp.to_identifier("__row_count"))
+        ]
+        for idx, col_item in enumerate(columns):
+            col_name = (
+                str(col_item.get("column_name") or col_item.get("name") or "")
+                if isinstance(col_item, Mapping)
+                else str(getattr(col_item, "column_name", None) or getattr(col_item, "name", None) or "")
+            )
+            if not col_name:
+                continue
+            col_expr = exp.column(col_name)
+            projections.extend((
+                exp.Alias(this=exp.Count(this=col_expr.copy()), alias=exp.to_identifier(f"__non_null_{idx}")),
+                exp.Alias(
+                    this=exp.Count(this=exp.Distinct(expressions=[col_expr.copy()])),
+                    alias=exp.to_identifier(f"__distinct_{idx}"),
+                ),
+                exp.Alias(
+                    this=exp.Max(
+                        this=exp.Length(this=exp.Cast(this=col_expr.copy(), to=exp.DataType.build("VARCHAR")))
+                    ),
+                    alias=exp.to_identifier(f"__max_len_{idx}"),
+                ),
+            ))
+
+        select_expr = exp.select(*projections).from_(exp.table_(table, db=schema))
+        return SQL(select_expr.sql(dialect=effective_dialect))
+
+    def _build_table_sample_sql(self, table: str, schema: str | None = None, sample_size: int = 1000) -> SQL:
+        """Build a SQLGlot query to sample rows from a table for data-driven type inference."""
+        effective_dialect: str | None = type(self).dialect
+        if effective_dialect in {"generic", "unknown", ""}:
+            effective_dialect = None
+        select_expr = exp.select(exp.Star()).from_(exp.table_(table, db=schema)).limit(max(1, sample_size))
+        return SQL(select_expr.sql(dialect=effective_dialect))
+
+    def _infer_column_type_from_sample(
+        self, declared_type: str, values: "abc.Sequence[Any]", *, target_dialect: str | None = None
+    ) -> str:
+        """Infer a refined SQL column type from declared catalog type and sampled non-null values."""
+        effective_dialect = target_dialect or type(self).dialect
+        config = None
+        if effective_dialect and effective_dialect not in {"generic", "unknown", ""}:
+            with contextlib.suppress(ValueError):
+                config = get_dialect_config(effective_dialect)
+
+        clean_declared = declared_type.strip()
+        base_declared = clean_declared.split("(", 1)[0].strip().upper()
+        if base_declared not in _LOOSE_PROFILE_TYPES:
+            if target_dialect and target_dialect != type(self).dialect:
+                src_dialect = None if type(self).dialect in {"generic", "unknown", ""} else type(self).dialect
+                with contextlib.suppress(Exception):
+                    return exp.DataType.build(clean_declared, dialect=src_dialect).sql(dialect=target_dialect)
+            return clean_declared or "TEXT"
+
+        non_empty = [val for val in values if val is not None and (not isinstance(val, str) or val.strip() != "")]
+        if not non_empty:
+            if config is not None:
+                return config.get_optimal_type("text")
+            return clean_declared or "TEXT"
+
+        if all(
+            isinstance(val, bool) or (isinstance(val, str) and val.strip().lower() in {"true", "false"})
+            for val in non_empty
+        ):
+            return config.get_optimal_type("boolean") if config is not None else "BOOLEAN"
+
+        if all(
+            (isinstance(val, int) and not isinstance(val, bool))
+            or (isinstance(val, str) and bool(_PROFILE_INT_RE.match(val.strip())))
+            for val in non_empty
+        ):
+            return config.get_optimal_type("bigint") if config is not None else "BIGINT"
+
+        if all(
+            (isinstance(val, (int, float, Decimal)) and not isinstance(val, bool))
+            or (isinstance(val, str) and bool(_PROFILE_NUM_RE.match(val.strip())))
+            for val in non_empty
+        ):
+            max_int_digits = 1
+            max_frac_digits = 2
+            for val in non_empty:
+                raw_num = str(val).strip().lstrip("+-")
+                if "." in raw_num:
+                    int_part, frac_part = raw_num.split(".", 1)
+                    max_int_digits = max(max_int_digits, len(int_part) or 1)
+                    max_frac_digits = max(max_frac_digits, len(frac_part) or 1)
+                else:
+                    max_int_digits = max(max_int_digits, len(raw_num) or 1)
+            precision = max(10, min(38, max_int_digits + max_frac_digits + 2))
+            scale = min(precision - 1, max(2, max_frac_digits))
+            return f"NUMERIC({precision}, {scale})"
+
+        if all(
+            isinstance(val, UUID) or (isinstance(val, str) and bool(_PROFILE_UUID_RE.match(val.strip())))
+            for val in non_empty
+        ):
+            return config.get_optimal_type("uuid") if config is not None else "UUID"
+
+        if all(_is_valid_profile_date(val) for val in non_empty):
+            return "DATE"
+
+        if all(_is_valid_profile_datetime(val) for val in non_empty):
+            return config.get_optimal_type("timestamp") if config is not None else "TIMESTAMP WITH TIME ZONE"
+
+        if all(_is_valid_profile_json(val) for val in non_empty):
+            return config.get_optimal_type("json") if config is not None else "JSON"
+
+        if config is not None and target_dialect is not None and target_dialect != type(self).dialect:
+            return config.get_optimal_type("text")
+        return clean_declared or (config.get_optimal_type("text") if config is not None else "TEXT")
+
+    def _compile_column_profiles(
+        self,
+        columns: "abc.Sequence[Any]",
+        stats_row: "Mapping[str, Any] | None",
+        sample_rows: "abc.Sequence[Mapping[str, Any]]",
+        *,
+        target_dialect: str | None = None,
+    ) -> "list[ColumnProfileMetadata]":
+        """Compile ColumnProfileMetadata items from catalog columns, aggregate stats, and sampled rows."""
+        normalized_stats: dict[str, Any] = {}
+        if stats_row is not None:
+            for k, v in stats_row.items():
+                normalized_stats[str(k).lower()] = v
+
+        row_count_raw = normalized_stats.get("__row_count")
+        row_count = int(row_count_raw) if row_count_raw is not None else len(sample_rows)
+
+        profiles: list[ColumnProfileMetadata] = []
+        for idx, col_item in enumerate(columns):
+            if isinstance(col_item, Mapping):
+                col_name = str(col_item.get("column_name") or col_item.get("name") or "")
+                declared_type = str(col_item.get("data_type") or col_item.get("type") or "TEXT")
+                is_null_raw = col_item.get("is_nullable")
+            else:
+                col_name = str(getattr(col_item, "column_name", None) or getattr(col_item, "name", None) or "")
+                declared_type = str(getattr(col_item, "data_type", None) or getattr(col_item, "type", None) or "TEXT")
+                is_null_raw = getattr(col_item, "is_nullable", None)
+            if not col_name:
+                continue
+
+            declared_nullable = (
+                str(is_null_raw).strip().upper() not in {"NO", "FALSE", "0", "N"} if is_null_raw is not None else True
+            )
+
+            col_samples: list[Any] = []
+            col_lower = col_name.lower()
+            for s_row in sample_rows:
+                if col_name in s_row:
+                    col_samples.append(s_row[col_name])
+                else:
+                    for k, v in s_row.items():
+                        if str(k).lower() == col_lower:
+                            col_samples.append(v)
+                            break
+
+            non_null_raw = normalized_stats.get(f"__non_null_{idx}")
+            if non_null_raw is not None:
+                non_null_count = int(non_null_raw)
+            else:
+                non_null_count = sum(1 for v in col_samples if v is not None)
+
+            null_count = max(0, row_count - non_null_count)
+            distinct_raw = normalized_stats.get(f"__distinct_{idx}")
+            if distinct_raw is not None:
+                distinct_count = int(distinct_raw)
+            else:
+                distinct_count = len({repr(v) for v in col_samples if v is not None})
+
+            max_len_raw = normalized_stats.get(f"__max_len_{idx}")
+            if max_len_raw is not None:
+                max_char_length: int | None = int(max_len_raw)
+            else:
+                str_lengths = [len(str(v)) for v in col_samples if v is not None]
+                max_char_length = max(str_lengths) if str_lengths else None
+
+            nullable = (null_count > 0) if row_count > 0 else declared_nullable
+            is_unique_candidate = row_count > 0 and null_count == 0 and distinct_count == row_count
+            inferred_type = self._infer_column_type_from_sample(
+                declared_type, col_samples, target_dialect=target_dialect
+            )
+
+            profiles.append(
+                ColumnProfileMetadata(
+                    column_name=col_name,
+                    declared_type=declared_type,
+                    inferred_type=inferred_type,
+                    row_count=row_count,
+                    null_count=null_count,
+                    distinct_count=distinct_count,
+                    nullable=nullable,
+                    max_char_length=max_char_length,
+                    is_unique_candidate=is_unique_candidate,
+                )
+            )
+
+        return profiles
+
+    def _compile_profiled_table_ddl(
+        self,
+        table_name: str,
+        profiles: "abc.Sequence[ColumnProfileMetadata]",
+        *,
+        schema: str | None = None,
+        target_table: str | None = None,
+        target_dialect: str | None = None,
+        primary_key: "str | abc.Sequence[str] | None" = None,
+    ) -> "DDLResult":
+        """Compile a DDLResult from ColumnProfileMetadata items."""
+        pk_cols = (
+            {primary_key.lower()}
+            if isinstance(primary_key, str)
+            else {str(c).lower() for c in (primary_key or ()) if c}
+        )
+        synthesized_columns: list[dict[str, Any]] = []
+        for idx, prof in enumerate(profiles, start=1):
+            is_pk = prof.column_name.lower() in pk_cols
+            synthesized_columns.append({
+                "column_name": prof.column_name,
+                "data_type": prof.inferred_type,
+                "is_nullable": "NO" if (is_pk or not prof.nullable) else "YES",
+                "ordinal_position": idx,
+                "is_primary": is_pk,
+            })
+
+        effective_dialect = target_dialect or type(self).dialect
+        return compile_table_ddl_results(
+            target_table or table_name, synthesized_columns, schema=schema, dialect=effective_dialect
         )
 
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
@@ -2819,3 +3063,74 @@ def _check_declared_parameters(sql_statement: "SQL") -> None:
         sql_statement._named_parameters = named_copy
     else:
         _check_declared_named_row(declared, named_params)
+
+
+_LOOSE_PROFILE_TYPES: Final = frozenset({
+    "",
+    "TEXT",
+    "VARCHAR",
+    "CHARACTER VARYING",
+    "NVARCHAR",
+    "CHAR",
+    "NCHAR",
+    "CHARACTER",
+    "STRING",
+    "CLOB",
+    "NCLOB",
+    "LONGTEXT",
+    "MEDIUMTEXT",
+    "TINYTEXT",
+    "BPCHAR",
+    "ANY",
+    "VARIANT",
+    "OBJECT",
+})
+_PROFILE_INT_RE: Final = re.compile(r"^[+-]?(?:0|[1-9]\d*)$")
+_PROFILE_NUM_RE: Final = re.compile(r"^[+-]?\d+\.\d+$")
+_PROFILE_UUID_RE: Final = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_PROFILE_DATE_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_PROFILE_DATETIME_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
+
+
+def _is_valid_profile_date(value: Any) -> bool:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return True
+    if not isinstance(value, str) or not _PROFILE_DATE_RE.match(value.strip()):
+        return False
+    try:
+        date.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
+def _is_valid_profile_datetime(value: Any) -> bool:
+    if isinstance(value, datetime):
+        return True
+    if not isinstance(value, str) or not _PROFILE_DATETIME_RE.match(value.strip()):
+        return False
+    normalized = value.strip()
+    if normalized.endswith(("Z", "z")):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_valid_profile_json(value: Any) -> bool:
+    if isinstance(value, (Mapping, list)):
+        return True
+    if not isinstance(value, str):
+        return False
+    stripped = value.strip()
+    if not (
+        (stripped.startswith("{") and stripped.endswith("}")) or (stripped.startswith("[") and stripped.endswith("]"))
+    ):
+        return False
+    try:
+        parsed = decode_json(stripped)
+    except Exception:
+        return False
+    return isinstance(parsed, (Mapping, list))

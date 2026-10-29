@@ -10,6 +10,7 @@ import contextlib
 import logging
 import sys
 from abc import abstractmethod
+from collections.abc import Mapping
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, Self, TypeVar, cast, final, overload
 
@@ -20,6 +21,7 @@ from sqlspec.core.result import DMLResult
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.data_dictionary import (
     DEFAULT_SYSTEM_METADATA_DOMAINS,
+    ColumnProfileMetadata,
     DDLResult,
     MetadataCapabilityProfile,
     MetadataResult,
@@ -58,7 +60,7 @@ from sqlspec.utils.schema import ValueT, to_value_type
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
     from types import TracebackType
 
     from sqlglot.dialects.dialect import DialectType
@@ -2176,6 +2178,69 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             exclude_tables=exclude_tables,
             direction=direction,
             target_dialect=target_dialect,
+        )
+
+    def get_table_profile(
+        self,
+        driver: Any,
+        table: str,
+        schema: "str | None" = None,
+        *,
+        sample_size: int = 1000,
+        target_dialect: "str | None" = None,
+    ) -> "list[ColumnProfileMetadata]":
+        """Profile live table columns and infer refined SQL types from existing data."""
+        resolved_table = self.resolve_identifier(table)
+        resolved_schema = self.resolve_schema(schema)
+        columns = self.get_columns(driver, table=resolved_table, schema=resolved_schema)
+        if not columns:
+            return []
+
+        stats_row: Mapping[str, Any] | None = None
+        try:
+            profile_sql = self._build_table_profile_sql(resolved_table, columns, schema=resolved_schema)
+            stats_rows = driver.select(profile_sql)
+            if stats_rows and isinstance(stats_rows[0], Mapping):
+                stats_row = stats_rows[0]
+        except Exception:
+            stats_row = None
+
+        sample_rows: list[Mapping[str, Any]] = []
+        try:
+            sample_sql = self._build_table_sample_sql(resolved_table, schema=resolved_schema, sample_size=sample_size)
+            raw_samples = driver.select(sample_sql)
+            sample_rows = [row for row in raw_samples if isinstance(row, Mapping)]
+        except Exception:
+            sample_rows = []
+
+        return self._compile_column_profiles(columns, stats_row, sample_rows, target_dialect=target_dialect)
+
+    def infer_table_ddl_from_data(
+        self,
+        driver: Any,
+        table: str,
+        schema: "str | None" = None,
+        *,
+        target_table: "str | None" = None,
+        target_dialect: "str | None" = None,
+        sample_size: int = 1000,
+        primary_key: "str | Sequence[str] | None" = None,
+    ) -> "DDLResult":
+        """Synthesize a refined table DDLResult by profiling live table data."""
+        profiles = self.get_table_profile(
+            driver, table, schema=schema, sample_size=sample_size, target_dialect=target_dialect
+        )
+        resolved_table = self.resolve_identifier(table)
+        resolved_schema = self.resolve_schema(schema)
+        if not profiles:
+            return self._unsupported_ddl(target_table or resolved_table, schema=resolved_schema, object_type="table")
+        return self._compile_profiled_table_ddl(
+            resolved_table,
+            profiles,
+            schema=resolved_schema,
+            target_table=target_table,
+            target_dialect=target_dialect,
+            primary_key=primary_key,
         )
 
     def get_system_metadata(

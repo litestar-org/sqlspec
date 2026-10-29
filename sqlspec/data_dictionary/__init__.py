@@ -31,6 +31,7 @@ from sqlspec.data_dictionary._registry import (
 from sqlspec.data_dictionary._types import (
     ColumnDetails,
     ColumnMetadata,
+    ColumnProfileMetadata,
     CommentMetadata,
     ConstraintMetadata,
     DDLResult,
@@ -76,6 +77,7 @@ __all__ = (
     "DEFAULT_SYSTEM_METADATA_DOMAINS",
     "ColumnDetails",
     "ColumnMetadata",
+    "ColumnProfileMetadata",
     "CommentMetadata",
     "ConstraintMetadata",
     "DDLResult",

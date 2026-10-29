@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 __all__ = (
     "ColumnDetails",
     "ColumnMetadata",
+    "ColumnProfileMetadata",
     "CommentMetadata",
     "ConstraintMetadata",
     "DDLResult",
@@ -1544,6 +1545,118 @@ class TableStatisticsMetadata(TypedDict, total=False):
     """Observed or estimated statistic value reported by the engine."""
     is_approximate: bool
     """Whether the reported value is an optimizer estimate rather than an exact count."""
+
+
+class ColumnProfileMetadata:
+    """Profile statistics and inferred SQL type for a database table column."""
+
+    __slots__ = (
+        "column_name",
+        "declared_type",
+        "distinct_count",
+        "inferred_type",
+        "is_unique_candidate",
+        "max_char_length",
+        "null_count",
+        "nullable",
+        "row_count",
+    )
+
+    def __init__(
+        self,
+        column_name: str,
+        declared_type: str,
+        inferred_type: str,
+        row_count: int,
+        null_count: int,
+        distinct_count: int,
+        nullable: bool,
+        max_char_length: int | None = None,
+        is_unique_candidate: bool = False,
+    ) -> None:
+        self.column_name = column_name
+        self.declared_type = declared_type
+        self.inferred_type = inferred_type
+        self.row_count = row_count
+        self.null_count = null_count
+        self.distinct_count = distinct_count
+        self.nullable = nullable
+        self.max_char_length = max_char_length
+        self.is_unique_candidate = is_unique_candidate
+
+    def __repr__(self) -> str:
+        return (
+            f"ColumnProfileMetadata(column_name={self.column_name!r}, declared_type={self.declared_type!r}, "
+            f"inferred_type={self.inferred_type!r}, row_count={self.row_count!r}, null_count={self.null_count!r}, "
+            f"distinct_count={self.distinct_count!r}, nullable={self.nullable!r}, "
+            f"max_char_length={self.max_char_length!r}, is_unique_candidate={self.is_unique_candidate!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ColumnProfileMetadata):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((
+            self.column_name,
+            self.declared_type,
+            self.inferred_type,
+            self.row_count,
+            self.null_count,
+            self.distinct_count,
+            self.nullable,
+            self.max_char_length,
+            self.is_unique_candidate,
+        ))
+
+    def __reduce__(
+        self,
+    ) -> "tuple[type[ColumnProfileMetadata], tuple[str, str, str, int, int, int, bool, int | None, bool]]":
+        return (
+            self.__class__,
+            (
+                self.column_name,
+                self.declared_type,
+                self.inferred_type,
+                self.row_count,
+                self.null_count,
+                self.distinct_count,
+                self.nullable,
+                self.max_char_length,
+                self.is_unique_candidate,
+            ),
+        )
+
+    def to_dict(self) -> "dict[str, object]":
+        """Serialize column profile metadata to a plain dictionary."""
+        return {
+            "column_name": self.column_name,
+            "declared_type": self.declared_type,
+            "inferred_type": self.inferred_type,
+            "row_count": self.row_count,
+            "null_count": self.null_count,
+            "distinct_count": self.distinct_count,
+            "nullable": self.nullable,
+            "max_char_length": self.max_char_length,
+            "is_unique_candidate": self.is_unique_candidate,
+        }
+
+    @classmethod
+    def from_dict(cls, data: "Mapping[str, Any]") -> "ColumnProfileMetadata":
+        """Create a ColumnProfileMetadata instance from a dictionary."""
+        max_len_raw = data.get("max_char_length")
+        return cls(
+            column_name=str(data["column_name"]),
+            declared_type=str(data.get("declared_type") or "TEXT"),
+            inferred_type=str(data.get("inferred_type") or data.get("declared_type") or "TEXT"),
+            row_count=int(data.get("row_count") or 0),
+            null_count=int(data.get("null_count") or 0),
+            distinct_count=int(data.get("distinct_count") or 0),
+            nullable=bool(data.get("nullable", True)),
+            max_char_length=int(max_len_raw) if max_len_raw is not None else None,
+            is_unique_candidate=bool(data.get("is_unique_candidate", False)),
+        )
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
