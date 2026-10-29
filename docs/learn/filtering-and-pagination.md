@@ -32,9 +32,7 @@ spec = SQLSpec()
 config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
 with spec.provide_session(config) as session:
-    session.execute(
-        "CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT, status TEXT, published_at TEXT)"
-    )
+    session.execute("CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT, status TEXT, published_at TEXT)")
     session.execute_many(
         "INSERT INTO articles (title, status, published_at) VALUES (:title, :status, :published_at)",
         [

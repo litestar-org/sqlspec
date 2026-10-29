@@ -39,10 +39,7 @@ with spec.provide_session(config) as session:
 ```python
 session.execute_many(
     "INSERT INTO users (email, role) VALUES (:email, :role)",
-    [
-        {"email": "grace@example.com", "role": "maintainer"},
-        {"email": "linus@example.com", "role": "reviewer"},
-    ],
+    [{"email": "grace@example.com", "role": "maintainer"}, {"email": "linus@example.com", "role": "reviewer"}],
 )
 ```
 
@@ -75,9 +72,7 @@ with spec.provide_session(config) as session:
     session.execute("INSERT INTO tasks (owner_id, title) VALUES (:owner_id, :title)", owner_id=7, title="Write docs")
 
     page_filter = LimitOffsetFilter(limit=20, offset=0)
-    rows = session.select(
-        "SELECT id, title FROM tasks WHERE owner_id = :owner_id ORDER BY id", page_filter, owner_id=7
-    )
+    rows = session.select("SELECT id, title FROM tasks WHERE owner_id = :owner_id ORDER BY id", page_filter, owner_id=7)
 ```
 
 ## Dialect Type Inference Tips

@@ -60,7 +60,8 @@ Chain `.join(...)`, `.left_join(...)`, `.right_join(...)`, or `.cross_join(...)`
 ```python
 high_value = sql.select("customer_id", "amount").from_("orders").where("amount >= :min_amount", min_amount=100)
 summary = (
-    sql.select("customer_id", sql.raw("COUNT(*) AS order_count"))
+    sql
+    .select("customer_id", sql.raw("COUNT(*) AS order_count"))
     .with_("high_value", high_value)
     .from_("high_value")
     .group_by("customer_id")

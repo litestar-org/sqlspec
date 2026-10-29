@@ -31,7 +31,9 @@ config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}
 
 with spec.provide_session(config) as session:
     session.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, active INTEGER)")
-    insert_result = session.execute("INSERT INTO items (name, active) VALUES (:name, :active)", name="Keyboard", active=1)
+    insert_result = session.execute(
+        "INSERT INTO items (name, active) VALUES (:name, :active)", name="Keyboard", active=1
+    )
     assert insert_result.rows_affected == 1
 
     returning_result = session.execute(

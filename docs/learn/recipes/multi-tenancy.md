@@ -33,9 +33,7 @@ def tenant_session(tenant_id: str) -> Iterator[tuple[SqliteDriver, str]]:
 
 with spec.provide_session(config) as setup:
     setup.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL)")
-    setup.execute(
-        "INSERT INTO projects (tenant_id, name) VALUES (:tenant_id, :name)", tenant_id="acme", name="Billing"
-    )
+    setup.execute("INSERT INTO projects (tenant_id, name) VALUES (:tenant_id, :name)", tenant_id="acme", name="Billing")
     setup.execute(
         "INSERT INTO projects (tenant_id, name) VALUES (:tenant_id, :name)", tenant_id="globex", name="Search"
     )

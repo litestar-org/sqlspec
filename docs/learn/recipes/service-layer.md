@@ -56,13 +56,9 @@ class CustomerService:
 
     async def upgrade_tier(self, customer_id: int, new_tier: str) -> None:
         async with self._db.begin_transaction() as session:
+            await session.execute("UPDATE customers SET tier = :tier WHERE id = :id", tier=new_tier, id=customer_id)
             await session.execute(
-                "UPDATE customers SET tier = :tier WHERE id = :id", tier=new_tier, id=customer_id
-            )
-            await session.execute(
-                "INSERT INTO tier_audit (customer_id, new_tier) VALUES (:id, :tier)",
-                id=customer_id,
-                tier=new_tier,
+                "INSERT INTO tier_audit (customer_id, new_tier) VALUES (:id, :tier)", id=customer_id, tier=new_tier
             )
 ```
 
@@ -87,9 +83,7 @@ with orders_svc.begin_transaction() as session:
 
     order = orders_svc.get_one("SELECT id, total FROM orders WHERE id = :id", session=session, id=101)
     session.execute(
-        "INSERT INTO ledger (order_id, amount) VALUES (:order_id, :amount)",
-        order_id=order["id"],
-        amount=order["total"],
+        "INSERT INTO ledger (order_id, amount) VALUES (:order_id, :amount)", order_id=order["id"], amount=order["total"]
     )
     assert ledger_svc.exists("SELECT 1 FROM ledger WHERE order_id = :id", session=session, id=101)
 ```
