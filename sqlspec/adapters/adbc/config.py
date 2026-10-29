@@ -43,119 +43,131 @@ __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
 
 
 class AdbcConnectionParams(TypedDict):
-    """ADBC connection parameters."""
+    """ADBC connection parameters across PyPI-installable Arrow Database Connectivity drivers."""
 
     uri: NotRequired[str]
+    """Backend connection URI (such as ``postgresql://``, ``sqlite://``, ``duckdb://``, ``grpc+tls://``, ``oracle://``, ``db2://``, or ``quack://``)."""
     dsn: NotRequired[str]
+    """Connection string alias normalized to ``uri`` when ``uri`` is unset."""
     url: NotRequired[str]
+    """Connection URL alias normalized to ``uri`` when ``uri`` is unset."""
     connection_string: NotRequired[str]
+    """Connection string alias normalized to ``uri`` when ``uri`` is unset."""
     db: NotRequired[str]
+    """Database path or identifier alias normalized for file-backed and embedded ADBC drivers."""
     path: NotRequired[str]
+    """Filesystem database path for ``adbc-driver-sqlite`` or ``adbc-driver-duckdb``."""
     driver: NotRequired[str]
+    """Short driver alias (such as ``'postgresql'``, ``'sqlite'``, ``'duckdb'``, ``'flightsql'``, ``'gizmosql'``, ``'snowflake'``, ``'bigquery'``, ``'oracle'``, ``'db2'``, or ``'quack'``) or shared library path."""
     driver_name: NotRequired[str]
+    """Explicit ADBC Python module connect path or shared library name overriding URI inference."""
     db_kwargs: NotRequired[dict[str, Any]]
+    """Driver-specific ``adbc_driver_manager.AdbcDatabase`` options passed to ``dbapi.connect``."""
     conn_kwargs: NotRequired[dict[str, Any]]
+    """Driver-specific ``adbc_driver_manager.AdbcConnection`` options passed to ``dbapi.connect``."""
     entrypoint: NotRequired[str]
+    """C symbol entrypoint name when loading a shared-object ADBC driver directly."""
     profile: NotRequired[str]
+    """Named credential or configuration profile forwarded to cloud ADBC drivers."""
     auth_type: NotRequired[str]
+    """Authentication mechanism (for example ``'external'`` OAuth/SSO on ``adbc-driver-gizmosql`` or Snowflake auth modes)."""
     adbc_driver_manager_entrypoint: NotRequired[str]
+    """Explicit ``adbc_driver_manager`` C initialization entrypoint symbol."""
     autocommit: NotRequired[bool]
+    """Enable autocommit mode on newly opened DB-API ADBC connections."""
     isolation_level: NotRequired[str]
+    """Transaction isolation level applied to the ADBC connection."""
     batch_size: NotRequired[int]
+    """Target Arrow ``RecordBatch`` row count during streaming reads and ingests."""
     query_timeout: NotRequired[float]
+    """Per-statement execution timeout in seconds forwarded to supporting ADBC backends."""
     connection_timeout: NotRequired[float]
+    """Connection establishment timeout in seconds."""
     ssl_mode: NotRequired[str]
+    """TLS verification mode forwarded to PostgreSQL and compatible ADBC drivers."""
     ssl_cert: NotRequired[str]
+    """Client TLS certificate path for mutual TLS connections."""
     ssl_key: NotRequired[str]
+    """Client TLS private key path paired with ``ssl_cert``."""
     ssl_ca: NotRequired[str]
+    """Root CA bundle path used to verify server TLS certificates."""
     username: NotRequired[str]
+    """Database authentication username lifted into ``db_kwargs`` or ``connect()`` as required by the driver."""
     password: NotRequired[str]
+    """Database authentication password lifted into ``db_kwargs`` or ``connect()`` as required by the driver."""
     token: NotRequired[str]
+    """Bearer, OAuth refresh, or Quack/FlightSQL authentication token."""
     project_id: NotRequired[str]
+    """Google Cloud project ID mapped to ``adbc.bigquery.sql.project_id`` for ``adbc-driver-bigquery``."""
     dataset_id: NotRequired[str]
+    """Default BigQuery dataset ID mapped to ``adbc.bigquery.sql.dataset_id``."""
     account: NotRequired[str]
+    """Snowflake account identifier for ``adbc-driver-snowflake``."""
     warehouse: NotRequired[str]
+    """Snowflake virtual warehouse name activated on connect."""
     database: NotRequired[str]
+    """Target catalog or database name for Snowflake, PostgreSQL, or FlightSQL backends."""
     schema: NotRequired[str]
+    """Default schema name for Snowflake or multi-schema ADBC backends."""
     role: NotRequired[str]
+    """Session role activated on connect for Snowflake or role-aware backends."""
     authorization_header: NotRequired[str]
+    """Explicit HTTP/gRPC ``Authorization`` header value for FlightSQL and GizmoSQL servers."""
     grpc_options: NotRequired[dict[str, Any]]
+    """Low-level gRPC channel options forwarded to FlightSQL, GizmoSQL, or Quack transports."""
     grpc_max_message_size: NotRequired[int]
+    """Maximum inbound gRPC message size in bytes for Arrow Flight transfers."""
     fetch_timeout: NotRequired[float]
+    """Timeout in seconds when fetching Arrow Flight result streams."""
     gizmosql_backend: NotRequired[str]
+    """Underlying SQL engine dialect hint when connecting through ``adbc-driver-gizmosql`` or ``adbc-driver-flightsql``."""
     tls_skip_verify: NotRequired[bool]
+    """Disable server certificate verification on TLS-enabled FlightSQL or GizmoSQL endpoints."""
     tls_root_certs: NotRequired[str]
+    """PEM-encoded root certificate bundle for FlightSQL or GizmoSQL TLS verification."""
     mtls_cert_chain: NotRequired[str]
+    """PEM-encoded client certificate chain for FlightSQL or GizmoSQL mTLS."""
     mtls_private_key: NotRequired[str]
+    """PEM-encoded client private key paired with ``mtls_cert_chain``."""
     with_cookie_middleware: NotRequired[bool]
+    """Enable stateful session cookie middleware on FlightSQL/GizmoSQL connections."""
     headers: NotRequired[dict[str, str]]
+    """Custom gRPC metadata headers attached to FlightSQL or GizmoSQL requests."""
     extra: NotRequired[dict[str, Any]]
+    """Additional driver options merged into ``db_kwargs``."""
 
 
 class AdbcDriverFeatures(TypedDict):
-    """ADBC driver feature configuration.
-
-    Controls optional type handling and serialization behavior for the ADBC adapter.
-    These features configure how data is converted between Python and Arrow types.
-
-    Attributes:
-        json_serializer: JSON serialization function to use.
-            Callable that takes Any and returns str (JSON string).
-            Default: sqlspec.utils.serializers.to_json
-        enable_cast_detection: Enable cast-aware parameter processing.
-            When True, detects SQL casts and applies appropriate
-            serialization. Currently used for PostgreSQL JSONB handling.
-            Default: True
-        enable_strict_type_coercion: Enforce strict type coercion rules.
-            When True, raises errors for unsupported type conversions.
-            When False, attempts best-effort conversion.
-            Default: False
-        strict_type_coercion: Alias for enable_strict_type_coercion.
-        enable_arrow_extension_types: Enable PyArrow extension type support.
-            When True, preserves Arrow extension type metadata when reading data.
-            When False, falls back to storage types.
-            Default: True
-        arrow_extension_types: Alias for enable_arrow_extension_types.
-        enable_pgvector: Enable automatic pgvector extension detection.
-            When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
-            on the first connection to check for the ``vector`` extension.
-            Defaults to True when the ``pgvector`` Python package is installed.
-        enable_paradedb: Enable ParadeDB (pg_search) extension detection.
-            When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
-            on the first connection to check for the ``pg_search`` extension.
-            Defaults to True. Independent of enable_pgvector.
-        enable_pg_textsearch: Enable pg_textsearch extension detection for BM25 search.
-            When True and the resolved dialect is PostgreSQL, queries ``pg_extension``
-            on the first connection to check for the ``pg_textsearch`` extension.
-            Defaults to True.
-        enable_events: Enable database event channel support.
-            Defaults to True when extension_config["events"] is configured.
-            Provides pub/sub capabilities via table-backed queue (ADBC has no native pub/sub).
-            Requires extension_config["events"] for migration setup.
-        on_connection_create: Callback executed when a connection is created.
-            Receives the raw ADBC connection for low-level driver configuration.
-        events_backend: Event channel backend selection.
-            Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
-            ADBC does not have native pub/sub, so poll_queue is the only backend.
-            Defaults to "poll_queue".
-        enable_statement_profiling: Enable DuckDB JSON statement profiling when using a DuckDB ADBC backend.
-            Defaults to False.
-    """
+    """ADBC driver feature flags controlling Arrow type handling, dialect probes, and DuckDB profiling."""
 
     json_serializer: "NotRequired[Callable[[Any], str]]"
+    """Serializer converting dict/list parameters to JSON text (defaults to ``sqlspec.utils.serializers.to_json``)."""
     enable_cast_detection: NotRequired[bool]
+    """Detect explicit SQL casts such as ``::jsonb`` or ``::vector`` during parameter preparation (defaults to ``True``)."""
     enable_strict_type_coercion: NotRequired[bool]
+    """Raise an error on unsupported parameter types instead of best-effort conversion (defaults to ``False``)."""
     strict_type_coercion: NotRequired[bool]
+    """Alias normalized to ``enable_strict_type_coercion``."""
     enable_arrow_extension_types: NotRequired[bool]
+    """Preserve PyArrow extension type metadata when materializing Arrow results (defaults to ``True``)."""
     arrow_extension_types: NotRequired[bool]
+    """Alias normalized to ``enable_arrow_extension_types``."""
     enable_pgvector: NotRequired[bool]
+    """Probe ``pg_extension`` for ``vector`` on PostgreSQL ADBC connections (defaults to ``True`` when ``pgvector`` is installed)."""
     enable_paradedb: NotRequired[bool]
+    """Probe ``pg_extension`` for ParadeDB ``pg_search`` on PostgreSQL ADBC connections (defaults to ``True``)."""
     enable_pg_textsearch: NotRequired[bool]
+    """Probe ``pg_extension`` for ``pg_textsearch`` BM25 support on PostgreSQL ADBC connections (defaults to ``True``)."""
     enable_lowercase_column_names: NotRequired[bool]
+    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Oracle and Db2 ADBC backends)."""
     enable_events: NotRequired[bool]
+    """Enable SQLSpec table-backed event channel support."""
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
+    """Callback invoked with the raw ADBC connection immediately after ``connect()``."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event queue backend name (``'poll_queue'``)."""
     enable_statement_profiling: NotRequired[bool]
+    """Capture per-statement DuckDB JSON operator profiles on ``StatementEvent.profile`` when using DuckDB ADBC (defaults to ``False``)."""
 
 
 class AdbcConnectionContext(SyncPoolConnectionContext):

@@ -42,54 +42,81 @@ _DRIVER_POOLING_LOCK = threading.Lock()
 
 
 class ArrowOdbcConnectionParams(TypedDict):
-    """arrow-odbc connection parameters."""
+    """ODBC connection parameters compiled into an ``arrow-odbc`` connection string."""
 
     connection_string: NotRequired[str]
+    """Full ODBC ``KEY=VALUE;...`` connection string overridden by explicit keyword fields."""
     dsn: NotRequired[str]
+    """Registered ODBC Data Source Name (``DSN=...``)."""
     driver: NotRequired[str]
+    """Installed ODBC driver name or library path (``Driver={...}``)."""
     server: NotRequired[str]
+    """Target database server address or ``host,port`` endpoint."""
     host: NotRequired[str]
+    """Hostname alias used when ``server`` is not specified."""
     database: NotRequired[str]
+    """Target catalog or database name (``Database=...``)."""
     uid: NotRequired[str]
+    """ODBC authentication user identifier (``UID=...``)."""
     pwd: NotRequired[str]
+    """ODBC authentication password (``PWD=...``)."""
     user: NotRequired[str]
+    """Alias normalized to ``uid`` when building the ODBC connection string."""
     password: NotRequired[str]
+    """Alias normalized to ``pwd`` when building the ODBC connection string."""
     trusted_connection: NotRequired[bool | str]
+    """Use integrated OS or Kerberos authentication (``Trusted_Connection``)."""
     trust_server_certificate: NotRequired[bool | str]
+    """Trust self-signed server TLS certificates without CA chain validation."""
     encrypt: NotRequired[bool | str]
+    """Require or configure TLS encryption on the ODBC connection."""
     login_timeout: NotRequired[int]
+    """Connection login timeout in seconds forwarded to ``arrow_odbc.connect``."""
     login_timeout_sec: NotRequired[int]
+    """Alias for ``login_timeout`` in seconds."""
     packet_size: NotRequired[int]
+    """Network packet size in bytes negotiated by the ODBC driver."""
     autocommit: NotRequired[bool]
+    """Initial connection autocommit state (defaults to ``True``)."""
     extra: NotRequired[dict[str, Any]]
+    """Additional ODBC connection-string attributes merged verbatim."""
 
 
 class ArrowOdbcDriverFeatures(TypedDict):
-    """arrow-odbc driver feature flags.
-
-    ``connection_autocommit`` is the autocommit mode of connections created by
-    the config; the config sets it from ``connection_config["autocommit"]``.
-    ``enable_lowercase_column_names`` lowercases result column names the
-    database folded to uppercase (quoted mixed-case names are kept); it
-    defaults to on for Db2 and off for every other dialect.
-    """
+    """``arrow-odbc`` driver feature flags controlling Arrow batch sizing, dialect hints, and codecs."""
 
     chunk_size: NotRequired[int]
+    """Maximum rows per Arrow ``RecordBatch`` fetched from ODBC cursors (defaults to ``65535``)."""
     max_bytes_per_batch: NotRequired[int]
+    """Upper memory budget in bytes per Arrow ``RecordBatch`` buffer."""
     max_text_size: NotRequired[int]
+    """Maximum byte length allocated for unbounded ``VARCHAR(MAX)`` / ``TEXT`` columns."""
     max_binary_size: NotRequired[int]
+    """Maximum byte length allocated for unbounded ``VARBINARY(MAX)`` / ``BLOB`` columns."""
     fetch_concurrently: NotRequired[bool]
+    """Prefetch the next ODBC batch on a background Rust thread while Arrow batches are consumed."""
     query_timeout_sec: NotRequired[int]
+    """Per-statement ODBC query execution timeout in seconds."""
     payload_text_encoding: NotRequired["TextEncoding"]
+    """Wire text encoding override (``'auto'``, ``'utf8'``, or ``'utf16'``) passed to ``arrow-odbc``."""
     enable_driver_pooling: NotRequired[bool]
+    """Enable process-global ODBC driver-manager connection pooling prior to first connect (defaults to ``False``)."""
     connection_string: NotRequired[str]
+    """Resolved connection string inspected for SQL dialect auto-detection."""
     dbms_name: NotRequired[str]
+    """Database engine hint (such as ``'PostgreSQL'``, ``'Microsoft SQL Server'``, ``'Db2'``, or ``'SQLite'``) selecting the SQLGlot dialect."""
     connection_autocommit: NotRequired[bool]
+    """Effective autocommit baseline derived from ``connection_config['autocommit']``."""
     enable_lowercase_column_names: NotRequired[bool]
+    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Db2 and ``False`` elsewhere)."""
     json_serializer: "NotRequired[Callable[[Any], str]]"
+    """Serializer converting dict/list parameters to JSON text (defaults to ``sqlspec.utils.serializers.to_json``)."""
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    """Deserializer parsing JSON text payloads (defaults to ``sqlspec.utils.serializers.from_json``)."""
     enable_events: NotRequired[bool]
+    """Enable SQLSpec table-backed event channel support."""
     on_connection_create: "NotRequired[Callable[[ArrowOdbcConnection], None]]"
+    """Callback invoked with the raw ``arrow_odbc.Connection`` immediately after connect."""
 
 
 class ArrowOdbcConnectionContext(SyncPoolConnectionContext):

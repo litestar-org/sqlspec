@@ -49,103 +49,90 @@ _JOB_CONFIG_OVERRIDE_KEYS: tuple[str, ...] = (
 
 
 class BigQueryConnectionParams(TypedDict):
-    """Standard BigQuery connection parameters.
-
-    Includes both official BigQuery client parameters and BigQuery-specific configuration options.
-    """
+    """Google Cloud BigQuery client and default ``QueryJobConfig`` parameters."""
 
     project: NotRequired[str]
+    """Billing and default job execution Google Cloud project ID."""
     project_id: NotRequired[str]
+    """Alias normalized to ``project`` when ``project`` is unset."""
     location: NotRequired[str]
+    """Default geographic region or multi-region (such as ``'US'`` or ``'EU'``) for jobs and datasets."""
     credentials: NotRequired["Credentials"]
+    """Explicit ``google.auth.credentials.Credentials`` instance overriding ADC."""
     client_options: NotRequired["ClientOptions"]
+    """GAPIC ``ClientOptions`` configuring custom endpoints, quota project, or scopes."""
     client_info: NotRequired["ClientInfo"]
+    """Custom ``ClientInfo`` user-agent metadata attached to BigQuery API requests."""
 
     default_query_job_config: NotRequired[QueryJobConfig]
+    """Base ``QueryJobConfig`` cloned and overlaid with top-level query governance fields."""
     default_load_job_config: NotRequired[LoadJobConfig]
+    """Base ``LoadJobConfig`` passed to the BigQuery ``Client`` for load jobs."""
     default_job_creation_mode: NotRequired[str]
+    """Client job creation mode (such as ``'JOB_CREATION_OPTIONAL'`` for stateless short queries)."""
     dataset_id: NotRequired[str]
+    """Default dataset (`dataset` or `project.dataset`) used to resolve unqualified table names."""
     dataset: NotRequired[str]
+    """Alias normalized to ``dataset_id`` when ``dataset_id`` is unset."""
     database: NotRequired[str]
+    """Alias normalized to ``dataset_id`` when ``dataset_id`` is unset."""
     db: NotRequired[str]
+    """Short alias normalized to ``dataset_id`` when ``dataset_id`` is unset."""
     use_query_cache: NotRequired[bool]
+    """Read from BigQuery cached query results when unmodified (defaults to ``True``)."""
     maximum_bytes_billed: NotRequired[int]
+    """Per-query cost guard failing queries estimated to scan above this byte limit."""
     query_timeout_ms: NotRequired[int]
+    """Server-side query execution timeout in milliseconds applied to ``job_timeout_ms``."""
     job_timeout_ms: NotRequired[int]
+    """Server-side BigQuery job execution timeout in milliseconds."""
     labels: NotRequired["dict[str, str]"]
+    """Billing and governance key-value labels attached to executed query jobs."""
     priority: NotRequired[Literal["INTERACTIVE", "BATCH"]]
+    """BigQuery query scheduling priority (``'INTERACTIVE'`` or ``'BATCH'``)."""
     reservation: NotRequired[str]
+    """BigQuery Editions slot reservation resource path assigned to query jobs."""
     max_slots: NotRequired[int]
+    """Maximum slot concurrency cap applied to individual query jobs."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional keyword metadata retained in normalized connection configuration."""
 
 
 class BigQueryDriverFeatures(TypedDict):
-    """BigQuery driver-specific features configuration.
-
-    Only non-standard BigQuery client parameters that are SQLSpec-specific extensions.
-
-    Attributes:
-        connection_instance: Pre-existing BigQuery connection instance to use.
-        on_connection_create: Callback invoked when connection is created.
-        json_serializer: Custom JSON serializer for dict/list parameter conversion.
-            Defaults to sqlspec.utils.serializers.to_json if not provided.
-        enable_uuid_conversion: Enable automatic UUID string conversion.
-            When True (default), UUID strings are automatically converted to UUID objects.
-            When False, UUID strings are treated as regular strings.
-        enable_events: Enable database event channel support.
-            Defaults to True when extension_config["events"] is configured.
-            Provides pub/sub capabilities via table-backed queue (BigQuery has no native pub/sub).
-            Requires extension_config["events"] for migration setup.
-        events_backend: Event channel backend selection.
-            Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
-            BigQuery does not have native pub/sub, so poll_queue is the only backend.
-            Defaults to "poll_queue".
-        job_retry_deadline: Total seconds to keep retrying transient job failures. Defaults to 60.0.
-            Values <= 0 disable retries entirely: API requests are not retried and ``job_retry`` is
-            withheld from ``client.query()``, which also bypasses the client's built-in
-            ``jobs.insert`` retry wrapper (fixed 600s deadline, retries transport timeouts).
-        job_result_timeout: Timeout (seconds) for polling ``QueryJob.result()``. Defaults to the
-            client polling default (waits indefinitely for the job using the API's per-call default
-            timeouts). Also used as the per-request HTTP timeout when ``request_timeout`` is unset.
-        use_query_and_wait: Use ``Client.query_and_wait()`` for single-statement queries.
-            Pair with ``connection_config["default_job_creation_mode"]="JOB_CREATION_OPTIONAL"``
-            to allow short queries to run without creating a job. Defaults to True.
-        request_timeout: Per-request HTTP transport timeout (seconds) for the API calls that start
-            query jobs. Bounds each request so a server that accepts the request but never responds
-            (e.g. a wedged emulator) raises instead of blocking indefinitely. Defaults to
-            ``job_result_timeout`` when that is numeric, else 120.0.
-        query_page_size: Optional page size passed through ``QueryJob.result()`` for SELECT result fetching.
-            Non-positive values are ignored by the BigQuery client.
-        query_max_results: Optional total row limit passed through ``QueryJob.result()`` for SELECT result fetching.
-        enable_storage_write_api: Route ``load_from_arrow`` (append, ``overwrite=False``) through the
-            BigQuery Storage Write API using native Arrow instead of a Parquet load job. Falls back to
-            the Parquet path on any ``bigquery_storage`` import/availability failure. Defaults to False.
-        storage_write_stream_type: Write stream mode ("COMMITTED" or "PENDING") when
-            ``enable_storage_write_api`` is True. Defaults to "PENDING".
-        enable_native_storage: Export eligible remote destinations through EXPORT DATA.
-            Defaults to True. False retains the client Arrow writer. Local emulator endpoints,
-            custom storage pipelines, and unsupported destinations/formats use the client path.
-        native_export_connection: Existing project.location.connection identifier required for
-            S3 and account-qualified Azure exports. Google Cloud Storage needs no connection.
-            The caller supplies the provider permissions and existing cross-cloud resources.
-    """
+    """BigQuery driver feature flags controlling query execution, Storage Write API, and ``EXPORT DATA``."""
 
     connection_instance: NotRequired["BigQueryConnection"]
+    """Pre-created ``google.cloud.bigquery.Client`` reused without transferring lifecycle ownership."""
     on_connection_create: NotRequired["Callable[[Any], None]"]
+    """Callback invoked with the ``bigquery.Client`` when instantiated by the config."""
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Serializer converting dict/list parameters to JSON strings (defaults to ``sqlspec.utils.serializers.to_json``)."""
     enable_uuid_conversion: NotRequired[bool]
+    """Automatically coerce ``UUID`` strings and parameters (defaults to ``True``)."""
     enable_events: NotRequired[bool]
+    """Enable SQLSpec table-backed event channel support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event queue backend name (``'poll_queue'``)."""
     job_retry_deadline: NotRequired[float]
+    """Total seconds to retry transient query failures (defaults to ``60.0``; ``<= 0`` disables retries)."""
     job_result_timeout: NotRequired[float]
+    """Maximum seconds to poll ``QueryJob.result()`` before raising a timeout error."""
     use_query_and_wait: NotRequired[bool]
+    """Execute single-statement queries via low-latency ``Client.query_and_wait()`` outside transactions (defaults to ``True``)."""
     request_timeout: NotRequired[float]
+    """Per-request HTTP transport timeout in seconds for job submission calls (defaults to ``job_result_timeout`` or ``120.0``)."""
     query_page_size: NotRequired[int]
+    """Page size forwarded to ``QueryJob.result()`` when fetching ``SELECT`` rows."""
     query_max_results: NotRequired[int]
+    """Maximum total rows fetched from ``QueryJob.result()``."""
     enable_storage_write_api: NotRequired[bool]
+    """Route append ``load_from_arrow`` calls through the BigQuery Storage Write API with Parquet load fallback (defaults to ``False``)."""
     storage_write_stream_type: NotRequired[Literal["COMMITTED", "PENDING"]]
+    """Storage Write API stream mode (``'PENDING'`` default atomic commit or ``'COMMITTED'`` immediate visibility)."""
     enable_native_storage: NotRequired[bool]
+    """Route eligible remote object-store exports through server-side ``EXPORT DATA`` (defaults to ``True``)."""
     native_export_connection: NotRequired[str]
+    """BigQuery Cloud Resource connection ID (`project.location.connection`) required for cross-cloud S3/Azure ``EXPORT DATA``."""
 
 
 def build_connection_config(

@@ -38,48 +38,76 @@ EXTENSION_FLAG_KEYS: "tuple[str, ...]" = (
 
 
 class DuckDBConnectionParams(TypedDict):
-    """DuckDB connection parameters.
-
-    Mirrors the keyword arguments accepted by duckdb.connect so callers can drive every DuckDB
-    configuration switch directly through SQLSpec. All keys are optional and forwarded verbatim
-    to DuckDB, either as top-level parameters or via the nested ``config`` dictionary when DuckDB
-    expects them there.
-    """
+    """DuckDB connection parameters forwarded to ``duckdb.connect`` or its ``config`` dictionary."""
 
     database: NotRequired[str]
+    """Database file path, ``':memory:shared_db'`` shared memory identifier, or MotherDuck URI."""
     read_only: NotRequired[bool]
+    """Open the database file in read-only mode without taking a write lock."""
     config: NotRequired["dict[str, Any]"]
+    """Raw DuckDB engine configuration dictionary merged with modeled settings."""
     memory_limit: NotRequired[str]
+    """Maximum buffer-manager memory ceiling (for example ``'4GB'``)."""
     threads: NotRequired[int]
+    """Number of DuckDB execution worker threads."""
     temp_directory: NotRequired[str]
+    """Directory path used when spilling out-of-core intermediates to disk."""
     max_temp_directory_size: NotRequired[str]
+    """Maximum disk space cap for ``temp_directory`` spill files (for example ``'20GB'``)."""
     autoload_known_extensions: NotRequired[bool]
+    """Automatically load installed DuckDB extensions when referenced by SQL syntax."""
     autoinstall_known_extensions: NotRequired[bool]
+    """Automatically download and install known DuckDB extensions on first reference."""
     allow_community_extensions: NotRequired[bool]
+    """Permit installing extensions from the DuckDB Community Extensions repository."""
     allow_unsigned_extensions: NotRequired[bool]
+    """Permit loading unsigned local or third-party DuckDB extension binaries."""
     extension_directory: NotRequired[str]
+    """Custom filesystem directory where DuckDB stores downloaded extensions."""
     custom_extension_repository: NotRequired[str]
+    """Custom HTTP or local repository URL searched when installing extensions."""
     autoinstall_extension_repository: NotRequired[str]
+    """Repository URL used specifically for automatic on-demand extension installs."""
     allow_persistent_secrets: NotRequired[bool]
+    """Allow reading and writing persistent secrets on disk."""
     enable_external_access: NotRequired[bool]
+    """Allow SQL statements to access local files, HTTP URLs, and object stores."""
     secret_directory: NotRequired[str]
+    """Filesystem directory storing persistent DuckDB secret files."""
     enable_object_cache: NotRequired[bool]
+    """Cache parsed Parquet metadata and object-store footers in memory."""
     parquet_metadata_cache: NotRequired[bool]
+    """Enable caching of Parquet file footers across repeated scans."""
     enable_external_file_cache: NotRequired[bool]
+    """Cache remote HTTP and object-store byte ranges in DuckDB's buffer pool."""
     checkpoint_threshold: NotRequired[str]
+    """WAL size threshold triggering an automatic database checkpoint (for example ``'16MB'``)."""
     enable_progress_bar: NotRequired[bool]
+    """Display interactive terminal progress bars during long-running queries."""
     progress_bar_time: NotRequired[int]
+    """Milliseconds elapsed before DuckDB displays the query progress bar."""
     enable_logging: NotRequired[bool]
+    """Enable DuckDB internal query and engine logging."""
     log_query_path: NotRequired[str]
+    """Filesystem path receiving logged SQL queries when logging is enabled."""
     logging_level: NotRequired[str]
+    """Minimum severity level recorded by DuckDB's internal logger."""
     preserve_insertion_order: NotRequired[bool]
+    """Preserve input row ordering during table scans and bulk operations."""
     default_null_order: NotRequired[str]
+    """Default ``NULLS FIRST`` or ``NULLS LAST`` ordering when ``ORDER BY`` omits null placement."""
     default_order: NotRequired[str]
+    """Default ``ASC`` or ``DESC`` sort direction when ``ORDER BY`` omits direction."""
     ieee_floating_point_ops: NotRequired[bool]
+    """Follow IEEE-754 floating-point division-by-zero semantics instead of returning ``NULL``."""
     binary_as_string: NotRequired[bool]
+    """Interpret untyped Parquet binary columns as ``VARCHAR`` strings."""
     arrow_large_buffer_size: NotRequired[bool]
+    """Emit 64-bit ``LargeUtf8`` and ``LargeBinary`` Arrow buffers on Arrow exports."""
     errors_as_json: NotRequired[bool]
+    """Format DuckDB exception payloads as structured JSON strings."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional DuckDB configuration options merged into ``config``."""
 
 
 class DuckDBPoolParams(DuckDBConnectionParams):
@@ -90,7 +118,9 @@ class DuckDBPoolParams(DuckDBConnectionParams):
     """
 
     pool_recycle_seconds: NotRequired[int]
+    """Maximum connection lifetime in seconds before recycling (defaults to ``86400``; ``0`` disables)."""
     health_check_interval: NotRequired[float]
+    """Idle seconds between lightweight connection health checks."""
 
 
 class DuckDBExtensionConfig(TypedDict):
@@ -160,35 +190,26 @@ class DuckDBSecretConfig(TypedDict):
 
 
 class DuckDBDriverFeatures(TypedDict):
-    """TypedDict for DuckDB driver features configuration.
-
-    Attributes:
-        extensions: Extensions to install/load when connecting.
-        secrets: Secrets to create for external services.
-        on_connection_create: Callback run when connecting.
-        json_serializer: Serializer for dict/list parameters. Defaults to
-            sqlspec.utils.serializers.to_json.
-        enable_uuid_conversion: Convert UUID parameters to strings (default True).
-            False passes parameters unchanged. UUID result columns always return
-            UUID objects; VARCHAR columns remain strings.
-        extension_flags: Startup-only flags; DuckDB rejects changes after startup.
-        enable_events: Enable table-backed event queues. Defaults to True when
-            extension_config["events"] is set; requires it for migrations.
-        events_backend: Only "poll_queue" is supported, with lease-based retries
-            and acknowledgements. DuckDB has no native pub/sub.
-        enable_statement_profiling: Enable per-statement JSON operator tree
-            profiling attached to ``StatementEvent.profile`` (default False).
-    """
+    """DuckDB driver feature flags controlling extension/secret management, codecs, and statement profiling."""
 
     extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
+    """Extensions installed and loaded automatically when each pooled connection opens."""
     secrets: NotRequired[Sequence[DuckDBSecretConfig]]
+    """Secrets provisioned on new connections for object stores and external catalogs."""
     on_connection_create: NotRequired["Callable[[DuckDBConnection], DuckDBConnection | None]"]
+    """Callback invoked when a new ``DuckDBPyConnection`` is opened."""
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Serializer converting dict/list parameters to JSON text (defaults to ``sqlspec.utils.serializers.to_json``)."""
     enable_uuid_conversion: NotRequired[bool]
+    """Convert ``UUID`` parameters to strings on bind while returning ``UUID`` objects from ``UUID`` columns (defaults to ``True``)."""
     extension_flags: NotRequired["dict[str, Any]"]
+    """Startup-only extension security flags merged into ``connection_config`` before ``duckdb.connect``."""
     enable_events: NotRequired[bool]
+    """Enable SQLSpec table-backed event channel support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event queue backend name (``'poll_queue'``)."""
     enable_statement_profiling: NotRequired[bool]
+    """Capture per-statement DuckDB JSON operator profiles on ``StatementEvent.profile`` (defaults to ``False``)."""
 
 
 class DuckDBConnectionContext(SyncPoolConnectionContext):
