@@ -215,23 +215,11 @@ def validate_squash_range(
         msg = f"Squash range versions must be numeric: {start_version} to {end_version}"
         raise SquashValidationError(msg) from exc
 
-    if (
-        parsed_start.type != VersionType.SEQUENTIAL
-        or parsed_end.type != VersionType.SEQUENTIAL
-        or parsed_start.sequence is None
-        or parsed_end.sequence is None
-    ):
-        msg = f"Squash range versions must be numeric: {start_version} to {end_version}"
-        raise SquashValidationError(msg)
-
     if parsed_start.extension != parsed_end.extension:
         msg = f"Cannot squash migrations from different extensions: {start_version} to {end_version}"
         raise SquashValidationError(msg)
 
-    start_int = parsed_start.sequence
-    end_int = parsed_end.sequence
-
-    if start_int > end_int:
+    if parsed_start > parsed_end:
         msg = f"Invalid range: start version {start_version} is greater than end version {end_version}"
         raise SquashValidationError(msg)
 
@@ -256,12 +244,7 @@ def validate_squash_range(
             parsed = parse_version(version)
         except ValueError:
             continue
-        if (
-            parsed.type == VersionType.SEQUENTIAL
-            and parsed.extension == parsed_start.extension
-            and parsed.sequence is not None
-            and start_int <= parsed.sequence <= end_int
-        ):
+        if parsed.extension == parsed_start.extension and parsed_start <= parsed <= parsed_end:
             result.append((version, path))
 
     result.sort(key=lambda x: parse_version(x[0]))
@@ -271,10 +254,18 @@ def validate_squash_range(
         raise SquashValidationError(msg)
 
     if not allow_gaps and len(result) > 1:
-        sorted_versions = [parse_version(v).sequence or 0 for v, _ in result]
-        for i in range(1, len(sorted_versions)):
-            if sorted_versions[i] - sorted_versions[i - 1] != 1:
-                msg = f"Gap detected in version sequence between {sorted_versions[i - 1]:04d} and {sorted_versions[i]:04d}"
+        parsed_versions = [parse_version(v) for v, _ in result]
+        for i in range(1, len(parsed_versions)):
+            prev_ver = parsed_versions[i - 1]
+            curr_ver = parsed_versions[i]
+            if (
+                prev_ver.type == VersionType.SEQUENTIAL
+                and curr_ver.type == VersionType.SEQUENTIAL
+                and prev_ver.sequence is not None
+                and curr_ver.sequence is not None
+                and curr_ver.sequence - prev_ver.sequence != 1
+            ):
+                msg = f"Gap detected in version sequence between {prev_ver.sequence:04d} and {curr_ver.sequence:04d}"
                 raise SquashValidationError(msg)
 
     return result

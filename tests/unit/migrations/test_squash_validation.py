@@ -255,3 +255,43 @@ def test_parse_version_range_double_dot_preferred_over_hyphen() -> None:
     from sqlspec.migrations.squash import parse_version_range
 
     assert parse_version_range("1..7") == ("0001", "0007")
+
+
+def test_parse_version_range_preserves_timestamps_and_mixed_endpoints() -> None:
+    """Timestamp endpoints must not be truncated or mis-padded across ':', '..', or '-'."""
+    from sqlspec.migrations.squash import parse_version_range
+
+    assert parse_version_range("20251011120000:20251012153000") == ("20251011120000", "20251012153000")
+    assert parse_version_range("20251011120000..20251012153000") == ("20251011120000", "20251012153000")
+    assert parse_version_range("20251011120000-20251012153000") == ("20251011120000", "20251012153000")
+    assert parse_version_range("1..20251012153000") == ("0001", "20251012153000")
+
+
+def test_validate_squash_range_supports_timestamp_and_mixed_ranges() -> None:
+    """validate_squash_range should accept timestamped and mixed sequential+timestamp ranges."""
+    from sqlspec.exceptions import SquashValidationError
+    from sqlspec.migrations.validation import validate_squash_range
+
+    ts_migrations: list[tuple[str, Path]] = [
+        ("20251011120000", Path("20251011120000_init.sql")),
+        ("20251012153000", Path("20251012153000_users.sql")),
+        ("20251013090000", Path("20251013090000_posts.sql")),
+    ]
+    ts_result = validate_squash_range(ts_migrations, "20251011120000", "20251013090000")
+    assert [v for v, _ in ts_result] == ["20251011120000", "20251012153000", "20251013090000"]
+
+    mixed_migrations: list[tuple[str, Path]] = [
+        ("0001", Path("0001_init.sql")),
+        ("0002", Path("0002_users.sql")),
+        ("20251011120000", Path("20251011120000_posts.sql")),
+    ]
+    mixed_result = validate_squash_range(mixed_migrations, "0001", "20251011120000")
+    assert [v for v, _ in mixed_result] == ["0001", "0002", "20251011120000"]
+
+    gapped_mixed: list[tuple[str, Path]] = [
+        ("0001", Path("0001_init.sql")),
+        ("0003", Path("0003_users.sql")),
+        ("20251011120000", Path("20251011120000_posts.sql")),
+    ]
+    with pytest.raises(SquashValidationError, match="Gap detected"):
+        validate_squash_range(gapped_mixed, "0001", "20251011120000")

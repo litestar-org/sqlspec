@@ -187,3 +187,33 @@ def test_sync_squash_defaults_squash_no_migrations_returns_early(tmp_path: Path)
     config.get_observability_runtime = Mock(return_value=None)
     commands = SyncMigrationCommands(config)
     commands.squash(description="empty", dry_run=True)
+
+
+def test_sync_squash_auto_discovers_timestamp_migrations_and_defaults_description_with_yes(tmp_path: Path) -> None:
+    """Omitting range and description with yes=True should squash timestamped migrations into 0001_initial_schema.sql."""
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    (tmp_path / "20251011120000_init.sql").write_text(
+        "-- name: migrate-20251011120000-up\nCREATE TABLE widgets (id INT PRIMARY KEY);\n", encoding="utf-8"
+    )
+    (tmp_path / "20251012153000_alter.sql").write_text(
+        "-- name: migrate-20251012153000-up\nALTER TABLE widgets ADD COLUMN label VARCHAR(80);\n", encoding="utf-8"
+    )
+    config = Mock()
+    config.is_async = False
+    config.migration_tracker_type = Mock(return_value=Mock())
+    config.migration_config = {"script_location": str(tmp_path)}
+    config.provide_session = Mock()
+    config.get_observability_runtime = Mock(return_value=None)
+    commands = SyncMigrationCommands(config)
+
+    with patch("rich.prompt.Prompt.ask") as mock_prompt:
+        commands.squash(yes=True, update_database=False)
+        mock_prompt.assert_not_called()
+
+    target_file = tmp_path / "0001_initial_schema.sql"
+    assert target_file.exists()
+    content = target_file.read_text(encoding="utf-8")
+    assert "CREATE TABLE widgets" in content
+    assert "label VARCHAR(80)" in content
+    assert "ALTER TABLE" not in content

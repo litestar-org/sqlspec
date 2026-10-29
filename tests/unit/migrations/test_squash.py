@@ -589,3 +589,134 @@ def test_apply_squash_apply_squash_creates_backup(tmp_path: Path) -> None:
     squasher.apply_squash([plan], dry_run=False)
     backup_dirs = list(tmp_path.glob(".backup_*"))
     assert len(backup_dirs) == 0
+
+
+def test_apply_squash_strategy_ddl_folds_create_and_alter_into_net_ddl(tmp_path: Path) -> None:
+    """strategy='ddl' should fold CREATE TABLE + ALTER TABLE migrations into a single CREATE TABLE."""
+    from sqlspec.migrations.runner import SyncMigrationRunner
+    from sqlspec.migrations.squash import MigrationSquasher
+
+    (tmp_path / "0001_initial.sql").write_text(
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, temp_col TEXT);\n\n"
+        "-- name: migrate-0001-down\n"
+        "DROP TABLE users;\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "0002_alter_users.sql").write_text(
+        "-- name: migrate-0002-up\n"
+        "ALTER TABLE users ADD COLUMN email VARCHAR(255) NOT NULL;\n"
+        "ALTER TABLE users DROP COLUMN temp_col;\n",
+        encoding="utf-8",
+    )
+
+    runner = SyncMigrationRunner(tmp_path)
+    squasher = MigrationSquasher(tmp_path, runner)
+    plans = squasher.plan_squash("0001", "0002", "initial_schema", strategy="ddl")
+    squasher.apply_squash(plans)
+
+    target_file = tmp_path / "0001_initial_schema.sql"
+    assert target_file.exists()
+    content = target_file.read_text(encoding="utf-8")
+    assert "CREATE TABLE users" in content
+    assert "email VARCHAR(255) NOT NULL" in content
+    assert "temp_col" not in content
+    assert "ALTER TABLE" not in content
+    assert "DROP TABLE IF EXISTS users" in content
+
+
+def test_apply_squash_strategy_schema_emits_live_database_ddl(tmp_path: Path) -> None:
+    """strategy='schema' should emit DDL reflected from the live database via data_dictionary.get_schema_ddl."""
+    from sqlspec.adapters.sqlite.config import SqliteConfig
+    from sqlspec.migrations.context import MigrationContext
+    from sqlspec.migrations.runner import SyncMigrationRunner
+    from sqlspec.migrations.squash import MigrationSquasher
+
+    (tmp_path / "0001_initial.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "0002_invoices.sql").write_text(
+        "-- name: migrate-0002-up\nCREATE TABLE invoices (id INTEGER PRIMARY KEY, account_id INTEGER REFERENCES accounts (id));\n",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "live.sqlite"
+    config = SqliteConfig(connection_config={"database": str(db_path)})
+    with config.provide_session() as driver:
+        driver.execute_script(
+            "CREATE TABLE ddl_migrations (version_num VARCHAR(32) PRIMARY KEY);"
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL);"
+            "CREATE TABLE invoices (id INTEGER PRIMARY KEY, account_id INTEGER REFERENCES accounts (id));"
+        )
+        context = MigrationContext.from_config(config)
+        context.driver = driver
+        runner = SyncMigrationRunner(tmp_path, context=context)
+        squasher = MigrationSquasher(tmp_path, runner, strategy="schema")
+        plans = squasher.plan_squash("0001", "0002", "schema_baseline", strategy="schema")
+        squasher.apply_squash(plans)
+
+    target_file = tmp_path / "0001_schema_baseline.sql"
+    assert target_file.exists()
+    content = target_file.read_text(encoding="utf-8")
+    assert "CREATE TABLE accounts" in content
+    assert "CREATE TABLE invoices" in content
+    assert "ddl_migrations" not in content
+    assert "DROP TABLE IF EXISTS invoices" in content
+    assert "DROP TABLE IF EXISTS accounts" in content
+
+
+def test_apply_squash_strategy_concat_omits_down_when_constituent_is_irreversible(tmp_path: Path) -> None:
+    """strategy='concat' should omit the down block and emit a note when any source migration lacks down."""
+    from sqlspec.migrations.runner import SyncMigrationRunner
+    from sqlspec.migrations.squash import MigrationSquasher
+
+    (tmp_path / "0001_t1.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);\n-- name: migrate-0001-down\nDROP TABLE t1;\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "0002_irreversible.sql").write_text(
+        "-- name: migrate-0002-up\nDELETE FROM t1 WHERE id < 0;\n", encoding="utf-8"
+    )
+    (tmp_path / "0003_t2.sql").write_text(
+        "-- name: migrate-0003-up\nCREATE TABLE t2 (id INT);\n-- name: migrate-0003-down\nDROP TABLE t2;\n",
+        encoding="utf-8",
+    )
+
+    runner = SyncMigrationRunner(tmp_path)
+    squasher = MigrationSquasher(tmp_path, runner)
+    plans = squasher.plan_squash("0001", "0003", "concat_safe", strategy="concat")
+    squasher.apply_squash(plans)
+
+    content = (tmp_path / "0001_concat_safe.sql").read_text(encoding="utf-8")
+    assert "-- name: migrate-0001-up" in content
+    assert "-- name: migrate-0001-down" not in content
+    assert "Irreversible squash (missing down in 0002)" in content
+
+
+def test_plan_squash_timestamp_range_and_single_file_mixed_migrations(tmp_path: Path) -> None:
+    """plan_squash should assign 0001 to initial timestamp ranges and squash mixed migrations into one file when single_file=True."""
+    from sqlspec.migrations.runner import SyncMigrationRunner
+    from sqlspec.migrations.squash import MigrationSquasher
+
+    (tmp_path / "20251011120000_init.sql").write_text(
+        "-- transactional: false\n-- name: migrate-20251011120000-up\nCREATE TABLE items (id INT PRIMARY KEY);\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "20251012153000_add_name.py").write_text(
+        "def up():\n    return ['ALTER TABLE items ADD COLUMN name VARCHAR(64);']\n", encoding="utf-8"
+    )
+
+    runner = SyncMigrationRunner(tmp_path)
+    squasher = MigrationSquasher(tmp_path, runner)
+    plans = squasher.plan_squash("20251011120000", "20251012153000", "initial_schema", single_file=True, strategy="ddl")
+    assert len(plans) == 1
+    assert plans[0].target_version == "0001"
+    assert plans[0].target_path == tmp_path / "0001_initial_schema.sql"
+    assert plans[0].source_versions == ["20251011120000", "20251012153000"]
+
+    squasher.apply_squash(plans)
+    content = (tmp_path / "0001_initial_schema.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE items" in content
+    assert "name VARCHAR(64)" in content
+    assert "ALTER TABLE" not in content
