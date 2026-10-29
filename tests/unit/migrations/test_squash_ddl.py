@@ -176,6 +176,86 @@ def test_fold_mysql_modify_and_change_column() -> None:
     ]
 
 
+def test_fold_varchar_columns_keep_declared_types_sqlite() -> None:
+    """VARCHAR(n) columns fold through ADD COLUMN and CREATE INDEX and keep their declared type text."""
+    up_sql, _ = _assert_sqlite_equivalent([
+        "CREATE TABLE contacts (id INTEGER PRIMARY KEY, name VARCHAR(80) NOT NULL);",
+        "ALTER TABLE contacts ADD COLUMN email VARCHAR(255);",
+        "CREATE INDEX idx_contacts_email ON contacts (email);",
+    ])
+
+    assert up_sql == [
+        "CREATE TABLE contacts (id INTEGER PRIMARY KEY, name VARCHAR(80) NOT NULL, email VARCHAR(255));",
+        "CREATE INDEX idx_contacts_email ON contacts (email);",
+    ]
+
+
+def test_fold_varchar_columns_keep_declared_types_duckdb() -> None:
+    """DuckDB VARCHAR(n) and multi-word types fold and match sequential application."""
+    up_sql, _ = _assert_duckdb_equivalent([
+        "CREATE TABLE contacts (id INTEGER PRIMARY KEY, name VARCHAR(80) NOT NULL, seen TIMESTAMP WITH TIME ZONE);",
+        "ALTER TABLE contacts ADD COLUMN email VARCHAR(255);",
+        "CREATE INDEX idx_contacts_email ON contacts (email);",
+    ])
+
+    assert up_sql[0] == (
+        "CREATE TABLE contacts (id INTEGER PRIMARY KEY, name VARCHAR(80) NOT NULL, "
+        "seen TIMESTAMP WITH TIME ZONE, email VARCHAR(255));"
+    )
+
+
+def test_fold_keeps_sequence_used_by_column_default_duckdb() -> None:
+    """A sequence referenced by a column default is created before the table and dropped after it."""
+    up_sql, down_sql = _assert_duckdb_equivalent([
+        "CREATE SEQUENCE order_ids START 10;",
+        "CREATE TABLE orders (id INTEGER DEFAULT nextval('order_ids'), note VARCHAR);",
+        "ALTER TABLE orders ADD COLUMN total DOUBLE;",
+        "INSERT INTO orders (note, total) VALUES ('first', 1.5);",
+    ])
+
+    assert up_sql[:2] == [
+        "CREATE SEQUENCE order_ids START 10;",
+        "CREATE TABLE orders (id INTEGER DEFAULT NEXTVAL('order_ids'), note VARCHAR, total DOUBLE);",
+    ]
+    assert down_sql == ["DROP TABLE IF EXISTS orders;", "DROP SEQUENCE IF EXISTS order_ids;"]
+
+
+def test_fold_rewrites_postgres_types_with_original_spelling() -> None:
+    """Rewritten Postgres tables keep multi-word and array type spellings exactly as written."""
+    up_sql, _ = fold_migration_ddl(
+        [
+            "CREATE TABLE events (id int, name character varying(20), at timestamp with time zone, tags text[]);",
+            "ALTER TABLE events ADD COLUMN amount numeric(10, 2);",
+        ],
+        dialect="postgres",
+    )
+
+    assert up_sql == [
+        (
+            "CREATE TABLE events (id int, name character varying(20), at timestamp with time zone, tags text[], "
+            "amount numeric(10, 2));"
+        )
+    ]
+
+
+def test_fold_mysql_drop_primary_key_keeps_columns_not_null() -> None:
+    """MySQL keeps former primary key columns NOT NULL after DROP PRIMARY KEY."""
+    up_sql, _ = fold_migration_ddl(
+        [
+            "CREATE TABLE pairs (a INT, b INT, label VARCHAR(10), PRIMARY KEY (a, b));",
+            "CREATE TABLE singles (id INT PRIMARY KEY, label VARCHAR(10));",
+            "ALTER TABLE pairs DROP PRIMARY KEY;",
+            "ALTER TABLE singles DROP PRIMARY KEY;",
+        ],
+        dialect="mysql",
+    )
+
+    assert up_sql == [
+        "CREATE TABLE pairs (a INT NOT NULL, b INT NOT NULL, label VARCHAR(10));",
+        "CREATE TABLE singles (id INT NOT NULL, label VARCHAR(10));",
+    ]
+
+
 def test_fold_respects_quoted_identifier_case_postgres() -> None:
     """Quoted mixed-case names are distinct objects from unquoted names."""
     up_sql, down_sql = fold_migration_ddl(
@@ -245,7 +325,7 @@ def test_fold_rename_table_matches_sequential_duckdb() -> None:
         base=["CREATE TABLE settings (key VARCHAR PRIMARY KEY);"],
     )
 
-    assert up_sql == ["CREATE TABLE items (id INT, label TEXT NOT NULL);"]
+    assert up_sql == ["CREATE TABLE items (id INTEGER, label TEXT NOT NULL);"]
     assert down_sql == ["DROP TABLE IF EXISTS items;"]
 
 
@@ -366,10 +446,50 @@ _REFUSALS: list[tuple[str, str, list[str], str]] = [
         "opaque command",
     ),
     (
-        "sqlite_declared_type_canonicalized",
-        "sqlite",
-        ["CREATE TABLE t (name VARCHAR(20));", "ALTER TABLE t ADD COLUMN note TEXT;"],
-        "does not reproduce faithfully",
+        "drop_sequence_used_by_default",
+        "duckdb",
+        [
+            "CREATE SEQUENCE order_ids;",
+            "CREATE TABLE orders (id INTEGER DEFAULT nextval('order_ids'));",
+            "DROP SEQUENCE order_ids CASCADE;",
+        ],
+        "DROP SEQUENCE order_ids while orders still reference it",
+    ),
+    (
+        "drop_sequence_used_by_regclass_default",
+        "postgres",
+        [
+            "CREATE SEQUENCE order_ids;",
+            "CREATE TABLE orders (id INTEGER DEFAULT nextval('public.order_ids'::regclass));",
+            "DROP SEQUENCE order_ids;",
+        ],
+        "DROP SEQUENCE order_ids while orders still reference it",
+    ),
+    (
+        "mysql_drop_foreign_key",
+        "mysql",
+        [
+            "CREATE TABLE p (id INT PRIMARY KEY);",
+            "CREATE TABLE c (pid INT, CONSTRAINT fk_parent FOREIGN KEY (pid) REFERENCES p (id));",
+            "ALTER TABLE c DROP FOREIGN KEY fk_parent;",
+        ],
+        "leaves behind the index MySQL created",
+    ),
+    (
+        "mysql_drop_foreign_key_constraint",
+        "mysql",
+        [
+            "CREATE TABLE p (id INT PRIMARY KEY);",
+            "CREATE TABLE c (pid INT, CONSTRAINT fk_parent FOREIGN KEY (pid) REFERENCES p (id));",
+            "ALTER TABLE c DROP CONSTRAINT fk_parent;",
+        ],
+        "leaves behind the index MySQL created",
+    ),
+    (
+        "drop_named_primary_key_constraint",
+        "postgres",
+        ["CREATE TABLE t (id INT, CONSTRAINT t_pk PRIMARY KEY (id));", "ALTER TABLE t DROP CONSTRAINT t_pk;"],
+        "dropping primary key constraint t_pk",
     ),
     ("create_type", "postgres", ["CREATE TYPE mood AS ENUM ('happy', 'sad');"], "CREATE TYPE cannot be folded"),
     (
@@ -579,6 +699,9 @@ def _assert_duckdb_equivalent(migrations: Sequence[str], *, base: Sequence[str] 
 def _duckdb_snapshot(connection: duckdb.DuckDBPyConnection) -> dict[str, object]:
     tables = connection.execute("SELECT table_name FROM duckdb_tables() WHERE NOT internal ORDER BY 1").fetchall()
     views = connection.execute("SELECT view_name FROM duckdb_views() WHERE NOT internal ORDER BY 1").fetchall()
+    sequences = connection.execute(
+        "SELECT sequence_name, start_value, increment_by FROM duckdb_sequences() ORDER BY 1"
+    ).fetchall()
     columns = connection.execute(
         "SELECT table_name, column_index, column_name, data_type, is_nullable, column_default "
         "FROM duckdb_columns() WHERE NOT internal ORDER BY table_name, column_index"
@@ -597,6 +720,7 @@ def _duckdb_snapshot(connection: duckdb.DuckDBPyConnection) -> dict[str, object]
     return {
         "tables": tables,
         "views": views,
+        "sequences": sequences,
         "columns": columns,
         "constraints": constraints,
         "indexes": indexes,

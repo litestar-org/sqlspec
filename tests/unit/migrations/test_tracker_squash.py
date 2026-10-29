@@ -578,12 +578,15 @@ def test_extract_replaces_versions_reads_only_the_sql_header() -> None:
     """Only the leading SQL comment header declares replaced versions; trailing punctuation is stripped."""
     from sqlspec.migrations.runner import extract_replaces_versions
 
-    header = "-- SQLSpec Migration\n\n-- Replaces: 0001, 0002;\n-- name: migrate-0003-up\nSELECT 1;\n"
-    body_comment = "-- name: migrate-0003-up\n-- Replaces: 0001\nCREATE TABLE t (id INT);\n"
+    header = "-- SQLSpec Migration\n\n-- Squashed from: 0001, 0002;\n-- name: migrate-0003-up\nSELECT 1;\n"
+    body_comment = "-- name: migrate-0003-up\n-- Squashed from: 0001\nCREATE TABLE t (id INT);\n"
+    prose_header = "-- Replaces: the legacy audit table\n-- name: migrate-0004-up\nSELECT 1;\n"
     after_statement = "CREATE TABLE t (id INT);\n-- Squashed from: 0001\n"
 
     assert extract_replaces_versions(header, ".sql") == ["0001", "0002"]
     assert extract_replaces_versions(body_comment, ".sql") == []
+    assert extract_replaces_versions(prose_header, ".sql") == []
+    assert extract_replaces_versions('"""Replaces: the old loader."""\n', ".py") == []
     assert extract_replaces_versions(after_statement, ".sql") == []
 
 
@@ -604,13 +607,17 @@ def test_extract_replaces_versions_rejects_invalid_versions() -> None:
     from sqlspec.migrations.runner import extract_replaces_versions
 
     with pytest.raises(MigrationError, match="'see ticket 12'"):
-        extract_replaces_versions("-- Replaces: 0001, see ticket 12\n-- name: migrate-0002-up\nSELECT 1;\n", ".sql")
+        extract_replaces_versions(
+            "-- Squashed from: 0001, see ticket 12\n-- name: migrate-0002-up\nSELECT 1;\n", ".sql"
+        )
+    with pytest.raises(MigrationError, match="Invalid version '0001 0002"):
+        extract_replaces_versions('"""Squashed from: 0001 0002."""\n', ".py")
     with pytest.raises(MigrationError, match="__replaces__"):
         extract_replaces_versions("__replaces__ = VERSIONS\n", ".py")
 
 
 def test_sync_upgrade_ignores_replaces_comment_in_migration_body(tmp_path: Path) -> None:
-    """A ``-- Replaces:`` comment inside a migration body neither deletes nor rewrites tracking rows."""
+    """Replaces-style comments in a header or body neither delete nor rewrite tracking rows."""
     from sqlspec.adapters.sqlite.config import SqliteConfig
     from sqlspec.migrations.commands import SyncMigrationCommands
 
@@ -622,7 +629,8 @@ def test_sync_upgrade_ignores_replaces_comment_in_migration_body(tmp_path: Path)
         encoding="utf-8",
     )
     (migrations_dir / "0002_posts.sql").write_text(
-        "-- name: migrate-0002-up\n-- Replaces: 0001\nCREATE TABLE posts (id INTEGER PRIMARY KEY);\n"
+        "-- Replaces: the legacy users table\n"
+        "-- name: migrate-0002-up\n-- Squashed from: 0001\nCREATE TABLE posts (id INTEGER PRIMARY KEY);\n"
         "-- name: migrate-0002-down\nDROP TABLE posts;\n",
         encoding="utf-8",
     )

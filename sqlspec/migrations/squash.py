@@ -90,6 +90,11 @@ _DML_TYPES = (exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.TruncateTable)
 _TABLE_CONSTRAINT_TYPES = (exp.Constraint, exp.PrimaryKey, exp.ForeignKey, exp.UniqueColumnConstraint)
 _GENERATED_COLUMN_TYPES = (exp.ComputedColumnConstraint, exp.GeneratedAsIdentityColumnConstraint)
 _SUPPORTED_ALTER_COLUMN_ARGS = frozenset({"this", "dtype", "using", "default", "drop", "allow_null"})
+_MAX_TYPE_TOKENS = 12
+_TYPE_PLACEHOLDER = "__sqlspec_column_type__"
+_TYPE_ARGUMENT_TOKEN_TYPES = frozenset({TokenType.L_PAREN, TokenType.R_PAREN, TokenType.NUMBER, TokenType.COMMA})
+_MYSQL_FAMILY = frozenset({"mysql", "singlestore", "doris", "starrocks", "tidb"})
+_SEQUENCE_FUNCTIONS = frozenset({"NEXTVAL", "CURRVAL", "SETVAL", "LASTVAL"})
 
 
 class DDLStateFolder:
@@ -126,12 +131,14 @@ class DDLStateFolder:
         "_schemas",
         "_sequences",
         "_tables",
+        "_type_tokens",
         "_views",
     )
 
     def __init__(self, dialect: str | None = None) -> None:
         self._dialect = dialect
         self._dialect_impl: Dialect = Dialect.get_or_raise(dialect)
+        self._type_tokens: frozenset[TokenType] = frozenset(self._dialect_impl.parser_class.TYPE_TOKENS)
         self._schemas: dict[str, _FoldedStatement] = {}
         self._sequences: dict[str, _FoldedStatement] = {}
         self._tables: dict[str, _FoldedStatement] = {}
@@ -158,9 +165,13 @@ class DDLStateFolder:
             SquashValidationError: If any statement cannot be folded faithfully.
         """
         self._current_origin = origin
-        for text, expr in self._split_statements(statement):
+        for text, expr, tokens in self._split_statements(statement):
             self._current_text = text
-            self._current_faithful = self._is_faithful(text, expr)
+            spans = self._column_type_spans(expr, tokens, statement)
+            self._current_faithful = self._is_faithful(expr, tokens, spans)
+            for column, first, last in spans:
+                original_type = statement[tokens[first].start : tokens[last].end + 1]
+                column.set("kind", exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=original_type))
             self._apply_expression(expr)
 
     def to_statements(self) -> tuple[list[str], list[str]]:
@@ -191,7 +202,7 @@ class DDLStateFolder:
         down_statements.extend(self._render_drop(entry, "SCHEMA") for entry in reversed(self._schemas.values()))
         return up_statements, down_statements
 
-    def _split_statements(self, sql: str) -> list[tuple[str, exp.Expr]]:
+    def _split_statements(self, sql: str) -> list[tuple[str, exp.Expr, list[Token]]]:
         self._current_text = sql.strip()
         try:
             tokens = self._dialect_impl.tokenize(sql)
@@ -206,7 +217,7 @@ class DDLStateFolder:
             else:
                 chunks[-1].append(token)
 
-        statements: list[tuple[str, exp.Expr]] = []
+        statements: list[tuple[str, exp.Expr, list[Token]]] = []
         for chunk in chunks:
             if not chunk:
                 continue
@@ -217,8 +228,54 @@ class DDLStateFolder:
             except ParseError as error:
                 msg = "SQLGlot cannot parse it"
                 raise self._refusal(msg) from error
-            statements.extend((text, expr) for expr in parsed if expr is not None)
+            statements.extend((text, expr, chunk) for expr in parsed if expr is not None)
         return statements
+
+    def _column_type_spans(self, expr: exp.Expr, tokens: list[Token], sql: str) -> list[tuple[exp.ColumnDef, int, int]]:
+        """Locate the original token span of each column definition's data type.
+
+        SQLGlot canonicalizes type synonyms (for example SQLite renders ``VARCHAR(20)`` as
+        ``TEXT(20)``). The span is the longest run of tokens after the column name whose parsed
+        type renders identically to the parsed column type. The spans let the fidelity check
+        compare types semantically and let rewritten tables keep the declared type text.
+
+        Args:
+            expr: Parsed statement.
+            tokens: Tokens of the statement, with offsets into ``sql``.
+            sql: Full SQL text the tokens were produced from.
+
+        Returns:
+            Tuples of ``(column, first_token_index, last_token_index)``.
+        """
+        token_positions = {token.start: position for position, token in enumerate(tokens)}
+        spans: list[tuple[exp.ColumnDef, int, int]] = []
+        for column in expr.find_all(exp.ColumnDef):
+            kind = column.args.get("kind")
+            ident = column.this
+            if not isinstance(kind, exp.DataType) or not isinstance(ident, exp.Identifier):
+                continue
+            start = ident.meta.get("start")
+            position = token_positions.get(start) if isinstance(start, int) else None
+            if position is None:
+                continue
+            last = self._type_span_end(kind, tokens, position + 1, sql)
+            if last is not None:
+                spans.append((column, position + 1, last))
+        return spans
+
+    def _type_span_end(self, kind: exp.DataType, tokens: list[Token], first: int, sql: str) -> int | None:
+        expected = kind.sql(dialect=self._dialect)
+        matched: int | None = None
+        for last in range(first, min(first + _MAX_TYPE_TOKENS, len(tokens))):
+            try:
+                parsed = self._dialect_impl.parser(error_level=ErrorLevel.IMMEDIATE).parse_into(
+                    exp.DataType, tokens[first : last + 1], sql
+                )
+            except ParseError:
+                continue
+            if len(parsed) == 1 and parsed[0] is not None and parsed[0].sql(dialect=self._dialect) == expected:
+                matched = last
+        return matched
 
     def _apply_expression(self, expr: exp.Expr) -> None:
         if isinstance(expr, exp.Command):
@@ -506,7 +563,13 @@ class DDLStateFolder:
         for name in names:
             if drop_kind == "COLUMN":
                 self._drop_column(table_key, entry, schema, name, if_exists=if_exists)
-            elif drop_kind in {"CONSTRAINT", "FOREIGN KEY"}:
+            elif drop_kind == "FOREIGN KEY":
+                msg = (
+                    "ALTER TABLE DROP FOREIGN KEY leaves behind the index MySQL created for the foreign key, "
+                    "which the folded CREATE TABLE cannot reproduce exactly"
+                )
+                raise self._refusal(msg)
+            elif drop_kind == "CONSTRAINT":
                 self._drop_constraint(table_key, entry, schema, name, if_exists=if_exists)
             elif drop_kind == "INDEX":
                 self._drop_table_index(table_key, entry, schema, name)
@@ -575,6 +638,26 @@ class DDLStateFolder:
                 return
             msg = f"constraint {name} is not defined by name on {table_key} within the squash range"
             raise self._refusal(msg)
+        named = [
+            node
+            for item in schema.expressions
+            for node in ([item] if isinstance(item, exp.Constraint) else item.args.get("constraints") or [])
+            if isinstance(node, (exp.Constraint, exp.ColumnConstraint))
+            and isinstance(node.this, exp.Identifier)
+            and self._ident_key(node.this) == name
+        ]
+        if any(node.find(exp.PrimaryKey, exp.PrimaryKeyColumnConstraint) is not None for node in named):
+            msg = (
+                f"dropping primary key constraint {name} leaves dialect-specific NOT NULL state on its columns, "
+                "which the folded CREATE TABLE cannot reproduce exactly"
+            )
+            raise self._refusal(msg)
+        if (self._dialect or "") in _MYSQL_FAMILY and any(node.find(exp.Reference) is not None for node in named):
+            msg = (
+                f"dropping foreign key constraint {name} leaves behind the index MySQL created for it, "
+                "which the folded CREATE TABLE cannot reproduce exactly"
+            )
+            raise self._refusal(msg)
         self._mark_modified(entry)
         kept: list[exp.Expr] = []
         for item in schema.expressions:
@@ -614,6 +697,8 @@ class DDLStateFolder:
         schema.set("expressions", [item for item in schema.expressions if item not in inline])
 
     def _drop_primary_key(self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema) -> None:
+        """Drop the primary key while keeping its columns NOT NULL, as MySQL does."""
+        primary_key_columns = self._primary_key_columns(table_key)
         kept: list[exp.Expr] = []
         found = False
         for item in schema.expressions:
@@ -635,6 +720,17 @@ class DDLStateFolder:
             msg = f"{table_key} has no primary key defined within the squash range"
             raise self._refusal(msg)
         self._mark_modified(entry)
+        for item in kept:
+            if not isinstance(item, exp.ColumnDef) or self._name_key(item) not in primary_key_columns:
+                continue
+            constraints = list(item.args.get("constraints") or [])
+            if not any(
+                isinstance(c.args.get("kind"), exp.NotNullColumnConstraint)
+                and not c.args["kind"].args.get("allow_null")
+                for c in constraints
+            ):
+                constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
+                item.set("constraints", constraints)
         schema.set("expressions", kept)
 
     def _rename_column(
@@ -855,8 +951,55 @@ class DDLStateFolder:
         if key not in self._sequences:
             msg = f"DROP SEQUENCE targets {key}, which is not created within the squash range"
             raise self._refusal(msg)
+        users = self._sequence_users(key)
+        if users:
+            msg = (
+                f"DROP SEQUENCE {key} while {', '.join(users)} still reference it; the folded definitions "
+                "would keep the reference to a dropped sequence"
+            )
+            raise self._refusal(msg)
         self._sequences.pop(key)
         self._comments.pop(("SEQUENCE", key), None)
+
+    def _sequence_users(self, key: str) -> list[str]:
+        """Return in-range tables and views whose definitions reference sequence ``key``.
+
+        Covers ``nextval('seq')``-style calls (including ``'seq'::regclass`` casts),
+        ``NEXT VALUE FOR seq``, and Oracle ``seq.NEXTVAL`` references.
+
+        Args:
+            key: Catalog key of the sequence.
+
+        Returns:
+            Keys of the tables and views that reference the sequence.
+        """
+        users: list[str] = []
+        for relation_key, entry in [*self._tables.items(), *self._views.items()]:
+            if any(self._references_sequence(node, key) for node in entry.expr.walk()):
+                users.append(relation_key)
+        return users
+
+    def _references_sequence(self, node: exp.Expr, key: str) -> bool:
+        if isinstance(node, exp.NextValueFor):
+            return self._sequence_name_matches(node.this, key)
+        if isinstance(node, exp.Column) and node.name.upper() in _SEQUENCE_FUNCTIONS:
+            owner = node.args.get("table")
+            return isinstance(owner, exp.Identifier) and self._sequence_name_matches(
+                exp.Table(this=owner.copy(), db=node.args.get("db")), key
+            )
+        if isinstance(node, exp.Literal) and node.is_string and node.find_ancestor(exp.Func) is not None:
+            try:
+                table = exp.to_table(node.this, dialect=self._dialect)
+            except (ParseError, TokenError):
+                return False
+            return self._sequence_name_matches(table, key)
+        return False
+
+    def _sequence_name_matches(self, node: exp.Expr | None, key: str) -> bool:
+        if node is None:
+            return False
+        candidate = self._object_key(node)
+        return bool(candidate) and candidate.rsplit(".", 1)[-1] == key.rsplit(".", 1)[-1]
 
     def _drop_schema(self, key: str) -> None:
         if key not in self._schemas:
@@ -1248,33 +1391,60 @@ class DDLStateFolder:
             raise self._refusal(msg, entry) from error
         return _ensure_semicolon(sql)
 
-    def _is_faithful(self, text: str, expr: exp.Expr) -> bool:
-        """Return whether rendering ``expr`` reproduces the tokens of ``text``.
+    def _is_faithful(self, expr: exp.Expr, tokens: list[Token], spans: list[tuple[exp.ColumnDef, int, int]]) -> bool:
+        """Return whether rendering ``expr`` reproduces the original statement faithfully.
 
-        Every keyword token type of the original text must appear in the rendering (allowing a
-        small set of synonyms), and every identifier, literal, and non-function word must survive.
-        Function names may be canonicalized because SQLGlot maps them to equivalent spellings.
+        Data types are compared as parsed type nodes rendered for the dialect, so type synonyms
+        (``VARCHAR`` versus SQLite ``TEXT``) are faithful while rewrites that change a column
+        definition (Postgres ``SERIAL`` becoming an identity column) are not. Column type spans
+        are then masked on both sides, and every other keyword token type of the original must
+        appear in the rendering (allowing a small set of synonyms) and every identifier, literal,
+        and non-function word must survive. Function names may be canonicalized because SQLGlot
+        maps them to equivalent spellings.
 
         Args:
-            text: Original statement text.
-            expr: Parsed statement.
+            expr: Parsed statement, unchanged on return.
+            tokens: Original tokens of the statement.
+            spans: Column type spans from :meth:`_column_type_spans`.
 
         Returns:
             True when the rendering is faithful to the original text.
         """
         try:
             rendered = expr.sql(dialect=self._dialect, unsupported_level=ErrorLevel.IGNORE)
-            original_tokens = self._dialect_impl.tokenize(text)
-            rendered_tokens = self._dialect_impl.tokenize(rendered)
+            reparsed = [node for node in self._dialect_impl.parse(rendered) if node is not None]
+        except (ParseError, TokenError):
+            return False
+        if self._type_signature([expr]) != self._type_signature(reparsed):
+            return False
+        original_kinds = [(column, column.args.get("kind")) for column, _, _ in spans]
+        for column, _ in original_kinds:
+            column.set("kind", exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=_TYPE_PLACEHOLDER))
+        try:
+            masked = expr.sql(dialect=self._dialect, unsupported_level=ErrorLevel.IGNORE)
+        finally:
+            for column, kind in original_kinds:
+                column.set("kind", kind)
+        try:
+            masked_tokens = self._dialect_impl.tokenize(masked)
         except TokenError:
             return False
-        original_types, original_words = self._token_signature(original_tokens)
-        rendered_types, rendered_words = self._token_signature(rendered_tokens)
+        skipped = {position for _, first, last in spans for position in range(first, last + 1)}
+        original_types, original_words = self._token_signature([
+            token for position, token in enumerate(tokens) if position not in skipped
+        ])
+        original_words[_TYPE_PLACEHOLDER] += len(spans)
+        rendered_types, rendered_words = self._token_signature(masked_tokens)
         for token_type in original_types - rendered_types:
             equivalent = _EQUIVALENT_TOKEN_TYPES.get(token_type)
             if equivalent is None or equivalent not in rendered_types:
                 return False
         return not original_words - rendered_words
+
+    def _type_signature(self, expressions: list[exp.Expr]) -> "Counter[str]":
+        return Counter(
+            data_type.sql(dialect=self._dialect) for node in expressions for data_type in node.find_all(exp.DataType)
+        )
 
     def _refusal(self, reason: str, entry: "_FoldedStatement | None" = None) -> SquashValidationError:
         text = entry.text if entry is not None else self._current_text
@@ -1311,18 +1481,35 @@ class DDLStateFolder:
     def _ident_key(self, ident: exp.Identifier) -> str:
         return self._dialect_impl.normalize_identifier(ident.copy()).name
 
-    @staticmethod
-    def _token_signature(tokens: list[Token]) -> tuple[set[TokenType], "Counter[str]"]:
+    def _token_signature(self, tokens: list[Token]) -> tuple[set[TokenType], "Counter[str]"]:
+        """Return keyword token types and words, excluding data type tokens and their size arguments."""
         types: set[TokenType] = set()
         words: Counter[str] = Counter()
+        argument_depth = 0
+        arguments_pending = False
         for position, token in enumerate(tokens):
             token_type = token.token_type
+            next_type = tokens[position + 1].token_type if position + 1 < len(tokens) else None
+            if arguments_pending:
+                arguments_pending = False
+                if token_type == TokenType.L_PAREN:
+                    argument_depth = 1
+                    continue
+            if argument_depth:
+                if token_type == TokenType.L_PAREN:
+                    argument_depth += 1
+                elif token_type == TokenType.R_PAREN:
+                    argument_depth -= 1
+                if token_type in _TYPE_ARGUMENT_TOKEN_TYPES:
+                    continue
+            if token_type in self._type_tokens:
+                arguments_pending = next_type == TokenType.L_PAREN
+                continue
             if token_type == TokenType.SEMICOLON:
                 continue
             if token_type not in _TEXT_TOKEN_TYPES:
                 types.add(token_type)
                 continue
-            next_type = tokens[position + 1].token_type if position + 1 < len(tokens) else None
             if token_type == TokenType.VAR and next_type == TokenType.L_PAREN:
                 continue
             words[token.text if token_type in _CASE_SENSITIVE_TOKEN_TYPES else token.text.lower()] += 1

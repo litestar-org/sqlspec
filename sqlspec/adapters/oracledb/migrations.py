@@ -10,12 +10,14 @@ from typing import TYPE_CHECKING, cast
 from rich.console import Console
 
 from sqlspec.builder import CreateTable, Select, sql
-from sqlspec.migrations.base import BaseMigrationTracker
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.migrations.base import AppliedMigrationRecord
 
@@ -86,6 +88,7 @@ class OracleMigrationTrackerMixin:
             .column("execution_time_ms", "INTEGER")
             .column("checksum", "VARCHAR2(64)")
             .column("applied_by", "VARCHAR2(255)")
+            .column("replaces", "VARCHAR2(4000)")
         )
 
     def _current_version_query(self) -> Select:
@@ -127,6 +130,7 @@ class OracleMigrationTrackerMixin:
                 'EXECUTION_TIME_MS AS "execution_time_ms"',
                 'CHECKSUM AS "checksum"',
                 'APPLIED_BY AS "applied_by"',
+                'REPLACES AS "replaces"',
             )
             .from_(self.version_table)
             .order_by("EXECUTION_SEQUENCE")
@@ -144,6 +148,24 @@ class OracleMigrationTrackerMixin:
         """
         return sql.select('COALESCE(MAX(EXECUTION_SEQUENCE), 0) + 1 AS "next_seq"').from_(self.version_table)
 
+    def _check_versions_query(self, versions: "list[str]") -> Select:
+        """Get Oracle-specific SQL for checking which of ``versions`` are recorded.
+
+        Aliases the UPPERCASE column as quoted lowercase so squash reconciliation can read
+        ``version_num`` from the result rows.
+
+        Args:
+            versions: Version strings to look up.
+
+        Returns:
+            SQL builder object for the version existence query.
+        """
+        return sql.select('VERSION_NUM AS "version_num"').from_(self.version_table).where_in("VERSION_NUM", versions)
+
+    def _applied_by(self) -> str:
+        """Return the operating-system user recorded as having applied a migration."""
+        return getpass.getuser()
+
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.
 
@@ -159,7 +181,7 @@ class OracleMigrationTrackerMixin:
         return target_columns - existing_lower
 
 
-class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["SyncDriverAdapterBase"]):
+class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, SyncMigrationTracker):
     """Oracle-specific sync migration tracker."""
 
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
@@ -182,7 +204,8 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
                 applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 execution_time_ms INTEGER,
                 checksum VARCHAR2(64),
-                applied_by VARCHAR2(255)
+                applied_by VARCHAR2(255),
+                replaces VARCHAR2(4000)
             )';
         EXCEPTION
             WHEN OTHERS THEN
@@ -232,8 +255,12 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         checksum: str,
         *,
         commit: bool = True,
+        replaces: "Sequence[str] | None" = None,
     ) -> None:
         """Record a successfully applied migration.
+
+        Squashed migrations persist their replaced versions in the ``replaces`` column so
+        multi-environment reconciliation can recognize fully applied pre-squash histories.
 
         Args:
             driver: The database driver to use.
@@ -242,18 +269,30 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
             commit: Whether to commit the transaction after recording.
+            replaces: Optional sequence of replaced migration versions for squashed migrations.
         """
-        applied_by = getpass.getuser()
-        parsed_version = parse_version(version)
-        version_type = parsed_version.type.value
+        applied_by = self._applied_by()
+        version_type = self._derive_version_type(version)
 
         next_seq_result = driver.execute(self._next_execution_sequence_query())
         seq_data = next_seq_result.get_data()
         execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
 
-        record_sql = self._record_migration_statement(
-            version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
-        )
+        if replaces:
+            record_sql = self._record_squashed_migration_statement(
+                version,
+                version_type,
+                execution_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                applied_by,
+                ",".join(replaces),
+            )
+        else:
+            record_sql = self._record_migration_statement(
+                version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
+            )
         driver.execute(record_sql)
         if commit:
             driver.commit()
@@ -379,7 +418,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         logger.debug("Added column %s to tracking table", column_name)
 
 
-class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["AsyncDriverAdapterBase"]):
+class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, AsyncMigrationTracker):
     """Oracle-specific async migration tracker."""
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
@@ -402,7 +441,8 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
                 applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 execution_time_ms INTEGER,
                 checksum VARCHAR2(64),
-                applied_by VARCHAR2(255)
+                applied_by VARCHAR2(255),
+                replaces VARCHAR2(4000)
             )';
         EXCEPTION
             WHEN OTHERS THEN
@@ -452,8 +492,12 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         checksum: str,
         *,
         commit: bool = True,
+        replaces: "Sequence[str] | None" = None,
     ) -> None:
         """Record a successfully applied migration.
+
+        Squashed migrations persist their replaced versions in the ``replaces`` column so
+        multi-environment reconciliation can recognize fully applied pre-squash histories.
 
         Args:
             driver: The database driver to use.
@@ -462,19 +506,31 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
             commit: Whether to commit the transaction after recording.
+            replaces: Optional sequence of replaced migration versions for squashed migrations.
         """
 
-        applied_by = getpass.getuser()
-        parsed_version = parse_version(version)
-        version_type = parsed_version.type.value
+        applied_by = self._applied_by()
+        version_type = self._derive_version_type(version)
 
         next_seq_result = await driver.execute(self._next_execution_sequence_query())
         seq_data = next_seq_result.get_data()
         execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
 
-        record_sql = self._record_migration_statement(
-            version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
-        )
+        if replaces:
+            record_sql = self._record_squashed_migration_statement(
+                version,
+                version_type,
+                execution_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                applied_by,
+                ",".join(replaces),
+            )
+        else:
+            record_sql = self._record_migration_statement(
+                version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
+            )
         await driver.execute(record_sql)
         if commit:
             await driver.commit()

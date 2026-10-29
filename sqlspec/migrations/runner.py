@@ -1268,7 +1268,9 @@ def extract_replaces_versions(content: str, suffix: str) -> list[str]:
     tracking state. For ``.sql`` files the header is the leading contiguous block of ``--``
     comment lines (blank lines allowed) that ends at the first statement or ``-- name:`` query
     marker. For ``.py`` files a module-level ``__replaces__`` assignment takes precedence over a
-    ``Replaces:`` / ``Squashed from:`` line in the module docstring.
+    ``Squashed from:`` line in the module docstring. Only the markers the squasher generates
+    (``Squashed from:`` and ``__replaces__``) are honored, so prose comments such as
+    ``-- Replaces: the legacy audit table`` are inert.
 
     Args:
         content: Raw migration file text.
@@ -1333,12 +1335,11 @@ def _python_replaces_versions(content: str) -> list[str]:
 
 
 def _header_replaces_versions(header_lines: list[str]) -> list[str]:
-    """Return versions from the first ``Replaces:`` or ``Squashed from:`` header line."""
+    """Return versions from the first ``Squashed from:`` header line."""
+    prefix = "squashed from:"
     for line in header_lines:
-        lowered = line.lower()
-        for prefix in ("squashed from:", "replaces:"):
-            if lowered.startswith(prefix):
-                return _parse_replaces_tokens(line[len(prefix) :])
+        if line.lower().startswith(prefix):
+            return _parse_replaces_tokens(line[len(prefix) :])
     return []
 
 
