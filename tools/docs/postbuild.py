@@ -4,12 +4,19 @@ import argparse
 import html
 import json
 import re
+import shutil
 import sys
 import tomllib
 from pathlib import Path
 from typing import Any
 
-__all__ = ("build_postbuild_artifacts", "emit_legacy_html_redirects", "generate_llms_files", "main")
+__all__ = (
+    "build_postbuild_artifacts",
+    "emit_legacy_html_redirects",
+    "generate_llms_files",
+    "main",
+    "sync_root_brand_assets",
+)
 
 _FRONTMATTER_PATTERN = re.compile(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|$)", re.DOTALL)
 _FRONTMATTER_TITLE_PATTERN = re.compile(r"^[ \t]*title:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
@@ -19,12 +26,38 @@ _HTML_BLOCK_PATTERN = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECA
 _MIN_SNIPPET_RANGE_PARTS = 2
 _FULL_SNIPPET_RANGE_PARTS = 3
 _MIN_QUOTED_SCALAR_LENGTH = 2
+_ROOT_BRAND_ASSETS: tuple[str, ...] = (
+    "favicon.ico",
+    "favicon.svg",
+    "favicon-16x16.png",
+    "favicon-32x32.png",
+    "apple-touch-icon.png",
+    "android-chrome-192x192.png",
+    "android-chrome-512x512.png",
+    "site.webmanifest",
+)
 
 
 def build_postbuild_artifacts(config_path: Path, docs_dir: Path, site_dir: Path) -> None:
-    """Generate llms.txt, llms-full.txt, and flat .html redirect files in site_dir."""
+    """Generate llms.txt, llms-full.txt, root favicons, and flat .html redirect files in site_dir."""
     generate_llms_files(config_path=config_path, docs_dir=docs_dir, site_dir=site_dir)
+    sync_root_brand_assets(docs_dir=docs_dir, site_dir=site_dir)
     emit_legacy_html_redirects(config_path=config_path, site_dir=site_dir)
+
+
+def sync_root_brand_assets(docs_dir: Path, site_dir: Path) -> int:
+    """Copy favicon and web-manifest files from docs/assets into the root of site_dir."""
+    assets_dir = docs_dir / "assets"
+    if not assets_dir.is_dir():
+        return 0
+    site_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for filename in _ROOT_BRAND_ASSETS:
+        source = assets_dir / filename
+        if source.is_file():
+            shutil.copy2(source, site_dir / filename)
+            copied += 1
+    return copied
 
 
 def generate_llms_files(config_path: Path, docs_dir: Path, site_dir: Path) -> None:
@@ -144,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     generate_llms_files(config_path=args.config, docs_dir=args.docs_dir, site_dir=args.site_dir)
+    sync_root_brand_assets(docs_dir=args.docs_dir, site_dir=args.site_dir)
     redirects_count = emit_legacy_html_redirects(config_path=args.config, site_dir=args.site_dir)
     sys.stdout.write(
         f"Generated {args.site_dir / 'llms.txt'}, {args.site_dir / 'llms-full.txt'}, "

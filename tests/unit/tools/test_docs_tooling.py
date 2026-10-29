@@ -87,10 +87,16 @@ def test_emit_legacy_html_redirects_preserves_hashes(tmp_path: Path) -> None:
 
 def test_build_postbuild_artifacts_and_cli_main(tmp_path: Path) -> None:
     config_path, docs_dir, site_dir = _write_sample_project(tmp_path)
+    assets_dir = docs_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    (assets_dir / "favicon.ico").write_bytes(b"\x00\x00\x01\x00")
+    (assets_dir / "favicon.svg").write_text("<svg></svg>\n", encoding="utf-8")
 
     build_postbuild_artifacts(config_path=config_path, docs_dir=docs_dir, site_dir=site_dir)
     assert (site_dir / "llms.txt").is_file()
     assert (site_dir / "llms-full.txt").is_file()
+    assert (site_dir / "favicon.ico").is_file()
+    assert (site_dir / "favicon.svg").is_file()
     assert (site_dir / "usage" / "migrations.html").is_file()
 
     rc = postbuild_main(["--config", str(config_path), "--docs-dir", str(docs_dir), "--site-dir", str(site_dir)])

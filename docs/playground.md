@@ -1,12 +1,12 @@
 ---
+title: Playground
 hide:
+  - navigation
   - toc
 ---
 
 # Interactive SQLSpec Playground
 
-Run SQLSpec against an in-memory SQLite database directly in your browser using WebAssembly (Pyodide).
-Edit the Python snippet below and select **Run** to execute parameterized SQL statements, inspect tabular output, or experiment with `SQLFileLoader` and `sql` query builders.
-All execution stays local to your browser tab with zero server round-trips.
+Execute SQLSpec against an in-memory SQLite database directly in your browser via WebAssembly (Pyodide) with zero server round-trips. Choose a preset example or edit the code and press **Run** (`Ctrl+Enter`).
 
 --8<-- "tools/docs/includes/playground.html"

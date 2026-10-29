@@ -1,160 +1,206 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css">
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/sql/sql.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/selection/active-line.js"></script>
 <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
 
 <style>
+  .sqlspec-playground [hidden] {
+    display: none !important;
+  }
+
   .sqlspec-playground {
     border: 1px solid #cbd5e1;
     border-radius: 12px;
-    padding: 1.5rem;
-    background: var(--md-default-bg-color, #ffffff);
-    box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
+    background: #ffffff;
+    box-shadow: 0 4px 20px rgba(15, 23, 42, 0.05);
+    overflow: hidden;
+    margin-top: 1rem;
   }
 
   html.dark .sqlspec-playground,
   [data-md-color-scheme="slate"] .sqlspec-playground {
-    background: #1e293b;
-    border-color: #334155;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    background: #0f172a;
+    border-color: #1e293b;
+    box-shadow: 0 8px 28px rgba(2, 6, 23, 0.45);
   }
 
-  .sqlspec-playground__header {
+  .sqlspec-playground__toolbar {
     display: flex;
     flex-wrap: wrap;
-    gap: 1rem;
-    align-items: flex-start;
+    gap: 0.75rem;
+    align-items: center;
     justify-content: space-between;
-    margin-bottom: 1.25rem;
-    padding-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    background: #f8fafc;
     border-bottom: 1px solid #e2e8f0;
   }
 
-  html.dark .sqlspec-playground__header,
-  [data-md-color-scheme="slate"] .sqlspec-playground__header {
-    border-bottom-color: #334155;
+  html.dark .sqlspec-playground__toolbar,
+  [data-md-color-scheme="slate"] .sqlspec-playground__toolbar {
+    background: #111827;
+    border-bottom-color: #1e293b;
   }
 
-  .sqlspec-playground__header h2 {
-    margin: 0 0 0.35rem 0;
-    color: var(--md-default-fg-color, #0f172a);
-    font-size: 1.25rem;
-    font-weight: 600;
-  }
-
-  html.dark .sqlspec-playground__header h2,
-  [data-md-color-scheme="slate"] .sqlspec-playground__header h2 {
-    color: #f1f5f9;
-  }
-
-  .sqlspec-playground__header p {
-    margin: 0;
-    color: var(--md-default-fg-color--light, #334155);
-    max-width: 46rem;
-    font-size: 0.9rem;
-  }
-
-  .sqlspec-playground__header-actions {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .sqlspec-playground__status {
-    padding: 0.4rem 0.85rem;
-    border-radius: 999px;
-    background: #f1f5f9;
-    color: #334155;
-    font-size: 0.8rem;
-    font-weight: 600;
-  }
-
-  html.dark .sqlspec-playground__status,
-  [data-md-color-scheme="slate"] .sqlspec-playground__status {
-    background: #0f172a;
-    color: #cbd5e1;
-  }
-
-  .sqlspec-playground__status--ready {
-    background: #dbeafe;
-    color: #1e40af;
-  }
-
-  html.dark .sqlspec-playground__status--ready,
-  [data-md-color-scheme="slate"] .sqlspec-playground__status--ready {
-    background: rgba(96, 165, 250, 0.2);
-    color: #93c5fd;
-  }
-
-  .sqlspec-playground__grid {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 1rem;
-  }
-
-  .sqlspec-playground__panel {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .sqlspec-playground__panel-header {
+  .sqlspec-playground__preset-group {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    font-weight: 600;
-    color: var(--md-default-fg-color, #0f172a);
-    font-size: 0.9rem;
-  }
-
-  html.dark .sqlspec-playground__panel-header,
-  [data-md-color-scheme="slate"] .sqlspec-playground__panel-header {
-    color: #f1f5f9;
-  }
-
-  .sqlspec-playground__panel-actions {
-    display: flex;
-    gap: 0.5rem;
+    gap: 0.55rem;
     flex-wrap: wrap;
   }
 
-  .sqlspec-playground__button {
+  .sqlspec-playground__preset-label {
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #475569;
+  }
+
+  html.dark .sqlspec-playground__preset-label,
+  [data-md-color-scheme="slate"] .sqlspec-playground__preset-label {
+    color: #94a3b8;
+  }
+
+  .sqlspec-playground__select {
+    appearance: auto;
     border: 1px solid #cbd5e1;
-    background: #f8fafc;
+    background: #ffffff;
     color: #0f172a;
     border-radius: 6px;
-    padding: 0.4rem 0.85rem;
+    padding: 0.36rem 0.65rem;
     font-size: 0.8rem;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s ease;
+    min-width: 14rem;
+  }
+
+  html.dark .sqlspec-playground__select,
+  [data-md-color-scheme="slate"] .sqlspec-playground__select {
+    background: #1e293b;
+    color: #f1f5f9;
+    border-color: #334155;
+  }
+
+  .sqlspec-playground__select:focus {
+    outline: 2px solid #2563eb;
+    outline-offset: 1px;
+  }
+
+  .sqlspec-playground__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .sqlspec-playground__inline-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.28rem 0.65rem;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: #475569;
+    border: 1px solid #e2e8f0;
+  }
+
+  html.dark .sqlspec-playground__inline-status,
+  [data-md-color-scheme="slate"] .sqlspec-playground__inline-status {
+    background: #1e293b;
+    color: #cbd5e1;
+    border-color: #334155;
+  }
+
+  .sqlspec-playground__inline-status--running {
+    background: #eff6ff;
+    color: #1d4ed8;
+    border-color: #bfdbfe;
+  }
+
+  html.dark .sqlspec-playground__inline-status--running,
+  [data-md-color-scheme="slate"] .sqlspec-playground__inline-status--running {
+    background: rgba(37, 99, 235, 0.18);
+    color: #93c5fd;
+    border-color: rgba(96, 165, 250, 0.35);
+  }
+
+  .sqlspec-playground__inline-status--success {
+    background: #f0fdf4;
+    color: #15803d;
+    border-color: #bbf7d0;
+  }
+
+  html.dark .sqlspec-playground__inline-status--success,
+  [data-md-color-scheme="slate"] .sqlspec-playground__inline-status--success {
+    background: rgba(22, 163, 74, 0.16);
+    color: #86efac;
+    border-color: rgba(74, 222, 128, 0.3);
+  }
+
+  .sqlspec-playground__inline-status--error {
+    background: #fef2f2;
+    color: #b91c1c;
+    border-color: #fecaca;
+  }
+
+  html.dark .sqlspec-playground__inline-status--error,
+  [data-md-color-scheme="slate"] .sqlspec-playground__inline-status--error {
+    background: rgba(220, 38, 38, 0.18);
+    color: #fca5a5;
+    border-color: rgba(248, 113, 113, 0.35);
+  }
+
+  .sqlspec-playground__spinner {
+    width: 11px;
+    height: 11px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: sqlspec-spin 0.75s linear infinite;
+  }
+
+  @keyframes sqlspec-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .sqlspec-playground__button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #0f172a;
+    border-radius: 6px;
+    padding: 0.36rem 0.75rem;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   }
 
   html.dark .sqlspec-playground__button,
   [data-md-color-scheme="slate"] .sqlspec-playground__button {
-    background: #0f172a;
+    background: #1e293b;
     color: #f1f5f9;
-    border-color: #475569;
+    border-color: #334155;
   }
 
   .sqlspec-playground__button:hover:not(:disabled) {
-    background: #e2e8f0;
+    background: #f1f5f9;
     border-color: #94a3b8;
-    color: #0f172a;
   }
 
   html.dark .sqlspec-playground__button:hover:not(:disabled),
   [data-md-color-scheme="slate"] .sqlspec-playground__button:hover:not(:disabled) {
     background: #334155;
-    border-color: #64748b;
-    color: #ffffff;
+    border-color: #475569;
   }
 
   .sqlspec-playground__button:disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
   }
 
@@ -185,77 +231,237 @@
     color: #ffffff;
   }
 
-  .sqlspec-playground__output {
-    margin-top: 1rem;
-    border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    background: var(--md-code-bg-color, #f8fafc);
-    padding: 0.75rem;
+  .sqlspec-playground__kbd {
+    font-family: var(--md-code-font-family, monospace);
+    font-size: 0.68rem;
+    font-weight: 500;
+    padding: 0.08rem 0.35rem;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
   }
 
-  html.dark .sqlspec-playground__output,
-  [data-md-color-scheme="slate"] .sqlspec-playground__output {
-    background: #0f172a;
-    border-color: #334155;
+  .sqlspec-playground__workspace {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
-  .sqlspec-playground__output pre {
-    margin: 0.5rem 0 0 0;
-    max-height: 280px;
-    overflow-y: auto;
-    padding: 0.85rem;
-    background: #0f172a;
-    color: #f1f5f9;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    line-height: 1.5;
+  @media screen and (min-width: 960px) {
+    .sqlspec-playground__workspace {
+      grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+    }
+  }
+
+  .sqlspec-playground__pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .sqlspec-playground__pane--editor {
+    border-bottom: 1px solid #e2e8f0;
+  }
+
+  html.dark .sqlspec-playground__pane--editor,
+  [data-md-color-scheme="slate"] .sqlspec-playground__pane--editor {
+    border-bottom-color: #1e293b;
+  }
+
+  @media screen and (min-width: 960px) {
+    .sqlspec-playground__pane--editor {
+      border-bottom: 0;
+      border-right: 1px solid #e2e8f0;
+    }
+
+    html.dark .sqlspec-playground__pane--editor,
+    [data-md-color-scheme="slate"] .sqlspec-playground__pane--editor {
+      border-right-color: #1e293b;
+    }
+  }
+
+  .sqlspec-playground__pane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.55rem 0.9rem;
+    min-height: 2.35rem;
+    background: #f1f5f9;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: #334155;
+  }
+
+  html.dark .sqlspec-playground__pane-header,
+  [data-md-color-scheme="slate"] .sqlspec-playground__pane-header {
+    background: #0b1120;
+    border-bottom-color: #1e293b;
+    color: #cbd5e1;
+  }
+
+  .sqlspec-playground__pane-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
     font-family: var(--md-code-font-family, monospace);
   }
 
-  .sqlspec-playground__output pre:focus {
-    outline: 2px solid #2563eb;
-    outline-offset: 2px;
+  .sqlspec-playground__pane-subtitle {
+    font-family: var(--md-text-font-family, sans-serif);
+    font-weight: 500;
+    font-size: 0.73rem;
+    color: #64748b;
+  }
+
+  html.dark .sqlspec-playground__pane-subtitle,
+  [data-md-color-scheme="slate"] .sqlspec-playground__pane-subtitle {
+    color: #94a3b8;
+  }
+
+  .sqlspec-playground__meta-badge {
+    font-family: var(--md-code-font-family, monospace);
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 0.14rem 0.5rem;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #334155;
+  }
+
+  html.dark .sqlspec-playground__meta-badge,
+  [data-md-color-scheme="slate"] .sqlspec-playground__meta-badge {
+    background: #1e293b;
+    color: #cbd5e1;
+  }
+
+  .sqlspec-playground__ghost-btn {
+    border: 1px solid transparent;
+    background: transparent;
+    color: #475569;
+    border-radius: 5px;
+    padding: 0.16rem 0.5rem;
+    font-size: 0.73rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .sqlspec-playground__ghost-btn:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+  }
+
+  html.dark .sqlspec-playground__ghost-btn,
+  [data-md-color-scheme="slate"] .sqlspec-playground__ghost-btn {
+    color: #94a3b8;
+  }
+
+  html.dark .sqlspec-playground__ghost-btn:hover,
+  [data-md-color-scheme="slate"] .sqlspec-playground__ghost-btn:hover {
+    background: #1e293b;
+    color: #f1f5f9;
+  }
+
+  .sqlspec-playground textarea[data-python-editor] {
+    width: 100%;
+    min-height: 460px;
+    padding: 0.85rem;
+    border: 0;
+    font-family: var(--md-code-font-family, monospace);
+    font-size: 0.78rem;
+    background: #f8fafc;
+    color: #0f172a;
+    box-sizing: border-box;
   }
 
   .sqlspec-playground .CodeMirror {
-    border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    height: 320px;
+    height: 460px;
+    border: 0;
+    border-radius: 0;
     font-family: var(--md-code-font-family, monospace);
-    font-size: 0.85rem;
-    background: var(--md-code-bg-color, #f8fafc);
-    color: var(--md-default-fg-color, #0f172a);
+    font-size: 0.78rem;
+    line-height: 1.55;
+    background: #f8fafc;
+    color: #0f172a;
   }
 
   html.dark .sqlspec-playground .CodeMirror,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror {
-    background: #0f172a;
-    color: #f1f5f9;
-    border-color: #334155;
+    background: #0b1120;
+    color: #e2e8f0;
+  }
+
+  .sqlspec-playground .CodeMirror-scrollbar-filler,
+  .sqlspec-playground .CodeMirror-gutter-filler {
+    background: transparent;
+  }
+
+  .sqlspec-playground .CodeMirror-lines {
+    padding: 0.65rem 0;
+  }
+
+  .sqlspec-playground .CodeMirror pre.CodeMirror-line,
+  .sqlspec-playground .CodeMirror pre.CodeMirror-line-like {
+    padding: 0 0.75rem;
   }
 
   .sqlspec-playground .CodeMirror-gutters {
-    background: transparent;
-    border-right: 1px solid var(--md-default-fg-color--lightest, #e2e8f0);
+    background: #f1f5f9;
+    border-right: 1px solid #e2e8f0;
   }
 
   html.dark .sqlspec-playground .CodeMirror-gutters,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror-gutters {
-    border-right-color: #334155;
+    background: #0b1120;
+    border-right-color: #1e293b;
   }
 
   .sqlspec-playground .CodeMirror-linenumber {
     color: #64748b;
+    padding: 0 0.5rem 0 0.35rem;
+    font-size: 0.75rem;
   }
 
   html.dark .sqlspec-playground .CodeMirror-linenumber,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror-linenumber {
-    color: #94a3b8;
+    color: #64748b;
+  }
+
+  .sqlspec-playground .CodeMirror-vscrollbar::-webkit-scrollbar,
+  .sqlspec-playground .CodeMirror-hscrollbar::-webkit-scrollbar,
+  .sqlspec-playground__results-body::-webkit-scrollbar,
+  .sqlspec-playground__table-wrapper::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .sqlspec-playground .CodeMirror-vscrollbar::-webkit-scrollbar-button,
+  .sqlspec-playground .CodeMirror-hscrollbar::-webkit-scrollbar-button,
+  .sqlspec-playground__results-body::-webkit-scrollbar-button,
+  .sqlspec-playground__table-wrapper::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .sqlspec-playground .CodeMirror-vscrollbar::-webkit-scrollbar-track,
+  .sqlspec-playground .CodeMirror-hscrollbar::-webkit-scrollbar-track,
+  .sqlspec-playground__results-body::-webkit-scrollbar-track,
+  .sqlspec-playground__table-wrapper::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .sqlspec-playground .CodeMirror-vscrollbar::-webkit-scrollbar-thumb,
+  .sqlspec-playground .CodeMirror-hscrollbar::-webkit-scrollbar-thumb,
+  .sqlspec-playground__results-body::-webkit-scrollbar-thumb,
+  .sqlspec-playground__table-wrapper::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.4);
+    border-radius: 9999px;
   }
 
   .sqlspec-playground .CodeMirror .cm-keyword {
     color: #6d28d9;
-    font-weight: 600;
+    font-weight: 500;
   }
 
   .sqlspec-playground .CodeMirror .cm-string,
@@ -264,16 +470,22 @@
   }
 
   .sqlspec-playground .CodeMirror .cm-number {
-    color: #b45309;
+    color: #c2410c;
   }
 
   .sqlspec-playground .CodeMirror .cm-comment {
-    color: #475569;
+    color: #64748b;
     font-style: italic;
   }
 
   .sqlspec-playground .CodeMirror .cm-def {
-    color: #c2410c;
+    color: #1d4ed8;
+    font-weight: 500;
+  }
+
+  .sqlspec-playground .CodeMirror .cm-meta {
+    color: #0f766e;
+    font-weight: 500;
   }
 
   .sqlspec-playground .CodeMirror .cm-variable {
@@ -281,25 +493,27 @@
   }
 
   .sqlspec-playground .CodeMirror .cm-variable-2 {
-    color: #1e293b;
+    color: #0f766e;
   }
 
-  .sqlspec-playground .CodeMirror .cm-builtin {
-    color: #1d4ed8;
+  .sqlspec-playground .CodeMirror .cm-builtin,
+  .sqlspec-playground .CodeMirror .cm-atom {
+    color: #0369a1;
+    font-weight: 500;
   }
 
   .sqlspec-playground .CodeMirror .cm-operator {
-    color: #334155;
+    color: #475569;
   }
 
   .sqlspec-playground .CodeMirror .cm-property {
-    color: #0f766e;
+    color: #1d4ed8;
   }
 
   html.dark .sqlspec-playground .CodeMirror .cm-keyword,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-keyword {
     color: #c4b5fd;
-    font-weight: 600;
+    font-weight: 500;
   }
 
   html.dark .sqlspec-playground .CodeMirror .cm-string,
@@ -316,51 +530,61 @@
 
   html.dark .sqlspec-playground .CodeMirror .cm-comment,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-comment {
-    color: #94a3b8;
+    color: #64748b;
     font-style: italic;
   }
 
   html.dark .sqlspec-playground .CodeMirror .cm-def,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-def {
-    color: #fdba74;
+    color: #60a5fa;
+    font-weight: 500;
+  }
+
+  html.dark .sqlspec-playground .CodeMirror .cm-meta,
+  [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-meta {
+    color: #2dd4bf;
+    font-weight: 500;
   }
 
   html.dark .sqlspec-playground .CodeMirror .cm-variable,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-variable {
-    color: #f1f5f9;
+    color: #e2e8f0;
   }
 
   html.dark .sqlspec-playground .CodeMirror .cm-variable-2,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-variable-2 {
-    color: #e2e8f0;
+    color: #5eead4;
   }
 
   html.dark .sqlspec-playground .CodeMirror .cm-builtin,
-  [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-builtin {
-    color: #93c5fd;
+  html.dark .sqlspec-playground .CodeMirror .cm-atom,
+  [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-builtin,
+  [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-atom {
+    color: #38bdf8;
+    font-weight: 500;
   }
 
   html.dark .sqlspec-playground .CodeMirror .cm-operator,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-operator {
-    color: #cbd5e1;
+    color: #94a3b8;
   }
 
   html.dark .sqlspec-playground .CodeMirror .cm-property,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror .cm-property {
-    color: #fde68a;
+    color: #60a5fa;
   }
 
   .sqlspec-playground .CodeMirror-activeline-background {
-    background: rgba(29, 78, 216, 0.05);
+    background: rgba(37, 99, 235, 0.06);
   }
 
   html.dark .sqlspec-playground .CodeMirror-activeline-background,
   [data-md-color-scheme="slate"] .sqlspec-playground .CodeMirror-activeline-background {
-    background: rgba(96, 165, 250, 0.08);
+    background: rgba(96, 165, 250, 0.09);
   }
 
   .sqlspec-playground .CodeMirror-cursor {
-    border-left: 2px solid #1d4ed8;
+    border-left: 2px solid #2563eb;
   }
 
   html.dark .sqlspec-playground .CodeMirror-cursor,
@@ -368,179 +592,115 @@
     border-left: 2px solid #60a5fa;
   }
 
-  .sqlspec-playground__tip-dialog {
-    border: 1px solid #cbd5e1;
-    border-radius: 12px;
-    padding: 1.5rem;
-    max-width: 520px;
-    width: min(92vw, 520px);
-    background: #ffffff;
-    color: #0f172a;
-    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.2);
-    margin: auto;
-  }
-
-  html.dark .sqlspec-playground__tip-dialog,
-  [data-md-color-scheme="slate"] .sqlspec-playground__tip-dialog {
-    background: #0f172a;
-    border-color: #334155;
-    color: #f1f5f9;
-  }
-
-  .sqlspec-playground__tip-dialog::backdrop {
-    background: rgba(15, 23, 42, 0.65);
-  }
-
-  .sqlspec-playground__tip-dialog h3 {
-    margin-top: 0;
-    color: #0f172a;
-    font-size: 1.1rem;
-  }
-
-  html.dark .sqlspec-playground__tip-dialog h3,
-  [data-md-color-scheme="slate"] .sqlspec-playground__tip-dialog h3 {
-    color: #f1f5f9;
-  }
-
-  .sqlspec-playground__tip-dialog ul {
-    margin: 0.75rem 0 1rem;
-    padding-left: 1.25rem;
-  }
-
-  .sqlspec-playground__tip-dialog-actions {
+  .sqlspec-playground__results-body {
+    flex: 1;
     display: flex;
-    justify-content: flex-end;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.9rem;
+    min-height: 260px;
+    max-height: 460px;
+    overflow-y: auto;
+    background: #ffffff;
+    box-sizing: border-box;
   }
 
-  @media (max-width: 700px) {
-    .sqlspec-playground {
-      padding: 1rem;
-    }
-
-    .sqlspec-playground__header {
-      flex-direction: column;
-      align-items: flex-start;
-    }
-
-    .sqlspec-playground .CodeMirror {
-      height: 250px;
-    }
+  html.dark .sqlspec-playground__results-body,
+  [data-md-color-scheme="slate"] .sqlspec-playground__results-body {
+    background: #0f172a;
   }
 
-  .sqlspec-playground__inline-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.75rem;
-    color: #475569;
-    margin-left: 0.5rem;
+  .sqlspec-playground__empty {
+    margin: auto;
+    text-align: center;
+    max-width: 22rem;
+    padding: 1.5rem 1rem;
+    color: #64748b;
+    font-size: 0.82rem;
+    line-height: 1.55;
   }
 
-  html.dark .sqlspec-playground__inline-status,
-  [data-md-color-scheme="slate"] .sqlspec-playground__inline-status {
-    color: #cbd5e1;
+  html.dark .sqlspec-playground__empty,
+  [data-md-color-scheme="slate"] .sqlspec-playground__empty {
+    color: #94a3b8;
   }
 
-  .sqlspec-playground__inline-status--running {
-    color: #1d4ed8;
+  .sqlspec-playground__empty strong {
+    display: block;
+    margin-bottom: 0.3rem;
+    color: #334155;
+    font-size: 0.86rem;
   }
 
-  html.dark .sqlspec-playground__inline-status--running,
-  [data-md-color-scheme="slate"] .sqlspec-playground__inline-status--running {
-    color: #60a5fa;
-  }
-
-  .sqlspec-playground__inline-status--success {
-    color: #15803d;
-  }
-
-  html.dark .sqlspec-playground__inline-status--success,
-  [data-md-color-scheme="slate"] .sqlspec-playground__inline-status--success {
-    color: #4ade80;
-  }
-
-  .sqlspec-playground__inline-status--error {
-    color: #b91c1c;
-  }
-
-  html.dark .sqlspec-playground__inline-status--error,
-  [data-md-color-scheme="slate"] .sqlspec-playground__inline-status--error {
-    color: #f87171;
-  }
-
-  .sqlspec-playground__spinner {
-    width: 12px;
-    height: 12px;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
+  html.dark .sqlspec-playground__empty strong,
+  [data-md-color-scheme="slate"] .sqlspec-playground__empty strong {
+    color: #e2e8f0;
   }
 
   .sqlspec-playground__table-wrapper {
-    overflow-x: auto;
-    max-height: 320px;
-    margin-top: 1rem;
-    border-radius: 6px;
-    border: 1px solid #cbd5e1;
+    overflow: auto;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
   }
 
   html.dark .sqlspec-playground__table-wrapper,
   [data-md-color-scheme="slate"] .sqlspec-playground__table-wrapper {
-    border-color: #334155;
+    border-color: #1e293b;
   }
 
   .sqlspec-playground__table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     font-family: var(--md-code-font-family, monospace);
+    margin: 0;
   }
 
   .sqlspec-playground__table th,
   .sqlspec-playground__table td {
-    padding: 0.5rem 0.75rem;
+    padding: 0.48rem 0.65rem;
     text-align: left;
     border-bottom: 1px solid #e2e8f0;
-    color: var(--md-default-fg-color, #0f172a);
+    color: #0f172a;
+    white-space: nowrap;
   }
 
   html.dark .sqlspec-playground__table th,
   html.dark .sqlspec-playground__table td,
   [data-md-color-scheme="slate"] .sqlspec-playground__table th,
   [data-md-color-scheme="slate"] .sqlspec-playground__table td {
-    border-bottom-color: #334155;
-    color: #f1f5f9;
+    border-bottom-color: #1e293b;
+    color: #e2e8f0;
+  }
+
+  .sqlspec-playground__table tbody tr:last-child td {
+    border-bottom: 0;
   }
 
   .sqlspec-playground__table th {
-    background: #f1f5f9;
-    color: #0f172a;
+    background: #f8fafc;
+    color: #334155;
     font-weight: 600;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
     position: sticky;
     top: 0;
-    z-index: 10;
+    z-index: 2;
     cursor: pointer;
     user-select: none;
-    border-bottom: 2px solid #1d4ed8;
+    border-bottom: 2px solid #cbd5e1;
   }
 
   html.dark .sqlspec-playground__table th,
   [data-md-color-scheme="slate"] .sqlspec-playground__table th {
     background: #1e293b;
-    color: #f1f5f9;
-    border-bottom-color: #60a5fa;
+    color: #cbd5e1;
+    border-bottom-color: #334155;
   }
 
   .sqlspec-playground__table th:hover {
-    background: #e2e8f0;
+    background: #f1f5f9;
   }
 
   html.dark .sqlspec-playground__table th:hover,
@@ -549,18 +709,20 @@
   }
 
   .sqlspec-playground__table th .sort-indicator {
-    margin-left: 0.35rem;
-    opacity: 0.5;
+    opacity: 0.65;
+  }
+
+  .sqlspec-playground__table th.sorted-asc .sort-indicator,
+  .sqlspec-playground__table th.sorted-desc .sort-indicator {
+    margin-left: 0.3rem;
   }
 
   .sqlspec-playground__table th.sorted-asc .sort-indicator::after {
-    content: "▲";
-    opacity: 1;
+    content: "\25B2";
   }
 
   .sqlspec-playground__table th.sorted-desc .sort-indicator::after {
-    content: "▼";
-    opacity: 1;
+    content: "\25BC";
   }
 
   .sqlspec-playground__table tbody tr:nth-child(even) {
@@ -572,216 +734,530 @@
     background: rgba(241, 245, 249, 0.03);
   }
 
-  .sqlspec-playground__row-count {
-    margin-top: 0.5rem;
-    font-size: 0.75rem;
-    color: #475569;
+  .sqlspec-playground__console {
+    margin: 0;
+    padding: 0.75rem 0.85rem;
+    background: #f8fafc;
+    color: #0f172a;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    line-height: 1.55;
+    font-family: var(--md-code-font-family, monospace);
+    white-space: pre-wrap;
+    overflow-x: auto;
   }
 
-  html.dark .sqlspec-playground__row-count,
-  [data-md-color-scheme="slate"] .sqlspec-playground__row-count {
-    color: #cbd5e1;
+  html.dark .sqlspec-playground__console,
+  [data-md-color-scheme="slate"] .sqlspec-playground__console {
+    background: #0b1120;
+    color: #e2e8f0;
+    border-color: #1e293b;
   }
 
   .sqlspec-playground__error {
-    margin-top: 1rem;
-    padding: 1rem;
+    margin: 0;
+    padding: 0.85rem;
     border-radius: 8px;
     background: #fef2f2;
     border: 1px solid #fca5a5;
     color: #991b1b;
     font-family: var(--md-code-font-family, monospace);
-    font-size: 0.85rem;
+    font-size: 0.78rem;
+    line-height: 1.5;
     white-space: pre-wrap;
+    overflow-x: auto;
   }
 
   html.dark .sqlspec-playground__error,
   [data-md-color-scheme="slate"] .sqlspec-playground__error {
-    background: #450a0a;
-    border-color: #7f1d1d;
+    background: rgba(127, 29, 29, 0.28);
+    border-color: rgba(248, 113, 113, 0.4);
     color: #fca5a5;
+  }
+
+  @media (max-width: 700px) {
+    .sqlspec-playground .CodeMirror {
+      height: 300px;
+    }
+
+    .sqlspec-playground__select {
+      min-width: 100%;
+    }
   }
 </style>
 
 <section class="sqlspec-playground" id="sqlspec-playground-main">
-  <div class="sqlspec-playground__grid">
-    <div class="sqlspec-playground__panel">
-      <div class="sqlspec-playground__panel-header">
-        <span>Python</span>
-        <div class="sqlspec-playground__panel-actions">
-          <span class="sqlspec-playground__inline-status" data-inline-status></span>
-          <button class="sqlspec-playground__button" data-open-tips>Usage tips</button>
-          <button class="sqlspec-playground__button sqlspec-playground__button--primary" data-run-python>Run</button>
-          <button class="sqlspec-playground__button" data-reset-python>Reset</button>
-        </div>
+  <div class="sqlspec-playground__toolbar">
+    <div class="sqlspec-playground__preset-group">
+      <label class="sqlspec-playground__preset-label" for="sqlspec-preset-select">Example</label>
+      <select id="sqlspec-preset-select" class="sqlspec-playground__select" data-preset-select>
+        <option value="quickstart">Parameterized Queries</option>
+        <option value="typed">Typed Dataclass Rows</option>
+        <option value="builder">SQL Query Builder</option>
+        <option value="named">Named SQL Statements</option>
+        <option value="pagination">Batch Insert &amp; Pagination</option>
+      </select>
+    </div>
+
+    <div class="sqlspec-playground__actions">
+      <span class="sqlspec-playground__inline-status" data-inline-status>Initializing...</span>
+      <button type="button" class="sqlspec-playground__button" data-copy-python>Copy</button>
+      <button type="button" class="sqlspec-playground__button" data-reset-python>Reset</button>
+      <button type="button" class="sqlspec-playground__button sqlspec-playground__button--primary" data-run-python>
+        <span>Run</span>
+        <span class="sqlspec-playground__kbd">Ctrl+Enter</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="sqlspec-playground__workspace">
+    <div class="sqlspec-playground__pane sqlspec-playground__pane--editor">
+      <div class="sqlspec-playground__pane-header">
+        <span class="sqlspec-playground__pane-title">main.py</span>
+        <span class="sqlspec-playground__pane-subtitle">Python · SQLite :memory:</span>
       </div>
-      <textarea data-python-editor>
-from sqlspec import SQLSpec
+      <textarea data-python-editor aria-label="Python editor">from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(config) as session:
     session.execute_script("""
-        CREATE TABLE IF NOT EXISTS teams (id INTEGER PRIMARY KEY, name TEXT);
-        INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec'), ('Advanced Alchemy');
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY,
+            name TEXT, category TEXT, stars INTEGER
+        );
+        INSERT INTO projects (name, category, stars) VALUES
+            ('Litestar', 'ASGI Framework', 6400),
+            ('SQLSpec', 'SQL Execution', 420),
+            ('Advanced Alchemy', 'ORM Toolkit', 510),
+            ('Polyfactory', 'Test Factories', 890);
     """)
-    results = session.select("SELECT * FROM teams")
+    rows = session.select(
+        "SELECT id, name, category, stars FROM projects "
+        "WHERE stars >= :min_stars ORDER BY stars DESC",
+        min_stars=400,
+    )
 
-results
-      </textarea>
+rows</textarea>
+    </div>
+
+    <div class="sqlspec-playground__pane">
+      <div class="sqlspec-playground__pane-header">
+        <span class="sqlspec-playground__pane-title">Results</span>
+        <div class="sqlspec-playground__actions">
+          <span data-row-count class="sqlspec-playground__meta-badge" hidden></span>
+          <button type="button" class="sqlspec-playground__ghost-btn" data-clear-output>Clear</button>
+        </div>
+      </div>
+
+      <div class="sqlspec-playground__results-body" data-output-container>
+        <div data-empty-state class="sqlspec-playground__empty">
+          <strong>Preparing Browser Runtime</strong>
+          Loading Python WebAssembly (Pyodide) and installing <code>sqlspec</code>. Your query will run automatically once ready.
+        </div>
+        <div data-table-output class="sqlspec-playground__table-wrapper" hidden></div>
+        <div data-output class="sqlspec-playground__console" tabindex="0" aria-live="polite" hidden></div>
+        <div data-error-output class="sqlspec-playground__error" hidden></div>
+      </div>
     </div>
   </div>
-
-  <div class="sqlspec-playground__output">
-    <div class="sqlspec-playground__panel-header">
-      <span>Results</span>
-      <button class="sqlspec-playground__button" data-clear-output>Clear</button>
-    </div>
-    <div data-output-container>
-      <div data-table-output class="sqlspec-playground__table-wrapper" hidden></div>
-      <div data-row-count class="sqlspec-playground__row-count" hidden></div>
-      <pre data-output tabindex="0" aria-live="polite" hidden></pre>
-      <div data-error-output class="sqlspec-playground__error" hidden></div>
-    </div>
-  </div>
-
-  <dialog class="sqlspec-playground__tip-dialog" data-tips-dialog>
-    <h3>Usage Tips</h3>
-    <ul>
-      <li>Run the default snippet to seed a SQLite in-memory database.</li>
-      <li>Edit the Python code to test queries, parameter binding, and statement builders.</li>
-      <li>Return a list of dictionaries to render a sortable results table.</li>
-      <li>Select Reset to restore the default snippet.</li>
-    </ul>
-    <div class="sqlspec-playground__tip-dialog-actions">
-      <button class="sqlspec-playground__button" data-close-tips>Close</button>
-    </div>
-  </dialog>
 </section>
 
 <script>
   (function() {
+    const PRESETS = {
+      quickstart: [
+        'from sqlspec import SQLSpec',
+        'from sqlspec.adapters.sqlite import SqliteConfig',
+        '',
+        'spec = SQLSpec()',
+        'config = spec.add_config(',
+        '    SqliteConfig(connection_config={"database": ":memory:"})',
+        ')',
+        '',
+        'with spec.provide_session(config) as session:',
+        '    session.execute_script("""',
+        '        CREATE TABLE projects (',
+        '            id INTEGER PRIMARY KEY,',
+        '            name TEXT, category TEXT, stars INTEGER',
+        '        );',
+        '        INSERT INTO projects (name, category, stars) VALUES',
+        "            ('Litestar', 'ASGI Framework', 6400),",
+        "            ('SQLSpec', 'SQL Execution', 420),",
+        "            ('Advanced Alchemy', 'ORM Toolkit', 510),",
+        "            ('Polyfactory', 'Test Factories', 890);",
+        '    """)',
+        '    rows = session.select(',
+        '        "SELECT id, name, category, stars FROM projects "',
+        '        "WHERE stars >= :min_stars ORDER BY stars DESC",',
+        '        min_stars=400,',
+        '    )',
+        '',
+        'rows'
+      ].join('\n'),
+      typed: [
+        'from dataclasses import dataclass',
+        'from sqlspec import SQLSpec',
+        'from sqlspec.adapters.sqlite import SqliteConfig',
+        '',
+        '',
+        '@dataclass(frozen=True, slots=True)',
+        'class ServiceMetric:',
+        '    service: str',
+        '    region: str',
+        '    latency_ms: float',
+        '',
+        '',
+        'spec = SQLSpec()',
+        'config = spec.add_config(',
+        '    SqliteConfig(connection_config={"database": ":memory:"})',
+        ')',
+        '',
+        'with spec.provide_session(config) as session:',
+        '    session.execute(',
+        '        "CREATE TABLE metrics (service TEXT, region TEXT, latency_ms REAL)"',
+        '    )',
+        '    session.execute_many(',
+        '        "INSERT INTO metrics (service, region, latency_ms) VALUES (?, ?, ?)",',
+        '        [',
+        '            ("auth-api", "us-east", 4.2),',
+        '            ("billing-api", "eu-west", 7.8),',
+        '            ("search-api", "us-east", 2.9),',
+        '        ],',
+        '    )',
+        '    metrics = session.select(',
+        '        "SELECT service, region, latency_ms FROM metrics ORDER BY latency_ms ASC",',
+        '        schema_type=ServiceMetric,',
+        '    )',
+        '',
+        'metrics'
+      ].join('\n'),
+      builder: [
+        'from sqlspec import SQLSpec, sql',
+        'from sqlspec.adapters.sqlite import SqliteConfig',
+        '',
+        'spec = SQLSpec()',
+        'config = spec.add_config(',
+        '    SqliteConfig(connection_config={"database": ":memory:"})',
+        ')',
+        '',
+        'with spec.provide_session(config) as session:',
+        '    session.execute(',
+        '        "CREATE TABLE adapters ("',
+        '        "id INTEGER PRIMARY KEY, name TEXT, family TEXT, async_ready INTEGER)"',
+        '    )',
+        '    session.execute_many(',
+        '        "INSERT INTO adapters (name, family, async_ready) VALUES (?, ?, ?)",',
+        '        [',
+        '            ("asyncpg", "PostgreSQL", 1),',
+        '            ("psycopg", "PostgreSQL", 1),',
+        '            ("oracledb", "Oracle", 1),',
+        '            ("duckdb", "Analytics", 0),',
+        '        ],',
+        '    )',
+        '    query = (',
+        '        sql.select("id", "name", "family")',
+        '        .from_("adapters")',
+        '        .where("async_ready = ?")',
+        '        .order_by("id")',
+        '    )',
+        '    rows = session.execute(query, 1).all()',
+        '',
+        'rows'
+      ].join('\n'),
+      named: [
+        'from sqlspec import SQLSpec',
+        'from sqlspec.adapters.sqlite import SqliteConfig',
+        '',
+        'spec = SQLSpec()',
+        'config = spec.add_config(',
+        '    SqliteConfig(connection_config={"database": ":memory:"})',
+        ')',
+        'spec.add_named_sql(',
+        '    "active_users_by_role",',
+        '    "SELECT id, username, role FROM users "',
+        '    "WHERE role = :role AND active = 1 ORDER BY username",',
+        ')',
+        '',
+        'with spec.provide_session(config) as session:',
+        '    session.execute(',
+        '        "CREATE TABLE users ("',
+        '        "id INTEGER PRIMARY KEY, username TEXT, role TEXT, active INTEGER)"',
+        '    )',
+        '    session.execute_many(',
+        '        "INSERT INTO users (username, role, active) VALUES (?, ?, ?)",',
+        '        [',
+        '            ("ada", "maintainer", 1),',
+        '            ("grace", "maintainer", 1),',
+        '            ("linus", "contributor", 1),',
+        '            ("alan", "maintainer", 0),',
+        '        ],',
+        '    )',
+        '    maintainers = session.select(',
+        '        spec.get_sql("active_users_by_role"), role="maintainer"',
+        '    )',
+        '',
+        'maintainers'
+      ].join('\n'),
+      pagination: [
+        'from sqlspec import SQL, SQLSpec',
+        'from sqlspec.adapters.sqlite import SqliteConfig',
+        '',
+        'spec = SQLSpec()',
+        'config = spec.add_config(',
+        '    SqliteConfig(connection_config={"database": ":memory:"})',
+        ')',
+        '',
+        'with spec.provide_session(config) as session:',
+        '    session.execute(',
+        '        "CREATE TABLE events (id INTEGER PRIMARY KEY, topic TEXT, status TEXT)"',
+        '    )',
+        '    session.execute_many(',
+        '        "INSERT INTO events (topic, status) VALUES (?, ?)",',
+        '        [(f"orders.created.{i}", "delivered") for i in range(1, 10)],',
+        '    )',
+        '    paged = SQL("SELECT id, topic, status FROM events ORDER BY id").paginate(',
+        '        page=2, page_size=3',
+        '    )',
+        '    page_rows, total_count = session.select_with_total(paged)',
+        '    print(f"Showing page 2 ({len(page_rows)} of {total_count} total events)")',
+        '',
+        'page_rows'
+      ].join('\n')
+    };
+
+    const PYTHON_RUNNER_BOOTSTRAP = [
+      'import ast',
+      'import dataclasses',
+      'import json',
+      'import time',
+      'from collections.abc import Mapping',
+      'from sqlspec import SQL, SQLSpec, sql',
+      'from sqlspec.adapters.sqlite import SqliteConfig',
+      '',
+      'def _sqlspec_normalize_row(item):',
+      '    if isinstance(item, Mapping):',
+      '        return dict(item)',
+      '    if dataclasses.is_dataclass(item) and not isinstance(item, type):',
+      '        return dataclasses.asdict(item)',
+      '    if hasattr(item, "__struct_fields__"):',
+      '        return {field: getattr(item, field) for field in item.__struct_fields__}',
+      '    if hasattr(item, "model_dump"):',
+      '        return item.model_dump()',
+      '    return None',
+      '',
+      'async def _sqlspec_execute_snippet(source_code: str) -> str:',
+      '    namespace = {"__name__": "__main__"}',
+      '    tree = ast.parse(source_code, mode="exec")',
+      '    last_expr = None',
+      '    if tree.body and isinstance(tree.body[-1], ast.Expr):',
+      '        last_stmt = tree.body.pop()',
+      '        last_expr = ast.Expression(last_stmt.value)',
+      '        ast.fix_missing_locations(last_expr)',
+      '    started = time.perf_counter()',
+      '    compiled_body = compile(tree, "<playground>", "exec")',
+      '    exec(compiled_body, namespace, namespace)',
+      '    value = eval(compile(last_expr, "<playground>", "eval"), namespace, namespace) if last_expr is not None else None',
+      '    elapsed_ms = (time.perf_counter() - started) * 1000.0',
+      '    if isinstance(value, (list, tuple)) and value:',
+      '        converted = [_sqlspec_normalize_row(row) for row in value]',
+      '        if all(row is not None for row in converted):',
+      '            return json.dumps({"kind": "table", "rows": converted, "elapsed_ms": elapsed_ms}, default=str)',
+      '    single = _sqlspec_normalize_row(value) if value is not None else None',
+      '    if single is not None:',
+      '        return json.dumps({"kind": "table", "rows": [single], "elapsed_ms": elapsed_ms}, default=str)',
+      '    if value is None:',
+      '        return json.dumps({"kind": "none", "elapsed_ms": elapsed_ms})',
+      '    return json.dumps({"kind": "value", "value": repr(value), "elapsed_ms": elapsed_ms})'
+    ].join('\n');
+
     const root = document.getElementById("sqlspec-playground-main");
+    if (!root) return;
+
+    const presetSelect = root.querySelector("[data-preset-select]");
     const outputEl = root.querySelector("[data-output]");
     const tableOutputEl = root.querySelector("[data-table-output]");
     const rowCountEl = root.querySelector("[data-row-count]");
     const errorOutputEl = root.querySelector("[data-error-output]");
+    const emptyStateEl = root.querySelector("[data-empty-state]");
     const inlineStatusEl = root.querySelector("[data-inline-status]");
     const pythonTextarea = root.querySelector("[data-python-editor]");
     const runPythonButton = root.querySelector("[data-run-python]");
     const resetPythonButton = root.querySelector("[data-reset-python]");
+    const copyPythonButton = root.querySelector("[data-copy-python]");
     const clearOutputButton = root.querySelector("[data-clear-output]");
-    const tipsDialog = root.querySelector("[data-tips-dialog]");
-    const openTipsButton = root.querySelector("[data-open-tips]");
-    const closeTipsButton = root.querySelector("[data-close-tips]");
-
-    const pythonDefault = pythonTextarea.value.trim();
-    let currentData = null;
-    let sortColumn = null;
-    let sortDirection = 'asc';
-
-    const pythonEditor = CodeMirror.fromTextArea(pythonTextarea, {
-      mode: "python",
-      lineNumbers: true,
-      indentUnit: 4,
-      tabSize: 4,
-      indentWithTabs: false,
-      viewportMargin: Infinity,
-      styleActiveLine: true,
-      cursorBlinkRate: 530
-    });
 
     let pyodide = null;
+    let currentData = null;
+    let sortColumn = null;
+    let sortDirection = "asc";
+    let lastElapsedMs = null;
+
+    const getEditorValue = () => (pythonEditor ? pythonEditor.getValue() : pythonTextarea.value);
+    const setEditorValue = (code) => {
+      if (pythonEditor) {
+        pythonEditor.setValue(code);
+      } else {
+        pythonTextarea.value = code;
+      }
+    };
+
+    let pythonEditor = null;
+    if (typeof CodeMirror !== "undefined") {
+      pythonEditor = CodeMirror.fromTextArea(pythonTextarea, {
+        mode: "python",
+        lineNumbers: true,
+        indentUnit: 4,
+        tabSize: 4,
+        indentWithTabs: false,
+        styleActiveLine: true,
+        cursorBlinkRate: 530,
+        extraKeys: {
+          "Ctrl-Enter": () => { executeCurrentSnippet(); },
+          "Cmd-Enter": () => { executeCurrentSnippet(); }
+        }
+      });
+    }
+
+    const setEmptyState = (title, message) => {
+      if (!emptyStateEl) return;
+      emptyStateEl.innerHTML = "";
+      const heading = document.createElement("strong");
+      heading.textContent = title;
+      const body = document.createElement("span");
+      body.textContent = message;
+      emptyStateEl.appendChild(heading);
+      emptyStateEl.appendChild(body);
+      emptyStateEl.hidden = false;
+    };
 
     const setInlineStatus = (text, type) => {
       if (!inlineStatusEl) return;
       inlineStatusEl.className = "sqlspec-playground__inline-status";
       while (inlineStatusEl.firstChild) inlineStatusEl.removeChild(inlineStatusEl.firstChild);
       if (type === "running") {
-        const spinner = document.createElement('span');
-        spinner.className = 'sqlspec-playground__spinner';
+        const spinner = document.createElement("span");
+        spinner.className = "sqlspec-playground__spinner";
         inlineStatusEl.appendChild(spinner);
-        inlineStatusEl.appendChild(document.createTextNode(' ' + text));
+        inlineStatusEl.appendChild(document.createTextNode(" " + text));
         inlineStatusEl.classList.add("sqlspec-playground__inline-status--running");
       } else if (type === "success") {
-        inlineStatusEl.textContent = '\u2713 ' + text;
+        inlineStatusEl.textContent = "\u2713 " + text;
         inlineStatusEl.classList.add("sqlspec-playground__inline-status--success");
       } else if (type === "error") {
-        inlineStatusEl.textContent = '\u2717 ' + text;
+        inlineStatusEl.textContent = "\u2717 " + text;
         inlineStatusEl.classList.add("sqlspec-playground__inline-status--error");
       } else {
         inlineStatusEl.textContent = text;
       }
     };
 
-    const clearOutput = () => {
+    const clearOutput = (showPlaceholder) => {
       outputEl.textContent = "";
       outputEl.hidden = true;
       while (tableOutputEl.firstChild) tableOutputEl.removeChild(tableOutputEl.firstChild);
       tableOutputEl.hidden = true;
-      if (rowCountEl) rowCountEl.hidden = true;
+      if (rowCountEl) {
+        rowCountEl.textContent = "";
+        rowCountEl.hidden = true;
+      }
       errorOutputEl.textContent = "";
       errorOutputEl.hidden = true;
       currentData = null;
       sortColumn = null;
+      lastElapsedMs = null;
+      if (emptyStateEl) {
+        if (showPlaceholder) {
+          setEmptyState(
+            "Ready to Execute",
+            "Press Run or Ctrl+Enter to execute the Python snippet against in-memory SQLite."
+          );
+        } else {
+          emptyStateEl.hidden = true;
+        }
+      }
     };
 
     const sortData = (data, column, direction) => {
       return [...data].sort((a, b) => {
-        const aVal = a[column], bVal = b[column];
+        const aVal = a[column];
+        const bVal = b[column];
         if (aVal === bVal) return 0;
         if (aVal == null) return 1;
         if (bVal == null) return -1;
-        return (aVal < bVal ? -1 : 1) * (direction === 'asc' ? 1 : -1);
+        return (aVal < bVal ? -1 : 1) * (direction === "asc" ? 1 : -1);
       });
     };
 
-    const renderTable = (data) => {
-      if (!Array.isArray(data) || data.length === 0 || typeof data[0] !== 'object') {
+    const updateMetaBadge = (rowCount, elapsedMs) => {
+      if (!rowCountEl) return;
+      const parts = [];
+      if (typeof rowCount === "number") {
+        parts.push(rowCount + " row" + (rowCount === 1 ? "" : "s"));
+      }
+      if (typeof elapsedMs === "number") {
+        parts.push(elapsedMs.toFixed(1) + " ms");
+      }
+      if (parts.length > 0) {
+        rowCountEl.textContent = parts.join(" · ");
+        rowCountEl.hidden = false;
+      } else {
+        rowCountEl.hidden = true;
+      }
+    };
+
+    const renderTable = (data, elapsedMs) => {
+      if (!Array.isArray(data) || data.length === 0 || typeof data[0] !== "object") {
         return false;
       }
       currentData = data;
+      if (typeof elapsedMs === "number") {
+        lastElapsedMs = elapsedMs;
+      }
       const displayData = sortColumn ? sortData(data, sortColumn, sortDirection) : data;
       const headers = Object.keys(data[0]);
       while (tableOutputEl.firstChild) tableOutputEl.removeChild(tableOutputEl.firstChild);
 
-      const table = document.createElement('table');
-      table.className = 'sqlspec-playground__table';
+      const table = document.createElement("table");
+      table.className = "sqlspec-playground__table";
 
-      const thead = document.createElement('thead');
-      const trHead = document.createElement('tr');
-      headers.forEach(header => {
-        const th = document.createElement('th');
+      const thead = document.createElement("thead");
+      const trHead = document.createElement("tr");
+      headers.forEach((header) => {
+        const th = document.createElement("th");
         th.textContent = header;
-        const indicator = document.createElement('span');
-        indicator.className = 'sort-indicator';
+        const indicator = document.createElement("span");
+        indicator.className = "sort-indicator";
         th.appendChild(indicator);
         if (header === sortColumn) {
-          th.classList.add(sortDirection === 'asc' ? 'sorted-asc' : 'sorted-desc');
+          th.classList.add(sortDirection === "asc" ? "sorted-asc" : "sorted-desc");
         }
-        th.addEventListener('click', () => {
+        th.addEventListener("click", () => {
           if (sortColumn === header) {
-            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+            sortDirection = sortDirection === "asc" ? "desc" : "asc";
           } else {
             sortColumn = header;
-            sortDirection = 'asc';
+            sortDirection = "asc";
           }
-          renderTable(currentData);
+          renderTable(currentData, lastElapsedMs);
         });
         trHead.appendChild(th);
       });
       thead.appendChild(trHead);
       table.appendChild(thead);
 
-      const tbody = document.createElement('tbody');
-      displayData.forEach(row => {
-        const tr = document.createElement('tr');
-        headers.forEach(header => {
-          const td = document.createElement('td');
+      const tbody = document.createElement("tbody");
+      displayData.forEach((row) => {
+        const tr = document.createElement("tr");
+        headers.forEach((header) => {
+          const td = document.createElement("td");
           const val = row[header];
-          td.textContent = val === null ? 'null' : val;
+          td.textContent = val === null || val === undefined ? "null" : String(val);
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -789,108 +1265,144 @@ results
       table.appendChild(tbody);
       tableOutputEl.appendChild(table);
       tableOutputEl.hidden = false;
-      if (rowCountEl) {
-        rowCountEl.textContent = data.length + ' row' + (data.length !== 1 ? 's' : '');
-        rowCountEl.hidden = false;
-      }
+      updateMetaBadge(data.length, lastElapsedMs);
       return true;
     };
 
     const showError = (error) => {
+      if (emptyStateEl) emptyStateEl.hidden = true;
       errorOutputEl.textContent = error;
       errorOutputEl.hidden = false;
     };
 
-    const initializePlayground = async () => {
+    async function executeCurrentSnippet() {
+      if (!pyodide || runPythonButton.disabled) {
+        return;
+      }
+
+      clearOutput(false);
+      runPythonButton.disabled = true;
+      setInlineStatus("Running...", "running");
+
+      const stdoutBuffer = [];
+      pyodide.setStdout({ batched: (line) => stdoutBuffer.push(line) });
+      pyodide.setStderr({ batched: (line) => stdoutBuffer.push(line) });
+
       try {
-        setInlineStatus("Loading...", "running");
+        pyodide.globals.set("_sqlspec_user_code", getEditorValue());
+        const rawJson = await pyodide.runPythonAsync("await _sqlspec_execute_snippet(_sqlspec_user_code)");
+        const payload = JSON.parse(rawJson);
+        const consoleText = stdoutBuffer.join("\n").trim();
+
+        let hasVisibleOutput = false;
+        if (payload.kind === "table" && renderTable(payload.rows, payload.elapsed_ms)) {
+          hasVisibleOutput = true;
+        } else if (payload.kind === "value") {
+          updateMetaBadge(null, payload.elapsed_ms);
+        } else {
+          updateMetaBadge(null, payload.elapsed_ms);
+        }
+
+        if (consoleText || payload.kind === "value") {
+          const lines = [];
+          if (consoleText) lines.push(consoleText);
+          if (payload.kind === "value") lines.push(payload.value);
+          outputEl.textContent = lines.join("\n");
+          outputEl.hidden = false;
+          hasVisibleOutput = true;
+        }
+
+        if (!hasVisibleOutput) {
+          setEmptyState(
+            "Statement Executed",
+            "Completed with no returned rows or console output."
+          );
+        }
+
+        setInlineStatus("SQLite Ready", "success");
+      } catch (err) {
+        showError(String(err));
+        setInlineStatus("Execution Error", "error");
+      } finally {
+        runPythonButton.disabled = false;
+      }
+    }
+
+    const initializePlayground = async () => {
+      if (typeof loadPyodide === "undefined") {
+        setInlineStatus("Runtime Unavailable", "error");
+        setEmptyState(
+          "WebAssembly Runtime Unavailable",
+          "Pyodide could not be loaded from jsDelivr CDN in this browser environment."
+        );
+        return;
+      }
+      try {
+        setInlineStatus("Loading Pyodide...", "running");
         pyodide = await loadPyodide({
           indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/"
         });
 
-        const stdoutBuffer = [];
-        pyodide.setStdout({ batched: (t) => stdoutBuffer.push(t) });
-        pyodide.setStderr({ batched: (t) => stdoutBuffer.push(t) });
-
+        setInlineStatus("Installing sqlspec...", "running");
         await pyodide.loadPackage(["sqlite3", "micropip"]);
         const micropip = pyodide.pyimport("micropip");
         await micropip.install("sqlspec");
+        await pyodide.runPythonAsync(PYTHON_RUNNER_BOOTSTRAP);
 
-        setInlineStatus("Ready", "success");
         runPythonButton.disabled = false;
+        setInlineStatus("SQLite Ready", "success");
+        await executeCurrentSnippet();
       } catch (err) {
-        setInlineStatus("Failed", "error");
-        showError('Failed to initialize: ' + err);
-        console.error(err);
+        setInlineStatus("Init Failed", "error");
+        showError("Failed to initialize Python WebAssembly runtime:\n" + String(err));
       }
     };
 
     runPythonButton.disabled = true;
 
-    runPythonButton.addEventListener("click", async () => {
-      if (!pyodide) {
-        setInlineStatus("Not ready", "error");
-        return;
-      }
+    runPythonButton.addEventListener("click", () => {
+      executeCurrentSnippet();
+    });
 
-      clearOutput();
-      setInlineStatus("Running...", "running");
-
-      const stdoutBuffer = [];
-      pyodide.setStdout({ batched: (t) => stdoutBuffer.push(t) });
-      pyodide.setStderr({ batched: (t) => stdoutBuffer.push(t) });
-
-      try {
-        const result = await pyodide.runPythonAsync(pythonEditor.getValue());
-        let tableRendered = false;
-
-        if (result && typeof result.toJs === 'function') {
-          const jsResult = result.toJs({dict_converter: Object.fromEntries});
-          if (Array.isArray(jsResult)) {
-            tableRendered = renderTable(jsResult);
+    if (presetSelect) {
+      presetSelect.addEventListener("change", () => {
+        const key = presetSelect.value;
+        if (PRESETS[key]) {
+          setEditorValue(PRESETS[key]);
+          if (pyodide && !runPythonButton.disabled) {
+            executeCurrentSnippet();
+          } else {
+            clearOutput(true);
           }
         }
-
-        if (tableRendered) {
-          setInlineStatus("Done", "success");
-        } else if (stdoutBuffer.length > 0) {
-          outputEl.textContent = stdoutBuffer.join('\n');
-          outputEl.hidden = false;
-          setInlineStatus("Done", "success");
-        } else if (result !== undefined && result !== null) {
-          outputEl.textContent = String(result);
-          outputEl.hidden = false;
-          setInlineStatus("Done", "success");
-        } else {
-          setInlineStatus("Done", "success");
-        }
-      } catch (err) {
-        showError(String(err));
-        setInlineStatus("Error", "error");
-        console.error(err);
-      }
-    });
+      });
+    }
 
     resetPythonButton.addEventListener("click", () => {
-      pythonEditor.setValue(pythonDefault);
-      clearOutput();
-      setInlineStatus("Reset", "success");
+      const key = presetSelect ? presetSelect.value : "quickstart";
+      setEditorValue(PRESETS[key] || PRESETS.quickstart);
+      if (pyodide && !runPythonButton.disabled) {
+        executeCurrentSnippet();
+      } else {
+        clearOutput(true);
+      }
     });
+
+    if (copyPythonButton) {
+      copyPythonButton.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(getEditorValue());
+          const original = copyPythonButton.textContent;
+          copyPythonButton.textContent = "Copied";
+          setTimeout(() => { copyPythonButton.textContent = original; }, 1400);
+        } catch (_err) {
+          copyPythonButton.textContent = "Copy failed";
+        }
+      });
+    }
 
     clearOutputButton.addEventListener("click", () => {
-      clearOutput();
-    });
-
-    openTipsButton.addEventListener("click", () => {
-      if (tipsDialog) {
-        tipsDialog.showModal();
-      }
-    });
-
-    closeTipsButton.addEventListener("click", () => {
-      if (tipsDialog) {
-        tipsDialog.close();
-      }
+      clearOutput(true);
     });
 
     initializePlayground();

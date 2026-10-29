@@ -2,16 +2,25 @@
 title: SQLSpec
 hide:
   - navigation
+  - toc
 ---
 
 <h1 id="sqlspec" class="sqlspec-sr-only">SQLSpec</h1>
 
-<div class="sqlspec-hero-banner">
-  <img src="assets/banner-inline-light.svg#only-light" alt="SQLSpec" width="540" height="131">
-  <img src="assets/banner-inline-dark.svg#only-dark" alt="SQLSpec" width="540" height="131">
+<div class="sqlspec-hero">
+  <div class="sqlspec-hero-banner">
+    <img src="assets/banner-inline-light.svg#only-light" alt="SQLSpec" width="520" height="126">
+    <img src="assets/banner-inline-dark.svg#only-dark" alt="SQLSpec" width="520" height="126">
+  </div>
+  <p class="sqlspec-hero-lead">
+    SQL-first database execution for Python across 20 sync and async adapters. Write raw SQL, load named statements from <code>.sql</code> files, or compose dialect-portable queries with SQLGlot while SQLSpec handles parameter compilation, statement caching, migrations, Apache Arrow streaming, and typed row mapping.
+  </p>
+  <div class="sqlspec-hero-actions">
+    <a class="sqlspec-cta sqlspec-cta--primary" href="learn/quickstart/">Get Started</a>
+    <a class="sqlspec-cta" href="playground/">Interactive Playground</a>
+    <a class="sqlspec-cta" href="databases/">20 Database Adapters</a>
+  </div>
 </div>
-
-SQLSpec is a SQL-first database access library for Python with unified synchronous and asynchronous session APIs, dialect-aware parameter compilation, statement caching, schema migrations, Apache Arrow streaming, and typed row projection across 20 database adapters. Write plain SQL, load named queries from `.sql` files, or compose dialect-portable queries with SQLGlot while keeping full control over your SQL and database driver.
 
 ## Install
 

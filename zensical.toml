@@ -9,6 +9,8 @@ site_dir = "site"
 use_directory_urls = true
 exclude_docs = """
 examples/
+_static/
+_templates/
 _tapes/
 __init__.py
 conf.py
