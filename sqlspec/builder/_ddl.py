@@ -5,6 +5,7 @@ TRUNCATE, and other schema manipulation statements.
 """
 
 import re
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 import sqlglot
@@ -20,12 +21,11 @@ from sqlspec.builder._parsing_utils import (
     parse_order_expression,
 )
 from sqlspec.core import SQL
+from sqlspec.data_dictionary._types import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport, ObjectIdentity
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_sqlglot_expression
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder._column import ColumnExpression
@@ -52,6 +52,7 @@ __all__ = (
     "DropView",
     "RenameTable",
     "Truncate",
+    "compile_table_ddl_results",
 )
 
 CONSTRAINT_TYPE_PRIMARY_KEY = "PRIMARY KEY"
@@ -92,9 +93,56 @@ _IDENTITY_KEYWORDS = frozenset({
     "BY DEFAULT ON NULL",
     "BY DEFAULT ON NULL AS IDENTITY",
 })
+_IDENTITY_SEED_INC_RE = re.compile(r"^IDENTITY\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$", re.IGNORECASE)
 _ORDER_DIRECTION_SUFFIX_RE = re.compile(
     r"\s+(?:ASC|DESC|NULLS\s+(?:FIRST|LAST))(?:\s+NULLS\s+(?:FIRST|LAST))?\s*$", re.IGNORECASE
 )
+_PAREN_COLS_RE = re.compile(r"\(([^)]+)\)")
+_FK_DEF_RE = re.compile(
+    r"FOREIGN\s+KEY\s*\((?P<cols>[^)]+)\)\s*REFERENCES\s+(?P<ref_table>[^\s(]+)\s*\((?P<ref_cols>[^)]+)\)",
+    re.IGNORECASE,
+)
+_FK_ON_DELETE_RE = re.compile(
+    r"\bON\s+DELETE\s+(CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT|NO\s+ACTION)\b", re.IGNORECASE
+)
+_FK_ON_UPDATE_RE = re.compile(
+    r"\bON\s+UPDATE\s+(CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT|NO\s+ACTION)\b", re.IGNORECASE
+)
+_CHAR_LENGTH_TYPES = frozenset({
+    "binary",
+    "bit",
+    "bit varying",
+    "bytes",
+    "char",
+    "char varying",
+    "character",
+    "character varying",
+    "national character",
+    "national character varying",
+    "nchar",
+    "nvarchar",
+    "nvarchar2",
+    "raw",
+    "string",
+    "varbinary",
+    "varbit",
+    "varchar",
+    "varchar2",
+})
+_UNICODE_CHAR_TYPES = frozenset({"nchar", "nvarchar", "national character", "national character varying"})
+_DECIMAL_TYPES = frozenset({"dec", "decimal", "number", "numeric"})
+_TEMPORAL_SCALE_TYPES = frozenset({"datetime2", "datetimeoffset", "time"})
+_MSSQL_STORAGE_INDEX_TYPES = frozenset({
+    "CLUSTERED",
+    "NONCLUSTERED",
+    "HEAP",
+    "XML",
+    "SPATIAL",
+    "CLUSTERED COLUMNSTORE",
+    "NONCLUSTERED COLUMNSTORE",
+    "CLUSTERED_COLUMNSTORE",
+    "NONCLUSTERED_COLUMNSTORE",
+})
 
 
 def build_column_expression(
@@ -144,57 +192,16 @@ def build_column_expression(
     if col.comment:
         constraints.append(exp.ColumnConstraint(kind=exp.CommentColumnConstraint(this=exp.convert(col.comment))))
 
-    if col.identity is not None and col.identity is not False:
-        if isinstance(col.identity, str):
-            ident_upper = col.identity.strip().upper()
-            is_always = not ident_upper.startswith("BY DEFAULT")
-            on_null = "ON NULL" in ident_upper
-        else:
-            is_always = True
-            on_null = False
-        constraints.append(
-            exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=is_always, on_null=on_null or None))
-        )
-    elif col.generated is True or (
-        isinstance(col.generated, str) and col.generated.strip().upper() in _IDENTITY_KEYWORDS
-    ):
-        if isinstance(col.generated, str):
-            gen_upper = col.generated.strip().upper()
-            is_always = not gen_upper.startswith("BY DEFAULT")
-            on_null = "ON NULL" in gen_upper
-        else:
-            is_always = True
-            on_null = False
-        constraints.append(
-            exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=is_always, on_null=on_null or None))
-        )
+    identity_constraint = _build_identity_column_constraint(col)
+    if identity_constraint is not None:
+        constraints.append(identity_constraint)
 
-    computed_source: str | exp.Expr | None = col.generated_expression
-    if (
-        computed_source is None
-        and isinstance(col.generated, str)
-        and col.generated.strip().upper() not in _IDENTITY_KEYWORDS
-    ):
-        computed_source = col.generated
-
-    if computed_source is not None:
-        if isinstance(computed_source, exp.Expr):
-            parsed_computed: exp.Expr = computed_source.copy()
-        else:
-            norm_dialect = _normalize_dialect(dialect) if dialect else None
-            parsed_computed = sqlglot.parse_one(str(computed_source), read=norm_dialect)
-        if isinstance(parsed_computed, exp.Paren):
-            parsed_computed = parsed_computed.unnest()
-        constraints.append(
-            exp.ColumnConstraint(kind=exp.ComputedColumnConstraint(this=parsed_computed, persisted=col.persisted))
-        )
+    computed_constraint = _build_computed_column_constraint(col, dialect=dialect)
+    if computed_constraint is not None:
+        constraints.append(computed_constraint)
 
     if col.collate:
-        constraints.append(
-            exp.ColumnConstraint(
-                kind=exp.CollateColumnConstraint(this=_parse_ddl_identifier(col.collate, dialect=dialect))
-            )
-        )
+        constraints.append(_build_collate_column_constraint(col.collate, dialect=dialect))
 
     if constraints:
         col_def.set("constraints", constraints)
@@ -250,8 +257,8 @@ def build_constraint_expression(
         return fk_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_UNIQUE:
-        unique_constraint = exp.UniqueKeyProperty(
-            expressions=[_parse_ddl_identifier(col, dialect=dialect) for col in constraint.columns]
+        unique_constraint = exp.UniqueColumnConstraint(
+            this=exp.Tuple(expressions=[_parse_ddl_identifier(col, dialect=dialect) for col in constraint.columns])
         )
 
         if constraint.name:
@@ -699,6 +706,137 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         self._table_options[key] = value
         return self
 
+    @classmethod
+    def from_metadata(
+        cls,
+        table_name: str,
+        columns: "Sequence[Mapping[str, Any] | Any]",
+        constraints: "Sequence[Mapping[str, Any] | Any] | None" = None,
+        foreign_keys: "Sequence[Mapping[str, Any] | Any] | None" = None,
+        schema: "str | None" = None,
+        if_not_exists: bool = False,
+        dialect: "DialectType" = None,
+    ) -> "CreateTable":
+        """Build a CreateTable builder from structured data_dictionary metadata rows."""
+        builder = cls(table_name, dialect=dialect)
+        if schema:
+            builder.in_schema(schema)
+        if if_not_exists:
+            builder.if_not_exists()
+
+        norm_columns = [_normalize_metadata_row(col) for col in columns]
+        if any(row.get("ordinal_position") is not None for row in norm_columns):
+            indexed_cols = list(enumerate(norm_columns))
+            indexed_cols.sort(key=lambda item: (_safe_int(item[1].get("ordinal_position"), item[0] + 1), item[0]))
+            norm_columns = [item[1] for item in indexed_cols]
+
+        norm_constraints = [_normalize_metadata_row(c) for c in constraints or ()]
+        norm_fks = [_normalize_metadata_row(fk) for fk in foreign_keys or ()]
+
+        default_constraint_map: dict[str, Any] = {}
+        for c_row in norm_constraints:
+            c_type_raw = str(_first_present(c_row, "constraint_type", "type") or "").strip().upper()
+            if c_type_raw in {"DEFAULT", "DEFAULT_CONSTRAINT"}:
+                c_col = _first_non_empty_str(c_row, "column_name", "name")
+                c_def = _first_present(c_row, "definition", "default", "column_default")
+                if c_col and c_def is not None:
+                    default_constraint_map[c_col] = c_def
+
+        pk_cols, pk_name = _extract_metadata_primary_key(norm_columns, norm_constraints)
+        use_inline_pk = len(pk_cols) == 1 and pk_name is None
+
+        unique_specs: list[tuple[str | None, list[str]]] = []
+        seen_unique_cols: set[tuple[str, ...]] = set()
+        for c_row in norm_constraints:
+            if _normalize_constraint_type(c_row) != CONSTRAINT_TYPE_UNIQUE:
+                continue
+            uq_name = _first_non_empty_str(c_row, "constraint_name", "name")
+            uq_cols = _extract_constraint_columns(c_row)
+            if not uq_cols or tuple(uq_cols) == tuple(pk_cols) or tuple(uq_cols) in seen_unique_cols:
+                continue
+            seen_unique_cols.add(tuple(uq_cols))
+            unique_specs.append((uq_name, uq_cols))
+
+        for row in norm_columns:
+            col_name = _first_non_empty_str(row, "column_name", "name")
+            if not col_name:
+                continue
+            dtype = _resolve_metadata_column_type(row, dialect=dialect)
+            not_null = _resolve_metadata_not_null(row)
+            computed_expr, persisted = _resolve_metadata_computed(row)
+            identity_val = None if computed_expr is not None else _resolve_metadata_identity(row)
+            auto_increment = (
+                False
+                if (computed_expr is not None or identity_val is not None)
+                else _resolve_metadata_auto_increment(row)
+            )
+            raw_default = (
+                None
+                if (computed_expr is not None or identity_val is not None or auto_increment)
+                else (
+                    _first_present(row, "column_default", "default", "default_value")
+                    or default_constraint_map.get(col_name)
+                )
+            )
+            default_val = _parse_metadata_default(raw_default, dialect=dialect)
+            collate_val = _first_non_empty_str(row, "collate", "collation", "collation_name")
+            check_val = _first_non_empty_str(row, "check")
+            is_col_pk = use_inline_pk and col_name == pk_cols[0]
+            is_col_unique = (
+                _truthy(_first_present(row, "is_unique", "unique"))
+                and col_name not in pk_cols
+                and (col_name,) not in seen_unique_cols
+            )
+            builder.column(
+                name=col_name,
+                dtype=dtype,
+                default=default_val,
+                not_null=not_null,
+                primary_key=is_col_pk,
+                unique=is_col_unique,
+                auto_increment=auto_increment,
+                check=check_val,
+                collate=collate_val,
+                identity=identity_val,
+                generated_expression=computed_expr,
+                persisted=persisted,
+            )
+
+        if pk_cols and not use_inline_pk:
+            builder.primary_key_constraint(pk_cols, name=pk_name)
+
+        for uq_name, uq_cols in unique_specs:
+            builder.unique_constraint(uq_cols, name=uq_name)
+
+        seen_checks: set[str] = set()
+        for c_row in norm_constraints:
+            if _normalize_constraint_type(c_row) != CONSTRAINT_TYPE_CHECK:
+                continue
+            chk_name = _first_non_empty_str(c_row, "constraint_name", "name")
+            raw_cond = _first_non_empty_str(c_row, "check_clause", "condition", "definition", "expression")
+            cond = _strip_check_wrapper(raw_cond) if raw_cond else None
+            if not cond:
+                continue
+            dedup_key = chk_name or cond
+            if dedup_key in seen_checks:
+                continue
+            seen_checks.add(dedup_key)
+            builder.check_constraint(cond, name=chk_name)
+
+        for fk_spec in _extract_metadata_foreign_keys(norm_constraints, norm_fks, table_schema=schema):
+            builder.foreign_key_constraint(
+                columns=fk_spec["columns"],
+                references_table=fk_spec["ref_table"],
+                references_columns=fk_spec["ref_columns"],
+                name=fk_spec["name"],
+                on_delete=fk_spec["on_delete"],
+                on_update=fk_spec["on_update"],
+                deferrable=fk_spec["deferrable"],
+                initially_deferred=fk_spec["initially_deferred"],
+            )
+
+        return builder
+
     def _create_base_expression(self) -> "exp.Expr":
         """Create the SQLGlot expression for CREATE TABLE."""
         self._require(self._columns or self._like_table, "Table must have at least one column or use LIKE clause")
@@ -1030,6 +1168,63 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
     def where(self, condition: str | exp.Expr) -> Self:
         self._where = condition
         return self
+
+    @classmethod
+    def from_metadata(
+        cls,
+        index: "Mapping[str, Any] | Any",
+        *,
+        table_name: "str | None" = None,
+        schema: "str | None" = None,
+        dialect: "DialectType" = None,
+    ) -> "CreateIndex | None":
+        """Build a CreateIndex builder from a structured index metadata row or IndexDetails object."""
+        row = _normalize_metadata_row(index)
+        if _truthy(_first_present(row, "is_primary", "is_primary_key", "primary_key")):
+            return None
+        if _truthy(row.get("is_unique_constraint")):
+            return None
+
+        index_name = _first_non_empty_str(row, "index_name", "name")
+        if not index_name or index_name.lower().startswith("sqlite_autoindex_"):
+            return None
+
+        resolved_table = table_name or _first_non_empty_str(row, "table_name", "table")
+        resolved_schema = (
+            schema if schema is not None else _first_non_empty_str(row, "schema_name", "schema", "table_schema")
+        )
+        cols = _split_metadata_columns(_first_present(row, "columns", "column_names", "column_name"))
+        if not resolved_table or not cols:
+            return None
+
+        builder = cls(index_name, dialect=dialect)
+        if resolved_schema:
+            builder.in_schema(resolved_schema)
+        builder.on(resolved_table, *cols)
+
+        if _truthy(_first_present(row, "is_unique", "unique")):
+            builder.unique()
+
+        inc_cols = _split_metadata_columns(_first_present(row, "included_columns", "include", "include_columns"))
+        if inc_cols:
+            builder.include(*inc_cols)
+
+        has_filter_val = row.get("has_filter")
+        if has_filter_val is None or _truthy(has_filter_val):
+            where_clause = _first_non_empty_str(row, "where", "filter_definition", "predicate")
+            if where_clause:
+                builder.where(where_clause)
+
+        using_method = _first_non_empty_str(row, "using", "index_type", "access_method")
+        if using_method:
+            using_upper = using_method.strip().upper().replace("_", " ")
+            norm_dialect = _normalize_dialect(dialect) if dialect else None
+            if using_upper not in _MSSQL_STORAGE_INDEX_TYPES and not (
+                using_upper == "BTREE" and norm_dialect in {"tsql", "mssql", "sqlite"}
+            ):
+                builder.using(using_method.strip())
+
+        return builder
 
     def _create_base_expression(self) -> exp.Expr:
         """Build the CREATE INDEX expression for this builder.
@@ -1808,7 +2003,7 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
 class CommentOn(DDLBuilder):
     """Builder for COMMENT ON ... IS ... statements."""
 
-    __slots__ = ("_column", "_comment", "_table", "_target_type")
+    __slots__ = ("_column", "_comment", "_schema", "_table", "_target_type")
 
     def __init__(self, dialect: "DialectType" = None) -> None:
         """Initialize COMMENT ON builder.
@@ -1819,8 +2014,14 @@ class CommentOn(DDLBuilder):
         super().__init__(dialect=dialect)
         self._target_type: str | None = None
         self._table: str | None = None
+        self._schema: str | None = None
         self._column: str | None = None
         self._comment: str | None = None
+
+    def in_schema(self, schema_name: str) -> Self:
+        """Set the schema for the target table or column."""
+        self._schema = schema_name
+        return self
 
     def on_table(self, table: str) -> Self:
         self._target_type = "TABLE"
@@ -1842,12 +2043,12 @@ class CommentOn(DDLBuilder):
         effective_dialect = self._expression_dialect or self.dialect_name
         if self._target_type == "TABLE" and self._table and self._comment is not None:
             return exp.Comment(
-                this=_parse_ddl_table(self._table, dialect=effective_dialect),
+                this=_parse_ddl_table(self._table, schema=self._schema, dialect=effective_dialect),
                 kind="TABLE",
                 expression=exp.convert(self._comment),
             )
         if self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
-            table_expr = _parse_ddl_table(self._table, dialect=effective_dialect)
+            table_expr = _parse_ddl_table(self._table, schema=self._schema, dialect=effective_dialect)
             col_expr = exp.Column(
                 this=_parse_ddl_identifier(self._column, dialect=effective_dialect),
                 table=table_expr.args.get("this"),
@@ -2059,6 +2260,562 @@ class DropSequence(DDLBuilder):
         )
 
 
+def compile_table_ddl_results(
+    table_name: str,
+    columns: "Sequence[Mapping[str, Any] | Any]",
+    *,
+    schema: "str | None" = None,
+    constraints: "Sequence[Mapping[str, Any] | Any] | None" = None,
+    foreign_keys: "Sequence[Mapping[str, Any] | Any] | None" = None,
+    indexes: "Sequence[Mapping[str, Any] | Any] | None" = None,
+    table_comment: "str | None" = None,
+    column_comments: "Mapping[str, str] | None" = None,
+    dialect: "DialectType" = None,
+    object_type: str = "table",
+    warnings: tuple[str, ...] = (),
+) -> DDLResult:
+    """Compile structured catalog metadata into a generated DDLResult for a table."""
+    dialect_str = _normalize_dialect(dialect) if dialect else None
+    identity = ObjectIdentity(
+        name=table_name, object_type=object_type, schema=schema, dialect=dialect_str, source=MetadataSource.GENERATED
+    )
+    if not columns:
+        return DDLResult.unsupported(
+            identity,
+            source=MetadataSource.GENERATED,
+            warnings=warnings or (f"No catalog columns found for {schema or '<default>'}.{table_name}",),
+        )
+
+    table_builder = CreateTable.from_metadata(
+        table_name, columns, constraints=constraints, foreign_keys=foreign_keys, schema=schema, dialect=dialect
+    )
+    statements: list[str] = [table_builder.build(dialect=dialect).sql.rstrip(";").strip()]
+
+    for index_row in _group_metadata_index_rows(indexes or ()):
+        idx_builder = CreateIndex.from_metadata(index_row, table_name=table_name, schema=schema, dialect=dialect)
+        if idx_builder is not None:
+            statements.append(idx_builder.build(dialect=dialect).sql.rstrip(";").strip())
+
+    if table_comment:
+        tbl_comment = CommentOn(dialect=dialect).on_table(table_name).is_(table_comment)
+        if schema:
+            tbl_comment.in_schema(schema)
+        statements.append(tbl_comment.build(dialect=dialect).sql.rstrip(";").strip())
+
+    merged_column_comments: dict[str, str] = {}
+    for col in columns:
+        row = _normalize_metadata_row(col)
+        col_name = _first_non_empty_str(row, "column_name", "name")
+        col_comment = _first_non_empty_str(row, "comment", "column_comment", "description")
+        if col_name and col_comment:
+            merged_column_comments[col_name] = col_comment
+    if column_comments:
+        merged_column_comments.update({
+            col_name: col_comment for col_name, col_comment in column_comments.items() if col_name and col_comment
+        })
+
+    for col_name, col_comment in merged_column_comments.items():
+        col_comment_builder = CommentOn(dialect=dialect).on_column(table_name, col_name).is_(col_comment)
+        if schema:
+            col_comment_builder.in_schema(schema)
+        statements.append(col_comment_builder.build(dialect=dialect).sql.rstrip(";").strip())
+
+    ddl_text = ";\n\n".join(stmt for stmt in statements if stmt) + ";"
+    return DDLResult(
+        identity=identity,
+        status=MetadataSupport.SUPPORTED,
+        fidelity=MetadataFidelity.GENERATED,
+        source=MetadataSource.GENERATED,
+        ddl=ddl_text,
+        warnings=warnings,
+    )
+
+
+def _normalize_metadata_row(item: Any) -> dict[str, Any]:
+    """Normalize a metadata mapping, ObjectMetadata, or ForeignKeyMetadata into a dict."""
+    if isinstance(item, Mapping):
+        result: dict[str, Any] = {str(k): v for k, v in item.items()}
+        nested_attrs = result.get("attributes")
+        if isinstance(nested_attrs, Mapping):
+            for k, v in nested_attrs.items():
+                result.setdefault(str(k), v)
+        nested_ident = result.get("identity")
+        if isinstance(nested_ident, Mapping):
+            if nested_ident.get("name") is not None:
+                result.setdefault("name", nested_ident["name"])
+            if nested_ident.get("schema") is not None:
+                result.setdefault("schema_name", nested_ident["schema"])
+        elif isinstance(nested_ident, ObjectIdentity):
+            result.setdefault("name", nested_ident.name)
+            if nested_ident.schema is not None:
+                result.setdefault("schema_name", nested_ident.schema)
+        return result
+
+    ident = getattr(item, "identity", None)
+    attrs = getattr(item, "attributes", None)
+    if isinstance(ident, ObjectIdentity) and isinstance(attrs, Mapping):
+        result = {str(k): v for k, v in attrs.items()}
+        result.setdefault("name", ident.name)
+        if ident.schema is not None:
+            result.setdefault("schema_name", ident.schema)
+        return result
+
+    asdict_fn = getattr(item, "_asdict", None)
+    if callable(asdict_fn):
+        asdict_res = asdict_fn()
+        if isinstance(asdict_res, Mapping):
+            return {str(k): v for k, v in asdict_res.items()}
+
+    slots = getattr(type(item), "__slots__", None)
+    if slots and isinstance(slots, (tuple, list)):
+        slot_dict: dict[str, Any] = {}
+        for key in slots:
+            if isinstance(key, str) and hasattr(item, key):
+                slot_dict[key] = getattr(item, key)
+        if slot_dict:
+            return slot_dict
+
+    return {
+        key: getattr(item, key) for key in dir(item) if not key.startswith("_") and not callable(getattr(item, key))
+    }
+
+
+def _first_present(row: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        val = row.get(key)
+        if val is not None:
+            return val
+    return None
+
+
+def _first_non_empty_str(row: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        val = row.get(key)
+        if val is not None:
+            text = str(val).strip()
+            if text:
+                return text
+    return None
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _split_metadata_columns(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [
+            part.strip().strip('"[]`')
+            if _is_simple_identifier(part.strip().strip('"[]`')) and " " not in part.strip()
+            else part.strip()
+            for part in value.split(",")
+            if part.strip()
+        ]
+    if isinstance(value, Sequence):
+        return [str(part).strip() for part in value if str(part).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _resolve_metadata_column_type(row: Mapping[str, Any], dialect: "DialectType | None" = None) -> str:
+    data_type_val = _first_non_empty_str(row, "data_type", "type")
+    column_type_val = _first_non_empty_str(row, "column_type")
+    if column_type_val and "(" in column_type_val and (not data_type_val or "(" not in data_type_val):
+        raw_type = column_type_val
+    else:
+        norm_dialect = _normalize_dialect(dialect) if dialect else None
+        fallback_type = "sql_variant" if norm_dialect in {"tsql", "mssql"} else "TEXT"
+        raw_type = data_type_val or column_type_val or fallback_type
+
+    if "(" in raw_type or "[" in raw_type:
+        return raw_type
+
+    normalized = raw_type.strip().lower()
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    char_len = _first_present(row, "character_maximum_length", "char_length")
+    max_length = char_len if char_len is not None else row.get("max_length")
+    precision = _first_present(row, "numeric_precision", "precision")
+    scale = _first_present(row, "numeric_scale", "scale")
+
+    if normalized in _UNICODE_CHAR_TYPES:
+        if max_length in {-1, "-1"} or (isinstance(max_length, str) and max_length.strip().upper() == "MAX"):
+            return f"{raw_type}(MAX)" if norm_dialect in {"tsql", "mssql", None} else "TEXT"
+        if max_length is not None:
+            raw_len = _safe_int(max_length, 0)
+            if raw_len > 0:
+                is_mssql_bytes = _truthy(row.get("from_mssql_byte_length")) or (
+                    char_len is None
+                    and (
+                        norm_dialect in {"tsql", "mssql"}
+                        or "identity_seed" in row
+                        or "is_computed" in row
+                        or "is_persisted_computed" in row
+                    )
+                )
+                effective_len = max(1, raw_len // 2) if is_mssql_bytes else raw_len
+                return f"{raw_type}({effective_len})"
+
+    if normalized in _CHAR_LENGTH_TYPES:
+        if max_length in {-1, "-1"} or (isinstance(max_length, str) and max_length.strip().upper() == "MAX"):
+            if norm_dialect in {"tsql", "mssql"}:
+                return f"{raw_type}(MAX)"
+            return "TEXT" if "char" in normalized else raw_type
+        if max_length is not None:
+            raw_len = _safe_int(max_length, 0)
+            if raw_len > 0:
+                return f"{raw_type}({raw_len})"
+
+    if normalized in _DECIMAL_TYPES:
+        eff_precision = precision if precision is not None else (max_length if scale is not None else None)
+        if eff_precision is not None and scale is not None:
+            return f"{raw_type}({_safe_int(eff_precision)},{_safe_int(scale)})"
+        if eff_precision is not None:
+            return f"{raw_type}({_safe_int(eff_precision)})"
+
+    if normalized in _TEMPORAL_SCALE_TYPES and scale is not None:
+        return f"{raw_type}({_safe_int(scale)})"
+
+    return raw_type
+
+
+def _resolve_metadata_not_null(row: Mapping[str, Any]) -> bool:
+    if row.get("not_null") is not None:
+        return _truthy(row["not_null"])
+    nullable_val = _first_present(row, "is_nullable", "nullable")
+    if nullable_val is None:
+        return False
+    if isinstance(nullable_val, bool):
+        return not nullable_val
+    if isinstance(nullable_val, (int, float)):
+        return nullable_val == 0
+    if isinstance(nullable_val, str):
+        norm = nullable_val.strip().lower()
+        if norm in {"no", "n", "false", "f", "0"}:
+            return True
+        if norm in {"yes", "y", "true", "t", "1"}:
+            return False
+    return not bool(nullable_val)
+
+
+def _resolve_metadata_computed(row: Mapping[str, Any]) -> tuple[str | exp.Expr | None, bool]:
+    persisted_val = _first_present(row, "is_persisted_computed", "is_stored", "persisted")
+    if persisted_val is not None:
+        persisted = _truthy(persisted_val)
+    elif (
+        str(row.get("generated_kind") or "").strip().lower() in {"v", "virtual"}
+        or "virtual" in str(row.get("extra") or "").lower()
+        or ("is_persisted_computed" in row and row.get("is_persisted_computed") is None)
+    ):
+        persisted = False
+    else:
+        persisted = True
+
+    expr_val = _first_present(row, "computed_definition", "generation_expression", "generated_expression")
+    if expr_val is not None and str(expr_val).strip():
+        return (expr_val if isinstance(expr_val, exp.Expr) else str(expr_val).strip(), persisted)
+
+    gen_val = row.get("generated")
+    if isinstance(gen_val, str) and gen_val.strip() and gen_val.strip().upper() not in _IDENTITY_KEYWORDS:
+        return (gen_val.strip(), persisted)
+
+    is_gen = (
+        _truthy(row.get("is_computed"))
+        or _truthy(row.get("is_generated"))
+        or str(row.get("generated_kind") or "").strip().lower() in {"s", "v", "stored", "virtual"}
+        or str(row.get("extra") or "").strip().lower() == "generated"
+    )
+    if is_gen:
+        fallback_expr = _first_non_empty_str(row, "column_default", "default")
+        if fallback_expr:
+            return (fallback_expr, persisted)
+
+    return (None, persisted)
+
+
+def _resolve_metadata_identity(row: Mapping[str, Any]) -> str | None:
+    raw_identity = _first_present(row, "identity", "identity_generation")
+    if isinstance(raw_identity, bool):
+        if raw_identity:
+            return "ALWAYS"
+    elif isinstance(raw_identity, str):
+        ident_clean = raw_identity.strip().upper()
+        if ident_clean in {"D", "BY DEFAULT", "GENERATED BY DEFAULT", "BY DEFAULT AS IDENTITY"}:
+            return "BY DEFAULT"
+        if ident_clean in {"A", "Y", "YES", "ALWAYS", "GENERATED ALWAYS", "ALWAYS AS IDENTITY", "TRUE", "1"}:
+            return "ALWAYS"
+        if ident_clean not in {"", "N", "NO", "NONE", "FALSE", "0", "NOT_APPLICABLE"}:
+            return ident_clean
+
+    if _truthy(row.get("is_identity")):
+        seed = row.get("identity_seed")
+        inc = row.get("identity_increment")
+        if seed is not None and inc is not None:
+            seed_i = _safe_int(seed, 1)
+            inc_i = _safe_int(inc, 1)
+            if (seed_i, inc_i) != (1, 1):
+                return f"IDENTITY({seed_i},{inc_i})"
+        return "ALWAYS"
+
+    return None
+
+
+def _resolve_metadata_auto_increment(row: Mapping[str, Any]) -> bool:
+    if _truthy(row.get("auto_increment")):
+        return True
+    extra = str(row.get("extra") or "").lower()
+    return "auto_increment" in extra or "autoincrement" in extra
+
+
+def _parse_metadata_default(value: Any, dialect: "DialectType | None" = None) -> Any:
+    if value is None or isinstance(value, exp.Expr):
+        return value
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped or stripped.upper() == "NULL":
+        return None
+    normalized_kw = re.sub(r"\s+", "_", stripped.upper())
+    if normalized_kw in {CURRENT_TIMESTAMP_KEYWORD, CURRENT_DATE_KEYWORD, CURRENT_TIME_KEYWORD}:
+        return normalized_kw
+
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    parsed: exp.Expr | None = exp.maybe_parse(stripped, dialect=norm_dialect)
+    if parsed is None:
+        return stripped
+    while isinstance(parsed, exp.Paren):
+        parsed = parsed.this
+    if isinstance(parsed, exp.Column) and not parsed.table:
+        return stripped
+    return parsed
+
+
+def _normalize_constraint_type(row: Mapping[str, Any]) -> str | None:
+    raw = str(_first_present(row, "constraint_type", "type") or "").strip().upper().replace("_", " ")
+    if raw in {"PRIMARY KEY", "P", "PRIMARY KEY CONSTRAINT"}:
+        return CONSTRAINT_TYPE_PRIMARY_KEY
+    if raw in {"UNIQUE", "U", "UNIQUE CONSTRAINT"}:
+        return CONSTRAINT_TYPE_UNIQUE
+    if raw in {"CHECK", "C", "K", "CHECK CONSTRAINT"}:
+        return CONSTRAINT_TYPE_CHECK
+    if raw in {"FOREIGN KEY", "F", "R", "FOREIGN KEY CONSTRAINT"}:
+        return CONSTRAINT_TYPE_FOREIGN_KEY
+    return None
+
+
+def _extract_constraint_columns(row: Mapping[str, Any]) -> list[str]:
+    cols = _split_metadata_columns(_first_present(row, "columns", "column_names", "column_name"))
+    if cols:
+        return cols
+    defn = _first_non_empty_str(row, "definition")
+    if defn:
+        match = _PAREN_COLS_RE.search(defn)
+        if match:
+            return _split_metadata_columns(match.group(1))
+    return []
+
+
+def _extract_metadata_primary_key(
+    columns: Sequence[Mapping[str, Any]], constraints: Sequence[Mapping[str, Any]]
+) -> tuple[list[str], str | None]:
+    pk_name_from_constraint: str | None = None
+    pk_cols_from_constraint: list[str] = []
+    for c_row in constraints:
+        if _normalize_constraint_type(c_row) == CONSTRAINT_TYPE_PRIMARY_KEY:
+            pk_name_from_constraint = pk_name_from_constraint or _first_non_empty_str(c_row, "constraint_name", "name")
+            c_cols = _extract_constraint_columns(c_row)
+            for col in c_cols:
+                if col not in pk_cols_from_constraint:
+                    pk_cols_from_constraint.append(col)
+
+    pk_candidates: list[tuple[int, int, str]] = []
+    pk_name_from_columns: str | None = None
+    for idx, row in enumerate(columns):
+        if not pk_name_from_columns:
+            pk_name_from_columns = _first_non_empty_str(row, "primary_key_name")
+        col_name = _first_non_empty_str(row, "column_name", "name")
+        if not col_name:
+            continue
+        pk_ord = row.get("primary_key_ordinal")
+        if pk_ord is not None and str(pk_ord).strip() not in {"", "0"}:
+            pk_candidates.append((_safe_int(pk_ord, idx + 1), idx, col_name))
+            continue
+        is_pk_val = _first_present(row, "is_primary", "is_primary_key", "primary_key")
+        if isinstance(is_pk_val, int) and not isinstance(is_pk_val, bool) and is_pk_val > 0:
+            pk_candidates.append((is_pk_val, idx, col_name))
+        elif _truthy(is_pk_val) or str(row.get("column_key") or "").strip().upper() == "PRI":
+            pk_candidates.append((idx + 1, idx, col_name))
+
+    pk_candidates.sort(key=lambda item: (item[0], item[1]))
+    pk_cols_from_columns: list[str] = []
+    for _, _, col_name in pk_candidates:
+        if col_name not in pk_cols_from_columns:
+            pk_cols_from_columns.append(col_name)
+
+    return (pk_cols_from_constraint or pk_cols_from_columns, pk_name_from_constraint or pk_name_from_columns)
+
+
+def _strip_check_wrapper(definition: str) -> str:
+    stripped = definition.strip()
+    if stripped.upper().startswith("CHECK"):
+        remainder = stripped[5:].strip()
+        if remainder.startswith("(") and remainder.endswith(")"):
+            return remainder[1:-1].strip()
+        return remainder
+    return stripped
+
+
+def _normalize_fk_action(action: str | None) -> str | None:
+    if not action:
+        return None
+    cleaned = re.sub(r"[\s_]+", " ", action.strip().upper())
+    return cleaned if cleaned in VALID_FOREIGN_KEY_ACTIONS else None
+
+
+def _extract_metadata_foreign_keys(
+    constraints: Sequence[Mapping[str, Any]],
+    foreign_keys: Sequence[Mapping[str, Any]],
+    *,
+    table_schema: str | None = None,
+) -> list[dict[str, Any]]:
+    raw_items: list[Mapping[str, Any]] = [
+        c_row for c_row in constraints if _normalize_constraint_type(c_row) == CONSTRAINT_TYPE_FOREIGN_KEY
+    ]
+    raw_items.extend(foreign_keys)
+
+    merged: list[dict[str, Any]] = []
+    for row in raw_items:
+        name = _first_non_empty_str(row, "constraint_name", "name")
+        cols = _split_metadata_columns(_first_present(row, "columns", "column_names", "column_name"))
+        ref_table = _first_non_empty_str(row, "referenced_table", "references_table")
+        ref_cols = _split_metadata_columns(
+            _first_present(row, "referenced_columns", "references_columns", "referenced_column")
+        )
+        defn = _first_non_empty_str(row, "definition")
+        if defn and (not cols or not ref_table or not ref_cols):
+            fk_match = _FK_DEF_RE.search(defn)
+            if fk_match:
+                if not cols:
+                    cols = _split_metadata_columns(fk_match.group("cols"))
+                if not ref_table:
+                    ref_table = fk_match.group("ref_table").strip()
+                if not ref_cols:
+                    ref_cols = _split_metadata_columns(fk_match.group("ref_cols"))
+
+        if not cols or not ref_table or not ref_cols:
+            continue
+
+        ref_schema = _first_non_empty_str(row, "referenced_schema", "references_schema")
+        if ref_schema and table_schema and ref_schema != table_schema and "." not in ref_table:
+            ref_table = f"{ref_schema}.{ref_table}"
+
+        on_delete = _normalize_fk_action(_first_non_empty_str(row, "on_delete", "delete_rule"))
+        on_update = _normalize_fk_action(_first_non_empty_str(row, "on_update", "update_rule"))
+        if defn:
+            if not on_delete:
+                del_match = _FK_ON_DELETE_RE.search(defn)
+                if del_match:
+                    on_delete = _normalize_fk_action(del_match.group(1))
+            if not on_update:
+                upd_match = _FK_ON_UPDATE_RE.search(defn)
+                if upd_match:
+                    on_update = _normalize_fk_action(upd_match.group(1))
+
+        deferrable = _truthy(_first_present(row, "deferrable", "is_deferrable"))
+        initially_deferred = _truthy(row.get("initially_deferred"))
+
+        matched_existing: dict[str, Any] | None = None
+        for existing in merged:
+            if name and existing["name"] == name:
+                matched_existing = existing
+                break
+            if (
+                tuple(existing["columns"]) == tuple(cols)
+                and existing["ref_table"] == ref_table
+                and tuple(existing["ref_columns"]) == tuple(ref_cols)
+            ):
+                matched_existing = existing
+                break
+
+        if matched_existing is not None:
+            if len(cols) == 1 and len(ref_cols) == 1 and cols[0] not in matched_existing["columns"]:
+                matched_existing["columns"].append(cols[0])
+                matched_existing["ref_columns"].append(ref_cols[0])
+            if not matched_existing["name"] and name:
+                matched_existing["name"] = name
+            if not matched_existing["on_delete"] and on_delete:
+                matched_existing["on_delete"] = on_delete
+            if not matched_existing["on_update"] and on_update:
+                matched_existing["on_update"] = on_update
+            if deferrable:
+                matched_existing["deferrable"] = True
+            if initially_deferred:
+                matched_existing["initially_deferred"] = True
+            continue
+
+        merged.append({
+            "name": name,
+            "columns": list(cols),
+            "ref_table": ref_table,
+            "ref_columns": list(ref_cols),
+            "on_delete": on_delete,
+            "on_update": on_update,
+            "deferrable": deferrable,
+            "initially_deferred": initially_deferred,
+        })
+
+    return [item for item in merged if len(item["columns"]) == len(item["ref_columns"])]
+
+
+def _group_metadata_index_rows(indexes: Sequence[Mapping[str, Any] | Any]) -> list[dict[str, Any]]:
+    grouped: list[dict[str, Any]] = []
+    by_name: dict[str, dict[str, Any]] = {}
+    for item in indexes:
+        row = _normalize_metadata_row(item)
+        idx_name = _first_non_empty_str(row, "index_name", "name")
+        if not idx_name:
+            continue
+        has_col_list = row.get("columns") is not None or row.get("column_names") is not None
+        single_col = _first_non_empty_str(row, "column_name")
+        if not has_col_list and single_col:
+            existing = by_name.get(idx_name)
+            pos = _safe_int(_first_present(row, "column_position", "ordinal_position", "key_ordinal"), 0)
+            if existing is None:
+                entry = dict(row)
+                entry["_col_pairs"] = [(pos, single_col)]
+                by_name[idx_name] = entry
+                grouped.append(entry)
+            else:
+                existing["_col_pairs"].append((pos, single_col))
+        elif idx_name not in by_name:
+            by_name[idx_name] = row
+            grouped.append(row)
+
+    result: list[dict[str, Any]] = []
+    for entry in grouped:
+        pairs = entry.pop("_col_pairs", None)
+        if pairs is not None:
+            pairs.sort(key=lambda pair: pair[0])
+            entry["columns"] = [col for _, col in pairs]
+        result.append(entry)
+    return result
+
+
 def _build_optional_column_schema(columns: list[str], dialect: "DialectType | None" = None) -> exp.Schema | None:
     if not columns:
         return None
@@ -2100,3 +2857,84 @@ def _parse_ddl_table(table_name: str, schema: "str | None" = None, dialect: "Dia
     if schema:
         table.set("db", _parse_ddl_identifier(schema, dialect=dialect))
     return table
+
+
+def _build_identity_column_constraint(col: "ColumnDefinition") -> exp.ColumnConstraint | None:
+    """Build an identity ColumnConstraint for a ColumnDefinition when configured."""
+    if col.identity is not None and col.identity is not False:
+        start_lit: exp.Expr | None = None
+        inc_lit: exp.Expr | None = None
+        if isinstance(col.identity, str):
+            ident_upper = col.identity.strip().upper()
+            ident_match = _IDENTITY_SEED_INC_RE.match(ident_upper)
+            if ident_match is not None:
+                seed_num = int(ident_match.group(1))
+                inc_num = int(ident_match.group(2))
+                is_always = True
+                on_null = False
+                if (seed_num, inc_num) != (1, 1):
+                    start_lit = exp.Literal.number(seed_num)
+                    inc_lit = exp.Literal.number(inc_num)
+            else:
+                is_always = not ident_upper.startswith("BY DEFAULT")
+                on_null = "ON NULL" in ident_upper
+        else:
+            is_always = True
+            on_null = False
+        return exp.ColumnConstraint(
+            kind=exp.GeneratedAsIdentityColumnConstraint(
+                this=is_always, on_null=on_null or None, start=start_lit, increment=inc_lit
+            )
+        )
+
+    if col.generated is True or (
+        isinstance(col.generated, str) and col.generated.strip().upper() in _IDENTITY_KEYWORDS
+    ):
+        if isinstance(col.generated, str):
+            gen_upper = col.generated.strip().upper()
+            is_always = not gen_upper.startswith("BY DEFAULT")
+            on_null = "ON NULL" in gen_upper
+        else:
+            is_always = True
+            on_null = False
+        return exp.ColumnConstraint(
+            kind=exp.GeneratedAsIdentityColumnConstraint(this=is_always, on_null=on_null or None)
+        )
+
+    return None
+
+
+def _build_computed_column_constraint(
+    col: "ColumnDefinition", dialect: "DialectType | None" = None
+) -> exp.ColumnConstraint | None:
+    """Build a computed ColumnConstraint for a ColumnDefinition when configured."""
+    computed_source: str | exp.Expr | None = col.generated_expression
+    if (
+        computed_source is None
+        and isinstance(col.generated, str)
+        and col.generated.strip().upper() not in _IDENTITY_KEYWORDS
+    ):
+        computed_source = col.generated
+
+    if computed_source is None:
+        return None
+
+    if isinstance(computed_source, exp.Expr):
+        parsed_computed: exp.Expr = computed_source.copy()
+    else:
+        norm_dialect = _normalize_dialect(dialect) if dialect else None
+        parsed_computed = sqlglot.parse_one(str(computed_source), read=norm_dialect)
+    if isinstance(parsed_computed, exp.Paren):
+        parsed_computed = parsed_computed.unnest()
+    return exp.ColumnConstraint(kind=exp.ComputedColumnConstraint(this=parsed_computed, persisted=col.persisted))
+
+
+def _build_collate_column_constraint(collate: str, dialect: "DialectType | None" = None) -> exp.ColumnConstraint:
+    """Build a COLLATE ColumnConstraint, preserving explicit case on case-folding dialects."""
+    collate_ident = _parse_ddl_identifier(collate, dialect=dialect)
+    if any(ch.isupper() for ch in collate) and (
+        _normalize_dialect(dialect) in {"postgres", "postgresql", "cockroach", "cockroachdb", "duckdb"}
+    ):
+        collate_ident.set("quoted", True)
+        collate_ident.meta["_explicit_quoted"] = True
+    return exp.ColumnConstraint(kind=exp.CollateColumnConstraint(this=collate_ident))

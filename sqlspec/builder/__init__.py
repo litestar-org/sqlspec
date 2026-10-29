@@ -34,6 +34,7 @@ if TYPE_CHECKING:
         DropView,
         RenameTable,
         Truncate,
+        compile_table_ddl_results,
     )
     from sqlspec.builder._delete import Delete
     from sqlspec.builder._dml import (
@@ -196,6 +197,7 @@ __all__ = (
     "build_oracle_hybrid_rrf_sql",
     "build_postgres_explain",
     "build_sqlite_explain",
+    "compile_table_ddl_results",
     "create_temporal_table",
     "extract_expression",
     "normalize_dialect_name",
@@ -291,6 +293,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "build_oracle_hybrid_rrf_sql": ("sqlspec.builder._vector_distance", "build_oracle_hybrid_rrf_sql"),
     "build_postgres_explain": ("sqlspec.builder._explain", "build_postgres_explain"),
     "build_sqlite_explain": ("sqlspec.builder._explain", "build_sqlite_explain"),
+    "compile_table_ddl_results": ("sqlspec.builder._ddl", "compile_table_ddl_results"),
     "create_temporal_table": ("sqlspec.builder._temporal", "create_temporal_table"),
     "extract_expression": ("sqlspec.builder._parsing_utils", "extract_expression"),
     "normalize_dialect_name": ("sqlspec.builder._explain", "normalize_dialect_name"),
