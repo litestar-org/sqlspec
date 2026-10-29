@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
 [data-md-color-scheme="default"] {
   --md-default-bg-color: #ffffff;
   --md-default-bg-color--light: #f8fafc;
@@ -97,6 +99,11 @@
   border-bottom: 1px solid var(--md-default-fg-color--lightest);
 }
 
+[data-md-color-scheme="default"] .md-header,
+[data-md-color-scheme="default"] .md-tabs {
+  background-color: rgba(255, 255, 255, 0.92);
+}
+
 .md-header__button.md-logo {
   padding: 0.25rem;
 }
@@ -114,6 +121,63 @@
   height: 1.65rem;
   width: 1.65rem;
   fill: none;
+}
+
+[data-md-color-scheme="slate"] .md-header__button.md-logo {
+  background: url("../assets/badge-dark.svg") center / 1.75rem 1.75rem no-repeat;
+}
+
+[data-md-color-scheme="slate"] .md-nav__button.md-logo {
+  background: url("../assets/badge-dark.svg") center / 1.65rem 1.65rem no-repeat;
+}
+
+[data-md-color-scheme="slate"] .md-header__button.md-logo img,
+[data-md-color-scheme="slate"] .md-nav__button.md-logo img {
+  opacity: 0;
+}
+
+.md-header__title {
+  font-family: var(--md-text-font-family);
+  letter-spacing: normal;
+}
+
+.md-header__topic:first-child {
+  font-family: var(--md-text-font-family);
+  font-size: 0.86rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #202235;
+}
+
+[data-md-color-scheme="slate"] .md-header__topic:first-child {
+  color: #f8fafc;
+}
+
+.md-header__topic + .md-header__topic {
+  font-family: var(--md-text-font-family);
+  font-size: 0.84rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: none;
+}
+
+.md-tabs__link {
+  font-family: var(--md-text-font-family);
+  font-size: 0.74rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.md-tabs__item--active {
+  font-weight: 600;
+  border-bottom-width: 2px;
+}
+
+.md-source {
+  font-family: var(--md-text-font-family);
+  font-size: 0.62rem;
+  font-weight: 500;
 }
 
 .sqlspec-sr-only {

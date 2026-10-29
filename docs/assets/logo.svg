@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none" role="img" aria-label="SQLSpec">
   <title>SQLSpec</title>
-  <rect x="8" y="8" width="240" height="240" rx="52" fill="#202235" stroke="#EDB641" stroke-width="6"/>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="6"/>
   <ellipse cx="104" cy="56" rx="72" ry="26" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M32 56V180" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M176 56V100" fill="none" stroke="#EDB641" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
