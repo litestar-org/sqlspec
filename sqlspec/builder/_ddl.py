@@ -2953,6 +2953,9 @@ def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | Non
     try:
         return exp.DataType.build(dtype, dialect=target_dialect)
     except ParseError as exc:
+        if target_dialect is not None:
+            with contextlib.suppress(ParseError):
+                return exp.DataType.build(dtype)
         msg = f"Column {name!r}: cannot parse type {dtype!r} for dialect {dialect!r}"
         raise SQLBuilderError(msg) from exc
 

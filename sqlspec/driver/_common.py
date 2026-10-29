@@ -640,16 +640,26 @@ class DataDictionaryMixin:
         self, item: Any, default_schema: str | None = None
     ) -> tuple[str | None, str | None]:
         """Extract table name and schema from a table metadata row or object."""
+        resolved_name: str | None = None
+        resolved_schema: str | None = default_schema
         if isinstance(item, Mapping):
             name = item.get("table_name") or item.get("name") or item.get("object_name")
             tbl_schema = item.get("schema_name") or item.get("table_schema") or default_schema
-            return (str(name) if name else None, str(tbl_schema) if tbl_schema else default_schema)
-        ident = getattr(item, "identity", None)
-        if isinstance(ident, ObjectIdentity):
-            return (ident.name, ident.schema or default_schema)
-        name = getattr(item, "table_name", None) or getattr(item, "name", None)
-        tbl_schema = getattr(item, "schema_name", None) or default_schema
-        return (str(name) if name else None, str(tbl_schema) if tbl_schema else default_schema)
+            resolved_name = str(name) if name else None
+            resolved_schema = str(tbl_schema) if tbl_schema else default_schema
+        else:
+            ident = getattr(item, "identity", None)
+            if isinstance(ident, ObjectIdentity):
+                resolved_name = ident.name
+                resolved_schema = ident.schema or default_schema
+            else:
+                name = getattr(item, "table_name", None) or getattr(item, "name", None)
+                tbl_schema = getattr(item, "schema_name", None) or default_schema
+                resolved_name = str(name) if name else None
+                resolved_schema = str(tbl_schema) if tbl_schema else default_schema
+        if resolved_schema and resolved_schema.lower() == "main" and default_schema is None:
+            resolved_schema = None
+        return (resolved_name, resolved_schema)
 
     def _build_view_ddl_from_row(
         self, row: Any, *, default_schema: str | None = None, target_dialect: str | None = None

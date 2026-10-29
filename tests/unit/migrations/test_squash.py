@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from sqlspec.migrations.runner import SyncMigrationRunner
+from sqlspec.migrations.squash import MigrationSquasher
+
 
 def test_squash_plan_squash_plan_instantiation(tmp_path: Path) -> None:
     """Test SquashPlan dataclass can be instantiated."""
@@ -720,3 +723,48 @@ def test_plan_squash_timestamp_range_and_single_file_mixed_migrations(tmp_path: 
     assert "CREATE TABLE items" in content
     assert "name VARCHAR(64)" in content
     assert "ALTER TABLE" not in content
+
+
+def test_python_squash_emits_replaces_attribute_and_ddl_irreversible_note(tmp_path: Path) -> None:
+    """Python squashed migrations emit __replaces__ and DDL strategy marks irreversible statements."""
+    py_dir = tmp_path / "py_migrations"
+    py_dir.mkdir()
+    (py_dir / "0001_init.py").write_text(
+        "def up():\n    return ['CREATE TABLE t_py (id INT PRIMARY KEY);']\n\ndef down():\n    return ['DROP TABLE t_py;']\n",
+        encoding="utf-8",
+    )
+    (py_dir / "0002_extra.py").write_text(
+        "def up():\n    return ['ALTER TABLE t_py ADD COLUMN label VARCHAR(32);']\n\ndef down():\n    return ['ALTER TABLE t_py DROP COLUMN label;']\n",
+        encoding="utf-8",
+    )
+
+    py_runner = SyncMigrationRunner(py_dir)
+    py_squasher = MigrationSquasher(py_dir, py_runner)
+    py_plans = py_squasher.plan_squash("0001", "0002", "py_release")
+    py_squasher.apply_squash(py_plans)
+
+    target_py = py_dir / "0001_py_release.py"
+    py_content = target_py.read_text(encoding="utf-8")
+    assert "__replaces__ = ['0001', '0002']" in py_content
+    loaded = py_runner.load_migration(target_py, "0001")
+    assert loaded["replaces"] == ["0001", "0002"]
+
+    sql_dir = tmp_path / "sql_migrations"
+    sql_dir.mkdir()
+    (sql_dir / "0001_seed.sql").write_text(
+        "-- name: migrate-0001-up\nDELETE FROM audit_log WHERE 1 = 0;\n", encoding="utf-8"
+    )
+    (sql_dir / "0002_cleanup.sql").write_text(
+        "-- name: migrate-0002-up\nUPDATE audit_log SET processed = 1;\n-- name: migrate-0002-down\nUPDATE audit_log SET processed = 0;\n",
+        encoding="utf-8",
+    )
+
+    sql_runner = SyncMigrationRunner(sql_dir)
+    sql_squasher = MigrationSquasher(sql_dir, sql_runner)
+    sql_plans = sql_squasher.plan_squash("0001", "0002", "ddl_irreversible", strategy="ddl")
+    sql_squasher.apply_squash(sql_plans)
+
+    sql_content = (sql_dir / "0001_ddl_irreversible.sql").read_text(encoding="utf-8")
+    assert "-- name: migrate-0001-up" in sql_content
+    assert "-- name: migrate-0001-down" not in sql_content
+    assert "Irreversible squash (missing down in 0001)" in sql_content

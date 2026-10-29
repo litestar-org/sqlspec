@@ -1034,6 +1034,9 @@ class MigrationSquasher:
             "",
         ])
 
+        if plan.source_versions:
+            lines.extend([f"__replaces__ = {list(plan.source_versions)!r}", ""])
+
         lines.extend(["def up() -> list[str]:", '    """Return UP migration SQL statements."""', "    return ["])
         lines.extend(f"        {statement!r}," for statement in up_sql)
         lines.extend(["    ]", ""])
@@ -1175,6 +1178,8 @@ class MigrationSquasher:
         if not raw_up:
             return [], []
         folded_up, folded_down = fold_migration_ddl(raw_up, dialect=self._resolve_dialect())
+        if not folded_down and missing_downs:
+            plan.missing_down_versions = missing_downs
         effective_down = folded_down or ([] if missing_downs else raw_down)
         return folded_up, effective_down
 

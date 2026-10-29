@@ -2009,10 +2009,11 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult":
         """Get one object's DDL or an explicit unsupported DDL result."""
-        if object_type.lower() == "table" and not prefer_native:
-            return self._synthesize_table_ddl(driver, object_name, schema=schema)
+        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
+            return self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
         if type(self).get_ddl is not SyncDataDictionaryBase.get_ddl:
             native_res = self.get_ddl(
                 driver,
@@ -2024,9 +2025,11 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
                 redact=redact,
             )
             if native_res.status == MetadataSupport.SUPPORTED and native_res.ddl:
+                if target_dialect is not None:
+                    return self._transpile_ddl_result(native_res, target_dialect=target_dialect)
                 return native_res
         if object_type.lower() == "table":
-            return self._synthesize_table_ddl(driver, object_name, schema=schema)
+            return self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
         return self._unsupported_ddl(object_name, schema=schema, object_type=object_type)
 
     def get_schema_ddl(

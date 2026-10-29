@@ -1,7 +1,7 @@
 """IBM Db2 database data dictionary implementation."""
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -356,34 +356,6 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
             return self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
         return self._unsupported_ddl(object_name, schema=self.resolve_schema(schema), object_type=object_type)
 
-    def get_schema_ddl(
-        self,
-        driver: "Db2SyncDriver",
-        schema: str | None = None,
-        *,
-        include_domains: "Sequence[str] | None" = None,
-        exclude_domains: "Sequence[str] | None" = None,
-        exclude_tables: "Sequence[str] | None" = ("ddl_migrations",),
-        direction: Literal["create", "drop"] = "create",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-        target_dialect: str | None = None,
-    ) -> MetadataResult:
-        """Get topologically ordered Db2 schema DDL."""
-        return super().get_schema_ddl(
-            driver,
-            schema=schema,
-            include_domains=include_domains,
-            exclude_domains=exclude_domains,
-            exclude_tables=exclude_tables,
-            direction=direction,
-            include_dependencies=include_dependencies,
-            prefer_native=prefer_native,
-            redact=redact,
-            target_dialect=target_dialect,
-        )
-
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
@@ -593,31 +565,3 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         if object_type.lower() == "table":
             return await self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
         return self._unsupported_ddl(object_name, schema=self.resolve_schema(schema), object_type=object_type)
-
-    async def get_schema_ddl(
-        self,
-        driver: "Db2AsyncDriver",
-        schema: str | None = None,
-        *,
-        include_domains: "Sequence[str] | None" = None,
-        exclude_domains: "Sequence[str] | None" = None,
-        exclude_tables: "Sequence[str] | None" = ("ddl_migrations",),
-        direction: Literal["create", "drop"] = "create",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-        target_dialect: str | None = None,
-    ) -> MetadataResult:
-        """Get topologically ordered Db2 schema DDL."""
-        return await super().get_schema_ddl(
-            driver,
-            schema=schema,
-            include_domains=include_domains,
-            exclude_domains=exclude_domains,
-            exclude_tables=exclude_tables,
-            direction=direction,
-            include_dependencies=include_dependencies,
-            prefer_native=prefer_native,
-            redact=redact,
-            target_dialect=target_dialect,
-        )

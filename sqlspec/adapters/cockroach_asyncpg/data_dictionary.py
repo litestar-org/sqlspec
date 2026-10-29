@@ -146,6 +146,7 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: str | None = None,
     ) -> DDLResult:
         """Get CockroachDB DDL from crdb_internal.tables and pg_catalog helpers."""
         return await self.get_object_ddl(
@@ -156,6 +157,7 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
             include_dependencies=include_dependencies,
             prefer_native=prefer_native,
             redact=redact,
+            target_dialect=target_dialect,
         )
 
     async def get_object_ddl(
@@ -168,15 +170,18 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: str | None = None,
     ) -> DDLResult:
         """Get CockroachDB DDL for one object."""
-        _ = include_dependencies, prefer_native, redact
+        _ = include_dependencies, redact
+        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
+            return await self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
         schema_name = self.resolve_schema(schema)
         resolved_object = self.resolve_identifier(object_name)
         result = await self._select_domain(
             driver, "ddl", "by_object", schema_name=schema_name, object_name=resolved_object, object_type=object_type
         )
-        return _cockroach_ddl_result_from_rows(
+        res = _cockroach_ddl_result_from_rows(
             dialect=type(self).dialect,
             object_name=resolved_object,
             object_type=object_type,
@@ -184,6 +189,9 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
             rows=result.items,
             warnings=result.warnings,
         )
+        if target_dialect is not None:
+            return self._transpile_ddl_result(res, target_dialect=target_dialect)
+        return res
 
     async def get_schema_ddl(
         self,
@@ -200,7 +208,24 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
         redact: bool = True,
     ) -> MetadataResult:
         """Get topologically sorted CockroachDB DDL for all schema objects."""
-        _ = include_domains, exclude_domains, target_dialect, prefer_native, redact
+        if (
+            not prefer_native
+            or target_dialect is not None
+            or include_domains is not None
+            or exclude_domains is not None
+        ):
+            return await super().get_schema_ddl(
+                driver,
+                schema=schema,
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+                exclude_tables=exclude_tables,
+                direction=direction,
+                include_dependencies=include_dependencies,
+                prefer_native=prefer_native,
+                redact=redact,
+                target_dialect=target_dialect,
+            )
         schema_name = self.resolve_schema(schema)
         result = await self._select_domain(driver, "ddl", "by_schema", schema_name=schema_name)
         foreign_keys = await self.get_foreign_keys(driver, schema=schema) if include_dependencies else []

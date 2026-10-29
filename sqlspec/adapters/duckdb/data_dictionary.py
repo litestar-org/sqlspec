@@ -194,6 +194,7 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult":
         """Get native DuckDB DDL for a database object."""
         return self.get_object_ddl(
@@ -204,6 +205,7 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
             include_dependencies=include_dependencies,
             prefer_native=prefer_native,
             redact=redact,
+            target_dialect=target_dialect,
         )
 
     def get_object_ddl(
@@ -216,9 +218,12 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult":
         """Get native DuckDB DDL for a database object."""
-        _ = include_dependencies, prefer_native, redact
+        _ = include_dependencies, redact
+        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
+            return self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
         schema_name = self.resolve_schema(schema)
         rows = driver.select(
             self._get_domain_query_text("ddl", "by_object"),
@@ -226,9 +231,12 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
             object_name=object_name,
             object_type=object_type,
         )
-        return _duckdb_ddl_result_from_rows(
+        res = _duckdb_ddl_result_from_rows(
             dialect=type(self).dialect, object_name=object_name, object_type=object_type, schema=schema_name, rows=rows
         )
+        if target_dialect is not None:
+            return self._transpile_ddl_result(res, target_dialect=target_dialect)
+        return res
 
     def get_schema_ddl(
         self,
@@ -245,7 +253,24 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
         redact: bool = True,
     ) -> "MetadataResult":
         """Get topologically sorted native DuckDB DDL for all schema objects."""
-        _ = include_domains, exclude_domains, target_dialect, prefer_native, redact
+        if (
+            not prefer_native
+            or target_dialect is not None
+            or include_domains is not None
+            or exclude_domains is not None
+        ):
+            return super().get_schema_ddl(
+                driver,
+                schema=schema,
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+                exclude_tables=exclude_tables,
+                direction=direction,
+                include_dependencies=include_dependencies,
+                prefer_native=prefer_native,
+                redact=redact,
+                target_dialect=target_dialect,
+            )
         schema_name = self.resolve_schema(schema)
         rows = driver.select(self._get_domain_query_text("ddl", "by_schema"), schema_name=schema_name)
         foreign_keys = self.get_foreign_keys(driver, schema=schema) if include_dependencies else []

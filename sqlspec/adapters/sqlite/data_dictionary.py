@@ -181,6 +181,7 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult":
         """Get native SQLite DDL for a database object from sqlite_schema."""
         return self.get_object_ddl(
@@ -191,6 +192,7 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
             include_dependencies=include_dependencies,
             prefer_native=prefer_native,
             redact=redact,
+            target_dialect=target_dialect,
         )
 
     def get_object_ddl(
@@ -203,16 +205,22 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult":
         """Get native SQLite DDL for a database object from sqlite_schema."""
-        _ = include_dependencies, prefer_native, redact
+        _ = include_dependencies, redact
+        if object_type.lower() == "table" and (not prefer_native or target_dialect is not None):
+            return self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
         schema_name = self.resolve_schema(schema)
         schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         query_text = self._get_domain_query_text("ddl", "by_object").format(schema_prefix=schema_prefix)
         rows = driver.select(query_text, schema_name=schema_name, object_name=object_name, object_type=object_type)
-        return _sqlite_ddl_result_from_rows(
+        res = _sqlite_ddl_result_from_rows(
             dialect=type(self).dialect, object_name=object_name, object_type=object_type, schema=schema_name, rows=rows
         )
+        if target_dialect is not None:
+            return self._transpile_ddl_result(res, target_dialect=target_dialect)
+        return res
 
     def get_schema_ddl(
         self,
@@ -229,7 +237,24 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
         redact: bool = True,
     ) -> "MetadataResult":
         """Get topologically sorted native SQLite DDL for all schema objects."""
-        _ = include_domains, exclude_domains, target_dialect, prefer_native, redact
+        if (
+            not prefer_native
+            or target_dialect is not None
+            or include_domains is not None
+            or exclude_domains is not None
+        ):
+            return super().get_schema_ddl(
+                driver,
+                schema=schema,
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+                exclude_tables=exclude_tables,
+                direction=direction,
+                include_dependencies=include_dependencies,
+                prefer_native=prefer_native,
+                redact=redact,
+                target_dialect=target_dialect,
+            )
         schema_name = self.resolve_schema(schema)
         schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         query_text = self._get_domain_query_text("ddl", "by_schema").format(schema_prefix=schema_prefix)

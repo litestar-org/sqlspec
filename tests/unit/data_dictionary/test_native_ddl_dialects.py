@@ -459,3 +459,62 @@ def test_bigquery_native_ddl_and_schema_ddl() -> None:
     names = [item.identity.name for item in schema_ddl.items if isinstance(item, DDLResult)]
     assert "ddl_migrations" not in names
     assert names == ["users", "orders", "v_orders"]
+
+
+def test_sqlite_and_duckdb_honor_prefer_native_target_dialect_and_domain_filters() -> None:
+    """SQLite and DuckDB data dictionaries honor prefer_native=False, target_dialect, and domain filters."""
+    sqlite_cfg = SqliteConfig(connection_config={"database": ":memory:"})
+    sqlite_dd = SqliteDataDictionary()
+    try:
+        with sqlite_cfg.provide_session() as session:
+            session.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT NOT NULL)")
+            session.execute("CREATE VIEW v_accounts AS SELECT id, email FROM accounts")
+
+            synth_table = sqlite_dd.get_ddl(session, "accounts", prefer_native=False)
+            assert synth_table.fidelity == MetadataFidelity.GENERATED
+            assert synth_table.ddl is not None
+            assert "CREATE TABLE" in synth_table.ddl
+            assert "accounts" in synth_table.ddl
+
+            transpiled_table = sqlite_dd.get_object_ddl(session, "accounts", target_dialect="postgres")
+            assert transpiled_table.fidelity == MetadataFidelity.GENERATED
+            assert transpiled_table.identity.dialect == "postgres"
+            assert transpiled_table.ddl is not None
+
+            transpiled_view = sqlite_dd.get_ddl(session, "v_accounts", object_type="view", target_dialect="postgres")
+            assert transpiled_view.identity.dialect == "postgres"
+            assert transpiled_view.ddl is not None
+            assert "v_accounts" in transpiled_view.ddl
+
+            synth_schema = sqlite_dd.get_schema_ddl(session, prefer_native=False)
+            synth_items = [item for item in synth_schema.items if isinstance(item, DDLResult)]
+            assert any(
+                item.identity.name == "accounts" and item.fidelity == MetadataFidelity.GENERATED for item in synth_items
+            )
+
+            tables_only = sqlite_dd.get_schema_ddl(session, include_domains=("tables",))
+            table_names = [item.identity.name for item in tables_only.items if isinstance(item, DDLResult)]
+            assert "accounts" in table_names
+            assert "v_accounts" not in table_names
+    finally:
+        sqlite_cfg.close_pool()
+
+    duck_cfg = DuckDBConfig(connection_config={"database": ":memory:"})
+    duck_dd = DuckDBDataDictionary()
+    try:
+        with duck_cfg.provide_session() as session:
+            session.execute("CREATE TABLE metrics (id INTEGER PRIMARY KEY, label VARCHAR NOT NULL)")
+            session.execute("CREATE VIEW v_metrics AS SELECT id, label FROM metrics")
+
+            synth_metric = duck_dd.get_ddl(session, "metrics", prefer_native=False)
+            assert synth_metric.fidelity == MetadataFidelity.GENERATED
+            assert synth_metric.ddl is not None
+            assert "CREATE TABLE" in synth_metric.ddl
+            assert "metrics" in synth_metric.ddl
+
+            transpiled_schema = duck_dd.get_schema_ddl(session, target_dialect="postgres", exclude_domains=("views",))
+            schema_items = [item for item in transpiled_schema.items if isinstance(item, DDLResult)]
+            assert [item.identity.name for item in schema_items] == ["metrics"]
+            assert schema_items[0].identity.dialect == "postgres"
+    finally:
+        duck_cfg.close_pool()
