@@ -64,7 +64,7 @@ enable_inventory = true
 inventories = [
   "https://docs.python.org/3/objects.inv",
   "https://docs.litestar.dev/latest/objects.inv",
-  "https://jcristharif.com/msgspec/objects.inv",
+  "https://msgspec.dev/objects.inv",
   "https://arrow.apache.org/docs/objects.inv",
 ]
 
