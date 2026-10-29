@@ -1173,70 +1173,80 @@ class TableDetails(ObjectMetadata):
 
 
 class ColumnMetadata(TypedDict, total=False):
-    """Metadata for a database column.
-
-    Attributes:
-        schema_name: Schema containing the table.
-        table_name: Table name.
-        column_name: Name of the column.
-        data_type: Dialect or canonical data type name.
-        is_nullable: Whether the column allows null values.
-        column_default: Default value expression or sequence default.
-        ordinal_position: 1-based column position in the table.
-        max_length: Maximum character or byte length.
-        numeric_precision: Numeric precision.
-        numeric_scale: Numeric scale.
-        is_primary: Whether the column is part of the primary key.
-        is_unique: Whether the column has a unique constraint.
-        extra: Dialect-specific extra column attributes.
-        column_type: Full column type specification (e.g. on MySQL).
-        column_key: Index key designation (e.g. MySQL ``PRI``, ``UNI``, ``MUL``).
-        identity_generation: Identity column generation type (``a`` for ALWAYS, ``d`` for BY DEFAULT).
-        sequence_name: Name of the sequence owned by a serial or identity column.
-        is_generated: Whether the column is a generated/computed column.
-    """
+    """Introspected catalog metadata for a single database column."""
 
     schema_name: str
+    """Database schema or namespace owning the parent table."""
     table_name: str
+    """Unquoted name of the parent table or view."""
     column_name: str
+    """Unquoted column identifier."""
     data_type: str
+    """Dialect or canonical SQL data type name."""
     is_nullable: str | bool | None
+    """Nullability indicator returned by the catalog (boolean or ``YES``/``NO``)."""
     column_default: str | None
+    """SQL default value expression or sequence generator expression, if defined."""
     ordinal_position: int
+    """One-based ordinal position of the column within the table."""
     max_length: int
+    """Maximum character or byte length for string and binary types."""
     numeric_precision: int
+    """Total digit precision for exact or approximate numeric types."""
     numeric_scale: int
+    """Fractional digit scale for exact numeric types."""
     is_primary: bool | int
+    """Whether the column participates in the table primary key."""
     is_unique: bool | int
+    """Whether the column is covered by a single-column unique constraint."""
     extra: str
+    """Dialect-specific extra column modifiers (such as ``auto_increment``)."""
     column_type: str
+    """Full dialect column type specification including length or enum members."""
     column_key: str
+    """Catalog key classification code (such as MySQL ``PRI``, ``UNI``, or ``MUL``)."""
     identity_generation: str | None
+    """Identity generation mode (``a``/``ALWAYS`` or ``d``/``BY DEFAULT``), if applicable."""
     sequence_name: str | None
+    """Backing sequence name owned by a serial or identity column."""
     is_generated: bool | int
+    """Whether the column is a computed or virtual/stored generated column."""
 
 
 class TableMetadata(TypedDict, total=False):
-    """Metadata for a database table."""
+    """Introspected catalog metadata for a database table or view."""
 
     schema_name: str
+    """Database schema owning the table."""
     table_name: str
+    """Unquoted table or view identifier."""
     table_type: str
+    """Catalog object classification (such as ``BASE TABLE`` or ``VIEW``)."""
     table_catalog: str
+    """Database or catalog name reported by ``information_schema``."""
     table_schema: str
+    """Raw ``information_schema`` schema column alias when distinct from ``schema_name``."""
     dependency_level: int
+    """Zero-based foreign-key topological ordering depth for safe DDL/fixture creation."""
     level: int
+    """Dialect query alias for ``dependency_level`` in recursive hierarchy scans."""
 
 
 class IndexMetadata(TypedDict, total=False):
-    """Metadata for a database index."""
+    """Introspected catalog metadata for a table index."""
 
     schema_name: str
+    """Database schema owning the indexed table."""
     table_name: str
+    """Unquoted name of the indexed table."""
     index_name: str
+    """Unquoted index identifier."""
     columns: list[str] | str | None
+    """Ordered column names included in the index key (as list or comma-delimited string)."""
     is_unique: bool | int
+    """Whether the index enforces uniqueness."""
     is_primary: bool | int
+    """Whether the index backs the primary key constraint."""
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1386,76 +1396,134 @@ VersionCacheResult = tuple[bool, VersionInfo | None]
 
 
 class FeatureFlags(TypedDict, total=False):
-    """Typed feature flags for data dictionary dialects."""
+    """Dialect capability flags reported by data dictionary implementations."""
 
     supports_arrays: bool
+    """Whether the dialect supports native typed array columns."""
     supports_clustering: bool
+    """Whether tables support multi-column storage clustering keys."""
     supports_crdb_internal_metadata: bool
+    """Whether CockroachDB ``crdb_internal`` catalog tables are accessible."""
     supports_cte: bool
+    """Whether common table expressions (``WITH`` clauses) are supported."""
     supports_events: bool
+    """Whether scheduled database event objects are supported."""
     supports_generated_columns: bool
+    """Whether virtual or stored computed/generated columns are supported."""
     supports_generators: bool
+    """Whether sequence or value-generator objects are supported."""
     supports_for_update: bool
+    """Whether ``SELECT ... FOR UPDATE`` row-level locking is supported."""
     supports_geography: bool
+    """Whether spatial ``GEOGRAPHY`` or ``GEOMETRY`` types are supported."""
     supports_in_memory: bool
+    """Whether in-memory tables or transient memory storage engines are supported."""
     supports_index_clustering: bool
+    """Whether tables can be physically clustered along a secondary index."""
     supports_invisible_columns: bool
+    """Whether columns can be marked invisible or hidden from ``SELECT *``."""
     supports_invisible_indexes: bool
+    """Whether optimizer-invisible indexes are supported."""
     supports_interleaved_tables: bool
+    """Whether Spanner-style parent-child interleaved tables are supported."""
     supports_json: bool
+    """Whether native JSON or JSONB column types and operators are supported."""
     supports_maps: bool
+    """Whether native key-value ``MAP`` column types are supported."""
     supports_on_conflict: bool
+    """Whether ``INSERT ... ON CONFLICT`` conflict resolution syntax is supported."""
     supports_partitioning: bool
+    """Whether declarative table partitioning is supported."""
     supports_prepared_statements: bool
+    """Whether server-side prepared statements are supported."""
     supports_resource_groups: bool
+    """Whether workload management resource groups are supported."""
     supports_roles: bool
+    """Whether role-based privilege management is supported."""
     supports_sequences: bool
+    """Whether standalone ``CREATE SEQUENCE`` objects are supported."""
     supports_system_versioned_tables: bool
+    """Whether SQL:2011 temporal / system-versioned tables are supported."""
     supports_returning: bool
+    """Whether DML statements support ``RETURNING`` / ``OUTPUT`` projections."""
     supports_schemas: bool
+    """Whether named schemas / namespaces within a database are supported."""
     supports_skip_locked: bool
+    """Whether ``FOR UPDATE SKIP LOCKED`` non-blocking queue scans are supported."""
     supports_structs: bool
+    """Whether composite ``STRUCT`` / ``ROW`` column types are supported."""
     supports_transactions: bool
+    """Whether multi-statement ACID transactions are supported."""
     supports_update_from: bool
+    """Whether ``UPDATE ... FROM`` joined update syntax is supported."""
     supports_upsert: bool
+    """Whether atomic upsert (``ON CONFLICT``, ``ON DUPLICATE KEY``, or ``MERGE``) is supported."""
     supports_uuid: bool
+    """Whether a native 128-bit ``UUID`` column type is supported."""
     supports_window_functions: bool
+    """Whether SQL ``OVER (...)`` window functions are supported."""
 
 
 class FeatureVersions(TypedDict, total=False):
-    """Typed feature version requirements for data dictionary dialects."""
+    """Minimum server versions required to enable version-gated dialect features."""
 
     supports_cte: "VersionInfo"
+    """Minimum engine version supporting common table expressions."""
     supports_check_constraints: "VersionInfo"
+    """Minimum engine version enforcing ``CHECK`` constraints."""
     supports_events: "VersionInfo"
+    """Minimum engine version supporting scheduled database events."""
     supports_generated_columns: "VersionInfo"
+    """Minimum engine version supporting generated/computed columns."""
     supports_histograms: "VersionInfo"
+    """Minimum engine version supporting optimizer column histograms."""
     supports_invisible_columns: "VersionInfo"
+    """Minimum engine version supporting invisible columns."""
     supports_invisible_indexes: "VersionInfo"
+    """Minimum engine version supporting optimizer-invisible indexes."""
     supports_json: "VersionInfo"
+    """Minimum engine version supporting native JSON types and functions."""
     supports_jsonb: "VersionInfo"
+    """Minimum engine version supporting binary JSONB storage."""
     supports_partitioning: "VersionInfo"
+    """Minimum engine version supporting declarative table partitioning."""
     supports_resource_groups: "VersionInfo"
+    """Minimum engine version supporting workload resource groups."""
     supports_returning: "VersionInfo"
+    """Minimum engine version supporting DML ``RETURNING`` clauses."""
     supports_roles: "VersionInfo"
+    """Minimum engine version supporting SQL roles."""
     supports_sequences: "VersionInfo"
+    """Minimum engine version supporting standalone sequences."""
     supports_skip_locked: "VersionInfo"
+    """Minimum engine version supporting ``FOR UPDATE SKIP LOCKED``."""
     supports_system_versioned_tables: "VersionInfo"
+    """Minimum engine version supporting temporal system-versioned tables."""
     supports_upsert: "VersionInfo"
+    """Minimum engine version supporting native upsert statements."""
     supports_window_functions: "VersionInfo"
+    """Minimum engine version supporting SQL window functions."""
 
 
 class TableStatisticsMetadata(TypedDict, total=False):
     """Native driver statistics for a table or column."""
 
     catalog_name: str
+    """Database or catalog containing the target table."""
     schema_name: str
+    """Schema namespace containing the target table."""
     table_name: str
+    """Unquoted table identifier."""
     column_name: str | None
+    """Column name for column-level statistics, or ``None`` for table-wide metrics."""
     statistic_key: int
+    """Driver-defined numeric statistic identifier (such as ADBC statistic key codes)."""
     statistic_name: str
+    """Canonical human-readable statistic name (such as ``row_count`` or ``byte_width``)."""
     statistic_value: int | float | str | bytes | None
+    """Observed or estimated statistic value reported by the engine."""
     is_approximate: bool
+    """Whether the reported value is an optimizer estimate rather than an exact count."""
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

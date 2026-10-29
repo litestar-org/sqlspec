@@ -28,72 +28,129 @@ class MssqlPythonConnectionParams(TypedDict):
     """mssql-python connection parameters."""
 
     connection_string: NotRequired[str]
+    """Full ODBC/TDS semicolon-delimited connection string passed to ``mssql_python.connect``."""
     server: NotRequired[str]
+    """SQL Server hostname, ``host,port``, or ``host\\instance`` target."""
     address: NotRequired[str]
+    """ODBC ``Address`` alias for ``server``."""
     addr: NotRequired[str]
+    """ODBC ``Addr`` alias for ``server``."""
     port: NotRequired[int]
+    """SQL Server TCP port (defaults to ``1433`` when omitted)."""
     database: NotRequired[str]
+    """Initial SQL Server or Azure SQL database name."""
     db: NotRequired[str]
+    """Alias normalized to ``Database`` in the connection string."""
     uid: NotRequired[str]
+    """SQL authentication login ID."""
     user: NotRequired[str]
+    """Alias normalized to ``UID`` in the connection string."""
     username: NotRequired[str]
+    """Alias normalized to ``UID`` in the connection string."""
     pwd: NotRequired[str]
+    """SQL authentication password."""
     password: NotRequired[str]
+    """Alias normalized to ``PWD`` in the connection string."""
     authentication: NotRequired[str]
+    """ODBC ``Authentication`` mode (such as ``ActiveDirectoryDefault`` or ``SqlPassword``)."""
     trusted_connection: NotRequired[bool | str]
+    """Use integrated Windows / Kerberos authentication (``yes``/``no``)."""
     trust_server_certificate: NotRequired[bool | str]
+    """Bypass TLS server certificate chain validation (``yes``/``no``)."""
     trust: NotRequired[bool | str]
+    """Short alias for ``trust_server_certificate``."""
     encrypt: NotRequired[bool | str]
+    """TLS encryption policy (``yes``, ``no``, ``strict``, ``mandatory``, or ``optional``)."""
     hostname_in_certificate: NotRequired[str]
+    """Expected DNS subject name validated in the server TLS certificate."""
     hostnameincertificate: NotRequired[str]
+    """ODBC keyword alias for ``hostname_in_certificate``."""
     server_certificate: NotRequired[str]
+    """Filesystem path to an expected server certificate file for pinning."""
     servercertificate: NotRequired[str]
+    """ODBC keyword alias for ``server_certificate``."""
     server_spn: NotRequired[str]
+    """Kerberos Service Principal Name for the SQL Server target."""
     serverspn: NotRequired[str]
+    """ODBC keyword alias for ``server_spn``."""
     multi_subnet_failover: NotRequired[bool | str]
+    """Enable parallel IP connection attempts for Always On availability groups."""
     multisubnetfailover: NotRequired[bool | str]
+    """ODBC keyword alias for ``multi_subnet_failover``."""
     application_intent: NotRequired[str]
+    """Availability group workload routing intent (``ReadWrite`` or ``ReadOnly``)."""
     applicationintent: NotRequired[str]
+    """ODBC keyword alias for ``application_intent``."""
     connect_retry_count: NotRequired[int]
+    """Number of automatic connection retry attempts on broken idle connections."""
     connectretrycount: NotRequired[int]
+    """ODBC keyword alias for ``connect_retry_count``."""
     connect_retry_interval: NotRequired[int]
+    """Delay in seconds between automatic connection recovery attempts."""
     connectretryinterval: NotRequired[int]
+    """ODBC keyword alias for ``connect_retry_interval``."""
     keep_alive: NotRequired[int]
+    """TCP keepalive idle interval in milliseconds."""
     keepalive: NotRequired[int]
+    """ODBC keyword alias for ``keep_alive``."""
     keep_alive_interval: NotRequired[int]
+    """Interval in milliseconds between TCP keepalive probes."""
     keepaliveinterval: NotRequired[int]
+    """ODBC keyword alias for ``keep_alive_interval``."""
     ip_address_preference: NotRequired[str]
+    """Address family preference during DNS resolution (``IPv4First``, ``IPv6First``, or ``UsePlatformDefault``)."""
     ipaddresspreference: NotRequired[str]
+    """ODBC keyword alias for ``ip_address_preference``."""
     packet_size: NotRequired[int]
+    """TDS network packet size in bytes."""
     packetsize: NotRequired[int]
+    """ODBC keyword alias for ``packet_size``."""
     connection_timeout: NotRequired[int]
+    """Connection establishment timeout in seconds."""
     login_timeout: NotRequired[int]
+    """Login handshake timeout in seconds."""
     command_timeout: NotRequired[int]
+    """Default SQL statement execution timeout in seconds."""
     autocommit: NotRequired[bool]
+    """Enable autocommit mode on new ``mssql-python`` connections."""
     attrs_before: NotRequired[dict[int, int | str | bytes]]
+    """Pre-connect SQL_ATTR_* ODBC connection attributes dictionary (such as access tokens)."""
     timeout: NotRequired[int]
+    """Query execution timeout in seconds assigned on the connection."""
     native_uuid: NotRequired[bool]
+    """Return ``UNIQUEIDENTIFIER`` columns as ``uuid.UUID`` objects instead of strings."""
     token_provider: NotRequired[TokenProvider]
+    """Callable or Entra ID credential provider supplying OAuth access tokens."""
     extra: NotRequired[dict[str, Any]]
+    """Additional connection attributes forwarded to ``mssql_python.connect``."""
 
 
 class MssqlPythonPoolParams(MssqlPythonConnectionParams):
     """mssql-python driver-level pooling parameters."""
 
     pool_size: NotRequired[int]
+    """Maximum number of connections retained in ``MssqlPythonConnectionPool``."""
     pool_idle_timeout: NotRequired[int]
+    """Idle duration in seconds before pooled SQL Server connections are closed."""
     pool_enabled: NotRequired[bool]
+    """Enable ``mssql-python`` driver-level connection pooling."""
 
 
 class MssqlPythonDriverFeatures(TypedDict):
     """mssql-python driver feature flags."""
 
     use_pool: NotRequired[bool]
+    """Enable SQLSpec connection pooling around ``mssql-python`` connections (defaults to ``True``)."""
     json_serializer: "NotRequired[Callable[[Any], str]]"
+    """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    """Custom JSON deserializer applied to JSON result columns (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[MssqlPythonConnection], None]]"
+    """Synchronous hook invoked with each raw ``mssql-python`` connection upon creation."""
     enable_events: NotRequired[bool]
+    """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` is the sole SQL Server backend)."""
 
 
 class MssqlPythonConnectionContext(SyncPoolConnectionContext):

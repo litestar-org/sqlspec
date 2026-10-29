@@ -20,11 +20,17 @@ class StoredSession(TypedDict):
     """
 
     id: str
+    """Unique Google ADK session identifier."""
     app_name: str
+    """Application namespace owning the session."""
     user_id: str
+    """End-user identifier associated with the session."""
     state: "dict[str, Any]"
+    """Serialized session-scoped state dictionary."""
     create_time: datetime
+    """UTC timestamp when the session record was created."""
     update_time: datetime
+    """UTC timestamp of the most recent session state or event update."""
 
 
 class StoredEvent(TypedDict):
@@ -38,9 +44,16 @@ class StoredEvent(TypedDict):
     """
 
     id: str
+    """Unique ADK event identifier."""
     app_name: str
+    """Application namespace owning the parent session."""
     user_id: str
+    """End-user identifier owning the parent session."""
     session_id: str
+    """Parent ADK session identifier."""
     invocation_id: str
+    """Agent turn or invocation identifier grouping related events."""
     timestamp: datetime
+    """UTC timestamp when the event was emitted."""
     event_data: "dict[str, Any]"
+    """Complete serialized Google ADK ``Event`` payload."""

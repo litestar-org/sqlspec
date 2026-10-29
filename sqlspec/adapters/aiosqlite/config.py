@@ -62,128 +62,135 @@ class AiosqliteConnectionParams(TypedDict):
     """TypedDict for aiosqlite connection parameters."""
 
     database: NotRequired[str | PathLike[str]]
+    """Filesystem path, ``':memory:'``, or ``file:...`` URI for the SQLite database."""
     timeout: NotRequired[float]
+    """Busy lock wait timeout in seconds passed to ``aiosqlite.connect``."""
     detect_types: NotRequired[int]
+    """Bitmask of ``sqlite3.PARSE_DECLTYPES`` and ``sqlite3.PARSE_COLNAMES`` flags."""
     isolation_level: NotRequired[SQLiteIsolationLevel]
+    """Implicit transaction begin mode, or ``None`` for manual transaction management."""
     check_same_thread: NotRequired[bool]
+    """Restrict underlying ``sqlite3.Connection`` access to the ``aiosqlite`` worker thread."""
     factory: "NotRequired[AiosqliteConnectionFactory | None]"
+    """Custom ``sqlite3.Connection`` subclass instantiated on the worker thread."""
     cached_statements: NotRequired[int]
+    """Number of compiled SQLite VM statements cached per connection."""
     uri: NotRequired[bool]
+    """Interpret ``database`` as a SQLite ``file:`` URI supporting query parameters."""
     iter_chunk_size: NotRequired[int]
+    """Row batch size fetched per worker-thread hop when iterating ``aiosqlite`` cursors."""
     autocommit: NotRequired[SQLiteAutocommitMode]
+    """PEP 249 / Python 3.12+ autocommit flag or ``sqlite3.LEGACY_TRANSACTION_CONTROL`` (``-1``)."""
 
 
 class AiosqlitePoolParams(AiosqliteConnectionParams):
     """TypedDict for aiosqlite pool parameters, inheriting connection parameters."""
 
     pool_size: NotRequired[int]
+    """Maximum number of worker-backed SQLite connections managed by ``AiosqliteConnectionPool``."""
     min_size: NotRequired[int]
+    """Minimum number of warm connections pre-opened in the pool."""
     connect_timeout: NotRequired[float]
+    """Maximum wait time in seconds when acquiring a connection from the pool."""
     idle_timeout: NotRequired[float]
+    """Idle duration in seconds before recycling unused pooled connections."""
     operation_timeout: NotRequired[float]
+    """Maximum duration in seconds allowed for pool lifecycle operations."""
     health_check_interval: NotRequired[float]
+    """Interval in seconds between background or checkout connection health checks."""
     enable_optimizations: NotRequired[bool]
+    """Apply WAL journal mode, ``synchronous=NORMAL``, and busy-timeout PRAGMAs on connect."""
     enable_foreign_keys: NotRequired[bool]
+    """Execute ``PRAGMA foreign_keys = ON`` on every pooled connection (defaults to ``True``)."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional keyword arguments forwarded directly to ``aiosqlite.connect``."""
 
 
 class AiosqliteFunctionConfig(TypedDict):
     """User-defined aiosqlite function registration."""
 
     name: str
+    """SQL scalar function name registered on the worker-thread SQLite connection."""
     narg: int
+    """Expected positional argument count (use ``-1`` for variadic functions)."""
     func: "Callable[..., Any]"
+    """Synchronous Python callable executed on the ``aiosqlite`` worker thread."""
     deterministic: NotRequired[bool]
+    """Mark the function deterministic so SQLite can inline it in indexes and expressions."""
 
 
 class AiosqliteCollationConfig(TypedDict):
     """User-defined aiosqlite collation registration."""
 
     name: str
+    """SQL collation name usable in ``COLLATE <name>`` clauses."""
     func: "Callable[[str, str], int]"
+    """Synchronous comparator callable returning negative, zero, or positive ordering."""
 
 
 class AiosqliteAggregateConfig(TypedDict):
     """User-defined aiosqlite aggregate registration."""
 
     name: str
+    """SQL aggregate function name registered on each connection."""
     narg: int
+    """Expected argument count passed to ``step()`` (use ``-1`` for variadic aggregates)."""
     aggregate_class: "type[Any]"
+    """Class implementing ``step(...)`` and ``finalize()`` on the worker thread."""
 
 
 class AiosqliteWindowFunctionConfig(TypedDict):
     """User-defined aiosqlite window function registration."""
 
     name: str
+    """SQL window function name registered on each connection."""
     narg: int
+    """Expected argument count passed to ``step()``/``inverse()`` (use ``-1`` for variadic functions)."""
     window_class: "type[Any]"
+    """Class implementing ``step()``, ``inverse()``, ``value()``, and ``finalize()``."""
 
 
 class AiosqliteDriverFeatures(TypedDict):
-    """Aiosqlite driver feature configuration.
-
-    Controls optional type handling and serialization features for SQLite connections.
-
-    enable_custom_adapters: Enable custom type adapters for JSON/UUID/datetime conversion.
-     Defaults to False.
-     Set to True if you want global sqlite3 module type adapter/converter registration.
-    json_serializer: Custom JSON serializer function.
-     Defaults to sqlspec.utils.serializers.to_json.
-    json_deserializer: Custom JSON deserializer function.
-     Defaults to sqlspec.utils.serializers.from_json.
-    on_connection_create: Async callback executed when a connection is created.
-     Receives the raw aiosqlite connection for low-level driver configuration.
-     Runs after internal setup (PRAGMA optimizations).
-    enable_events: Enable database event channel support.
-     Defaults to True when extension_config["events"] is configured.
-     Provides pub/sub capabilities via table-backed queue (SQLite has no native pub/sub).
-     Requires extension_config["events"] for migration setup.
-    events_backend: Event channel backend selection.
-     Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
-     SQLite does not have native pub/sub, so poll_queue is the only backend.
-     Defaults to "poll_queue".
-    custom_functions: Register SQL functions that run on the aiosqlite worker thread.
-     Each entry must include name, narg, and func. Callable values are plain sync callables.
-    custom_collations: Register SQL collations that compare two string values.
-     Each entry must include name and func. Callable values are plain sync callables.
-    custom_aggregates: Register SQL aggregates with step/finalize classes.
-     Each entry must include name, narg, and aggregate_class.
-    custom_window_functions: Register user-defined aggregate window functions.
-     Each entry must include name, narg, and window_class.
-    default_transaction_mode: Default SQLite transaction mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
-    authorizer_callback: sqlite3 authorizer hook run during statement compilation on the worker thread.
-    trace_callback: sqlite3 trace hook run for executed statements on the worker thread.
-    progress_handler: sqlite3 progress hook run every progress_handler_interval VM opcodes.
-    progress_handler_interval: Progress callback interval in SQLite virtual machine opcodes.
-     Must be a positive integer when provided.
-    row_factory: Row factory selector or callable used for raw aiosqlite connections.
-     "row" maps to sqlite3.Row, "dict" maps to a dict row adapter, "tuple" keeps tuple rows.
-     "dict" and custom callables can change raw connection result shapes seen by callers.
-    text_factory: Text factory used for raw aiosqlite connections.
-    pragmas: Additional PRAGMA settings applied after built-in optimization PRAGMAs.
-     User values override built-in defaults when the same PRAGMA appears in both places.
-    extensions: Shared-library extension paths loaded on each connection.
-    """
+    """Optional aiosqlite driver feature flags, UDF registrations, PRAGMAs, and async hooks."""
 
     enable_custom_adapters: NotRequired[bool]
+    """Register global ``sqlite3`` module type adapters/converters (defaults to ``False``)."""
     json_serializer: "NotRequired[Callable[[Any], str]]"
+    """Custom JSON serializer used for bound parameters (defaults to ``to_json``)."""
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    """Custom JSON deserializer used for JSON column decoding (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[AiosqliteConnection], Awaitable[None]]]"
+    """Async hook invoked with each ``aiosqlite.Connection`` after PRAGMA initialization."""
     enable_events: NotRequired[bool]
+    """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` is the sole SQLite backend)."""
     custom_functions: "NotRequired[Sequence[AiosqliteFunctionConfig]]"
+    """Scalar SQL functions registered on the ``aiosqlite`` worker thread."""
     custom_collations: "NotRequired[Sequence[AiosqliteCollationConfig]]"
+    """Custom SQL collations registered on the ``aiosqlite`` worker thread."""
     custom_aggregates: "NotRequired[Sequence[AiosqliteAggregateConfig]]"
+    """Custom SQL aggregate classes registered on each connection."""
     custom_window_functions: "NotRequired[Sequence[AiosqliteWindowFunctionConfig]]"
+    """Custom SQL window function classes registered on each connection."""
     default_transaction_mode: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]]
+    """Default ``BEGIN`` locking mode used by ``begin()`` (``DEFERRED``, ``IMMEDIATE``, or ``EXCLUSIVE``)."""
     authorizer_callback: "NotRequired[Callable[[int, str | None, str | None, str | None, str | None], int]]"
+    """SQLite compile-time authorizer callback executed on the worker thread."""
     trace_callback: "NotRequired[Callable[[str], None]]"
+    """Statement trace callback executed on the worker thread."""
     progress_handler: "NotRequired[Callable[[], int | None]]"
+    """SQLite VM progress hook invoked every ``progress_handler_interval`` opcodes."""
     progress_handler_interval: NotRequired[int]
+    """Positive VM opcode count between ``progress_handler`` invocations."""
     row_factory: "NotRequired[Literal['row', 'dict', 'tuple'] | Callable[..., Any]]"
+    """Raw connection row factory selector (``'row'``, ``'dict'``, ``'tuple'``) or custom callable."""
     text_factory: "NotRequired[Callable[[bytes], Any]]"
+    """Decoder callable assigned to ``conn.text_factory`` for ``TEXT`` columns."""
     pragmas: "NotRequired[Mapping[str, str | int | bool]]"
+    """Additional ``PRAGMA`` key/value overrides applied after built-in optimizations."""
     extensions: "NotRequired[Sequence[str]]"
+    """Shared-library SQLite extension paths loaded on each connection."""
 
 
 _ROW_FACTORY_LITERALS = frozenset({"dict", "row", "tuple"})

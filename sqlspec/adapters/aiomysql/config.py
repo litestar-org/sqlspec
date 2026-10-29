@@ -53,81 +53,97 @@ class AiomysqlConnectionParams(TypedDict):
     """
 
     dsn: NotRequired[str]
+    """MySQL/MariaDB connection URI (``mysql://user:pass@host:port/db``)."""
     url: NotRequired[str]
+    """Connection URL alias parsed identically to ``dsn``."""
     connection_string: NotRequired[str]
+    """Connection string alias parsed identically to ``dsn``."""
     host: NotRequired[str]
+    """MySQL or MariaDB server hostname (defaults to ``'localhost'``)."""
     user: NotRequired[str]
+    """Database account username."""
     username: NotRequired[str]
+    """Alias normalized to ``user`` when ``user`` is omitted."""
     password: NotRequired[str]
+    """Password for the database user."""
     passwd: NotRequired[str]
+    """Legacy PyMySQL/aiomysql alias for ``password``."""
     db: NotRequired[str]
+    """Default schema/database selected upon connecting."""
     database: NotRequired[str]
+    """Alias normalized to ``db`` when ``db`` is omitted."""
     port: NotRequired[int]
+    """MySQL/MariaDB TCP port (defaults to ``3306``)."""
     unix_socket: NotRequired[str]
+    """Filesystem path to a local MySQL Unix domain socket."""
     charset: NotRequired[str]
+    """Connection character set (defaults to ``'utf8mb4'``)."""
     connect_timeout: NotRequired[int | float | None]
+    """TCP connection establishment timeout in seconds."""
     read_default_file: NotRequired[str]
+    """Path to a MySQL ``my.cnf`` option file."""
     read_default_group: NotRequired[str]
+    """Option group name read from ``read_default_file``."""
     autocommit: NotRequired[bool | None]
+    """Enable MySQL autocommit mode on new connections."""
     allow_local_infile: NotRequired[bool]
+    """Alias enabling client-side ``LOAD DATA LOCAL INFILE`` transfers."""
     echo: NotRequired[bool]
+    """Log executed SQL statements through ``aiomysql``."""
     local_infile: NotRequired[bool]
+    """Permit client-side ``LOAD DATA LOCAL INFILE`` transfers."""
     ssl: NotRequired["SSLContext"]
+    """Configured ``ssl.SSLContext`` used for TLS connections."""
     sql_mode: NotRequired[str]
+    """Session ``sql_mode`` string applied at connection startup."""
     init_command: NotRequired[str]
+    """SQL statement executed immediately after authentication."""
     conv: NotRequired["dict[int, Callable[[bytes], Any]] | dict[int, type[Any]] | Mapping[int, Any]"]
+    """Custom PyMySQL/aiomysql type decoder mapping."""
     use_unicode: NotRequired[bool | None]
+    """Decode text columns into Python ``str`` values (defaults to ``True``)."""
     client_flag: NotRequired[int]
+    """Bitmask of MySQL ``CLIENT_*`` capability flags."""
     cursorclass: NotRequired[type["AiomysqlRawCursor"] | type["AiomysqlDictCursor"]]
+    """Default ``aiomysql`` cursor class instantiated by ``conn.cursor()``."""
     cursor_class: NotRequired[type["AiomysqlRawCursor"] | type["AiomysqlDictCursor"]]
+    """Alias normalized to ``cursorclass``."""
     auth_plugin: NotRequired[str]
+    """Explicit client authentication plugin name (such as ``caching_sha2_password``)."""
     program_name: NotRequired[str]
+    """Application name reported in MySQL connection attributes."""
     server_public_key: NotRequired[str | bytes]
+    """Server RSA public key PEM for SHA-256 password exchange."""
     loop: NotRequired[Any]
+    """Explicit ``asyncio`` event loop passed to ``aiomysql``."""
 
 
 class AiomysqlPoolParams(AiomysqlConnectionParams):
     """aiomysql pool parameters."""
 
     minsize: NotRequired[int]
+    """Minimum number of open connections maintained in ``aiomysql.Pool``."""
     maxsize: NotRequired[int]
+    """Maximum number of concurrent connections allowed in ``aiomysql.Pool``."""
     pool_recycle: NotRequired[int]
+    """Maximum connection age in seconds before recycling pooled connections."""
 
 
 class AiomysqlDriverFeatures(TypedDict):
-    """aiomysql driver feature flags.
-
-    MySQL/MariaDB handle JSON natively, but custom serializers can be provided
-    for specialized use cases.
-
-    enable_local_infile_bulk_load: Use native LOCAL INFILE for eligible Arrow rows.
-     Defaults to the connection's local_infile or allow_local_infile opt-in.
-     Set False to force executemany on an opted-in connection.
-    json_serializer: Custom JSON serializer function.
-     Defaults to sqlspec.utils.serializers.to_json.
-     Use for performance (orjson) or custom encoding.
-    json_deserializer: Custom JSON deserializer function.
-     Defaults to sqlspec.utils.serializers.from_json.
-     Use for performance (orjson) or custom decoding.
-    on_connection_create: Async callback executed when a connection is acquired from pool.
-     Receives the raw aiomysql connection for low-level driver configuration.
-     Called exactly once per physical connection using WeakSet tracking.
-    enable_events: Enable database event channel support.
-     Defaults to True when extension_config["events"] is configured.
-     Provides pub/sub capabilities via table-backed queue (MySQL/MariaDB have no native pub/sub).
-     Requires extension_config["events"] for migration setup.
-    events_backend: Event channel backend selection.
-     Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
-     MySQL/MariaDB do not have native pub/sub, so poll_queue is the only backend.
-     Defaults to "poll_queue".
-    """
+    """Optional aiomysql driver feature flags for JSON serialization, bulk loading, and events."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer applied to JSON result columns (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[AiomysqlConnection], Awaitable[None]]]"
+    """Async callback invoked once per physical ``aiomysql`` connection acquired from the pool."""
     enable_events: NotRequired[bool]
+    """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` is the sole MySQL/MariaDB backend)."""
     enable_local_infile_bulk_load: NotRequired[bool]
+    """Use ``LOAD DATA LOCAL INFILE`` for ``load_from_arrow`` when local infile is enabled."""
 
 
 def build_connection_config(

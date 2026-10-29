@@ -38,8 +38,11 @@ class PruneReport(TypedDict):
     """Performance telemetry for a pruning operation."""
 
     deleted_count: int
+    """Total number of expired or idle rows deleted during the sweep."""
     elapsed_ms: float
+    """Wall-clock duration of the pruning operation in milliseconds."""
     table: str
+    """Target ADK persistence table name that was pruned."""
 
 
 async def prune_sessions(target: Any, *, idle_days: int = 30, app_name: str | None = None) -> PruneReport:

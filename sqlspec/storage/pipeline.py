@@ -55,36 +55,57 @@ class StorageCapabilities(TypedDict):
     """Runtime-evaluated driver storage capabilities."""
 
     arrow_export_enabled: bool
+    """Whether the driver supports exporting query results as Apache Arrow tables or batches."""
     arrow_import_enabled: bool
+    """Whether the driver supports ingesting Apache Arrow tables or record batches."""
     parquet_export_enabled: bool
+    """Whether direct or staged Parquet export is available."""
     parquet_import_enabled: bool
+    """Whether direct or staged Parquet ingestion is available."""
     partition_strategies: "list[str]"
+    """Supported partition fan-out strategy names (such as ``chunk`` or ``hash``)."""
     default_storage_profile: NotRequired[str | None]
+    """Named storage registry profile used when callers omit an explicit backend URI."""
 
 
 class PartitionStrategyConfig(TypedDict, total=False):
     """Configuration for partition fan-out strategies."""
 
     kind: str
+    """Partitioning strategy identifier (such as ``rows``, ``hash``, or ``column``)."""
     partitions: int
+    """Target number of output partitions to produce."""
     rows_per_chunk: int
+    """Maximum row count written per output file or batch chunk."""
     manifest_path: str
+    """Optional destination URI or relative path for writing a partition manifest."""
 
 
 class StorageTelemetry(TypedDict, total=False):
     """Telemetry payload for storage bridge operations."""
 
     destination: str
+    """Resolved target or source storage URI for the bridge transfer."""
     bytes_processed: int
+    """Total uncompressed or encoded payload bytes read or written."""
     rows_processed: int
+    """Total number of records transferred across the storage bridge."""
     partitions_created: int
+    """Number of partitioned output objects written during export."""
     duration_s: float
+    """Elapsed wall-clock transfer time in seconds."""
     format: str
+    """Serialized wire/file format (such as ``parquet``, ``arrow``, ``csv``, or ``jsonl``)."""
     extra: "dict[str, object]"
+    """Adapter-specific diagnostic counters or native COPY options."""
     backend: str
+    """Storage backend implementation name (``local``, ``obstore``, or ``fsspec``)."""
     correlation_id: str
+    """Active request correlation identifier attached to the storage job."""
     config: str
+    """Adapter configuration class name executing the storage transfer."""
     bind_key: str
+    """Registered SQLSpec configuration bind key, when configured."""
 
 
 class ResolvedStorageTarget(NamedTuple):

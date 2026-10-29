@@ -46,8 +46,7 @@ def test_scan_public_docstring_leaks_detects_compiler_and_layout_leaks(tmp_path:
 
     private_typing = tmp_path / "_typing.py"
     private_typing.write_text(
-        "class SampleSessionContext:\n"
-        '    """Excluded from mypyc compilation to avoid ABI boundary issues."""\n',
+        'class SampleSessionContext:\n    """Excluded from mypyc compilation to avoid ABI boundary issues."""\n',
         encoding="utf-8",
     )
 
@@ -167,11 +166,7 @@ def test_scan_public_docstrings_cli_main(tmp_path: Path, capsys: pytest.CaptureF
     assert exit_ok == 0
 
     bad_file = tmp_path / "bad.py"
-    bad_file.write_text(
-        "def helper() -> None:\n"
-        '    """Avoid mypyc ABI boundary failure."""\n',
-        encoding="utf-8",
-    )
+    bad_file.write_text('def helper() -> None:\n    """Avoid mypyc ABI boundary failure."""\n', encoding="utf-8")
     exit_fail = scan_main(["--check-leaks", str(bad_file)])
     captured = capsys.readouterr()
     assert exit_fail == 1

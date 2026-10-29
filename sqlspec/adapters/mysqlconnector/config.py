@@ -68,98 +68,176 @@ class MysqlConnectorFailoverTarget(TypedDict):
     """Connector/Python failover target parameters."""
 
     host: NotRequired[str]
+    """Failover MySQL server hostname or IP address."""
     user: NotRequired[str]
+    """Account username for the failover host."""
     password: NotRequired[str]
+    """Account password for the failover host."""
     database: NotRequired[str]
+    """Target database name on the failover host."""
     port: NotRequired[int]
+    """MySQL TCP port on the failover host."""
     unix_socket: NotRequired[str]
+    """Unix socket path on the failover target."""
     pool_name: NotRequired[str]
+    """Pool identifier used if the failover entry initializes a Connector/Python pool."""
     pool_size: NotRequired[int]
+    """Pool size used if the failover entry initializes a Connector/Python pool."""
 
 
 class MysqlConnectorCursorParams(TypedDict):
     """Connector/Python cursor parameters routed by SQLSpec."""
 
     buffered: NotRequired[bool]
+    """Fetch the complete result set client-side immediately after query execution."""
     raw: NotRequired[bool]
+    """Return raw MySQL wire bytes without Python type conversion."""
     dictionary: NotRequired[bool]
+    """Return rows from raw cursors as column-keyed dictionaries."""
     prepared: NotRequired[bool]
+    """Execute statements through the MySQL binary prepared-statement protocol."""
     cursor_class: NotRequired[type[Any]]
+    """Custom ``MySQLCursor`` subclass passed to ``connection.cursor()``."""
 
 
 class _MysqlConnectorBaseConnectionParams(TypedDict):
     """Common Connector/Python connection parameters."""
 
     host: NotRequired[str]
+    """MySQL server hostname or IP address (defaults to ``'localhost'``)."""
     user: NotRequired[str]
+    """Database account username."""
     username: NotRequired[str]
+    """Alias normalized to ``user`` when ``user`` is omitted."""
     password: NotRequired[str]
+    """Primary password for ``user``."""
     passwd: NotRequired[str]
+    """Legacy Connector/Python alias for ``password``."""
     password1: NotRequired[str]
+    """First authentication factor password for multi-factor MySQL accounts."""
     password2: NotRequired[str]
+    """Second authentication factor password or token for MFA accounts."""
     password3: NotRequired[str]
+    """Third authentication factor password or token for MFA accounts."""
     database: NotRequired[str]
+    """Default schema/database selected upon connecting."""
     db: NotRequired[str]
+    """Alias normalized to ``database`` when ``database`` is omitted."""
     port: NotRequired[int]
+    """MySQL server TCP port (defaults to ``3306``)."""
     unix_socket: NotRequired[str]
+    """Filesystem path to a local MySQL Unix domain socket."""
     conn_attrs: NotRequired[dict[str, str]]
+    """Custom key/value attributes exposed in ``performance_schema.session_connect_attrs``."""
     init_command: NotRequired[str]
+    """SQL statement executed immediately after establishing a connection."""
     auth_plugin: NotRequired[str]
+    """Default client authentication plugin name (such as ``caching_sha2_password``)."""
     webauthn_callback: NotRequired[Callable[[], None] | str]
+    """Callback invoked during FIDO/WebAuthn challenge-response authentication."""
     openid_token_file: NotRequired[str]
+    """Path to a file containing an OpenID Connect identity token."""
     use_unicode: NotRequired[bool]
+    """Decode character columns into Python ``str`` values (defaults to ``True``)."""
     charset: NotRequired[str]
+    """Connection character set (defaults to ``'utf8mb4'``)."""
     collation: NotRequired[str]
+    """Connection collation paired with ``charset``."""
     autocommit: NotRequired[bool]
+    """Enable MySQL autocommit mode outside explicit transactions."""
     time_zone: NotRequired[str]
+    """Session ``time_zone`` offset or named zone set on connect."""
     sql_mode: NotRequired[str]
+    """Session ``sql_mode`` flags applied at connection startup."""
     get_warnings: NotRequired[bool]
+    """Automatically fetch MySQL warnings after each statement."""
     raise_on_warnings: NotRequired[bool]
+    """Raise a Python exception whenever the server reports a SQL warning."""
     connection_timeout: NotRequired[int | float]
+    """Connection establishment timeout in seconds."""
     connect_timeout: NotRequired[int | float]
+    """Alias for ``connection_timeout`` in seconds."""
     read_timeout: NotRequired[int | float]
+    """Socket read timeout in seconds for server responses."""
     write_timeout: NotRequired[int | float]
+    """Socket write timeout in seconds for outgoing packets."""
     client_flags: NotRequired[MysqlConnectorClientFlags]
+    """MySQL ``ClientFlag`` bitmask or sequence of capability flags."""
     buffered: NotRequired[bool]
+    """Default ``buffered`` cursor setting across statements on the connection."""
     raw: NotRequired[bool]
+    """Default ``raw`` cursor setting returning unconverted wire bytes."""
     consume_results: NotRequired[bool]
+    """Automatically drain unread cursor result sets before closing or reusing cursors."""
     tls_versions: NotRequired[MysqlConnectorStringSequence]
+    """Permitted TLS protocol versions (such as ``['TLSv1.2', 'TLSv1.3']``)."""
     tls_ciphersuites: NotRequired[MysqlConnectorStringSequence]
+    """Allowed TLS cipher suite names."""
     ssl_ca: NotRequired[str]
+    """Path to the PEM CA bundle file used for server certificate verification."""
     ssl_cert: NotRequired[str]
+    """Path to the client TLS certificate file."""
     ssl_key: NotRequired[str]
+    """Path to the client TLS private key file."""
     ssl_cipher: NotRequired[str]
+    """Deprecated TLS cipher specification string."""
     ssl_disabled: NotRequired[bool]
+    """Disable TLS encryption completely when ``True``."""
     ssl_verify_cert: NotRequired[bool]
+    """Validate the server TLS certificate chain against ``ssl_ca``."""
     ssl_verify_identity: NotRequired[bool]
+    """Verify that the server TLS certificate subject/SAN matches ``host``."""
     force_ipv6: NotRequired[bool]
+    """Prefer IPv6 addresses when a hostname resolves to both IPv4 and IPv6."""
     dns_srv: NotRequired[bool]
+    """Resolve ``host`` as a DNS SRV record for multi-endpoint discovery."""
     kerberos_auth_mode: NotRequired[Literal["SSPI", "GSSAPI"]]
+    """Kerberos client library mode on Windows (``SSPI`` or ``GSSAPI``)."""
     krb_service_principal: NotRequired[str]
+    """Kerberos service principal name for ``authentication_kerberos_client``."""
     oci_config_file: NotRequired[str]
+    """Path to an Oracle Cloud Infrastructure SDK configuration file for IAM auth."""
     oci_config_profile: NotRequired[str]
+    """Profile section within ``oci_config_file``."""
     compress: NotRequired[bool]
+    """Enable zlib packet compression on the MySQL wire protocol."""
     converter_class: NotRequired[type[Any]]
+    """Custom ``MySQLConverterBase`` subclass converting Python and MySQL values."""
     converter_str_fallback: NotRequired[bool]
+    """Serialize unsupported Python types via ``str(value)`` inside the converter."""
     failover: NotRequired[list[MysqlConnectorFailoverTarget] | tuple[MysqlConnectorFailoverTarget, ...]]
+    """Ordered sequence of ``MysqlConnectorFailoverTarget`` server definitions."""
     option_files: NotRequired[MysqlConnectorPathSequence]
+    """MySQL ``my.cnf`` / ``my.ini`` option file path or paths to load."""
     option_groups: NotRequired[MysqlConnectorStringSequence]
+    """Option group names read from ``option_files``."""
     allow_local_infile: NotRequired[bool]
+    """Permit ``LOAD DATA LOCAL INFILE`` client file uploads."""
     local_infile: NotRequired[bool]
+    """Alias enabling ``LOAD DATA LOCAL INFILE`` transfers."""
     allow_local_infile_in_path: NotRequired[str]
+    """Restrict ``LOAD DATA LOCAL INFILE`` uploads to files beneath this directory."""
     use_pure: NotRequired[bool]
+    """Force the pure-Python Connector/Python implementation instead of the C extension."""
     dsn: NotRequired[str]
+    """MySQL connection URI parsed by SQLSpec into Connector/Python keyword arguments."""
     url: NotRequired[str]
+    """Connection URL alias parsed identically to ``dsn``."""
     connection_string: NotRequired[str]
+    """Connection string alias parsed identically to ``dsn``."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional keyword arguments forwarded to ``mysql.connector.connect``."""
 
 
 class MysqlConnectorSyncConnectionParams(_MysqlConnectorBaseConnectionParams):
     """MysqlConnector sync connection parameters."""
 
     pool_name: NotRequired[str]
+    """Identifier assigned to the native ``MySQLConnectionPool``."""
     pool_size: NotRequired[int]
+    """Number of connections maintained by ``MySQLConnectionPool`` (max ``32`` by default)."""
     pool_reset_session: NotRequired[bool]
+    """Reset session variables when returning a connection to ``MySQLConnectionPool``."""
 
 
 class MysqlConnectorPoolParams(MysqlConnectorSyncConnectionParams):
@@ -174,37 +252,30 @@ class MysqlConnectorAsyncConnectionParams(_MysqlConnectorBaseConnectionParams):
     """MysqlConnector async connection parameters."""
 
     pool_name: NotRequired[str]
+    """Identifier assigned to the async connection pool."""
     pool_size: NotRequired[int]
+    """Maximum number of connections managed by the async pool."""
     pool_reset_session: NotRequired[bool]
+    """Reset session state when releasing a connection back to the async pool."""
 
 
 class MysqlConnectorDriverFeatures(TypedDict):
-    """MysqlConnector driver feature flags.
-
-    json_serializer: Custom JSON serializer function.
-     Defaults to sqlspec.utils.serializers.to_json.
-    json_deserializer: Custom JSON deserializer function.
-     Defaults to sqlspec.utils.serializers.from_json.
-    on_connection_create: Callback executed when a connection is acquired.
-     For sync: Callable[[MysqlConnectorSyncConnection], None]
-     For async: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]]
-     Called once per physical connection for sync connections. Async pooled
-     connections invoke the callback again after native session reset.
-    enable_events: Enable database event channel support.
-     Defaults to True when extension_config["events"] is configured.
-    events_backend: Event channel backend selection.
-     Only option: "poll_queue".
-    cursor_options: Cursor keyword arguments SQLSpec forwards to
-     ``connection.cursor()`` for statement execution.
-    """
+    """Optional Connector/Python driver feature flags, cursor options, and bulk-load settings."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer applied to JSON result columns (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[..., Any]]"
+    """Sync or async callback invoked when a physical or session-reset connection is acquired."""
     enable_events: NotRequired[bool]
+    """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` is the sole MySQL backend)."""
     cursor_options: NotRequired[MysqlConnectorCursorParams]
+    """Default ``MysqlConnectorCursorParams`` forwarded to ``connection.cursor()``."""
     enable_local_infile_bulk_load: NotRequired[bool]
+    """Route ``load_from_arrow`` through ``LOAD DATA LOCAL INFILE`` when local infile is enabled."""
 
 
 def build_connection_config(

@@ -35,13 +35,21 @@ class SQLCommenterAttributes(TypedDict, total=False):
     """Structured attributes appended as SQL comments for query attribution."""
 
     db_driver: str
+    """Database driver identifier (such as ``asyncpg`` or ``oracledb``)."""
     framework: str
+    """Application web framework name (such as ``litestar`` or ``fastapi``)."""
     route: str
+    """Matched HTTP route template or URL pattern."""
     controller: str
+    """Controller or router class handling the active request."""
     action: str
+    """Endpoint handler or action name handling the active request."""
     correlation_id: str
+    """Request correlation identifier propagated from ``CorrelationContext``."""
     traceparent: str
+    """W3C Trace Context ``traceparent`` header value for distributed tracing."""
     tracestate: str
+    """W3C Trace Context ``tracestate`` vendor state string."""
 
 
 _sqlcommenter_ctx: Final[ContextVar[dict[str, str] | None]] = ContextVar("_sqlcommenter_ctx", default=None)

@@ -114,11 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Fail when public classes, functions, or methods leak compiler/ABI/layout notes.",
     )
-    parser.add_argument(
-        "--check-overloads",
-        action="store_true",
-        help="Fail when @overload stubs define docstrings.",
-    )
+    parser.add_argument("--check-overloads", action="store_true", help="Fail when @overload stubs define docstrings.")
     parser.add_argument(
         "--check-typeddicts",
         action="store_true",
@@ -206,10 +202,7 @@ def _scan_class_method_leaks(file_path: Path, class_node: ast.ClassDef) -> list[
         if matched:
             violations.append(
                 DocstringLeakViolation(
-                    path=file_path,
-                    line=item.lineno,
-                    symbol=f"{class_node.name}.{item.name}",
-                    matched_patterns=matched,
+                    path=file_path, line=item.lineno, symbol=f"{class_node.name}.{item.name}", matched_patterns=matched
                 )
             )
     return violations

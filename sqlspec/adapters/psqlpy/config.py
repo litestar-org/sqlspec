@@ -38,107 +38,131 @@ class PsqlpyConnectionParams(TypedDict):
     """Psqlpy connection parameters."""
 
     dsn: NotRequired[str]
+    """PostgreSQL connection URI (``postgresql://user:pass@host:port/db``)."""
     username: NotRequired[str]
+    """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
+    """Password for ``username``."""
     db_name: NotRequired[str]
+    """Target PostgreSQL database name."""
     host: NotRequired[str]
+    """Database server hostname or IP address."""
     port: NotRequired[int]
+    """Database server TCP port (defaults to ``5432``)."""
     connect_timeout_sec: NotRequired[int]
+    """Whole-second component of the TCP connection establishment timeout."""
     connect_timeout_nanosec: NotRequired[int]
+    """Sub-second nanosecond component of the connection establishment timeout."""
     tcp_user_timeout_sec: NotRequired[int]
+    """Whole-second TCP unacknowledged transmission timeout."""
     tcp_user_timeout_nanosec: NotRequired[int]
+    """Sub-second nanosecond component of the TCP user timeout."""
     keepalives: NotRequired[bool]
+    """Enable TCP keepalive probes on client sockets."""
     keepalives_idle_sec: NotRequired[int]
+    """Idle duration in seconds before sending the first TCP keepalive probe."""
     keepalives_idle_nanosec: NotRequired[int]
+    """Nanosecond component of the TCP keepalive idle interval."""
     keepalives_interval_sec: NotRequired[int]
+    """Interval in seconds between consecutive unacknowledged TCP keepalive probes."""
     keepalives_interval_nanosec: NotRequired[int]
+    """Nanosecond component of the TCP keepalive probe interval."""
     keepalives_retries: NotRequired[int]
+    """Maximum unacknowledged TCP keepalive probes before dropping the connection."""
     ssl_mode: NotRequired[str]
+    """TLS negotiation policy (``disable``, ``prefer``, ``require``, ``verify-ca``, or ``verify-full``)."""
     ca_file: NotRequired[str]
+    """Path to a PEM root CA bundle used to verify server certificates."""
     target_session_attrs: NotRequired[str]
+    """Required server session state for multi-host routing (such as ``read-write``)."""
     options: NotRequired[str]
+    """Command-line startup GUC options sent to the PostgreSQL backend."""
     application_name: NotRequired[str]
+    """Application identifier reported in ``pg_stat_activity``."""
     client_encoding: NotRequired[str]
+    """Client character set encoding (defaults to ``UTF8``)."""
     gssencmode: NotRequired[str]
+    """GSSAPI transport encryption mode (``disable``, ``prefer``, or ``require``)."""
     sslnegotiation: NotRequired[str]
+    """PostgreSQL 17+ TLS handshake mode (``postgres`` or ``direct``)."""
     sslcompression: NotRequired[str]
+    """TLS compression setting forwarded to ``libpq``/Rust TLS configuration."""
     sslcert: NotRequired[str]
+    """Path to the client TLS certificate file."""
     sslkey: NotRequired[str]
+    """Path to the client TLS private key file."""
     sslpassword: NotRequired[str]
+    """Passphrase unlocking an encrypted ``sslkey``."""
     sslrootcert: NotRequired[str]
+    """Path to the trusted root certificate authority file."""
     sslcrl: NotRequired[str]
+    """Path to the certificate revocation list file."""
     require_auth: NotRequired[str]
+    """Comma-separated list of acceptable server authentication methods."""
     channel_binding: NotRequired[str]
+    """SCRAM channel binding requirement (``disable``, ``prefer``, or ``require``)."""
     krbsrvname: NotRequired[str]
+    """Kerberos service principal name for GSSAPI authentication."""
     gsslib: NotRequired[str]
+    """GSSAPI library implementation selector."""
     gssdelegation: NotRequired[str]
+    """Whether to delegate GSSAPI credentials to the PostgreSQL server."""
     service: NotRequired[str]
+    """Service profile name defined in ``pg_service.conf``."""
     load_balance_hosts: NotRequired[str]
+    """Host ordering policy across multi-host configurations (``disable`` or ``random``)."""
 
 
 class PsqlpyPoolParams(PsqlpyConnectionParams):
     """Psqlpy pool parameters."""
 
     hosts: NotRequired[list[str]]
+    """Ordered list of PostgreSQL hostnames for multi-host failover or load balancing."""
     ports: NotRequired[list[int]]
+    """Port numbers corresponding to ``hosts``."""
     conn_recycling_method: NotRequired[str]
+    """Pool connection reset strategy (such as ``fast`` or ``verified``)."""
     max_db_pool_size: NotRequired[int]
+    """Maximum number of concurrent connections held by ``psqlpy.ConnectionPool``."""
     max_cached_statement_lifetime: NotRequired[int]
+    """Maximum lifetime in seconds for cached prepared statements."""
     configure: NotRequired["Callable[..., Any]"]
+    """Optional pool connection configuration callback."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional keyword options passed directly to ``psqlpy.ConnectionPool``."""
 
 
 class PsqlpyDriverFeatures(TypedDict):
-    """Psqlpy driver feature flags.
-
-    enable_cast_detection: Enable cast-aware parameter processing.
-     Defaults to True. When enabled, SQL casts in prepared statements guide
-     psqlpy parameter coercion for JSON, UUID, and timestamp-like values.
-    enable_pgvector: Enable pgvector extension detection for vector similarity search.
-     Defaults to True when the pgvector Python package is installed.
-     Detects the PostgreSQL vector extension and promotes the dialect to "pgvector".
-     It does not register psqlpy type handlers; use psqlpy.extra_types.PgVector
-     or explicit SQL casts for vector values.
-    enable_paradedb: Enable ParadeDB (pg_search) extension detection.
-     When enabled and the pg_search extension is detected, the SQL dialect
-     switches to "paradedb" which supports search operators (@@@, &&&, etc.)
-     and inherits all pgvector distance operators.
-     Defaults to True. Independent of enable_pgvector.
-    enable_pg_textsearch: Enable pg_textsearch extension detection for BM25 search.
-     When enabled and the pg_textsearch extension is detected, the SQL dialect
-     switches to "pg_textsearch" which supports the BM25 <@> relevance ranking operator.
-     Defaults to True.
-    json_serializer: Custom JSON serializer applied to the statement configuration.
-    json_deserializer: Custom JSON deserializer retained alongside the serializer for parity with asyncpg.
-    on_connection_create: Async callback executed when a connection is acquired from pool.
-     Receives the raw psqlpy connection for low-level driver configuration.
-     Called once per tracked connection instance.
-    enable_events: Enable database event channel support.
-     Defaults to True when extension_config["events"] is configured.
-     Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
-     Requires extension_config["events"] for migration setup when using poll_queue or notify_queue.
-    events_backend: Event channel backend selection.
-     Options: "notify", "notify_queue", "poll_queue"
-     - "notify": Transient PostgreSQL LISTEN/NOTIFY with no replay or retry
-     - "notify_queue": Durable queue plus a PostgreSQL notification wakeup hint
-     - "poll_queue": Durable queue discovered by polling
-     Defaults to "notify".
-    """
+    """Optional driver feature flags, extension detection, and pooler settings for Psqlpy."""
 
     enable_cast_detection: NotRequired[bool]
+    """Use SQL type casts in statements to coerce JSON, UUID, and temporal bind values (defaults to ``True``)."""
     enable_pgvector: NotRequired[bool]
+    """Detect the PostgreSQL ``vector`` extension and promote the dialect to ``pgvector``."""
     enable_paradedb: NotRequired[bool]
+    """Detect ``pg_search`` and promote the dialect to ``paradedb`` (defaults to ``True``)."""
     enable_pg_textsearch: NotRequired[bool]
+    """Detect ``pg_textsearch`` and promote the dialect for BM25 ``<@>`` ranking (defaults to ``True``)."""
     enable_alloydb_columnar: NotRequired[bool]
+    """Enable ``google_columnar_engine.enabled=on`` at session startup or per transaction."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
+    """External pooler compatibility mode; executes queries with ``prepared=False`` when not ``session``."""
     pgbouncer: NotRequired[bool]
+    """Alias for ``pooler_mode='transaction'`` disabling prepared execution."""
     pgbouncer_mode: NotRequired[bool]
+    """Alias for ``pooler_mode='transaction'`` disabling prepared execution."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
+    """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer applied to statement parameter conversion (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer retained alongside ``json_serializer`` (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[PsqlpyConnection], Awaitable[None]]]"
+    """Async callback invoked once per physical ``psqlpy`` connection acquired from the pool."""
     enable_events: NotRequired[bool]
+    """Enable SQLSpec event channel pub/sub support (defaults to ``True`` when ``events`` is configured)."""
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
+    """Event transport backend (``notify`` for LISTEN/NOTIFY, ``notify_queue``, or ``poll_queue``)."""
 
 
 class _PsqlpySessionFactory(AsyncPoolSessionFactory):
