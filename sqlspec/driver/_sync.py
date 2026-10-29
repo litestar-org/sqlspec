@@ -1977,63 +1977,6 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         """Get dependency metadata or an unsupported-domain result."""
         return self._unsupported_metadata("dependencies")
 
-    def _synthesize_table_ddl(
-        self,
-        driver: Any,
-        table_name: str,
-        *,
-        schema: "str | None" = None,
-        target_dialect: "str | None" = None,
-        warnings: tuple[str, ...] = (),
-    ) -> "DDLResult":
-        """Synthesize table DDL from get_columns, get_constraints, get_foreign_keys, and get_indexes."""
-        resolved_schema: str | None = schema
-        resolved_table: str = table_name
-        if type(self).dialect not in {"generic", "unknown", ""} and hasattr(self, "resolve_schema"):
-            try:
-                resolved_schema = self.resolve_schema(schema)
-                resolved_table = self.resolve_identifier(table_name)
-            except Exception:
-                resolved_schema = schema
-                resolved_table = table_name
-        try:
-            columns = self.get_columns(driver, table=resolved_table, schema=resolved_schema)
-        except Exception:
-            columns = []
-        if not columns:
-            return self._unsupported_ddl(resolved_table, schema=resolved_schema, object_type="table")
-
-        constraints: Sequence[Any] = ()
-        try:
-            constraints_res = self.get_constraints(driver, table=resolved_table, schema=resolved_schema)
-            if constraints_res.capability.support == MetadataSupport.SUPPORTED:
-                constraints = constraints_res.items
-        except Exception:
-            constraints = ()
-
-        foreign_keys: Sequence[Any] = ()
-        try:
-            foreign_keys = self.get_foreign_keys(driver, table=resolved_table, schema=resolved_schema)
-        except Exception:
-            foreign_keys = ()
-
-        indexes: Sequence[Any] = ()
-        try:
-            indexes = self.get_indexes(driver, table=resolved_table, schema=resolved_schema)
-        except Exception:
-            indexes = ()
-
-        return self.build_synthesized_table_ddl(
-            resolved_table,
-            columns,
-            schema=resolved_schema,
-            constraints=constraints,
-            foreign_keys=foreign_keys,
-            indexes=indexes,
-            target_dialect=target_dialect,
-            warnings=warnings,
-        )
-
     def get_ddl(
         self,
         driver: Any,
@@ -2342,6 +2285,63 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         Returns:
             List of foreign key metadata
         """
+
+    def _synthesize_table_ddl(
+        self,
+        driver: Any,
+        table_name: str,
+        *,
+        schema: "str | None" = None,
+        target_dialect: "str | None" = None,
+        warnings: tuple[str, ...] = (),
+    ) -> "DDLResult":
+        """Synthesize table DDL from get_columns, get_constraints, get_foreign_keys, and get_indexes."""
+        resolved_schema: str | None = schema
+        resolved_table: str = table_name
+        if type(self).dialect not in {"generic", "unknown", ""} and hasattr(self, "resolve_schema"):
+            try:
+                resolved_schema = self.resolve_schema(schema)
+                resolved_table = self.resolve_identifier(table_name)
+            except Exception:
+                resolved_schema = schema
+                resolved_table = table_name
+        try:
+            columns = self.get_columns(driver, table=resolved_table, schema=resolved_schema)
+        except Exception:
+            columns = []
+        if not columns:
+            return self._unsupported_ddl(resolved_table, schema=resolved_schema, object_type="table")
+
+        constraints: Sequence[Any] = ()
+        try:
+            constraints_res = self.get_constraints(driver, table=resolved_table, schema=resolved_schema)
+            if constraints_res.capability.support == MetadataSupport.SUPPORTED:
+                constraints = constraints_res.items
+        except Exception:
+            constraints = ()
+
+        foreign_keys: Sequence[Any] = ()
+        try:
+            foreign_keys = self.get_foreign_keys(driver, table=resolved_table, schema=resolved_schema)
+        except Exception:
+            foreign_keys = ()
+
+        indexes: Sequence[Any] = ()
+        try:
+            indexes = self.get_indexes(driver, table=resolved_table, schema=resolved_schema)
+        except Exception:
+            indexes = ()
+
+        return self.build_synthesized_table_ddl(
+            resolved_table,
+            columns,
+            schema=resolved_schema,
+            constraints=constraints,
+            foreign_keys=foreign_keys,
+            indexes=indexes,
+            target_dialect=target_dialect,
+            warnings=warnings,
+        )
 
     def _unsupported_metadata(self, domain: str) -> "MetadataResult":
         return MetadataResult.unsupported(domain)
