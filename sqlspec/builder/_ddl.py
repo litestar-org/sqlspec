@@ -4,19 +4,28 @@ Provides builders for DDL operations including CREATE, DROP, ALTER,
 TRUNCATE, and other schema manipulation statements.
 """
 
+import re
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
-from mypy_extensions import trait
+import sqlglot
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._parsing_utils import _mark_explicit_table_quotes, _normalize_dialect
+from sqlspec.builder._parsing_utils import (
+    _is_simple_identifier,
+    _mark_explicit_table_quotes,
+    _normalize_dialect,
+    parse_order_expression,
+)
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_sqlglot_expression
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder._column import ColumnExpression
@@ -30,6 +39,7 @@ __all__ = (
     "CreateIndex",
     "CreateMaterializedView",
     "CreateSchema",
+    "CreateSequence",
     "CreateTable",
     "CreateTableAsSelect",
     "CreateView",
@@ -37,6 +47,7 @@ __all__ = (
     "DropIndex",
     "DropMaterializedView",
     "DropSchema",
+    "DropSequence",
     "DropTable",
     "DropView",
     "RenameTable",
@@ -72,6 +83,18 @@ VALID_CONSTRAINT_TYPES = {
 CURRENT_TIMESTAMP_KEYWORD = "CURRENT_TIMESTAMP"
 CURRENT_DATE_KEYWORD = "CURRENT_DATE"
 CURRENT_TIME_KEYWORD = "CURRENT_TIME"
+
+_IDENTITY_KEYWORDS = frozenset({
+    "ALWAYS",
+    "BY DEFAULT",
+    "ALWAYS AS IDENTITY",
+    "BY DEFAULT AS IDENTITY",
+    "BY DEFAULT ON NULL",
+    "BY DEFAULT ON NULL AS IDENTITY",
+})
+_ORDER_DIRECTION_SUFFIX_RE = re.compile(
+    r"\s+(?:ASC|DESC|NULLS\s+(?:FIRST|LAST))(?:\s+NULLS\s+(?:FIRST|LAST))?\s*$", re.IGNORECASE
+)
 
 
 def build_column_expression(
@@ -121,9 +144,49 @@ def build_column_expression(
     if col.comment:
         constraints.append(exp.ColumnConstraint(kind=exp.CommentColumnConstraint(this=exp.convert(col.comment))))
 
-    if col.generated:
+    if col.identity is not None and col.identity is not False:
+        if isinstance(col.identity, str):
+            ident_upper = col.identity.strip().upper()
+            is_always = not ident_upper.startswith("BY DEFAULT")
+            on_null = "ON NULL" in ident_upper
+        else:
+            is_always = True
+            on_null = False
         constraints.append(
-            exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=exp.maybe_parse(col.generated)))
+            exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=is_always, on_null=on_null or None))
+        )
+    elif col.generated is True or (
+        isinstance(col.generated, str) and col.generated.strip().upper() in _IDENTITY_KEYWORDS
+    ):
+        if isinstance(col.generated, str):
+            gen_upper = col.generated.strip().upper()
+            is_always = not gen_upper.startswith("BY DEFAULT")
+            on_null = "ON NULL" in gen_upper
+        else:
+            is_always = True
+            on_null = False
+        constraints.append(
+            exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=is_always, on_null=on_null or None))
+        )
+
+    computed_source: str | exp.Expr | None = col.generated_expression
+    if (
+        computed_source is None
+        and isinstance(col.generated, str)
+        and col.generated.strip().upper() not in _IDENTITY_KEYWORDS
+    ):
+        computed_source = col.generated
+
+    if computed_source is not None:
+        if isinstance(computed_source, exp.Expr):
+            parsed_computed: exp.Expr = computed_source.copy()
+        else:
+            norm_dialect = _normalize_dialect(dialect) if dialect else None
+            parsed_computed = sqlglot.parse_one(str(computed_source), read=norm_dialect)
+        if isinstance(parsed_computed, exp.Paren):
+            parsed_computed = parsed_computed.unnest()
+        constraints.append(
+            exp.ColumnConstraint(kind=exp.ComputedColumnConstraint(this=parsed_computed, persisted=col.persisted))
         )
 
     if col.collate:
@@ -318,8 +381,11 @@ class ColumnDefinition:
         "default",
         "dtype",
         "generated",
+        "generated_expression",
+        "identity",
         "name",
         "not_null",
+        "persisted",
         "primary_key",
         "unique",
     )
@@ -335,8 +401,11 @@ class ColumnDefinition:
         auto_increment: bool = False,
         comment: "str | None" = None,
         check: "str | None" = None,
-        generated: "str | None" = None,
+        generated: "str | bool | None" = None,
         collate: "str | None" = None,
+        identity: "str | bool | None" = None,
+        generated_expression: "str | exp.Expr | None" = None,
+        persisted: bool = True,
     ) -> None:
         self.name = name
         self.dtype = dtype
@@ -349,6 +418,13 @@ class ColumnDefinition:
         self.check = check
         self.generated = generated
         self.collate = collate
+        self.identity = identity
+        self.generated_expression = generated_expression
+        self.persisted = persisted
+
+    def to_sqlglot(self, dialect: "DialectType | None" = None, *, include_primary_key: bool = True) -> "exp.Expr":
+        """Build a SQLGlot ColumnDef expression for this column definition."""
+        return build_column_expression(self, dialect=dialect, include_primary_key=include_primary_key)
 
 
 class ConstraintDefinition:
@@ -469,8 +545,11 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         auto_increment: bool = False,
         comment: "str | None" = None,
         check: "str | None" = None,
-        generated: "str | None" = None,
+        generated: "str | bool | None" = None,
         collate: "str | None" = None,
+        identity: "str | bool | None" = None,
+        generated_expression: "str | exp.Expr | None" = None,
+        persisted: bool = True,
     ) -> "Self":
         """Add a column definition to the table."""
         if not name:
@@ -494,6 +573,9 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             check=check,
             generated=generated,
             collate=collate,
+            identity=identity,
+            generated_expression=generated_expression,
+            persisted=persisted,
         )
 
         self._columns.append(column_def)
@@ -866,19 +948,39 @@ class DropMaterializedView(_SingleObjectDropBuilder):
 class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
     """Builder for CREATE [UNIQUE] INDEX [IF NOT EXISTS] ... ON ... (...)."""
 
-    __slots__ = ("_columns", "_if_not_exists", "_index_name", "_table_name", "_unique", "_using", "_where")
+    __slots__ = (
+        "_columns",
+        "_if_not_exists",
+        "_include_columns",
+        "_index_name",
+        "_schema",
+        "_table_name",
+        "_unique",
+        "_using",
+        "_where",
+    )
 
-    def __init__(self, index_name: str, dialect: "DialectType" = None) -> None:
+    def __init__(
+        self,
+        index_name: str,
+        dialect: "DialectType" = None,
+        include: "Sequence[str | exp.Expr] | None" = None,
+        schema: "str | None" = None,
+    ) -> None:
         """Initialize CREATE INDEX with index name.
 
         Args:
             index_name: Name of the index to create
             dialect: SQL dialect to use
+            include: Optional sequence of covering columns for INCLUDE (...)
+            schema: Optional schema name for the target table
         """
         super().__init__(dialect=dialect)
         self._index_name = index_name
         self._table_name: str | None = None
+        self._schema: str | None = schema
         self._columns: list[str | exp.Ordered | exp.Expr] = []
+        self._include_columns: list[str | exp.Expr] = list(include) if include is not None else []
         self._unique = False
         self._if_not_exists = False
         self._using: str | None = None
@@ -888,12 +990,29 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         self._index_name = index_name
         return self
 
+    def in_schema(self, schema_name: str) -> Self:
+        """Set the schema for the indexed table."""
+        self._schema = schema_name
+        return self
+
+    def on(self, table_name: str, *cols: str | exp.Ordered | exp.Expr) -> Self:
+        """Set the target table (and optional index columns) for the index."""
+        self._table_name = table_name
+        if cols:
+            self._columns.extend(cols)
+        return self
+
     def on_table(self, table_name: str) -> Self:
         self._table_name = table_name
         return self
 
     def columns(self, *cols: str | exp.Ordered | exp.Expr) -> Self:
         self._columns.extend(cols)
+        return self
+
+    def include(self, *columns: str | exp.Expr) -> Self:
+        """Add covering columns for the INCLUDE (...) clause."""
+        self._include_columns.extend(columns)
         return self
 
     def expressions(self, *exprs: str | exp.Expr) -> Self:
@@ -915,8 +1034,9 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
     def _create_base_expression(self) -> exp.Expr:
         """Build the CREATE INDEX expression for this builder.
 
-        Columns are turned into raw expressions (not ``Ordered``) to preserve natural NULL ordering,
-        string ``where`` clauses become expressions, and the final ``exp.Index`` is wrapped in an ``exp.Create`` with the configured flags.
+        Columns are turned into raw expressions (not ``Ordered``) unless explicit ordering
+        is specified, string ``where`` clauses become expressions, and the final ``exp.Index``
+        is wrapped in an ``exp.Create`` with the configured flags.
         """
         self._require(self._index_name and self._table_name, "Index name and table name must be set for CREATE INDEX.")
 
@@ -924,15 +1044,40 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         cols: list[exp.Expr] = []
         for col in self._columns:
             if isinstance(col, str):
-                cols.append(exp.Column(this=_parse_ddl_identifier(col, dialect=effective_dialect)))
+                stripped = col.strip()
+                if _ORDER_DIRECTION_SUFFIX_RE.search(stripped):
+                    cols.append(parse_order_expression(stripped))
+                elif _is_simple_identifier(stripped) or (
+                    stripped[:1] in {'"', "`", "["} and "(" not in stripped and " " not in stripped[1:-1]
+                ):
+                    cols.append(exp.Column(this=_parse_ddl_identifier(stripped, dialect=effective_dialect)))
+                else:
+                    parsed_col: exp.Expr | None = exp.maybe_parse(stripped, dialect=effective_dialect)
+                    cols.append(
+                        parsed_col
+                        if parsed_col is not None
+                        else exp.Column(this=_parse_ddl_identifier(stripped, dialect=effective_dialect))
+                    )
             else:
-                cols.append(col)
+                cols.append(col.copy())
+
+        include_cols: list[exp.Expr] = []
+        for inc_col in self._include_columns:
+            if isinstance(inc_col, str):
+                include_cols.append(_parse_ddl_identifier(inc_col, dialect=effective_dialect))
+            else:
+                include_cols.append(inc_col.copy())
 
         where_expr = None
         if self._where:
             where_expr = exp.condition(self._where) if isinstance(self._where, str) else self._where
 
         index_params = exp.IndexParameters(columns=cols) if cols else None
+
+        if include_cols:
+            if index_params is None:
+                index_params = exp.IndexParameters()
+            index_params.set("include", include_cols)
 
         if self._using:
             if index_params is None:
@@ -946,11 +1091,33 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
 
         index_expr = exp.Index(
             this=_parse_ddl_identifier(self._index_name, dialect=effective_dialect),
-            table=_parse_ddl_table(cast("str", self._table_name), dialect=effective_dialect),
+            table=_parse_ddl_table(cast("str", self._table_name), schema=self._schema, dialect=effective_dialect),
             params=index_params,
         )
 
         return exp.Create(kind="INDEX", this=index_expr, unique=self._unique, exists=self._if_not_exists)
+
+    def _optimize_expression(
+        self, expression: exp.Expr, *, force: bool = False, dialect: "DialectType" = None
+    ) -> exp.Expr:
+        """Optimize the CREATE INDEX expression while preserving explicit ASC ordering."""
+        explicit_asc_positions: list[int] = []
+        index_params = expression.find(exp.IndexParameters)
+        if index_params is not None:
+            for idx, col_expr in enumerate(index_params.args.get("columns") or []):
+                if isinstance(col_expr, exp.Ordered) and col_expr.args.get("desc") is False:
+                    explicit_asc_positions.append(idx)
+
+        optimized = super()._optimize_expression(expression, force=force, dialect=dialect)
+        if explicit_asc_positions:
+            optimized = optimized.copy()
+            opt_params = optimized.find(exp.IndexParameters)
+            if opt_params is not None:
+                opt_columns = opt_params.args.get("columns") or []
+                for idx in explicit_asc_positions:
+                    if idx < len(opt_columns) and isinstance(opt_columns[idx], exp.Ordered):
+                        opt_columns[idx].set("desc", False)
+        return optimized
 
 
 class Truncate(DDLBuilder, _CascadeRestrictDDLMixin):
@@ -1723,6 +1890,172 @@ class RenameTable(DDLBuilder):
             this=_parse_ddl_table(self._old_name, dialect=effective_dialect),
             kind="TABLE",
             actions=[exp.AlterRename(this=_parse_ddl_table(cast("str", self._new_name), dialect=effective_dialect))],
+        )
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class CreateSequence(DDLBuilder):
+    """Builder for CREATE SEQUENCE statements."""
+
+    __slots__ = (
+        "_cache",
+        "_cycle",
+        "_if_not_exists",
+        "_increment_by",
+        "_max_value",
+        "_min_value",
+        "_schema",
+        "_sequence_name",
+        "_start_with",
+    )
+
+    def __init__(
+        self,
+        sequence_name: str,
+        schema: "str | None" = None,
+        if_not_exists: bool = False,
+        start_with: "int | None" = None,
+        increment_by: "int | None" = None,
+        min_value: "int | None" = None,
+        max_value: "int | None" = None,
+        cycle: bool = False,
+        cache: "int | None" = None,
+        dialect: "DialectType" = None,
+    ) -> None:
+        super().__init__(dialect=dialect)
+        self._sequence_name = sequence_name
+        self._schema = schema
+        self._if_not_exists = if_not_exists
+        self._start_with = start_with
+        self._increment_by = increment_by
+        self._min_value = min_value
+        self._max_value = max_value
+        self._cycle = cycle
+        self._cache = cache
+
+    def name(self, sequence_name: str) -> Self:
+        """Set the sequence name."""
+        self._sequence_name = sequence_name
+        return self
+
+    def in_schema(self, schema_name: str) -> Self:
+        """Set the schema for the sequence."""
+        self._schema = schema_name
+        return self
+
+    def if_not_exists(self) -> Self:
+        """Add IF NOT EXISTS to the CREATE SEQUENCE statement."""
+        self._if_not_exists = True
+        return self
+
+    def start_with(self, value: int) -> Self:
+        """Set the START WITH value for the sequence."""
+        self._start_with = value
+        return self
+
+    def increment_by(self, value: int) -> Self:
+        """Set the INCREMENT BY value for the sequence."""
+        self._increment_by = value
+        return self
+
+    def min_value(self, value: int) -> Self:
+        """Set the MINVALUE for the sequence."""
+        self._min_value = value
+        return self
+
+    def max_value(self, value: int) -> Self:
+        """Set the MAXVALUE for the sequence."""
+        self._max_value = value
+        return self
+
+    def cycle(self) -> Self:
+        """Enable CYCLE on the sequence."""
+        self._cycle = True
+        return self
+
+    def no_cycle(self) -> Self:
+        """Disable CYCLE on the sequence."""
+        self._cycle = False
+        return self
+
+    def cache(self, value: int) -> Self:
+        """Set the CACHE size for the sequence."""
+        self._cache = value
+        return self
+
+    def _create_base_expression(self) -> exp.Expr:
+        """Build the SQLGlot Create expression for this sequence."""
+        self._require(self._sequence_name, "Sequence name must be set for CREATE SEQUENCE.")
+        effective_dialect = self._expression_dialect or self.dialect_name
+        table_expr = _parse_ddl_table(self._sequence_name, schema=self._schema, dialect=effective_dialect)
+
+        options: list[exp.Expr] = [exp.Var(this="CYCLE")] if self._cycle else []
+        has_seq_props = any(
+            v is not None for v in (self._start_with, self._increment_by, self._min_value, self._max_value, self._cache)
+        ) or bool(options)
+
+        properties_node: exp.Properties | None = None
+        if has_seq_props:
+            seq_props = exp.SequenceProperties(
+                start=exp.Literal.number(self._start_with) if self._start_with is not None else None,
+                increment=exp.Literal.number(self._increment_by) if self._increment_by is not None else None,
+                minvalue=exp.Literal.number(self._min_value) if self._min_value is not None else None,
+                maxvalue=exp.Literal.number(self._max_value) if self._max_value is not None else None,
+                cache=exp.Literal.number(self._cache) if self._cache is not None else None,
+                options=options or None,
+            )
+            properties_node = exp.Properties(expressions=[seq_props])
+
+        return exp.Create(this=table_expr, kind="SEQUENCE", exists=self._if_not_exists, properties=properties_node)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class DropSequence(DDLBuilder):
+    """Builder for DROP SEQUENCE statements."""
+
+    __slots__ = ("_cascade", "_if_exists", "_schema", "_sequence_name")
+
+    def __init__(
+        self,
+        sequence_name: str,
+        schema: "str | None" = None,
+        if_exists: bool = False,
+        cascade: bool = False,
+        dialect: "DialectType" = None,
+    ) -> None:
+        super().__init__(dialect=dialect)
+        self._sequence_name = sequence_name
+        self._schema = schema
+        self._if_exists = if_exists
+        self._cascade = cascade
+
+    def name(self, sequence_name: str) -> Self:
+        """Set the sequence name."""
+        self._sequence_name = sequence_name
+        return self
+
+    def in_schema(self, schema_name: str) -> Self:
+        """Set the schema for the sequence."""
+        self._schema = schema_name
+        return self
+
+    def if_exists(self) -> Self:
+        """Add IF EXISTS to the DROP SEQUENCE statement."""
+        self._if_exists = True
+        return self
+
+    def cascade(self) -> Self:
+        """Add CASCADE to the DROP SEQUENCE statement."""
+        self._cascade = True
+        return self
+
+    def _create_base_expression(self) -> exp.Expr:
+        """Build the SQLGlot Drop expression for this sequence."""
+        self._require(self._sequence_name, "Sequence name must be set for DROP SEQUENCE.")
+        effective_dialect = self._expression_dialect or self.dialect_name
+        table_expr = _parse_ddl_table(self._sequence_name, schema=self._schema, dialect=effective_dialect)
+        return exp.Drop(
+            this=table_expr, tables=[table_expr.copy()], kind="SEQUENCE", exists=self._if_exists, cascade=self._cascade
         )
 
 

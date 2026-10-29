@@ -20,12 +20,14 @@ from sqlspec.builder._ddl import (
     CreateIndex,
     CreateMaterializedView,
     CreateSchema,
+    CreateSequence,
     CreateTable,
     CreateTableAsSelect,
     CreateView,
     DropIndex,
     DropMaterializedView,
     DropSchema,
+    DropSequence,
     DropTable,
     DropView,
     RenameTable,
@@ -589,6 +591,50 @@ class SQLFactory:
         """
         return CreateSchema(schema_name, dialect=_resolve_dialect(dialect, self.dialect))
 
+    def create_sequence(
+        self,
+        sequence_name: str,
+        dialect: DialectType = None,
+        *,
+        schema: str | None = None,
+        if_not_exists: bool = False,
+        start_with: int | None = None,
+        increment_by: int | None = None,
+        min_value: int | None = None,
+        max_value: int | None = None,
+        cycle: bool = False,
+        cache: int | None = None,
+    ) -> "CreateSequence":
+        """Create a CREATE SEQUENCE builder.
+
+        Args:
+            sequence_name: Name of the sequence to create
+            dialect: Optional SQL dialect
+            schema: Optional schema name
+            if_not_exists: Whether to include IF NOT EXISTS
+            start_with: Optional initial value
+            increment_by: Optional step increment
+            min_value: Optional minimum sequence value
+            max_value: Optional maximum sequence value
+            cycle: Whether the sequence cycles
+            cache: Optional sequence cache size
+
+        Returns:
+            CreateSequence builder instance
+        """
+        return CreateSequence(
+            sequence_name,
+            schema=schema,
+            if_not_exists=if_not_exists,
+            start_with=start_with,
+            increment_by=increment_by,
+            min_value=min_value,
+            max_value=max_value,
+            cycle=cycle,
+            cache=cache,
+            dialect=_resolve_dialect(dialect, self.dialect),
+        )
+
     def drop_table(self, table_name: str, dialect: DialectType = None) -> "DropTable":
         """Create a DROP TABLE builder.
 
@@ -648,6 +694,35 @@ class SQLFactory:
             DropSchema builder instance
         """
         return DropSchema(schema_name, dialect=_resolve_dialect(dialect, self.dialect))
+
+    def drop_sequence(
+        self,
+        sequence_name: str,
+        dialect: DialectType = None,
+        *,
+        schema: str | None = None,
+        if_exists: bool = False,
+        cascade: bool = False,
+    ) -> "DropSequence":
+        """Create a DROP SEQUENCE builder.
+
+        Args:
+            sequence_name: Name of the sequence to drop
+            dialect: Optional SQL dialect
+            schema: Optional schema name
+            if_exists: Whether to include IF EXISTS
+            cascade: Whether to include CASCADE
+
+        Returns:
+            DropSequence builder instance
+        """
+        return DropSequence(
+            sequence_name,
+            schema=schema,
+            if_exists=if_exists,
+            cascade=cascade,
+            dialect=_resolve_dialect(dialect, self.dialect),
+        )
 
     def alter_table(self, table_name: str, dialect: DialectType = None) -> "AlterTable":
         """Create an ALTER TABLE builder.
