@@ -194,9 +194,6 @@ class AsyncpgDataDictionary(AsyncDataDictionaryBase):
     async def get_version(self, driver: "AsyncpgDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
-        Performs an inline cache check to avoid a cross-module method call
-        that can trigger a mypyc segmentation fault.
-
         Args:
             driver: Async database driver instance.
 

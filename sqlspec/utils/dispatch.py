@@ -1,3 +1,5 @@
+"""Cached MRO-aware type dispatch registry compatible with mypyc compilation."""
+
 from typing import Any, Final, Generic, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
@@ -12,10 +14,10 @@ _NO_MATCH: Final[object] = object()
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class TypeDispatcher(Generic[T]):
-    """O(1) type lookup cache for Mypyc-compatible dispatch.
+    """O(1) MRO-aware type lookup registry.
 
-    Provides fast lookups for objects based on their type, with caching of MRO resolution.
-    This replaces expensive isinstance checks in hot paths.
+    Resolves values registered for exact types or base classes along a type's method
+    resolution order and caches resolved matches by concrete runtime type.
     """
 
     __slots__ = ("_cache", "_registry")

@@ -112,11 +112,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         super().__init__()
 
     def get_version(self, driver: "AdbcDriver") -> "VersionInfo | None":
-        """Get database version information based on detected dialect.
-
-        Inlines the version cache check to avoid cross-module method calls
-        across MyPyC compilation boundaries.
-        """
+        """Get database version information for the active ADBC dialect."""
         dialect = self._normalize_dialect(driver)
         if dialect == "bigquery":
             return None

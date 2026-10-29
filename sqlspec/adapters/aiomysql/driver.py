@@ -88,15 +88,8 @@ _MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
 class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiomysql (MySQL) database exceptions.
 
-    Maps MySQL error codes and SQLSTATE to specific SQLSpec exceptions
-    for better error handling in application code.
-
-    aiomysql uses pymysql.err.Error as its base exception class since
-    aiomysql is built on top of PyMySQL.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __aexit__
-    to avoid ABI boundary violations with compiled code.
+    Maps MySQL error codes and SQLSTATE values from ``pymysql.err.Error`` to
+    SQLSpec exceptions stored on ``pending_exception``.
     """
 
     __slots__ = ()

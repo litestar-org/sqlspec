@@ -1,4 +1,10 @@
-"""Asynchronous driver protocol implementation."""
+"""Asynchronous driver protocol implementation.
+
+Storage and SQL translation methods are defined directly on ``AsyncDriverAdapterBase``
+rather than separate mixins to avoid cross-trait mypyc attribute dispatch issues,
+and ``AsyncExceptionHandler`` stores mapped exceptions on ``pending_exception``
+rather than raising inside ``__aexit__`` across C-extension ABI boundaries.
+"""
 
 import logging
 import sys
@@ -157,22 +163,10 @@ class AsyncPoolSessionFactory:
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
-    """Base class for asynchronous database drivers.
+    """Base execution, transaction, Arrow, and storage adapter for asynchronous database drivers.
 
-    This class includes flattened storage and SQL translation methods that were
-    previously in StorageDriverMixin and SQLTranslatorMixin. The flattening
-    eliminates cross-trait attribute access that caused mypyc segmentation faults.
-
-    Method Organization:
-        1. Core dispatch methods (the execution engine)
-        2. Transaction management (abstract methods)
-        3. Public API - execution methods
-        4. Public API - query methods (select/fetch variants)
-        5. Arrow API methods
-        6. Stack execution
-        7. Storage API methods
-        8. Utility methods
-        9. Private/internal methods
+    Provides uniform SQL compilation, parameter binding, statement caching, result mapping,
+    Apache Arrow fetching, and storage pipeline execution over asynchronous driver connections.
     """
 
     __slots__ = ()
@@ -473,12 +467,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
     @abstractmethod
     def handle_database_exceptions(self) -> "AsyncExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately.
+        """Return an async context manager that maps driver errors to SQLSpec exceptions.
 
         Returns:
-            Exception handler with deferred exception pattern for mypyc compatibility.
-            The handler stores mapped exceptions in pending_exception rather than
-            raising from __aexit__ to avoid ABI boundary violations.
+            Asynchronous exception handler exposing mapped errors via ``pending_exception``.
         """
 
     async def execute(

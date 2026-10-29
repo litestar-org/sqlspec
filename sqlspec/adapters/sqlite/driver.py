@@ -58,12 +58,8 @@ __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSess
 class SqliteExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling SQLite database exceptions.
 
-    Maps SQLite extended result codes to specific SQLSpec exceptions
-    for better error handling in application code.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __exit__
-    to avoid ABI boundary violations with compiled code.
+    Maps SQLite extended result codes to SQLSpec exceptions stored on
+    ``pending_exception``.
     """
 
     __slots__ = ()
@@ -325,10 +321,10 @@ class SqliteDriver(SyncDriverAdapterBase):
         return SyncRowStream(SqliteStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "SqliteExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately.
+        """Return a context manager that maps SQLite errors to SQLSpec exceptions.
 
         Returns:
-            Exception handler with deferred exception pattern for mypyc compatibility.
+            Synchronous SQLite exception handler exposing mapped errors via ``pending_exception``.
         """
         return SqliteExceptionHandler()
 

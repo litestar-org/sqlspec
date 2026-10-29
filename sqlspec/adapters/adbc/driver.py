@@ -80,12 +80,8 @@ _CATALOG_QUALIFIED_PARTS = 3
 class AdbcExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling ADBC database exceptions.
 
-    ADBC propagates underlying database errors. Exception mapping
-    depends on the specific ADBC driver being used.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __exit__
-    to avoid ABI boundary violations with compiled code.
+    Captures underlying ADBC driver errors and exposes mapped SQLSpec exceptions
+    on ``pending_exception``.
     """
 
     __slots__ = ()

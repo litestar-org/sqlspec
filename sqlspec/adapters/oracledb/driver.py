@@ -329,14 +329,10 @@ class OraclePipelineMixin:
 
 
 class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
-    """Sync Context manager for handling Oracle database exceptions.
+    """Synchronous context manager for handling Oracle database exceptions.
 
-    Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
-    for better error handling in application code.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __exit__
-    to avoid ABI boundary violations with compiled code.
+    Maps Oracle ``ORA-XXXXX`` error codes to SQLSpec exceptions stored on
+    ``pending_exception``.
     """
 
     __slots__ = ()
@@ -354,12 +350,8 @@ class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
 class OracleAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling Oracle database exceptions.
 
-    Maps Oracle ORA-XXXXX error codes to specific SQLSpec exceptions
-    for better error handling in application code.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __aexit__
-    to avoid ABI boundary violations with compiled code.
+    Maps Oracle ``ORA-XXXXX`` error codes to SQLSpec exceptions stored on
+    ``pending_exception``.
     """
 
     __slots__ = ()

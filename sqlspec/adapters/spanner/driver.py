@@ -105,12 +105,7 @@ _READ_ONLY_ASYNC_SNAPSHOT_DDL_ERROR_MESSAGE = (
 
 
 class SpannerSyncExceptionHandler(BaseSyncExceptionHandler):
-    """Map Spanner client exceptions to SQLSpec exceptions.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __exit__
-    to avoid ABI boundary violations with compiled code.
-    """
+    """Map Spanner client exceptions to SQLSpec exceptions stored on ``pending_exception``."""
 
     __slots__ = ()
 
@@ -125,12 +120,7 @@ class SpannerSyncExceptionHandler(BaseSyncExceptionHandler):
 
 
 class SpannerAsyncExceptionHandler(BaseAsyncExceptionHandler):
-    """Map Spanner client exceptions to SQLSpec exceptions.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __aexit__
-    to avoid ABI boundary violations with compiled code.
-    """
+    """Map async Spanner client exceptions to SQLSpec exceptions stored on ``pending_exception``."""
 
     __slots__ = ()
 

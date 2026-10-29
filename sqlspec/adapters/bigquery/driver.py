@@ -89,12 +89,8 @@ _pq: Any = import_optional("pyarrow.parquet")
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling BigQuery API exceptions.
 
-    Maps HTTP status codes and error reasons to specific SQLSpec exceptions
-    for better error handling in application code.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __exit__
-    to avoid ABI boundary violations with compiled code.
+    Maps HTTP status codes and API error reasons to SQLSpec exceptions stored on
+    ``pending_exception``.
     """
 
     __slots__ = ()

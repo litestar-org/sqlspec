@@ -83,12 +83,8 @@ _MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
 class AsyncmyExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling asyncmy (MySQL) database exceptions.
 
-    Maps MySQL error codes and SQLSTATE to specific SQLSpec exceptions
-    for better error handling in application code.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __aexit__
-    to avoid ABI boundary violations with compiled code.
+    Maps MySQL error codes and SQLSTATE values to SQLSpec exceptions stored on
+    ``pending_exception``.
     """
 
     __slots__ = ()

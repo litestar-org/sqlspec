@@ -71,12 +71,8 @@ logger = get_logger("sqlspec.adapters.duckdb")
 class DuckDBExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling DuckDB database exceptions.
 
-    Uses exception type and message-based detection to map DuckDB errors
-    to specific SQLSpec exceptions for better error handling.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __exit__
-    to avoid ABI boundary violations with compiled code.
+    Maps DuckDB exception types and error messages to SQLSpec exceptions stored
+    on ``pending_exception``.
     """
 
     __slots__ = ()
@@ -358,10 +354,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return DuckDBCursor(connection)
 
     def handle_database_exceptions(self) -> "DuckDBExceptionHandler":
-        """Handle database-specific exceptions and wrap them appropriately.
+        """Return a context manager that maps DuckDB errors to SQLSpec exceptions.
 
         Returns:
-            Exception handler with deferred exception pattern for mypyc compatibility.
+            Synchronous DuckDB exception handler exposing mapped errors via ``pending_exception``.
         """
         return DuckDBExceptionHandler()
 

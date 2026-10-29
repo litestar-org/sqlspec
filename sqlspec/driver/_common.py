@@ -1,4 +1,9 @@
-"""Common driver attributes and utilities."""
+"""Common driver attributes and utilities.
+
+``SyncExceptionHandler`` and ``AsyncExceptionHandler`` record mapped exceptions on
+``pending_exception`` rather than raising inside ``__exit__`` or ``__aexit__`` so
+compiled mypyc callers re-raise outside the context-manager ABI boundary.
+"""
 
 import hashlib
 import logging
@@ -143,11 +148,10 @@ _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
 
 
 class SyncExceptionHandler(Protocol):
-    """Protocol for synchronous exception handlers with deferred exception pattern.
+    """Protocol for synchronous context managers that map driver errors to SQLSpec exceptions.
 
-    Exception handlers implement this protocol to avoid ABI boundary violations
-    with mypyc-compiled code. Instead of raising exceptions from __exit__,
-    handlers store mapped exceptions in pending_exception for the caller to raise.
+    Implementations suppress recognized driver exceptions in ``__exit__`` and expose the
+    mapped SQLSpec exception on ``pending_exception`` for the caller to raise.
     """
 
     def __enter__(self) -> Self: ...
@@ -159,11 +163,10 @@ class SyncExceptionHandler(Protocol):
 
 
 class AsyncExceptionHandler(Protocol):
-    """Protocol for asynchronous exception handlers with deferred exception pattern.
+    """Protocol for asynchronous context managers that map driver errors to SQLSpec exceptions.
 
-    Exception handlers implement this protocol to avoid ABI boundary violations
-    with mypyc-compiled code. Instead of raising exceptions from __aexit__,
-    handlers store mapped exceptions in pending_exception for the caller to raise.
+    Implementations suppress recognized driver exceptions in ``__aexit__`` and expose the
+    mapped SQLSpec exception on ``pending_exception`` for the caller to raise.
     """
 
     async def __aenter__(self) -> Self: ...

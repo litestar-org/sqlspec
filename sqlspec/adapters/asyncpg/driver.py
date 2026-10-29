@@ -64,12 +64,8 @@ logger = get_logger("sqlspec.adapters.asyncpg")
 class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling AsyncPG database exceptions.
 
-    Maps PostgreSQL SQLSTATE error codes to specific SQLSpec exceptions
-    for better error handling in application code.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __aexit__
-    to avoid ABI boundary violations with compiled code.
+    Maps PostgreSQL SQLSTATE error codes to SQLSpec exceptions stored on
+    ``pending_exception``.
     """
 
     __slots__ = ()
