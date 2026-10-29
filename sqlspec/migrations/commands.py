@@ -5,17 +5,19 @@ This module provides the main command interface for database migrations.
 
 import asyncio
 import functools
+import importlib
 import inspect
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from rich.console import Console
-from rich.prompt import Prompt
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from sqlspec.builder import sql
+from sqlspec.builder import CreateTable, DropTable, sql
 from sqlspec.exceptions import MigrationError, SquashValidationError
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
@@ -27,11 +29,12 @@ from sqlspec.migrations.utils import create_migration_file
 from sqlspec.migrations.validation import validate_migration_order
 from sqlspec.migrations.version import generate_conversion_map, generate_timestamp_version, parse_version
 from sqlspec.observability import resolve_db_system
+from sqlspec.utils.fixtures import open_fixture_sync
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from sqlspec.config import AsyncConfigT, SyncConfigT
     from sqlspec.migrations.base import AppliedMigrationRecord, LoadedMigrationMetadata
 
@@ -397,6 +400,10 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 "Dry run complete. No changes were made to the database.",
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
+        elif applied_count > 0 and self._last_command_error is None:
+            auto_dump_path = _resolve_auto_dump_path(self.migrations_path, self.config)
+            if auto_dump_path is not None:
+                self.dump_schema(output_path=auto_dump_path, echo=echo_value)
 
     @_with_command_span("downgrade", metadata_fn=_command_metadata)
     def downgrade(
@@ -598,7 +605,16 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     self.tracker.record_migration(driver, v, description, 0, checksum)
             console.print(f"[green]Database stamped at revision {target_version}[/]")
 
-    def revision(self, message: str, file_type: str | None = None) -> None:
+    def revision(
+        self,
+        message: str,
+        file_type: str | None = None,
+        *,
+        from_schema: bool = False,
+        from_data: "str | Path | None" = None,
+        schema: str | None = None,
+        target_table: str | None = None,
+    ) -> "Path":
         """Create a new migration file with timestamp-based versioning.
 
         Generates a unique timestamp version (YYYYMMDDHHmmss format) to avoid
@@ -607,8 +623,137 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         Args:
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
+            from_schema: When True, populate the migration with the current database schema DDL.
+            from_data: Path to a data file or name of an existing database staging table to infer DDL from.
+            schema: Optional database schema name.
+            target_table: Optional target table name when bootstrapping from data.
+
+        Returns:
+            Path to the created migration file.
         """
-        _create_revision(self.migrations_path, self.config, self._template_settings, message, file_type)
+        if from_schema and from_data is not None:
+            msg = "Cannot specify both from_schema and from_data"
+            raise MigrationError(msg)
+
+        up_sql: Sequence[str] | None = None
+        down_sql: Sequence[str] | None = None
+
+        if from_schema:
+            with self.config.provide_session() as driver:
+                excluded = (self.tracker.version_table, "ddl_migrations")
+                create_res = driver.data_dictionary.get_schema_ddl(
+                    driver, schema=schema, exclude_tables=excluded, direction="create"
+                )
+                drop_res = driver.data_dictionary.get_schema_ddl(
+                    driver, schema=schema, exclude_tables=excluded, direction="drop"
+                )
+                up_sql, down_sql = _normalize_schema_ddl_results(create_res, drop_res)
+        elif from_data is not None:
+            if _is_data_file_source(from_data):
+                context_dialect = MigrationContext.from_config(self.config).dialect
+                dialect = None if context_dialect in {"generic", "unknown", ""} else context_dialect
+                up_sql, down_sql = _infer_ddl_from_data_file(
+                    Path(from_data), schema=schema, target_table=target_table, dialect=dialect
+                )
+            else:
+                with self.config.provide_session() as driver:
+                    ddl_res = driver.data_dictionary.infer_table_ddl_from_data(
+                        driver, str(from_data), schema=schema, target_table=target_table
+                    )
+                    if not ddl_res.ddl:
+                        msg = f"Could not infer DDL from table '{from_data}'"
+                        raise MigrationError(msg)
+                    up_stmt = ddl_res.ddl.rstrip(";").strip() + ";"
+                    dialect = getattr(driver.data_dictionary, "dialect", None) or getattr(driver, "dialect", None)
+                    down_stmt = _build_drop_table_sql(target_table or str(from_data), schema=schema, dialect=dialect)
+                    up_sql, down_sql = [up_stmt], [down_stmt]
+
+        return _create_revision(
+            self.migrations_path,
+            self.config,
+            self._template_settings,
+            message,
+            file_type,
+            up_sql=up_sql,
+            down_sql=down_sql,
+        )
+
+    def dump_schema(
+        self,
+        output_path: "str | Path | None" = None,
+        *,
+        schema: str | None = None,
+        include_migrations_table: bool = False,
+        prefer_native: bool = True,
+        target_dialect: str | None = None,
+        echo: bool | None = None,
+    ) -> str:
+        """Dump the full current database schema DDL to a string and optional file path.
+
+        Args:
+            output_path: Optional file path to write the rendered schema SQL.
+            schema: Optional database schema name to inspect.
+            include_migrations_table: Whether to include the migration tracking table.
+            prefer_native: Prefer engine-native catalog DDL when available.
+            target_dialect: Optional target SQLGlot dialect for cross-dialect transpilation.
+            echo: Echo output to the console.
+
+        Returns:
+            Rendered schema DDL string.
+        """
+        _, echo_value, _ = self._resolve_output_policy(False, echo, False)
+        excluded: tuple[str, ...] = () if include_migrations_table else (self.tracker.version_table, "ddl_migrations")
+        with self.config.provide_session() as driver:
+            create_res = driver.data_dictionary.get_schema_ddl(
+                driver,
+                schema=schema,
+                exclude_tables=excluded,
+                direction="create",
+                prefer_native=prefer_native,
+                target_dialect=target_dialect,
+            )
+            dialect_label = (
+                target_dialect
+                or getattr(driver.data_dictionary, "dialect", None)
+                or getattr(driver, "dialect", None)
+                or "sql"
+            )
+        return _render_schema_dump(
+            create_res,
+            dialect_label=str(dialect_label),
+            schema=schema,
+            output_path=output_path,
+            config=self.config,
+            echo=echo_value,
+        )
+
+    def verify(self, *, strict: bool = False, use_logger: bool = False, echo: bool | None = None) -> "dict[str, Any]":
+        """Verify database migration tracking records against migration files on disk.
+
+        Args:
+            strict: Raise ``MigrationError`` when checksum drift, orphaned records, or partial squashes exist.
+            use_logger: Output verification messages to logger instead of Rich console.
+            echo: Echo output to the console.
+
+        Returns:
+            Verification report dictionary with ``valid``, ``checksum_mismatches``, ``orphaned_records``,
+            ``pending_versions``, and ``partial_squash_errors``.
+        """
+        ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, None)
+        with self.config.provide_session() as driver:
+            self.tracker.ensure_tracking_table(driver)
+            applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
+
+        self.runner.loader.clear_cache()
+        self.runner._metadata_cache.clear()
+        all_migrations = self.runner.get_migration_files()
+        loaded_files: dict[str, LoadedMigrationMetadata] = {}
+        for version, file_path in all_migrations:
+            loaded_files[version] = self.runner.load_migration(file_path, version)
+
+        report = _evaluate_migration_verification(applied_migrations, loaded_files)
+        _finalize_verification_report(report, strict=strict, use_logger=ul, echo=echo_value, summary_only=summary_value)
+        return report
 
     def squash(
         self,
@@ -694,11 +839,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print("[yellow][Preview Mode - No changes made][/]")
             return
 
-        if not yes:
-            response = input("\nProceed with squash? [y/N]: ")
-            if response.lower() != "y":
-                console.print("[yellow]Squash cancelled[/]")
-                return
+        if not yes and not Confirm.ask("Proceed with squash?", default=False):
+            console.print("[yellow]Squash cancelled[/]")
+            return
 
         try:
             if update_database or strategy.lower() == "schema":
@@ -749,6 +892,8 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     console.print(f"[green]✓ Created squashed migration: {plan.target_path.name}[/]")
 
             squasher._cleanup_backup()
+            self.runner.loader.clear_cache()
+            self.runner._metadata_cache.clear()
         except Exception:
             squasher._rollback_backup()
             raise
@@ -793,11 +938,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print("[yellow][Preview Mode - No changes made][/]")
             return
 
-        if not yes:
-            response = input("\nProceed with conversion? [y/N]: ")
-            if response.lower() != "y":
-                console.print("[yellow]Conversion cancelled[/]")
-                return
+        if not yes and not Confirm.ask("Proceed with conversion?", default=False):
+            console.print("[yellow]Conversion cancelled[/]")
+            return
 
         try:
             backup_path = fixer.create_backup()
@@ -829,6 +972,8 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         console.print("[green]✓ No applied migrations to update in tracking table[/]")
 
             fixer.cleanup()
+            self.runner.loader.clear_cache()
+            self.runner._metadata_cache.clear()
             console.print("[green]✓ Conversion complete![/]")
 
         except Exception as e:
@@ -1446,6 +1591,10 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 "Dry run complete. No changes were made to the database.",
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
+        elif applied_count > 0 and self._last_command_error is None:
+            auto_dump_path = _resolve_auto_dump_path(self.migrations_path, self.config)
+            if auto_dump_path is not None:
+                await self.dump_schema(output_path=auto_dump_path, echo=echo_value)
 
     @_with_command_span("downgrade", metadata_fn=_command_metadata)
     async def downgrade(
@@ -1651,7 +1800,16 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     await self.tracker.record_migration(driver, v, description, 0, checksum)
             console.print(f"[green]Database stamped at revision {target_version}[/]")
 
-    async def revision(self, message: str, file_type: str | None = None) -> None:
+    async def revision(
+        self,
+        message: str,
+        file_type: str | None = None,
+        *,
+        from_schema: bool = False,
+        from_data: "str | Path | None" = None,
+        schema: str | None = None,
+        target_table: str | None = None,
+    ) -> "Path":
         """Create a new migration file with timestamp-based versioning.
 
         Generates a unique timestamp version (YYYYMMDDHHmmss format) to avoid
@@ -1660,8 +1818,139 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         Args:
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
+            from_schema: When True, populate the migration with the current database schema DDL.
+            from_data: Path to a data file or name of an existing database staging table to infer DDL from.
+            schema: Optional database schema name.
+            target_table: Optional target table name when bootstrapping from data.
+
+        Returns:
+            Path to the created migration file.
         """
-        _create_revision(self.migrations_path, self.config, self._template_settings, message, file_type)
+        if from_schema and from_data is not None:
+            msg = "Cannot specify both from_schema and from_data"
+            raise MigrationError(msg)
+
+        up_sql: Sequence[str] | None = None
+        down_sql: Sequence[str] | None = None
+
+        if from_schema:
+            async with self.config.provide_session() as driver:
+                excluded = (self.tracker.version_table, "ddl_migrations")
+                create_res = await driver.data_dictionary.get_schema_ddl(
+                    driver, schema=schema, exclude_tables=excluded, direction="create"
+                )
+                drop_res = await driver.data_dictionary.get_schema_ddl(
+                    driver, schema=schema, exclude_tables=excluded, direction="drop"
+                )
+                up_sql, down_sql = _normalize_schema_ddl_results(create_res, drop_res)
+        elif from_data is not None:
+            if _is_data_file_source(from_data):
+                context_dialect = MigrationContext.from_config(self.config).dialect
+                dialect = None if context_dialect in {"generic", "unknown", ""} else context_dialect
+                up_sql, down_sql = _infer_ddl_from_data_file(
+                    Path(from_data), schema=schema, target_table=target_table, dialect=dialect
+                )
+            else:
+                async with self.config.provide_session() as driver:
+                    ddl_res = await driver.data_dictionary.infer_table_ddl_from_data(
+                        driver, str(from_data), schema=schema, target_table=target_table
+                    )
+                    if not ddl_res.ddl:
+                        msg = f"Could not infer DDL from table '{from_data}'"
+                        raise MigrationError(msg)
+                    up_stmt = ddl_res.ddl.rstrip(";").strip() + ";"
+                    dialect = getattr(driver.data_dictionary, "dialect", None) or getattr(driver, "dialect", None)
+                    down_stmt = _build_drop_table_sql(target_table or str(from_data), schema=schema, dialect=dialect)
+                    up_sql, down_sql = [up_stmt], [down_stmt]
+
+        return _create_revision(
+            self.migrations_path,
+            self.config,
+            self._template_settings,
+            message,
+            file_type,
+            up_sql=up_sql,
+            down_sql=down_sql,
+        )
+
+    async def dump_schema(
+        self,
+        output_path: "str | Path | None" = None,
+        *,
+        schema: str | None = None,
+        include_migrations_table: bool = False,
+        prefer_native: bool = True,
+        target_dialect: str | None = None,
+        echo: bool | None = None,
+    ) -> str:
+        """Dump the full current database schema DDL to a string and optional file path.
+
+        Args:
+            output_path: Optional file path to write the rendered schema SQL.
+            schema: Optional database schema name to inspect.
+            include_migrations_table: Whether to include the migration tracking table.
+            prefer_native: Prefer engine-native catalog DDL when available.
+            target_dialect: Optional target SQLGlot dialect for cross-dialect transpilation.
+            echo: Echo output to the console.
+
+        Returns:
+            Rendered schema DDL string.
+        """
+        _, echo_value, _ = self._resolve_output_policy(False, echo, False)
+        excluded: tuple[str, ...] = () if include_migrations_table else (self.tracker.version_table, "ddl_migrations")
+        async with self.config.provide_session() as driver:
+            create_res = await driver.data_dictionary.get_schema_ddl(
+                driver,
+                schema=schema,
+                exclude_tables=excluded,
+                direction="create",
+                prefer_native=prefer_native,
+                target_dialect=target_dialect,
+            )
+            dialect_label = (
+                target_dialect
+                or getattr(driver.data_dictionary, "dialect", None)
+                or getattr(driver, "dialect", None)
+                or "sql"
+            )
+        return _render_schema_dump(
+            create_res,
+            dialect_label=str(dialect_label),
+            schema=schema,
+            output_path=output_path,
+            config=self.config,
+            echo=echo_value,
+        )
+
+    async def verify(
+        self, *, strict: bool = False, use_logger: bool = False, echo: bool | None = None
+    ) -> "dict[str, Any]":
+        """Verify database migration tracking records against migration files on disk.
+
+        Args:
+            strict: Raise ``MigrationError`` when checksum drift, orphaned records, or partial squashes exist.
+            use_logger: Output verification messages to logger instead of Rich console.
+            echo: Echo output to the console.
+
+        Returns:
+            Verification report dictionary with ``valid``, ``checksum_mismatches``, ``orphaned_records``,
+            ``pending_versions``, and ``partial_squash_errors``.
+        """
+        ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, None)
+        async with self.config.provide_session() as driver:
+            await self.tracker.ensure_tracking_table(driver)
+            applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
+
+        self.runner.loader.clear_cache()
+        self.runner._metadata_cache.clear()
+        all_migrations = await self.runner.get_migration_files()
+        loaded_files: dict[str, LoadedMigrationMetadata] = {}
+        for version, file_path in all_migrations:
+            loaded_files[version] = await self.runner.load_migration(file_path, version)
+
+        report = _evaluate_migration_verification(applied_migrations, loaded_files)
+        _finalize_verification_report(report, strict=strict, use_logger=ul, echo=echo_value, summary_only=summary_value)
+        return report
 
     async def squash(
         self,
@@ -1761,11 +2050,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             console.print("[yellow][Preview Mode - No changes made][/]")
             return
 
-        if not yes:
-            response = await asyncio.to_thread(input, "\nProceed with squash? [y/N]: ")
-            if response.lower() != "y":
-                console.print("[yellow]Squash cancelled[/]")
-                return
+        if not yes and not await asyncio.to_thread(Confirm.ask, "Proceed with squash?", default=False):
+            console.print("[yellow]Squash cancelled[/]")
+            return
 
         try:
             if update_database or strategy.lower() == "schema":
@@ -1815,6 +2102,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                     console.print(f"[green]✓ Created squashed migration: {plan.target_path.name}[/]")
 
             squasher._cleanup_backup()
+            self.runner.loader.clear_cache()
+            self.runner._metadata_cache.clear()
         except Exception:
             squasher._rollback_backup()
             raise
@@ -1859,11 +2148,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             console.print("[yellow][Preview Mode - No changes made][/]")
             return
 
-        if not yes:
-            response = await asyncio.to_thread(input, "\nProceed with conversion? [y/N]: ")
-            if response.lower() != "y":
-                console.print("[yellow]Conversion cancelled[/]")
-                return
+        if not yes and not await asyncio.to_thread(Confirm.ask, "Proceed with conversion?", default=False):
+            console.print("[yellow]Conversion cancelled[/]")
+            return
 
         try:
             backup_path = fixer.create_backup()
@@ -1895,6 +2182,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         console.print("[green]✓ No applied migrations to update in tracking table[/]")
 
             fixer.cleanup()
+            self.runner.loader.clear_cache()
+            self.runner._metadata_cache.clear()
             console.print("[green]✓ Conversion complete![/]")
 
         except Exception as e:
@@ -2299,8 +2588,15 @@ def _output_info(
 
 
 def _create_revision(
-    migrations_path: "Path", config: Any, template_settings: Any, message: str, file_type: str | None = None
-) -> None:
+    migrations_path: "Path",
+    config: Any,
+    template_settings: Any,
+    message: str,
+    file_type: str | None = None,
+    *,
+    up_sql: "str | Sequence[str] | None" = None,
+    down_sql: "str | Sequence[str] | None" = None,
+) -> "Path":
     """Create a new migration file with timestamp-based versioning and log it.
 
     Args:
@@ -2309,11 +2605,23 @@ def _create_revision(
         template_settings: Migration template settings.
         message: Description for the migration.
         file_type: Type of migration file to create ('sql' or 'py').
+        up_sql: Optional SQL statements to pre-populate the UP section.
+        down_sql: Optional SQL statements to pre-populate the DOWN section.
+
+    Returns:
+        Path to the created migration file.
     """
     version = generate_timestamp_version()
     selected_format = file_type or template_settings.default_format
     file_path = create_migration_file(
-        migrations_path, version, message, selected_format, config=config, template_settings=template_settings
+        migrations_path,
+        version,
+        message,
+        selected_format,
+        config=config,
+        template_settings=template_settings,
+        up_sql=up_sql,
+        down_sql=down_sql,
     )
     log_with_context(
         logger,
@@ -2326,6 +2634,210 @@ def _create_revision(
         description=message,
     )
     console.print(f"[green]Created migration:[/] {file_path}")
+    return file_path
+
+
+def _resolve_auto_dump_path(migrations_path: "Path", config: Any) -> "Path | None":
+    """Return the auto schema dump path when enabled in migration_config."""
+    migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
+    auto_dump = migration_config.get("auto_dump_schema")
+    if not auto_dump:
+        return None
+    if isinstance(auto_dump, (str, Path)):
+        return Path(auto_dump)
+    configured_path = migration_config.get("schema_dump_path")
+    if isinstance(configured_path, (str, Path)):
+        return Path(configured_path)
+    return migrations_path / "schema.sql"
+
+
+def _render_schema_dump(
+    create_res: Any,
+    *,
+    dialect_label: str,
+    schema: str | None,
+    output_path: "str | Path | None",
+    config: Any,
+    echo: bool,
+) -> str:
+    """Render schema DDL items to a formatted SQL string and optionally write to disk."""
+    up_ddl, _ = _normalize_schema_ddl_results(create_res, ())
+    lines: list[str] = ["-- SQLSpec Schema Dump", f"-- Dialect: {dialect_label}"]
+    if schema:
+        lines.append(f"-- Schema: {schema}")
+    lines.append("")
+    if up_ddl:
+        lines.append("\n\n".join(stmt.rstrip() for stmt in up_ddl))
+    rendered = "\n".join(lines).rstrip() + "\n"
+
+    resolved_output: Path | None = None
+    if output_path is not None:
+        resolved_output = Path(output_path)
+    else:
+        migration_config = cast("dict[str, Any]", getattr(config, "migration_config", None)) or {}
+        configured_path = migration_config.get("schema_dump_path")
+        if isinstance(configured_path, (str, Path)):
+            resolved_output = Path(configured_path)
+
+    if resolved_output is not None:
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        resolved_output.write_text(rendered, encoding="utf-8")
+        if echo:
+            console.print(f"[green]✓ Schema dumped to {resolved_output}[/]")
+    return rendered
+
+
+def _evaluate_migration_verification(
+    applied_migrations: "list[AppliedMigrationRecord]", loaded_files: "dict[str, LoadedMigrationMetadata]"
+) -> "dict[str, Any]":
+    """Compare applied database migration records against migration files on disk."""
+    applied_map = {m["version_num"]: m for m in applied_migrations}
+    checksum_mismatches: list[dict[str, str]] = []
+    orphaned_records: list[str] = []
+    pending_versions: list[str] = []
+    partial_squash_errors: list[dict[str, Any]] = []
+    covered_applied_versions: set[str] = set()
+
+    for version, migration in loaded_files.items():
+        state, applied_replaces, missing_replaces = _classify_squash_reconciliation(version, migration, applied_map)
+        if state == "already_reconciled":
+            covered_applied_versions.add(version)
+            covered_applied_versions.update(applied_replaces)
+            applied_checksum = str(applied_map[version].get("checksum") or "")
+            file_checksum = str(migration.get("checksum") or "")
+            if applied_checksum != file_checksum:
+                checksum_mismatches.append({"version": version, "expected": applied_checksum, "actual": file_checksum})
+        elif state == "replace":
+            covered_applied_versions.update(applied_replaces)
+        elif state == "partial":
+            covered_applied_versions.update(applied_replaces)
+            partial_squash_errors.append({
+                "version": version,
+                "applied_replaces": applied_replaces,
+                "missing_replaces": missing_replaces,
+            })
+        elif version in applied_map:
+            covered_applied_versions.add(version)
+            applied_checksum = str(applied_map[version].get("checksum") or "")
+            file_checksum = str(migration.get("checksum") or "")
+            if applied_checksum != file_checksum:
+                checksum_mismatches.append({"version": version, "expected": applied_checksum, "actual": file_checksum})
+        else:
+            pending_versions.append(version)
+
+    for applied_rec in applied_migrations:
+        ver = applied_rec["version_num"]
+        if ver not in covered_applied_versions:
+            orphaned_records.append(ver)
+
+    is_valid = not (checksum_mismatches or orphaned_records or partial_squash_errors)
+    return {
+        "valid": is_valid,
+        "checksum_mismatches": checksum_mismatches,
+        "orphaned_records": orphaned_records,
+        "pending_versions": pending_versions,
+        "partial_squash_errors": partial_squash_errors,
+    }
+
+
+def _finalize_verification_report(
+    report: "dict[str, Any]", *, strict: bool, use_logger: bool, echo: bool, summary_only: bool
+) -> None:
+    """Log verification report and raise MigrationError when strict verification fails."""
+    if report["valid"]:
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "Migration verification passed (%d pending)",
+            len(report["pending_versions"]),
+            rich_message=f"[green]✓ Migration verification passed ({len(report['pending_versions'])} pending)[/]",
+        )
+        return
+
+    details: list[str] = []
+    if report["checksum_mismatches"]:
+        mismatched = ", ".join(item["version"] for item in report["checksum_mismatches"])
+        details.append(f"checksum mismatch in [{mismatched}]")
+    if report["orphaned_records"]:
+        orphans = ", ".join(report["orphaned_records"])
+        details.append(f"orphaned applied records [{orphans}]")
+    if report["partial_squash_errors"]:
+        partials = ", ".join(item["version"] for item in report["partial_squash_errors"])
+        details.append(f"partially applied squash in [{partials}]")
+
+    summary_text = "; ".join(details)
+    _output_error(
+        use_logger,
+        echo,
+        summary_only,
+        "Verification failed: %s",
+        summary_text,
+        rich_message=f"[red]✗ Verification failed: {summary_text}[/]",
+    )
+    if strict:
+        msg = f"Verification failed: {summary_text}"
+        raise MigrationError(msg)
+
+
+def _is_data_file_source(source: "str | Path") -> bool:
+    """Return True when source represents a file path on disk rather than a database table name."""
+    if isinstance(source, Path):
+        return True
+    candidate = Path(source)
+    return candidate.exists() or candidate.suffix.lower() in {
+        ".json",
+        ".jsonl",
+        ".ndjson",
+        ".parquet",
+        ".arrow",
+        ".ipc",
+        ".feather",
+    }
+
+
+def _build_drop_table_sql(table_name: str, *, schema: str | None = None, dialect: str | None = None) -> str:
+    """Build a semicolon-terminated DROP TABLE IF EXISTS statement."""
+    effective_dialect = None if dialect in {"generic", "unknown", ""} else dialect
+    qualified = f"{schema}.{table_name}" if schema else table_name
+    drop_expr = DropTable(qualified, dialect=effective_dialect).if_exists()._create_base_expression()
+    return drop_expr.sql(dialect=effective_dialect).rstrip(";").strip() + ";"
+
+
+def _infer_ddl_from_data_file(
+    data_path: "Path", *, schema: str | None = None, target_table: str | None = None, dialect: str | None = None
+) -> "tuple[list[str], list[str]]":
+    """Infer CREATE TABLE and DROP TABLE DDL statements from a data file on disk."""
+    if not data_path.exists():
+        msg = f"Data file not found: {data_path}"
+        raise MigrationError(msg)
+
+    resolved_table = target_table or data_path.stem.split(".", 1)[0]
+    qualified_table = f"{schema}.{resolved_table}" if schema else resolved_table
+    suffix_lower = data_path.suffix.lower()
+
+    if suffix_lower == ".parquet":
+        ensure_pyarrow()
+        pq = importlib.import_module("pyarrow.parquet")
+        arrow_schema = pq.read_schema(data_path)
+        create_builder = CreateTable.from_arrow_schema(qualified_table, arrow_schema, dialect=dialect)
+    elif suffix_lower in {".arrow", ".ipc", ".feather"}:
+        ensure_pyarrow()
+        ipc = importlib.import_module("pyarrow.ipc")
+        with ipc.open_file(data_path) as reader:
+            arrow_schema = reader.schema
+        create_builder = CreateTable.from_arrow_schema(qualified_table, arrow_schema, dialect=dialect)
+    elif suffix_lower in {".jsonl", ".ndjson"}:
+        raw_lines = [line.strip() for line in data_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        records = [from_json(line) for line in raw_lines]
+        create_builder = CreateTable.from_records(qualified_table, records, dialect=dialect)
+    else:
+        records = open_fixture_sync(data_path.parent, data_path.stem)
+        create_builder = CreateTable.from_records(qualified_table, records, dialect=dialect)
+
+    up_stmt = create_builder._create_base_expression().sql(dialect=dialect).rstrip(";").strip() + ";"
+    down_stmt = _build_drop_table_sql(resolved_table, schema=schema, dialect=dialect)
+    return [up_stmt], [down_stmt]
 
 
 def _output_error(

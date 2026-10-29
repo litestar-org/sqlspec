@@ -15,7 +15,7 @@ from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from sqlspec.config import DatabaseConfigProtocol
 __all__ = (
@@ -73,6 +73,8 @@ def create_migration_file(
     *,
     config: "DatabaseConfigProtocol[Any, Any, Any] | None" = None,
     template_settings: "MigrationTemplateSettings | None" = None,
+    up_sql: "str | Sequence[str] | None" = None,
+    down_sql: "str | Sequence[str] | None" = None,
 ) -> Path:
     """Create a new migration file from template."""
 
@@ -98,7 +100,7 @@ def create_migration_file(
         safe_message=safe_message,
     )
     renderer = settings.profile.python.render if file_format == "py" else settings.profile.sql.render
-    content = renderer(context)
+    content = renderer(context, up_sql=up_sql, down_sql=down_sql)
     file_path.write_text(content, encoding="utf-8")
     return file_path
 
