@@ -72,7 +72,7 @@
 }
 
 @media screen and (min-width: 76.25em) {
-  .md-sidebar--secondary {
+  .md-sidebar--secondary:not([hidden]) {
     display: block;
   }
 }

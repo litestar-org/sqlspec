@@ -12,6 +12,7 @@ __all__ = (
     "test_build_postbuild_artifacts_and_cli_main",
     "test_emit_legacy_html_redirects_preserves_hashes",
     "test_generate_llms_files_expands_snippets_and_orders_nav",
+    "test_generate_llms_files_fallback_nav_uses_frontmatter_title",
     "test_verify_site_artifacts_accepts_clean_site_and_exemptions",
     "test_verify_site_artifacts_rejects_bloated_secondary_toc",
     "test_verify_site_artifacts_rejects_broken_same_page_anchors",
@@ -35,10 +36,35 @@ def test_generate_llms_files_expands_snippets_and_orders_nav(tmp_path: Path) -> 
     assert "https://sqlspec.dev/learn/quickstart/" in llms_txt
     assert llms_txt.index("/learn/") < llms_txt.index("/learn/quickstart/")
 
-    assert "def main() -> int:" in llms_full
-    assert "return 42" in llms_full
+    assert "    def main() -> int:" in llms_full
+    assert "        return 42" in llms_full
     assert '--8<-- "docs/examples/demo.py"' not in llms_full
     assert "<script>console.log(1);</script>" not in llms_full
+    assert "hide:" not in llms_full
+    assert "frontmatter internal comment" not in llms_full
+
+
+def test_generate_llms_files_fallback_nav_uses_frontmatter_title(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    site_dir = tmp_path / "site"
+    docs_dir.mkdir(parents=True)
+    site_dir.mkdir(parents=True)
+    (docs_dir / "guide.md").write_text(
+        "---\n# frontmatter internal comment\ntitle: Frontmatter Guide Title\nhide:\n  - toc\n---\n\nBody paragraph.\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "zensical.toml"
+    config_path.write_text(
+        '[project]\nsite_name = "SQLSpec"\nsite_url = "https://sqlspec.dev/"\nnav = []\n', encoding="utf-8"
+    )
+
+    generate_llms_files(config_path=config_path, docs_dir=docs_dir, site_dir=site_dir)
+
+    llms_txt = (site_dir / "llms.txt").read_text(encoding="utf-8")
+    llms_full = (site_dir / "llms-full.txt").read_text(encoding="utf-8")
+    assert "- [Frontmatter Guide Title](https://sqlspec.dev/guide/)" in llms_txt
+    assert "frontmatter internal comment" not in llms_txt
+    assert "hide:" not in llms_full
 
 
 def test_emit_legacy_html_redirects_preserves_hashes(tmp_path: Path) -> None:
@@ -185,9 +211,11 @@ def _write_sample_project(root: Path) -> tuple[Path, Path, Path]:
     (docs_dir / "index.md").write_text("# SQLSpec\n\nTyped SQL execution for Python.\n", encoding="utf-8")
     (docs_dir / "learn" / "index.md").write_text("# Learn Overview\n\nStart learning SQLSpec.\n", encoding="utf-8")
     (docs_dir / "learn" / "quickstart.md").write_text(
-        '# Quickstart\n\nRun your first query:\n\n```python\n--8<-- "docs/examples/demo.py"\n```\n', encoding="utf-8"
+        '# Quickstart\n\nRun your first query:\n\n=== "Sync"\n\n    ```python\n    --8<-- "docs/examples/demo.py"\n    ```\n',
+        encoding="utf-8",
     )
     (docs_dir / "playground.md").write_text(
+        "---\n# frontmatter internal comment\nhide:\n  - toc\n---\n\n"
         '# Interactive Playground\n\nTry SQLSpec in browser.\n\n--8<-- "tools/docs/includes/widget.html"\n',
         encoding="utf-8",
     )

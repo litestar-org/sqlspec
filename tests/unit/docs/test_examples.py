@@ -12,6 +12,8 @@ from types import ModuleType
 
 import pytest
 
+from sqlspec.exceptions import MissingDependencyError
+
 __all__ = ()
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -142,8 +144,8 @@ def test_standalone_example_executes(example_path: Path) -> None:
     rel = example_path.relative_to(EXAMPLES_DIR).as_posix()
     try:
         module = _load_example_module(example_path)
-    except ModuleNotFoundError as exc:
-        pytest.skip(f"Optional dependency {exc.name!r} not installed for {rel}")
+    except (ModuleNotFoundError, MissingDependencyError) as exc:
+        pytest.skip(f"Optional dependency not installed for {rel}: {exc}")
 
     if rel in CONFIG_ONLY_MODULES:
         assert hasattr(module, "database_config")
@@ -159,9 +161,12 @@ def test_standalone_example_executes(example_path: Path) -> None:
             result.close()
         return
 
-    outcome = entrypoint()
-    if inspect.iscoroutine(outcome):
-        asyncio.run(outcome)
+    try:
+        outcome = entrypoint()
+        if inspect.iscoroutine(outcome):
+            asyncio.run(outcome)
+    except (ModuleNotFoundError, MissingDependencyError) as exc:
+        pytest.skip(f"Optional dependency not installed for {rel}: {exc}")
 
 
 def _is_directive_comment(comment_text: str) -> bool:

@@ -11,11 +11,14 @@ from typing import Any
 
 __all__ = ("build_postbuild_artifacts", "emit_legacy_html_redirects", "generate_llms_files", "main")
 
-_SNIPPET_PATTERN = re.compile(r'^[ \t]*--8<--[ \t]+"([^"\n]+)"[ \t]*$', re.MULTILINE)
+_FRONTMATTER_PATTERN = re.compile(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|$)", re.DOTALL)
+_FRONTMATTER_TITLE_PATTERN = re.compile(r"^[ \t]*title:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
+_SNIPPET_PATTERN = re.compile(r'^([ \t]*)--8<--[ \t]+"([^"\n]+)"[ \t]*$', re.MULTILINE)
 _HEADING_PATTERN = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 _HTML_BLOCK_PATTERN = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 _MIN_SNIPPET_RANGE_PARTS = 2
 _FULL_SNIPPET_RANGE_PARTS = 3
+_MIN_QUOTED_SCALAR_LENGTH = 2
 
 
 def build_postbuild_artifacts(config_path: Path, docs_dir: Path, site_dir: Path) -> None:
@@ -209,13 +212,31 @@ def _resolve_title_for_rel_path(docs_dir: Path, rel_md: str) -> str:
 
 
 def _extract_markdown_title(md_file: Path) -> str:
-    """Read the first Markdown H1 heading from md_file."""
-    text = md_file.read_text(encoding="utf-8")
-    match = _HEADING_PATTERN.search(text)
+    """Read the first Markdown H1 heading or YAML frontmatter title from md_file."""
+    frontmatter_title, body = _strip_yaml_frontmatter(md_file.read_text(encoding="utf-8"))
+    match = _HEADING_PATTERN.search(body)
     if match:
         return match.group(1).strip()
+    if frontmatter_title:
+        return frontmatter_title
     stem = md_file.stem
     return stem.replace("-", " ").replace("_", " ").title()
+
+
+def _strip_yaml_frontmatter(markdown_text: str) -> tuple[str | None, str]:
+    """Strip leading YAML frontmatter and return an optional title scalar plus Markdown body."""
+    match = _FRONTMATTER_PATTERN.match(markdown_text)
+    if match is None:
+        return None, markdown_text
+    raw_frontmatter = match.group(1)
+    body = markdown_text[match.end() :]
+    title_match = _FRONTMATTER_TITLE_PATTERN.search(raw_frontmatter)
+    if title_match is None:
+        return None, body
+    raw_title = title_match.group(1).strip()
+    if len(raw_title) >= _MIN_QUOTED_SCALAR_LENGTH and raw_title[0] == raw_title[-1] and raw_title[0] in {'"', "'"}:
+        raw_title = raw_title[1:-1].strip()
+    return (raw_title or None), body
 
 
 def _doc_path_to_url(rel_md: str) -> str:
@@ -234,16 +255,18 @@ def _doc_path_to_url(rel_md: str) -> str:
 
 
 def _expand_markdown_for_llms(markdown_text: str, repo_root: Path, page_url: str) -> str:
-    """Expand --8<-- file snippets and omit raw interactive HTML widget blocks."""
+    """Strip YAML frontmatter, expand --8<-- file snippets, and omit HTML widget blocks."""
+    _, body = _strip_yaml_frontmatter(markdown_text)
 
     def _replace_snippet(match: re.Match[str]) -> str:
-        spec = match.group(1).strip()
+        indent = match.group(1)
+        spec = match.group(2).strip()
         path_part, line_slice = _split_snippet_spec(spec)
         snippet_path = (repo_root / path_part).resolve()
         if not snippet_path.is_relative_to(repo_root) or not snippet_path.is_file():
             return match.group(0)
         if snippet_path.suffix.lower() in {".html", ".htm"}:
-            return f"[Interactive HTML widget omitted; open {page_url} in a browser.]"
+            return f"{indent}[Interactive HTML widget omitted; open {page_url} in a browser.]"
         content = snippet_path.read_text(encoding="utf-8")
         if line_slice is not None:
             start_line, end_line = line_slice
@@ -251,10 +274,17 @@ def _expand_markdown_for_llms(markdown_text: str, repo_root: Path, page_url: str
             start_idx = max(start_line - 1, 0)
             end_idx = end_line if end_line is not None else len(lines)
             content = "\n".join(lines[start_idx:end_idx])
-        return content.rstrip("\n")
+        return _indent_block(content.rstrip("\n"), indent)
 
-    expanded = _SNIPPET_PATTERN.sub(_replace_snippet, markdown_text)
+    expanded = _SNIPPET_PATTERN.sub(_replace_snippet, body)
     return _HTML_BLOCK_PATTERN.sub("", expanded)
+
+
+def _indent_block(text: str, indent: str) -> str:
+    """Prefix every non-empty line in text with indent."""
+    if not indent:
+        return text
+    return "\n".join(f"{indent}{line}" if line else "" for line in text.splitlines())
 
 
 def _split_snippet_spec(spec: str) -> tuple[str, tuple[int, int | None] | None]:
