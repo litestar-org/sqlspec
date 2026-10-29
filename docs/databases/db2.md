@@ -9,8 +9,8 @@ uv add "sqlspec[db2]"
 ```
 
 - Choose **`Db2SyncConfig`** or **`Db2AsyncConfig`** for transactional OLTP workloads over IBM's native `clidriver` (`ibm_db` / `ibm_db_dbi`).
-- Note on Linux `aarch64`: IBM publishes prebuilt `clidriver` wheels for Linux `x86_64`, macOS `arm64`, and Windows. On Linux ARM64 hosts, connect to Db2 via [`adbc`](../cloud-analytics/adbc.md) (`adbc-driver-db2` pure-Go DRDA wheel) or guard `ibm-db` with environment markers.
-- For high-volume columnar Arrow extracts on `x86_64`, you can also pair [`arrow_odbc`](../cloud-analytics/arrow-odbc.md) (`dialect="db2"` over 64-bit `libdb2o.so`).
+- Note on Linux `aarch64`: IBM publishes prebuilt `clidriver` wheels for Linux `x86_64`, macOS `arm64`, and Windows. On Linux ARM64 hosts, connect to Db2 via [`adbc`](adbc.md) (`adbc-driver-db2` pure-Go DRDA wheel) or guard `ibm-db` with environment markers.
+- For high-volume columnar Arrow extracts on `x86_64`, you can also pair [`arrow_odbc`](arrow-odbc.md) (`dialect="db2"` over 64-bit `libdb2o.so`).
 
 ## Minimal Connection and Pool Setup
 

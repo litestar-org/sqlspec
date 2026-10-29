@@ -1,6 +1,6 @@
 # PostgreSQL and AlloyDB Overview
 
-SQLSpec provides three dedicated PostgreSQL adapters—[`asyncpg`](asyncpg.md), [`psycopg`](psycopg.md), and [`psqlpy`](psqlpy.md)—plus CockroachDB variants ([`cockroach_asyncpg` and `cockroach_psycopg`](cockroachdb.md)) and columnar [`adbc`](../cloud-analytics/adbc.md) / [`arrow_odbc`](../cloud-analytics/arrow-odbc.md) bridges. All PostgreSQL adapters share catalog reflection, `LISTEN/NOTIFY` event hubs, and vector/BM25 search extensions.
+SQLSpec provides three dedicated PostgreSQL adapters—[`asyncpg`](asyncpg.md), [`psycopg`](psycopg.md), and [`psqlpy`](psqlpy.md)—plus columnar [`adbc`](../adbc.md) and [`arrow_odbc`](../arrow-odbc.md) bridges. For distributed CockroachDB clusters, see the standalone [CockroachDB](../cockroachdb.md) guide. All three PostgreSQL adapters share catalog reflection, `LISTEN/NOTIFY` event hubs, and vector/BM25 search extensions.
 
 ## Install and When to Choose
 
@@ -9,7 +9,6 @@ SQLSpec provides three dedicated PostgreSQL adapters—[`asyncpg`](asyncpg.md), 
 | [`asyncpg`](asyncpg.md) | `uv add "sqlspec[asyncpg]"` | Lowest-latency pure `asyncio` OLTP services using PostgreSQL's binary wire protocol. |
 | [`psycopg`](psycopg.md) | `uv add "sqlspec[psycopg]"` | Applications needing both synchronous and `asyncio` pools, libpq parity, `NullConnectionPool`, or streaming `COPY`. |
 | [`psqlpy`](psqlpy.md) | `uv add "sqlspec[psqlpy]"` | High-concurrency `asyncio` services leveraging a Rust/Tokio connection pool, native `PgVector` binding, and wire pipelining. |
-| [`cockroachdb`](cockroachdb.md) | `uv add "sqlspec[cockroachdb]"` | Distributed CockroachDB clusters requiring automatic `40001` serialization retries and `AS OF SYSTEM TIME` follower reads. |
 
 For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-connector`) or `sqlspec[alloydb]` (`google-cloud-alloydb-connector`).
 
@@ -63,7 +62,7 @@ For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-
 | --- | --- | --- |
 | `pooler_mode` | `"session" \| "transaction" \| "statement"` | Disables protocol-level prepared statement caching automatically in `"transaction"` and `"statement"` modes (PgBouncer, Supavisor, Odyssey). |
 | `direct_dsn` | `str` | Unpooled PostgreSQL DSN used by `config.derive_direct_config()` so DDL migrations and `ListenerHub` (`LISTEN/NOTIFY`) bypass transaction poolers. |
-| `enable_alloydb_columnar` | `bool` | Enables `google_columnar_engine.enabled = 'on'` on Google Cloud AlloyDB connections or transaction-locally via `SET LOCAL`. |
+| `enable_alloydb_columnar` | `bool` | Enables `google_columnar_engine.enable_columnar_scan = 'on'` on Google Cloud AlloyDB connections or transaction-locally via `SET LOCAL`. |
 | `enable_pgvector` | `bool` | Registers `pgvector` distance operators (`<->`, `<=>`, `<#>`) and vector codecs when available. |
 | `enable_paradedb` | `bool` | Enables ParadeDB `pg_search` BM25 (`@@@`) operators and hybrid search SQL generation. |
 | `enable_pg_textsearch` | `bool` | Enables PostgreSQL `pg_textsearch` full-text search extensions in ADK memory stores. |

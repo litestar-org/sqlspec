@@ -1,6 +1,6 @@
 # Microsoft SQL Server
 
-SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`sqlspec.adapters.mssql_python` (`MssqlPythonConfig`) and `sqlspec.adapters.pymssql` (`PymssqlConfig`)—plus zero-copy columnar ODBC streaming via [`arrow_odbc`](../cloud-analytics/arrow-odbc.md).
+SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`sqlspec.adapters.mssql_python` (`MssqlPythonConfig`) and `sqlspec.adapters.pymssql` (`PymssqlConfig`)—plus zero-copy columnar ODBC streaming via [`arrow_odbc`](arrow-odbc.md).
 
 ## Install and When to Choose
 
@@ -8,7 +8,7 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
 | --- | --- | --- |
 | `mssql_python` | `uv add "sqlspec[mssql-python]"` | Microsoft's official modern Python driver with Entra ID (`ActiveDirectoryDefault`) auth and native Arrow `BulkCopy` ingestion. |
 | `pymssql` | `uv add "sqlspec[pymssql]"` | Lightweight FreeTDS-based synchronous driver for classic SQL authentication and portable Linux containers. |
-| [`arrow_odbc`](../cloud-analytics/arrow-odbc.md) | `uv add "sqlspec[arrow-odbc]"` | High-throughput analytical reads streaming ODBC batches directly into Apache Arrow tables. |
+| [`arrow_odbc`](arrow-odbc.md) | `uv add "sqlspec[arrow-odbc]"` | High-throughput analytical reads streaming ODBC batches directly into Apache Arrow tables. |
 
 ## Minimal Connection and Pool Setup
 

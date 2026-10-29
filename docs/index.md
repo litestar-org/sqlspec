@@ -1,4 +1,15 @@
-# SQLSpec
+---
+title: SQLSpec
+hide:
+  - navigation
+---
+
+<h1 id="sqlspec" class="sqlspec-sr-only">SQLSpec</h1>
+
+<div class="sqlspec-hero-banner">
+  <img src="assets/banner-inline-light.svg#only-light" alt="SQLSpec" width="540" height="131">
+  <img src="assets/banner-inline-dark.svg#only-dark" alt="SQLSpec" width="540" height="131">
+</div>
 
 SQLSpec is a SQL-first database access library for Python with unified synchronous and asynchronous session APIs, dialect-aware parameter compilation, statement caching, schema migrations, Apache Arrow streaming, and typed row projection across 20 database adapters. Write plain SQL, load named queries from `.sql` files, or compose dialect-portable queries with SQLGlot while keeping full control over your SQL and database driver.
 

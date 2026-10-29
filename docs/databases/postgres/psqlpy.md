@@ -37,7 +37,7 @@ Acquire sessions via `async with spec.provide_session(config) as session:` and r
 | `keepalive` / `tcp_user_timeout_sec` | `connection_config` | TCP keepalive probes for detecting dropped firewall or load-balancer sockets. |
 | `pooler_mode` | `driver_features` | `"session"`, `"transaction"`, or `"statement"`; passes `prepared=False` automatically in transaction and statement pooler modes. |
 | `direct_dsn` | `driver_features` | Unpooled PostgreSQL DSN used by `derive_direct_config()` for `ListenerHub` (`LISTEN/NOTIFY`) and DDL migrations. |
-| `enable_alloydb_columnar` | `driver_features` | Enables `google_columnar_engine.enabled = 'on'` on Google Cloud AlloyDB. |
+| `enable_alloydb_columnar` | `driver_features` | Enables `google_columnar_engine.enable_columnar_scan = 'on'` on Google Cloud AlloyDB. |
 | `enable_cast_detection` | `driver_features` | Detects explicit `::vector` / `CAST(... AS vector)` expressions to coerce Python lists into `psqlpy.extra_types.PgVector`. |
 | `enable_pgvector` / `enable_paradedb` / `enable_pg_textsearch` | `driver_features` | Enables vector similarity, ParadeDB BM25, and `pg_textsearch` probing in ADK memory stores. |
 

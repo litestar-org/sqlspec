@@ -22,8 +22,8 @@ nav = [
 
 [project.theme]
 language = "en"
-logo = "assets/logo.png"
-favicon = "assets/favicon.png"
+logo = "assets/logo.svg"
+favicon = "assets/favicon.svg"
 features = [
   "content.code.annotate",
   "content.code.copy",
@@ -63,9 +63,33 @@ paths = ["."]
 enable_inventory = true
 inventories = [
   "https://docs.python.org/3/objects.inv",
+  "https://typing-extensions.readthedocs.io/en/stable/objects.inv",
+  "https://click.palletsprojects.com/en/stable/objects.inv",
+  "https://anyio.readthedocs.io/en/stable/objects.inv",
   "https://docs.litestar.dev/latest/objects.inv",
+  "https://fastapi.tiangolo.com/objects.inv",
+  "https://flask.palletsprojects.com/en/stable/objects.inv",
+  "https://sanic.readthedocs.io/en/latest/objects.inv",
+  "https://dishka.readthedocs.io/en/latest/objects.inv",
   "https://msgspec.dev/objects.inv",
+  "https://pydantic.dev/docs/validation/latest/objects.inv",
+  "https://www.attrs.org/en/stable/objects.inv",
   "https://arrow.apache.org/docs/objects.inv",
+  "https://arrow.apache.org/adbc/current/objects.inv",
+  "https://docs.pola.rs/api/python/stable/objects.inv",
+  "https://pandas.pydata.org/docs/objects.inv",
+  "https://developmentseed.org/obstore/latest/objects.inv",
+  "https://filesystem-spec.readthedocs.io/en/latest/objects.inv",
+  "https://opentelemetry-python.readthedocs.io/en/latest/objects.inv",
+  "https://www.psycopg.org/psycopg3/docs/objects.inv",
+  "https://magicstack.github.io/asyncpg/current/objects.inv",
+  "https://python-oracledb.readthedocs.io/en/latest/objects.inv",
+  "https://googleapis.dev/python/bigquery/latest/objects.inv",
+  "https://googleapis.dev/python/spanner/latest/objects.inv",
+  "https://aiosqlite.omnilib.dev/en/stable/objects.inv",
+  "https://pymysql.readthedocs.io/en/latest/objects.inv",
+  "https://aiomysql.readthedocs.io/en/stable/objects.inv",
+  "https://pymssql.readthedocs.io/en/stable/objects.inv",
 ]
 
 [project.plugins.mkdocstrings.handlers.python.options]
