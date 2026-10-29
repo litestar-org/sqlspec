@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable, Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
+from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
@@ -20,6 +21,7 @@ from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult
+    from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable, PandasDataFrame, PolarsDataFrame
 
 __all__ = (
@@ -42,9 +44,26 @@ __all__ = (
     "convert_dict_to_arrow_with_schema",
     "ensure_arrow_table",
     "records_to_arrow_table",
+    "sql_type_from_arrow_type",
 )
 _ARROW_TABLE_COERCER: "TypeDispatcher[Any] | None" = None
 _ARROW_SCHEMA_DECISION_CACHE_SIZE = 512
+_ARROW_TOKEN_FACTORIES: "dict[str, Callable[[Any], Any]]" = {
+    "bool": lambda pa: pa.bool_(),
+    "int16": lambda pa: pa.int16(),
+    "int32": lambda pa: pa.int32(),
+    "int64": lambda pa: pa.int64(),
+    "float32": lambda pa: pa.float32(),
+    "float64": lambda pa: pa.float64(),
+    "decimal": lambda pa: pa.decimal128(38, 9),
+    "string": lambda pa: pa.string(),
+    "binary": lambda pa: pa.binary(),
+    "date": lambda pa: pa.date32(),
+    "time": lambda pa: pa.time64("us"),
+    "timestamp": lambda pa: pa.timestamp("us"),
+    "timestamptz": lambda pa: pa.timestamp("us", tz="UTC"),
+    "duration": lambda pa: pa.duration("us"),
+}
 
 
 @overload
@@ -155,22 +174,79 @@ def arrow_type_from_token(token: str) -> Any:
     return factory(pa)
 
 
-_ARROW_TOKEN_FACTORIES: "dict[str, Callable[[Any], Any]]" = {
-    "bool": lambda pa: pa.bool_(),
-    "int16": lambda pa: pa.int16(),
-    "int32": lambda pa: pa.int32(),
-    "int64": lambda pa: pa.int64(),
-    "float32": lambda pa: pa.float32(),
-    "float64": lambda pa: pa.float64(),
-    "decimal": lambda pa: pa.decimal128(38, 9),
-    "string": lambda pa: pa.string(),
-    "binary": lambda pa: pa.binary(),
-    "date": lambda pa: pa.date32(),
-    "time": lambda pa: pa.time64("us"),
-    "timestamp": lambda pa: pa.timestamp("us"),
-    "timestamptz": lambda pa: pa.timestamp("us", tz="UTC"),
-    "duration": lambda pa: pa.duration("us"),
-}
+def sql_type_from_arrow_type(arrow_type: Any, dialect: str | None = None) -> str:
+    """Return a SQL column type string for a PyArrow DataType.
+
+    Args:
+        arrow_type: PyArrow DataType instance.
+        dialect: Optional target SQL dialect name.
+
+    Returns:
+        Dialect-optimal or standard SQL type string.
+    """
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    config = _resolve_dialect_config(dialect)
+    if _arrow_type_is_uuid(arrow_type):
+        return config.get_optimal_type("uuid") if config is not None else "UUID"
+
+    unwrapped = arrow_type
+    if pa.types.is_dictionary(unwrapped):
+        unwrapped = unwrapped.value_type
+    is_extension = getattr(pa.types, "is_extension", None)
+    if is_extension is not None and is_extension(unwrapped) and not _arrow_type_is_uuid(unwrapped):
+        unwrapped = unwrapped.storage_type
+
+    if _arrow_type_is_uuid(unwrapped):
+        return config.get_optimal_type("uuid") if config is not None else "UUID"
+
+    if pa.types.is_boolean(unwrapped):
+        return config.get_optimal_type("boolean") if config is not None else "BOOLEAN"
+    if pa.types.is_int8(unwrapped) or pa.types.is_int16(unwrapped) or pa.types.is_uint8(unwrapped):
+        return "SMALLINT"
+    if pa.types.is_int32(unwrapped) or pa.types.is_uint16(unwrapped):
+        return "INTEGER"
+    if pa.types.is_int64(unwrapped) or pa.types.is_uint32(unwrapped) or pa.types.is_uint64(unwrapped):
+        return "BIGINT"
+    if pa.types.is_float16(unwrapped) or pa.types.is_float32(unwrapped):
+        return "REAL"
+    if pa.types.is_float64(unwrapped):
+        if config is not None and config.name in {"duckdb", "mysql", "mariadb"}:
+            return "DOUBLE"
+        if config is not None and config.name in {"bigquery", "spanner"}:
+            return config.get_optimal_type("float")
+        return "DOUBLE PRECISION"
+    if pa.types.is_decimal(unwrapped):
+        return f"DECIMAL({unwrapped.precision}, {unwrapped.scale})"
+    if pa.types.is_date(unwrapped):
+        return "DATE"
+    if pa.types.is_time(unwrapped):
+        return "TIME"
+    if pa.types.is_timestamp(unwrapped):
+        if getattr(unwrapped, "tz", None):
+            return config.get_optimal_type("timestamp") if config is not None else "TIMESTAMP WITH TIME ZONE"
+        return "TIMESTAMP"
+    if pa.types.is_duration(unwrapped) or pa.types.is_interval(unwrapped):
+        return "INTERVAL"
+    if (
+        pa.types.is_binary(unwrapped)
+        or pa.types.is_large_binary(unwrapped)
+        or pa.types.is_fixed_size_binary(unwrapped)
+        or getattr(pa.types, "is_binary_view", lambda _: False)(unwrapped)
+    ):
+        return config.get_optimal_type("blob") if config is not None else "BLOB"
+    if (
+        pa.types.is_list(unwrapped)
+        or pa.types.is_large_list(unwrapped)
+        or pa.types.is_fixed_size_list(unwrapped)
+        or pa.types.is_struct(unwrapped)
+        or pa.types.is_map(unwrapped)
+        or getattr(pa.types, "is_list_view", lambda _: False)(unwrapped)
+        or getattr(pa.types, "is_large_list_view", lambda _: False)(unwrapped)
+    ):
+        return config.get_optimal_type("json") if config is not None else "JSON"
+    return config.get_optimal_type("text") if config is not None else "TEXT"
 
 
 def convert_dict_to_arrow_with_schema(
@@ -476,6 +552,21 @@ def _arrow_schema_has_opaque_uuid(schema: Any) -> bool:
     return any(
         _arrow_type_is_opaque_uuid(field.type) or _arrow_type_is_list_of_opaque_uuid(field.type) for field in schema
     )
+
+
+def _resolve_dialect_config(dialect: str | None) -> "DialectConfig | None":
+    if not dialect:
+        return None
+    with contextlib.suppress(ValueError):
+        return get_dialect_config(str(dialect))
+    return None
+
+
+def _arrow_type_is_uuid(data_type: Any) -> bool:
+    if _arrow_type_is_opaque_uuid(data_type):
+        return True
+    ext_name = getattr(data_type, "extension_name", None)
+    return isinstance(ext_name, str) and "uuid" in ext_name.casefold()
 
 
 def _arrow_type_is_opaque_uuid(data_type: Any) -> bool:

@@ -4,9 +4,13 @@ Provides builders for DDL operations including CREATE, DROP, ALTER,
 TRUNCATE, and other schema manipulation statements.
 """
 
+import contextlib
 import re
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
+from uuid import UUID
 
 import sqlglot
 from mypy_extensions import mypyc_attr, trait
@@ -21,8 +25,17 @@ from sqlspec.builder._parsing_utils import (
     parse_order_expression,
 )
 from sqlspec.core import SQL
-from sqlspec.data_dictionary._types import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport, ObjectIdentity
+from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.data_dictionary._types import (
+    DDLResult,
+    DialectConfig,
+    MetadataFidelity,
+    MetadataSource,
+    MetadataSupport,
+    ObjectIdentity,
+)
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.arrow_helpers import sql_type_from_arrow_type
 from sqlspec.utils.type_guards import has_sqlglot_expression
 
 if TYPE_CHECKING:
@@ -108,6 +121,11 @@ _FK_ON_DELETE_RE = re.compile(
 _FK_ON_UPDATE_RE = re.compile(
     r"\bON\s+UPDATE\s+(CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT|NO\s+ACTION)\b", re.IGNORECASE
 )
+_UUID_STR_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_ISO_DATETIME_STR_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$", re.IGNORECASE
+)
+_ISO_DATE_STR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CHAR_LENGTH_TYPES = frozenset({
     "binary",
     "bit",
@@ -834,6 +852,105 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
                 deferrable=fk_spec["deferrable"],
                 initially_deferred=fk_spec["initially_deferred"],
             )
+
+        return builder
+
+    @classmethod
+    def from_arrow_schema(
+        cls,
+        table_name: str,
+        arrow_schema: Any,
+        *,
+        schema: "str | None" = None,
+        primary_key: "str | Sequence[str] | None" = None,
+        if_not_exists: bool = False,
+        dialect: "DialectType" = None,
+    ) -> "CreateTable":
+        """Build a CreateTable builder from a pyarrow.Schema or pyarrow.Table."""
+        resolved_schema = getattr(arrow_schema, "schema", arrow_schema)
+        fields = list(resolved_schema)
+        if not fields:
+            msg = "Cannot infer table schema from empty Arrow schema"
+            raise SQLBuilderError(msg)
+
+        builder = cls(table_name, dialect=dialect)
+        if schema:
+            builder.in_schema(schema)
+        if if_not_exists:
+            builder.if_not_exists()
+
+        pk_cols = [primary_key] if isinstance(primary_key, str) else [str(col) for col in (primary_key or ()) if col]
+        use_inline_pk = len(pk_cols) == 1
+        dialect_str = _normalize_dialect(dialect) if dialect else None
+
+        for field in fields:
+            col_name = str(field.name)
+            dtype = sql_type_from_arrow_type(field.type, dialect=dialect_str)
+            is_pk_member = col_name in pk_cols
+            not_null = is_pk_member or not bool(getattr(field, "nullable", True))
+            builder.column(name=col_name, dtype=dtype, not_null=not_null, primary_key=use_inline_pk and is_pk_member)
+
+        if len(pk_cols) > 1:
+            builder.primary_key_constraint(pk_cols)
+
+        return builder
+
+    @classmethod
+    def from_records(
+        cls,
+        table_name: str,
+        records: "Sequence[Mapping[str, Any] | Any]",
+        *,
+        schema: "str | None" = None,
+        primary_key: "str | Sequence[str] | None" = None,
+        if_not_exists: bool = False,
+        dialect: "DialectType" = None,
+    ) -> "CreateTable":
+        """Infer a CreateTable builder from a sequence of mapping or struct records."""
+        if not records:
+            msg = "Cannot infer table schema from empty records"
+            raise SQLBuilderError(msg)
+
+        norm_records = [row if isinstance(row, Mapping) else _normalize_metadata_row(row) for row in records]
+        ordered_columns: list[str] = []
+        seen_columns: set[str] = set()
+        for row in norm_records:
+            for key in row:
+                col_str = str(key)
+                if col_str not in seen_columns:
+                    seen_columns.add(col_str)
+                    ordered_columns.append(col_str)
+
+        if not ordered_columns:
+            msg = "Cannot infer table schema from empty records"
+            raise SQLBuilderError(msg)
+
+        builder = cls(table_name, dialect=dialect)
+        if schema:
+            builder.in_schema(schema)
+        if if_not_exists:
+            builder.if_not_exists()
+
+        pk_cols = [primary_key] if isinstance(primary_key, str) else [str(col) for col in (primary_key or ()) if col]
+        use_inline_pk = len(pk_cols) == 1
+        dialect_str = _normalize_dialect(dialect) if dialect else None
+
+        for col_name in ordered_columns:
+            has_null = False
+            values: list[Any] = []
+            for row in norm_records:
+                if col_name not in row or row[col_name] is None:
+                    has_null = True
+                else:
+                    values.append(row[col_name])
+
+            is_pk_member = col_name in pk_cols
+            not_null = is_pk_member or not has_null
+            dtype = _infer_sql_type_from_values(values, dialect=dialect_str)
+            builder.column(name=col_name, dtype=dtype, not_null=not_null, primary_key=use_inline_pk and is_pk_member)
+
+        if len(pk_cols) > 1:
+            builder.primary_key_constraint(pk_cols)
 
         return builder
 
@@ -2938,3 +3055,87 @@ def _build_collate_column_constraint(collate: str, dialect: "DialectType | None"
         collate_ident.set("quoted", True)
         collate_ident.meta["_explicit_quoted"] = True
     return exp.ColumnConstraint(kind=exp.CollateColumnConstraint(this=collate_ident))
+
+
+def _resolve_ddl_dialect_config(dialect: str | None) -> "DialectConfig | None":
+    if not dialect:
+        return None
+    with contextlib.suppress(ValueError):
+        return get_dialect_config(dialect)
+    return None
+
+
+def _is_uuid_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(_UUID_STR_RE.match(value.strip()))
+
+
+def _is_iso_datetime_string(value: Any) -> bool:
+    if not isinstance(value, str) or not _ISO_DATETIME_STR_RE.match(value.strip()):
+        return False
+    normalized = value.strip()
+    if normalized.endswith(("Z", "z")):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_iso_date_string(value: Any) -> bool:
+    if not isinstance(value, str) or not _ISO_DATE_STR_RE.match(value.strip()):
+        return False
+    try:
+        date.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
+def _infer_sql_type_from_values(values: "Sequence[Any]", dialect: str | None = None) -> str:
+    """Infer a dialect-aware SQL column type string from observed non-null Python values."""
+    config = _resolve_ddl_dialect_config(dialect)
+    if not values:
+        return config.get_optimal_type("text") if config is not None else "TEXT"
+
+    if all(isinstance(val, bool) for val in values):
+        return config.get_optimal_type("boolean") if config is not None else "BOOLEAN"
+
+    if all(isinstance(val, (int, float, Decimal)) and not isinstance(val, bool) for val in values):
+        if any(isinstance(val, Decimal) for val in values):
+            return "DECIMAL(38, 9)"
+        if any(isinstance(val, float) for val in values):
+            if config is not None and config.name in {"duckdb", "mysql", "mariadb"}:
+                return "DOUBLE"
+            if config is not None and config.name in {"bigquery", "spanner"}:
+                return config.get_optimal_type("float")
+            return "DOUBLE PRECISION"
+        return "BIGINT"
+
+    if all(isinstance(val, UUID) or _is_uuid_string(val) for val in values):
+        return config.get_optimal_type("uuid") if config is not None else "UUID"
+
+    if all(isinstance(val, datetime) or _is_iso_datetime_string(val) for val in values):
+        return config.get_optimal_type("timestamp") if config is not None else "TIMESTAMP WITH TIME ZONE"
+
+    if all((isinstance(val, date) and not isinstance(val, datetime)) or _is_iso_date_string(val) for val in values):
+        return "DATE"
+
+    if all(
+        isinstance(val, (date, datetime)) or _is_iso_date_string(val) or _is_iso_datetime_string(val) for val in values
+    ):
+        return config.get_optimal_type("timestamp") if config is not None else "TIMESTAMP WITH TIME ZONE"
+
+    if all(isinstance(val, time) for val in values):
+        return "TIME"
+
+    if all(isinstance(val, timedelta) for val in values):
+        return "INTERVAL"
+
+    if all(isinstance(val, (bytes, bytearray, memoryview)) for val in values):
+        return config.get_optimal_type("blob") if config is not None else "BLOB"
+
+    if all(isinstance(val, (Mapping, list, tuple)) for val in values):
+        return config.get_optimal_type("json") if config is not None else "JSON"
+
+    return config.get_optimal_type("text") if config is not None else "TEXT"

@@ -2715,3 +2715,58 @@ def test_duckdb_sequence_resync_round_trip(tmp_path: Path) -> None:
             assert next_id == 26
     finally:
         config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("dialect", "generated_flag"),
+    [
+        ("oracle", {"virtual_column": "YES"}),
+        ("tsql", {"is_computed": 1, "computed_definition": "([price]*[qty])"}),
+        ("bigquery", {"is_generated": "ALWAYS", "generation_expression": "price * qty"}),
+        ("spanner", {"is_generated": "ALWAYS"}),
+        ("db2", {"generated_kind": "A"}),
+    ],
+)
+def test_all_dialect_fixture_column_metadata_sync_and_generated_filtering(
+    tmp_path: Path, dialect: str, generated_flag: "dict[str, Any]"
+) -> None:
+    """Sync fixture loading and exporting use data_dictionary.get_columns across all dialects."""
+    (tmp_path / "orders.json").write_text(json.dumps([{"id": 1, "total": 100}]), encoding="utf-8")
+    driver = MagicMock()
+    driver.statement_config.dialect = dialect
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": "id", "data_type": "integer", "is_primary_key": 1},
+        {"column_name": "total", "data_type": "numeric", **generated_flag},
+    ]
+    driver.select.return_value = [{"id": 1, "total": 100}]
+
+    load_table_fixtures_sync(driver, tmp_path)
+    export_table_fixtures_sync(driver, tmp_path / "out", ["orders"], compress=False)
+
+    driver.data_dictionary.get_columns.assert_called_with(driver, table="orders", schema=None)
+    assert driver.execute_many.call_args.args[1] == [{"id": 1}]
+    assert json.loads((tmp_path / "out" / "orders.json").read_text()) == [{"id": 1}]
+
+
+@pytest.mark.parametrize("dialect", ["oracle", "mssql", "bigquery", "spanner", "db2"])
+async def test_all_dialect_fixture_column_metadata_async_and_error_fallback(tmp_path: Path, dialect: str) -> None:
+    """Async fixture column lookup works across all dialects and falls back cleanly on errors."""
+    driver = AsyncMock()
+    driver.statement_config.dialect = dialect
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": "id", "data_type": "integer", "primary_key_ordinal": 1},
+        {"column_name": "computed_col", "data_type": "integer", "is_computed": True},
+    ]
+
+    cols = await fixture_module._table_columns_async(driver, dialect, "sales.orders")
+    assert len(cols) == 2
+    assert cols[0].name == "id"
+    assert cols[0].is_primary is True
+    assert cols[1].name == "computed_col"
+    assert cols[1].is_generated is True
+    driver.data_dictionary.get_columns.assert_awaited_once_with(driver, table="orders", schema="sales")
+
+    failing_driver = AsyncMock()
+    failing_driver.statement_config.dialect = dialect
+    failing_driver.data_dictionary.get_columns.side_effect = RuntimeError("catalog unavailable")
+    assert await fixture_module._table_columns_async(failing_driver, dialect, "orders") == []

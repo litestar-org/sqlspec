@@ -7,6 +7,7 @@ fixture files against a database driver. Supports both sync and async operations
 
 import array
 import base64
+import contextlib
 import gzip
 import os
 import re
@@ -721,7 +722,19 @@ def _truthy_metadata_flag(value: Any) -> bool:
     if isinstance(value, (int, float)):
         return value != 0
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "t", "yes", "y", "always"}
+        return value.strip().lower() in {
+            "1",
+            "true",
+            "t",
+            "yes",
+            "y",
+            "always",
+            "by default",
+            "s",
+            "v",
+            "stored",
+            "virtual",
+        }
     return bool(value)
 
 
@@ -1198,6 +1211,12 @@ def _extract_sequence_from_default(column_default: Any) -> "str | None":
     return None
 
 
+def _uses_metadata_column_lookup(driver: Any) -> bool:
+    """Return whether a driver exposes data_dictionary.get_columns."""
+    data_dictionary = getattr(driver, "data_dictionary", None)
+    return data_dictionary is not None and callable(getattr(data_dictionary, "get_columns", None))
+
+
 def _table_column(row: "Mapping[str, Any]") -> _TableColumn:
     """Return column metadata from a data dictionary column row.
 
@@ -1223,10 +1242,16 @@ def _table_column(row: "Mapping[str, Any]") -> _TableColumn:
     identity_on_null = identity_generation == "by default on null" or (
         not identity_always and _truthy_metadata_flag(row.get("default_on_null"))
     )
+    is_primary = (
+        _truthy_metadata_flag(row.get("is_primary"))
+        or _truthy_metadata_flag(row.get("is_primary_key"))
+        or _truthy_metadata_flag(row.get("primary_key"))
+        or row.get("primary_key_ordinal") is not None
+    )
     return _TableColumn(
         name=str(row["column_name"]),
         data_type=str(row.get("data_type") or "").lower(),
-        is_primary=_truthy_metadata_flag(row.get("is_primary")),
+        is_primary=is_primary,
         is_identity=is_identity,
         identity_always=identity_always,
         sequence_name=None if sequence_name is None else str(sequence_name),
@@ -1274,15 +1299,23 @@ def _table_columns_sync(driver: "SyncDriverAdapterBase", family: str, table: str
     ``current_schema()``, because the data dictionary resolves unqualified names
     through the search path.
     """
+    if not _uses_metadata_column_lookup(driver):
+        return []
     table_name, schema_name = _column_lookup_names(family, table)
-    rows = driver.data_dictionary.get_columns(driver, table=table_name, schema=schema_name)
+    try:
+        rows = driver.data_dictionary.get_columns(driver, table=table_name, schema=schema_name)
+    except Exception:
+        return []
+    if not isinstance(rows, (list, tuple)):
+        return []
     if not rows and family == "postgres" and schema_name is None:
-        active_schema = driver.select_value_or_none("SELECT current_schema()")
-        if active_schema:
-            rows = driver.data_dictionary.get_columns(
-                driver, table=table_name, schema=_quoted_identifier_sql(str(active_schema))
-            )
-    return [_table_column(row) for row in rows]
+        with contextlib.suppress(Exception):
+            active_schema = driver.select_value_or_none("SELECT current_schema()")
+            if isinstance(active_schema, str) and active_schema:
+                rows = driver.data_dictionary.get_columns(
+                    driver, table=table_name, schema=_quoted_identifier_sql(active_schema)
+                )
+    return [_table_column(row) for row in rows if isinstance(row, Mapping) and "column_name" in row]
 
 
 async def _table_columns_async(driver: "AsyncDriverAdapterBase", family: str, table: str) -> "list[_TableColumn]":
@@ -1292,15 +1325,23 @@ async def _table_columns_async(driver: "AsyncDriverAdapterBase", family: str, ta
     ``current_schema()``, because the data dictionary resolves unqualified names
     through the search path.
     """
+    if not _uses_metadata_column_lookup(driver):
+        return []
     table_name, schema_name = _column_lookup_names(family, table)
-    rows = await driver.data_dictionary.get_columns(driver, table=table_name, schema=schema_name)
+    try:
+        rows = await driver.data_dictionary.get_columns(driver, table=table_name, schema=schema_name)
+    except Exception:
+        return []
+    if not isinstance(rows, (list, tuple)):
+        return []
     if not rows and family == "postgres" and schema_name is None:
-        active_schema = await driver.select_value_or_none("SELECT current_schema()")
-        if active_schema:
-            rows = await driver.data_dictionary.get_columns(
-                driver, table=table_name, schema=_quoted_identifier_sql(str(active_schema))
-            )
-    return [_table_column(row) for row in rows]
+        with contextlib.suppress(Exception):
+            active_schema = await driver.select_value_or_none("SELECT current_schema()")
+            if isinstance(active_schema, str) and active_schema:
+                rows = await driver.data_dictionary.get_columns(
+                    driver, table=table_name, schema=_quoted_identifier_sql(active_schema)
+                )
+    return [_table_column(row) for row in rows if isinstance(row, Mapping) and "column_name" in row]
 
 
 def _generated_column_names(columns: "list[_TableColumn]") -> "set[str]":
