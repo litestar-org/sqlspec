@@ -1,11 +1,14 @@
 """Unit tests for the Metadata-to-DDL compiler in sqlspec.builder."""
 
 import sqlite3
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import duckdb
 import pytest
 
+from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.builder import CreateIndex, CreateSequence, CreateTable, DropSequence, compile_table_ddl_results
 from sqlspec.data_dictionary import (
     ColumnDetails,
@@ -150,7 +153,7 @@ def test_create_table_from_metadata_composite_pk_fk_check_unique_defaults_and_co
     assert 'CONSTRAINT "chk_orders_positive_qty" CHECK ("quantity" > 0)' in sql
     assert (
         'CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") '
-        'REFERENCES "customers"("id") ON DELETE CASCADE ON UPDATE SET NULL'
+        'REFERENCES "sales"."customers"("id") ON DELETE CASCADE ON UPDATE SET NULL'
     ) in sql
     assert sql.count("fk_orders_customer") == 1
     assert sql.count("pk_orders") == 1
@@ -937,3 +940,159 @@ def test_from_metadata_without_collector_raises_for_unreported_generated_express
     assert collected == [
         "Column 'b' is a generated column but the catalog did not report its expression; emitted as a plain column"
     ]
+
+
+def _ddl_items(result: Any) -> list[DDLResult]:
+    """Return the DDLResult items of a ``get_schema_ddl`` metadata result."""
+    return [cast("DDLResult", item) for item in result.items]
+
+
+def _replay(session: Any, ddl_results: "list[DDLResult]") -> None:
+    """Execute every generated DDL result in order on a sqlspec session."""
+    for item in ddl_results:
+        assert item.ddl is not None
+        session.execute_script(item.ddl)
+
+
+def test_duckdb_schema_ddl_qualifies_foreign_keys_in_non_default_schema(tmp_path: Path) -> None:
+    """Synthesized DDL for a non-default schema qualifies FK targets so it replays on a fresh database."""
+    with DuckDBConfig(connection_config={"database": str(tmp_path / "source.duckdb")}).provide_session() as source:
+        source.execute_script('CREATE SCHEMA "Sales"')
+        source.execute_script('CREATE TABLE "Sales"."Customers" (id INTEGER PRIMARY KEY)')
+        source.execute_script(
+            'CREATE TABLE "Sales"."Orders" (id INTEGER PRIMARY KEY, cid INTEGER REFERENCES "Sales"."Customers"(id))'
+        )
+        result = source.data_dictionary.get_schema_ddl(source, "Sales", prefer_native=False)
+
+    orders = next(item for item in _ddl_items(result) if item.identity.name == "Orders")
+    assert orders.ddl == (
+        'CREATE TABLE "Sales"."Orders" (\n'
+        '  "id" INT NOT NULL,\n'
+        '  "cid" INT,\n'
+        '  CONSTRAINT "Orders_id_pkey" PRIMARY KEY ("id"),\n'
+        '  CONSTRAINT "Orders_cid_id_fkey" FOREIGN KEY ("cid") REFERENCES "Sales"."Customers"("id")\n'
+        ");"
+    )
+    with DuckDBConfig(connection_config={"database": str(tmp_path / "replay.duckdb")}).provide_session() as replay:
+        replay.execute_script('CREATE SCHEMA "Sales"')
+        _replay(replay, _ddl_items(result))
+        replay.execute_script('INSERT INTO "Sales"."Customers" VALUES (1); INSERT INTO "Sales"."Orders" VALUES (1, 1)')
+        with pytest.raises(Exception, match="foreign key"):
+            replay.execute_script('INSERT INTO "Sales"."Orders" VALUES (2, 99)')
+
+
+def test_duckdb_catalog_expressions_keep_identifier_case_across_dialects(tmp_path: Path) -> None:
+    """DuckDB stores ``Amount > 0`` unquoted; CHECK, generated, and index expressions keep ``"Amount"``."""
+    with DuckDBConfig(connection_config={"database": str(tmp_path / "source.duckdb")}).provide_session() as source:
+        source.execute_script(
+            'CREATE TABLE t ("Amount" INTEGER, "Email" VARCHAR, '
+            '"Double" INTEGER GENERATED ALWAYS AS ("Amount" * 2) VIRTUAL, CHECK ("Amount" > 0))'
+        )
+        source.execute_script('CREATE INDEX ix_lower ON t (lower("Email"))')
+        postgres = source.data_dictionary.get_schema_ddl(source, target_dialect="postgres", prefer_native=False)
+        duck = source.data_dictionary.get_schema_ddl(source, prefer_native=False)
+        sqlite_target = source.data_dictionary.get_schema_ddl(source, target_dialect="sqlite", prefer_native=False)
+
+    assert [item.ddl for item in _ddl_items(postgres)] == [
+        (
+            'CREATE TABLE "t" (\n'
+            '  "Amount" INT,\n'
+            '  "Email" TEXT,\n'
+            '  "Double" INT GENERATED ALWAYS AS (CAST((\n    "Amount" * 2\n  ) AS INT)) STORED,\n'
+            '  CONSTRAINT "t_amount_check" CHECK ("Amount" > 0)\n'
+            ");\n\n"
+            'CREATE INDEX "ix_lower" ON "t"(LOWER("Email"));'
+        )
+    ]
+    with DuckDBConfig(connection_config={"database": str(tmp_path / "replay.duckdb")}).provide_session() as replay:
+        _replay(replay, _ddl_items(duck))
+        replay.execute_script('INSERT INTO t ("Amount", "Email") VALUES (3, \'A@X\')')
+        assert replay.select_value('SELECT "Double" FROM t') == 6
+        with pytest.raises(Exception, match="CHECK constraint"):
+            replay.execute_script('INSERT INTO t ("Amount") VALUES (-1)')
+    with SqliteConfig(connection_config={"database": ":memory:"}).provide_session() as sqlite_replay:
+        _replay(sqlite_replay, _ddl_items(sqlite_target))
+        assert sqlite_replay.select_value("SELECT COUNT(*) FROM sqlite_schema WHERE name = 'ix_lower'") == 1
+
+
+def test_sqlite_to_duckdb_drops_unsupported_fk_actions_with_warning() -> None:
+    """DuckDB has no referential actions; they are omitted with a LOSSY warning and the DDL replays."""
+    with SqliteConfig(connection_config={"database": ":memory:"}).provide_session() as source:
+        source.execute_script(
+            "CREATE TABLE p (id INTEGER PRIMARY KEY); "
+            "CREATE TABLE c (id INTEGER PRIMARY KEY, pid INTEGER REFERENCES p(id) ON DELETE CASCADE ON UPDATE SET NULL)"
+        )
+        result = source.data_dictionary.get_schema_ddl(source, target_dialect="duckdb", prefer_native=False)
+
+    child = next(item for item in _ddl_items(result) if item.identity.name == "c")
+    assert child.fidelity == MetadataFidelity.LOSSY
+    assert child.warnings == (
+        "Foreign key <unnamed>: DuckDB does not support ON DELETE CASCADE; action omitted",
+        "Foreign key <unnamed>: DuckDB does not support ON UPDATE SET NULL; action omitted",
+    )
+    assert (
+        child.ddl
+        == 'CREATE TABLE "c" (\n  "id" INT PRIMARY KEY,\n  "pid" INT,\n  FOREIGN KEY ("pid") REFERENCES "p"("id")\n);'
+    )
+    connection = duckdb.connect(":memory:")
+    for item in _ddl_items(result):
+        assert item.ddl is not None
+        connection.execute(item.ddl)
+
+    with pytest.raises(SQLBuilderError, match="DuckDB does not support ON DELETE CASCADE"):
+        CreateTable("c", dialect="duckdb").column("p", "INT").foreign_key_constraint(
+            "p", "parent", "id", on_delete="CASCADE"
+        ).build()
+
+
+def test_duckdb_enum_type_and_table_replay_on_fresh_database(tmp_path: Path) -> None:
+    """A table using a quoted enum type synthesizes and replays; non-ENUM targets fall back with a warning."""
+    with DuckDBConfig(connection_config={"database": str(tmp_path / "source.duckdb")}).provide_session() as source:
+        source.execute_script(
+            "CREATE TYPE \"Order Status\" AS ENUM ('a', 'b'); CREATE TABLE t (id INTEGER, s \"Order Status\")"
+        )
+        duck = source.data_dictionary.get_schema_ddl(source, prefer_native=False)
+        postgres = source.data_dictionary.get_schema_ddl(source, target_dialect="postgres", prefer_native=False)
+
+    duck_table = next(item for item in _ddl_items(duck) if item.identity.name == "t")
+    assert duck_table.ddl == 'CREATE TABLE "t" (\n  "id" INT,\n  "s" ENUM(\'a\', \'b\')\n);'
+    with DuckDBConfig(connection_config={"database": str(tmp_path / "replay.duckdb")}).provide_session() as replay:
+        _replay(replay, _ddl_items(duck))
+        replay.execute_script("INSERT INTO t VALUES (1, 'a')")
+        with pytest.raises(Exception, match="Could not convert"):
+            replay.execute_script("INSERT INTO t VALUES (2, 'z')")
+
+    postgres_table = next(item for item in _ddl_items(postgres) if item.identity.name == "t")
+    assert postgres_table.ddl == 'CREATE TABLE "t" (\n  "id" INT,\n  "s" TEXT\n);'
+    assert postgres_table.fidelity == MetadataFidelity.LOSSY
+    assert postgres_table.warnings == (
+        "Column 's' uses an inline ENUM type that postgres cannot declare; emitted as text",
+    )
+
+
+def test_quoted_and_schema_qualified_user_defined_types_render_per_dialect() -> None:
+    """Catalog type names such as ``"Sales"."Order Status"`` are kept as user-defined types with their quoting."""
+    columns = [
+        {"column_name": "id", "data_type": "integer", "is_nullable": "NO", "is_primary": True},
+        {"column_name": "status", "data_type": '"Sales"."Order Status"', "is_nullable": "NO"},
+        {"column_name": "mood", "data_type": "app.mood"},
+        {"column_name": "label", "data_type": '"Label Kind"'},
+    ]
+    postgres = compile_table_ddl_results("orders", columns, schema="Sales", dialect="postgres")
+    assert postgres.ddl == (
+        'CREATE TABLE "Sales"."orders" (\n'
+        '  "id" INT NOT NULL PRIMARY KEY,\n'
+        '  "status" "Sales"."Order Status" NOT NULL,\n'
+        '  "mood" app.mood,\n'
+        '  "label" "Label Kind"\n'
+        ");"
+    )
+    assert CreateTable("t", dialect="tsql").column("s", '"Sales"."Order Status"').build().sql == (
+        "CREATE TABLE [t] (\n  [s] [Sales].[Order Status]\n)"
+    )
+
+    connection = duckdb.connect(":memory:")
+    connection.execute("CREATE TYPE \"Label Kind\" AS ENUM ('x', 'y')")
+    connection.execute(CreateTable("t", dialect="duckdb").column("k", '"Label Kind"').build().sql)
+    connection.execute("INSERT INTO t VALUES ('y')")
+    assert connection.execute("SELECT k FROM t").fetchall() == [("y",)]

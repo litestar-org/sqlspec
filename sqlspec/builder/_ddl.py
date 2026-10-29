@@ -126,6 +126,10 @@ _DEFAULT_INFERRED_DECIMAL_PRECISION = 38
 _DEFAULT_INFERRED_DECIMAL_SCALE = 9
 _ORACLE_NUMBER_MAX_PRECISION = 38
 _BARE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_TYPE_NAME_PART = r'(?:"(?:[^"]|"")+"|`(?:[^`]|``)+`|\[(?:[^\]]|\]\])+\]|[A-Za-z_][A-Za-z0-9_$]*)'
+_QUALIFIED_TYPE_NAME_RE = re.compile(rf"^{_TYPE_NAME_PART}(?:\s*\.\s*{_TYPE_NAME_PART}){{0,2}}$")
+_INLINE_ENUM_TYPE_RE = re.compile(r"^\s*ENUM\s*\(", re.IGNORECASE)
+_INLINE_ENUM_DIALECTS = frozenset({"duckdb", "mysql", "clickhouse"})
 _VERBATIM_TYPE_NAME_RE = re.compile(
     r"^[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*(?:\s*\(\s*(?:\d+|MAX)(?:\s*,\s*\d+)?\s*\))?$", re.IGNORECASE
 )
@@ -1319,11 +1323,18 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             if default_val is _UNPARSEABLE_DEFAULT:
                 warnings.append(f"Column {col_name!r} default could not be parsed and was omitted: {raw_default}")
                 default_val = None
+        dtype = _translate_catalog_type(
+            _resolve_metadata_column_type(row, dialect=fragment_dialect), fragment_dialect, dialect
+        )
+        if _INLINE_ENUM_TYPE_RE.match(dtype) and norm_dialect not in _INLINE_ENUM_DIALECTS:
+            warnings.append(
+                f"Column {col_name!r} uses an inline ENUM type that {norm_dialect or 'the target dialect'} cannot "
+                "declare; emitted as text"
+            )
+            dtype = sql_type_for_category("text", norm_dialect)
         self.column(
             name=_catalog_name(col_name, dialect, fragment_dialect),
-            dtype=_translate_catalog_type(
-                _resolve_metadata_column_type(row, dialect=fragment_dialect), fragment_dialect, dialect
-            ),
+            dtype=dtype,
             default=default_val,
             not_null=_resolve_metadata_not_null(row),
             primary_key=primary_key,
@@ -2889,7 +2900,7 @@ def compile_table_ddl_results(
         idx_builder = CreateIndex.from_metadata(
             index_row,
             table_name=table_name,
-            schema=schema,
+            schema=schema or "",
             dialect=dialect,
             source_dialect=source_dialect,
             known_columns=known_columns,
@@ -3283,8 +3294,10 @@ def _parse_catalog_fragment(text: str, dialect: "DialectType | None") -> exp.Exp
 
     Catalogs wrap stored expressions in redundant parentheses (T-SQL reports
     ``([Total]>=(0))``); those around the whole fragment and around single literals or
-    columns are removed. Identifiers the catalog quoted are marked explicit so case
-    normalization keeps their spelling.
+    columns are removed. Identifiers keep the catalog's spelling: quoted identifiers, and
+    unquoted identifiers whose spelling differs from the source dialect's folded form
+    (DuckDB and T-SQL store ``Amount > 0`` for column ``"Amount"``), are marked explicitly
+    quoted so case normalization cannot rename them.
     """
     norm_dialect = _normalize_dialect(dialect) if dialect else None
     try:
@@ -3293,13 +3306,14 @@ def _parse_catalog_fragment(text: str, dialect: "DialectType | None") -> exp.Exp
         return None
     if isinstance(parsed, exp.Paren):
         parsed = parsed.unnest()
-    return parsed.transform(_simplify_catalog_fragment_node, copy=False)
+    return parsed.transform(lambda node: _simplify_catalog_fragment_node(node, norm_dialect), copy=False)
 
 
-def _simplify_catalog_fragment_node(node: exp.Expr) -> exp.Expr:
+def _simplify_catalog_fragment_node(node: exp.Expr, dialect: str | None) -> exp.Expr:
     if isinstance(node, exp.Paren) and isinstance(node.this, (exp.Literal, exp.Column, exp.Null, exp.Boolean)):
         return node.this
-    if isinstance(node, exp.Identifier) and node.quoted:
+    if isinstance(node, exp.Identifier) and (node.quoted or _fold_identifier(node.name, dialect) != node.name):
+        node.set("quoted", True)
         node.meta["sqlspec_explicit_table_quote"] = True
     return node
 
@@ -3416,6 +3430,13 @@ def _supported_foreign_key_actions(
         if on_update and on_update != FOREIGN_KEY_ACTION_RESTRICT:
             warnings.append(f"Foreign key {label}: Oracle does not support ON UPDATE {on_update}; action omitted")
         return resolved_delete, None
+    if norm_dialect == "duckdb":
+        implicit_actions = {FOREIGN_KEY_ACTION_RESTRICT}
+        if on_delete and on_delete not in implicit_actions:
+            warnings.append(f"Foreign key {label}: DuckDB does not support ON DELETE {on_delete}; action omitted")
+        if on_update and on_update not in implicit_actions:
+            warnings.append(f"Foreign key {label}: DuckDB does not support ON UPDATE {on_update}; action omitted")
+        return None, None
     if norm_dialect == "tsql":
         return (
             None if on_delete == FOREIGN_KEY_ACTION_RESTRICT else on_delete,
@@ -3480,8 +3501,11 @@ def _extract_metadata_foreign_keys(
                 warnings.append(f"Foreign key {name or '<unnamed>'} metadata is incomplete and was omitted")
             continue
 
-        ref_schema = _first_non_empty_str(row, "referenced_schema", "references_schema")
-        qualify_ref = bool(ref_schema and table_schema and ref_schema != table_schema)
+        ref_schema = (
+            _first_non_empty_str(row, "referenced_schema", "references_schema", "referenced_table_schema")
+            or table_schema
+        )
+        qualify_ref = bool(ref_schema and table_schema)
         if ref_is_catalog_name:
             ref_table = _catalog_qualified_name(ref_table, ref_schema if qualify_ref else None, dialect, source_dialect)
         elif qualify_ref and ref_schema and "." not in ref_table:
@@ -3575,11 +3599,12 @@ def _parse_native_index_sql(
 
 
 def _strip_default_ordering(column: exp.Expr) -> exp.Expr:
-    """Drop the implicit ascending wrapper SQLGlot adds to parsed index keys, keeping DESC."""
-    if isinstance(column, exp.Ordered) and not column.args.get("desc"):
-        inner: exp.Expr = column.this
-        return inner
-    return column
+    """Drop the implicit ascending wrapper and redundant parentheses around column or function keys, keeping DESC."""
+    inner: exp.Expr = column.this if isinstance(column, exp.Ordered) and not column.args.get("desc") else column
+    if isinstance(inner, exp.Paren) and isinstance(inner.this, (exp.Column, exp.Func)):
+        unwrapped: exp.Expr = inner.this
+        return unwrapped
+    return inner
 
 
 def _metadata_index_key_expressions(
@@ -3754,6 +3779,9 @@ def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | Non
         target_dialect = None
     with contextlib.suppress(ParseError):
         return exp.DataType.build(dtype, dialect=target_dialect)
+    if _QUALIFIED_TYPE_NAME_RE.fullmatch(dtype.strip()):
+        type_name = _mark_explicit_table_quotes(exp.to_table(dtype.strip(), dialect=norm_dialect), dtype.strip())
+        return exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=type_name.sql(dialect=norm_dialect))
     if target_dialect is not None:
         with contextlib.suppress(ParseError):
             return exp.DataType.build(dtype)
@@ -3809,6 +3837,16 @@ def _catalog_name(name: str, dialect: "DialectType | None", source_dialect: "Dia
     return exp.Identifier(this=name, quoted=True).sql(dialect=_normalize_dialect(dialect))
 
 
+def _fold_identifier(name: str, dialect: str | None) -> str:
+    """Return ``name`` as ``dialect`` folds an unquoted identifier."""
+    strategy = Dialect.get_or_raise(dialect).normalization_strategy
+    if strategy in {NormalizationStrategy.UPPERCASE, NormalizationStrategy.CASE_INSENSITIVE_UPPERCASE}:
+        return name.upper()
+    if strategy is NormalizationStrategy.CASE_SENSITIVE:
+        return name
+    return name.lower()
+
+
 def _catalog_name_needs_quotes(
     name: str, dialect: "DialectType | None", source_dialect: "DialectType | None" = None
 ) -> bool:
@@ -3822,17 +3860,8 @@ def _catalog_name_needs_quotes(
         return True
     norm_dialect = _normalize_dialect(dialect)
     sqlglot_dialect = Dialect.get_or_raise(norm_dialect)
-    case_dialect = (
-        sqlglot_dialect if source_dialect is None else Dialect.get_or_raise(_normalize_dialect(source_dialect))
-    )
-    strategy = case_dialect.normalization_strategy
-    if strategy in {NormalizationStrategy.UPPERCASE, NormalizationStrategy.CASE_INSENSITIVE_UPPERCASE}:
-        folded = name.upper()
-    elif strategy is NormalizationStrategy.CASE_SENSITIVE:
-        folded = name
-    else:
-        folded = name.lower()
-    if folded != name:
+    case_dialect = norm_dialect if source_dialect is None else _normalize_dialect(source_dialect)
+    if _fold_identifier(name, case_dialect) != name:
         return True
     if name.lower() in sqlglot_dialect.generator_class.RESERVED_KEYWORDS or name.upper() in _RESERVED_IDENTIFIER_WORDS:
         return True
@@ -4133,17 +4162,25 @@ def _dialect_foreign_key_actions(
 ) -> tuple[str | None, str | None]:
     """Return the referential actions to render, rejecting actions the dialect cannot express.
 
-    Oracle accepts only ``ON DELETE CASCADE`` and ``ON DELETE SET NULL``; ``NO ACTION`` and
-    ``RESTRICT`` are its default behaviour and are omitted.
+    Oracle accepts only ``ON DELETE CASCADE`` and ``ON DELETE SET NULL``; DuckDB accepts no
+    referential actions. ``NO ACTION`` and ``RESTRICT`` are the default behaviour there and
+    are omitted.
 
     Raises:
         SQLBuilderError: When an action has no equivalent on the target dialect.
     """
     on_delete = constraint.on_delete
     on_update = constraint.on_update
-    if (_normalize_dialect(dialect) if dialect else None) != "oracle":
-        return on_delete, on_update
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
     implicit_actions = {FOREIGN_KEY_ACTION_NO_ACTION, FOREIGN_KEY_ACTION_RESTRICT}
+    if norm_dialect == "duckdb":
+        for action_type, action in (("ON DELETE", on_delete), ("ON UPDATE", on_update)):
+            if action and action not in implicit_actions:
+                msg = f"DuckDB does not support {action_type} {action} on foreign keys"
+                raise SQLBuilderError(msg)
+        return None, None
+    if norm_dialect != "oracle":
+        return on_delete, on_update
     if on_update and on_update not in implicit_actions:
         msg = f"Oracle does not support ON UPDATE {on_update} on foreign keys"
         raise SQLBuilderError(msg)

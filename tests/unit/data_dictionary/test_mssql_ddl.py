@@ -144,7 +144,7 @@ def test_mssql_table_ddl_preserves_case_clustered_indexes_and_filter_predicates(
         "  ) PERSISTED,\n"
         "  CONSTRAINT [PK_Orders] PRIMARY KEY ([OrderId]),\n"
         "  CONSTRAINT [CK_Orders_Total] CHECK ([Total] >= 0),\n"
-        "  CONSTRAINT [FK_Orders_Customers] FOREIGN KEY ([CustomerName]) REFERENCES [Customers]([Name])\n"
+        "  CONSTRAINT [FK_Orders_Customers] FOREIGN KEY ([CustomerName]) REFERENCES [Sales].[Customers]([Name])\n"
         ");\n\n"
         "CREATE UNIQUE NONCLUSTERED INDEX [IX_Orders_CustomerName] ON [Sales].[Orders]([CustomerName]) "
         "INCLUDE ([Total])\nWHERE\n  NOT [CustomerName] IS NULL;\n\n"
@@ -174,7 +174,7 @@ def test_mssql_table_ddl_transpiles_types_and_fragments_to_postgres() -> None:
         '  "Tax" DECIMAL(13, 3) GENERATED ALWAYS AS ("Total" * 0.1) STORED,\n'
         '  CONSTRAINT "PK_Orders" PRIMARY KEY ("OrderId"),\n'
         '  CONSTRAINT "CK_Orders_Total" CHECK ("Total" >= 0),\n'
-        '  CONSTRAINT "FK_Orders_Customers" FOREIGN KEY ("CustomerName") REFERENCES "Customers"("Name")\n'
+        '  CONSTRAINT "FK_Orders_Customers" FOREIGN KEY ("CustomerName") REFERENCES "Sales"."Customers"("Name")\n'
         ");\n\n"
         'CREATE UNIQUE INDEX "IX_Orders_CustomerName" ON "Sales"."Orders"("CustomerName") INCLUDE ("Total")\n'
         'WHERE\n  NOT "CustomerName" IS NULL;\n\n'
