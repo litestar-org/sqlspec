@@ -11,7 +11,15 @@ WITH table_inventory AS (
     FROM pragma_table_list AS tl
     WHERE tl.schema = COALESCE(:schema_name, 'main')
       AND tl.type IN ('table', 'virtual')
-      AND tl.name NOT LIKE 'sqlite_%'
+      AND tl.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+),
+fk_edges AS MATERIALIZED (
+    SELECT
+        ti.table_name,
+        fk."table" AS referenced_table
+    FROM table_inventory AS ti
+    JOIN pragma_foreign_key_list(ti.table_name, COALESCE(:schema_name, 'main')) AS fk
+    WHERE fk."table" <> ti.table_name
 ),
 dependency_tree AS (
     SELECT
@@ -21,21 +29,19 @@ dependency_tree AS (
     FROM table_inventory AS ti
     WHERE NOT EXISTS (
         SELECT 1
-        FROM pragma_foreign_key_list(ti.table_name, COALESCE(:schema_name, 'main')) AS fk
-        WHERE fk."table" <> ti.table_name
+        FROM fk_edges AS e
+        WHERE e.table_name = ti.table_name
     )
 
     UNION ALL
 
     SELECT
-        ti.table_name,
+        e.table_name,
         dt.level + 1,
-        dt.path || ti.table_name || '/'
-    FROM table_inventory AS ti
-    JOIN pragma_foreign_key_list(ti.table_name, COALESCE(:schema_name, 'main')) AS fk
-    JOIN dependency_tree AS dt ON fk."table" = dt.table_name
-    WHERE fk."table" <> ti.table_name
-      AND instr(dt.path, '/' || ti.table_name || '/') = 0
+        dt.path || e.table_name || '/'
+    FROM fk_edges AS e
+    JOIN dependency_tree AS dt ON e.referenced_table = dt.table_name
+    WHERE instr(dt.path, '/' || e.table_name || '/') = 0
 ),
 dependency_levels AS (
     SELECT

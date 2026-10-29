@@ -844,6 +844,155 @@ class DataDictionaryMixin:
             ddl=f"{create_expr.sql(dialect=_sqlglot_dialect(dialect))};",
         )
 
+    def _build_type_ddl_from_row(
+        self, row: Any, *, default_schema: str | None = None, dialect: str | None = None
+    ) -> "DDLResult | None":
+        """Build a ``CREATE TYPE ... AS ENUM`` DDLResult from a user-defined type row.
+
+        Only enum types can be rebuilt from catalog rows; other kinds return an explicit
+        unsupported result with a warning.
+        """
+        if not isinstance(row, Mapping):
+            return None
+        name_raw = row.get("type_name") or row.get("name")
+        if not name_raw:
+            return None
+        schema_raw = row.get("schema_name") or default_schema
+        identity = ObjectIdentity(
+            name=str(name_raw),
+            object_type="type",
+            schema=str(schema_raw) if schema_raw else None,
+            dialect=dialect,
+            source=MetadataSource.GENERATED,
+        )
+        logical_type = str(row.get("logical_type") or "").strip().upper()
+        labels = row.get("labels")
+        if logical_type != "ENUM" or labels is None:
+            return DDLResult.unsupported(
+                identity,
+                source=MetadataSource.GENERATED,
+                warnings=(f"{logical_type or 'unknown'} type {identity.name} cannot be rebuilt from catalog rows",),
+            )
+        render_dialect = _sqlglot_dialect(dialect)
+        quoted_type = self._quoted_table(identity.name, identity.schema).sql(dialect=render_dialect)
+        rendered_labels = ", ".join(exp.Literal.string(str(label)).sql(dialect=render_dialect) for label in labels)
+        return DDLResult(
+            identity=identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.GENERATED,
+            source=MetadataSource.GENERATED,
+            ddl=f"CREATE TYPE {quoted_type} AS ENUM ({rendered_labels});",
+        )
+
+    def _synthesize_table_from_catalog(
+        self,
+        table_name: str,
+        schema: str | None,
+        catalog: "Mapping[str, Mapping[str, abc.Sequence[Any]]]",
+        *,
+        source_dialect: str | None,
+        target_dialect: str | None,
+        warnings: tuple[str, ...] = (),
+    ) -> "DDLResult":
+        """Synthesize one table's DDL from schema-wide catalog rows grouped by table."""
+        columns = catalog.get("columns", {}).get(table_name, ())
+        if not columns:
+            return DDLResult.unsupported(
+                ObjectIdentity(table_name, "table", schema=schema, dialect=type(self).dialect),
+                warnings=(*warnings, f"No catalog columns found for table {table_name}"),
+            )
+        return self.build_synthesized_table_ddl(
+            table_name,
+            columns,
+            schema=schema,
+            constraints=catalog.get("constraints", {}).get(table_name, ()),
+            foreign_keys=catalog.get("foreign_keys", {}).get(table_name, ()),
+            indexes=catalog.get("indexes", {}).get(table_name, ()),
+            target_dialect=target_dialect,
+            source_dialect=source_dialect,
+            warnings=warnings,
+        )
+
+    def _group_rows_by_table(
+        self, rows: "abc.Iterable[Any]", table_names: "abc.Sequence[str]"
+    ) -> "dict[str, list[Any]] | None":
+        """Group schema-wide catalog rows by exact table name.
+
+        Returns None when a row does not name its table, so callers fall back to per-table queries.
+        """
+        grouped: dict[str, list[Any]] = {name: [] for name in table_names}
+        for row in rows:
+            table_name = row.get("table_name") if isinstance(row, Mapping) else getattr(row, "table_name", None)
+            if not table_name:
+                return None
+            bucket = grouped.get(str(table_name))
+            if bucket is not None:
+                bucket.append(row)
+        return grouped
+
+    def _catalog_object_identity_result(
+        self, name: str, object_type: str, schema: str | None, dialect: str | None
+    ) -> "DDLResult":
+        """Return an identity-only DDLResult used when only the object's existence matters (drop DDL)."""
+        return DDLResult(
+            identity=ObjectIdentity(
+                name, object_type, schema=schema, dialect=dialect or type(self).dialect, source=MetadataSource.CATALOG
+            ),
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.GENERATED,
+            source=MetadataSource.CATALOG,
+        )
+
+    def _column_reference_text(self, grouped_columns: "Mapping[str, abc.Sequence[Any]]") -> "dict[str, str]":
+        """Join each table's column types and defaults into text searched for type and sequence references."""
+        texts: dict[str, str] = {}
+        for table_name, columns in grouped_columns.items():
+            parts: list[str] = []
+            for column in columns:
+                if isinstance(column, Mapping):
+                    parts.extend(str(column.get(key) or "") for key in ("data_type", "column_default"))
+            texts[table_name] = " ".join(parts)
+        return texts
+
+    def _link_schema_references(
+        self, items: "list[DDLResult]", reference_text: "Mapping[str, str]"
+    ) -> "list[DDLResult]":
+        """Add dependency edges from tables to the types and sequences they reference and from views to relations.
+
+        References are found by whole-identifier search in the table DDL plus ``reference_text``
+        (column types and defaults) and in the view DDL.
+        """
+        referenced = [item.identity for item in items if item.identity.object_type.lower() in {"sequence", "type"}]
+        relations = [
+            item.identity
+            for item in items
+            if self._is_table_object_type(item.identity.object_type) or "view" in item.identity.object_type.lower()
+        ]
+        linked: list[DDLResult] = []
+        for item in items:
+            object_type = item.identity.object_type.lower()
+            if self._is_table_object_type(object_type):
+                text = f"{item.ddl or ''} {reference_text.get(item.identity.name, '')}"
+                candidates = referenced
+            elif "view" in object_type:
+                text = item.ddl or ""
+                candidates = relations
+            else:
+                linked.append(item)
+                continue
+            edges = tuple(
+                DependencyEdge(
+                    item.identity,
+                    target,
+                    _REFERENCE_EDGE_KINDS.get(target.object_type.lower(), DependencyEdgeKind.VIEW_REFERENCE),
+                    source=item.identity.source,
+                )
+                for target in candidates
+                if target != item.identity and self._references_identifier(text, target.name)
+            )
+            linked.append(self._with_dependencies(item, (*item.dependencies, *edges)) if edges else item)
+        return linked
+
     def _resolve_schema_object_identity(
         self,
         lookup: "Mapping[tuple[str, str, str], ObjectIdentity]",
@@ -934,7 +1083,7 @@ class DataDictionaryMixin:
         self, include_domains: "abc.Sequence[str] | None", exclude_domains: "abc.Sequence[str] | None"
     ) -> "set[str]":
         """Return the synthesizable schema DDL domains selected by include/exclude filters."""
-        allowed = {"sequences", "tables", "views"}
+        allowed = {"sequences", "tables", "types", "views"}
         if include_domains is not None:
             allowed &= self._normalize_schema_ddl_domains(include_domains)
         if exclude_domains is not None:
@@ -978,8 +1127,9 @@ class DataDictionaryMixin:
 
         ``exclude_tables`` entries are compared as bare, unquoted, case-insensitive names with any
         schema qualification stripped; indexes and triggers of excluded tables are excluded too.
-        Objects without usable DDL are reported in the result warnings instead of being dropped
-        silently. For ``direction="drop"`` each object is converted into ``DROP ... IF EXISTS``
+        Objects without usable CREATE DDL are reported in the result warnings instead of being
+        dropped silently; drop direction needs only object identities, so every collected object is
+        kept. For ``direction="drop"`` each object is converted into ``DROP ... IF EXISTS``
         in reverse dependency order; indexes and triggers are omitted because dropping their
         table removes them. Table-to-table ordering comes from ``foreign_keys``; catalog dependency
         rows whose dependent is a table are ignored because engines such as DuckDB record foreign
@@ -998,11 +1148,12 @@ class DataDictionaryMixin:
             if self._is_excluded_schema_object(item, excluded_names):
                 continue
             candidate = item
-            if candidate.status == MetadataSupport.SUPPORTED and candidate.ddl and direction == "create":
-                candidate = self._transpile_ddl_result(candidate, target_dialect=target_dialect)
-            if candidate.status != MetadataSupport.SUPPORTED or not candidate.ddl:
-                result_warnings.append(self._skipped_schema_object_warning(candidate))
-                continue
+            if direction == "create":
+                if candidate.status == MetadataSupport.SUPPORTED and candidate.ddl:
+                    candidate = self._transpile_ddl_result(candidate, target_dialect=target_dialect)
+                if candidate.status != MetadataSupport.SUPPORTED or not candidate.ddl:
+                    result_warnings.append(self._skipped_schema_object_warning(candidate))
+                    continue
             filtered.append(candidate)
 
         identity_lookup: dict[tuple[str, str, str], ObjectIdentity] = {}
@@ -1410,6 +1561,11 @@ class DataDictionaryMixin:
             schema=schema,
             dialect=_ddl_dialect_or_none(target_dialect or type(self).dialect),
         )
+
+    @staticmethod
+    def _references_identifier(sql_text: str, name: str) -> bool:
+        """Return True when ``name`` appears in ``sql_text`` as a whole identifier."""
+        return re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", sql_text, re.IGNORECASE) is not None
 
     @staticmethod
     def _normalize_schema_ddl_domains(domains: "abc.Sequence[str]") -> "set[str]":
@@ -3396,6 +3552,10 @@ _DROP_OBJECT_KINDS: Final[dict[str, tuple[str, bool]]] = {
     "table function": ("TABLE FUNCTION", False),
 }
 _SEQUENCE_SYNTHESIS_UNSUPPORTED_DIALECTS: Final = frozenset({"spanner"})
+_REFERENCE_EDGE_KINDS: Final[dict[str, DependencyEdgeKind]] = {
+    "sequence": DependencyEdgeKind.SEQUENCE_USE,
+    "type": DependencyEdgeKind.DEFAULT_EXPRESSION,
+}
 _SEQUENCE_NUMERIC_PROPERTIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("start", ("start_value", "start_with", "start")),
     ("increment", ("increment_by", "increment")),

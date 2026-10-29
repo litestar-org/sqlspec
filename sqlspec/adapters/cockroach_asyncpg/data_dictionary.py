@@ -1,17 +1,13 @@
 """CockroachDB AsyncPG data dictionary."""
 
-import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
-    DDL_PARENT_TABLE_CONTEXT_KEY,
     ColumnMetadata,
     DDLResult,
-    DependencyEdge,
-    DependencyEdgeKind,
     ForeignKeyMetadata,
     IndexMetadata,
     MetadataCapability,
@@ -261,22 +257,15 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
         include_dependencies: bool,
         redact: bool,
     ) -> DDLResult | None:
-        """Return CockroachDB DDL for one object.
+        """Return CockroachDB DDL for one object from the stable query pack.
 
-        ``crdb_internal`` create statements are used only when ``supports_crdb_internal_metadata`` is
-        enabled; otherwise the stable query pack reports lossy DDL and tables are synthesized.
+        The stable pack cannot emit ``SHOW CREATE`` output, so it reports lossy DDL with a warning
+        and the base class synthesizes table DDL from stable catalog metadata.
         """
         _ = include_dependencies, redact
-        internal_query = _crdb_internal_ddl_query("ddl_by_object")
-        if internal_query is None:
-            result = await self._select_domain(
-                driver, "ddl", "by_object", schema_name=schema, object_name=object_name, object_type=object_type
-            )
-        else:
-            rows = await driver.select(
-                internal_query, schema_name=schema, object_name=object_name, object_type=object_type
-            )
-            result = _metadata_result("ddl", _cockroach_metadata_capability("ddl"), rows)
+        result = await self._select_domain(
+            driver, "ddl", "by_object", schema_name=schema, object_name=object_name, object_type=object_type
+        )
         return _cockroach_ddl_result_from_rows(
             dialect=type(self).dialect,
             object_name=object_name,
@@ -285,18 +274,6 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
             rows=result.items,
             warnings=result.warnings,
         )
-
-    async def _get_native_schema_ddl(
-        self, driver: "CockroachAsyncpgDriver", schema: str | None, *, include_dependencies: bool, redact: bool
-    ) -> list[DDLResult] | None:
-        """Return CockroachDB DDL for every schema object when crdb_internal metadata is enabled."""
-        _ = include_dependencies, redact
-        internal_query = _crdb_internal_ddl_query("ddl_by_schema")
-        if internal_query is None:
-            return None
-        schema_name = self.resolve_schema(schema)
-        rows = await driver.select(internal_query, schema_name=schema_name)
-        return _cockroach_schema_ddl_results(tuple(rows), schema=schema_name)
 
     async def _select_domain(
         self, driver: "CockroachAsyncpgDriver", domain: str, query_name: str, **parameters: Any
@@ -400,95 +377,6 @@ def _cockroach_ddl_result_from_rows(
             warnings=result_warnings,
         )
     return DDLResult.lossy(identity, ddl=None, source=MetadataSource.INFORMATION_SCHEMA, warnings=result_warnings)
-
-
-def _cockroach_schema_ddl_results(rows: tuple[object, ...], *, schema: str | None) -> list[DDLResult]:
-    """Build native DDL results from ``ddl.sql`` ``by_schema`` rows with non-foreign-key dependency edges."""
-    entries: list[tuple[ObjectIdentity, str, str | None, str]] = []
-    relations: dict[str, ObjectIdentity] = {}
-    sequences: dict[str, ObjectIdentity] = {}
-    for row in rows:
-        object_name_val = _row_value(row, "object_name")
-        ddl_val = _row_value(row, "ddl")
-        object_name = str(object_name_val) if object_name_val is not None else ""
-        if not object_name or ddl_val is None:
-            continue
-        object_type = str(_row_value(row, "object_type") or "table").lower()
-        table_name_val = _row_value(row, "table_name")
-        row_schema = _row_value(row, "schema_name")
-        fidelity_val = _row_value(row, "fidelity")
-        identity = ObjectIdentity(
-            name=object_name,
-            object_type=object_type,
-            schema=str(row_schema) if row_schema is not None else schema,
-            dialect="cockroachdb",
-            source=MetadataSource.INFORMATION_SCHEMA,
-        )
-        fidelity = str(fidelity_val) if fidelity_val is not None else MetadataFidelity.NATIVE.value
-        entries.append((identity, str(ddl_val), str(table_name_val) if table_name_val is not None else None, fidelity))
-        if object_type in {"table", "view", "materialized_view"}:
-            relations[object_name.lower()] = identity
-        elif object_type == "sequence":
-            sequences[object_name.lower()] = identity
-
-    results: list[DDLResult] = []
-    for identity, ddl_text, table_name, fidelity in entries:
-        edges: list[DependencyEdge] = []
-        context: dict[str, object] = {}
-        object_type = identity.object_type
-        if object_type in {"index", "trigger"} and table_name is not None:
-            context[DDL_PARENT_TABLE_CONTEXT_KEY] = table_name
-            parent_identity = relations.get(table_name.lower())
-            if parent_identity is not None:
-                edge_kind = (
-                    DependencyEdgeKind.TRIGGER_TARGET
-                    if object_type == "trigger"
-                    else DependencyEdgeKind.INDEX_EXPRESSION
-                )
-                edges.append(
-                    DependencyEdge(identity, parent_identity, edge_kind, source=MetadataSource.INFORMATION_SCHEMA)
-                )
-        elif object_type == "table":
-            edges.extend(
-                DependencyEdge(
-                    identity, seq_identity, DependencyEdgeKind.SEQUENCE_USE, source=MetadataSource.INFORMATION_SCHEMA
-                )
-                for seq_identity in sequences.values()
-                if _references_identifier(ddl_text, seq_identity.name)
-            )
-        elif object_type in {"view", "materialized_view"}:
-            edges.extend(
-                DependencyEdge(
-                    identity, ref_identity, DependencyEdgeKind.VIEW_REFERENCE, source=MetadataSource.INFORMATION_SCHEMA
-                )
-                for ref_key, ref_identity in relations.items()
-                if ref_key != identity.name.lower() and _references_identifier(ddl_text, ref_identity.name)
-            )
-        results.append(
-            DDLResult(
-                identity=identity,
-                status=MetadataSupport.SUPPORTED,
-                fidelity=fidelity,
-                source=MetadataSource.INFORMATION_SCHEMA,
-                ddl=ddl_text,
-                dependencies=tuple(edges),
-                context=context,
-            )
-        )
-    return results
-
-
-def _references_identifier(sql_text: str, name: str) -> bool:
-    """Return True when ``name`` appears in ``sql_text`` as a whole identifier."""
-    return re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", sql_text, re.IGNORECASE) is not None
-
-
-def _crdb_internal_ddl_query(query_name: str) -> "SQL | None":
-    """Return a crdb_internal DDL query when ``supports_crdb_internal_metadata`` is enabled, else None."""
-    query = get_data_dictionary_loader().get_domain_query(
-        "cockroachdb", "crdb_internal", query_name, required_features=("supports_crdb_internal_metadata",)
-    )
-    return query.sql if query.is_supported else None
 
 
 def _cockroach_domain_sql(domain: str, query_name: str) -> "SQL":

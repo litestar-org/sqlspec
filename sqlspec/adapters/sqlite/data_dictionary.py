@@ -215,6 +215,11 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
         _ = driver, schema
         return MetadataResult("sequences", items=())
 
+    def get_types(self, driver: "SqliteDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Return an empty type result because SQLite has no user-defined types."""
+        _ = driver, schema
+        return MetadataResult("types", items=())
+
     def _get_native_object_ddl(
         self,
         driver: "SqliteDriver",

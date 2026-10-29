@@ -194,6 +194,12 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
         rows = driver.select(self._get_domain_query_text("sequences", "by_schema"), schema_name=schema_name)
         return MetadataResult("sequences", items=tuple(rows))
 
+    def get_types(self, driver: "DuckDBDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Get user-defined type metadata from duckdb_types()."""
+        schema_name = self.resolve_schema(schema)
+        rows = driver.select(self._get_domain_query_text("types", "by_schema"), schema_name=schema_name)
+        return MetadataResult("types", items=tuple(rows))
+
     def get_dependencies(
         self, driver: "DuckDBDriver", object_name: "str | None" = None, schema: "str | None" = None
     ) -> "MetadataResult":

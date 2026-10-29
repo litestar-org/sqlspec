@@ -934,6 +934,8 @@ class SyncDataDictionaryProtocol(Protocol):
 
     def get_sequences(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
 
+    def get_types(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
     def get_ddl(
         self,
         driver: Any,
@@ -1039,6 +1041,8 @@ class AsyncDataDictionaryProtocol(Protocol):
     ) -> "MetadataResult": ...
 
     async def get_sequences(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
+    async def get_types(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
 
     async def get_ddl(
         self,

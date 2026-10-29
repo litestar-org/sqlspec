@@ -9,11 +9,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
-from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
-from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
-    CockroachPsycopgAsyncDataDictionary,
-    CockroachPsycopgSyncDataDictionary,
-)
+from sqlspec.adapters.cockroach_psycopg.data_dictionary import CockroachPsycopgSyncDataDictionary
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
@@ -24,7 +20,6 @@ from sqlspec.data_dictionary import (
     MetadataResult,
     MetadataSource,
     MetadataSupport,
-    get_dialect_config,
 )
 
 NATIVE_SQLITE_SCHEMA = (
@@ -56,13 +51,7 @@ def test_native_ddl_query_packs_expose_by_object_and_by_schema() -> None:
 
     crdb_stable = loader.get_domain_query_text("cockroachdb", "ddl", "by_object") or ""
     assert "crdb_internal" not in crdb_stable
-    crdb_by_schema = loader.get_domain_query_text("cockroachdb", "crdb_internal", "ddl_by_schema") or ""
-    assert "crdb_internal.tables" in crdb_by_schema
-    assert "pg_get_indexdef" in crdb_by_schema
-    gated = loader.get_domain_query(
-        "cockroachdb", "crdb_internal", "ddl_by_schema", required_features=("supports_crdb_internal_metadata",)
-    )
-    assert gated.is_supported is False
+    assert loader.get_domain_query_text("cockroachdb", "crdb_internal", "ddl_by_schema") is None
 
 
 def test_sqlite_native_object_ddl_returns_stored_statements() -> None:
@@ -258,62 +247,6 @@ class _FakeSequencedAsyncDriver:
         return self._sync.select(query, **kwargs)
 
 
-def _cockroach_schema_rows() -> list[dict[str, Any]]:
-    return [
-        {
-            "schema_name": "public",
-            "object_name": "ddl_migrations",
-            "object_type": "table",
-            "ddl": "CREATE TABLE public.ddl_migrations (version_num STRING PRIMARY KEY)",
-            "fidelity": "native",
-        },
-        {
-            "schema_name": "public",
-            "object_name": "Orders",
-            "object_type": "table",
-            "ddl": 'CREATE TABLE public."Orders" (id INT8 PRIMARY KEY, user_id INT8 REFERENCES public.users(id))',
-            "fidelity": "native",
-        },
-        {
-            "schema_name": "public",
-            "object_name": "users",
-            "object_type": "table",
-            "ddl": "CREATE TABLE public.users (id INT8 PRIMARY KEY)",
-            "fidelity": "native",
-        },
-        {
-            "schema_name": "public",
-            "object_name": "idx_orders_user",
-            "object_type": "index",
-            "table_name": "Orders",
-            "ddl": 'CREATE INDEX idx_orders_user ON public."Orders" (user_id)',
-            "fidelity": "native",
-        },
-    ]
-
-
-def _cockroach_fk_rows() -> list[dict[str, Any]]:
-    return [
-        {
-            "table_name": "Orders",
-            "column_name": "user_id",
-            "referenced_table": "users",
-            "referenced_column": "id",
-            "constraint_name": "fk_orders_users",
-            "table_schema": "public",
-            "referenced_schema": "public",
-            "on_delete": "CASCADE",
-            "on_update": "NO ACTION",
-        }
-    ]
-
-
-@pytest.fixture
-def crdb_internal_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Enable the crdb_internal metadata feature gate for native CockroachDB DDL."""
-    monkeypatch.setitem(get_dialect_config("cockroachdb").feature_flags, "supports_crdb_internal_metadata", True)
-
-
 def test_cockroach_default_ddl_uses_stable_catalog_and_synthesizes_tables() -> None:
     """Without crdb_internal metadata, CockroachDB schema DDL is synthesized from stable catalog surfaces."""
     dictionary = CockroachPsycopgSyncDataDictionary()
@@ -323,64 +256,6 @@ def test_cockroach_default_ddl_uses_stable_catalog_and_synthesizes_tables() -> N
     result = dictionary.get_object_ddl(cast("Any", driver), "users", schema="public")
     assert "crdb_internal" not in str(driver.calls[0][0])
     assert result.status == MetadataSupport.UNSUPPORTED
-
-
-@pytest.mark.usefixtures("crdb_internal_enabled")
-def test_cockroach_sync_native_ddl_and_schema_ddl() -> None:
-    """CockroachDB native schema DDL is ordered by foreign keys and dropped with quoted exact names."""
-    dictionary = CockroachPsycopgSyncDataDictionary()
-    single_driver = _FakeSequencedSyncDriver([
-        [
-            {
-                "schema_name": "public",
-                "object_name": "users",
-                "object_type": "table",
-                "ddl": "CREATE TABLE public.users (id INT8 PRIMARY KEY)",
-                "fidelity": "native",
-            }
-        ]
-    ])
-    single = dictionary.get_object_ddl(cast("Any", single_driver), "users", schema="public")
-    assert single.fidelity == MetadataFidelity.NATIVE
-    assert single.ddl == "CREATE TABLE public.users (id INT8 PRIMARY KEY)"
-
-    create_driver = _FakeSequencedSyncDriver([_cockroach_schema_rows(), _cockroach_fk_rows()])
-    create = dictionary.get_schema_ddl(cast("Any", create_driver), schema="public", exclude_tables=("ddl_migrations",))
-    assert _statements(create) == [
-        "CREATE TABLE public.users (id INT8 PRIMARY KEY)",
-        'CREATE TABLE public."Orders" (id INT8 PRIMARY KEY, user_id INT8 REFERENCES public.users(id))',
-        'CREATE INDEX idx_orders_user ON public."Orders" (user_id)',
-    ]
-
-    drop_driver = _FakeSequencedSyncDriver([_cockroach_schema_rows(), _cockroach_fk_rows()])
-    drop = dictionary.get_schema_ddl(
-        cast("Any", drop_driver), schema="public", direction="drop", exclude_tables=('"public"."ddl_migrations"',)
-    )
-    assert _statements(drop) == ['DROP TABLE IF EXISTS "public"."Orders";', 'DROP TABLE IF EXISTS "public"."users";']
-
-
-@pytest.mark.anyio
-@pytest.mark.usefixtures("crdb_internal_enabled")
-async def test_cockroach_async_native_ddl_and_schema_ddl() -> None:
-    """Async CockroachDB dictionaries share the native schema DDL ordering and DROP generation."""
-    for dictionary in (CockroachAsyncpgDataDictionary(), CockroachPsycopgAsyncDataDictionary()):
-        create_driver = _FakeSequencedAsyncDriver([_cockroach_schema_rows(), _cockroach_fk_rows()])
-        create = await dictionary.get_schema_ddl(cast("Any", create_driver), schema="public")
-        assert [item.identity.name for item in create.items if isinstance(item, DDLResult)] == [
-            "ddl_migrations",
-            "users",
-            "Orders",
-            "idx_orders_user",
-        ]
-
-        drop_driver = _FakeSequencedAsyncDriver([_cockroach_schema_rows(), _cockroach_fk_rows()])
-        drop = await dictionary.get_schema_ddl(
-            cast("Any", drop_driver), schema="public", direction="drop", exclude_tables=("DDL_MIGRATIONS",)
-        )
-        assert _statements(drop) == [
-            'DROP TABLE IF EXISTS "public"."Orders";',
-            'DROP TABLE IF EXISTS "public"."users";',
-        ]
 
 
 def _bigquery_schema_rows() -> list[dict[str, Any]]:
@@ -735,10 +610,7 @@ def test_duckdb_schema_ddl_replays_and_drops_cleanly(tmp_path: Path, prefer_nati
 
     replay = tmp_path / "replay.duckdb"
     _duckdb_apply(replay, _statements(create))
-    expected = _duckdb_snapshot(source)
-    if not prefer_native:
-        expected["types"] = []
-    assert _duckdb_snapshot(replay) == expected
+    assert _duckdb_snapshot(replay) == _duckdb_snapshot(source)
 
     _duckdb_apply(replay, _statements(drop))
     assert _duckdb_user_objects(replay) == []
@@ -843,3 +715,51 @@ def test_sqlite_foreign_key_metadata_reports_actions_without_pragma_ids(tmp_path
     replay = tmp_path / "fk_replay.sqlite"
     _sqlite_apply(replay, [parent_ddl, child_ddl.ddl])
     assert _sqlite_snapshot(replay)["tables"]["child"] == _sqlite_snapshot(source)["tables"]["child"]
+
+
+class _CountingDriver:
+    """Driver proxy counting data-dictionary round trips through ``select``."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.selects = 0
+
+    def select(self, *args: Any, **kwargs: Any) -> Any:
+        self.selects += 1
+        return self.inner.select(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
+@pytest.mark.parametrize("table_count", [5, 20])
+def test_sqlite_schema_ddl_round_trips_do_not_grow_with_table_count(table_count: int) -> None:
+    """Schema DDL issues a fixed number of catalog queries per schema, for both directions."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.execute_script("CREATE TABLE t0 (id INTEGER PRIMARY KEY, name TEXT UNIQUE)")
+            for index in range(1, table_count):
+                session.execute_script(
+                    f"CREATE TABLE t{index} (id INTEGER PRIMARY KEY, p INTEGER REFERENCES t{index - 1}(id), "
+                    f"v TEXT, CHECK (id > 0)); CREATE INDEX ix{index} ON t{index}(v)"
+                )
+            dictionary = session.data_dictionary
+            counts: dict[tuple[bool, str], int] = {}
+            for prefer_native in (True, False):
+                for direction in ("create", "drop"):
+                    driver = _CountingDriver(session)
+                    result = dictionary.get_schema_ddl(
+                        cast("Any", driver), prefer_native=prefer_native, direction=cast("Any", direction)
+                    )
+                    tables = [
+                        item
+                        for item in result.items
+                        if isinstance(item, DDLResult) and item.identity.object_type == "table"
+                    ]
+                    assert len(tables) == table_count
+                    counts[prefer_native, direction] = driver.selects
+    finally:
+        config.close_pool()
+
+    assert counts == {(True, "create"): 2, (True, "drop"): 2, (False, "create"): 7, (False, "drop"): 4}

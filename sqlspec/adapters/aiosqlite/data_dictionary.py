@@ -221,6 +221,11 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
         _ = driver, schema
         return MetadataResult("sequences", items=())
 
+    async def get_types(self, driver: "AiosqliteDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Return an empty type result because SQLite has no user-defined types."""
+        _ = driver, schema
+        return MetadataResult("types", items=())
+
     async def _get_native_object_ddl(
         self,
         driver: "AiosqliteDriver",

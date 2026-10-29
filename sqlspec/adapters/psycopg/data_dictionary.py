@@ -48,6 +48,7 @@ _POSTGRES_METADATA_DOMAINS: tuple[str, ...] = (
     "views",
     "materialized_views",
     "sequences",
+    "types",
     "routines",
     "triggers",
     "comments",
@@ -147,6 +148,10 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
     def get_sequences(self, driver: "PsycopgSyncDriver", schema: str | None = None) -> MetadataResult:
         """Get sequence metadata."""
         return self._select_domain(driver, "sequences", "by_schema", schema_name=self.resolve_schema(schema))
+
+    def get_types(self, driver: "PsycopgSyncDriver", schema: str | None = None) -> MetadataResult:
+        """Get user-defined enum type metadata."""
+        return self._select_domain(driver, "types", "by_schema", schema_name=self.resolve_schema(schema))
 
     def get_system_metadata(
         self, driver: "PsycopgSyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
@@ -423,6 +428,10 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
     async def get_sequences(self, driver: "PsycopgAsyncDriver", schema: str | None = None) -> MetadataResult:
         """Get sequence metadata."""
         return await self._select_domain(driver, "sequences", "by_schema", schema_name=self.resolve_schema(schema))
+
+    async def get_types(self, driver: "PsycopgAsyncDriver", schema: str | None = None) -> MetadataResult:
+        """Get user-defined enum type metadata."""
+        return await self._select_domain(driver, "types", "by_schema", schema_name=self.resolve_schema(schema))
 
     async def get_system_metadata(
         self, driver: "PsycopgAsyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any

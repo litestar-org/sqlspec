@@ -27,6 +27,7 @@ _ROUTED_DOMAINS = (
     "indexes",
     "views",
     "sequences",
+    "types",
     "ddl",
     "dependencies",
     "foreign_keys",
@@ -70,6 +71,7 @@ def _empty_schema(**overrides: Any) -> dict[str, Any]:
         "views": [],
         "dependencies": [],
         "sequences": [],
+        "types": [],
     }
     schema.update(overrides)
     return schema
@@ -87,6 +89,7 @@ POSTGRES_PUBLIC: dict[str, Any] = {
             _column("public", "orders", "customer_id", "BIGINT", 2),
             _column("public", "orders", "order_code", "VARCHAR", 3, max_length=64),
             _column("public", "orders", "total_cents", "INTEGER", 4, column_default="0"),
+            _column("public", "orders", "status", "order_status", 5, column_default="'new'::order_status"),
         ],
         "order_items": [
             _column("public", "order_items", "id", "BIGINT", 1, is_primary=True),
@@ -133,6 +136,9 @@ POSTGRES_PUBLIC: dict[str, Any] = {
             "referenced_object": "orders",
             "referenced_object_type": "r",
         }
+    ],
+    "types": [
+        {"schema_name": "public", "type_name": "order_status", "logical_type": "ENUM", "labels": ["new", "it's paid"]}
     ],
     "sequences": [
         {
@@ -198,11 +204,13 @@ class FakeCatalogSyncDriver:
         if domain == "tables":
             return [{"schema_name": kwargs.get("schema_name"), "table_name": name} for name in schema["tables"]]
         if domain in {"columns", "constraints", "indexes"}:
+            if table_name is None:
+                return [row for rows in schema[domain].values() for row in rows]
             return list(schema[domain].get(table_name, ()))
         if domain == "foreign_keys":
             return [row for row in schema["foreign_keys"] if table_name is None or row["table_name"] == table_name]
-        if domain in {"views", "dependencies", "sequences"}:
-            return list(schema[domain])
+        if domain in {"views", "dependencies", "sequences", "types"}:
+            return list(schema.get(domain, ()))
         if kwargs.get("object_type") == "view":
             return [
                 {
@@ -231,10 +239,12 @@ EXPECTED_ORDERS_DDL = (
     '  "customer_id" BIGINT NOT NULL,\n'
     '  "order_code" VARCHAR(64) NOT NULL,\n'
     '  "total_cents" INT NOT NULL DEFAULT 0,\n'
+    '  "status" order_status NOT NULL DEFAULT CAST(\'new\' AS "order_status"),\n'
     '  CONSTRAINT "pk_orders" PRIMARY KEY ("id"),\n'
     '  CONSTRAINT "uq_orders_code" UNIQUE ("order_code"),\n'
     '  CONSTRAINT "chk_orders_total" CHECK ("total_cents" >= 0),\n'
-    '  CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "customers"("id") ON DELETE CASCADE\n'
+    '  CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") '
+    "ON DELETE CASCADE\n"
     ");\n\n"
     'CREATE INDEX "idx_orders_customer" ON "public"."orders"("customer_id");'
 )
@@ -359,7 +369,9 @@ def test_db2_and_adbc_synthesize_table_ddl() -> None:
         '  "customer_id" BIGINT NOT NULL,\n'
         '  "order_code" VARCHAR(64) NOT NULL,\n'
         '  "total_cents" INT NOT NULL DEFAULT 0,\n'
-        '  CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "customers"("id") ON DELETE CASCADE\n'
+        '  "status" order_status NOT NULL DEFAULT CAST(\'new\' AS "order_status"),\n'
+        '  CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") '
+        "ON DELETE CASCADE\n"
         ");\n\n"
         'CREATE INDEX "idx_orders_customer" ON "public"."orders"("customer_id");'
     )
@@ -373,17 +385,21 @@ def test_sync_get_schema_ddl_orders_create_and_drop_with_sequences_and_views() -
         cast("Any", FakeCatalogSyncDriver()), schema="public", prefer_native=False, exclude_tables=("ddl_migrations",)
     )
     names = [item.identity.name for item in create.items if isinstance(item, DDLResult)]
-    assert names == ["Order Code Seq", "customers", "orders", "order_items", "active_orders"]
+    assert names == ["order_status", "Order Code Seq", "customers", "orders", "order_items", "active_orders"]
     statements = _statements(create)
-    assert statements[0] == (
+    assert statements[0] == "CREATE TYPE \"public\".\"order_status\" AS ENUM ('new', 'it''s paid');"
+    assert statements[1] == (
         'CREATE SEQUENCE "public"."Order Code Seq" START WITH 100 INCREMENT BY 5 MINVALUE 1 '
         "MAXVALUE 9223372036854775807 CYCLE;"
     )
-    assert statements[2] == EXPECTED_ORDERS_DDL
-    assert statements[4] == 'CREATE VIEW "public"."active_orders" AS SELECT orders.id FROM orders;'
+    assert statements[3] == EXPECTED_ORDERS_DDL
+    assert statements[5] == 'CREATE VIEW "public"."active_orders" AS SELECT orders.id FROM orders;'
+    orders = next(item for item in create.items if isinstance(item, DDLResult) and item.identity.name == "orders")
+    assert {edge.to_object.name for edge in orders.dependencies} == {"order_status", "customers"}
 
+    drop_driver = FakeCatalogSyncDriver()
     drop = dictionary.get_schema_ddl(
-        cast("Any", FakeCatalogSyncDriver()),
+        cast("Any", drop_driver),
         schema="public",
         direction="drop",
         prefer_native=False,
@@ -395,7 +411,9 @@ def test_sync_get_schema_ddl_orders_create_and_drop_with_sequences_and_views() -
         'DROP TABLE IF EXISTS "public"."orders";',
         'DROP TABLE IF EXISTS "public"."customers";',
         'DROP SEQUENCE IF EXISTS "public"."Order Code Seq";',
+        'DROP TYPE IF EXISTS "public"."order_status";',
     ]
+    assert not [domain for domain, _, kwargs in drop_driver.calls if domain == "columns" and kwargs["table_name"]]
 
     with_migrations = dictionary.get_schema_ddl(cast("Any", FakeCatalogSyncDriver()), schema="public")
     assert "ddl_migrations" in [item.identity.name for item in with_migrations.items if isinstance(item, DDLResult)]
@@ -427,7 +445,7 @@ def test_postgres_mixed_case_identifiers_keep_exact_catalog_names() -> None:
 @pytest.mark.parametrize("dictionary", [AsyncpgDataDictionary(), PsqlpyDataDictionary()])
 async def test_async_get_schema_ddl_topological_ordering_and_cross_dialect(dictionary: Any) -> None:
     """Async schema DDL orders tables by foreign keys and renders the requested target dialect."""
-    tables_only = {**POSTGRES_PUBLIC, "views": [], "dependencies": [], "sequences": []}
+    tables_only = {**POSTGRES_PUBLIC, "views": [], "dependencies": [], "sequences": [], "types": []}
     driver = FakeCatalogAsyncDriver(catalog={"public": tables_only})
 
     create = await dictionary.get_schema_ddl(
@@ -477,7 +495,10 @@ def test_schema_ddl_reports_domains_the_dictionary_cannot_collect() -> None:
         prefer_native=False,
     )
     assert result.items == ()
-    assert result.warnings == ("db2 data dictionary does not expose sequences; sequences were omitted from schema DDL",)
+    assert result.warnings == (
+        "db2 data dictionary does not expose types; types were omitted from schema DDL",
+        "db2 data dictionary does not expose sequences; sequences were omitted from schema DDL",
+    )
 
 
 def test_table_profile_sql_quotes_exact_identifiers() -> None:
