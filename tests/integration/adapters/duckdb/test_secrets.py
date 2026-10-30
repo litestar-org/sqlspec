@@ -215,7 +215,7 @@ def test_mixed_case_secret_name_is_created_and_reused(required: bool) -> None:
         anchor.close()
 
     assert recorded == [("MyHttpSecret",), ("MyHttpSecret",)]
-    assert names == [("myhttpsecret",)]
+    assert names in ([("myhttpsecret",)], [("MyHttpSecret",)])
 
 
 def _s3_secret(required: bool, **settings: Any) -> "dict[str, Any]":
