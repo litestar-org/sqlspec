@@ -1,21 +1,24 @@
-from pathlib import Path
+"""Configure a synchronous SQLite adapter and run a health-check query."""
 
-__all__ = ("test_sqlite_connection",)
+from typing import Any
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_sqlite_connection(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_path = tmp_path / "driver.sqlite"
+def main() -> dict[str, Any]:
+    """Create a table in an in-memory SQLite database and count its rows."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table if not exists health (id integer primary key)")
-        result = session.execute("select count(*) as total from health")
-        print(result.one())
-    # end-example
+        session.execute("CREATE TABLE health (id INTEGER PRIMARY KEY)")
+        row = session.select_one("SELECT COUNT(*) AS total FROM health")
+        assert row == {"total": 0}
+        return row
 
-    assert result.one() == {"total": 0}
+
+if __name__ == "__main__":
+    print(main())

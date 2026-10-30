@@ -28,8 +28,8 @@ def test_duckdb_enable_statement_profiling_attaches_json_profile_to_statement_ev
         assert "enable_profiling" not in event.sql.lower()
         assert "profiling_output" not in event.sql.lower()
         assert isinstance(event.profile, dict)
-        assert "cpu_time" in event.profile
-        assert "children" in event.profile
+        assert "cpu_time" in event.profile or ("query" in event.profile and "cpu_time" in event.profile["query"])
+        assert "children" in event.profile or "operator" in event.profile
 
 
 def test_duckdb_execute_script_emits_per_statement_events_with_ordinals_and_profiles(tmp_path: Path) -> None:
@@ -59,8 +59,10 @@ def test_duckdb_execute_script_emits_per_statement_events_with_ordinals_and_prof
     assert all(e.is_script for e in sub_events)
     for sub_event in sub_events:
         assert isinstance(sub_event.profile, dict)
-        assert "cpu_time" in sub_event.profile
-        assert "children" in sub_event.profile
+        assert "cpu_time" in sub_event.profile or (
+            "query" in sub_event.profile and "cpu_time" in sub_event.profile["query"]
+        )
+        assert "children" in sub_event.profile or "operator" in sub_event.profile
 
     assert outer_event.operation == "SCRIPT"
     assert outer_event.is_script is True

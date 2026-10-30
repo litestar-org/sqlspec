@@ -1,24 +1,27 @@
-from pathlib import Path
+"""Build and execute a parameterized SELECT query with the fluent SQL builder."""
 
-__all__ = ("test_builder_select",)
+from typing import Any
+
+from sqlspec import SQLSpec, sql
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_builder_select(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec, sql
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_path = tmp_path / "builder.db"
+def main() -> dict[str, Any]:
+    """Query a single team record from an in-memory SQLite database."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table if not exists teams (id integer primary key, name text)")
-        session.execute("insert into teams (name) values ('SQLSpec')")
+        session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
+        session.execute("INSERT INTO teams (name) VALUES ('SQLSpec')")
 
         query = sql.select("id", "name").from_("teams").where("name = ?")
-        result = session.execute(query, "SQLSpec")
-        print(result.one())
-    # end-example
+        row = session.execute(query, "SQLSpec").one()
+        assert row == {"id": 1, "name": "SQLSpec"}
+        return row
 
-    assert result.one() == {"id": 1, "name": "SQLSpec"}
+
+if __name__ == "__main__":
+    print(main())

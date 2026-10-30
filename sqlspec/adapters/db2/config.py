@@ -55,90 +55,71 @@ _ASYNC_POOL_KEYS = ("max_size", "acquire_timeout")
 
 
 class Db2ConnectionParams(TypedDict):
-    """IBM Db2 connection parameters.
-
-    Each modeled parameter renders under one CLI keyword:
-
-    database: ``DATABASE``. Required, either directly or through ``dsn``.
-    hostname: ``HOSTNAME``. Omit it to connect to a cataloged database alias.
-    port: ``PORT``. Defaults to 50000 when ``hostname`` is set.
-    protocol: ``PROTOCOL``. Defaults to ``TCPIP`` when ``hostname`` is set.
-    user: ``UID``.
-    password: ``PWD``.
-    current_schema: ``CURRENTSCHEMA``.
-    security: ``SECURITY``, for example ``"SSL"``.
-    ssl_server_certificate: ``SSLSERVERCERTIFICATE``.
-    authentication: ``AUTHENTICATION``.
-    connect_timeout: ``CONNECTTIMEOUT`` in seconds.
-    autocommit: Autocommit mode new connections start in. Never rendered into the DSN.
-    dsn: ``KEY=VALUE;...`` connection string or ``db2://user:password@host:port/database?Key=Value``
-     URL. Explicit parameters override values parsed from it.
-    extra: Additional CLI keywords rendered verbatim after the modeled parameters.
-    """
+    """IBM Db2 CLI connection parameters compiled into a ``KEY=VALUE;...`` DSN."""
 
     database: NotRequired[str]
+    """Database name or cataloged alias mapped to the ``DATABASE`` CLI keyword."""
     hostname: NotRequired[str]
+    """Db2 server hostname mapped to ``HOSTNAME`` (omit for cataloged local aliases)."""
     port: NotRequired[int]
+    """Db2 TCP listener port mapped to ``PORT`` (defaults to ``50000`` when ``hostname`` is set)."""
     protocol: NotRequired[str]
+    """Communications protocol mapped to ``PROTOCOL`` (defaults to ``'TCPIP'`` when ``hostname`` is set)."""
     user: NotRequired[str]
+    """Authentication username mapped to the ``UID`` CLI keyword."""
     password: NotRequired[str]
+    """Authentication password mapped to the ``PWD`` CLI keyword."""
     current_schema: NotRequired[str]
+    """Default SQL schema mapped to the ``CURRENTSCHEMA`` CLI keyword."""
     security: NotRequired[str]
+    """Transport security mode mapped to ``SECURITY`` (for example ``'SSL'``)."""
     ssl_server_certificate: NotRequired[str]
+    """Server certificate file path mapped to the ``SSLSERVERCERTIFICATE`` CLI keyword."""
     authentication: NotRequired[str]
+    """Db2 authentication mechanism mapped to the ``AUTHENTICATION`` CLI keyword."""
     connect_timeout: NotRequired[int]
+    """Connection establishment timeout in seconds mapped to ``CONNECTTIMEOUT``."""
     autocommit: NotRequired[bool]
+    """Initial connection autocommit state applied via ``ibm_db_dbi`` outside the DSN."""
     dsn: NotRequired[str]
+    """Base ``KEY=VALUE;...`` string or ``db2://`` URL overridden by explicit keyword parameters."""
     extra: NotRequired["dict[str, str | int | bool]"]
+    """Additional CLI keywords appended verbatim to the compiled DSN string."""
 
 
 class Db2PoolParams(Db2ConnectionParams):
-    """IBM Db2 pool parameters.
-
-    pool_recycle_seconds: Seconds after which a pooled connection is replaced. Defaults to 86400.
-    health_check_interval: Idle seconds after which a pooled connection is pinged before reuse.
-     Defaults to 30.0.
-    """
+    """IBM Db2 thread-local connection pool parameters."""
 
     pool_recycle_seconds: NotRequired[int]
+    """Maximum connection age in seconds before replacement (defaults to ``86400``)."""
     health_check_interval: NotRequired[float]
+    """Idle seconds elapsed before a pooled connection is pinged on reuse (defaults to ``30.0``)."""
 
 
 class Db2AsyncPoolParams(Db2PoolParams):
-    """IBM Db2 async pool parameters.
-
-    max_size: Maximum number of connections checked out or being opened at once. Defaults to 10.
-    acquire_timeout: Seconds to wait for a free connection before raising
-     ``ConnectionTimeoutError``. Defaults to 30.0.
-    """
+    """IBM Db2 bounded asyncio connection pool parameters."""
 
     max_size: NotRequired[int]
+    """Maximum number of connections checked out or opening concurrently (defaults to ``10``)."""
     acquire_timeout: NotRequired[float]
+    """Maximum seconds to wait for a free connection before raising ``ConnectionTimeoutError`` (defaults to ``30.0``)."""
 
 
 class Db2DriverFeatures(TypedDict):
-    """IBM Db2 driver feature flags.
-
-    json_serializer: Custom JSON serializer function.
-     Defaults to sqlspec.utils.serializers.to_json.
-    json_deserializer: Custom JSON deserializer function.
-     Defaults to sqlspec.utils.serializers.from_json.
-    on_connection_create: Callback executed when a connection is created.
-     Receives the raw Db2 connection (``ibm_db_dbi.Connection`` for ``Db2SyncConfig``,
-     ``ibm_db_dbi.AsyncConnection`` for ``Db2AsyncConfig``) for low-level driver configuration.
-     Runs after connection creation; ``Db2AsyncConfig`` awaits an awaitable result.
-    enable_events: Enable database event channel support.
-    events_backend: Event channel backend selection.
-    enable_lowercase_column_names: Normalize implicit uppercase column names to lowercase.
-     Defaults to True.
-    """
+    """IBM Db2 driver feature flags controlling JSON codecs, column casing, and event queues."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Serializer converting dict/list parameters to JSON text (defaults to ``sqlspec.utils.serializers.to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Deserializer parsing JSON text payloads (defaults to ``sqlspec.utils.serializers.from_json``)."""
     on_connection_create: "NotRequired[Callable[[Any], Any]]"
+    """Callback invoked with the raw ``ibm_db_dbi`` sync or async connection after open."""
     enable_events: NotRequired[bool]
+    """Enable SQLSpec table-backed event channel support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event queue backend name (``'poll_queue'``)."""
     enable_lowercase_column_names: NotRequired[bool]
+    """Normalize unquoted uppercase Db2 column names to lowercase (defaults to ``True``)."""
 
 
 class Db2SyncConnectionContext(SyncPoolConnectionContext):

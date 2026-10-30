@@ -68,12 +68,8 @@ random = secrets.SystemRandom()
 class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiosqlite database exceptions.
 
-    Maps SQLite extended result codes to specific SQLSpec exceptions
-    for better error handling in application code.
-
-    Uses deferred exception pattern for mypyc compatibility: exceptions
-    are stored in pending_exception rather than raised from __aexit__
-    to avoid ABI boundary violations with compiled code.
+    Maps SQLite extended result codes to SQLSpec exceptions stored on
+    ``pending_exception``.
     """
 
     __slots__ = ()

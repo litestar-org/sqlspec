@@ -25,11 +25,10 @@ def test_reference_docs_include_pymssql_page_and_index_entry() -> None:
     """The adapter reference should include pymssql."""
     docs_root = Path("docs/reference/adapters")
 
-    assert (docs_root / "pymssql.rst").is_file()
-    index = (docs_root / "index.rst").read_text()
-    page = (docs_root / "pymssql.rst").read_text()
+    assert (docs_root / "pymssql.md").is_file()
+    index = (docs_root / "index.md").read_text()
+    page = (docs_root / "pymssql.md").read_text()
 
-    assert ":link: pymssql" in index
-    assert "pymssql" in index.split(".. toctree::", 1)[1]
+    assert "pymssql.md" in index
     assert "PymssqlConfig" in page
     assert "PymssqlDriver" in page

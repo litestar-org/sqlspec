@@ -1,1 +1,3 @@
-"""Sanic framework examples."""
+"""Sanic integration documentation examples."""
+
+__all__ = ()

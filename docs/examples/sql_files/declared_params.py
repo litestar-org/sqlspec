@@ -1,56 +1,62 @@
+"""Validate required and optional named parameters declared in SQL file headers."""
+
+import tempfile
 from pathlib import Path
+from typing import Any
 
-__all__ = ("test_declared_params",)
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.exceptions import SQLSpecError
+
+__all__ = ("main",)
+
+TEAMS_SQL = (
+    "-- name: get_team_by_name\n"
+    "-- param: name str  The team name to look up\n"
+    "SELECT id, name FROM teams WHERE name = :name;\n"
+    "\n"
+    "-- name: list_teams\n"
+    "-- param: name str?  Optional team name filter\n"
+    "SELECT id, name FROM teams WHERE (:name IS NULL OR name = :name) ORDER BY id;\n"
+)
 
 
-def test_declared_params(tmp_path: "Path") -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.exceptions import SQLSpecError
-
-    sql_file = tmp_path / "teams.sql"
-    sql_file.write_text(
-        "-- name: get_team_by_name\n"
-        "-- param: name str  The team name to look up\n"
-        "select id, name from teams where name = :name\n"
-        "\n"
-        "-- name: list_teams\n"
-        "-- param: name str?  Optional team name filter\n"
-        "select id, name from teams where (:name is null or name = :name) order by id\n"
-    )
-
+def main() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load declared parameter metadata from a SQL file and verify automatic validation."""
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-    spec.load_sql_files(sql_file)
 
-    # Introspect declared parameters without executing.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        sql_file = Path(tmp_dir) / "teams.sql"
+        sql_file.write_text(TEAMS_SQL, encoding="utf-8")
+        spec.load_sql_files(sql_file)
+
     declarations = spec.get_query_parameters("get_team_by_name")
     assert declarations[0].name == "name"
     assert declarations[0].type_str == "str"
     assert declarations[0].description == "The team name to look up"
 
-    # The declarations also ride on the SQL object returned by get_sql().
     query = spec.get_sql("get_team_by_name")
     assert query.declared_parameters == declarations
 
     with spec.provide_session(config) as session:
-        session.execute("create table teams (id integer primary key, name text)")
-        session.execute("insert into teams (name) values ('Litestar'), ('SQLSpec')")
+        session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
+        session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
 
-        # A declared query validates supplied parameters automatically.
         row = session.execute(query, name="SQLSpec").one()
-
-        # Optional named parameters are bound as NULL when omitted.
         optional_rows = session.execute(spec.get_sql("list_teams")).all()
 
-        # Omitting a declared parameter raises before the query reaches the driver.
+        missing_error = ""
         try:
             session.execute(spec.get_sql("get_team_by_name"))
         except SQLSpecError as exc:
             missing_error = str(exc)
-    # end-example
 
     assert row["name"] == "SQLSpec"
     assert [team["name"] for team in optional_rows] == ["Litestar", "SQLSpec"]
     assert "name" in missing_error
+    return row, optional_rows
+
+
+if __name__ == "__main__":
+    print(main())

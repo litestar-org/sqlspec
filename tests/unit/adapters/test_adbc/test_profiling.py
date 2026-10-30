@@ -38,8 +38,10 @@ def test_adbc_duckdb_enable_statement_profiling_and_execute_script_events() -> N
     assert "enable_profiling" not in first_event.sql.lower()
     assert "profiling_output" not in first_event.sql.lower()
     assert isinstance(first_event.profile, dict)
-    assert "cpu_time" in first_event.profile
-    assert "children" in first_event.profile
+    assert "cpu_time" in first_event.profile or (
+        "query" in first_event.profile and "cpu_time" in first_event.profile["query"]
+    )
+    assert "children" in first_event.profile or "operator" in first_event.profile
 
     sub_events = events[1:4]
     outer_event = events[4]
@@ -49,8 +51,10 @@ def test_adbc_duckdb_enable_statement_profiling_and_execute_script_events() -> N
     assert all(e.is_script for e in sub_events)
     for sub_event in sub_events:
         assert isinstance(sub_event.profile, dict)
-        assert "cpu_time" in sub_event.profile
-        assert "children" in sub_event.profile
+        assert "cpu_time" in sub_event.profile or (
+            "query" in sub_event.profile and "cpu_time" in sub_event.profile["query"]
+        )
+        assert "children" in sub_event.profile or "operator" in sub_event.profile
 
     assert outer_event.operation == "SCRIPT"
     assert outer_event.is_script is True

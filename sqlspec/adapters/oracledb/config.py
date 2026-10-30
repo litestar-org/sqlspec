@@ -94,180 +94,211 @@ _ORACLE_VECTOR_MIN_MAJOR = 23
 
 
 class OracleConnectionParams(TypedDict):
-    """OracleDB connection parameters."""
+    """OracleDB connection parameters forwarded to ``python-oracledb``."""
 
     dsn: NotRequired[str]
+    """Easy Connect string, TNS alias, or full connect descriptor."""
     pool_alias: NotRequired[str]
+    """Named Thick-mode pool alias registered in the driver cache."""
     user: NotRequired[str]
+    """Database username for authentication."""
     proxy_user: NotRequired[str]
+    """Proxy target username appended inside ``[proxy_user]`` credentials."""
     password: NotRequired[str]
+    """Database password for the authenticating user."""
     newpassword: NotRequired[str]
+    """Replacement password applied atomically during connection establishment."""
     wallet_password: NotRequired[str]
+    """Passphrase decrypting an encrypted PEM ``ewallet.pem`` or PKCS#12 ``ewallet.p12`` wallet."""
     access_token: NotRequired[OracleAccessToken]
+    """OAuth 2.0 or IAM bearer token string, ``(token, private_key)`` tuple, or refresh callable."""
     host: NotRequired[str]
+    """Oracle listener hostname or IP address when building a connect descriptor."""
     port: NotRequired[int]
+    """Oracle listener TCP/TCPS port (defaults to ``1521``)."""
     protocol: NotRequired[OracleProtocol]
+    """Transport protocol (``'tcp'`` or ``'tcps'`` for TLS/mTLS)."""
     https_proxy: NotRequired[str]
+    """HTTPS proxy hostname used when tunneling TCPS connections."""
     https_proxy_port: NotRequired[int]
+    """HTTPS proxy TCP port used with ``https_proxy``."""
     service_name: NotRequired[str]
+    """Oracle database service name registered with the listener."""
     instance_name: NotRequired[str]
+    """Specific RAC instance name targeted within the service."""
     sid: NotRequired[str]
+    """Legacy Oracle System Identifier used when ``service_name`` is unavailable."""
     server_type: NotRequired[OracleServerType]
+    """Server handler mode (``'dedicated'``, ``'shared'``, or ``'pooled'`` for DRCP)."""
     cclass: NotRequired[str]
+    """Database Resident Connection Pooling (DRCP) connection class name."""
     purity: NotRequired[Purity]
+    """DRCP session purity (``PURITY_NEW`` or ``PURITY_SELF``)."""
     expire_time: NotRequired[int]
+    """Dead-connection detection probe interval in minutes."""
     externalauth: NotRequired[bool]
+    """Authenticate via OS credentials or an Oracle external password store wallet."""
     mode: NotRequired[AuthMode]
+    """Administrative privilege mode such as ``AUTH_MODE_SYSDBA`` or ``AUTH_MODE_SYSOPER``."""
     wallet_location: NotRequired[str]
+    """Directory path containing ``ewallet.pem`` or ``ewallet.p12`` for mTLS."""
     config_dir: NotRequired[str]
+    """Directory path containing ``tnsnames.ora`` and ``sqlnet.ora`` configuration files."""
     tcp_connect_timeout: NotRequired[float]
+    """Maximum seconds to wait when establishing the initial TCP socket."""
     retry_count: NotRequired[int]
+    """Number of connection-level retry attempts across listener endpoints."""
     retry_delay: NotRequired[int]
+    """Delay in seconds between connection retry attempts."""
     ssl_server_dn_match: NotRequired[bool]
+    """Verify that the server certificate distinguished name matches the target service."""
     ssl_server_cert_dn: NotRequired[str]
+    """Expected distinguished name on the Oracle server TLS certificate."""
     events: NotRequired[bool]
+    """Enable Thick-mode Continuous Query Notification and FAN HA event delivery."""
     disable_oob: NotRequired[bool]
+    """Disable TCP out-of-band break messages on networks that drop urgent packets."""
     stmtcachesize: NotRequired[int]
+    """Per-connection cursor statement cache size."""
     edition: NotRequired[str]
+    """Edition-Based Redefinition (EBR) edition name activated on connect."""
     tag: NotRequired[str]
+    """Pool session state tag requested when acquiring a connection."""
     matchanytag: NotRequired[bool]
+    """Allow acquiring a pooled connection with a different tag when an exact match is unavailable."""
     appcontext: NotRequired[list[OracleAppContext]]
+    """Initial ``(namespace, name, value)`` application context entries set on connect."""
     shardingkey: NotRequired[list[Any]]
+    """Primary sharding key values routing the connection to an Oracle shard."""
     supershardingkey: NotRequired[list[Any]]
+    """Composite super-sharding key values for multi-tier sharded topologies."""
     debug_jdwp: NotRequired[str]
+    """JDWP ``host:port`` endpoint attached for PL/SQL and Java stored-procedure debugging."""
     connection_id_prefix: NotRequired[str]
+    """Prefix prepended to driver-generated end-to-end diagnostic connection identifiers."""
     ssl_context: NotRequired[Any]
+    """Custom ``ssl.SSLContext`` overriding default Thin-mode TLS verification."""
     sdu: NotRequired[int]
+    """Oracle Net Session Data Unit buffer size in bytes."""
     pool_boundary: NotRequired[OraclePoolBoundary]
+    """Implicit DRCP/PRCP release boundary (``'statement'`` or ``'transaction'``)."""
     use_tcp_fast_open: NotRequired[bool]
+    """Enable TCP Fast Open (TFO) for Oracle Autonomous Database connections."""
     ssl_version: NotRequired[TLSVersion]
+    """Minimum or pinned ``ssl.TLSVersion`` negotiated for TCPS connections."""
     program: NotRequired[str]
+    """Client program name reported in ``V$SESSION.PROGRAM``."""
     machine: NotRequired[str]
+    """Client host name reported in ``V$SESSION.MACHINE``."""
     terminal: NotRequired[str]
+    """Client terminal identifier reported in ``V$SESSION.TERMINAL``."""
     osuser: NotRequired[str]
+    """Operating system username reported in ``V$SESSION.OSUSER``."""
     driver_name: NotRequired[str]
+    """Client driver label reported in ``V$SESSION_CONNECT_INFO.CLIENT_DRIVER``."""
     use_sni: NotRequired[bool]
+    """Send TLS Server Name Indication (SNI) to bypass double-handshake listener negotiation."""
     thick_mode_dsn_passthrough: NotRequired[bool]
+    """Forward the raw DSN string unchanged to Oracle Client libraries in Thick mode."""
     extra_auth_params: NotRequired[dict[str, Any]]
+    """Additional provider parameters passed to cloud token authentication plugins."""
     pool_name: NotRequired[str]
+    """Explicit server-side DRCP/PRCP pool name when multiple pools exist."""
     on_connect_callback: NotRequired[Callable[..., Any]]
+    """Driver-level callback invoked by ``python-oracledb`` immediately on physical connect."""
     handle: NotRequired[int]
+    """Raw OCI service context pointer wrapped in Thick mode."""
     extra: NotRequired[dict[str, Any]]
+    """Additional keyword arguments merged into ``oracledb.connect`` or ``create_pool``."""
     topology: NotRequired[OracleTopologyConfig | dict[str, Any]]
+    """Multi-endpoint RAC/Data Guard topology descriptor compiled into a TNS ``DESCRIPTION``."""
     wallet_zip: NotRequired[str | Path | bytes]
+    """Autonomous Database wallet ZIP path, directory, or raw bytes extracted into a secure temporary directory."""
     tns_alias: NotRequired[str]
+    """Alias resolved from ``tnsnames.ora`` inside ``config_dir`` or an extracted ``wallet_zip``."""
 
 
 class OraclePoolParams(OracleConnectionParams):
-    """OracleDB pool parameters."""
+    """OracleDB session pool parameters extending ``OracleConnectionParams``."""
 
     thick_mode: NotRequired[bool]
+    """Initialize Oracle Client Thick mode via ``oracledb.init_oracle_client()`` before creating the pool."""
     lib_dir: NotRequired[str]
+    """Filesystem path to Oracle Instant Client libraries implying Thick mode."""
     pool_class: NotRequired[type[Any]]
+    """Custom ``ConnectionPool`` subclass passed to ``python-oracledb``."""
     params: NotRequired[oracledb.PoolParams]
+    """Pre-constructed ``oracledb.PoolParams`` instance merged with keyword settings."""
     min: NotRequired[int]
+    """Minimum number of sessions maintained in the pool."""
     max: NotRequired[int]
+    """Maximum number of concurrent sessions permitted in the pool."""
     increment: NotRequired[int]
+    """Number of new sessions opened at once when all pooled sessions are busy."""
     connectiontype: NotRequired[type[Any]]
+    """Custom ``oracledb.Connection`` subclass instantiated for pooled sessions."""
     getmode: NotRequired[PoolGetMode]
+    """Behavior when the pool is at capacity (``POOL_GETMODE_WAIT``, ``NOWAIT``, ``FORCEGET``, or ``TIMEDWAIT``)."""
     homogeneous: NotRequired[bool]
+    """Use identical database credentials across all pooled sessions (defaults to ``True``)."""
     timeout: NotRequired[int]
+    """Idle seconds after which surplus sessions above ``min`` are closed."""
     wait_timeout: NotRequired[int]
+    """Maximum milliseconds to wait for an available session under ``POOL_GETMODE_TIMEDWAIT``."""
     max_lifetime_session: NotRequired[int]
+    """Maximum lifetime in seconds before a pooled session is retired."""
     session_callback: NotRequired[Callable[..., Any]]
+    """Callback ``(connection, requested_tag)`` invoked when a pooled session is acquired."""
     max_sessions_per_shard: NotRequired[int]
+    """Maximum pooled sessions allocated to any single Oracle shard."""
     soda_metadata_cache: NotRequired[bool]
+    """Enable Thick-mode SODA collection metadata caching across pooled sessions."""
     ping_interval: NotRequired[int]
+    """Idle seconds elapsed before a pooled session is health-checked on checkout."""
     ping_timeout: NotRequired[int]
+    """Maximum milliseconds allowed for a checkout health-check ping before replacing the session."""
 
 
 class OracleDriverFeatures(TypedDict):
-    """Oracle driver feature flags.
+    """Oracle driver feature flags controlling VECTOR/UUID codecs, LOB coercion, and enterprise hooks.
 
-    enable_numpy_vectors: Enable automatic NumPy array ↔ Oracle VECTOR conversion.
-     Requires NumPy and Oracle Database 23ai or higher with VECTOR data type support.
-     Defaults to True when NumPy is installed.
-     Provides automatic bidirectional conversion between NumPy ndarrays and Oracle VECTOR columns.
-     Supports float32, float64, int8, and uint8 dtypes.
-    enable_lowercase_column_names: Normalize implicit Oracle uppercase column names to lowercase.
-     Targets unquoted Oracle identifiers that default to uppercase while preserving quoted case-sensitive aliases.
-     Defaults to True for compatibility with schema libraries expecting snake_case fields.
-    enable_uuid_binary: Enable automatic UUID ↔ RAW(16) binary conversion.
-     When True (default), Python UUID objects are automatically converted to/from
-     RAW(16) binary format for optimal storage efficiency (16 bytes vs 36 bytes).
-     Applies only to RAW(16) columns; other RAW sizes remain unchanged.
-     Uses Python's stdlib uuid module (no external dependencies).
-     Defaults to True for improved type safety and storage efficiency.
-    vector_return_format: Return type for VECTOR column reads. One of:
-     - "numpy" (default when NumPy is installed): np.ndarray, zero-copy compute path.
-     - "list": list[float|int], best for code that expects native Python sequences.
-     - "array": array.array, zero-copy oracledb passthrough.
-     Defaults to "numpy" when NumPy is installed, otherwise "list".
-     Sparse VECTOR columns always bind and return python-oracledb ``SparseVector`` values.
-    oracle_varchar2_byte_limit: Threshold (in UTF-8 bytes) above which ``str``
-     parameters are auto-coerced to ``DB_TYPE_CLOB``. Defaults to 4000 (the
-     Oracle SQL VARCHAR2 limit). Databases with ``MAX_STRING_SIZE=EXTENDED``
-     may set this to 32767 to keep larger strings as VARCHAR2.
-    oracle_raw_byte_limit: Threshold (in bytes) above which ``bytes`` parameters
-     are auto-coerced to ``DB_TYPE_BLOB``. Defaults to 2000 (the Oracle SQL
-     RAW limit).
-    arraysize: Optional per-cursor row fetch buffer size. When absent, the
-     python-oracledb cursor default is left unchanged.
-    prefetchrows: Optional per-cursor prefetch row count. When absent, the
-     python-oracledb cursor default is left unchanged.
-    fetch_lobs: Optional per-statement LOB fetch mode. ``False`` returns
-     supported LOB values as ``str``/``bytes`` instead of LOB locators.
-    fetch_decimals: Optional per-statement NUMBER fetch mode. ``True`` returns
-     decimal values where python-oracledb supports them.
-    on_connection_create: Callback executed when a connection is acquired from pool.
-     For sync: Callable[[OracleSyncConnection, str], None] - receives connection and tag
-     For async: Callable[[OracleAsyncConnection, str], Awaitable[None]]
-     Called after internal setup (numpy vectors, UUID handlers).
-    enable_events: Enable SQLSpec event queue support.
-     Defaults to True when extension_config["events"] is configured.
-     Provides pub/sub capabilities via Oracle Advanced Queuing or table-backed fallback.
-     Requires extension_config["events"] for migration setup when using poll_queue backend.
-     This is separate from connection_config["events"], which enables python-oracledb
-     Thick mode database event notifications for HA and continuous query notification.
-    events_backend: Event channel backend selection.
-     Options: "aq", "poll_queue", "txeventq"
-     - "aq": Oracle Advanced Queuing (native messaging, requires DBMS_AQADM privileges)
-     - "txeventq": Oracle Transactional Event Queues (native messaging, requires
-       DBMS_AQADM privileges; provisioned via DBMS_AQADM.CREATE_TRANSACTIONAL_EVENT_QUEUE)
-     - "poll_queue": Durable table-backed queue with lease-based retries and acknowledgements
-     Defaults to "poll_queue" (works on all Oracle editions without special privileges).
-    enable_direct_path_load: Route load_from_arrow through Connection.direct_path_load.
-     Thin-mode only; falls back to executemany when the API is absent or the
-     connection is in Thick mode. Defaults to True; set to False to force
-     executemany.
-    session_context_hook: Optional declarative session context configuration
-     applied on checkout and cleared on release.
-    dbms_cloud_credential: Optional default ``DBMS_CLOUD`` credential name used
-     by ``load_from_storage`` for server-side object-store ingestion via
-     ``DBMS_CLOUD.COPY_DATA``.
-    Native pipeline execution is runtime-gated by async Thin-mode driver API support,
-     Oracle Database 26ai or newer, and the SQLSPEC_ORACLE_DISABLE_PIPELINE environment
-     override; there is no adapter config switch that can force-enable unsupported
-     pipeline execution.
+    Native async pipeline execution is runtime-gated on Oracle Database 26ai+ in Thin mode and can be disabled via ``SQLSPEC_ORACLE_DISABLE_PIPELINE``.
     """
 
     enable_numpy_vectors: NotRequired[bool]
+    """Register bidirectional NumPy ``ndarray`` handlers for Oracle 23ai+ ``VECTOR`` columns (defaults to ``True`` when NumPy is installed)."""
     enable_lowercase_column_names: NotRequired[bool]
+    """Normalize unquoted uppercase Oracle column names to lowercase while preserving quoted aliases (defaults to ``True``)."""
     enable_uuid_binary: NotRequired[bool]
+    """Convert Python ``UUID`` values to and from ``RAW(16)`` columns."""
     vector_return_format: NotRequired[OracleVectorReturnFormat]
+    """Decoded type for dense ``VECTOR`` columns (``'numpy'``, ``'list'``, or ``'array'``)."""
     oracle_varchar2_byte_limit: NotRequired[int]
+    """UTF-8 byte threshold above which ``str`` parameters bind as ``DB_TYPE_CLOB`` (defaults to ``4000``)."""
     oracle_raw_byte_limit: NotRequired[int]
+    """Byte threshold above which ``bytes`` parameters bind as ``DB_TYPE_BLOB`` (defaults to ``2000``)."""
     arraysize: NotRequired[int]
+    """Per-cursor ``arraysize`` row fetch buffer override."""
     prefetchrows: NotRequired[int]
+    """Per-cursor ``prefetchrows`` initial round-trip prefetch count override."""
     fetch_lobs: NotRequired[bool]
+    """Return LOB columns as locator objects when ``True`` or inline ``str``/``bytes`` when ``False``."""
     fetch_decimals: NotRequired[bool]
+    """Return ``NUMBER`` columns as ``decimal.Decimal`` values when ``True``."""
     on_connection_create: NotRequired[Callable[..., Any]]
+    """Hook ``(connection, tag)`` invoked after built-in JSON, VECTOR, and UUID handlers are registered."""
     enable_events: NotRequired[bool]
+    """Enable SQLSpec event channels (separate from ``connection_config['events']`` FAN/CQN notifications)."""
     events_backend: NotRequired[OracleEventsBackend]
+    """Event queue backend (``'poll_queue'`` default, ``'aq'``, or ``'txeventq'``)."""
     enable_direct_path_load: NotRequired[bool]
+    """Route ``load_from_arrow`` through Thin-mode ``Connection.direct_path_load`` with ``executemany`` fallback (defaults to ``True``)."""
     session_context_hook: NotRequired[OracleSessionContextConfig | dict[str, Any]]
+    """Declarative ``DBMS_SESSION`` / ``CLIENT_IDENTIFIER`` context applied on checkout and cleared on release."""
     enable_session_tracing: NotRequired[bool]
+    """Piggyback active correlation and trace identifiers onto ``module``, ``action``, ``client_identifier``, and ``econtext_id`` in zero extra RTTs."""
     dbms_cloud_credential: NotRequired[str | None]
+    """Default ``DBMS_CLOUD`` credential name used for server-side ``DBMS_CLOUD.COPY_DATA`` object-store loads."""
 
 
 class OracleSyncConnectionContext(SyncPoolConnectionContext):

@@ -107,124 +107,125 @@ class PsycopgConnectionParams(TypedDict):
     """Psycopg connection parameters."""
 
     conninfo: NotRequired[str]
+    """PostgreSQL libpq connection URI or keyword/value conninfo string."""
     host: NotRequired[str]
+    """Database server hostname or Unix socket directory."""
     port: NotRequired[int]
+    """Database server TCP port (defaults to ``5432``)."""
     user: NotRequired[str]
+    """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
+    """Password or token for ``user``."""
     dbname: NotRequired[str]
+    """Target PostgreSQL database name."""
     connect_timeout: NotRequired[int]
+    """Connection establishment timeout in seconds."""
     options: NotRequired[str]
+    """Command-line startup GUC options sent to the PostgreSQL backend."""
     application_name: NotRequired[str]
+    """Application identifier reported in ``pg_stat_activity``."""
     sslmode: NotRequired[PsycopgSSLMode]
+    """libpq TLS verification mode (``disable``, ``allow``, ``prefer``, ``require``, ``verify-ca``, or ``verify-full``)."""
     sslcert: NotRequired[str]
+    """Path to the client TLS certificate file."""
     sslkey: NotRequired[str]
+    """Path to the client TLS private key file."""
     sslrootcert: NotRequired[str]
+    """Path to the trusted root CA certificate file."""
     autocommit: NotRequired[bool]
+    """Enable Psycopg autocommit mode outside explicit transactions."""
     prepare_threshold: NotRequired[int | None]
+    """Executions before server-side statement preparation, or ``None`` to disable prepared statements."""
     context: NotRequired["AdaptContext | None"]
+    """Custom Psycopg ``AdaptContext`` used for type adaptation."""
     row_factory: NotRequired["RowFactory[Any] | AsyncRowFactory[Any] | None"]
+    """Row factory applied to raw Psycopg connections or cursors."""
     cursor_factory: NotRequired["type[Cursor[Any] | AsyncCursor[Any]] | None"]
+    """Custom Psycopg ``Cursor`` or ``AsyncCursor`` class."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional libpq keyword parameters forwarded to ``connect``."""
 
 
 class PsycopgPoolParams(PsycopgConnectionParams):
     """Psycopg pool parameters."""
 
     min_size: NotRequired[int]
+    """Minimum number of connections kept open in ``ConnectionPool`` / ``AsyncConnectionPool``."""
     max_size: NotRequired[int]
+    """Maximum number of connections allowed in the pool."""
     connection_class: NotRequired["type[Connection[Any] | AsyncConnection[Any]]"]
+    """Custom Psycopg ``Connection`` or ``AsyncConnection`` subclass."""
     name: NotRequired[str]
+    """Pool identifier used in logs and worker thread names."""
     timeout: NotRequired[float]
+    """Maximum wait time in seconds when acquiring a connection from the pool."""
     max_waiting: NotRequired[int]
+    """Maximum number of queued callers waiting for a connection (``0`` means no limit)."""
     max_lifetime: NotRequired[float]
+    """Maximum connection age in seconds before recycling."""
     max_idle: NotRequired[float]
+    """Maximum idle duration in seconds before shrinking connections above ``min_size``."""
     reconnect_timeout: NotRequired[float]
+    """Seconds to retry failed connection attempts before invoking ``reconnect_failed``."""
     num_workers: NotRequired[int]
+    """Number of background maintenance workers run by ``psycopg_pool``."""
     open: NotRequired[bool | None]
+    """Whether to open the pool immediately upon instantiation."""
     configure: NotRequired["ConnectionCB[PsycopgSyncConnection] | AsyncConnectionCB[PsycopgAsyncConnection] | None"]
+    """Callback run once on each new physical connection before entering the pool."""
     check: NotRequired["ConnectionCB[PsycopgSyncConnection] | AsyncConnectionCB[PsycopgAsyncConnection] | None"]
+    """Health-check callback run before lending out a pooled connection."""
     reset: NotRequired["ConnectionCB[PsycopgSyncConnection] | AsyncConnectionCB[PsycopgAsyncConnection] | None"]
+    """Reset callback run when returning a connection to the pool."""
     close_returns: NotRequired[bool]
+    """Make ``conn.close()`` return the connection to the pool instead of closing the socket."""
     reconnect_failed: NotRequired["ConnectFailedCB | AsyncConnectFailedCB | None"]
+    """Callback invoked when pool reconnection attempts exceed ``reconnect_timeout``."""
     kwargs: NotRequired["dict[str, Any]"]
+    """Explicit connection keyword mapping passed to ``psycopg.connect``."""
     null_pool: NotRequired[bool]
+    """Use ``NullConnectionPool`` / ``AsyncNullConnectionPool`` so idle connections are never retained."""
 
 
 class PsycopgDriverFeatures(TypedDict):
-    """Psycopg driver feature flags.
-
-    enable_pgvector: Enable automatic pgvector extension support for vector similarity search.
-     Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
-     Defaults to True when pgvector-python is installed.
-     Provides automatic conversion between Python objects and PostgreSQL vector types.
-     Enables vector similarity operations and index support.
-     Set to False to disable pgvector support even when package is available.
-    enable_paradedb: Enable ParadeDB (pg_search) extension detection.
-     When enabled and the pg_search extension is detected, the SQL dialect
-     switches to "paradedb" which supports search operators (@@@, &&&, etc.)
-     and inherits all pgvector distance operators.
-     Defaults to True. Independent of enable_pgvector.
-    enable_pg_textsearch: Enable pg_textsearch extension detection for BM25 search.
-     When enabled and the pg_textsearch extension is detected, the SQL dialect
-     switches to "pg_textsearch" which supports the BM25 <@> relevance ranking operator.
-     Defaults to True.
-    json_serializer: Custom JSON serializer for StatementConfig parameter handling.
-    json_deserializer: Custom JSON deserializer reference stored alongside the serializer for parity with asyncpg.
-    on_connection_create: Callback executed when a connection is created/acquired from the pool.
-     Receives the raw psycopg connection for low-level driver configuration.
-     Runs after internal setup (pgvector registration).
-     For sync config: Callable[[PsycopgSyncConnection], None]
-     For async config: Callable[[PsycopgAsyncConnection], Awaitable[None]]
-    enable_events: Enable database event channel support.
-     Defaults to True when extension_config["events"] is configured.
-     Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
-     Requires extension_config["events"] for migration setup when using poll_queue or notify_queue.
-    events_backend: Event channel backend selection.
-     Options: "notify", "notify_queue", "poll_queue"
-     - "notify": Transient PostgreSQL LISTEN/NOTIFY with no replay or retry
-     - "notify_queue": Durable queue plus a PostgreSQL notification wakeup hint
-     - "poll_queue": Durable queue discovered by polling
-     Defaults to "notify".
-    enable_alloydb: Enable sync-only Google AlloyDB connector integration.
-     Requires google-cloud-alloydb-connector. Defaults to False.
-    alloydb_instance_uri: AlloyDB instance URI in projects/... resource path form.
-     Required when enable_alloydb is True.
-    enable_alloydb_iam_auth: Enable AlloyDB IAM database authentication for sync connector connections.
-     Defaults to False.
-    alloydb_ip_type: AlloyDB connector IP type. Defaults to PRIVATE.
-    enable_alloydb_columnar: Enable Google AlloyDB Columnar Engine acceleration.
-     Configures ``google_columnar_engine.enabled=on`` at the session level via ``options``
-     in session mode, or per-transaction via ``SET LOCAL`` in transaction/statement pooler mode.
-     Defaults to False.
-    pooler_mode: Connection pooler mode ("session", "transaction", "statement", "auto").
-     When "transaction" or "statement", sets ``prepare_threshold=None`` to disable server-side
-     prepared statements for PgBouncer / PgCat / Odyssey / Supavisor compatibility.
-     Defaults to "session".
-    pgbouncer: Legacy alias for ``pooler_mode="transaction"``.
-    pgbouncer_mode: Legacy alias for ``pooler_mode="transaction"``.
-    direct_dsn: Optional direct PostgreSQL DSN or connection config mapping bypassing the external
-     pooler for session-scoped operations (DDL/migrations and LISTEN/NOTIFY).
-    null_pool: Enable NullConnectionPool / AsyncNullConnectionPool for serverless / PgBouncer environments.
-    """
+    """Optional Psycopg driver feature flags, extension codecs, AlloyDB settings, and pooler modes."""
 
     enable_pgvector: NotRequired[bool]
+    """Register ``pgvector`` adapters and promote the dialect when ``pgvector`` is installed."""
     enable_paradedb: NotRequired[bool]
+    """Detect ``pg_search`` and promote the SQL dialect to ``paradedb`` (defaults to ``True``)."""
     enable_pg_textsearch: NotRequired[bool]
+    """Detect ``pg_textsearch`` and promote the dialect for BM25 ``<@>`` ranking (defaults to ``True``)."""
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer applied to statement parameters and Psycopg JSON dumpers."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer applied to Psycopg JSON/JSONB loaders."""
     on_connection_create: NotRequired["Callable[..., Any]"]
+    """Sync or async callback invoked with each raw Psycopg connection after internal setup."""
     enable_events: NotRequired[bool]
+    """Enable SQLSpec event channel pub/sub support (defaults to ``True`` when ``events`` is configured)."""
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
+    """Event transport backend (``notify`` for LISTEN/NOTIFY, ``notify_queue``, or ``poll_queue``)."""
     enable_alloydb: NotRequired[bool]
+    """Route sync connections through ``google-cloud-alloydb-connector`` (defaults to ``False``)."""
     alloydb_instance_uri: NotRequired[str]
+    """AlloyDB instance resource URI (``projects/.../locations/.../clusters/.../instances/...``)."""
     enable_alloydb_iam_auth: NotRequired[bool]
+    """Use IAM database authentication with the AlloyDB Python Connector."""
     alloydb_ip_type: NotRequired[str]
+    """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb_columnar: NotRequired[bool]
+    """Enable ``google_columnar_engine.enabled=on`` via startup ``options`` or per-transaction ``SET LOCAL``."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"]]
+    """External pooler compatibility mode; sets ``prepare_threshold=None`` in ``transaction`` or ``statement`` mode."""
     pgbouncer: NotRequired[bool]
+    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
     pgbouncer_mode: NotRequired[bool]
+    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
+    """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
     null_pool: NotRequired[bool]
+    """Enable ``NullConnectionPool`` / ``AsyncNullConnectionPool`` for serverless or external pooler deployments."""
 
 
 def build_connection_config(connection_config: "PsycopgPoolParams | Mapping[str, Any] | None") -> dict[str, Any]:
@@ -381,6 +382,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         self._validate_alloydb_config()
 
+    @property
+    def pg_textsearch_available(self) -> bool:
+        """Return True if the pg_textsearch extension is available."""
+        return bool(self._pg_textsearch_available)
+
     def derive_direct_config(self) -> Self:
         """Derive a session-mode Psycopg sync configuration targeting direct_dsn when configured."""
         direct_dsn = self.driver_features.get("direct_dsn")
@@ -411,11 +417,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             bind_key=self.bind_key,
             extension_config=dict(self.extension_config) if self.extension_config else None,
         )
-
-    @property
-    def pg_textsearch_available(self) -> bool:
-        """Return True if the pg_textsearch extension is available."""
-        return bool(self._pg_textsearch_available)
 
     def create_connection(self) -> "PsycopgSyncConnection":
         """Open a standalone connection owned by the caller.
@@ -826,6 +827,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             **kwargs,
         )
 
+    @property
+    def pg_textsearch_available(self) -> bool:
+        """Return True if the pg_textsearch extension is available."""
+        return bool(self._pg_textsearch_available)
+
     def derive_direct_config(self) -> Self:
         """Derive a session-mode Psycopg async configuration targeting direct_dsn when configured."""
         direct_dsn = self.driver_features.get("direct_dsn")
@@ -856,11 +862,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             bind_key=self.bind_key,
             extension_config=dict(self.extension_config) if self.extension_config else None,
         )
-
-    @property
-    def pg_textsearch_available(self) -> bool:
-        """Return True if the pg_textsearch extension is available."""
-        return bool(self._pg_textsearch_available)
 
     async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore
         """Open a standalone connection owned by the caller.

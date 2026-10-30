@@ -27,27 +27,49 @@ class PymssqlConnectionParams(TypedDict):
     """pymssql connection parameters."""
 
     server: NotRequired[str]
+    """SQL Server hostname, ``host:port``, or ``host\\instance`` target."""
     host: NotRequired[str]
+    """Alias for ``server`` accepted by ``pymssql.connect``."""
     user: NotRequired[str]
+    """SQL Server or Windows domain login (``DOMAIN\\user``)."""
     password: NotRequired[str]
+    """Password for ``user``."""
     database: NotRequired[str]
+    """Initial SQL Server database selected on connect."""
     port: NotRequired[int | str]
+    """SQL Server TCP port (defaults to ``1433``)."""
     timeout: NotRequired[PymssqlTimeout]
+    """Query response timeout in seconds (``0`` means wait indefinitely)."""
     login_timeout: NotRequired[PymssqlTimeout]
+    """Connection and authentication timeout in seconds (defaults to ``60``)."""
     charset: NotRequired[str]
+    """Character encoding communicated over FreeTDS (defaults to ``'UTF-8'``)."""
     as_dict: NotRequired[bool]
+    """Return rows from raw ``pymssql`` cursors as dictionaries instead of tuples."""
     appname: NotRequired[str]
+    """Application name visible in ``sys.dm_exec_sessions``."""
     conn_properties: NotRequired[str]
+    """Semicolon-separated ``SET`` session statements run immediately upon connect."""
     autocommit: NotRequired[bool]
+    """Enable autocommit mode on new ``pymssql`` connections."""
     tds_version: NotRequired[str]
+    """Explicit FreeTDS protocol version (such as ``'7.4'``)."""
     encryption: NotRequired[Literal["off", "request", "require"]]
+    """FreeTDS TLS transport encryption requirement (``off``, ``request``, or ``require``)."""
     use_datetime2: NotRequired[bool]
+    """Bind Python ``datetime`` values using ``DATETIME2`` precision instead of legacy ``DATETIME``."""
     arraysize: NotRequired[int]
+    """Default row batch count returned by ``cursor.fetchmany()``."""
     conv: NotRequired[Mapping[int | type[Any], Callable[..., Any]]]
+    """Custom FreeTDS type serialization/deserialization mapping."""
     read_only: NotRequired[bool]
+    """Set Always On ``ApplicationIntent=ReadOnly`` during login."""
     pool_recycle_seconds: NotRequired[int]
+    """Maximum connection age in seconds before ``PymssqlConnectionPool`` recycles connections."""
     health_check_interval: NotRequired[float]
+    """Minimum interval in seconds between connection health checks in ``PymssqlConnectionPool``."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional keyword arguments forwarded to ``pymssql.connect``."""
 
 
 class PymssqlPoolParams(PymssqlConnectionParams):
@@ -55,24 +77,18 @@ class PymssqlPoolParams(PymssqlConnectionParams):
 
 
 class PymssqlDriverFeatures(TypedDict):
-    """pymssql driver feature flags.
-
-    json_serializer: Custom JSON serializer function.
-     Defaults to sqlspec.utils.serializers.to_json.
-    json_deserializer: Custom JSON deserializer function.
-     Defaults to sqlspec.utils.serializers.from_json.
-    on_connection_create: Callback executed when a connection is created.
-     Receives the raw pymssql connection for low-level driver configuration.
-     Runs after connection creation.
-    enable_events: Enable database event channel support.
-    events_backend: Event channel backend selection.
-    """
+    """Optional pymssql driver feature flags for JSON serialization, connection hooks, and events."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer applied to JSON result columns (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[PymssqlConnection], None]]"
+    """Synchronous hook invoked with each raw ``pymssql.Connection`` upon creation."""
     enable_events: NotRequired[bool]
+    """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` is the sole SQL Server backend)."""
 
 
 class PymssqlConnectionContext(SyncPoolConnectionContext):

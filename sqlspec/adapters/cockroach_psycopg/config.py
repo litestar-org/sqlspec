@@ -66,50 +66,90 @@ class CockroachPsycopgConnectionConfig(TypedDict):
     """CockroachDB connection parameters."""
 
     conninfo: NotRequired[str]
+    """CockroachDB libpq connection URI or keyword/value conninfo string."""
     host: NotRequired[str]
+    """CockroachDB node or load-balancer hostname."""
     port: NotRequired[int]
+    """CockroachDB SQL TCP port (defaults to ``26257``)."""
     user: NotRequired[str]
+    """CockroachDB SQL username."""
     password: NotRequired[str]
+    """Password or JWT token for ``user``."""
     dbname: NotRequired[str]
+    """Target CockroachDB database name."""
     connect_timeout: NotRequired[int]
+    """Connection establishment timeout in seconds."""
     options: NotRequired[str]
+    """Command-line startup session options sent to CockroachDB."""
     default_transaction_use_follower_reads: NotRequired[bool]
+    """Enable bounded-staleness follower reads for read-only transactions."""
     results_buffer_size: NotRequired[int]
+    """CockroachDB server result streaming buffer size in bytes."""
     statement_timeout: NotRequired[int]
+    """Per-statement execution timeout in milliseconds."""
     idle_in_transaction_session_timeout: NotRequired[int]
+    """Idle-in-transaction timeout in milliseconds before aborting open transactions."""
     application_name: NotRequired[str]
+    """Application identifier visible in CockroachDB session diagnostics."""
     sslmode: NotRequired[str]
+    """libpq TLS verification mode (such as ``require`` or ``verify-full``)."""
     sslcert: NotRequired[str]
+    """Path to the client TLS certificate file."""
     sslkey: NotRequired[str]
+    """Path to the client TLS private key file."""
     sslrootcert: NotRequired[str]
+    """Path to the root CA certificate bundle."""
     autocommit: NotRequired[bool]
+    """Enable Psycopg autocommit mode outside explicit transactions."""
     prepare_threshold: NotRequired[int | None]
+    """Executions before Psycopg prepares a statement server-side, or ``None`` to disable."""
     row_factory: NotRequired["Callable[..., Any]"]
+    """Custom Psycopg row factory applied to raw connections."""
     cursor_factory: NotRequired["type[Any]"]
+    """Custom Psycopg cursor class used by raw connections."""
     context: NotRequired[Any]
+    """Psycopg ``AdaptContext`` providing custom type adapters."""
     cluster: NotRequired[str]
+    """CockroachDB Serverless / Cloud routing cluster identifier."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional libpq keyword parameters merged into ``connect``."""
 
 
 class CockroachPsycopgPoolConfig(CockroachPsycopgConnectionConfig):
     """CockroachDB pool parameters."""
 
     min_size: NotRequired[int]
+    """Minimum number of connections maintained in ``ConnectionPool`` / ``AsyncConnectionPool``."""
     max_size: NotRequired[int]
+    """Maximum number of connections allowed in the pool."""
     name: NotRequired[str]
+    """Diagnostic pool name used in logs and worker threads."""
     timeout: NotRequired[float]
+    """Maximum wait time in seconds when acquiring a connection from the pool."""
     max_waiting: NotRequired[int]
+    """Maximum queued callers waiting for an available connection (``0`` means unlimited)."""
     max_lifetime: NotRequired[float]
+    """Maximum lifetime in seconds before a pooled connection is recycled."""
     max_idle: NotRequired[float]
+    """Maximum idle time in seconds before shrinking connections above ``min_size``."""
     reconnect_timeout: NotRequired[float]
+    """Duration in seconds the pool retries failed connection attempts before invoking ``reconnect_failed``."""
     reconnect_failed: NotRequired["Callable[..., Any]"]
+    """Callback invoked when pool reconnection attempts exceed ``reconnect_timeout``."""
     num_workers: NotRequired[int]
+    """Number of background maintenance worker threads/tasks managed by the pool."""
     configure: NotRequired["Callable[..., Any]"]
+    """Callback invoked once on each newly created connection before entering the pool."""
     check: NotRequired["Callable[..., Any]"]
+    """Health-check callback invoked before handing out a pooled connection."""
     reset: NotRequired["Callable[..., Any]"]
+    """Callback invoked to clean connection state when returned to the pool."""
     open: NotRequired[bool | None]
+    """Whether to open the pool immediately during construction."""
     close_returns: NotRequired[bool]
+    """Make ``conn.close()`` return the connection to the pool instead of closing the socket."""
     kwargs: NotRequired["dict[str, Any]"]
+    """Explicit connection keyword dictionary passed to ``psycopg.connect``."""
 
 
 class _NativeStorageCSVOptions(TypedDict):
@@ -121,33 +161,36 @@ class _NativeStorageCSVOptions(TypedDict):
 
 
 class CockroachPsycopgDriverFeatures(TypedDict):
-    """CockroachDB driver feature configuration.
-
-    enable_native_storage: Opt in to server-side storage operations. Exports create
-     generated files under a prefix; imports temporarily take the table offline.
-    native_storage_csv_options: Explicit nullas/nullif markers and skip count.
-     Export is headerless; native CSV import requires an explicit skip count.
-     Markers must not occur as literal data. No NULL marker is inferred.
-    on_connection_create: Callback executed when a connection is acquired from pool.
-     For sync: Callable[[CockroachSyncConnection], None]
-     For async: Callable[[CockroachAsyncConnection], Awaitable[None]]
-     Called after internal setup.
-    """
+    """Driver feature flags for CockroachDB Psycopg retries, follower reads, and native storage."""
 
     enable_native_storage: NotRequired[bool]
+    """Opt in to server-side CockroachDB ``EXPORT`` and ``IMPORT INTO`` storage operations."""
     native_storage_csv_options: NotRequired[_NativeStorageCSVOptions]
+    """Explicit CSV markers mapping supporting ``nullas`` (export NULL string), ``nullif`` (import NULL string), and ``skip`` (header line count to skip on import)."""
     enable_auto_retry: NotRequired[bool]
+    """Automatically retry CockroachDB ``40001`` serialization failure transactions with backoff."""
     max_retries: NotRequired[int]
+    """Maximum retry attempts on ``40001`` transaction serialization conflicts."""
     retry_delay_base_ms: NotRequired[float]
+    """Initial exponential backoff delay in milliseconds between serialization retries."""
     retry_delay_max_ms: NotRequired[float]
+    """Upper bound in milliseconds on exponential backoff delay between retries."""
     enable_retry_logging: NotRequired[bool]
+    """Emit structured debug/warning logs when serialization retries occur."""
     enable_follower_reads: NotRequired[bool]
+    """Allow ``AS OF SYSTEM TIME`` follower-read clauses on read queries."""
     default_staleness: NotRequired[str]
+    """Default ``AS OF SYSTEM TIME`` staleness expression (such as ``'-5s'`` or ``follower_read_timestamp()``)."""
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer applied to statement parameters (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer retained alongside ``json_serializer`` (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[..., Any]]"
+    """Sync or async callback invoked with each raw Psycopg connection after internal setup."""
     enable_events: NotRequired[bool]
+    """Enable durable queue-backed SQLSpec event channel support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` for CockroachDB table-backed polling)."""
 
 
 class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):

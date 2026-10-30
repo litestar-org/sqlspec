@@ -1,1 +1,3 @@
-"""Flask integration examples."""
+"""Flask integration documentation examples."""
+
+__all__ = ()

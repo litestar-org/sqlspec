@@ -1,40 +1,39 @@
-from pathlib import Path
+"""Paginate queries with SQL.paginate(), select_with_total(), and fluent builder modifiers."""
 
-__all__ = ("test_pagination",)
+from typing import Any
+
+from sqlspec import SQLSpec, sql
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.core import SQL
+
+__all__ = ("main",)
 
 
-def test_pagination(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec, sql
-    from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.core import SQL
-
-    db_path = tmp_path / "pagination.db"
+def main() -> tuple[list[dict[str, Any]], int]:
+    """Run offset pagination via SQL.paginate, select_with_total, and the fluent builder."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table items (id integer primary key, name text)")
-        session.execute_many("insert into items (name) values (?)", [(f"Item {i}",) for i in range(1, 51)])
+        session.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+        session.execute_many("INSERT INTO items (name) VALUES (?)", [(f"Item {i}",) for i in range(1, 51)])
 
-        # Approach 1: Use SQL.paginate() for simple offset pagination
-        query = SQL("select id, name from items order by id").paginate(page=2, page_size=10)
-        page_data = session.select(query)
-        print(f"Page 2: {len(page_data)} items, first={page_data[0]['name']}")
-
-        # Approach 2: Use select_with_total for pagination with total count
-        paged_query = SQL("select id, name from items order by id").paginate(page=1, page_size=10)
-        data, total = session.select_with_total(paged_query)
-        print(f"Page 1: {len(data)} items, total: {total}")
-
-        # Approach 3: Use the builder for dynamic pagination
-        builder_query = (
-            sql.select("id", "name").from_("items").where_like("name", "Item%").order_by("id").limit(10).offset(0)
+        page_two = session.select(SQL("SELECT id, name FROM items ORDER BY id").paginate(page=2, page_size=10))
+        page_one, total = session.select_with_total(
+            SQL("SELECT id, name FROM items ORDER BY id").paginate(page=1, page_size=10)
         )
-        result = session.execute(builder_query)
-        print(f"Builder: {len(result.all())} items")
-    # end-example
+        builder_rows = session.execute(
+            sql.select("id", "name").from_("items").where_like("name", "Item%").order_by("id").limit(10).offset(0)
+        ).all()
 
-    assert len(page_data) == 10
-    assert page_data[0]["name"] == "Item 11"
+    assert len(page_two) == 10
+    assert page_two[0]["name"] == "Item 11"
+    assert len(page_one) == 10
+    assert len(builder_rows) == 10
     assert total == 50
+    return page_two, total
+
+
+if __name__ == "__main__":
+    rows, total_rows = main()
+    print(f"Page 2 first={rows[0]['name']}, total={total_rows}")

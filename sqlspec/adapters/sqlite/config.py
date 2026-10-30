@@ -52,118 +52,120 @@ class SqliteConnectionParams(TypedDict):
     """SQLite connection parameters."""
 
     database: NotRequired[str | PathLike[str]]
+    """Filesystem path, ``':memory:'``, or ``file:...`` URI for the SQLite database."""
     timeout: NotRequired[float]
+    """Busy lock wait timeout in seconds passed to ``sqlite3.connect``."""
     detect_types: NotRequired[int]
+    """Bitmask of ``sqlite3.PARSE_DECLTYPES`` and ``sqlite3.PARSE_COLNAMES`` flags."""
     isolation_level: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"] | None]
+    """Implicit transaction begin mode, or ``None`` for manual/autocommit control."""
     check_same_thread: NotRequired[bool]
+    """Restrict raw ``sqlite3.Connection`` usage to the creating OS thread."""
     factory: "NotRequired[SqliteConnectionFactory | None]"
+    """Custom ``sqlite3.Connection`` subclass passed to ``sqlite3.connect``."""
     cached_statements: NotRequired[int]
+    """Number of compiled SQLite VM statements cached per connection by ``sqlite3``."""
     uri: NotRequired[bool]
+    """Interpret ``database`` as a SQLite ``file:`` URI supporting query parameters."""
     autocommit: NotRequired[SQLiteAutocommitMode]
+    """PEP 249 / Python 3.12+ autocommit control flag or ``sqlite3.LEGACY_TRANSACTION_CONTROL`` (``-1``)."""
     pool_recycle_seconds: NotRequired[int]
+    """Maximum connection age in seconds before recycling pooled SQLite connections."""
     health_check_interval: NotRequired[float]
+    """Minimum interval in seconds between connection liveness probes in ``SqliteConnectionPool``."""
     enable_optimizations: NotRequired[bool]
+    """Apply recommended SQLite ``PRAGMA`` settings (WAL journal mode, synchronous=NORMAL, busy_timeout) on connect."""
     enable_foreign_keys: NotRequired[bool]
+    """Execute ``PRAGMA foreign_keys = ON`` when initializing each connection (defaults to ``True``)."""
     extra: NotRequired[dict[str, Any]]
+    """Additional keyword arguments forwarded to ``sqlite3.connect``."""
 
 
 class SqliteFunctionConfig(TypedDict):
     """User-defined SQLite function registration."""
 
     name: str
+    """SQL function name registered on each SQLite connection."""
     narg: int
+    """Expected positional argument count (use ``-1`` for variadic functions)."""
     func: "Callable[..., Any]"
+    """Python callable invoked synchronously when the SQL function executes."""
     deterministic: NotRequired[bool]
+    """Mark the function deterministic so SQLite can inline it in indexes and generated columns."""
 
 
 class SqliteCollationConfig(TypedDict):
     """User-defined SQLite collation registration."""
 
     name: str
+    """SQL collation name usable in ``COLLATE <name>`` clauses."""
     func: "Callable[[str, str], int]"
+    """Comparator callable returning a negative, zero, or positive integer for two strings."""
 
 
 class SqliteAggregateConfig(TypedDict):
     """User-defined SQLite aggregate registration."""
 
     name: str
+    """SQL aggregate function name registered on each connection."""
     narg: int
+    """Expected argument count passed to ``step()`` (use ``-1`` for variadic aggregates)."""
     aggregate_class: "type[Any]"
+    """Class implementing ``step(...)`` and ``finalize()`` methods."""
 
 
 class SqliteWindowFunctionConfig(TypedDict):
     """User-defined SQLite window function registration."""
 
     name: str
+    """SQL window function name registered on each connection."""
     narg: int
+    """Expected argument count passed to ``step()``/``inverse()`` (use ``-1`` for variadic functions)."""
     window_class: "type[Any]"
+    """Class implementing ``step()``, ``inverse()``, ``value()``, and ``finalize()`` methods."""
 
 
 class SqliteDriverFeatures(TypedDict):
-    """SQLite driver feature configuration.
-
-    Controls optional type handling and serialization features for SQLite connections.
-
-    enable_custom_adapters: Enable custom type adapters for JSON/UUID/datetime conversion.
-     Defaults to False.
-     Set to True if you want global sqlite3 module type adapter/converter registration.
-    json_serializer: Custom JSON serializer function.
-     Defaults to sqlspec.utils.serializers.to_json.
-    json_deserializer: Custom JSON deserializer function.
-     Defaults to sqlspec.utils.serializers.from_json.
-    on_connection_create: Callback executed when a connection is created.
-     Receives the raw sqlite3 connection for low-level driver configuration.
-     Runs after internal setup (PRAGMA optimizations).
-    enable_events: Enable database event channel support.
-     Defaults to True when extension_config["events"] is configured.
-     Provides pub/sub capabilities via table-backed queue (SQLite has no native pub/sub).
-     Requires extension_config["events"] for migration setup.
-    events_backend: Event channel backend selection.
-     Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
-     SQLite does not have native pub/sub, so poll_queue is the only backend.
-     Defaults to "poll_queue".
-    custom_functions: Register SQL functions that run on the connection thread.
-     Each entry must include name, narg, and func.
-    custom_collations: Register SQL collations that compare two string values.
-     Each entry must include name and func.
-    custom_aggregates: Register SQL aggregates with step/finalize classes.
-     Each entry must include name, narg, and aggregate_class.
-    custom_window_functions: Register user-defined aggregate window functions.
-     Each entry must include name, narg, and window_class.
-    default_transaction_mode: Default SQLite transaction mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
-    authorizer_callback: sqlite3 authorizer hook run during statement compilation.
-    trace_callback: sqlite3 trace hook run for executed statements.
-    progress_handler: sqlite3 progress hook run every progress_handler_interval VM opcodes.
-    progress_handler_interval: Progress callback interval in SQLite virtual machine opcodes.
-     Must be a positive integer when provided.
-    row_factory: Row factory selector or callable used for raw sqlite3 connections.
-     "row" maps to sqlite3.Row, "dict" maps to a dict row adapter, "tuple" keeps tuple rows.
-     "dict" and custom callables can change raw connection result shapes seen by callers.
-    text_factory: Text factory used for raw sqlite3 connections.
-    pragmas: Additional PRAGMA settings applied after built-in optimization PRAGMAs.
-     User values override built-in defaults when the same PRAGMA appears in both places.
-    extensions: Shared-library extension paths loaded on each connection.
-    """
+    """Optional SQLite driver feature flags, UDF registrations, PRAGMAs, and connection hooks."""
 
     enable_custom_adapters: NotRequired[bool]
+    """Register global ``sqlite3`` module type adapters/converters (defaults to ``False``)."""
     json_serializer: "NotRequired[Callable[[Any], str]]"
+    """Custom JSON serializer used for bound parameters (defaults to ``to_json``)."""
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    """Custom JSON deserializer used for JSON column decoding (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[SqliteConnection], None]]"
+    """Synchronous hook called with each raw ``sqlite3.Connection`` after PRAGMA setup."""
     enable_events: NotRequired[bool]
+    """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` is the sole SQLite backend)."""
     custom_functions: "NotRequired[Sequence[SqliteFunctionConfig]]"
+    """Scalar SQL functions registered via ``conn.create_function`` on each connection."""
     custom_collations: "NotRequired[Sequence[SqliteCollationConfig]]"
+    """Custom string collations registered via ``conn.create_collation`` on each connection."""
     custom_aggregates: "NotRequired[Sequence[SqliteAggregateConfig]]"
+    """Custom SQL aggregate classes registered via ``conn.create_aggregate``."""
     custom_window_functions: "NotRequired[Sequence[SqliteWindowFunctionConfig]]"
+    """Custom SQL window function classes registered via ``conn.create_window_function``."""
     default_transaction_mode: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]]
+    """Default ``BEGIN`` locking mode used by ``begin()`` (``DEFERRED``, ``IMMEDIATE``, or ``EXCLUSIVE``)."""
     authorizer_callback: "NotRequired[Callable[[int, str | None, str | None, str | None, str | None], int]]"
+    """SQLite compile-time access control hook registered via ``conn.set_authorizer``."""
     trace_callback: "NotRequired[Callable[[str], None]]"
+    """Statement trace callback registered via ``conn.set_trace_callback``."""
     progress_handler: "NotRequired[Callable[[], int | None]]"
+    """SQLite VM progress hook invoked every ``progress_handler_interval`` opcodes."""
     progress_handler_interval: NotRequired[int]
+    """Positive VM opcode count between ``progress_handler`` invocations."""
     row_factory: "NotRequired[Literal['row', 'dict', 'tuple'] | Callable[..., Any]]"
+    """Raw connection row factory selector (``'row'``, ``'dict'``, ``'tuple'``) or custom callable."""
     text_factory: "NotRequired[Callable[[bytes], Any]]"
+    """Decoder callable assigned to ``conn.text_factory`` for ``TEXT`` columns."""
     pragmas: "NotRequired[Mapping[str, str | int | bool]]"
+    """Additional ``PRAGMA`` key/value overrides applied after built-in connection optimizations."""
     extensions: "NotRequired[Sequence[str]]"
+    """Shared-library SQLite extension paths loaded via ``conn.load_extension``."""
 
 
 _ROW_FACTORY_LITERALS = frozenset({"dict", "row", "tuple"})

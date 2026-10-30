@@ -40,8 +40,3 @@ repos:
     hooks:
       - id: slotscheck
         exclude: "docs|.github"
-  - repo: https://github.com/sphinx-contrib/sphinx-lint
-    rev: "v1.0.2"
-    hooks:
-      - id: sphinx-lint
-        args: ["--jobs", "1"]

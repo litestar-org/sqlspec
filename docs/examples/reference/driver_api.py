@@ -1,22 +1,25 @@
-from pathlib import Path
+"""Fetch single optional rows directly with driver convenience methods."""
 
-__all__ = ("test_driver_api",)
+from typing import Any
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_driver_api(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_path = tmp_path / "driver_api.db"
+def main() -> dict[str, Any] | None:
+    """Query a single optional user row via session.select_one_or_none."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table if not exists users (id integer primary key, name text)")
-        session.execute("insert into users (name) values ('Ada')")
-        row = session.select_one_or_none("select name from users where id = ?", 1)
-        print(row)
-    # end-example
+        session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+        session.execute("INSERT INTO users (name) VALUES ('Ada')")
+        row = session.select_one_or_none("SELECT name FROM users WHERE id = ?", 1)
+        assert row == {"name": "Ada"}
+        return row
 
-    assert row == {"name": "Ada"}
+
+if __name__ == "__main__":
+    print(main())

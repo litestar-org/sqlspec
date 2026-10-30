@@ -1,52 +1,45 @@
+"""Persist and reload Google ADK session events using AiosqliteADKStore."""
+
+import asyncio
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 
-import anyio
-import pytest
+from google.adk.events.event import Event
+from google.genai import types
 
-if TYPE_CHECKING:
-    from sqlspec.extensions.adk import StoredEvent
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
+from sqlspec.extensions.adk import StoredEvent
+from sqlspec.extensions.adk.converters import event_to_record
 
-__all__ = ("test_adk_memory_store",)
+__all__ = ("main",)
 
 
-def test_adk_memory_store() -> None:
-    pytest.importorskip("aiosqlite")
-    pytest.importorskip("google.adk")
+async def main() -> list[StoredEvent]:
+    """Create an ADK session, append a user event, and fetch stored events."""
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        store = AiosqliteADKStore(config)
+        await store.ensure_tables()
 
-    async def _run() -> "list[StoredEvent]":
-        # start-example
-        from google.adk.events.event import Event
-        from google.genai import types
+        session = await store.create_session(
+            session_id="session_1", app_name="docs", user_id="user_1", state={"mode": "demo"}
+        )
 
-        from sqlspec.adapters.aiosqlite import AiosqliteConfig
-        from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
-        from sqlspec.extensions.adk.converters import event_to_record
-
-        config = AiosqliteConfig(connection_config={"database": ":memory:"})
-        try:
-            store = AiosqliteADKStore(config)
-            await store.ensure_tables()
-
-            session = await store.create_session(
-                session_id="session_1", app_name="docs", user_id="user_1", state={"mode": "demo"}
-            )
-
-            event = Event(
-                id="evt_1",
-                invocation_id="inv_1",
-                author="user",
-                content=types.Content(parts=[types.Part(text="Hello")]),
-                timestamp=datetime.now(UTC).timestamp(),
-            )
-            event_record = event_to_record(event, session["app_name"], session["user_id"], session["id"])
-            await store.append_event(event_record)
-            events = await store.get_events(session["app_name"], session["user_id"], session["id"])
-        finally:
-            await config.close_pool()
-        # end-example
+        event = Event(
+            id="evt_1",
+            invocation_id="inv_1",
+            author="user",
+            content=types.Content(parts=[types.Part(text="Hello")]),
+            timestamp=datetime.now(UTC).timestamp(),
+        )
+        event_record = event_to_record(event, session["app_name"], session["user_id"], session["id"])
+        await store.append_event(event_record)
+        events = await store.get_events(session["app_name"], session["user_id"], session["id"])
+        assert len(events) == 1
         return events
+    finally:
+        await config.close_pool()
 
-    events = anyio.run(_run)
 
-    assert len(events) == 1
+if __name__ == "__main__":
+    print(len(asyncio.run(main())))

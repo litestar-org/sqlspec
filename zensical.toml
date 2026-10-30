@@ -1,0 +1,372 @@
+[project]
+site_name = "SQLSpec"
+site_description = "Typed SQL query execution, statement caching, migrations, Arrow streaming, and multi-adapter database access for Python."
+site_url = "https://sqlspec.dev/"
+repo_url = "https://github.com/litestar-org/sqlspec"
+repo_name = "litestar-org/sqlspec"
+docs_dir = "docs"
+site_dir = "site"
+use_directory_urls = true
+exclude_docs = """
+examples/
+_static/
+_tapes/
+"""
+extra_css = ["stylesheets/extra.css"]
+nav = [
+  { "Home" = "index.md" },
+  { "Learn" = [
+    "learn/index.md",
+    { "Getting Started" = [
+      { "Installation" = "learn/installation.md" },
+      { "Quickstart" = "learn/quickstart.md" },
+      { "Configuration" = "learn/configuration.md" },
+    ] },
+    { "Core Execution" = [
+      { "Querying" = "learn/querying.md" },
+      { "Parameters" = "learn/parameters.md" },
+      { "Schema Mapping" = "learn/schema-mapping.md" },
+      { "Transactions" = "learn/transactions.md" },
+    ] },
+    { "SQL Files & Builder" = [
+      { "SQL Files" = "learn/sql-files.md" },
+      { "Query Builder" = "learn/query-builder.md" },
+      { "Filtering & Pagination" = "learn/filtering-and-pagination.md" },
+    ] },
+    { "Operations & Analytics" = [
+      { "Migrations" = "learn/migrations.md" },
+      { "CLI" = "learn/cli.md" },
+      { "Arrow & Storage" = "learn/arrow-and-storage.md" },
+      { "Data Dictionary" = "learn/data-dictionary.md" },
+      { "Observability" = "learn/observability.md" },
+      { "Testing" = "learn/testing.md" },
+      { "Performance" = "learn/performance.md" },
+    ] },
+    { "Recipes" = [
+      "learn/recipes/index.md",
+      { "Service Layer" = "learn/recipes/service-layer.md" },
+      { "Multi-Tenancy" = "learn/recipes/multi-tenancy.md" },
+      { "Health Checks" = "learn/recipes/health-checks.md" },
+      { "ETL & Bulk Ingest" = "learn/recipes/etl-and-bulk-ingest.md" },
+    ] },
+  ] },
+  { "Databases" = [
+    "databases/index.md",
+    { "PostgreSQL" = [
+      "databases/postgres/index.md",
+      { "asyncpg" = "databases/postgres/asyncpg.md" },
+      { "psycopg" = "databases/postgres/psycopg.md" },
+      { "psqlpy" = "databases/postgres/psqlpy.md" },
+    ] },
+    { "CockroachDB" = "databases/cockroachdb.md" },
+    { "SQLite" = "databases/sqlite.md" },
+    { "MySQL & MariaDB" = "databases/mysql.md" },
+    { "Oracle Database" = "databases/oracledb.md" },
+    { "SQL Server" = "databases/mssql.md" },
+    { "IBM Db2" = "databases/db2.md" },
+    { "DuckDB" = "databases/duckdb.md" },
+    { "BigQuery" = "databases/bigquery.md" },
+    { "Cloud Spanner" = "databases/spanner.md" },
+    { "ADBC" = "databases/adbc.md" },
+    { "Arrow ODBC" = "databases/arrow-odbc.md" },
+  ] },
+  { "Integrations" = [
+    "integrations/index.md",
+    { "Litestar" = "integrations/litestar.md" },
+    { "Google ADK" = "integrations/adk.md" },
+    { "Events & Queues" = "integrations/events.md" },
+    { "FastAPI" = "integrations/fastapi.md" },
+    { "Starlette" = "integrations/starlette.md" },
+    { "Flask" = "integrations/flask.md" },
+    { "Sanic" = "integrations/sanic.md" },
+    { "Dishka" = "integrations/dishka.md" },
+  ] },
+  { "Reference" = [
+    "reference/index.md",
+    { "SQLSpec & Config" = [
+      { "SQLSpec" = "reference/sqlspec.md" },
+      { "Configuration" = "reference/config.md" },
+      { "Exceptions" = "reference/exceptions.md" },
+      { "Protocols" = "reference/protocols.md" },
+      { "Typing" = "reference/typing.md" },
+    ] },
+    { "Drivers" = [
+      "reference/driver/index.md",
+      { "SyncDriverAdapterBase" = "reference/driver/sync.md" },
+      { "AsyncDriverAdapterBase" = "reference/driver/async.md" },
+      { "Common & Transactions" = "reference/driver/common.md" },
+    ] },
+    { "Core Pipeline" = [
+      "reference/core/index.md",
+      { "SQL & StatementConfig" = "reference/core/statement.md" },
+      { "Compiler & Processor" = "reference/core/compiler.md" },
+      { "Parameters" = "reference/core/parameters.md" },
+      { "Results" = "reference/core/results.md" },
+      { "Filters" = "reference/core/filters.md" },
+      { "Cache" = "reference/core/cache.md" },
+    ] },
+    { "Query Builder" = [
+      "reference/builder/index.md",
+      { "SQLFactory" = "reference/builder/factory.md" },
+      { "Select" = "reference/builder/select.md" },
+      { "DML (Insert/Update/Delete/Merge)" = "reference/builder/dml.md" },
+      { "DDL" = "reference/builder/ddl.md" },
+      { "Expressions & Mixins" = "reference/builder/expressions.md" },
+    ] },
+    { "Subsystems" = [
+      { "SQLFileLoader" = "reference/loader.md" },
+      { "Migrations" = "reference/migrations.md" },
+      { "CLI" = "reference/cli.md" },
+      { "Storage & Arrow" = "reference/storage.md" },
+      { "Data Dictionary" = "reference/data-dictionary.md" },
+      { "Observability" = "reference/observability.md" },
+      { "Service Layer" = "reference/service.md" },
+      { "Dialects" = "reference/dialects.md" },
+      { "Utilities" = "reference/utils.md" },
+    ] },
+    { "Extensions" = [
+      "reference/extensions/index.md",
+      { "Litestar" = "reference/extensions/litestar.md" },
+      { "Google ADK" = "reference/extensions/adk.md" },
+      { "Events" = "reference/extensions/events.md" },
+      { "FastAPI" = "reference/extensions/fastapi.md" },
+      { "Starlette" = "reference/extensions/starlette.md" },
+      { "Flask" = "reference/extensions/flask.md" },
+      { "Sanic" = "reference/extensions/sanic.md" },
+      { "OpenTelemetry" = "reference/extensions/opentelemetry.md" },
+      { "Prometheus" = "reference/extensions/prometheus.md" },
+    ] },
+    { "Database Adapters" = [
+      "reference/adapters/index.md",
+      { "asyncpg" = "reference/adapters/asyncpg.md" },
+      { "psycopg" = "reference/adapters/psycopg.md" },
+      { "psqlpy" = "reference/adapters/psqlpy.md" },
+      { "cockroach-asyncpg" = "reference/adapters/cockroach-asyncpg.md" },
+      { "cockroach-psycopg" = "reference/adapters/cockroach-psycopg.md" },
+      { "sqlite" = "reference/adapters/sqlite.md" },
+      { "aiosqlite" = "reference/adapters/aiosqlite.md" },
+      { "asyncmy" = "reference/adapters/asyncmy.md" },
+      { "aiomysql" = "reference/adapters/aiomysql.md" },
+      { "pymysql" = "reference/adapters/pymysql.md" },
+      { "mysqlconnector" = "reference/adapters/mysqlconnector.md" },
+      { "oracledb" = "reference/adapters/oracledb.md" },
+      { "mssql-python" = "reference/adapters/mssql-python.md" },
+      { "pymssql" = "reference/adapters/pymssql.md" },
+      { "db2" = "reference/adapters/db2.md" },
+      { "duckdb" = "reference/adapters/duckdb.md" },
+      { "bigquery" = "reference/adapters/bigquery.md" },
+      { "spanner" = "reference/adapters/spanner.md" },
+      { "adbc" = "reference/adapters/adbc.md" },
+      { "arrow-odbc" = "reference/adapters/arrow-odbc.md" },
+    ] },
+  ] },
+  { "Playground" = "playground.md" },
+  { "Project" = [
+    "contributing/index.md",
+    { "Creating Adapters" = "contributing/creating-adapters.md" },
+    { "Releases" = "releases.md" },
+    { "Changelog" = "changelog.md" },
+  ] },
+]
+
+[project.theme]
+language = "en"
+logo = "assets/logo.svg"
+favicon = "assets/favicon.svg"
+features = [
+  "content.code.annotate",
+  "content.code.copy",
+  "content.tabs.link",
+  "navigation.indexes",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.top",
+  "search.highlight",
+  "toc.follow",
+]
+
+[project.theme.font]
+text = "Inter"
+code = "JetBrains Mono"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "custom"
+accent = "indigo"
+toggle = { icon = "lucide/sun", name = "Switch to dark mode" }
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "custom"
+accent = "indigo"
+toggle = { icon = "lucide/moon", name = "Switch to light mode" }
+
+[project.plugins.search]
+
+[project.plugins.redirects.redirect_maps]
+"contributing/creating_adapters.md" = "contributing/creating-adapters.md"
+"contributing/guide.md" = "contributing/index.md"
+"contribution-guide.md" = "contributing/index.md"
+"extensions/index.md" = "integrations/index.md"
+"extensions/adk/index.md" = "integrations/adk.md"
+"extensions/adk/quickstart.md" = "integrations/adk.md"
+"extensions/adk/installation.md" = "integrations/adk.md"
+"extensions/adk/backends.md" = "integrations/adk.md"
+"extensions/adk/adapters.md" = "integrations/adk.md"
+"extensions/adk/schema.md" = "integrations/adk.md"
+"extensions/adk/migrations.md" = "integrations/adk.md"
+"extensions/adk/api.md" = "reference/extensions/adk.md"
+"getting_started/index.md" = "learn/index.md"
+"getting_started/installation.md" = "learn/installation.md"
+"getting_started/introduction.md" = "learn/index.md"
+"getting_started/quickstart.md" = "learn/quickstart.md"
+"recipes/index.md" = "learn/recipes/index.md"
+"recipes/dishka.md" = "integrations/dishka.md"
+"recipes/health_checks.md" = "learn/recipes/health-checks.md"
+"recipes/multi_tenancy.md" = "learn/recipes/multi-tenancy.md"
+"recipes/service_layer.md" = "learn/recipes/service-layer.md"
+"recipes/sql_server.md" = "databases/mssql.md"
+"usage/index.md" = "learn/index.md"
+"usage/bulk_ingest.md" = "learn/recipes/etl-and-bulk-ingest.md"
+"usage/cli.md" = "learn/cli.md"
+"usage/configuration.md" = "learn/configuration.md"
+"usage/data_dictionary.md" = "learn/data-dictionary.md"
+"usage/data_flow.md" = "learn/arrow-and-storage.md"
+"usage/drivers_and_querying.md" = "learn/querying.md"
+"usage/etl.md" = "learn/recipes/etl-and-bulk-ingest.md"
+"usage/filtering.md" = "learn/filtering-and-pagination.md"
+"usage/framework_integrations.md" = "integrations/index.md"
+"usage/frameworks/fastapi.md" = "integrations/fastapi.md"
+"usage/frameworks/flask.md" = "integrations/flask.md"
+"usage/frameworks/litestar/index.md" = "integrations/litestar.md"
+"usage/frameworks/litestar/installation.md" = "integrations/litestar.md"
+"usage/frameworks/litestar/quickstart.md" = "integrations/litestar.md"
+"usage/frameworks/litestar/dependency_injection.md" = "integrations/litestar.md"
+"usage/frameworks/litestar/transactions.md" = "integrations/litestar.md"
+"usage/frameworks/litestar/session_stores.md" = "integrations/litestar.md"
+"usage/frameworks/litestar/api.md" = "reference/extensions/litestar.md"
+"usage/frameworks/sanic.md" = "integrations/sanic.md"
+"usage/frameworks/starlette.md" = "integrations/starlette.md"
+"usage/migrations.md" = "learn/migrations.md"
+"usage/observability.md" = "learn/observability.md"
+"usage/performance.md" = "learn/performance.md"
+"usage/query_builder.md" = "learn/query-builder.md"
+"usage/sql_files.md" = "learn/sql-files.md"
+"usage/testing.md" = "learn/testing.md"
+"reference/adapters/arrow_odbc.md" = "reference/adapters/arrow-odbc.md"
+"reference/adapters/cockroach_asyncpg.md" = "reference/adapters/cockroach-asyncpg.md"
+"reference/adapters/cockroach_psycopg.md" = "reference/adapters/cockroach-psycopg.md"
+"reference/adapters/mssql_python.md" = "reference/adapters/mssql-python.md"
+"reference/base.md" = "reference/sqlspec.md"
+"reference/builder/queries.md" = "reference/builder/select.md"
+"reference/core/query-modifiers.md" = "reference/core/compiler.md"
+"reference/core/splitter.md" = "reference/core/compiler.md"
+"reference/core/sqlcommenter.md" = "reference/core/compiler.md"
+"reference/core/type-converters.md" = "reference/core/compiler.md"
+"reference/data_dictionary.md" = "reference/data-dictionary.md"
+"reference/extensions/otel.md" = "reference/extensions/opentelemetry.md"
+"reference/query-stack.md" = "reference/core/statement.md"
+
+[project.plugins.mkdocstrings]
+default_handler = "python"
+custom_templates = "tools/docs/templates"
+
+[project.plugins.mkdocstrings.handlers.python]
+paths = ["."]
+enable_inventory = true
+inventories = [
+  "https://docs.python.org/3/objects.inv",
+  "https://typing-extensions.readthedocs.io/en/stable/objects.inv",
+  "https://click.palletsprojects.com/en/stable/objects.inv",
+  "https://anyio.readthedocs.io/en/stable/objects.inv",
+  "https://docs.litestar.dev/latest/objects.inv",
+  "https://fastapi.tiangolo.com/objects.inv",
+  "https://flask.palletsprojects.com/en/stable/objects.inv",
+  "https://sanic.readthedocs.io/en/latest/objects.inv",
+  "https://dishka.readthedocs.io/en/latest/objects.inv",
+  "https://msgspec.dev/objects.inv",
+  "https://pydantic.dev/docs/validation/latest/objects.inv",
+  "https://www.attrs.org/en/stable/objects.inv",
+  "https://arrow.apache.org/docs/objects.inv",
+  "https://arrow.apache.org/adbc/current/objects.inv",
+  "https://docs.pola.rs/api/python/stable/objects.inv",
+  "https://pandas.pydata.org/docs/objects.inv",
+  "https://developmentseed.org/obstore/latest/objects.inv",
+  "https://filesystem-spec.readthedocs.io/en/latest/objects.inv",
+  "https://opentelemetry-python.readthedocs.io/en/latest/objects.inv",
+  "https://www.psycopg.org/psycopg3/docs/objects.inv",
+  "https://magicstack.github.io/asyncpg/current/objects.inv",
+  "https://python-oracledb.readthedocs.io/en/latest/objects.inv",
+  "https://googleapis.dev/python/bigquery/latest/objects.inv",
+  "https://googleapis.dev/python/spanner/latest/objects.inv",
+  "https://aiosqlite.omnilib.dev/en/stable/objects.inv",
+  "https://pymysql.readthedocs.io/en/latest/objects.inv",
+  "https://aiomysql.readthedocs.io/en/stable/objects.inv",
+  "https://pymssql.readthedocs.io/en/stable/objects.inv",
+]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+docstring_style = "google"
+docstring_section_style = "table"
+find_stubs_package = true
+heading_level = 3
+inherited_members = false
+line_length = 80
+members_order = "source"
+merge_init_into_class = false
+modernize_annotations = true
+annotations_path = "brief"
+preload_modules = ["sqlspec"]
+separate_signature = true
+show_bases = true
+show_category_heading = false
+show_if_no_docstring = true
+show_labels = false
+show_object_full_path = false
+show_overloads = false
+show_root_full_path = false
+show_root_heading = true
+show_root_toc_entry = true
+show_signature_annotations = false
+show_source = false
+show_symbol_type_heading = true
+show_symbol_type_toc = false
+signature_crossrefs = false
+summary = false
+unwrap_annotated = true
+filters = ["!^_"]
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+toc = { permalink = true, toc_depth = "2-3" }
+
+[project.markdown_extensions.pymdownx.details]
+[project.markdown_extensions.pymdownx.inlinehilite]
+[project.markdown_extensions.pymdownx.keys]
+
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+line_spans = "__span"
+pygments_lang_class = true
+
+[project.markdown_extensions.pymdownx.snippets]
+base_path = ["."]
+check_paths = true
+dedent_subsections = true
+
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+slugify = { object = "pymdownx.slugs.slugify", kwds = { case = "lower" } }

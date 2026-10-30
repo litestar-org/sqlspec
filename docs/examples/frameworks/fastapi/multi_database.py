@@ -1,25 +1,21 @@
-from typing import Annotated
+"""Inject multiple async and sync SQLSpec database sessions into a FastAPI route."""
 
-import pytest
+from typing import Annotated, Any
 
-__all__ = ("test_fastapi_multi_database",)
+from fastapi import Depends, FastAPI
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.extensions.fastapi import SQLSpecPlugin
+
+__all__ = ("main",)
 
 
-def test_fastapi_multi_database() -> None:
-    pytest.importorskip("fastapi")
-    pytest.importorskip("aiosqlite")
-    # start-example
-    from fastapi import Depends, FastAPI
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-    from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-    from sqlspec.extensions.fastapi import SQLSpecPlugin
-
-    sqlspec = SQLSpec()
-
-    # Primary async database
-    sqlspec.add_config(
+def main() -> FastAPI:
+    """Create a FastAPI application wired to both primary async and ETL sync databases."""
+    spec = SQLSpec()
+    spec.add_config(
         AiosqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={
@@ -27,9 +23,7 @@ def test_fastapi_multi_database() -> None:
             },
         )
     )
-
-    # ETL sync database (e.g., DuckDB pattern)
-    sqlspec.add_config(
+    spec.add_config(
         SqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={
@@ -39,19 +33,19 @@ def test_fastapi_multi_database() -> None:
     )
 
     app = FastAPI()
-    db_plugin = SQLSpecPlugin(sqlspec, app)
+    db_plugin = SQLSpecPlugin(spec, app)
 
     @app.get("/report")
     async def report(
         db: Annotated[AiosqliteDriver, Depends(db_plugin.provide_session("db"))],
         etl_db: Annotated[SqliteDriver, Depends(db_plugin.provide_session("etl_db"))],
-    ) -> dict[str, list]:
-        # Async query to primary database
-        users = await db.select("SELECT 1 as id, 'Alice' as name")
-        # Sync query to ETL database
-        metrics = etl_db.select("SELECT 'metric1' as name, 100 as value")
+    ) -> dict[str, list[dict[str, Any]]]:
+        users = await db.select("SELECT 1 AS id, 'Alice' AS name")
+        metrics = etl_db.select("SELECT 'metric1' AS name, 100 AS value")
         return {"users": users, "metrics": metrics}
 
-    # end-example
+    return app
 
-    assert app is not None
+
+if __name__ == "__main__":
+    print(main())

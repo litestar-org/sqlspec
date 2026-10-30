@@ -67,12 +67,8 @@ _SECRET_BOOLEAN_TEXT: Final[dict[str, str]] = {
 class DuckDBConnectionPool:
     """Thread-local connection manager for DuckDB.
 
-    Uses thread-local storage to ensure each thread gets its own DuckDB connection,
-    preventing the thread-safety issues that cause segmentation faults when
-    multiple cursors share the same connection concurrently.
-
-    This design trades traditional pooling for thread safety, which is essential
-    for DuckDB since connections and cursors are not thread-safe.
+    Isolates DuckDB connections per thread using thread-local storage because native
+    DuckDB connections and cursors are not safe for concurrent multi-threaded sharing.
     """
 
     __slots__ = (

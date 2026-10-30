@@ -30,7 +30,9 @@ Routing matrix (output):
 Handlers chain to any pre-existing ``inputtypehandler`` / ``outputtypehandler``
 registered on the connection, so registration order
 matters: register JSON after numpy, before UUID is also safe because each
-handler returns ``None`` for values it does not own.
+handler returns ``None`` for values it does not own. Chained handlers use
+``functools.partial`` so ``python-oracledb`` can introspect parameter arity
+even when this module is compiled with mypyc.
 """
 
 from functools import partial
@@ -151,11 +153,7 @@ def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
 
 
 def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an input type handler that chains ``inner`` to ``fallback``.
-
-    A partial keeps the signature introspectable when compiled with mypyc;
-    python-oracledb uses it to select the handler calling convention.
-    """
+    """Build an input type handler that chains ``inner`` to ``fallback``."""
     if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
         return fallback
     return partial(_chained_input_handler, inner, fallback)

@@ -1,33 +1,33 @@
-from pathlib import Path
+"""Combine raw SQL expressions and RETURNING clauses inside fluent builder queries."""
 
-__all__ = ("test_raw_expressions",)
+from typing import Any
+
+from sqlspec import SQLSpec, sql
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_raw_expressions(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec, sql
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_path = tmp_path / "raw.db"
+def main() -> dict[str, Any]:
+    """Aggregate event counts with sql.raw() and insert a row using RETURNING."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
         session.execute(
-            "create table events (  id integer primary key,  name text,  created_at text default (datetime('now')))"
+            "CREATE TABLE events (id INTEGER PRIMARY KEY, name TEXT, created_at TEXT DEFAULT (datetime('now')))"
         )
-        session.execute("insert into events (name) values ('signup'), ('login')")
+        session.execute("INSERT INTO events (name) VALUES ('signup'), ('login')")
 
-        # sql.raw() creates a raw SQL expression for use inside builders
-        raw_count = sql.raw("COUNT(*)")
-        query = sql.select("name", raw_count).from_("events").group_by("name")
-        result = session.execute(query)
-        print(result.all())
+        raw_count = sql.raw("COUNT(*) AS total")
+        grouped = session.execute(sql.select("name", raw_count).from_("events").group_by("name")).all()
+        assert len(grouped) == 2
 
-        # Use RETURNING clause with INSERT
         insert_returning = sql.insert("events").columns("name").values("logout").returning("id", "name")
-        new_row = session.execute(insert_returning)
-        print(new_row.one())  # {"id": 3, "name": "logout"}
-    # end-example
+        inserted = session.execute(insert_returning).one()
+        assert inserted["name"] == "logout"
+        return inserted
 
-    assert new_row.one()["name"] == "logout"
+
+if __name__ == "__main__":
+    print(main())

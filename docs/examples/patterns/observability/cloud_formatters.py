@@ -1,13 +1,18 @@
-__all__ = ("test_cloud_formatters",)
+"""Configure structured GCP Cloud Logging and AWS CloudWatch log formatters."""
+
+from sqlspec.observability import AWSLogFormatter, GCPLogFormatter, ObservabilityConfig
+
+__all__ = ("main",)
 
 
-def test_cloud_formatters() -> None:
-    # start-example
-    from sqlspec.observability import AWSLogFormatter, GCPLogFormatter, ObservabilityConfig
-
+def main() -> tuple[ObservabilityConfig, ObservabilityConfig]:
+    """Create ObservabilityConfig instances for GCP and AWS structured log output."""
     gcp_logs = ObservabilityConfig(cloud_formatter=GCPLogFormatter())
     aws_logs = ObservabilityConfig(cloud_formatter=AWSLogFormatter())
-    # end-example
-
     assert gcp_logs.cloud_formatter is not None
     assert aws_logs.cloud_formatter is not None
+    return gcp_logs, aws_logs
+
+
+if __name__ == "__main__":
+    print(main())

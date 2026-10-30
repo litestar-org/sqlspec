@@ -62,11 +62,10 @@ def test_public_filters_alias_points_to_core_filters_module() -> None:
 
 
 def test_filters_docs_render_inherited_members() -> None:
-    """Docs include inherited members for public filters whose methods are inherited."""
-    docs = Path("docs/reference/core/filters.rst").read_text()
-    for class_name in ("BeforeAfterFilter", "OnBeforeAfterFilter", "SearchFilter", "NotInSearchFilter"):
-        block = docs.split(f".. autoclass:: {class_name}", 1)[1].split(".. autoclass::", 1)[0]
-        assert ":inherited-members:" in block
+    """Docs include public filters whose methods are inherited."""
+    docs = Path("docs/reference/core/filters.md").read_text()
+    for class_name in ("BeforeAfterFilter", "SearchFilter", "InCollectionFilter", "NotInCollectionFilter"):
+        assert f"::: sqlspec.core.filters.{class_name}" in docs
 
 
 def test_statement_filter_get_column_expression_delegates_to_parse_column_for_condition(

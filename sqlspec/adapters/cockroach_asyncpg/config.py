@@ -64,48 +64,86 @@ class CockroachAsyncpgConnectionConfig(TypedDict):
     """AsyncPG connection parameters for CockroachDB."""
 
     dsn: NotRequired[str]
+    """CockroachDB PostgreSQL-compatible connection URI."""
     host: NotRequired[str]
+    """CockroachDB node or load-balancer hostname."""
     port: NotRequired[int]
+    """CockroachDB SQL TCP port (defaults to ``26257``)."""
     user: NotRequired[str]
+    """CockroachDB SQL username."""
     password: NotRequired[str]
+    """Password or JWT token for ``user``."""
     service: NotRequired[str]
+    """Service profile name in ``pg_service.conf``."""
     servicefile: NotRequired[str]
+    """Path to an alternate ``pg_service.conf`` file."""
     database: NotRequired[str]
+    """Target CockroachDB database name."""
     ssl: NotRequired[Any]
+    """TLS mode string, boolean flag, or ``ssl.SSLContext`` instance."""
     passfile: NotRequired[str]
+    """Path to a ``pgpass`` password file."""
     direct_tls: NotRequired[bool]
+    """Initiate TLS handshake directly without ``SSLRequest`` negotiation."""
     timeout: NotRequired[float]
+    """Connection establishment timeout in seconds."""
     connect_timeout: NotRequired[float]
+    """Pool connection establishment timeout in seconds."""
     command_timeout: NotRequired[float]
+    """Default per-command timeout in seconds."""
     application_name: NotRequired[str]
+    """Application identifier forwarded via ``server_settings``."""
     cluster: NotRequired[str]
+    """CockroachDB Serverless / Cloud routing cluster identifier."""
     pgbouncer: NotRequired[bool]
+    """Disable prepared statement caching when connecting through a transaction pooler."""
     default_transaction_use_follower_reads: NotRequired[bool]
+    """Session setting enabling bounded-staleness follower reads on read-only transactions."""
     results_buffer_size: NotRequired[int]
+    """CockroachDB server result streaming buffer size in bytes."""
     statement_cache_size: NotRequired[int]
+    """Maximum prepared statements cached per connection (``0`` disables caching)."""
     max_cached_statement_lifetime: NotRequired[int]
+    """Maximum age in seconds before cached prepared statements are evicted."""
     max_cacheable_statement_size: NotRequired[int]
+    """Maximum SQL byte length eligible for prepared statement caching."""
     server_settings: NotRequired["dict[str, str]"]
+    """Startup CockroachDB session variables passed at connection time."""
     target_session_attrs: NotRequired[CockroachAsyncpgTargetSessionAttrs]
+    """Required node session attribute when connecting across multiple hosts."""
     krbsrvname: NotRequired[str]
+    """Kerberos service principal name for GSSAPI authentication."""
     gsslib: NotRequired[CockroachAsyncpgGSSLib]
+    """GSSAPI library implementation (``gssapi`` or ``sspi``)."""
 
 
 class CockroachAsyncpgPoolConfig(CockroachAsyncpgConnectionConfig):
     """AsyncPG pool parameters for CockroachDB."""
 
     min_size: NotRequired[int]
+    """Minimum number of open connections maintained in the pool."""
     max_size: NotRequired[int]
+    """Maximum number of concurrent connections allowed in the pool."""
     max_queries: NotRequired[int]
+    """Number of queries after which a pooled connection is recycled."""
     max_inactive_connection_lifetime: NotRequired[float]
+    """Idle timeout in seconds before closing unused connections above ``min_size``."""
     connect: NotRequired["Callable[..., Awaitable[CockroachAsyncpgConnection]]"]
+    """Custom async connection factory passed to ``asyncpg.create_pool``."""
     setup: NotRequired["Callable[[CockroachAsyncpgConnection], Awaitable[None]]"]
+    """Async hook run before each connection checkout from the pool."""
     init: NotRequired["Callable[[CockroachAsyncpgConnection], Awaitable[None]]"]
+    """Async hook run once when a new physical connection is opened."""
     reset: NotRequired["Callable[[CockroachAsyncpgConnection], Awaitable[None]]"]
+    """Async hook run when returning a connection to the pool."""
     loop: NotRequired["AbstractEventLoop"]
+    """Explicit ``asyncio`` event loop for pool tasks."""
     connection_class: NotRequired[type["CockroachAsyncpgConnection"]]
+    """Custom ``asyncpg.Connection`` subclass used by the pool."""
     record_class: NotRequired[type[Record]]
+    """Custom ``asyncpg.Record`` subclass returned by raw queries."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional keyword arguments forwarded to ``asyncpg.create_pool``."""
 
 
 class _NativeStorageCSVOptions(TypedDict):
@@ -117,34 +155,40 @@ class _NativeStorageCSVOptions(TypedDict):
 
 
 class CockroachAsyncpgDriverFeatures(TypedDict):
-    """Driver feature flags for CockroachDB AsyncPG adapter.
-
-    enable_native_storage: Opt in to server-side storage operations. Exports create
-     generated files under a prefix; imports temporarily take the table offline.
-    native_storage_csv_options: Explicit nullas/nullif markers and skip count.
-     Export is headerless; native CSV import requires an explicit skip count.
-     Markers must not occur as literal data. No NULL marker is inferred.
-    on_connection_create: Async callback executed when a connection is acquired from pool.
-     Receives the raw asyncpg connection for low-level driver configuration.
-     Called after internal setup (JSON codecs, pgvector registration).
-    """
+    """Driver feature flags for CockroachDB retries, follower reads, codecs, and native storage."""
 
     enable_native_storage: NotRequired[bool]
+    """Opt in to server-side CockroachDB ``EXPORT`` and ``IMPORT INTO`` storage operations."""
     native_storage_csv_options: NotRequired[_NativeStorageCSVOptions]
+    """Explicit CSV markers mapping supporting ``nullas`` (export NULL string), ``nullif`` (import NULL string), and ``skip`` (header line count to skip on import)."""
     enable_auto_retry: NotRequired[bool]
+    """Automatically retry CockroachDB ``40001`` serialization failure transactions with backoff."""
     max_retries: NotRequired[int]
+    """Maximum retry attempts on ``40001`` transaction serialization conflicts."""
     retry_delay_base_ms: NotRequired[float]
+    """Initial exponential backoff delay in milliseconds between serialization retries."""
     retry_delay_max_ms: NotRequired[float]
+    """Upper bound in milliseconds on exponential backoff delay between retries."""
     enable_retry_logging: NotRequired[bool]
+    """Emit structured debug/warning logs when serialization retries occur."""
     enable_follower_reads: NotRequired[bool]
+    """Allow ``AS OF SYSTEM TIME`` follower-read clauses on read queries."""
     default_staleness: NotRequired[str]
+    """Default ``AS OF SYSTEM TIME`` staleness expression (such as ``'-5s'`` or ``follower_read_timestamp()``)."""
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer registered on ``json``/``jsonb`` codecs (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer registered on ``json``/``jsonb`` codecs (defaults to ``from_json``)."""
     enable_json_codecs: NotRequired[bool]
+    """Register automatic ``json`` and ``jsonb`` codecs on new connections (defaults to ``True``)."""
     enable_pgvector: NotRequired[bool]
+    """Register ``pgvector`` codecs for CockroachDB ``VECTOR`` columns when ``pgvector`` is installed."""
     on_connection_create: "NotRequired[Callable[[CockroachAsyncpgConnection], Awaitable[None]]]"
+    """Async callback invoked with each raw ``asyncpg`` connection after codec initialization."""
     enable_events: NotRequired[bool]
+    """Enable durable queue-backed SQLSpec event channel support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` for CockroachDB table-backed polling)."""
 
 
 class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):

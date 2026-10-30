@@ -116,45 +116,82 @@ _DATABASE_CONFIG_FIELDS = frozenset({
 
 
 class SpannerConnectionParams(TypedDict):
-    """Spanner connection parameters."""
+    """Google Cloud Spanner client, instance, and database connection parameters."""
 
     project: "NotRequired[str]"
+    """Google Cloud project ID owning the Spanner instance."""
     project_id: "NotRequired[str]"
+    """Alias normalized to ``project`` when ``project`` is unset."""
     credentials: "NotRequired[Credentials]"
+    """Explicit ``google.auth.credentials.Credentials`` instance overriding ADC."""
     client_info: "NotRequired[ClientInfo]"
+    """Custom ``google.api_core.gapic_v1.client_info.ClientInfo`` user-agent metadata."""
     client_options: "NotRequired[ClientOptions | dict[str, Any]]"
+    """GAPIC ``ClientOptions`` or mapping configuring API endpoint, universe domain, or quota project."""
     query_options: "NotRequired[ExecuteSqlRequest.QueryOptions]"
+    """Client-wide default ``ExecuteSqlRequest.QueryOptions`` (such as ``optimizer_version``)."""
     route_to_leader_enabled: "NotRequired[bool]"
+    """Route read-write transactions and Partitioned DML directly to Paxos leader replicas."""
     directed_read_options: "NotRequired[DirectedReadOptions]"
+    """Client-wide replica routing rules for read-only snapshot requests."""
     observability_options: "NotRequired[Any]"
+    """Google Cloud Spanner client-side OpenTelemetry tracing configuration."""
     default_transaction_options: "NotRequired[DefaultTransactionOptions]"
+    """Default isolation level or read-lock mode applied to read-write transactions."""
     experimental_host: "NotRequired[str]"
+    """Direct single-endpoint Spanner or emulator host address."""
     disable_builtin_metrics: "NotRequired[bool]"
+    """Disable built-in Cloud Monitoring client-side metric export."""
     client_context: "NotRequired[dict[str, str]]"
+    """Key-value client context attributes attached to Spanner RPC metadata."""
     use_plain_text: "NotRequired[bool]"
+    """Connect over unencrypted plaintext gRPC when targeting local emulators."""
     ca_certificate: "NotRequired[str]"
+    """PEM root CA certificate bundle path for custom TLS verification."""
     client_certificate: "NotRequired[str]"
+    """PEM client certificate path for mTLS authentication."""
     client_key: "NotRequired[str]"
+    """PEM client private key path paired with ``client_certificate``."""
     instance_type: "NotRequired[str]"
+    """Spanner instance edition or provisioning type forwarded to the client."""
     instance_id: "NotRequired[str]"
+    """Target Spanner instance identifier."""
     instance: "NotRequired[str]"
+    """Alias normalized to ``instance_id`` when ``instance_id`` is unset."""
     configuration_name: "NotRequired[str]"
+    """Regional or multi-region Spanner instance configuration resource name."""
     display_name: "NotRequired[str]"
+    """Human-readable display name used when referencing or provisioning an instance."""
     node_count: "NotRequired[int]"
+    """Allocated node count for the Spanner instance descriptor."""
     processing_units: "NotRequired[int]"
+    """Allocated processing units for sub-node or granular Spanner instances."""
     instance_labels: "NotRequired[dict[str, str]]"
+    """Resource labels associated with the Spanner instance."""
     database_id: "NotRequired[str]"
+    """Target Spanner database identifier within ``instance_id``."""
     database: "NotRequired[str]"
+    """Alias normalized to ``database_id`` when ``database_id`` is unset."""
     db: "NotRequired[str]"
+    """Short alias normalized to ``database_id`` when ``database_id`` is unset."""
     ddl_statements: "NotRequired[tuple[str, ...] | list[str]]"
+    """Initial DDL statements associated with the ``Database`` handle."""
     logger: "NotRequired[Logger]"
+    """Custom Python ``logging.Logger`` attached to the Spanner ``Database`` object."""
     encryption_config: "NotRequired[EncryptionConfig | dict[str, Any]]"
+    """Customer-managed Cloud KMS encryption configuration for the database."""
     database_dialect: "NotRequired[DatabaseDialect]"
+    """Spanner SQL dialect enum (``GOOGLE_STANDARD_SQL`` or ``POSTGRESQL``)."""
     database_role: "NotRequired[str]"
+    """Fine-grained access control database role assumed by sessions."""
     enable_drop_protection: "NotRequired[bool]"
+    """Flag indicating whether database drop protection is enabled on the handle."""
     enable_interceptors_in_tests: "NotRequired[bool]"
+    """Enable gRPC client interceptors when running under test harnesses."""
     proto_descriptors: "NotRequired[bytes]"
+    """Serialized protobuf ``FileDescriptorSet`` bytes associated with the database."""
     extra: "NotRequired[dict[str, Any]]"
+    """Additional keyword arguments retained in normalized connection configuration."""
 
 
 class SpannerPoolParams(SpannerConnectionParams):
@@ -166,53 +203,52 @@ class SpannerPoolParams(SpannerConnectionParams):
     """
 
     pool_type: "NotRequired[type[AbstractSessionPool | AsyncAbstractSessionPool]]"
+    """Session pool class (``FixedSizePool``, ``BurstyPool``, ``PingingPool``, or async equivalents)."""
     size: "NotRequired[int]"
+    """Fixed session count pre-allocated by ``FixedSizePool`` or ``PingingPool``."""
     target_size: "NotRequired[int]"
+    """Target warm session count maintained by ``BurstyPool``."""
     max_sessions: "NotRequired[int]"
+    """Upper cap on sessions opened concurrently by custom or bursty pools."""
     default_timeout: "NotRequired[int | float]"
+    """Seconds to wait when borrowing a session from the pool before timing out."""
     session_labels: "NotRequired[dict[str, str]]"
+    """Key-value labels attached to sessions created by the pool."""
     labels: "NotRequired[dict[str, str]]"
+    """Alias for ``session_labels`` forwarded to pool session creation."""
     ping_interval: "NotRequired[int]"
+    """Background keepalive ping interval in seconds for ``PingingPool``."""
     max_age_minutes: "NotRequired[int]"
+    """Maximum session age in minutes before pool rotation."""
 
 
 class SpannerDriverFeatures(TypedDict):
-    """Driver feature flags for Spanner.
-
-    Attributes:
-        enable_uuid_conversion: Enable automatic UUID string conversion.
-        json_serializer: Custom JSON serializer for parameter conversion.
-        json_deserializer: Custom JSON deserializer for result conversion.
-        retry: Per-request retry policy passed to execute_sql(), execute_update(), and batch_update().
-        timeout: Per-request timeout in seconds passed to execute_sql(), execute_update(), and batch_update().
-        request_options: Default RequestOptions forwarded to execute_sql(), execute_update(),
-            and batch_update(). Per-call overrides are available through normal
-            driver execution methods.
-        directed_read_options: Default DirectedReadOptions forwarded to execute_sql().
-        session_labels: Deprecated compatibility alias for pool session labels.
-            Prefer ``connection_config["session_labels"]``.
-        enable_events: Enable database event channel support.
-            Defaults to True when extension_config["events"] is configured.
-        events_backend: Backend type for event handling.
-            Spanner only supports "poll_queue" (no native pub/sub).
-        enable_batch_write_api: Route load_from_arrow through the Spanner Batch Write API
-            (Database.mutation_groups().batch_write()) for high-throughput, independently
-            committed mutation groups instead of a single in-transaction insert_or_update.
-            Defaults to False.
-    """
+    """Driver feature flags configuring Spanner codecs, RPC options, and Batch Write ingestion."""
 
     enable_uuid_conversion: "NotRequired[bool]"
+    """Automatically coerce ``UUID`` parameters to strings (defaults to ``True``)."""
     json_serializer: "NotRequired[Callable[[Any], str]]"
+    """Custom JSON serializer for ``JSON`` parameter payloads."""
     json_deserializer: "NotRequired[Callable[[str], Any]]"
+    """Custom JSON deserializer for ``JSON`` column values."""
     retry: "NotRequired[Retry | None]"
+    """Default ``google.api_core.retry.Retry`` policy passed to ``execute_sql``, ``execute_update``, and ``batch_update``."""
     timeout: "NotRequired[float | None]"
+    """Default per-RPC timeout in seconds passed to ``execute_sql``, ``execute_update``, and ``batch_update``."""
     query_options: "NotRequired[ExecuteSqlRequest.QueryOptions | dict[str, Any] | None]"
+    """Default ``ExecuteSqlRequest.QueryOptions`` forwarded to SQL execution calls."""
     request_options: "NotRequired[RequestOptions | dict[str, Any] | None]"
+    """Default ``RequestOptions`` (priority, request tag, transaction tag) forwarded to statement RPCs."""
     directed_read_options: "NotRequired[DirectedReadOptions | None]"
+    """Default ``DirectedReadOptions`` forwarded to snapshot ``execute_sql`` reads."""
     session_labels: "NotRequired[dict[str, str]]"
+    """Deprecated compatibility alias for ``connection_config['session_labels']``."""
     enable_events: "NotRequired[bool]"
+    """Enable SQLSpec table-backed event channel support."""
     events_backend: "NotRequired[Literal['poll_queue']]"
+    """Event queue backend name (``'poll_queue'``)."""
     enable_batch_write_api: "NotRequired[bool]"
+    """Route ``load_from_arrow`` through Spanner ``batch_write`` mutation groups instead of single-transaction mutations (defaults to ``False``)."""
 
 
 def build_connection_config(

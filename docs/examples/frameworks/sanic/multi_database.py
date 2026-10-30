@@ -1,25 +1,23 @@
-import pytest
+"""Query multiple async and sync SQLSpec database binds inside a Sanic route."""
 
-__all__ = ("test_sanic_multi_database",)
+from sanic import Request, Sanic, response
+from sanic.response import HTTPResponse
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.extensions.sanic import SQLSpecPlugin
+
+__all__ = ("main",)
 
 
-def test_sanic_multi_database() -> None:
-    pytest.importorskip("sanic")
-    pytest.importorskip("aiosqlite")
-    # start-example
-    from sanic import Request, Sanic, response
-    from sanic.response import HTTPResponse
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-    from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-    from sqlspec.extensions.sanic import SQLSpecPlugin
-
-    sqlspec = SQLSpec()
-    sqlspec.add_config(
+def main() -> Sanic:
+    """Create a Sanic application wired to primary async and analytics sync databases."""
+    spec = SQLSpec()
+    spec.add_config(
         AiosqliteConfig(
             bind_key="primary",
-            connection_config={"database": "primary.db"},
+            connection_config={"database": ":memory:"},
             extension_config={
                 "sanic": {
                     "connection_key": "primary_connection",
@@ -29,10 +27,10 @@ def test_sanic_multi_database() -> None:
             },
         )
     )
-    sqlspec.add_config(
+    spec.add_config(
         SqliteConfig(
             bind_key="analytics",
-            connection_config={"database": "analytics.db"},
+            connection_config={"database": ":memory:"},
             extension_config={
                 "sanic": {
                     "connection_key": "analytics_connection",
@@ -43,18 +41,20 @@ def test_sanic_multi_database() -> None:
         )
     )
 
-    db_plugin = SQLSpecPlugin(sqlspec)
+    db_plugin = SQLSpecPlugin(spec)
     app = Sanic("SQLSpecSanicMultiDatabaseExample")
 
     @app.get("/report")
     async def report(request: Request) -> HTTPResponse:
         primary: AiosqliteDriver = db_plugin.get_session(request, "primary_db")
         analytics: SqliteDriver = db_plugin.get_session(request, "analytics_db")
-        users = await primary.select("select 1 as id, 'Alice' as name")
-        metrics = analytics.select("select 'active_users' as name, 100 as value")
+        users = await primary.select("SELECT 1 AS id, 'Alice' AS name")
+        metrics = analytics.select("SELECT 'active_users' AS name, 100 AS value")
         return response.json({"users": users, "metrics": metrics})
 
     db_plugin.init_app(app)
-    # end-example
+    return app
 
-    assert app is not None
+
+if __name__ == "__main__":
+    print(main())

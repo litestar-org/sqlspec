@@ -1,21 +1,26 @@
-from pathlib import Path
+"""Bind named and positional parameters consistently across SQLSpec drivers."""
 
-__all__ = ("test_parameter_binding",)
+from typing import Any
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_parameter_binding(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_path = tmp_path / "params.db"
+def main() -> dict[str, Any]:
+    """Execute named and positional parameter bindings in SQLite."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("select :status as status, :status as status_copy", status="active")
-        result = session.execute("select ? as value", 42)
-        print(result.one())
-    # end-example
+        named = session.select_one("SELECT :status AS status, :status AS status_copy", status="active")
+        assert named == {"status": "active", "status_copy": "active"}
 
-    assert result.one() == {"value": 42}
+        positional = session.select_one("SELECT ? AS value", 42)
+        assert positional == {"value": 42}
+        return positional
+
+
+if __name__ == "__main__":
+    print(main())

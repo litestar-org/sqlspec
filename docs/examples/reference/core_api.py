@@ -1,24 +1,27 @@
-from pathlib import Path
+"""Transform projections on a core SQL statement with select_only."""
 
-__all__ = ("test_core_api",)
+from typing import Any
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.core import SQL
+
+__all__ = ("main",)
 
 
-def test_core_api(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.core import SQL
-
-    db_path = tmp_path / "core_api.db"
+def main() -> dict[str, Any] | None:
+    """Rewrite a SELECT projection with SQL.select_only and execute it."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table if not exists notes (id integer primary key, body text)")
-        session.execute("insert into notes (body) values ('Note')")
-        query = SQL("select id, body from notes where id = :note_id or id = :note_id").select_only("body")
-        result = session.execute(query, note_id=1)
-        print(result.one_or_none())
-    # end-example
+        session.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+        session.execute("INSERT INTO notes (body) VALUES ('Note')")
+        query = SQL("SELECT id, body FROM notes WHERE id = :note_id OR id = :note_id").select_only("body")
+        row = session.execute(query, note_id=1).one_or_none()
+        assert row == {"body": "Note"}
+        return row
 
-    assert result.one_or_none() == {"body": "Note"}
+
+if __name__ == "__main__":
+    print(main())

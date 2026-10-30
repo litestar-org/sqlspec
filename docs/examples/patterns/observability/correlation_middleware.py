@@ -1,25 +1,29 @@
-from pathlib import Path
+"""Bind request correlation IDs with CorrelationContext and framework middleware."""
 
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.utils.correlation import CorrelationContext
 
-__all__ = ("test_correlation_middleware",)
+__all__ = ("main",)
 
 
-def test_correlation_middleware(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
+def main() -> str:
+    """Configure correlation middleware and scope a request correlation identifier."""
     spec = SQLSpec()
     spec.add_config(
         SqliteConfig(
-            connection_config={"database": str(tmp_path / "observability.db")},
+            connection_config={"database": ":memory:"},
             extension_config={"litestar": {"enable_correlation_middleware": True}},
         )
     )
 
     with CorrelationContext.context("req-123") as correlation_id:
-        print(correlation_id)
-    # end-example
+        active_id = CorrelationContext.get()
+        assert active_id == "req-123"
 
     assert CorrelationContext.get() is None
+    return correlation_id
+
+
+if __name__ == "__main__":
+    print(main())

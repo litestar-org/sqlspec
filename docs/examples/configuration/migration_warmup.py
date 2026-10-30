@@ -1,15 +1,15 @@
-__all__ = ("test_migration_warmup",)
+"""Warm up migration commands and verify database connectivity before serving traffic."""
+
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_migration_warmup() -> None:
-    # start-example
-    from sqlspec.adapters.sqlite import SqliteConfig
-
+def main() -> int:
+    """Initialize migration commands, verify a session query, and close the pool."""
     config = SqliteConfig(
         connection_config={"database": ":memory:"}, migration_config={"script_location": "migrations"}
     )
-
-    # Check custom tracker setup and extension discovery before serving requests.
     commands = config.get_migration_commands()
 
     try:
@@ -17,7 +17,11 @@ def test_migration_warmup() -> None:
             value = session.select_value("SELECT 1")
     finally:
         config.close_pool()
-    # end-example
 
     assert value == 1
     assert config.get_migration_commands() is commands
+    return int(value)
+
+
+if __name__ == "__main__":
+    print(main())

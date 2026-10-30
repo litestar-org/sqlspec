@@ -91,141 +91,129 @@ class AsyncpgConnectionConfig(TypedDict):
     """TypedDict for AsyncPG connection parameters."""
 
     dsn: NotRequired[str]
+    """PostgreSQL connection URI (``postgresql://user:pass@host:port/dbname``)."""
     host: NotRequired[str]
+    """Database server hostname or Unix domain socket directory."""
     port: NotRequired[int]
+    """Database server TCP port (defaults to ``5432``)."""
     user: NotRequired[str]
+    """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
+    """Password or dynamic token for ``user``."""
     database: NotRequired[str]
+    """Target PostgreSQL database name."""
     ssl: NotRequired[Any]
+    """TLS mode string, boolean flag, or ``ssl.SSLContext`` instance."""
     passfile: NotRequired[str]
+    """Path to a ``pgpass`` password file."""
     service: NotRequired[str]
+    """Service section name in ``pg_service.conf``."""
     servicefile: NotRequired[str]
+    """Path to an alternate ``pg_service.conf`` file."""
     direct_tls: NotRequired[bool]
+    """Initiate TLS negotiation directly without PostgreSQL ``SSLRequest`` startup."""
     timeout: NotRequired[float]
+    """Connection establishment timeout in seconds (alias supported by ``asyncpg.connect``)."""
     connect_timeout: NotRequired[float]
+    """Pool connection establishment timeout in seconds."""
     command_timeout: NotRequired[float]
+    """Default per-command execution timeout in seconds."""
     statement_cache_size: NotRequired[int]
+    """Maximum number of server-side prepared statements cached per connection (``0`` disables caching)."""
     pgbouncer: NotRequired[bool]
+    """Disable prepared statement caching for transaction-pooling proxies such as PgBouncer."""
     max_cached_statement_lifetime: NotRequired[int]
+    """Maximum age in seconds before cached prepared statements are evicted."""
     max_cacheable_statement_size: NotRequired[int]
+    """Maximum SQL byte length eligible for prepared statement caching."""
     server_settings: NotRequired["dict[str, str]"]
+    """Startup PostgreSQL run-time GUC settings (such as ``application_name`` or ``search_path``)."""
     target_session_attrs: NotRequired[AsyncpgTargetSessionAttrs]
+    """Required server session role when connecting to multi-host targets (such as ``read-write``)."""
     krbsrvname: NotRequired[str]
+    """Kerberos service principal name used for GSSAPI authentication."""
     gsslib: NotRequired[AsyncpgGSSLib]
+    """GSSAPI library backend (``gssapi`` or ``sspi`` on Windows)."""
 
 
 class AsyncpgPoolConfig(AsyncpgConnectionConfig):
     """TypedDict for AsyncPG pool parameters, inheriting connection parameters."""
 
     min_size: NotRequired[int]
+    """Minimum number of connections maintained in the pool."""
     max_size: NotRequired[int]
+    """Maximum number of concurrent connections allowed in the pool."""
     max_queries: NotRequired[int]
+    """Number of executed queries after which a pooled connection is closed and replaced."""
     max_inactive_connection_lifetime: NotRequired[float]
+    """Idle duration in seconds before unused connections above ``min_size`` are closed."""
     connect: NotRequired["Callable[..., Awaitable[AsyncpgConnection]]"]
+    """Custom async callable invoked to establish raw ``asyncpg`` connections."""
     setup: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
+    """Async callback invoked before each connection acquisition from the pool."""
     init: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
+    """Async callback invoked once when a new physical connection is created."""
     reset: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
+    """Async callback invoked when a connection is released back to the pool."""
     loop: NotRequired["AbstractEventLoop"]
+    """Explicit ``asyncio`` event loop passed to ``asyncpg.create_pool``."""
     connection_class: NotRequired[type["AsyncpgConnection"]]
+    """Custom ``asyncpg.Connection`` subclass instantiated by the pool."""
     record_class: NotRequired[type[Record]]
+    """Custom ``asyncpg.Record`` subclass returned by raw queries."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional keyword arguments forwarded directly to ``asyncpg.create_pool``."""
 
 
 class AsyncpgDriverFeatures(TypedDict):
-    """AsyncPG driver feature flags.
-
-    json_serializer: Custom JSON serializer function for PostgreSQL JSON/JSONB types.
-     Defaults to sqlspec.utils.serializers.to_json.
-     Use for performance optimization or custom encoding behavior.
-     Applied when enable_json_codecs is True.
-    json_deserializer: Custom JSON deserializer function for PostgreSQL JSON/JSONB types.
-     Defaults to sqlspec.utils.serializers.from_json.
-     Use for performance optimization or custom decoding behavior.
-     Applied when enable_json_codecs is True.
-    enable_json_codecs: Enable automatic JSON/JSONB codec registration on connections.
-     Defaults to True for seamless Python dict/list to PostgreSQL JSON/JSONB conversion.
-     Set to False to disable automatic codec registration (manual handling required).
-    enable_pgvector: Enable pgvector extension support for vector similarity search.
-     Requires pgvector-python package (pip install pgvector) and PostgreSQL with pgvector extension.
-     Defaults to True when pgvector-python is installed.
-     Provides automatic conversion between Python objects and PostgreSQL vector types.
-     Enables vector similarity operations and index support.
-    enable_paradedb: Enable ParadeDB (pg_search) extension detection.
-     When enabled and the pg_search extension is detected, the SQL dialect
-     switches to "paradedb" which supports search operators (@@@, &&&, etc.)
-     and inherits all pgvector distance operators.
-     Defaults to True. Independent of enable_pgvector.
-    enable_pg_textsearch: Enable pg_textsearch extension detection for BM25 search.
-     When enabled and the pg_textsearch extension is detected, the SQL dialect
-     switches to "pg_textsearch" which supports the BM25 <@> relevance ranking operator.
-     Defaults to True.
-    enable_cloud_sql: Enable Google Cloud SQL connector integration.
-     Requires cloud-sql-python-connector package.
-     Defaults to False (explicit opt-in required).
-     Auto-configures IAM authentication, SSL, and IP routing.
-     Mutually exclusive with enable_alloydb.
-    cloud_sql_instance: Cloud SQL instance connection name.
-     Format: "project:region:instance"
-     Required when enable_cloud_sql is True.
-    cloud_sql_enable_iam_auth: Enable IAM database authentication.
-     Defaults to False for passwordless authentication.
-     When False, requires user/password in connection_config.
-    cloud_sql_ip_type: IP address type for connection.
-     Options: "PUBLIC", "PRIVATE", "PSC"
-     Defaults to "PRIVATE".
-    enable_alloydb: Enable Google AlloyDB connector integration.
-     Requires cloud-alloydb-python-connector package.
-     Defaults to False (explicit opt-in required).
-     Auto-configures IAM authentication and private networking.
-     Mutually exclusive with enable_cloud_sql.
-    alloydb_instance_uri: AlloyDB instance URI.
-     Format: "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
-     Required when enable_alloydb is True.
-    enable_alloydb_iam_auth: Enable IAM database authentication.
-     Defaults to False for passwordless authentication.
-    alloydb_ip_type: IP address type for connection.
-     Options: "PUBLIC", "PRIVATE", "PSC"
-     Defaults to "PRIVATE".
-    enable_events: Enable database event channel support.
-     Defaults to True when extension_config["events"] is configured.
-     Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
-     Requires extension_config["events"] for migration setup when using poll_queue or notify_queue.
-    events_backend: Event channel backend selection.
-     Options: "notify", "notify_queue", "poll_queue"
-     - "notify": Transient PostgreSQL LISTEN/NOTIFY with no replay or retry
-     - "notify_queue": Durable queue plus a PostgreSQL notification wakeup hint
-     - "poll_queue": Durable queue discovered by polling
-     Defaults to "notify".
-    on_connection_create: Async callback executed when a connection is initialized.
-     Receives the raw asyncpg connection after internal codec registration.
-    pgbouncer: Enable PgBouncer transaction-pooling compatibility mode.
-     Disables server-side prepared statement caching (statement_cache_size=0).
-    type_codecs: Optional list of custom type codec specifications to register.
-    """
+    """Optional driver feature flags, codecs, cloud connectors, and pooler settings for AsyncPG."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer registered on ``json``/``jsonb`` codecs (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer registered on ``json``/``jsonb`` codecs (defaults to ``from_json``)."""
     enable_json_codecs: NotRequired[bool]
+    """Automatically register ``json`` and ``jsonb`` codecs on new connections (defaults to ``True``)."""
     enable_pgvector: NotRequired[bool]
+    """Register ``pgvector`` binary codecs and promote the dialect when ``pgvector`` is installed."""
     enable_paradedb: NotRequired[bool]
+    """Detect ``pg_search`` and promote the SQL dialect to ``paradedb`` (defaults to ``True``)."""
     enable_pg_textsearch: NotRequired[bool]
+    """Detect ``pg_textsearch`` and promote the SQL dialect for BM25 ``<@>`` ranking (defaults to ``True``)."""
     enable_cloud_sql: NotRequired[bool]
+    """Route connections through ``cloud-sql-python-connector`` (mutually exclusive with ``enable_alloydb``)."""
     cloud_sql_instance: NotRequired[str]
+    """Cloud SQL instance connection string in ``project:region:instance`` format."""
     cloud_sql_enable_iam_auth: NotRequired[bool]
+    """Use IAM database authentication with the Cloud SQL Python Connector."""
     cloud_sql_ip_type: NotRequired[str]
+    """Cloud SQL network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb: NotRequired[bool]
+    """Route connections through ``google-cloud-alloydb-connector`` (mutually exclusive with ``enable_cloud_sql``)."""
     alloydb_instance_uri: NotRequired[str]
+    """AlloyDB instance resource URI (``projects/.../locations/.../clusters/.../instances/...``)."""
     enable_alloydb_iam_auth: NotRequired[bool]
+    """Use IAM database authentication with the AlloyDB Python Connector."""
     alloydb_ip_type: NotRequired[str]
+    """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb_columnar: NotRequired[bool]
+    """Enable ``google_columnar_engine.enabled=on`` at session startup or per transaction."""
     enable_events: NotRequired[bool]
+    """Enable SQLSpec event channel pub/sub support (defaults to ``True`` when ``events`` is configured)."""
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
+    """Event transport backend (``notify`` for LISTEN/NOTIFY, ``notify_queue``, or ``poll_queue``)."""
     on_connection_create: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
+    """Async hook invoked with each raw ``asyncpg`` connection after internal codec setup."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
+    """External pooler compatibility mode; sets ``statement_cache_size=0`` in ``transaction`` or ``statement`` mode."""
     pgbouncer: NotRequired[bool]
+    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
     pgbouncer_mode: NotRequired[bool]
+    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
+    """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
     type_codecs: NotRequired["list[dict[str, Any]]"]
+    """Custom ``asyncpg`` type codec specifications registered on connection initialization."""
 
 
 class _AsyncpgCloudSqlConnector:

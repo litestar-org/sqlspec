@@ -1,22 +1,25 @@
-from pathlib import Path
+"""Execute a SELECT statement and materialize all returned rows as dictionaries."""
 
-__all__ = ("test_execute_select",)
+from typing import Any
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+__all__ = ("main",)
 
 
-def test_execute_select(tmp_path: Path) -> None:
-    # start-example
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    db_path = tmp_path / "selects.db"
+def main() -> list[dict[str, Any]]:
+    """Seed two team rows and return all records ordered by ID."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("create table if not exists teams (id integer primary key, name text)")
-        session.execute("insert into teams (name) values ('Litestar'), ('SQLSpec')")
-        result = session.execute("select id, name from teams order by id")
-        print(result.all())
-    # end-example
+        session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
+        session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
+        rows = session.execute("SELECT id, name FROM teams ORDER BY id").all()
+        assert rows == [{"id": 1, "name": "Litestar"}, {"id": 2, "name": "SQLSpec"}]
+        return rows
 
-    assert result.all() == [{"id": 1, "name": "Litestar"}, {"id": 2, "name": "SQLSpec"}]
+
+if __name__ == "__main__":
+    print(main())

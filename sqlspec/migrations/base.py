@@ -46,15 +46,25 @@ class LoadedMigrationMetadata(TypedDict):
     """
 
     version: "str | None"
+    """Sequential or timestamp migration version parsed from the filename or header."""
     description: str
+    """Human-readable migration summary read from the file metadata or filename."""
     file_path: "Path"
+    """Filesystem path to the ``.sql`` or ``.py`` migration script."""
     checksum: str
+    """Hexadecimal digest of the normalized migration source content."""
     content: str
+    """Raw UTF-8 source text of the migration file."""
     transactional: "bool | None"
+    """Explicit per-migration transaction override, or ``None`` to use adapter defaults."""
     schema: NotRequired["str | None"]
+    """Optional session schema directive parsed from ``-- schema: <name>``."""
     has_upgrade: NotRequired[bool]
+    """Whether the migration defines an executable upgrade step."""
     has_downgrade: NotRequired[bool]
+    """Whether the migration defines a reversible downgrade step."""
     loader: NotRequired[Any]
+    """Migration loader instance responsible for executing this script."""
 
 
 class AppliedMigrationRecord(TypedDict):
@@ -65,14 +75,23 @@ class AppliedMigrationRecord(TypedDict):
     """
 
     version_num: str
+    """Applied migration version identifier stored in ``ddl_migrations``."""
     version_type: str
+    """Persisted migration version format (``sequential`` or ``timestamp``)."""
     execution_sequence: int
+    """Monotonic ordinal recording the order in which migrations were applied."""
     description: str
+    """Migration description persisted when the version was applied."""
     applied_at: Any
+    """Timestamp recording when the migration completed."""
     execution_time_ms: int
+    """Wall-clock execution duration of the upgrade step in milliseconds."""
     checksum: str
+    """Content digest recorded at apply time for drift detection."""
     applied_by: "str | None"
+    """Database user or OS/git actor recorded when applying the migration."""
     replaces: "str | None"
+    """Comma-separated prior version identifiers superseded by a squashed migration."""
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

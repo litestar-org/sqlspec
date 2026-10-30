@@ -54,61 +54,107 @@ class AsyncmySSLParams(TypedDict):
     """Asyncmy TLS parameters."""
 
     ca: NotRequired[str]
+    """Path to the PEM CA bundle file used to verify server certificates."""
     capath: NotRequired[str]
+    """Directory path containing hashed CA certificate files."""
     cert: NotRequired[str]
+    """Path to the client TLS certificate file."""
     key: NotRequired[str]
+    """Path to the client TLS private key file."""
     cipher: NotRequired[str]
+    """OpenSSL cipher suite list string."""
     check_hostname: NotRequired[bool]
+    """Verify that the server certificate matches the target hostname."""
     verify_mode: NotRequired[bool | int | str]
+    """Certificate verification policy (``ssl.VerifyMode``, boolean, or mode name)."""
 
 
 class AsyncmyConnectionParams(TypedDict):
     """Asyncmy connection parameters."""
 
     dsn: NotRequired[str]
+    """MySQL/MariaDB connection URI (``mysql://user:pass@host:port/db``)."""
     url: NotRequired[str]
+    """Connection URL alias parsed identically to ``dsn``."""
     connection_string: NotRequired[str]
+    """Connection string alias parsed identically to ``dsn``."""
     host: NotRequired[str]
+    """MySQL or MariaDB server hostname (defaults to ``'localhost'``)."""
     user: NotRequired[str]
+    """Database account username."""
     username: NotRequired[str]
+    """Alias normalized to ``user`` when ``user`` is omitted."""
     password: NotRequired[str]
+    """Password for the database user."""
     database: NotRequired[str]
+    """Default schema/database selected upon connecting."""
     db: NotRequired[str]
+    """Alias for ``database`` accepted by ``asyncmy``."""
     port: NotRequired[int]
+    """MySQL/MariaDB TCP port (defaults to ``3306``)."""
     unix_socket: NotRequired[str]
+    """Filesystem path to a local MySQL Unix domain socket."""
     charset: NotRequired[str]
+    """Connection character set (defaults to ``'utf8mb4'``)."""
     connect_timeout: NotRequired[int | float]
+    """TCP handshake and authentication timeout in seconds."""
     read_default_file: NotRequired[str]
+    """Path to a MySQL ``my.cnf`` option file."""
     read_default_group: NotRequired[str]
+    """Option group name read from ``read_default_file``."""
     autocommit: NotRequired[bool]
+    """Enable MySQL autocommit mode on new connections."""
     allow_local_infile: NotRequired[bool]
+    """Permit client-side ``LOAD DATA LOCAL INFILE`` transfers."""
     local_infile: NotRequired[bool]
+    """Alias enabling ``LOAD DATA LOCAL INFILE`` support."""
     ssl: NotRequired["AsyncmySSLParams | ssl.SSLContext | dict[str, Any]"]
+    """TLS configuration mapping or ``ssl.SSLContext`` instance."""
     sql_mode: NotRequired[str]
+    """Session ``sql_mode`` string applied when the connection opens."""
     init_command: NotRequired[str]
+    """SQL statement executed immediately after authentication."""
     auth_plugin_map: NotRequired["dict[str | bytes, type[Any]]"]
+    """Mapping from MySQL auth plugin names to custom handler classes."""
     binary_prefix: NotRequired[bool]
+    """Emit ``_binary`` introducer prefixes when escaping ``bytes`` literals."""
     client_flag: NotRequired[int]
+    """Bitmask of MySQL ``CLIENT_*`` protocol capability flags."""
     conv: NotRequired["dict[Any, Any]"]
+    """Custom MySQL field-type conversion table."""
     cursor_class: NotRequired[type["AsyncmyRawCursor"] | type["AsyncmyDictCursor"]]
+    """Cursor class alias normalized for ``asyncmy`` connections."""
     cursor_cls: NotRequired[type["AsyncmyRawCursor"] | type["AsyncmyDictCursor"]]
+    """Default ``asyncmy`` cursor class used by raw connections."""
     max_allowed_packet: NotRequired[int]
+    """Maximum client packet size in bytes (defaults to ``16 MiB`` in ``asyncmy``)."""
     program_name: NotRequired[str]
+    """Client program name reported in ``performance_schema.session_connect_attrs``."""
     read_timeout: NotRequired[int | float]
+    """Socket read timeout in seconds for query responses."""
     server_public_key: NotRequired[str | bytes]
+    """RSA public key PEM used for ``caching_sha2_password`` / ``sha256_password`` exchange."""
     stmt_cache_size: NotRequired[int]
+    """Maximum prepared statements cached per ``asyncmy`` connection."""
     use_unicode: NotRequired[bool]
+    """Decode string columns into Python ``str`` values (defaults to ``True``)."""
     write_timeout: NotRequired[int | float]
+    """Socket write timeout in seconds for outgoing packets."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional keyword arguments forwarded to ``asyncmy.connect`` / ``create_pool``."""
 
 
 class AsyncmyPoolParams(AsyncmyConnectionParams):
     """Asyncmy pool parameters."""
 
     minsize: NotRequired[int]
+    """Minimum number of open connections maintained in ``asyncmy.Pool``."""
     maxsize: NotRequired[int]
+    """Maximum number of concurrent connections allowed in ``asyncmy.Pool``."""
     echo: NotRequired[bool]
+    """Log executed SQL statements on ``asyncmy`` connections and pools."""
     pool_recycle: NotRequired[int]
+    """Maximum connection age in seconds before ``asyncmy`` recycles pooled connections."""
 
 
 def build_connection_config(
@@ -135,39 +181,20 @@ def build_connection_config(
 
 
 class AsyncmyDriverFeatures(TypedDict):
-    """Asyncmy driver feature flags.
-
-    MySQL/MariaDB handle JSON natively, but custom serializers can be provided
-    for specialized use cases.
-
-    enable_local_infile_bulk_load: Use native LOCAL INFILE for eligible Arrow rows.
-     Defaults to the connection's local_infile or allow_local_infile opt-in.
-     Set False to force executemany on an opted-in connection.
-    json_serializer: Custom JSON serializer function.
-     Defaults to sqlspec.utils.serializers.to_json.
-     Use for performance (orjson) or custom encoding.
-    json_deserializer: Custom JSON deserializer function.
-     Defaults to sqlspec.utils.serializers.from_json.
-     Use for performance (orjson) or custom decoding.
-    on_connection_create: Async callback executed when a connection is acquired from pool.
-     Receives the raw asyncmy connection for low-level driver configuration.
-     Called exactly once per physical connection using WeakSet tracking.
-    enable_events: Enable database event channel support.
-     Defaults to True when extension_config["events"] is configured.
-     Provides pub/sub capabilities via table-backed queue (MySQL/MariaDB have no native pub/sub).
-     Requires extension_config["events"] for migration setup.
-    events_backend: Event channel backend selection.
-     Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
-     MySQL/MariaDB do not have native pub/sub, so poll_queue is the only backend.
-     Defaults to "poll_queue".
-    """
+    """Optional Asyncmy driver feature flags for JSON serialization, bulk loading, and events."""
 
     enable_local_infile_bulk_load: NotRequired[bool]
+    """Use ``LOAD DATA LOCAL INFILE`` for ``load_from_arrow`` when local infile is enabled on the connection."""
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer applied to JSON result columns (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[AsyncmyConnection], Awaitable[None]]]"
+    """Async callback invoked once per physical ``asyncmy`` connection acquired from the pool."""
     enable_events: NotRequired[bool]
+    """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` is the sole MySQL/MariaDB backend)."""
 
 
 class _AsyncmySessionFactory(AsyncPoolSessionFactory):

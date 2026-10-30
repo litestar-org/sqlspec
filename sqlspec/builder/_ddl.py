@@ -762,7 +762,7 @@ class DropTable(_SingleObjectDropBuilder):
 
 
 class DropIndex(_SingleObjectDropBuilder):
-    """Builder for DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]."""
+    """Builder for ``DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]``."""
 
     __slots__ = ("_table_name",)
 
@@ -954,7 +954,7 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
 
 
 class Truncate(DDLBuilder, _CascadeRestrictDDLMixin):
-    """Builder for TRUNCATE TABLE ... [CASCADE|RESTRICT] [RESTART IDENTITY|CONTINUE IDENTITY]."""
+    """Builder for ``TRUNCATE TABLE ... [CASCADE|RESTRICT] [RESTART IDENTITY|CONTINUE IDENTITY]``."""
 
     __slots__ = ("_cascade", "_identity", "_table_name")
 

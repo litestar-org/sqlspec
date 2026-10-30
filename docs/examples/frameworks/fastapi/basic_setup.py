@@ -1,31 +1,30 @@
+"""Register SQLSpecPlugin with FastAPI and inject an async database session."""
+
 from typing import Annotated, Any
 
-import pytest
+from fastapi import Depends, FastAPI
 
-__all__ = ("test_fastapi_basic_setup",)
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.extensions.fastapi import SQLSpecPlugin
+
+__all__ = ("main",)
 
 
-def test_fastapi_basic_setup() -> None:
-    pytest.importorskip("fastapi")
-    pytest.importorskip("aiosqlite")
-    # start-example
-    from fastapi import Depends, FastAPI
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-    from sqlspec.extensions.fastapi import SQLSpecPlugin
-
-    sqlspec = SQLSpec()
-    sqlspec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
+def main() -> FastAPI:
+    """Create a FastAPI application with an injected AiosqliteDriver route."""
+    spec = SQLSpec()
+    spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
 
     app = FastAPI()
-    db_ext = SQLSpecPlugin(sqlspec, app)
+    db_ext = SQLSpecPlugin(spec, app)
 
     @app.get("/teams")
     async def list_teams(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session())]) -> dict[str, Any]:
-        result = await db.execute("select 1 as ok")
-        return result.one()
+        return await db.select_one("SELECT 1 AS ok")
 
-    # end-example
+    return app
 
-    assert app is not None
+
+if __name__ == "__main__":
+    print(main())

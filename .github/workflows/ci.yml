@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ci_required: ${{ steps.scope.outputs.ci_required }}
+      docs_required: ${{ steps.scope.outputs.docs_required }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,6 +41,7 @@ jobs:
           set -euo pipefail
 
           ci_required=true
+          docs_required=true
           base_sha=""
 
           if [ "$EVENT_NAME" = "pull_request" ]; then
@@ -52,26 +54,30 @@ jobs:
             changed_files="$(git diff --name-only "$base_sha" "$HEAD_SHA")"
             if [ -n "$changed_files" ]; then
               ci_required=false
+              docs_required=false
               while IFS= read -r path; do
                 [ -z "$path" ] && continue
                 case "$path" in
                   docs/examples|docs/examples/*)
                     ci_required=true
-                    break
+                    docs_required=true
                     ;;
-                  docs/*)
+                  docs/*|zensical.toml|CONTRIBUTING.md|tools/docs/*|.github/workflows/docs.yml)
+                    docs_required=true
+                    ;;
+                  sqlspec/*|pyproject.toml|uv.lock|.github/workflows/ci.yml)
+                    ci_required=true
+                    docs_required=true
                     ;;
                   *.md)
                     case "$path" in
                       */*)
                         ci_required=true
-                        break
                         ;;
                     esac
                     ;;
                   *)
                     ci_required=true
-                    break
                     ;;
                 esac
               done <<< "$changed_files"
@@ -79,7 +85,8 @@ jobs:
           fi
 
           echo "ci_required=$ci_required" >> "$GITHUB_OUTPUT"
-          echo "ci_required=$ci_required"
+          echo "docs_required=$docs_required" >> "$GITHUB_OUTPUT"
+          echo "ci_required=$ci_required docs_required=$docs_required"
 
   quality:
     needs: [ci-scope]
@@ -493,10 +500,9 @@ jobs:
   build-docs:
     needs:
       - ci-scope
-      - quality
-      - test-unit
-    if: github.event_name == 'pull_request' && needs.ci-scope.outputs.ci_required == 'true'
+    if: github.event_name == 'pull_request' && needs.ci-scope.outputs.docs_required == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -513,10 +519,15 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --group doc
+
+      - name: Verify public docstrings and CLI reference
+        run: |
+          uv run --no-sync python -m tools.docs.scan_public_docstrings --check-leaks --check-overloads --check-typeddicts sqlspec
+          uv run --no-sync python -m tools.docs.generate_cli_docs --check
 
       - name: Build docs
-        run: uv run make docs
+        run: make docs
 
   ci-required:
     needs:
@@ -532,6 +543,7 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.ci-scope.result }}
           CI_REQUIRED: ${{ needs.ci-scope.outputs.ci_required }}
+          DOCS_REQUIRED: ${{ needs.ci-scope.outputs.docs_required }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.test-unit.result }}
           INTEGRATION_RESULT: ${{ needs.test-integration.result }}
@@ -546,17 +558,22 @@ jobs:
             exit 1
           fi
 
+          failed=0
+
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$DOCS_REQUIRED" = "true" ] && [ "$DOCS_RESULT" != "success" ]; then
+            echo "::error::DOCS_RESULT was $DOCS_RESULT"
+            failed=1
+          fi
+
           if [ "$CI_REQUIRED" = "false" ]; then
             echo "Heavy CI intentionally skipped for docs-only or root markdown changes."
-            exit 0
+            exit "$failed"
           fi
 
           if [ "$CI_REQUIRED" != "true" ]; then
             echo "::error::CI_REQUIRED was '$CI_REQUIRED'"
             exit 1
           fi
-
-          failed=0
 
           for check in QUALITY_RESULT UNIT_RESULT INTEGRATION_RESULT; do
             result="${!check}"
@@ -565,10 +582,5 @@ jobs:
               failed=1
             fi
           done
-
-          if [ "$EVENT_NAME" = "pull_request" ] && [ "$DOCS_RESULT" != "success" ]; then
-            echo "::error::DOCS_RESULT was $DOCS_RESULT"
-            failed=1
-          fi
 
           exit "$failed"

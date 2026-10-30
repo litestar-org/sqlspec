@@ -1,23 +1,21 @@
-import pytest
+"""Enable request correlation IDs and SQLCommenter trace context middleware in Sanic."""
 
-__all__ = ("test_sanic_observability",)
+from sanic import Request, Sanic, response
+from sanic.response import HTTPResponse
+
+from sqlspec import SQLSpec, StatementConfig
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.extensions.sanic import SQLSpecPlugin
+
+__all__ = ("main",)
 
 
-def test_sanic_observability() -> None:
-    pytest.importorskip("sanic")
-    pytest.importorskip("aiosqlite")
-    # start-example
-    from sanic import Request, Sanic, response
-    from sanic.response import HTTPResponse
-
-    from sqlspec import SQLSpec, StatementConfig
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.extensions.sanic import SQLSpecPlugin
-
-    sqlspec = SQLSpec()
-    sqlspec.add_config(
+def main() -> Sanic:
+    """Create a Sanic application with correlation and SQLCommenter middleware enabled."""
+    spec = SQLSpec()
+    spec.add_config(
         AiosqliteConfig(
-            connection_config={"database": "app.db"},
+            connection_config={"database": ":memory:"},
             statement_config=StatementConfig(enable_sqlcommenter=True),
             extension_config={
                 "sanic": {
@@ -29,7 +27,7 @@ def test_sanic_observability() -> None:
         )
     )
 
-    db_plugin = SQLSpecPlugin(sqlspec)
+    db_plugin = SQLSpecPlugin(spec)
     app = Sanic("SQLSpecSanicObservabilityExample")
 
     @app.get("/health")
@@ -37,6 +35,8 @@ def test_sanic_observability() -> None:
         return response.json({"correlation_id": request.ctx.correlation_id})
 
     db_plugin.init_app(app)
-    # end-example
+    return app
 
-    assert app is not None
+
+if __name__ == "__main__":
+    print(main())

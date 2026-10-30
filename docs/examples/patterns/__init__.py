@@ -1,1 +1,3 @@
-"""Common SQLSpec usage patterns."""
+"""Common SQLSpec pattern documentation examples."""
+
+__all__ = ()

@@ -1,0 +1,31 @@
+{#- Compact 3-column Attributes table without redundant autoref span wrappers on attribute names. -#}
+{% import "language.html.jinja" as lang with context %}
+<p><span class="doc-section-title">{{ section.title or lang.t("Attributes:") }}</span></p>
+<table>
+  <thead>
+    <tr>
+      <th>{{ lang.t("Name") }}</th>
+      <th>{{ lang.t("Type") }}</th>
+      <th>{{ lang.t("Description") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for attribute in section.value %}
+      <tr class="doc-section-item">
+        <td><code>{{ attribute.name }}</code></td>
+        <td>
+          {% if attribute.annotation %}
+            {% with expression = attribute.annotation %}
+              <code>{% include "expression.html.jinja" with context %}</code>
+            {% endwith %}
+          {% endif %}
+        </td>
+        <td>
+          <div class="doc-md-description">
+            {{ attribute.description|convert_markdown(heading_level, html_id, autoref_hook=autoref_hook|default(AutorefsHook(obj[attribute.name], config))) }}
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>

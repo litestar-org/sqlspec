@@ -1,30 +1,29 @@
-import anyio
-import pytest
+"""Open an asynchronous SQLite session with AiosqliteConfig and run a query."""
 
-__all__ = ("test_async_connection",)
+import asyncio
+from typing import Any
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+__all__ = ("main",)
 
 
-def test_async_connection() -> None:
-    pytest.importorskip("aiosqlite")
+async def main() -> list[dict[str, Any]]:
+    """Insert and read a note using an asynchronous SQLite session."""
+    spec = SQLSpec()
+    config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
 
-    async def _run() -> None:
-        # start-example
-        from sqlspec import SQLSpec
-        from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    try:
+        async with spec.provide_session(config) as session:
+            await session.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+            await session.execute("INSERT INTO notes (body) VALUES (?)", "Hello, Async SQLSpec")
+            rows = await session.select("SELECT id, body FROM notes")
+            assert rows == [{"id": 1, "body": "Hello, Async SQLSpec"}]
+            return rows
+    finally:
+        await config.close_pool()
 
-        spec = SQLSpec()
-        config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
 
-        try:
-            async with spec.provide_session(config) as session:
-                await session.execute("create table if not exists notes (id integer primary key, body text)")
-                await session.execute("insert into notes (body) values (?)", "Hello, Async SQLSpec!")
-                result = await session.execute("select id, body from notes")
-                print(result.all())
-        finally:
-            await config.close_pool()
-        # end-example
-
-        assert result.all() == [{"id": 1, "body": "Hello, Async SQLSpec!"}]
-
-    anyio.run(_run)
+if __name__ == "__main__":
+    print(asyncio.run(main()))

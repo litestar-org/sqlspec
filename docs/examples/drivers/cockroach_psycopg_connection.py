@@ -1,14 +1,16 @@
-import pytest
+"""Configure a Psycopg connection pool for CockroachDB."""
 
-__all__ = ("test_cockroach_psycopg_connection",)
+from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgSyncConfig
+
+__all__ = ("main",)
 
 
-def test_cockroach_psycopg_connection() -> None:
-    pytest.importorskip("psycopg")
-    # start-example
-    from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgSyncConfig
-
+def main() -> CockroachPsycopgSyncConfig:
+    """Construct a CockroachPsycopgSyncConfig targeting a CockroachDB cluster."""
     config = CockroachPsycopgSyncConfig(connection_config={"dsn": "postgresql://user:pass@localhost:26257/defaultdb"})
-    # end-example
-
     assert "conninfo" in config.connection_config
+    return config
+
+
+if __name__ == "__main__":
+    print(main())

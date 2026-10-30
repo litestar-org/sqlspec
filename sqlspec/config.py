@@ -104,21 +104,31 @@ DRIVER_FEATURE_LIFECYCLE_HOOKS: dict[str, str | None] = {
 
 
 class LifecycleConfig(TypedDict):
-    """Lifecycle hooks for database adapters.
+    """Lifecycle callback hooks for database adapters.
 
     Each hook accepts a list of callables to support multiple handlers.
     """
 
     on_connection_create: NotRequired[list[Callable[[Any], None]]]
+    """Callbacks invoked immediately after a raw driver connection is established."""
     on_connection_destroy: NotRequired[list[Callable[[Any], None]]]
+    """Callbacks invoked before closing or destroying a driver connection."""
     on_pool_create: NotRequired[list[Callable[[Any], None]]]
+    """Callbacks invoked after the adapter connection pool is initialized."""
     on_pool_destroying: NotRequired[list[Callable[[Any], Any]]]
+    """Callbacks invoked immediately before shutting down the connection pool."""
     on_pool_destroy: NotRequired[list[Callable[[Any], None]]]
+    """Callbacks invoked after the connection pool has finished closing."""
     on_session_start: NotRequired[list[Callable[[Any], None]]]
+    """Callbacks invoked when a driver session context begins."""
     on_session_end: NotRequired[list[Callable[[Any], None]]]
+    """Callbacks invoked when a driver session context exits."""
     on_query_start: NotRequired[list[Callable[[str, dict[str, Any]], None]]]
+    """Callbacks invoked before statement execution with a ``LifecycleContext`` mapping (``sql``, ``parameters``, ``driver``, ``operation``)."""
     on_query_complete: NotRequired[list[Callable[[str, dict[str, Any], Any], None]]]
+    """Callbacks invoked on completion with a ``LifecycleContext`` mapping (including ``rows_affected``, ``sql``, ``parameters``, ``driver``, ``operation``)."""
     on_error: NotRequired[list[Callable[[Exception, str, dict[str, Any]], None]]]
+    """Callbacks invoked on query failure with a ``LifecycleContext`` mapping (including ``exception``, ``sql``, ``parameters``, ``driver``, ``operation``)."""
 
 
 class SQLTemplateOverride(TypedDict):

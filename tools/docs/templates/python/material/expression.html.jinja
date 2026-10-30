@@ -1,0 +1,88 @@
+{#- Render external stdlib/typing names inside docstring tables as plain text while keeping sqlspec.* and Bases cross-referenced. -#}
+{%- macro crossref(name, annotation_path, backlink_type="") -%}
+  {%- if name.classname == "ExprName" and name.is_type_parameter -%}
+    {{ type_param_crossref(name) }}
+  {%- else -%}
+    {{ object_crossref(name, annotation_path, backlink_type) }}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro object_crossref(name, annotation_path, backlink_type="") -%}
+  {%- with full = name.canonical_path -%}
+    {%- if annotation_path == "brief" -%}
+      {%- set annotation = name.canonical_name -%}
+    {%- elif annotation_path == "source" -%}
+      {%- set annotation = name.name -%}
+    {%- elif annotation_path == "full" -%}
+      {%- set annotation = full -%}
+    {%- endif -%}
+    {%- for prefix, title, path, suffix in annotation|split_path(full) -%}
+      {{ prefix }}
+      {%- if not signature and (backlink_type or path.startswith("sqlspec.")) -%}
+        <autoref identifier="{{ path }}"{% if backlink_type %} backlink-type="{{ backlink_type }}" backlink-anchor="{{ html_id }}"{% endif %} optional{% if title != path %} hover{% endif %}>{{ title }}</autoref>
+      {%- elif signature and config.signature_crossrefs -%}
+        {%- filter stash_crossref(length=title|length) -%}
+          <autoref identifier="{{ path }}"{% if backlink_type %} backlink-type="{{ backlink_type }}" backlink-anchor="{{ html_id }}"{% endif %} optional{% if title != path %} hover{% endif %}>{{ title }}</autoref>
+        {%- endfilter -%}
+      {%- else -%}
+        {{ title }}
+      {%- endif -%}
+      {{ suffix }}
+    {%- endfor -%}
+  {%- endwith -%}
+{%- endmacro -%}
+
+{%- macro type_param_crossref(name) -%}
+  {{ name.name }}
+{%- endmacro -%}
+
+{%- macro param_crossref(expression) -%}
+  {{ expression.name }}
+{%- endmacro -%}
+
+{%- macro render(expression, annotations_path, backlink_type="") -%}
+  {%- if expression is string -%}
+    {%- if signature -%}{{ expression|safe }}{%- else -%}{{ expression }}{%- endif -%}
+  {%- elif expression.classname == "ExprName" -%}
+    {{ crossref(expression, annotations_path, backlink_type) }}
+  {%- elif config.unwrap_annotated and expression.classname == "ExprSubscript" and expression.canonical_path in ("typing.Annotated", "typing_extensions.Annotated") -%}
+    {{ render(expression.slice.elements[0], annotations_path) }}
+  {%- elif expression.classname == "ExprAttribute" -%}
+    {%- if expression.first.is_type_parameter -%}
+      {{ type_param_crossref(expression.first) }}
+      {%- for element in expression -%}
+        {%- if not loop.first -%}
+          {{ render(element, "brief") }}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- elif annotations_path == "brief" -%}
+      {%- if expression.last.is_enum_value -%}
+        {{ crossref(expression.last.parent, "brief", backlink_type) }}.value
+      {%- else -%}
+        {{ render(expression.last, "brief") }}
+      {%- endif -%}
+    {%- elif annotations_path == "full" -%}
+      {{ render(expression.first, "full") }}
+      {%- for element in expression -%}
+        {%- if not loop.first -%}
+          {{ render(element, "brief") }}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- else -%}
+      {%- for element in expression -%}
+        {{ render(element, annotations_path) }}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- elif expression.classname == "ExprKeyword" -%}
+    {{ param_crossref(expression) }}={{ render(expression.value, annotations_path) }}
+  {%- else -%}
+    {%- for element in expression -%}
+      {{ render(element, annotations_path) }}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- if config.modernize_annotations and expression is not string -%}
+  {%- set expression = expression.modernize() -%}
+{%- endif -%}
+{{ render(expression, annotations_path|default(config.annotations_path), backlink_type|default("")) }}

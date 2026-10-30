@@ -1,26 +1,22 @@
-import pytest
+"""Query both async primary and sync ETL SQLSpec sessions inside a Starlette endpoint."""
 
-__all__ = ("test_starlette_multi_database",)
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.extensions.starlette import SQLSpecPlugin
+
+__all__ = ("main",)
 
 
-def test_starlette_multi_database() -> None:
-    pytest.importorskip("starlette")
-    pytest.importorskip("aiosqlite")
-    # start-example
-    from starlette.applications import Starlette
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-    from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-    from sqlspec.extensions.starlette import SQLSpecPlugin
-
-    sqlspec = SQLSpec()
-
-    # Primary async database
-    sqlspec.add_config(
+def main() -> Starlette:
+    """Create a Starlette application wired to async and sync SQLite databases."""
+    spec = SQLSpec()
+    spec.add_config(
         AiosqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={
@@ -28,9 +24,7 @@ def test_starlette_multi_database() -> None:
             },
         )
     )
-
-    # ETL sync database
-    sqlspec.add_config(
+    spec.add_config(
         SqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={
@@ -39,20 +33,19 @@ def test_starlette_multi_database() -> None:
         )
     )
 
-    db_plugin = SQLSpecPlugin(sqlspec)
+    db_plugin = SQLSpecPlugin(spec)
 
     async def report(request: Request) -> JSONResponse:
         db: AiosqliteDriver = db_plugin.get_session(request, "db")
         etl_db: SqliteDriver = db_plugin.get_session(request, "etl_db")
-
-        # Async query to primary database
-        users = await db.select("SELECT 1 as id, 'Alice' as name")
-        # Sync query to ETL database
-        metrics = etl_db.select("SELECT 'metric1' as name, 100 as value")
+        users = await db.select("SELECT 1 AS id, 'Alice' AS name")
+        metrics = etl_db.select("SELECT 'metric1' AS name, 100 AS value")
         return JSONResponse({"users": users, "metrics": metrics})
 
     app = Starlette(routes=[Route("/report", report)])
     db_plugin.init_app(app)
-    # end-example
+    return app
 
-    assert app is not None
+
+if __name__ == "__main__":
+    print(main())

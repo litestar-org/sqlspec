@@ -54,13 +54,21 @@ class PyMysqlSslParams(TypedDict):
     """
 
     ca: NotRequired[str]
+    """Path to the PEM CA bundle file used to verify server certificates."""
     capath: NotRequired[str]
+    """Directory path containing hashed CA certificate files."""
     cert: NotRequired[str]
+    """Path to the client TLS certificate file."""
     key: NotRequired[str]
+    """Path to the client TLS private key file."""
     password: NotRequired[str]
+    """Passphrase unlocking an encrypted client private key."""
     cipher: NotRequired[str]
+    """OpenSSL cipher suite list string."""
     check_hostname: NotRequired[bool]
+    """Verify that the server certificate matches the target hostname."""
     verify_mode: NotRequired[bool | int | str]
+    """Certificate verification policy (``ssl.VerifyMode``, boolean, or mode name)."""
 
 
 PyMysqlSslConfig = ssl.SSLContext | PyMysqlSslParams | Mapping[str, Any]
@@ -70,95 +78,125 @@ class PyMysqlConnectionParams(TypedDict):
     """PyMySQL connection parameters."""
 
     dsn: NotRequired[str]
+    """MySQL/MariaDB connection URI (``mysql://user:pass@host:port/db``)."""
     url: NotRequired[str]
+    """Connection URL alias parsed identically to ``dsn``."""
     connection_string: NotRequired[str]
+    """Connection string alias parsed identically to ``dsn``."""
     host: NotRequired[str]
+    """MySQL or MariaDB server hostname (defaults to ``'localhost'``)."""
     user: NotRequired[str]
+    """Database account username."""
     username: NotRequired[str]
+    """Alias normalized to ``user`` when ``user`` is omitted."""
     password: NotRequired[str]
+    """Password for the database user."""
     database: NotRequired[str]
+    """Default schema/database selected upon connecting."""
     db: NotRequired[str]
+    """Alias for ``database`` accepted by ``pymysql.connect``."""
     port: NotRequired[int]
+    """MySQL/MariaDB TCP port (defaults to ``3306``)."""
     unix_socket: NotRequired[str]
+    """Filesystem path to a local MySQL Unix domain socket."""
     charset: NotRequired[str]
+    """Connection character set (defaults to ``'utf8mb4'``)."""
     collation: NotRequired[str]
+    """Session collation paired with ``charset``."""
     sql_mode: NotRequired[str]
+    """Session ``sql_mode`` string applied when the connection opens."""
     read_default_file: NotRequired[str]
+    """Path to a MySQL ``my.cnf`` option file."""
     read_default_group: NotRequired[str]
+    """Option group name read from ``read_default_file``."""
     conv: NotRequired[PyMysqlConverter]
+    """Custom PyMySQL type encoder/decoder mapping."""
     use_unicode: NotRequired[bool]
+    """Decode text columns into Python ``str`` values (defaults to ``True``)."""
     client_flag: NotRequired[int]
+    """Bitmask of MySQL ``CLIENT_*`` protocol capability flags."""
     cursorclass: NotRequired[type[PyMysqlRawCursor]]
+    """Default PyMySQL cursor class instantiated by ``conn.cursor()``."""
     init_command: NotRequired[str]
+    """SQL statement executed immediately after authentication."""
     connect_timeout: NotRequired[PyMysqlTimeout]
+    """TCP handshake and authentication timeout in seconds."""
     read_timeout: NotRequired[PyMysqlTimeout]
+    """Socket read timeout in seconds for server responses."""
     write_timeout: NotRequired[PyMysqlTimeout]
+    """Socket write timeout in seconds for outgoing packets."""
     autocommit: NotRequired[bool]
+    """Enable MySQL autocommit mode on new connections."""
     allow_local_infile: NotRequired[bool]
+    """Alias enabling ``LOAD DATA LOCAL INFILE`` transfers."""
     local_infile: NotRequired[bool]
+    """Permit client-side ``LOAD DATA LOCAL INFILE`` transfers."""
     max_allowed_packet: NotRequired[int]
+    """Maximum client packet size in bytes."""
     defer_connect: NotRequired[bool]
+    """Construct the ``pymysql.Connection`` instance without opening the socket immediately."""
     auth_plugin_map: NotRequired[Mapping[str, type[Any]]]
+    """Mapping from MySQL auth plugin names to custom handler classes."""
     bind_address: NotRequired[str]
+    """Local source IP address or hostname bound by the client socket."""
     binary_prefix: NotRequired[bool]
+    """Emit ``_binary`` introducer prefixes when escaping ``bytes`` literals."""
     program_name: NotRequired[str]
+    """Application name sent in MySQL connection attributes."""
     server_public_key: NotRequired[str | bytes]
+    """Server RSA public key PEM used for SHA-256 password exchange."""
     ssl: NotRequired[PyMysqlSslConfig]
+    """TLS ``ssl.SSLContext`` or ``PyMysqlSslParams`` mapping."""
     ssl_ca: NotRequired[str]
+    """Path to the PEM CA bundle file for TLS verification."""
     ssl_cert: NotRequired[str]
+    """Path to the client TLS certificate file."""
     ssl_disabled: NotRequired[bool]
+    """Disable TLS negotiation completely when ``True``."""
     ssl_key: NotRequired[str]
+    """Path to the client TLS private key file."""
     ssl_key_password: NotRequired[str]
+    """Passphrase unlocking an encrypted ``ssl_key``."""
     ssl_verify_cert: NotRequired[bool]
+    """Verify the server TLS certificate against ``ssl_ca``."""
     ssl_verify_identity: NotRequired[bool]
+    """Verify that the server TLS certificate matches the target hostname."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional keyword arguments forwarded to ``pymysql.connect``."""
 
 
 class PyMysqlPoolParams(PyMysqlConnectionParams):
     """PyMySQL pool parameters."""
 
     pool_recycle_seconds: NotRequired[int]
+    """Maximum connection age in seconds before recycling pooled PyMySQL connections."""
     health_check_interval: NotRequired[float]
+    """Minimum interval in seconds between ``conn.ping()`` liveness checks."""
 
 
 class PyMysqlDriverFeatures(TypedDict):
-    """PyMySQL driver feature flags.
-
-    json_serializer: Custom JSON serializer function.
-     Defaults to sqlspec.utils.serializers.to_json.
-    json_deserializer: Custom JSON deserializer function.
-     Defaults to sqlspec.utils.serializers.from_json.
-    on_connection_create: Callback executed when a connection is created.
-     Receives the raw pymysql connection for low-level driver configuration.
-     Runs after connection creation.
-    enable_events: Enable database event channel support.
-    events_backend: Event channel backend selection.
-    enable_local_infile_bulk_load: Route load_from_arrow through LOAD DATA LOCAL INFILE.
-     Defaults to the connection's local_infile or allow_local_infile opt-in.
-     Set False to force executemany on an opted-in connection.
-    enable_cloud_sql: Enable Google Cloud SQL connector integration.
-     Requires cloud-sql-python-connector package.
-     Defaults to False (explicit opt-in required).
-    cloud_sql_instance: Cloud SQL instance connection name.
-     Format: "project:region:instance"
-     Required when enable_cloud_sql is True.
-    cloud_sql_enable_iam_auth: Enable IAM database authentication.
-     Defaults to False for passwordless authentication.
-    cloud_sql_ip_type: IP address type for connection.
-     Options: "PUBLIC", "PRIVATE", "PSC"
-     Defaults to "PRIVATE".
-    """
+    """Optional PyMySQL driver feature flags, Cloud SQL connector settings, and bulk-load options."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom JSON deserializer applied to JSON result columns (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[PyMysqlConnection], None]]"
+    """Synchronous hook invoked with each raw ``pymysql.Connection`` upon creation."""
     enable_events: NotRequired[bool]
+    """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Event channel backend (``poll_queue`` is the sole MySQL/MariaDB backend)."""
     enable_local_infile_bulk_load: NotRequired[bool]
+    """Route ``load_from_arrow`` through ``LOAD DATA LOCAL INFILE`` when local infile is enabled."""
     enable_cloud_sql: NotRequired[bool]
+    """Route connections through ``cloud-sql-python-connector`` (defaults to ``False``)."""
     cloud_sql_instance: NotRequired[str]
+    """Cloud SQL instance connection string in ``project:region:instance`` format."""
     cloud_sql_enable_iam_auth: NotRequired[bool]
+    """Use IAM database authentication with the Cloud SQL Python Connector."""
     cloud_sql_ip_type: NotRequired[str]
+    """Cloud SQL network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
 
 
 _CLOUD_SQL_DIRECT_CONNECTION_KEYS = frozenset((

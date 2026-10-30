@@ -60,8 +60,11 @@ class MssqlPythonBulkCopyResult(TypedDict):
     """BulkCopy statistics returned by mssql-python."""
 
     rows_copied: int
+    """Total number of rows inserted via TDS ``bcp`` bulk copy."""
     batch_count: NotRequired[int]
+    """Number of bulk-copy batches committed during the transfer."""
     elapsed_time: NotRequired[float]
+    """Wall-clock bulk-copy execution time in seconds."""
 
 
 class MssqlPythonExceptionHandler(BaseSyncExceptionHandler):

@@ -1,3 +1,5 @@
+"""Minimal synchronous driver adapter skeleton implementing SyncDriverAdapterBase."""
+
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
@@ -9,48 +11,27 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
     from sqlspec.driver import ExecutionResult, SyncDataDictionaryBase
 
-__all__ = ("ExampleDriver", "ExampleExceptionHandler", "test_new_adapter")
+__all__ = ("ExampleDriver", "ExampleExceptionHandler", "main")
 
 
-# start-example
 class ExampleExceptionHandler(BaseSyncExceptionHandler):
     """Adapter-specific exception handler wrapping database errors."""
 
 
 class ExampleDriver(SyncDriverAdapterBase):
-    """Example synchronous database driver adapter."""
+    """Minimal synchronous database driver adapter skeleton."""
 
     @property
     def data_dictionary(self) -> "SyncDataDictionaryBase":
-        """Return the data dictionary instance for schema inspection.
-
-        Returns:
-            Data dictionary instance.
-        """
+        """Return the data dictionary instance for schema inspection."""
         raise NotImplementedError
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute a single statement and return execution metadata.
-
-        Args:
-            cursor: Database cursor.
-            statement: SQL statement to execute.
-
-        Returns:
-            Execution result metadata.
-        """
+        """Execute a single statement and return execution metadata."""
         raise NotImplementedError
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute a statement with multiple parameter sets.
-
-        Args:
-            cursor: Database cursor.
-            statement: SQL statement with batched parameters.
-
-        Returns:
-            Execution result metadata.
-        """
+        """Execute a statement with multiple parameter sets."""
         raise NotImplementedError
 
     def begin(self) -> None:
@@ -67,13 +48,13 @@ class ExampleDriver(SyncDriverAdapterBase):
 
     @contextmanager
     def with_cursor(self, connection: Any) -> Generator[Any, None, None]:
-        """Acquire and yield a cursor from the connection.
+        """Acquire and yield a cursor from the active connection.
 
         Args:
             connection: Active database connection.
 
         Yields:
-            Database cursor.
+            Database cursor bound to the connection.
         """
         cursor = connection.cursor()
         try:
@@ -82,25 +63,20 @@ class ExampleDriver(SyncDriverAdapterBase):
             cursor.close()
 
     def handle_database_exceptions(self) -> ExampleExceptionHandler:
-        """Provide the exception handler context manager.
-
-        Returns:
-            Exception handler instance.
-        """
+        """Provide the exception handler context manager."""
         return ExampleExceptionHandler()
 
     def _connection_in_transaction(self) -> bool:
-        """Check whether the active connection is in an open transaction.
-
-        Returns:
-            True if in a transaction, False otherwise.
-        """
+        """Check whether the active connection is in an open transaction."""
         return False
 
 
-# end-example
+def main() -> type[ExampleDriver]:
+    """Verify the driver adapter skeleton defines required methods."""
+    assert callable(ExampleDriver.dispatch_execute)
+    assert callable(ExampleDriver.handle_database_exceptions)
+    return ExampleDriver
 
 
-def test_new_adapter() -> None:
-    """Validate that the example driver skeleton defines required methods."""
-    assert ExampleDriver._connection_in_transaction is not None
+if __name__ == "__main__":
+    print(main().__name__)

@@ -200,9 +200,6 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
     def get_version(self, driver: "PsycopgSyncDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
-        Uses an inline cache check to avoid cross-module method calls that can
-        trigger MyPyC boundary issues.
-
         Args:
             driver: Sync database driver instance.
 
@@ -480,9 +477,6 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
 
     async def get_version(self, driver: "PsycopgAsyncDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
-
-        Uses an inline cache check to avoid cross-module method calls that can
-        trigger MyPyC boundary issues.
 
         Args:
             driver: Async database driver instance.

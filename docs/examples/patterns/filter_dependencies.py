@@ -1,27 +1,31 @@
-__all__ = ("show_filter_dependencies",)
+"""Generate Litestar query-parameter filter dependencies from a declarative FilterConfig."""
+
+from typing import Any
+
+from sqlspec.extensions.litestar.providers import FilterConfig, create_filter_dependencies
+
+__all__ = ("main",)
 
 
-def show_filter_dependencies() -> None:
-    # start-example
-    from sqlspec.extensions.litestar.providers import FilterConfig, create_filter_dependencies
-
-    # Define filter configuration for a "users" endpoint
+def main() -> dict[str, Any]:
+    """Build filter, sort, search, and pagination dependency providers for a users endpoint."""
     user_filters: FilterConfig = {
-        "id_filter": str,  # Filter by user IDs
-        "id_field": "id",  # Column name for ID filter
-        "sort_field": ["created_at", "uploaded_collections", "name"],  # Allowed sort columns
-        # orderBy accepts camel aliases like uploadedCollections by default
-        "sort_field_aliases": {"lastUpload": "uploaded_collections"},  # Optional non-mechanical aliases
-        "sort_order": "desc",  # Default sort direction
-        "pagination_type": "limit_offset",  # Enable pagination
-        "pagination_size": 20,  # Default page size
-        "search": "name,email",  # Searchable fields
-        "search_ignore_case": True,  # Case-insensitive search
-        "created_at": True,  # Enable created_at range filter
-        "updated_at": True,  # Enable updated_at range filter
+        "id_filter": str,
+        "id_field": "id",
+        "sort_field": ["created_at", "uploaded_collections", "name"],
+        "sort_field_aliases": {"lastUpload": "uploaded_collections"},
+        "sort_order": "desc",
+        "pagination_type": "limit_offset",
+        "pagination_size": 20,
+        "search": "name,email",
+        "search_ignore_case": True,
+        "created_at": True,
+        "updated_at": True,
     }
-
-    # Generate Litestar dependency providers
     deps = create_filter_dependencies(user_filters)
-    print(f"Generated {len(deps)} filter dependencies")
-    # end-example
+    assert deps
+    return deps
+
+
+if __name__ == "__main__":
+    print(f"Generated {len(main())} filter dependencies")
