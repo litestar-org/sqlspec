@@ -12,7 +12,6 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from sqlglot import exp
 
 from sqlspec.exceptions import SquashValidationError
 from sqlspec.migrations.context import MigrationContext
@@ -616,6 +615,41 @@ def test_folder_emits_unmodified_statements_verbatim() -> None:
     assert down_sql == ["DROP TABLE IF EXISTS Orders;"]
 
 
+def test_sqlite_add_column_keeps_columns_before_table_constraints() -> None:
+    """Added columns are inserted before table-level constraints so SQLite accepts the folded DDL."""
+    up_sql, _ = _assert_sqlite_equivalent([
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY);",
+        (
+            "CREATE TABLE items ("
+            "id INTEGER NOT NULL, "
+            "parent_id INTEGER, "
+            "code VARCHAR(20) NOT NULL, "
+            "PRIMARY KEY (id, code), "
+            "UNIQUE (code), "
+            "CHECK (id > 0), "
+            "FOREIGN KEY (parent_id) REFERENCES parents (id)"
+            ");"
+        ),
+        "ALTER TABLE items ADD COLUMN note VARCHAR(40) DEFAULT 'ok';",
+        "INSERT INTO parents (id) VALUES (1);",
+        "INSERT INTO items (id, parent_id, code, note) VALUES (1, 1, 'A', 'first');",
+    ])
+    assert "note VARCHAR(40) DEFAULT 'ok', PRIMARY KEY (id, code)" in up_sql[1]
+
+
+def test_fold_refuses_when_dialect_rewrites_cast_type_in_expression() -> None:
+    """Non-column CAST types that SQLGlot rewrites to a different affinity are refused on rewrite."""
+    with pytest.raises(SquashValidationError, match="does not reproduce faithfully"):
+        fold_migration_ddl(
+            [
+                "CREATE TABLE metrics (id INTEGER PRIMARY KEY, amount DEFAULT (CAST('1' AS DECIMAL(10, 2))));",
+                "ALTER TABLE metrics ADD COLUMN label TEXT;",
+            ],
+            dialect="sqlite",
+            origins=["0001", "0002"],
+        )
+
+
 def _fold(migrations: Sequence[str], dialect: str) -> tuple[list[str], list[str]]:
     return fold_migration_ddl(
         migrations, dialect=dialect, origins=[f"{position:04d}" for position in range(1, len(migrations) + 1)]
@@ -651,10 +685,7 @@ def _sqlite_snapshot(connection: sqlite3.Connection) -> dict[str, object]:
     for object_type, name, _ in objects:
         if object_type not in {"table", "view"}:
             continue
-        columns = [
-            (cid, column, _sqlite_type(declared), notnull, default, pk)
-            for cid, column, declared, notnull, default, pk in connection.execute(f'PRAGMA table_info("{name}")')
-        ]
+        columns = list(connection.execute(f'PRAGMA table_info("{name}")'))
         foreign_keys = sorted(
             (row[2], row[3], row[4], row[5], row[6]) for row in connection.execute(f'PRAGMA foreign_key_list("{name}")')
         )
@@ -665,12 +696,6 @@ def _sqlite_snapshot(connection: sqlite3.Connection) -> dict[str, object]:
         rows = sorted(connection.execute(f'SELECT * FROM "{name}"').fetchall(), key=repr)
         relations[name] = (columns, foreign_keys, indexes, rows)
     return {"objects": objects, "relations": relations}
-
-
-def _sqlite_type(declared: str) -> str:
-    if not declared:
-        return ""
-    return exp.DataType.build(declared, dialect="sqlite").sql(dialect="sqlite")
 
 
 def _assert_duckdb_equivalent(migrations: Sequence[str], *, base: Sequence[str] = ()) -> tuple[list[str], list[str]]:

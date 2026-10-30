@@ -280,6 +280,7 @@ _UNICODE_CHAR_TYPES = frozenset({"nchar", "nvarchar", "national character", "nat
 _DECIMAL_TYPES = frozenset({"dec", "decimal", "number", "numeric"})
 _TEMPORAL_SCALE_TYPES = frozenset({"datetime2", "datetimeoffset", "time"})
 _ORACLE_ON_DELETE_ACTIONS = frozenset({FOREIGN_KEY_ACTION_CASCADE, FOREIGN_KEY_ACTION_SET_NULL})
+_NO_PARTIAL_INDEX_DIALECTS = frozenset({"duckdb"})
 _NO_CASCADE_SEQUENCE_DIALECTS = frozenset({"tsql", "oracle", "spanner", "bigquery", "db2"})
 _PARENTHESIZED_DEFAULT_DIALECTS = frozenset({"sqlite", "mysql", "spanner"})
 _SELF_PARENTHESIZED_GENERATED_DIALECTS = frozenset({"postgres", "mysql", "sqlite"})
@@ -1722,6 +1723,10 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
                 warnings.append(f"Index {index_name} is partial but the catalog did not report its predicate; omitted")
                 return None
 
+        if where_expr is not None and _normalize_dialect(dialect) in _NO_PARTIAL_INDEX_DIALECTS:
+            warnings.append(f"DuckDB does not support partial indexes; index '{index_name}' omitted")
+            return None
+
         builder = cls(_catalog_name(index_name, dialect, fragment_dialect), dialect=dialect)
         if resolved_schema:
             builder.in_schema(_catalog_name(resolved_schema, dialect, fragment_dialect))
@@ -1777,6 +1782,10 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
 
         where_expr: exp.Expr | None = None
         if self._where is not None:
+            if norm_dialect in _NO_PARTIAL_INDEX_DIALECTS:
+                self._raise_builder_error(
+                    "DuckDB does not support partial indexes; a full index would change the index semantics."
+                )
             where_expr = (
                 exp.condition(self._where, dialect=norm_dialect) if isinstance(self._where, str) else self._where.copy()
             )

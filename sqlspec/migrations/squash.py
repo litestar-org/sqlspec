@@ -92,7 +92,7 @@ _GENERATED_COLUMN_TYPES = (exp.ComputedColumnConstraint, exp.GeneratedAsIdentity
 _SUPPORTED_ALTER_COLUMN_ARGS = frozenset({"this", "dtype", "using", "default", "drop", "allow_null"})
 _MAX_TYPE_TOKENS = 12
 _TYPE_PLACEHOLDER = "__sqlspec_column_type__"
-_TYPE_ARGUMENT_TOKEN_TYPES = frozenset({TokenType.L_PAREN, TokenType.R_PAREN, TokenType.NUMBER, TokenType.COMMA})
+_ALTER_TYPE_KEYWORDS = frozenset({"SET", "DATA", "TYPE"})
 _MYSQL_FAMILY = frozenset({"mysql", "singlestore", "doris", "starrocks", "tidb"})
 _SEQUENCE_FUNCTIONS = frozenset({"NEXTVAL", "CURRVAL", "SETVAL", "LASTVAL"})
 
@@ -131,14 +131,12 @@ class DDLStateFolder:
         "_schemas",
         "_sequences",
         "_tables",
-        "_type_tokens",
         "_views",
     )
 
     def __init__(self, dialect: str | None = None) -> None:
         self._dialect = dialect
         self._dialect_impl: Dialect = Dialect.get_or_raise(dialect)
-        self._type_tokens: frozenset[TokenType] = frozenset(self._dialect_impl.parser_class.TYPE_TOKENS)
         self._schemas: dict[str, _FoldedStatement] = {}
         self._sequences: dict[str, _FoldedStatement] = {}
         self._tables: dict[str, _FoldedStatement] = {}
@@ -169,9 +167,9 @@ class DDLStateFolder:
             self._current_text = text
             spans = self._column_type_spans(expr, tokens, statement)
             self._current_faithful = self._is_faithful(expr, tokens, spans)
-            for column, first, last in spans:
+            for node, arg_key, first, last in spans:
                 original_type = statement[tokens[first].start : tokens[last].end + 1]
-                column.set("kind", exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=original_type))
+                node.set(arg_key, exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=original_type))
             self._apply_expression(expr)
 
     def to_statements(self) -> tuple[list[str], list[str]]:
@@ -231,13 +229,14 @@ class DDLStateFolder:
             statements.extend((text, expr, chunk) for expr in parsed if expr is not None)
         return statements
 
-    def _column_type_spans(self, expr: exp.Expr, tokens: list[Token], sql: str) -> list[tuple[exp.ColumnDef, int, int]]:
-        """Locate the original token span of each column definition's data type.
+    def _column_type_spans(self, expr: exp.Expr, tokens: list[Token], sql: str) -> list[tuple[exp.Expr, str, int, int]]:
+        """Locate the original token span of each declared column data type.
 
         SQLGlot canonicalizes type synonyms (for example SQLite renders ``VARCHAR(20)`` as
-        ``TEXT(20)``). The span is the longest run of tokens after the column name whose parsed
-        type renders identically to the parsed column type. The spans let the fidelity check
-        compare types semantically and let rewritten tables keep the declared type text.
+        ``TEXT(20)``). The span is the longest run of tokens after the column name (or after
+        ``ALTER COLUMN ... [SET DATA] TYPE``) whose parsed type renders identically to the
+        parsed column type. The spans let the fidelity check compare column types semantically
+        while keeping expression casts strict, and let rewritten tables keep the declared type text.
 
         Args:
             expr: Parsed statement.
@@ -245,10 +244,10 @@ class DDLStateFolder:
             sql: Full SQL text the tokens were produced from.
 
         Returns:
-            Tuples of ``(column, first_token_index, last_token_index)``.
+            Tuples of ``(node, arg_key, first_token_index, last_token_index)``.
         """
         token_positions = {token.start: position for position, token in enumerate(tokens)}
-        spans: list[tuple[exp.ColumnDef, int, int]] = []
+        spans: list[tuple[exp.Expr, str, int, int]] = []
         for column in expr.find_all(exp.ColumnDef):
             kind = column.args.get("kind")
             ident = column.this
@@ -260,7 +259,22 @@ class DDLStateFolder:
                 continue
             last = self._type_span_end(kind, tokens, position + 1, sql)
             if last is not None:
-                spans.append((column, position + 1, last))
+                spans.append((column, "kind", position + 1, last))
+        for alter_col in expr.find_all(exp.AlterColumn):
+            dtype = alter_col.args.get("dtype")
+            ident = alter_col.this.this if isinstance(alter_col.this, exp.Column) else alter_col.this
+            if not isinstance(dtype, exp.DataType) or not isinstance(ident, exp.Identifier):
+                continue
+            start = ident.meta.get("start")
+            position = token_positions.get(start) if isinstance(start, int) else None
+            if position is None:
+                continue
+            first = position + 1
+            while first < len(tokens) and tokens[first].text.upper() in _ALTER_TYPE_KEYWORDS:
+                first += 1
+            last = self._type_span_end(dtype, tokens, first, sql)
+            if last is not None:
+                spans.append((alter_col, "dtype", first, last))
         return spans
 
     def _type_span_end(self, kind: exp.DataType, tokens: list[Token], first: int, sql: str) -> int | None:
@@ -518,7 +532,9 @@ class DDLStateFolder:
         self._mark_modified(entry)
         column = action.copy()
         column.set("exists", None)
-        schema.set("expressions", [*schema.expressions, column])
+        columns = [item for item in schema.expressions if isinstance(item, exp.ColumnDef)]
+        constraints = [item for item in schema.expressions if not isinstance(item, exp.ColumnDef)]
+        schema.set("expressions", [*columns, column, *constraints])
 
     def _modify_column(
         self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, action: exp.ModifyColumn
@@ -1391,21 +1407,23 @@ class DDLStateFolder:
             raise self._refusal(msg, entry) from error
         return _ensure_semicolon(sql)
 
-    def _is_faithful(self, expr: exp.Expr, tokens: list[Token], spans: list[tuple[exp.ColumnDef, int, int]]) -> bool:
+    def _is_faithful(self, expr: exp.Expr, tokens: list[Token], spans: list[tuple[exp.Expr, str, int, int]]) -> bool:
         """Return whether rendering ``expr`` reproduces the original statement faithfully.
 
-        Data types are compared as parsed type nodes rendered for the dialect, so type synonyms
-        (``VARCHAR`` versus SQLite ``TEXT``) are faithful while rewrites that change a column
-        definition (Postgres ``SERIAL`` becoming an identity column) are not. Column type spans
-        are then masked on both sides, and every other keyword token type of the original must
-        appear in the rendering (allowing a small set of synonyms) and every identifier, literal,
-        and non-function word must survive. Function names may be canonicalized because SQLGlot
-        maps them to equivalent spellings.
+        Declared column data types are compared as parsed type nodes rendered for the dialect,
+        so column type synonyms (``VARCHAR`` versus SQLite ``TEXT``) are faithful while rewrites
+        that change a column definition (Postgres ``SERIAL`` becoming an identity column) are not.
+        Column type spans are then masked on both sides, while non-column types (such as ``CAST``
+        targets inside ``DEFAULT`` or ``CHECK`` expressions) remain unmasked so dialect rewrites
+        that alter runtime evaluation are rejected. Every other keyword token type of the original
+        must appear in the rendering (allowing a small set of synonyms) and every identifier,
+        literal, and non-function word must survive. Function names may be canonicalized because
+        SQLGlot maps them to equivalent spellings.
 
         Args:
             expr: Parsed statement, unchanged on return.
             tokens: Original tokens of the statement.
-            spans: Column type spans from :meth:`_column_type_spans`.
+            spans: Declared column type spans from :meth:`_column_type_spans`.
 
         Returns:
             True when the rendering is faithful to the original text.
@@ -1417,19 +1435,19 @@ class DDLStateFolder:
             return False
         if self._type_signature([expr]) != self._type_signature(reparsed):
             return False
-        original_kinds = [(column, column.args.get("kind")) for column, _, _ in spans]
-        for column, _ in original_kinds:
-            column.set("kind", exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=_TYPE_PLACEHOLDER))
+        original_kinds = [(node, arg_key, node.args.get(arg_key)) for node, arg_key, _, _ in spans]
+        for node, arg_key, _ in original_kinds:
+            node.set(arg_key, exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=_TYPE_PLACEHOLDER))
         try:
             masked = expr.sql(dialect=self._dialect, unsupported_level=ErrorLevel.IGNORE)
         finally:
-            for column, kind in original_kinds:
-                column.set("kind", kind)
+            for node, arg_key, kind in original_kinds:
+                node.set(arg_key, kind)
         try:
             masked_tokens = self._dialect_impl.tokenize(masked)
         except TokenError:
             return False
-        skipped = {position for _, first, last in spans for position in range(first, last + 1)}
+        skipped = {position for _, _, first, last in spans for position in range(first, last + 1)}
         original_types, original_words = self._token_signature([
             token for position, token in enumerate(tokens) if position not in skipped
         ])
@@ -1481,35 +1499,19 @@ class DDLStateFolder:
     def _ident_key(self, ident: exp.Identifier) -> str:
         return self._dialect_impl.normalize_identifier(ident.copy()).name
 
-    def _token_signature(self, tokens: list[Token]) -> tuple[set[TokenType], "Counter[str]"]:
-        """Return keyword token types and words, excluding data type tokens and their size arguments."""
+    @staticmethod
+    def _token_signature(tokens: list[Token]) -> tuple[set[TokenType], "Counter[str]"]:
+        """Return keyword token types and words for non-masked statement tokens."""
         types: set[TokenType] = set()
         words: Counter[str] = Counter()
-        argument_depth = 0
-        arguments_pending = False
         for position, token in enumerate(tokens):
             token_type = token.token_type
-            next_type = tokens[position + 1].token_type if position + 1 < len(tokens) else None
-            if arguments_pending:
-                arguments_pending = False
-                if token_type == TokenType.L_PAREN:
-                    argument_depth = 1
-                    continue
-            if argument_depth:
-                if token_type == TokenType.L_PAREN:
-                    argument_depth += 1
-                elif token_type == TokenType.R_PAREN:
-                    argument_depth -= 1
-                if token_type in _TYPE_ARGUMENT_TOKEN_TYPES:
-                    continue
-            if token_type in self._type_tokens:
-                arguments_pending = next_type == TokenType.L_PAREN
-                continue
             if token_type == TokenType.SEMICOLON:
                 continue
             if token_type not in _TEXT_TOKEN_TYPES:
                 types.add(token_type)
                 continue
+            next_type = tokens[position + 1].token_type if position + 1 < len(tokens) else None
             if token_type == TokenType.VAR and next_type == TokenType.L_PAREN:
                 continue
             words[token.text if token_type in _CASE_SENSITIVE_TOKEN_TYPES else token.text.lower()] += 1

@@ -1096,3 +1096,32 @@ def test_quoted_and_schema_qualified_user_defined_types_render_per_dialect() -> 
     connection.execute(CreateTable("t", dialect="duckdb").column("k", '"Label Kind"').build().sql)
     connection.execute("INSERT INTO t VALUES ('y')")
     assert connection.execute("SELECT k FROM t").fetchall() == [("y",)]
+
+
+def test_sqlite_partial_index_is_omitted_for_duckdb_with_warning() -> None:
+    """DuckDB rejects partial indexes, so the index is omitted (not widened) and the loss is reported."""
+    with SqliteConfig(connection_config={"database": ":memory:"}).provide_session() as source:
+        source.execute_script(
+            "CREATE TABLE staff (id INTEGER PRIMARY KEY, manager_id INTEGER, email TEXT); "
+            "CREATE UNIQUE INDEX ix_staff_manager ON staff (manager_id) WHERE manager_id IS NOT NULL; "
+            "CREATE INDEX ix_staff_email ON staff (email)"
+        )
+        result = source.data_dictionary.get_schema_ddl(source, target_dialect="duckdb", prefer_native=False)
+
+    staff = next(item for item in _ddl_items(result) if item.identity.name == "staff")
+    assert staff.fidelity == MetadataFidelity.LOSSY
+    assert staff.warnings == ("DuckDB does not support partial indexes; index 'ix_staff_manager' omitted",)
+    assert staff.ddl == (
+        'CREATE TABLE "staff" (\n  "id" INT PRIMARY KEY,\n  "manager_id" INT,\n  "email" TEXT\n);\n\n'
+        'CREATE INDEX "ix_staff_email" ON "staff"("email");'
+    )
+    connection = duckdb.connect(":memory:")
+    for item in _ddl_items(result):
+        assert item.ddl is not None
+        for statement in item.ddl.split(";\n\n"):
+            connection.execute(statement.rstrip(";"))
+    connection.execute("INSERT INTO staff VALUES (1, NULL, 'a'), (2, NULL, 'b')")
+    assert connection.execute("SELECT index_name FROM duckdb_indexes()").fetchall() == [("ix_staff_email",)]
+
+    with pytest.raises(SQLBuilderError, match="DuckDB does not support partial indexes"):
+        CreateIndex("ix", dialect="duckdb").on("staff", "manager_id").where("manager_id IS NOT NULL").build()
