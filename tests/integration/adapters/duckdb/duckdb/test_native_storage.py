@@ -204,13 +204,13 @@ def test_arrow_and_native_copy_replace_single_local_object(
                 assert job.telemetry["bytes_processed"] > 0
                 assert job.telemetry["destination"] == key
             copy_sql = (
-                "COPY (SELECT ? AS value) TO ? (FORMAT PARQUET)"
+                f"COPY (SELECT ? AS value) TO '{uri}' (FORMAT PARQUET)"
                 if file_format == "parquet"
-                else "COPY (SELECT ? AS value) TO ? (FORMAT CSV, HEADER TRUE)"
+                else f"COPY (SELECT ? AS value) TO '{uri}' (FORMAT CSV, HEADER TRUE)"
             )
             read_sql = "SELECT * FROM read_parquet(?)" if file_format == "parquet" else "SELECT * FROM read_csv(?)"
             for value in [3, 4]:
-                assert session.connection.execute(copy_sql, [value, uri]).fetchone() == (1,)
+                assert session.connection.execute(copy_sql, [value]).fetchone() == (1,)
                 assert session.connection.execute(read_sql, [uri]).fetchall() == [(value,)]
     finally:
         config.close_pool()
