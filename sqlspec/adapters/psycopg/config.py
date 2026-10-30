@@ -1,5 +1,6 @@
 """Psycopg database configuration with direct field-based configuration."""
 
+import inspect
 from collections.abc import Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
@@ -82,6 +83,7 @@ __all__ = (
 PsycopgSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 _ALLOYDB_DIRECT_CONNECTION_KEYS = ("conninfo", "host", "hostaddr", "port", "user", "password", "dbname", "db")
 _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
+    "auth_token_provider",
     "check",
     "close_returns",
     "configure",
@@ -101,6 +103,7 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
 })
 _ALLOYDB_CONNECTOR_PACKAGE = "google-cloud-alloydb-connector"
 _DEFAULT_PSYCOPG_PREPARE_THRESHOLD: Final[int] = 5
+_AUTH_TOKEN_DEFAULT_MAX_LIFETIME: Final[float] = 1800.0
 
 
 class PsycopgConnectionParams(TypedDict):
@@ -116,6 +119,8 @@ class PsycopgConnectionParams(TypedDict):
     """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
     """Password or token for ``user``."""
+    auth_token_provider: NotRequired["Callable[[], str] | Callable[[], Awaitable[str]]"]
+    """Callable returning a fresh authentication password or IAM token on each connection attempt."""
     dbname: NotRequired[str]
     """Target PostgreSQL database name."""
     connect_timeout: NotRequired[int]
@@ -555,6 +560,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """Create the actual connection pool."""
         all_config = dict(self.connection_config)
         all_config.pop("null_pool", None)
+        auth_token_provider = all_config.pop("auth_token_provider", None)
+        default_max_lifetime = _AUTH_TOKEN_DEFAULT_MAX_LIFETIME if auth_token_provider is not None else 3600.0
 
         pool_parameters = {
             "connection_class": all_config.pop("connection_class", None),
@@ -563,7 +570,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             "name": all_config.pop("name", None),
             "timeout": all_config.pop("timeout", 30.0),
             "max_waiting": all_config.pop("max_waiting", 0),
-            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
+            "max_lifetime": all_config.pop("max_lifetime", default_max_lifetime),
             "max_idle": all_config.pop("max_idle", 600.0),
             "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
             "reconnect_failed": all_config.pop("reconnect_failed", None),
@@ -573,6 +580,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             "reset": all_config.pop("reset", None),
             "close_returns": all_config.pop("close_returns", False),
         }
+
+        if callable(auth_token_provider) and not self.driver_features.get("enable_alloydb", False):
+            base_conn_cls = cast(
+                "type[PsycopgConnection[Any]]", pool_parameters.get("connection_class") or PsycopgConnection
+            )
+            pool_parameters["connection_class"] = _make_token_provider_sync_connection_class(
+                base_conn_cls, cast("Callable[[], str]", auth_token_provider)
+            )
 
         user_configure = all_config.pop("configure", None)
         if user_configure is not None and user_configure is not self._configure_connection:
@@ -678,6 +693,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             The connection class, the conninfo string, and the connect kwargs.
         """
         all_config = {k: v for k, v in self.connection_config.items() if k not in _POOL_ONLY_CONFIG_KEYS}
+        auth_token_provider = self.connection_config.get("auth_token_provider")
+        if callable(auth_token_provider):
+            all_config["password"] = str(auth_token_provider())
         connection_class = all_config.pop("connection_class", None) or PsycopgConnection
         conninfo = all_config.pop("conninfo", None)
         all_config.update(all_config.pop("kwargs", {}))
@@ -873,6 +891,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             A psycopg AsyncConnection instance.
         """
         connection_class, conninfo, connection_kwargs = self._connection_kwargs()
+        auth_token_provider = self.connection_config.get("auth_token_provider")
+        if callable(auth_token_provider):
+            token_result = auth_token_provider()
+            if inspect.isawaitable(token_result):
+                token_result = await token_result
+            connection_kwargs["password"] = str(token_result)
         connection = await connection_class.connect(conninfo, **connection_kwargs)
         user_configure = self.connection_config.get("configure")
         try:
@@ -948,6 +972,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         all_config = dict(self.connection_config)
         all_config.pop("null_pool", None)
+        auth_token_provider = all_config.pop("auth_token_provider", None)
+        default_max_lifetime = _AUTH_TOKEN_DEFAULT_MAX_LIFETIME if auth_token_provider is not None else 3600.0
 
         pool_parameters = {
             "connection_class": all_config.pop("connection_class", None),
@@ -956,7 +982,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "name": all_config.pop("name", None),
             "timeout": all_config.pop("timeout", 30.0),
             "max_waiting": all_config.pop("max_waiting", 0),
-            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
+            "max_lifetime": all_config.pop("max_lifetime", default_max_lifetime),
             "max_idle": all_config.pop("max_idle", 600.0),
             "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
             "reconnect_failed": all_config.pop("reconnect_failed", None),
@@ -965,6 +991,13 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "reset": all_config.pop("reset", None),
             "close_returns": all_config.pop("close_returns", False),
         }
+        if callable(auth_token_provider):
+            base_async_cls = cast(
+                "type[PsycopgAsyncConnection]", pool_parameters.get("connection_class") or PsycopgAsyncConnection
+            )
+            pool_parameters["connection_class"] = _make_token_provider_async_connection_class(
+                base_async_cls, cast("Callable[[], str | Awaitable[str]]", auth_token_provider)
+            )
         open_pool = all_config.pop("open", True)
         pool_parameters["open"] = False if open_pool is True else open_pool
 
@@ -1124,3 +1157,34 @@ def _make_alloydb_connection_class(
             return cast("Self", conn)
 
     return _AlloyDBPsycopgConnection
+
+
+def _make_token_provider_sync_connection_class(
+    base_cls: "type[PsycopgConnection[Any]]", provider: "Callable[[], str]"
+) -> "type[PsycopgConnection[Any]]":
+    """Build a Psycopg sync connection subclass that refreshes ``password`` from ``provider``."""
+
+    class _TokenProviderPsycopgConnection(base_cls):  # type: ignore[valid-type,misc]
+        @classmethod
+        def connect(cls, conninfo: str = "", **kwargs: Any) -> Self:
+            kwargs["password"] = str(provider())
+            return cast("Self", super().connect(conninfo, **kwargs))
+
+    return _TokenProviderPsycopgConnection
+
+
+def _make_token_provider_async_connection_class(
+    base_cls: "type[PsycopgAsyncConnection]", provider: "Callable[[], str | Awaitable[str]]"
+) -> "type[PsycopgAsyncConnection]":
+    """Build a Psycopg async connection subclass that refreshes ``password`` from ``provider``."""
+
+    class _TokenProviderPsycopgAsyncConnection(base_cls):  # type: ignore[valid-type,misc]
+        @classmethod
+        async def connect(cls, conninfo: str = "", **kwargs: Any) -> Self:
+            token_result = provider()
+            if inspect.isawaitable(token_result):
+                token_result = await token_result
+            kwargs["password"] = str(token_result)
+            return cast("Self", await super().connect(conninfo, **kwargs))
+
+    return _TokenProviderPsycopgAsyncConnection

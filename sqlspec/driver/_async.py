@@ -49,7 +49,12 @@ from sqlspec.driver._exception_handler import _run_with_async_exception_handler
 from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._storage_helpers import stringify_storage_target
+from sqlspec.driver._storage_helpers import (
+    AsyncWithoutIndexesContext,
+    execute_load_from_storage_async,
+    execute_staged_load_async,
+    stringify_storage_target,
+)
 from sqlspec.driver._stream import AsyncRowStream, _LazyEagerAsyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
@@ -1384,6 +1389,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         self._raise_storage_not_implemented("select_to_storage")
 
+    def without_indexes(
+        self, table: str, *, schema: str | None = None, concurrent: bool = False
+    ) -> AsyncWithoutIndexesContext:
+        """Drop secondary indexes on ``table`` before bulk loading and rebuild them on exit."""
+        return AsyncWithoutIndexesContext(self, table, schema=schema, concurrent=concurrent)
+
     async def load_from_arrow(
         self,
         table: str,
@@ -1391,6 +1402,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *,
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into the target table.
 
@@ -1399,6 +1419,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             source: Arrow data source.
             partitioner: Optional partitioner configuration.
             overwrite: Whether to overwrite existing data.
+            telemetry: Optional inbound storage telemetry to merge.
+            stage_table: Optional staging table flag or explicit staging table name.
+            conflict_keys: Optional conflict key columns for server-side merge/upsert.
+            on_conflict: Conflict action (``"update"`` or ``"nothing"``).
+            exclude_update_columns: Optional columns excluded from ``SET`` updates.
+            drop_stage_table: Whether to drop the staging table after merge.
+            drop_indexes: Whether to drop and rebuild secondary indexes around the load.
+            concurrent_indexes: Whether to rebuild PostgreSQL indexes with ``CONCURRENTLY``.
+            type_casts: Optional column-to-SQL-type mapping for stage-to-target casts.
 
         Returns:
             StorageBridgeJob with execution telemetry.
@@ -1406,6 +1435,21 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Raises:
             NotImplementedError: If not implemented.
         """
+        _ = (
+            table,
+            source,
+            partitioner,
+            overwrite,
+            telemetry,
+            stage_table,
+            conflict_keys,
+            on_conflict,
+            exclude_update_columns,
+            drop_stage_table,
+            drop_indexes,
+            concurrent_indexes,
+            type_casts,
+        )
         self._raise_storage_not_implemented("load_from_arrow")
 
     async def load_from_storage(
@@ -1416,20 +1460,71 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        storage_options: "dict[str, Any] | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        checkpoint_table: str | None = None,
+        checkpoint_phase: str = "default",
+        max_workers: int = 1,
+        executor: Literal["thread", "process"] = "thread",
+        arrow_schema: Any = None,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load artifacts from storage into the target table.
 
         Args:
             table: Target table name.
-            source: Storage source path.
+            source: Storage source path, prefix, or glob pattern.
             file_format: File format of source.
             partitioner: Optional partitioner configuration.
             overwrite: Whether to overwrite existing data.
+            storage_options: Optional storage backend configuration.
+            stage_table: Optional staging table flag or explicit staging table name.
+            conflict_keys: Optional conflict key columns for server-side merge/upsert.
+            on_conflict: Conflict action (``"update"`` or ``"nothing"``).
+            exclude_update_columns: Optional columns excluded from ``SET`` updates.
+            drop_stage_table: Whether to drop the staging table after merge.
+            drop_indexes: Whether to drop and rebuild secondary indexes around the load.
+            concurrent_indexes: Whether to rebuild PostgreSQL indexes with ``CONCURRENTLY``.
+            checkpoint_table: Optional database table name for shard-level checkpoint tracking.
+            checkpoint_phase: Checkpoint phase identifier (default ``"default"``).
+            max_workers: Number of parallel workers for multi-shard storage fan-out.
+            executor: Worker pool type (``"thread"`` or ``"process"``).
+            arrow_schema: Optional PyArrow schema for explicit type pinning on decode.
+            type_casts: Optional column-to-SQL-type mapping for stage-to-target casts.
 
         Returns:
             StorageBridgeJob with execution telemetry.
         """
-        self._raise_storage_not_implemented("load_from_storage")
+        if type(self).load_from_arrow is AsyncDriverAdapterBase.load_from_arrow:
+            self._raise_storage_not_implemented("load_from_storage")
+        return await execute_load_from_storage_async(
+            self,
+            table,
+            source,
+            file_format=file_format,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            storage_options=storage_options,
+            stage_table=stage_table,
+            conflict_keys=conflict_keys,
+            on_conflict=on_conflict,
+            exclude_update_columns=exclude_update_columns,
+            drop_stage_table=drop_stage_table,
+            drop_indexes=drop_indexes,
+            concurrent_indexes=concurrent_indexes,
+            checkpoint_table=checkpoint_table,
+            checkpoint_phase=checkpoint_phase,
+            max_workers=max_workers,
+            executor=executor,
+            arrow_schema=arrow_schema,
+            type_casts=type_casts,
+        )
 
     async def load_from_records(
         self,
@@ -1438,6 +1533,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         *,
         columns: "list[str] | None" = None,
         overwrite: bool = False,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load in-memory dict or positional records into the target table.
 
@@ -1451,12 +1554,36 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             records: Mapping records, or positional sequences with ``columns``.
             columns: Column names (required for positional records).
             overwrite: Whether to overwrite existing data.
+            stage_table: Optional staging table flag or explicit staging table name.
+            conflict_keys: Optional conflict key columns for server-side merge/upsert.
+            on_conflict: Conflict action (``"update"`` or ``"nothing"``).
+            exclude_update_columns: Optional columns excluded from ``SET`` updates.
+            drop_stage_table: Whether to drop the staging table after merge.
+            drop_indexes: Whether to drop and rebuild secondary indexes around the load.
+            concurrent_indexes: Whether to rebuild PostgreSQL indexes with ``CONCURRENTLY``.
+            type_casts: Optional column-to-SQL-type mapping for stage-to-target casts.
 
         Returns:
             StorageBridgeJob with execution telemetry.
         """
         prepared_records = self._prepare_records_for_arrow(records)
         arrow_table = self._records_to_arrow_table(prepared_records, columns)
+        if stage_table or conflict_keys or drop_indexes:
+            return await execute_staged_load_async(
+                self,
+                table,
+                arrow_table,
+                raw_loader=self.load_from_arrow,
+                overwrite=overwrite,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         return await self.load_from_arrow(table, arrow_table, overwrite=overwrite)
 
     def convert_to_dialect(

@@ -79,6 +79,7 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
 })
 _CLOUD_SQL_INSTANCE_PARTS: Final[int] = 3
 _ALLOYDB_URI_PARTS: Final[int] = 8
+_AUTH_TOKEN_DEFAULT_INACTIVE_LIFETIME: Final[float] = 1800.0
 
 logger = get_logger(__name__)
 
@@ -100,6 +101,8 @@ class AsyncpgConnectionConfig(TypedDict):
     """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
     """Password or dynamic token for ``user``."""
+    auth_token_provider: NotRequired["Callable[[], str] | Callable[[], Awaitable[str]]"]
+    """Callable or async callable returning a fresh password or IAM token for each new connection."""
     database: NotRequired[str]
     """Target PostgreSQL database name."""
     ssl: NotRequired[Any]
@@ -403,6 +406,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         config = {
             key: value for key, value in build_connection_config(self.connection_config).items() if value is not None
         }
+        auth_token_provider = config.pop("auth_token_provider", None)
+        if callable(auth_token_provider):
+            config["password"] = auth_token_provider
         for key in _POOL_ONLY_CONFIG_KEYS:
             config.pop(key, None)
 
@@ -633,6 +639,10 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         config = {
             key: value for key, value in build_connection_config(self.connection_config).items() if value is not None
         }
+        auth_token_provider = config.pop("auth_token_provider", None)
+        if callable(auth_token_provider):
+            config["password"] = auth_token_provider
+            config.setdefault("max_inactive_connection_lifetime", _AUTH_TOKEN_DEFAULT_INACTIVE_LIFETIME)
 
         if self.connection_config.get("pgbouncer") or self.driver_features.get("pgbouncer"):
             config["statement_cache_size"] = 0

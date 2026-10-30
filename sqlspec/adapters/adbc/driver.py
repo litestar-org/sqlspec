@@ -55,7 +55,7 @@ from sqlspec.utils.serializers import to_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping, Sequence
 
     from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcRawCursor
     from sqlspec.builder import QueryBuilder
@@ -715,10 +715,35 @@ class AdbcDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Ingest an Arrow payload directly through the ADBC cursor."""
 
         self._require_capability("arrow_import_enabled")
+        if stage_table or conflict_keys or drop_indexes:
+            return self._execute_staged_load_sync(
+                table,
+                source,
+                raw_loader=self.load_from_arrow,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         ensure_pyarrow()
 
         source_data: Any = source.get_data() if hasattr(source, "get_data") else source
@@ -773,11 +798,13 @@ class AdbcDriver(SyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Read an artifact from storage and ingest it via ADBC."""
 
-        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
-        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+        return super().load_from_storage(
+            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+        )
 
     def collect_rows(self, cursor: "AdbcRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect ADBC rows for the direct execution path."""

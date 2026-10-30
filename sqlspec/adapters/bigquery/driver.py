@@ -705,10 +705,51 @@ class BigQueryDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: bool | str = False,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: str = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = True,
+        type_casts: "dict[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into BigQuery (Parquet load job, or opt-in Storage Write API)."""
 
         self._require_capability("parquet_import_enabled")
+        if drop_indexes:
+            with self.without_indexes(table, concurrent=concurrent_indexes):
+                return self.load_from_arrow(
+                    table,
+                    source,
+                    partitioner=partitioner,
+                    overwrite=overwrite,
+                    telemetry=telemetry,
+                    stage_table=stage_table,
+                    conflict_keys=conflict_keys,
+                    on_conflict=on_conflict,
+                    exclude_update_columns=exclude_update_columns,
+                    drop_stage_table=drop_stage_table,
+                    drop_indexes=False,
+                    concurrent_indexes=concurrent_indexes,
+                    type_casts=type_casts,
+                )
+        if stage_table or conflict_keys:
+            return super().load_from_arrow(
+                table,
+                source,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=False,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         arrow_table = self._coerce_arrow_table(source)
         ensure_pyarrow()
         qualified_table = self._qualify_table_name(table)
@@ -753,8 +794,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
         file_format: "BigQueryLoadFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into BigQuery."""
+        if kwargs:
+            return super().load_from_storage(
+                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+            )
 
         job_config = build_load_job_config(file_format, overwrite)
         qualified_table = self._qualify_table_name(table)

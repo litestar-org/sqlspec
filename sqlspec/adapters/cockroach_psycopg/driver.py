@@ -164,6 +164,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Append via native IMPORT when eligible, taking the table offline.
 
@@ -174,7 +175,8 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         options = self.driver_features.get("native_storage_csv_options", {})
         resolved = None
         if (
-            self._native_storage_ready()
+            not kwargs
+            and self._native_storage_ready()
             and not overwrite
             and (file_format == "parquet" or (file_format == "csv" and "skip" in options))
         ):
@@ -186,7 +188,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             self._attach_partition_telemetry(produced, partitioner)
             return self._storage_job(produced)
         return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite
+            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
     def begin(self) -> None:
@@ -402,6 +404,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Append via native IMPORT when eligible, taking the table offline.
 
@@ -412,7 +415,8 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         options = self.driver_features.get("native_storage_csv_options", {})
         resolved = None
         if (
-            self._native_storage_ready()
+            not kwargs
+            and self._native_storage_ready()
             and not overwrite
             and (file_format == "parquet" or (file_format == "csv" and "skip" in options))
         ):
@@ -424,7 +428,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             self._attach_partition_telemetry(produced, partitioner)
             return self._storage_job(produced)
         return await super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite
+            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
     async def begin(self) -> None:

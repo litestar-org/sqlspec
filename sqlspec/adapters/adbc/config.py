@@ -98,6 +98,8 @@ class AdbcConnectionParams(TypedDict):
     """Database authentication password lifted into ``db_kwargs`` or ``connect()`` as required by the driver."""
     token: NotRequired[str]
     """Bearer, OAuth refresh, or Quack/FlightSQL authentication token."""
+    auth_token_provider: NotRequired["Callable[[], str]"]
+    """Callable returning a fresh password or bearer token on each ``create_connection`` call."""
     project_id: NotRequired[str]
     """Google Cloud project ID mapped to ``adbc.bigquery.sql.project_id`` for ``adbc-driver-bigquery``."""
     dataset_id: NotRequired[str]

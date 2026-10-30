@@ -4,7 +4,7 @@ import os
 import tempfile
 from collections.abc import Sized
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from sqlspec.adapters.pymysql._typing import (
     PYMYSQL_INSERT_VALUES_PATTERN,
@@ -41,7 +41,7 @@ from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping, Sequence
 
     from sqlspec.adapters.pymysql._typing import PyMysqlConnection
     from sqlspec.core import SQL, SQLResult, StatementConfig
@@ -253,8 +253,33 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         self._require_capability("arrow_import_enabled")
+        if stage_table or conflict_keys or drop_indexes:
+            return self._execute_staged_load_sync(
+                table,
+                source,
+                raw_loader=self.load_from_arrow,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             statement = f"TRUNCATE TABLE {format_identifier(table)}"
@@ -310,9 +335,11 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
-        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
-        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+        return super().load_from_storage(
+            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+        )
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect PyMySQL rows for the direct execution path."""

@@ -42,7 +42,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
@@ -436,6 +436,14 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: bool | str = False,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: str = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = True,
+        type_casts: "dict[str, str] | None" = None,
         batch_size: int = 0,
         timeout: int = 30,
         table_lock: bool = False,
@@ -453,6 +461,48 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         while consuming a stream can still leave a partially completed load.
         """
         self._require_capability("arrow_import_enabled")
+        if drop_indexes:
+            with self.without_indexes(table, concurrent=concurrent_indexes):
+                return self.load_from_arrow(
+                    table,
+                    source,
+                    partitioner=partitioner,
+                    overwrite=overwrite,
+                    telemetry=telemetry,
+                    stage_table=stage_table,
+                    conflict_keys=conflict_keys,
+                    on_conflict=on_conflict,
+                    exclude_update_columns=exclude_update_columns,
+                    drop_stage_table=drop_stage_table,
+                    drop_indexes=False,
+                    concurrent_indexes=concurrent_indexes,
+                    type_casts=type_casts,
+                    batch_size=batch_size,
+                    timeout=timeout,
+                    table_lock=table_lock,
+                    check_constraints=check_constraints,
+                    fire_triggers=fire_triggers,
+                    keep_identity=keep_identity,
+                    keep_nulls=keep_nulls,
+                    use_internal_transaction=use_internal_transaction,
+                    column_mappings=column_mappings,
+                )
+        if stage_table or conflict_keys:
+            return super().load_from_arrow(
+                table,
+                source,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=False,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         ensure_pyarrow()
         pa = cast("Any", import_optional("pyarrow"))
 
@@ -540,8 +590,13 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into SQL Server via BulkCopy."""
+        if kwargs:
+            return super().load_from_storage(
+                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+            )
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 

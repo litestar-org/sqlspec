@@ -833,9 +833,50 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: bool | str = False,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: str = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = True,
+        type_casts: "dict[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into Oracle using batched executemany calls."""
         self._require_capability("arrow_import_enabled")
+        if drop_indexes:
+            with self.without_indexes(table, concurrent=concurrent_indexes):
+                return self.load_from_arrow(
+                    table,
+                    source,
+                    partitioner=partitioner,
+                    overwrite=overwrite,
+                    telemetry=telemetry,
+                    stage_table=stage_table,
+                    conflict_keys=conflict_keys,
+                    on_conflict=on_conflict,
+                    exclude_update_columns=exclude_update_columns,
+                    drop_stage_table=drop_stage_table,
+                    drop_indexes=False,
+                    concurrent_indexes=concurrent_indexes,
+                    type_casts=type_casts,
+                )
+        if stage_table or conflict_keys:
+            return super().load_from_arrow(
+                table,
+                source,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=False,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             statement = build_truncate_statement(table)
@@ -900,6 +941,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         overwrite: bool = False,
         credential_name: str | None = None,
         format_options: "Mapping[str, Any] | None" = None,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load staged artifacts into Oracle via ``DBMS_CLOUD.COPY_DATA`` or client-side Arrow."""
         raw_credential = (
@@ -908,7 +950,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         effective_credential = (
             raw_credential.strip() if isinstance(raw_credential, str) and raw_credential.strip() else None
         )
-        if effective_credential is not None:
+        if effective_credential is not None and not kwargs:
             resolved_source: StorageDestination = (
                 self._storage_pipeline().resolve_destination(source).uri
                 if isinstance(source, str) and source.startswith("alias://")
@@ -942,6 +984,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 }
                 self._attach_partition_telemetry(telemetry_payload, partitioner)
                 return self._storage_job(telemetry_payload)
+        if kwargs:
+            return super().load_from_storage(
+                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+            )
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
@@ -1610,9 +1656,50 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: bool | str = False,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: str = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = True,
+        type_casts: "dict[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Asynchronously load Arrow data into Oracle."""
         self._require_capability("arrow_import_enabled")
+        if drop_indexes:
+            async with self.without_indexes(table, concurrent=concurrent_indexes):
+                return await self.load_from_arrow(
+                    table,
+                    source,
+                    partitioner=partitioner,
+                    overwrite=overwrite,
+                    telemetry=telemetry,
+                    stage_table=stage_table,
+                    conflict_keys=conflict_keys,
+                    on_conflict=on_conflict,
+                    exclude_update_columns=exclude_update_columns,
+                    drop_stage_table=drop_stage_table,
+                    drop_indexes=False,
+                    concurrent_indexes=concurrent_indexes,
+                    type_casts=type_casts,
+                )
+        if stage_table or conflict_keys:
+            return await super().load_from_arrow(
+                table,
+                source,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=False,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             statement = build_truncate_statement(table)
@@ -1673,6 +1760,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         overwrite: bool = False,
         credential_name: str | None = None,
         format_options: "Mapping[str, Any] | None" = None,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Asynchronously load staged artifacts into Oracle via ``DBMS_CLOUD.COPY_DATA`` or client-side Arrow."""
         raw_credential = (
@@ -1681,7 +1769,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         effective_credential = (
             raw_credential.strip() if isinstance(raw_credential, str) and raw_credential.strip() else None
         )
-        if effective_credential is not None:
+        if effective_credential is not None and not kwargs:
             resolved_source: StorageDestination = (
                 self._storage_pipeline().resolve_destination(source).uri
                 if isinstance(source, str) and source.startswith("alias://")
@@ -1715,6 +1803,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 }
                 self._attach_partition_telemetry(telemetry_payload, partitioner)
                 return self._storage_job(telemetry_payload)
+        if kwargs:
+            return await super().load_from_storage(
+                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+            )
         arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound

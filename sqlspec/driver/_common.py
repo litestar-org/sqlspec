@@ -86,6 +86,10 @@ from sqlspec.driver._storage_helpers import (
     coerce_arrow_table,
     create_storage_job,
     encode_arrow_batch_pg_binary,
+    execute_load_from_storage_async,
+    execute_load_from_storage_sync,
+    execute_staged_load_async,
+    execute_staged_load_sync,
     ingest_telemetry_from_batches,
     iter_pgcopy_binary_chunks,
     iter_pgcopy_binary_chunks_async,
@@ -3286,6 +3290,83 @@ class CommonDriverAttributesMixin:
     ) -> "StorageBridgeJob":
         """Create a StorageBridgeJob from telemetry data."""
         return create_storage_job(produced, provided, status=status)
+
+    def _execute_staged_load_sync(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        raw_loader: "abc.Callable[..., StorageBridgeJob]",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "abc.Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "abc.Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "abc.Mapping[str, str] | None" = None,
+    ) -> "StorageBridgeJob":
+        """Execute a staged or index-free bulk load synchronously."""
+        return execute_staged_load_sync(
+            self,
+            table,
+            source,
+            raw_loader=raw_loader,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=telemetry,
+            stage_table=stage_table,
+            conflict_keys=conflict_keys,
+            on_conflict=on_conflict,
+            exclude_update_columns=exclude_update_columns,
+            drop_stage_table=drop_stage_table,
+            drop_indexes=drop_indexes,
+            concurrent_indexes=concurrent_indexes,
+            type_casts=type_casts,
+        )
+
+    async def _execute_staged_load_async(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        raw_loader: "abc.Callable[..., Any]",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "abc.Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "abc.Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "abc.Mapping[str, str] | None" = None,
+    ) -> "StorageBridgeJob":
+        """Execute a staged or index-free bulk load asynchronously."""
+        return await execute_staged_load_async(
+            self,
+            table,
+            source,
+            raw_loader=raw_loader,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=telemetry,
+            stage_table=stage_table,
+            conflict_keys=conflict_keys,
+            on_conflict=on_conflict,
+            exclude_update_columns=exclude_update_columns,
+            drop_stage_table=drop_stage_table,
+            drop_indexes=drop_indexes,
+            concurrent_indexes=concurrent_indexes,
+            type_casts=type_casts,
+        )
+
+    _execute_load_from_storage_sync = staticmethod(execute_load_from_storage_sync)
+    _execute_load_from_storage_async = staticmethod(execute_load_from_storage_async)
 
 
 def parameter_values_need_processing(
