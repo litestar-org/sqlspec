@@ -141,7 +141,8 @@ def test_postgres_and_cockroach_foreign_keys_and_indexes_contracts() -> None:
     assert "AS sequence_name" in pg_columns_by_table
     assert "AS identity_generation" in pg_columns_by_table
     assert "AS is_primary" in pg_columns_by_table
-    assert "AS generated_kind" in pg_columns_by_table
+    assert "AS is_generated" in pg_columns_by_table
+    assert "AS generation_expression" in pg_columns_by_table
     assert "COALESCE(" in pg_columns_by_table
     assert crdb_columns_by_table is not None
     assert "AS sequence_name" in crdb_columns_by_table

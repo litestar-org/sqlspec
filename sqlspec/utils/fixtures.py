@@ -119,16 +119,8 @@ _UNORDERABLE_FAMILY_TYPES: Final["Mapping[str, frozenset[str]]"] = {
     "spanner": frozenset({"json", "tokenlist"}),
     "tsql": frozenset({"geography", "geometry", "image", "ntext", "text", "xml"}),
 }
-_IDENTITY_GENERATION_VALUES: Final["frozenset[str]"] = frozenset({
-    "a",
-    "always",
-    "by default",
-    "by default on null",
-    "d",
-    "y",
-})
-_ALWAYS_IDENTITY_GENERATION_VALUES: Final["frozenset[str]"] = frozenset({"a", "always"})
-_NOT_GENERATED_ALWAYS_TYPE: Final[str] = "not_applicable"
+_IDENTITY_GENERATION_VALUES: Final["frozenset[str]"] = frozenset({"always", "by default", "by default on null"})
+_ALWAYS_IDENTITY_GENERATION_VALUES: Final["frozenset[str]"] = frozenset({"always"})
 _ISO_DURATION_PATTERN: Final["re.Pattern[str]"] = re.compile(
     r"(-)?P(?:(\d+(?:\.\d+)?)W)?(?:(\d+(?:\.\d+)?)D)?"
     r"(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?"
@@ -1201,9 +1193,9 @@ def _extract_sequence_from_default(column_default: Any) -> "str | None":
 def _table_column(row: "Mapping[str, Any]") -> _TableColumn:
     """Return column metadata from a data dictionary column row.
 
-    Identity columns are recognized from ``identity_generation`` (PostgreSQL ``a``/``d``,
-    Db2 ``Y``, Spanner ``BY DEFAULT``), ``is_identity`` (SQL Server, Spanner),
-    ``identity_column`` (Oracle), or ``auto_increment`` in ``extra`` (MySQL, MariaDB).
+    Identity columns are recognized from canonical ``is_identity`` (boolean, numeric,
+    or truthy string flag), ``identity_generation`` (such as ``ALWAYS``, ``BY DEFAULT``,
+    or ``BY DEFAULT ON NULL``), or ``auto_increment`` in ``extra`` (MySQL, MariaDB).
     Standalone sequence defaults are recognized from ``sequence_name`` or parsed from
     ``column_default``. An identity column is never treated as generated, because Db2
     also flags identity columns in ``is_generated``.
@@ -1216,13 +1208,10 @@ def _table_column(row: "Mapping[str, Any]") -> _TableColumn:
     is_identity = (
         identity_generation in _IDENTITY_GENERATION_VALUES
         or _truthy_metadata_flag(row.get("is_identity"))
-        or _truthy_metadata_flag(row.get("identity_column"))
         or "auto_increment" in extra
     )
     identity_always = identity_generation in _ALWAYS_IDENTITY_GENERATION_VALUES
-    identity_on_null = identity_generation == "by default on null" or (
-        not identity_always and _truthy_metadata_flag(row.get("default_on_null"))
-    )
+    identity_on_null = identity_generation == "by default on null"
     return _TableColumn(
         name=str(row["column_name"]),
         data_type=str(row.get("data_type") or "").lower(),
@@ -1238,23 +1227,10 @@ def _table_column(row: "Mapping[str, Any]") -> _TableColumn:
 def _is_generated_column(row: "Mapping[str, Any]") -> bool:
     """Return whether a data dictionary column row describes a generated (computed) column.
 
-    PostgreSQL rows carry ``generated_kind``; DuckDB, Db2, Spanner, and BigQuery rows
-    ``is_generated``; CockroachDB, Spanner, and BigQuery rows ``generation_expression``;
-    Oracle rows ``virtual_column``; SQL Server rows ``is_computed`` and
-    ``computed_definition``, plus ``generated_always_type_desc`` for system-versioned
-    period columns; and MySQL, MariaDB, and SQLite rows an ``extra`` value containing
-    the word ``generated``.
+    Recognized from canonical ``is_generated`` or ``generation_expression`` metadata,
+    or dialect-specific ``extra`` flags containing the word ``generated``.
     """
-    generated_always_type = str(row.get("generated_always_type_desc") or "").strip().lower()
-    if (
-        _truthy_metadata_flag(row.get("is_generated"))
-        or _truthy_metadata_flag(row.get("is_computed"))
-        or _truthy_metadata_flag(row.get("virtual_column"))
-        or bool(row.get("generated_kind"))
-        or bool(row.get("generation_expression"))
-        or bool(row.get("computed_definition"))
-        or generated_always_type not in {"", _NOT_GENERATED_ALWAYS_TYPE}
-    ):
+    if _truthy_metadata_flag(row.get("is_generated")) or bool(row.get("generation_expression")):
         return True
     return "generated" in str(row.get("extra") or "").lower().split()
 
@@ -1894,18 +1870,30 @@ def _sequence_resync_statements(
             quoted_column = _quoted_identifier_sql(column.name)
             if column.sequence_name is not None:
                 statement = (
-                    f"SELECT setval(to_regclass(:sequence_name), coalesce(max({quoted_column}), "
-                    "(SELECT seqmin FROM pg_catalog.pg_sequence WHERE seqrelid = to_regclass(:sequence_name))), "
-                    f"max({quoted_column}) IS NOT NULL) FROM {quoted_table}"
+                    "WITH seq_info AS ("
+                    "SELECT to_regclass(:sequence_name) AS relid, seqmin "
+                    "FROM pg_catalog.pg_sequence "
+                    "WHERE seqrelid = to_regclass(:sequence_name)"
+                    "), table_max AS ("
+                    f"SELECT max({quoted_column}) AS max_val FROM {quoted_table}"
+                    ") "
+                    "SELECT setval("
+                    "s.relid, coalesce(m.max_val, s.seqmin), m.max_val IS NOT NULL"
+                    ") FROM seq_info s CROSS JOIN table_max m"
                 )
                 statements.append((statement, {"sequence_name": column.sequence_name}))
             elif column.is_identity:
                 statement = (
-                    f"SELECT setval(to_regclass(pg_catalog.pg_get_serial_sequence(:table_name, :column_name)), "
-                    f"coalesce(max({quoted_column}), "
-                    "(SELECT seqmin FROM pg_catalog.pg_sequence "
-                    "WHERE seqrelid = to_regclass(pg_catalog.pg_get_serial_sequence(:table_name, :column_name)))), "
-                    f"max({quoted_column}) IS NOT NULL) FROM {quoted_table}"
+                    "WITH seq_info AS ("
+                    "SELECT to_regclass(pg_catalog.pg_get_serial_sequence(:table_name, :column_name)) AS relid, s.seqmin "
+                    "FROM pg_catalog.pg_sequence s "
+                    "WHERE s.seqrelid = to_regclass(pg_catalog.pg_get_serial_sequence(:table_name, :column_name))"
+                    "), table_max AS ("
+                    f"SELECT max({quoted_column}) AS max_val FROM {quoted_table}"
+                    ") "
+                    "SELECT setval("
+                    "s.relid, coalesce(m.max_val, s.seqmin), m.max_val IS NOT NULL"
+                    ") FROM seq_info s CROSS JOIN table_max m"
                 )
                 statements.append((statement, {"table_name": quoted_table, "column_name": column.name}))
         return statements
@@ -1956,8 +1944,12 @@ def _sequence_resync_statements(
             quoted_column = _quoted_identifier_sql(primary_columns[0].name)
             table_base = table.rsplit(".", maxsplit=1)[-1]
             statement = (
-                f"UPDATE sqlite_sequence SET seq = (SELECT coalesce(max({quoted_column}), 0) "
-                f"FROM {_quoted_table_name(table)}) WHERE name = :table_name"
+                "WITH max_val AS ("
+                f"SELECT coalesce(max({quoted_column}), 0) AS val "
+                f"FROM {_quoted_table_name(table)}"
+                ") "
+                "UPDATE sqlite_sequence SET seq = max_val.val "
+                "FROM max_val WHERE sqlite_sequence.name = :table_name"
             )
             statements.append((statement, {"table_name": table_base}))
         return statements

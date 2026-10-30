@@ -1014,7 +1014,7 @@ ALWAYS_IDENTITY_COLUMNS: "list[dict[str, Any]]" = [
         "column_name": "id",
         "data_type": "integer",
         "is_primary": True,
-        "identity_generation": "a",
+        "identity_generation": "ALWAYS",
         "sequence_name": 'app."Users_id_seq"',
     },
     {
@@ -1133,8 +1133,8 @@ def test_values_of_unlisted_types_pass_through_unchanged(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     ("dialect", "generated_column", "expected_generated"),
     [
-        ("postgres", {"generated_kind": "s"}, True),
-        ("postgres", {"generated_kind": ""}, False),
+        ("postgres", {"is_generated": True}, True),
+        ("postgres", {"is_generated": False}, False),
         ("postgres", {"generation_expression": "id * 2"}, True),
         ("postgres", {"generation_expression": ""}, False),
         ("duckdb", {"is_generated": True}, True),
@@ -1171,7 +1171,7 @@ def test_load_rejects_rows_with_only_generated_columns(tmp_path: Path) -> None:
     (tmp_path / "items.json").write_text(json.dumps([{"doubled": 2}]), encoding="utf-8")
     driver = _postgres_mock_driver([
         {"column_name": "id", "data_type": "integer", "is_primary": True},
-        {"column_name": "doubled", "data_type": "integer", "generated_kind": "s"},
+        {"column_name": "doubled", "data_type": "integer", "is_generated": True},
     ])
 
     with pytest.raises(ValueError, match="only contain generated columns"):
@@ -1554,7 +1554,7 @@ async def test_ignore_unknown_columns_async(tmp_path: Path) -> None:
     (tmp_path / "users.json").write_text(json.dumps([{"doubled": 2}]), encoding="utf-8")
     mock_driver = _postgres_mock_driver([
         {"column_name": "id", "data_type": "integer", "is_primary": True},
-        {"column_name": "doubled", "data_type": "integer", "generated_kind": "s"},
+        {"column_name": "doubled", "data_type": "integer", "is_generated": True},
     ])
     with pytest.raises(ValueError, match="only contain generated columns"):
         load_table_fixtures_sync(mock_driver, tmp_path, ignore_unknown_columns=True)
@@ -1912,7 +1912,13 @@ def test_catalog_column_metadata_skips_computed_columns_per_dialect() -> None:
     assert col_mysql_auto.is_identity is True
     assert col_mysql_auto.is_generated is False
 
-    row_db2 = {"column_name": "id", "data_type": "integer", "identity_generation": "Y", "is_generated": 1}
+    row_db2 = {
+        "column_name": "id",
+        "data_type": "integer",
+        "is_identity": 1,
+        "identity_generation": "BY DEFAULT",
+        "is_generated": 1,
+    }
     col_db2 = fixture_module._table_column(row_db2)
     assert col_db2.is_identity is True
     assert col_db2.is_generated is False
@@ -1923,7 +1929,7 @@ def test_catalog_column_metadata_skips_computed_columns_per_dialect() -> None:
     assert col_db2_always.identity_always is True
     assert col_db2_always.is_generated is False
 
-    row_tsql = {"column_name": "valid_to", "data_type": "datetime2", "generated_always_type_desc": "AS_ROW_END"}
+    row_tsql = {"column_name": "valid_to", "data_type": "datetime2", "is_generated": 1}
     assert fixture_module._table_column(row_tsql).is_generated is True
 
     row_spanner = {
@@ -1944,7 +1950,8 @@ def test_db2_identity_columns_load_and_export_while_computed_columns_are_skipped
             "column_name": "id",
             "data_type": "integer",
             "is_primary": True,
-            "identity_generation": "Y",
+            "is_identity": 1,
+            "identity_generation": "BY DEFAULT",
             "is_generated": 1,
         },
         {"column_name": "name", "data_type": "varchar", "is_primary": False},
@@ -2068,13 +2075,8 @@ def test_tsql_export_orders_by_sortable_columns_and_skips_computed_and_period_co
     driver.data_dictionary.get_columns.return_value = [
         {"column_name": "id", "data_type": "int", "is_primary": True, "is_identity": 1},
         {"column_name": "data", "data_type": "image", "is_primary": False},
-        {"column_name": "computed", "data_type": "varchar", "is_computed": 1, "is_primary": False},
-        {
-            "column_name": "row_start",
-            "data_type": "datetime2",
-            "generated_always_type_desc": "AS_ROW_START",
-            "is_primary": False,
-        },
+        {"column_name": "computed", "data_type": "varchar", "is_generated": 1, "is_primary": False},
+        {"column_name": "row_start", "data_type": "datetime2", "is_generated": 1, "is_primary": False},
         {"column_name": "tag", "data_type": "nvarchar", "is_primary": False},
     ]
     driver.select.return_value = [
@@ -2627,7 +2629,7 @@ def test_standalone_sequence_extraction_and_resync_across_dialects() -> None:
         "column_name": "id",
         "data_type": "number",
         "column_default": '"APP"."USERS_SEQ".NEXTVAL',
-        "identity_column": "NO",
+        "is_identity": 0,
         "is_primary": True,
     })
     assert col_ora_seq.is_identity is False
@@ -2641,9 +2643,8 @@ def test_standalone_sequence_extraction_and_resync_across_dialects() -> None:
     col_ora_on_null = fixture_module._table_column({
         "column_name": "id",
         "data_type": "number",
-        "identity_column": "YES",
-        "identity_generation": "BY DEFAULT",
-        "default_on_null": "YES",
+        "is_identity": 1,
+        "identity_generation": "BY DEFAULT ON NULL",
         "is_primary": True,
     })
     assert col_ora_on_null.is_identity is True
@@ -2669,7 +2670,7 @@ def test_standalone_sequence_extraction_and_resync_across_dialects() -> None:
         "column_name": "id",
         "data_type": "integer",
         "column_default": 'NEXT VALUE FOR "APP"."INVOICE_SEQ"',
-        "identity_generation": "N",
+        "identity_generation": None,
         "is_primary": True,
     })
     assert col_db2_seq.is_identity is False

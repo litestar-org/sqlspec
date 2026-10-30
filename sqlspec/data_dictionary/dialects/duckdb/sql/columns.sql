@@ -9,6 +9,16 @@ WITH table_ddl AS (
         regexp_replace(sql, '"([^"]|"")*"|''([^'']|'''')*''', '', 'g') AS ddl_unquoted
     FROM duckdb_tables()
     WHERE schema_name = COALESCE(:schema_name, current_schema())
+),
+pk_constraints AS (
+    SELECT
+        database_name,
+        schema_name,
+        table_name,
+        unnest(constraint_column_names) AS column_name
+    FROM duckdb_constraints()
+    WHERE constraint_type = 'PRIMARY KEY'
+      AND schema_name = COALESCE(:schema_name, current_schema())
 )
 SELECT
     c.database_name,
@@ -24,15 +34,7 @@ SELECT
     c.numeric_scale,
     c.comment,
     c.internal,
-    EXISTS (
-        SELECT 1
-        FROM duckdb_constraints() AS k
-        WHERE k.database_name = c.database_name
-          AND k.schema_name = c.schema_name
-          AND k.table_name = c.table_name
-          AND k.constraint_type = 'PRIMARY KEY'
-          AND list_contains(k.constraint_column_names, c.column_name)
-    ) AS is_primary,
+    pk.column_name IS NOT NULL AS is_primary,
     COALESCE(
         contains(
             t.ddl_unquoted,
@@ -61,6 +63,11 @@ LEFT JOIN table_ddl AS t
     ON t.database_name = c.database_name
     AND t.schema_name = c.schema_name
     AND t.table_name = c.table_name
+LEFT JOIN pk_constraints AS pk
+    ON pk.database_name = c.database_name
+    AND pk.schema_name = c.schema_name
+    AND pk.table_name = c.table_name
+    AND pk.column_name = c.column_name
 WHERE c.schema_name = COALESCE(:schema_name, current_schema())
   AND NOT c.internal
 ORDER BY c.table_name, c.column_index;
@@ -77,6 +84,17 @@ WITH table_ddl AS (
     FROM duckdb_tables()
     WHERE schema_name = COALESCE(:schema_name, current_schema())
       AND table_name = :table_name
+),
+pk_constraints AS (
+    SELECT
+        database_name,
+        schema_name,
+        table_name,
+        unnest(constraint_column_names) AS column_name
+    FROM duckdb_constraints()
+    WHERE constraint_type = 'PRIMARY KEY'
+      AND schema_name = COALESCE(:schema_name, current_schema())
+      AND table_name = :table_name
 )
 SELECT
     c.database_name,
@@ -92,15 +110,7 @@ SELECT
     c.numeric_scale,
     c.comment,
     c.internal,
-    EXISTS (
-        SELECT 1
-        FROM duckdb_constraints() AS k
-        WHERE k.database_name = c.database_name
-          AND k.schema_name = c.schema_name
-          AND k.table_name = c.table_name
-          AND k.constraint_type = 'PRIMARY KEY'
-          AND list_contains(k.constraint_column_names, c.column_name)
-    ) AS is_primary,
+    pk.column_name IS NOT NULL AS is_primary,
     COALESCE(
         contains(
             t.ddl_unquoted,
@@ -129,6 +139,11 @@ LEFT JOIN table_ddl AS t
     ON t.database_name = c.database_name
     AND t.schema_name = c.schema_name
     AND t.table_name = c.table_name
+LEFT JOIN pk_constraints AS pk
+    ON pk.database_name = c.database_name
+    AND pk.schema_name = c.schema_name
+    AND pk.table_name = c.table_name
+    AND pk.column_name = c.column_name
 WHERE c.schema_name = COALESCE(:schema_name, current_schema())
   AND c.table_name = :table_name
   AND NOT c.internal

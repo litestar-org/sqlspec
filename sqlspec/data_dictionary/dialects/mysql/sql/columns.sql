@@ -17,7 +17,9 @@ SELECT
     column_key,
     column_key = 'PRI' AS is_primary,
     extra,
+    extra LIKE '%auto_increment%' AS is_identity,
     generation_expression,
+    CASE WHEN generation_expression IS NOT NULL AND generation_expression <> '' THEN 1 ELSE 0 END AS is_generated,
     column_comment
 FROM information_schema.columns
 WHERE table_schema = COALESCE(:schema_name, DATABASE())
@@ -34,7 +36,9 @@ SELECT
     column_key AS `column_key`,
     column_key = 'PRI' AS `is_primary`,
     extra AS `extra`,
-    generation_expression AS `generation_expression`
+    extra LIKE '%auto_increment%' AS `is_identity`,
+    generation_expression AS `generation_expression`,
+    CASE WHEN generation_expression IS NOT NULL AND generation_expression <> '' THEN 1 ELSE 0 END AS `is_generated`
 FROM information_schema.columns
 WHERE table_name = :table_name
   AND table_schema = COALESCE(:schema_name, DATABASE())

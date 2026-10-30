@@ -34,10 +34,10 @@ async def test_columns_report_keys_identity_and_sequences(cockroach_asyncpg_conf
                     column.get("sequence_name"),
                 )
                 for column in columns
-                if column.get("is_hidden") != "YES"
+                if not column.get("is_hidden")
             }
             assert metadata == {
-                "id": (True, "a", 'public."ColumnMetadataItems_id_seq"'),
+                "id": (True, "ALWAYS", 'public."ColumnMetadataItems_id_seq"'),
                 "userName": (False, "", None),
                 "note": (False, "", None),
             }
