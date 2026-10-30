@@ -559,7 +559,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
         metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
         if first_batch is not None:
-            use_binary = bool(self.driver_features.get("enable_pgcopy_binary", True))
+            use_binary = bool(self.driver_features.get("enable_pgcopy_binary", False))
             copy_sql = build_copy_from_command(table, columns, binary=use_binary)
             all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             exc_handler = self.handle_database_exceptions()
@@ -1125,7 +1125,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
         metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
         if first_batch is not None:
-            use_binary = bool(self.driver_features.get("enable_pgcopy_binary", True))
+            use_binary = bool(self.driver_features.get("enable_pgcopy_binary", False))
             copy_sql = build_copy_from_command(table, columns, binary=use_binary)
             all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             exc_handler = self.handle_database_exceptions()

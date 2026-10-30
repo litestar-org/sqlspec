@@ -288,7 +288,7 @@ def test_psycopg_and_cockroach_sync_load_from_arrow_streams_binary_copy() -> Non
         driver = driver_cls(
             connection=cast("Any", conn),
             statement_config=psycopg_statement_config,
-            driver_features={"storage_capabilities": _CAPS},
+            driver_features={"storage_capabilities": _CAPS, "enable_pgcopy_binary": True},
         )
         reader = pa.RecordBatchReader.from_batches(
             schema,
@@ -316,7 +316,7 @@ async def test_psycopg_and_cockroach_async_load_from_arrow_streams_binary_copy()
         driver = driver_cls(
             connection=cast("Any", conn),
             statement_config=psycopg_statement_config,
-            driver_features={"storage_capabilities": _CAPS},
+            driver_features={"storage_capabilities": _CAPS, "enable_pgcopy_binary": True},
         )
         reader = pa.RecordBatchReader.from_batches(
             schema, [pa.RecordBatch.from_pydict({"id": [10, 20], "label": ["x", "y"]}, schema=schema)]
@@ -363,7 +363,7 @@ async def test_asyncpg_and_cockroach_asyncpg_load_from_arrow_streams_binary_copy
         driver = driver_cls(
             connection=cast("Any", conn),
             statement_config=asyncpg_statement_config,
-            driver_features={"storage_capabilities": _CAPS},
+            driver_features={"storage_capabilities": _CAPS, "enable_pgcopy_binary": True},
         )
         batch = pa.RecordBatch.from_arrays(
             [

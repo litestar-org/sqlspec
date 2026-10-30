@@ -393,7 +393,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
         if first_batch is not None:
             all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
-            use_binary = bool(self.driver_features.get("enable_pgcopy_binary", True))
+            use_binary = bool(self.driver_features.get("enable_pgcopy_binary", False))
             if use_binary:
                 async_chunks = self._iter_pgcopy_binary_chunks_async(all_batches, columns=columns, metrics=metrics)
                 await self.connection.copy_to_table(
