@@ -42,67 +42,54 @@ Base configuration protocols, pooled and non-pooled database config classes, lif
 ::: sqlspec.config.SyncDatabaseConfig
     options:
       heading_level: 3
-      members:
-        - provide_connection
-        - provide_session
-        - provide_pool
-        - create_connection
-        - create_pool
-        - close_pool
+      members: false
 
 ::: sqlspec.config.AsyncDatabaseConfig
     options:
       heading_level: 3
-      members:
-        - provide_connection
-        - provide_session
-        - provide_pool
-        - create_connection
-        - create_pool
-        - close_pool
+      members: false
 
 ::: sqlspec.config.NoPoolSyncConfig
     options:
       heading_level: 3
-      members:
-        - provide_connection
-        - provide_session
-        - create_connection
+      members: false
 
 ::: sqlspec.config.NoPoolAsyncConfig
     options:
       heading_level: 3
-      members:
-        - provide_connection
-        - provide_session
-        - create_connection
+      members: false
 
 ## Lifecycle & Migration Settings
 
 ::: sqlspec.config.LifecycleConfig
     options:
       heading_level: 3
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.MigrationConfig
     options:
       heading_level: 3
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.MigrationTemplates
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.PythonTemplateOverride
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.SQLTemplateOverride
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.validate_migration_config_keys
     options:
@@ -110,52 +97,52 @@ Base configuration protocols, pooled and non-pooled database config classes, lif
 
 ## Extension Configuration Schemas
 
+Top-level `extension_config` mapping passed to any database configuration class. [`LitestarConfig`](extensions/litestar.md) and [`ADKConfig`](extensions/adk.md) are documented on their respective extension pages.
+
 ::: sqlspec.config.ExtensionConfigs
     options:
       heading_level: 3
-      members: false
-
-::: sqlspec.config.LitestarConfig
-    options:
-      heading_level: 4
-      members: false
-
-::: sqlspec.config.ADKConfig
-    options:
-      heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.EventsConfig
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.FastAPIConfig
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.StarletteConfig
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.FlaskConfig
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.SanicConfig
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.OpenTelemetryConfig
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.config.PrometheusConfig
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true

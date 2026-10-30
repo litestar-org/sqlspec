@@ -135,6 +135,7 @@ toggle = { icon = "lucide/moon", name = "Switch to light mode" }
 
 [project.plugins.mkdocstrings]
 default_handler = "python"
+custom_templates = "tools/docs/templates"
 
 [project.plugins.mkdocstrings.handlers.python]
 paths = ["."]
@@ -178,7 +179,7 @@ heading_level = 3
 inherited_members = false
 line_length = 80
 members_order = "source"
-merge_init_into_class = true
+merge_init_into_class = false
 modernize_annotations = true
 annotations_path = "brief"
 preload_modules = ["sqlspec"]
@@ -186,6 +187,7 @@ separate_signature = true
 show_bases = true
 show_category_heading = false
 show_if_no_docstring = true
+show_labels = false
 show_object_full_path = false
 show_overloads = false
 show_root_full_path = false

@@ -1,0 +1,5 @@
+{#- Skip individual <h4> attribute blocks on classes when summary/TypedDict renders the Attributes table. -#}
+{% set parent_is_typed_dict = attribute.parent and attribute.parent.is_class and ('TypedDict' in (attribute.parent.bases | map('string') | join(' ')) or 'Params' in attribute.parent.name or 'Features' in attribute.parent.name or (attribute.parent.name.endswith('Config') and not attribute.parent.functions)) %}
+{% if root or not (attribute.parent and attribute.parent.is_class and (config.summary.attributes or parent_is_typed_dict)) %}
+  {% include "_base/attribute.html.jinja" with context %}
+{% endif %}

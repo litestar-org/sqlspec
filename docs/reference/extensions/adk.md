@@ -27,7 +27,7 @@ from sqlspec.extensions.adk import (
 )
 ```
 
-Session, event, long-term memory, and artifact metadata services and base stores for the Google Agent Development Kit (ADK). Adapter-specific ADK store subclasses are documented on each [Database Adapter](../../databases/index.md) page. See the [Google ADK Integration Guide](../../integrations/adk.md) for setup examples.
+Session, event, long-term memory, and artifact metadata services and base stores for the Google Agent Development Kit (ADK). Adapter-specific ADK store subclasses are documented on each [Database Adapter](../adapters/index.md) page. See the [Google ADK Integration Guide](../../integrations/adk.md) for setup examples.
 
 ## ADK Services
 
@@ -37,8 +37,6 @@ Session, event, long-term memory, and artifact metadata services and base stores
       members:
         - create_session
         - get_session
-        - list_sessions
-        - delete_session
         - append_event
 
 ::: sqlspec.extensions.adk.memory.SQLSpecMemoryService
@@ -93,7 +91,8 @@ Session, event, long-term memory, and artifact metadata services and base stores
 ::: sqlspec.config.ADKConfig
     options:
       heading_level: 4
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.extensions.adk._types.StoredSession
     options:

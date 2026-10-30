@@ -38,7 +38,8 @@ Litestar plugin, ASGI transaction and correlation middlewares, server-side sessi
 ::: sqlspec.config.LitestarConfig
     options:
       heading_level: 3
-      members: false
+      separate_signature: false
+      show_signature_annotations: true
 
 ## Middleware, Stores & Channels
 
