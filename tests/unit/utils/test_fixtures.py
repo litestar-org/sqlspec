@@ -1824,7 +1824,7 @@ def test_sequence_resync_statements_cross_dialect() -> None:
         "users", [col_seq], dialect_name="duckdb", family="duckdb"
     )
     assert len(stmts_duckdb) == 1
-    assert 'setval(:sequence_name, coalesce(max("id"), 1)' in stmts_duckdb[0][0]
+    assert "count(nextval(" in stmts_duckdb[0][0]
     assert stmts_duckdb[0][1] == {"sequence_name": "users_id_seq"}
 
     stmts_tsql = fixture_module._sequence_resync_statements("users", [col_ident], dialect_name="tsql", family="tsql")

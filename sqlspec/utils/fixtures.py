@@ -1898,7 +1898,7 @@ def _sequence_resync_statements(
                 statements.append((statement, {"table_name": quoted_table, "column_name": column.name}))
         return statements
 
-    if dialect_name in {"cockroach", "cockroachdb", "duckdb"} or family in {"cockroach", "cockroachdb", "duckdb"}:
+    if dialect_name in {"cockroach", "cockroachdb"} or family in {"cockroach", "cockroachdb"}:
         for column in table_columns:
             if column.sequence_name is None:
                 continue
@@ -1906,6 +1906,20 @@ def _sequence_resync_statements(
             statement = (
                 f"SELECT setval(:sequence_name, coalesce(max({quoted_column}), 1), "
                 f"max({quoted_column}) IS NOT NULL) FROM {_quoted_table_name(table)}"
+            )
+            statements.append((statement, {"sequence_name": column.sequence_name}))
+        return statements
+
+    if dialect_name == "duckdb" or family == "duckdb":
+        for column in table_columns:
+            if column.sequence_name is None:
+                continue
+            quoted_column = _quoted_identifier_sql(column.name)
+            statement = (
+                f"SELECT count(nextval('{column.sequence_name}')) FROM range("
+                f"(SELECT coalesce(last_value, start_value - increment_by) FROM duckdb_sequences() "
+                f"WHERE sequence_name = :sequence_name), "
+                f"(SELECT coalesce(max({quoted_column}), 0) FROM {_quoted_table_name(table)}))"
             )
             statements.append((statement, {"sequence_name": column.sequence_name}))
         return statements
