@@ -12,8 +12,10 @@ from typing import TYPE_CHECKING, Any, Literal, cast, final
 from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcNativeError, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
+    cleanup_duckdb_profile_path,
     collect_rows,
     configure_adbc_duckdb_profiling,
+    create_duckdb_profile_path,
     create_mapped_exception,
     detect_dialect,
     driver_profile,
@@ -27,6 +29,7 @@ from sqlspec.adapters.adbc.core import (
     prepare_batch_with_casts,
     prepare_postgres_parameters,
     prepare_postgres_uuid_bindings,
+    read_duckdb_profile_json,
     resolve_column_names,
     resolve_dialect_name,
     resolve_many_rowcount,
@@ -34,11 +37,6 @@ from sqlspec.adapters.adbc.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-from sqlspec.adapters.duckdb.core import (
-    cleanup_duckdb_profile_path,
-    create_duckdb_profile_path,
-    read_duckdb_profile_json,
-)
 from sqlspec.core import (
     SQL,
     StatementConfig,

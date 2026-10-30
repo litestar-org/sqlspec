@@ -1,7 +1,9 @@
 """Regression tests for import-time optional dependency leakage."""
 
+import ast
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -96,3 +98,72 @@ def test_import_sqlspec_does_not_import_heavy_optional_deps_in_process() -> None
 
     leaked = [name for name in FORBIDDEN if name in sys.modules]
     assert not leaked, f"import sqlspec eagerly imported: {leaked}"
+
+
+def test_adbc_import_does_not_require_or_load_duckdb() -> None:
+    """Importing ADBC modules must not require or import DuckDB."""
+    script = """
+import importlib.abc
+import sys
+
+class BlockDuckDB(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "duckdb" or fullname.startswith("duckdb."):
+            raise ModuleNotFoundError("duckdb blocked", name=fullname)
+
+sys.meta_path.insert(0, BlockDuckDB())
+
+import sqlspec.adapters.adbc
+import sqlspec.adapters.adbc.config
+import sqlspec.adapters.adbc.driver
+import sqlspec.adapters.adbc.data_dictionary
+from sqlspec.adapters.adbc import AdbcConfig
+
+config = AdbcConfig()
+assert config is not None
+assert "duckdb" not in sys.modules
+assert "sqlspec.adapters.duckdb" not in sys.modules
+assert "sqlspec.adapters.sqlite" not in sys.modules
+"""
+    subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+
+
+def test_no_unintended_cross_adapter_imports() -> None:
+    """Ensure adapter implementations do not import from other adapter packages."""
+    adapters_root = Path("sqlspec/adapters")
+    assert adapters_root.is_dir()
+
+    allowed_cross_imports: dict[str, set[str]] = {
+        "aiomysql": {"mysql_common"},
+        "asyncmy": {"mysql_common"},
+        "cockroach_asyncpg": {"asyncpg"},
+        "cockroach_psycopg": {"psycopg"},
+        "mysqlconnector": {"mysql_common"},
+        "pymysql": {"mysql_common"},
+    }
+
+    violations: list[str] = []
+    for adapter_dir in sorted(adapters_root.iterdir()):
+        if not adapter_dir.is_dir() or adapter_dir.name.startswith((".", "_")):
+            continue
+        adapter_name = adapter_dir.name
+        allowed = allowed_cross_imports.get(adapter_name, set())
+
+        for py_file in sorted(adapter_dir.rglob("*.py")):
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            for node in ast.walk(tree):
+                imported_module: str | None = None
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    if node.module.startswith("sqlspec.adapters."):
+                        imported_module = node.module.split(".")[2]
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith("sqlspec.adapters."):
+                            imported_module = alias.name.split(".")[2]
+
+                if imported_module and imported_module != adapter_name and imported_module not in allowed:
+                    violations.append(
+                        f"{py_file}:{getattr(node, 'lineno', '?')}: {adapter_name} imports sqlspec.adapters.{imported_module}"
+                    )
+
+    assert not violations, "Found cross-adapter imports:\n" + "\n".join(violations)

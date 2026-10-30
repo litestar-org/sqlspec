@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.adbc._typing import AdbcNotSupportedError, AdbcOperationalError
-from sqlspec.adapters.sqlite.core import format_identifier
+from sqlspec.adapters.adbc.core import format_identifier
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     ConstraintMetadata,

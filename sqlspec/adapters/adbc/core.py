@@ -4,8 +4,10 @@ import contextlib
 import datetime as dt
 import decimal
 import re
+import tempfile
 from collections.abc import Sized
 from functools import lru_cache, partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
@@ -44,14 +46,14 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
 from sqlspec.utils.module_loader import import_optional, import_string
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
-from sqlspec.utils.uuids import uuid_from_string
+from sqlspec.utils.uuids import uuid4, uuid_from_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
-    from pathlib import Path
 
     from sqlspec.core import SQL
     from sqlspec.utils.dispatch import TypeDispatcher
@@ -60,8 +62,10 @@ __all__ = (
     "apply_driver_features",
     "build_connection_config",
     "build_profile",
+    "cleanup_duckdb_profile_path",
     "collect_rows",
     "configure_adbc_duckdb_profiling",
+    "create_duckdb_profile_path",
     "create_mapped_exception",
     "detect_dialect",
     "detect_postgres_extensions",
@@ -70,6 +74,7 @@ __all__ = (
     "driver_kind_from_uri",
     "driver_profile",
     "enforce_strict_type_coercion",
+    "format_identifier",
     "get_statement_config",
     "handle_postgres_rollback",
     "is_postgres_dialect",
@@ -83,6 +88,7 @@ __all__ = (
     "prepare_parameters_with_casts",
     "prepare_postgres_parameters",
     "prepare_postgres_uuid_bindings",
+    "read_duckdb_profile_json",
     "resolve_column_names",
     "resolve_dialect_from_config",
     "resolve_dialect_from_driver_path",
@@ -994,7 +1000,12 @@ def apply_driver_features(
     return statement_config, processed_features
 
 
-def configure_adbc_duckdb_profiling(connection: Any, profile_path: "Path") -> None:
+def create_duckdb_profile_path() -> Path:
+    """Allocate a unique temporary file path for DuckDB JSON statement profiling."""
+    return Path(tempfile.gettempdir()) / f"sqlspec_duckdb_profile_{uuid4().hex}.json"
+
+
+def configure_adbc_duckdb_profiling(connection: Any, profile_path: Path) -> None:
     """Enable DuckDB JSON statement profiling on an ADBC DuckDB connection.
 
     Args:
@@ -1011,6 +1022,60 @@ def configure_adbc_duckdb_profiling(connection: Any, profile_path: "Path") -> No
     finally:
         with contextlib.suppress(Exception):
             cursor.close()
+
+
+def cleanup_duckdb_profile_path(profile_path: Path | str | None) -> None:
+    """Remove a temporary DuckDB JSON statement profile file if it exists."""
+    if not profile_path:
+        return
+    with contextlib.suppress(OSError):
+        Path(profile_path).unlink(missing_ok=True)
+
+
+def read_duckdb_profile_json(profile_path: Path | str | None, executed_sql: str | None = None) -> dict[str, Any] | None:
+    """Read and validate the DuckDB JSON profile file written for executed_sql."""
+    if not profile_path:
+        return None
+    path_obj = Path(profile_path)
+    if not path_obj.exists():
+        return None
+    try:
+        raw_bytes = path_obj.read_bytes()
+    except OSError:
+        return None
+    if not raw_bytes:
+        return None
+    try:
+        parsed: Any = from_json(raw_bytes)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    query_name = parsed.get("query_name")
+    if query_name is None and isinstance(parsed.get("query"), dict):
+        query_name = parsed["query"].get("sql")
+    if isinstance(query_name, str) and executed_sql:
+        normalized_query = query_name.strip().rstrip(";").strip()
+        normalized_sql = executed_sql.strip().rstrip(";").strip()
+        if normalized_sql and normalized_query != normalized_sql:
+            return None
+    if "cpu_time" not in parsed and isinstance(parsed.get("query"), dict) and "cpu_time" in parsed["query"]:
+        parsed["cpu_time"] = parsed["query"]["cpu_time"]
+    if "children" not in parsed and isinstance(parsed.get("operator"), list) and parsed["operator"]:
+        root_op = parsed["operator"][0]
+        if isinstance(root_op, dict) and "children" in root_op:
+            parsed["children"] = root_op["children"]
+    return cast("dict[str, Any]", parsed)
+
+
+def format_identifier(identifier: str) -> str:
+    """Format and quote a potentially qualified SQL identifier for ADBC metadata queries."""
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    parts = split_qualified_identifier(cleaned, quote_chars='"')
+    return ".".join(quote_identifier(part) for part in parts)
 
 
 def normalize_column_names(
