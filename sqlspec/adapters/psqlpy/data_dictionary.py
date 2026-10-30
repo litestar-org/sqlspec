@@ -48,6 +48,7 @@ _POSTGRES_METADATA_DOMAINS: tuple[str, ...] = (
     "views",
     "materialized_views",
     "sequences",
+    "types",
     "routines",
     "triggers",
     "comments",
@@ -144,32 +145,13 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
             driver, "dependencies", "by_schema", schema_name=self.resolve_schema(schema), object_name=resolved_object
         )
 
-    async def get_ddl(
-        self,
-        driver: "PsqlpyDriver",
-        object_name: str,
-        schema: str | None = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Get object DDL where PostgreSQL exposes native definition helpers."""
-        _ = include_dependencies, prefer_native, redact
-        schema_name = self.resolve_schema(schema)
-        resolved_object = self.resolve_identifier(object_name)
-        result = await self._select_domain(
-            driver, "ddl", "by_object", schema_name=schema_name, object_name=resolved_object, object_type=object_type
-        )
-        return _ddl_result_from_rows(
-            dialect=type(self).dialect,
-            object_name=resolved_object,
-            object_type=object_type,
-            schema=schema_name,
-            rows=result.items,
-            warnings=result.warnings,
-        )
+    async def get_sequences(self, driver: "PsqlpyDriver", schema: str | None = None) -> MetadataResult:
+        """Get sequence metadata."""
+        return await self._select_domain(driver, "sequences", "by_schema", schema_name=self.resolve_schema(schema))
+
+    async def get_types(self, driver: "PsqlpyDriver", schema: str | None = None) -> MetadataResult:
+        """Get user-defined enum type metadata."""
+        return await self._select_domain(driver, "types", "by_schema", schema_name=self.resolve_schema(schema))
 
     async def get_system_metadata(
         self, driver: "PsqlpyDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
@@ -295,20 +277,41 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
     async def get_foreign_keys(
         self, driver: "PsqlpyDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
-        """Get foreign key metadata."""
+        """Get foreign key metadata, including ON DELETE / ON UPDATE actions."""
         schema_name = self.resolve_schema(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
-            return await driver.select(
-                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+            rows = await driver.select(self.get_query("foreign_keys", "by_schema"), schema_name=schema_name)
+        else:
+            table_name = self.resolve_identifier(table)
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
+            rows = await driver.select(
+                self.get_query("foreign_keys", "by_table"), schema_name=schema_name, table_name=table_name
             )
-        table_name = self.resolve_identifier(table)
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
-        return await driver.select(
-            self.get_query("foreign_keys", "by_table"),
-            schema_name=schema_name,
-            table_name=table_name,
-            schema_type=ForeignKeyMetadata,
+        return [ForeignKeyMetadata.from_row(row) for row in rows]
+
+    async def _get_native_object_ddl(
+        self,
+        driver: "PsqlpyDriver",
+        object_name: str,
+        *,
+        schema: str | None,
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> DDLResult | None:
+        """Return native PostgreSQL DDL for one object from the ``ddl`` query pack."""
+        _ = include_dependencies, redact
+        result = await self._select_domain(
+            driver, "ddl", "by_object", schema_name=schema, object_name=object_name, object_type=object_type
+        )
+        return _ddl_result_from_rows(
+            dialect=type(self).dialect,
+            object_name=object_name,
+            object_type=object_type,
+            schema=schema,
+            rows=result.items,
+            warnings=result.warnings,
         )
 
     async def _select_domain(

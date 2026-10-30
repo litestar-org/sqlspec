@@ -214,24 +214,22 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         except SQLFileNotFoundError:
             return []
 
-    def get_ddl(
+    def _get_native_object_ddl(
         self,
         driver: "ArrowOdbcDriver",
         object_name: str,
-        schema: str | None = None,
         *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
         """Fail closed because arrow-odbc does not expose lossless DDL metadata."""
-        _ = driver, include_dependencies, prefer_native, redact
-        schema_name = self.resolve_schema(schema)
+        _ = driver, include_dependencies, redact
         identity = ObjectIdentity(
             name=object_name,
             object_type=object_type,
-            schema=schema_name,
+            schema=schema,
             dialect=self._dialect,
             source=MetadataSource.DRIVER_METADATA,
         )

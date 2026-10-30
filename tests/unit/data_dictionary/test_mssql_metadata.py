@@ -138,10 +138,13 @@ def test_mssql_generated_table_ddl_reports_generated_fidelity() -> None:
     assert result.source == MetadataSource.GENERATED
     assert result.identity.schema == "dbo"
     assert result.identity.name == "accounts"
-    assert result.ddl is not None
-    assert "CREATE TABLE [dbo].[accounts]" in result.ddl
-    assert "[id] int IDENTITY(1,1) NOT NULL" in result.ddl
-    assert "CONSTRAINT [pk_accounts] PRIMARY KEY ([id])" in result.ddl
+    assert result.ddl == (
+        "CREATE TABLE [dbo].[accounts] (\n"
+        "  [id] INTEGER NOT NULL IDENTITY(1, 1),\n"
+        "  [name] NVARCHAR(100) NOT NULL DEFAULT 'unknown',\n"
+        "  CONSTRAINT [pk_accounts] PRIMARY KEY ([id])\n"
+        ");"
+    )
     assert "reconstructed from sys catalog views" in " ".join(result.warnings)
 
 

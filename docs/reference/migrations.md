@@ -18,10 +18,11 @@ from sqlspec.migrations import (
     create_migration_runner,
     ensure_schema_async,
     ensure_schema_sync,
+    fold_migration_ddl,
 )
 ```
 
-Programmatic schema migration commands, SQL and Python migration loaders, version table trackers, declarative schema targets, and migration squashing. See the [Migrations Guide](../learn/migrations.md) for end-to-end workflows.
+Programmatic schema migration commands, SQL and Python migration loaders, version table trackers, declarative schema targets, and canonical DDL or concatenation squashing. See the [Migrations Guide](../learn/migrations.md) for end-to-end workflows.
 
 ## Migration Commands
 
@@ -31,10 +32,14 @@ Programmatic schema migration commands, SQL and Python migration loaders, versio
       members:
         - init
         - current
+        - revision
         - upgrade
         - downgrade
+        - verify
+        - dump_schema
         - stamp
         - squash
+        - fix
 
 ::: sqlspec.migrations.commands.AsyncMigrationCommands
     options:
@@ -96,6 +101,10 @@ Programmatic schema migration commands, SQL and Python migration loaders, versio
       heading_level: 4
       members: false
 
+::: sqlspec.migrations.schema.ensure_schema_sync
+    options:
+      heading_level: 4
+
 ::: sqlspec.migrations.schema.ensure_schema_async
     options:
       heading_level: 4
@@ -104,3 +113,12 @@ Programmatic schema migration commands, SQL and Python migration loaders, versio
     options:
       heading_level: 4
       members: false
+
+::: sqlspec.migrations.squash.SquashPlan
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.migrations.squash.fold_migration_ddl
+    options:
+      heading_level: 4

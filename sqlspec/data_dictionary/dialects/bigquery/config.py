@@ -16,6 +16,8 @@ __all__ = (
 
 
 BIGQUERY_VERSION_PATTERN = re.compile(r".*")
+_ASCII_CONTROL_MAX = 32
+_ASCII_DEL = 127
 
 BIGQUERY_FEATURE_VERSIONS: "FeatureVersions" = {}
 
@@ -79,11 +81,12 @@ def format_bigquery_information_schema_tables(schema: "str | None") -> "tuple[st
     Returns:
         TABLES, KEY_COLUMN_USAGE, and REFERENTIAL_CONSTRAINTS identifiers.
     """
-    if schema:
+    cleaned = _clean_bigquery_schema_qualifier(schema)
+    if cleaned:
         return (
-            f"`{schema}.INFORMATION_SCHEMA.TABLES`",
-            f"`{schema}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`",
-            f"`{schema}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`",
+            f"`{cleaned}.INFORMATION_SCHEMA.TABLES`",
+            f"`{cleaned}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`",
+            f"`{cleaned}.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`",
         )
     return (
         "INFORMATION_SCHEMA.TABLES",
@@ -94,6 +97,30 @@ def format_bigquery_information_schema_tables(schema: "str | None") -> "tuple[st
 
 def format_bigquery_schema_prefix(schema: "str | None") -> str:
     """Format a BigQuery schema prefix for INFORMATION_SCHEMA queries."""
-    if schema:
-        return f"`{schema}`."
+    cleaned = _clean_bigquery_schema_qualifier(schema)
+    if cleaned:
+        return f"`{cleaned}`."
     return ""
+
+
+def _clean_bigquery_schema_qualifier(schema: "str | None") -> "str | None":
+    """Validate and clean a BigQuery dataset or project.dataset qualifier for backtick interpolation."""
+    if schema is None:
+        return None
+    stripped = schema.strip()
+    if stripped.startswith("`") and stripped.endswith("`"):
+        stripped = stripped[1:-1]
+    if not stripped:
+        return None
+    if (
+        "`" in stripped
+        or "\x00" in stripped
+        or any(ord(ch) < _ASCII_CONTROL_MAX or ord(ch) == _ASCII_DEL for ch in stripped)
+    ):
+        msg = f"Invalid BigQuery schema qualifier: {schema!r}"
+        raise ValueError(msg)
+    parts = stripped.split(".")
+    if len(parts) not in {1, 2} or any(not part or " " in part or ";" in part for part in parts):
+        msg = f"Invalid BigQuery schema qualifier: {schema!r}"
+        raise ValueError(msg)
+    return stripped

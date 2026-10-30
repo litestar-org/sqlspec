@@ -282,38 +282,6 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         requested_domains = ORACLE_SYSTEM_METADATA_DOMAINS if domains is None else tuple(domains)
         return tuple(_oracle_system_metadata_capability(domain) for domain in requested_domains)
 
-    def get_ddl(
-        self,
-        driver: "OracleSyncDriver",
-        object_name: str,
-        schema: "str | None" = None,
-        *,
-        object_type: str = "TABLE",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Get native Oracle DDL using DBMS_METADATA."""
-
-        _ = include_dependencies, prefer_native, redact
-        owner = self.resolve_schema(schema)
-        normalized_name = self.resolve_identifier(object_name)
-        normalized_type = object_type.upper()
-        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "by_object")
-        if not query.is_supported or query.sql is None:
-            return _oracle_ddl_metadata_result(
-                object_type=normalized_type, object_name=normalized_name, owner=owner, ddl_text=None
-            )
-        ddl_value = driver.select_value(
-            query.sql, object_type=normalized_type, object_name=normalized_name, owner=owner
-        )
-        return _oracle_ddl_metadata_result(
-            object_type=normalized_type,
-            object_name=normalized_name,
-            owner=owner,
-            ddl_text=_coerce_oracle_ddl_text(ddl_value),
-        )
-
     def get_system_metadata(
         self, driver: "OracleSyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
     ) -> SystemMetadataResult:
@@ -585,6 +553,32 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
                 return []
             raise
 
+    def _get_native_object_ddl(
+        self,
+        driver: "OracleSyncDriver",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return native Oracle DDL using DBMS_METADATA."""
+        _ = include_dependencies, redact
+        normalized_type = object_type.upper()
+        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "by_object")
+        if not query.is_supported or query.sql is None:
+            return _oracle_ddl_metadata_result(
+                object_type=normalized_type, object_name=object_name, owner=schema, ddl_text=None
+            )
+        ddl_value = driver.select_value(query.sql, object_type=normalized_type, object_name=object_name, owner=schema)
+        return _oracle_ddl_metadata_result(
+            object_type=normalized_type,
+            object_name=object_name,
+            owner=schema,
+            ddl_text=_coerce_oracle_ddl_text(ddl_value),
+        )
+
     def _build_version_info(
         self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
     ) -> "OracleVersionInfo | None":
@@ -698,38 +692,6 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         _ = driver
         requested_domains = ORACLE_SYSTEM_METADATA_DOMAINS if domains is None else tuple(domains)
         return tuple(_oracle_system_metadata_capability(domain) for domain in requested_domains)
-
-    async def get_ddl(
-        self,
-        driver: "OracleAsyncDriver",
-        object_name: str,
-        schema: "str | None" = None,
-        *,
-        object_type: str = "TABLE",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Get native Oracle DDL using DBMS_METADATA."""
-
-        _ = include_dependencies, prefer_native, redact
-        owner = self.resolve_schema(schema)
-        normalized_name = self.resolve_identifier(object_name)
-        normalized_type = object_type.upper()
-        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "by_object")
-        if not query.is_supported or query.sql is None:
-            return _oracle_ddl_metadata_result(
-                object_type=normalized_type, object_name=normalized_name, owner=owner, ddl_text=None
-            )
-        ddl_value = await driver.select_value(
-            query.sql, object_type=normalized_type, object_name=normalized_name, owner=owner
-        )
-        return _oracle_ddl_metadata_result(
-            object_type=normalized_type,
-            object_name=normalized_name,
-            owner=owner,
-            ddl_text=_coerce_oracle_ddl_text(ddl_value),
-        )
 
     async def get_system_metadata(
         self, driver: "OracleAsyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
@@ -1009,6 +971,34 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             if _is_missing_or_inaccessible_oracle_object(error):
                 return []
             raise
+
+    async def _get_native_object_ddl(
+        self,
+        driver: "OracleAsyncDriver",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return native Oracle DDL using DBMS_METADATA."""
+        _ = include_dependencies, redact
+        normalized_type = object_type.upper()
+        query = get_data_dictionary_loader().get_domain_query("oracle", "ddl", "by_object")
+        if not query.is_supported or query.sql is None:
+            return _oracle_ddl_metadata_result(
+                object_type=normalized_type, object_name=object_name, owner=schema, ddl_text=None
+            )
+        ddl_value = await driver.select_value(
+            query.sql, object_type=normalized_type, object_name=object_name, owner=schema
+        )
+        return _oracle_ddl_metadata_result(
+            object_type=normalized_type,
+            object_name=object_name,
+            owner=schema,
+            ddl_text=_coerce_oracle_ddl_text(ddl_value),
+        )
 
     def _build_version_info(
         self, version_value: "str | None", compatible: "str | None", is_autonomous: bool

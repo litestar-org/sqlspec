@@ -6,7 +6,16 @@ SELECT
     kc.name AS constraint_name,
     kc.type_desc AS constraint_type,
     CAST(kc.is_system_named AS BIT) AS is_system_named,
-    NULL AS column_name,
+    STUFF((
+        SELECT ',' + c2.name
+        FROM sys.index_columns AS ic2
+        INNER JOIN sys.columns AS c2 ON ic2.object_id = c2.object_id AND ic2.column_id = c2.column_id
+        WHERE ic2.object_id = kc.parent_object_id
+          AND ic2.index_id = kc.unique_index_id
+          AND ic2.is_included_column = 0
+        ORDER BY ic2.key_ordinal
+        FOR XML PATH(''), TYPE
+    ).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS column_name,
     NULL AS definition
 FROM sys.key_constraints AS kc
 INNER JOIN sys.tables AS t ON kc.parent_object_id = t.object_id
@@ -49,7 +58,16 @@ SELECT
     kc.name AS constraint_name,
     kc.type_desc AS constraint_type,
     CAST(kc.is_system_named AS BIT) AS is_system_named,
-    NULL AS column_name,
+    STUFF((
+        SELECT ',' + c2.name
+        FROM sys.index_columns AS ic2
+        INNER JOIN sys.columns AS c2 ON ic2.object_id = c2.object_id AND ic2.column_id = c2.column_id
+        WHERE ic2.object_id = kc.parent_object_id
+          AND ic2.index_id = kc.unique_index_id
+          AND ic2.is_included_column = 0
+        ORDER BY ic2.key_ordinal
+        FOR XML PATH(''), TYPE
+    ).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS column_name,
     NULL AS definition
 FROM sys.key_constraints AS kc
 INNER JOIN sys.tables AS t ON kc.parent_object_id = t.object_id

@@ -29,8 +29,10 @@ from sqlspec.data_dictionary._registry import (
     register_dialect,
 )
 from sqlspec.data_dictionary._types import (
+    DDL_PARENT_TABLE_CONTEXT_KEY,
     ColumnDetails,
     ColumnMetadata,
+    ColumnProfileMetadata,
     CommentMetadata,
     ConstraintMetadata,
     DDLResult,
@@ -73,9 +75,11 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary._loader import DataDictionaryLoader, get_data_dictionary_loader
 
 __all__ = (
+    "DDL_PARENT_TABLE_CONTEXT_KEY",
     "DEFAULT_SYSTEM_METADATA_DOMAINS",
     "ColumnDetails",
     "ColumnMetadata",
+    "ColumnProfileMetadata",
     "CommentMetadata",
     "ConstraintMetadata",
     "DDLResult",

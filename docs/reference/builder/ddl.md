@@ -10,6 +10,7 @@ from sqlspec.builder import (
     CreateIndex,
     CreateMaterializedView,
     CreateSchema,
+    CreateSequence,
     CreateTable,
     CreateTableAsSelect,
     CreateView,
@@ -17,17 +18,19 @@ from sqlspec.builder import (
     DropIndex,
     DropMaterializedView,
     DropSchema,
+    DropSequence,
     DropTable,
     DropView,
     RenameTable,
     Truncate,
+    compile_table_ddl_results,
     create_temporal_table,
 )
 ```
 
-Schema, table, column, constraint, index, view, and materialized view DDL builders.
+Schema, sequence, table, column, constraint, index, view, materialized view, and metadata-to-DDL builders.
 
-## Table & Schema DDL
+## Table, Sequence & Schema DDL
 
 ::: sqlspec.builder._ddl.DDLBuilder
     options:
@@ -45,6 +48,9 @@ Schema, table, column, constraint, index, view, and materialized view DDL builde
         - check_constraint
         - in_schema
         - partition_by
+        - from_metadata
+        - from_arrow_schema
+        - from_records
 
 ::: sqlspec.builder._ddl.CreateTableAsSelect
     options:
@@ -86,6 +92,20 @@ Schema, table, column, constraint, index, view, and materialized view DDL builde
       heading_level: 4
       members: false
 
+::: sqlspec.builder._ddl.CreateSequence
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.builder._ddl.DropSequence
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.builder._ddl.compile_table_ddl_results
+    options:
+      heading_level: 4
+
 ## Columns, Constraints & Comments
 
 ::: sqlspec.builder._ddl.ColumnDefinition
@@ -117,7 +137,13 @@ Schema, table, column, constraint, index, view, and materialized view DDL builde
 ::: sqlspec.builder._ddl.CreateIndex
     options:
       heading_level: 4
-      members: false
+      members:
+        - on_table
+        - columns
+        - include
+        - unique
+        - where
+        - from_metadata
 
 ::: sqlspec.builder._ddl.DropIndex
     options:

@@ -1,3 +1,5 @@
+"""Request state helpers for the Starlette SQLSpec extension."""
+
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:

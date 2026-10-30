@@ -932,6 +932,10 @@ class SyncDataDictionaryProtocol(Protocol):
         self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
     ) -> "MetadataResult": ...
 
+    def get_sequences(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
+    def get_types(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
     def get_ddl(
         self,
         driver: Any,
@@ -942,6 +946,7 @@ class SyncDataDictionaryProtocol(Protocol):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult": ...
 
     def get_object_ddl(
@@ -954,6 +959,7 @@ class SyncDataDictionaryProtocol(Protocol):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult": ...
 
     def get_schema_ddl(
@@ -963,9 +969,12 @@ class SyncDataDictionaryProtocol(Protocol):
         *,
         include_domains: "Sequence[str] | None" = None,
         exclude_domains: "Sequence[str] | None" = None,
+        exclude_tables: "Sequence[str] | None" = (),
+        direction: "Literal['create', 'drop']" = "create",
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "MetadataResult": ...
 
     def get_system_metadata_capabilities(
@@ -1031,6 +1040,10 @@ class AsyncDataDictionaryProtocol(Protocol):
         self, driver: Any, object_name: "str | None" = None, schema: "str | None" = None
     ) -> "MetadataResult": ...
 
+    async def get_sequences(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
+    async def get_types(self, driver: Any, schema: "str | None" = None) -> "MetadataResult": ...
+
     async def get_ddl(
         self,
         driver: Any,
@@ -1041,6 +1054,7 @@ class AsyncDataDictionaryProtocol(Protocol):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult": ...
 
     async def get_object_ddl(
@@ -1053,6 +1067,7 @@ class AsyncDataDictionaryProtocol(Protocol):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult": ...
 
     async def get_schema_ddl(
@@ -1062,9 +1077,12 @@ class AsyncDataDictionaryProtocol(Protocol):
         *,
         include_domains: "Sequence[str] | None" = None,
         exclude_domains: "Sequence[str] | None" = None,
+        exclude_tables: "Sequence[str] | None" = (),
+        direction: "Literal['create', 'drop']" = "create",
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "MetadataResult": ...
 
     async def get_system_metadata_capabilities(

@@ -68,4 +68,9 @@ ORDER BY ix.seqno;
 
 -- name: index_columns_by_index
 -- dialect: sqlite
-PRAGMA index_info({index_name});
+SELECT
+    seqno,
+    cid,
+    name
+FROM pragma_index_info(:index_name, COALESCE(:schema_name, 'main'))
+ORDER BY seqno;

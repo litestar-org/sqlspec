@@ -1,3 +1,5 @@
+"""Request context state utilities for the Sanic SQLSpec extension."""
+
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import ImproperConfigurationError

@@ -33,8 +33,12 @@ Entry-point `sql` factory (`SQLFactory`), base `QueryBuilder` class, `Explain` b
         - create_table
         - create_view
         - create_index
+        - create_schema
+        - create_sequence
         - alter_table
         - drop_table
+        - drop_schema
+        - drop_sequence
         - truncate
         - raw
         - column

@@ -1,6 +1,6 @@
 # MySQL and MariaDB
 
-SQLSpec supports four MySQL and MariaDB adapters sharing unified error translation (`ER_DUP_ENTRY`, `ER_LOCK_DEADLOCK`, `ER_NO_REFERENCED_ROW_2`), catalog introspection, and bulk `LOAD DATA LOCAL INFILE` Arrow ingestion: `asyncmy`, `pymysql`, `aiomysql`, and `mysqlconnector`.
+SQLSpec provides MySQL and MariaDB adapters sharing unified error translation (`ER_DUP_ENTRY`, `ER_LOCK_DEADLOCK`, `ER_NO_REFERENCED_ROW_2`), catalog introspection, and bulk `LOAD DATA LOCAL INFILE` Arrow ingestion: `asyncmy`, `pymysql`, `aiomysql`, and `mysqlconnector`.
 
 ## Install and When to Choose
 
@@ -95,8 +95,8 @@ See [AsyncMy](/reference/adapters/asyncmy/), [PyMySQL](/reference/adapters/pymys
 
 ## Type Mapping and Dialect Notes
 
-- **Placeholder Syntax**: Write `:named` or `?` parameters in SQLSpec; all four MySQL adapters compile placeholders to `%s` automatically while preserving literal `%` signs in `LIKE '100%'` expressions.
+- **Placeholder Syntax**: Write `:named` or `?` parameters in SQLSpec; all MySQL adapters compile placeholders to `%s` automatically while preserving literal `%` signs in `LIKE '100%'` expressions.
 - **`utf8mb4` Collation**: Always use `utf8mb4` (default in MySQL 8+ and configured automatically where supported) so 4-byte UTF-8 characters and emojis never truncate under legacy 3-byte `utf8`.
 - **Implicit DDL Commits**: MySQL and MariaDB issue an implicit `COMMIT` before and after `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`, and `TRUNCATE TABLE`. Keep schema migrations separate from transactional application tests that rely on rollback isolation.
 - **`RETURNING` and Generated Keys**: MariaDB 10.5+ supports `INSERT ... RETURNING` and `DELETE ... RETURNING` directly via `session.select(...)`. Standard MySQL does not support `RETURNING`, but SQLSpec handles this automatically: `result = await session.execute("INSERT ...")` captures the generated key into `result.last_inserted_id` and row count into `result.rows_affected` on the returned `SQLResult`.
-- **`SHOW` and `DESCRIBE` Queries**: All four adapters classify `SHOW ...`, `DESCRIBE ...`, and `EXPLAIN ...` as row-returning statements automatically in `session.select(...)`.
+- **`SHOW` and `DESCRIBE` Queries**: All MySQL adapters classify `SHOW ...`, `DESCRIBE ...`, and `EXPLAIN ...` as row-returning statements automatically in `session.select(...)`.

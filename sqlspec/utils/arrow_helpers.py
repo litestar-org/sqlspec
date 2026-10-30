@@ -12,7 +12,8 @@ from collections.abc import Callable, Iterable, Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.exceptions import ImproperConfigurationError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
 from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
@@ -20,6 +21,7 @@ from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult
+    from sqlspec.data_dictionary._types import DialectConfig
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable, PandasDataFrame, PolarsDataFrame
 
 __all__ = (
@@ -42,9 +44,71 @@ __all__ = (
     "convert_dict_to_arrow_with_schema",
     "ensure_arrow_table",
     "records_to_arrow_table",
+    "sql_type_for_category",
+    "sql_type_from_arrow_type",
 )
 _ARROW_TABLE_COERCER: "TypeDispatcher[Any] | None" = None
 _ARROW_SCHEMA_DECISION_CACHE_SIZE = 512
+_CONFIG_CATEGORY_DEFAULTS: "dict[str, str]" = {
+    "uuid": "UUID",
+    "boolean": "BOOLEAN",
+    "blob": "BLOB",
+    "json": "JSON",
+    "text": "TEXT",
+}
+_PLAIN_CATEGORY_TYPES: "dict[str, str]" = {
+    "smallint": "SMALLINT",
+    "integer": "INTEGER",
+    "bigint": "BIGINT",
+    "real": "REAL",
+    "date": "DATE",
+    "time": "TIME",
+    "interval": "INTERVAL",
+}
+_NAIVE_TIMESTAMP_TYPES: "dict[str, str]" = {"mssql": "DATETIME2(6)", "bigquery": "DATETIME"}
+_AWARE_TIMESTAMP_TYPES: "dict[str, str]" = {
+    "postgres": "TIMESTAMP WITH TIME ZONE",
+    "cockroachdb": "TIMESTAMPTZ",
+    "duckdb": "TIMESTAMP WITH TIME ZONE",
+    "oracle": "TIMESTAMP WITH TIME ZONE",
+    "mssql": "DATETIMEOFFSET(6)",
+}
+_BOUNDED_KEY_TEXT_DIALECTS: "frozenset[str]" = frozenset({"mysql", "mariadb", "oracle", "mssql", "db2"})
+_KEY_TEXT_LENGTH = 255
+_DEFAULT_DECIMAL_PRECISION = 38
+_DEFAULT_DECIMAL_SCALE = 9
+_DECIMAL_MAX_PRECISION: "dict[str, int]" = {
+    "duckdb": 38,
+    "mssql": 38,
+    "oracle": 38,
+    "db2": 31,
+    "mysql": 65,
+    "mariadb": 65,
+    "postgres": 1000,
+    "cockroachdb": 1000,
+    "bigquery": 76,
+}
+_SPANNER_NUMERIC_SCALE = 9
+_SPANNER_NUMERIC_INTEGER_DIGITS = 29
+_BIGQUERY_NUMERIC_MAX_PRECISION = 38
+_BIGQUERY_NUMERIC_MAX_SCALE = 9
+_BIGQUERY_BIGNUMERIC_MAX_PRECISION = 76
+_ARROW_TOKEN_FACTORIES: "dict[str, Callable[[Any], Any]]" = {
+    "bool": lambda pa: pa.bool_(),
+    "int16": lambda pa: pa.int16(),
+    "int32": lambda pa: pa.int32(),
+    "int64": lambda pa: pa.int64(),
+    "float32": lambda pa: pa.float32(),
+    "float64": lambda pa: pa.float64(),
+    "decimal": lambda pa: pa.decimal128(38, 9),
+    "string": lambda pa: pa.string(),
+    "binary": lambda pa: pa.binary(),
+    "date": lambda pa: pa.date32(),
+    "time": lambda pa: pa.time64("us"),
+    "timestamp": lambda pa: pa.timestamp("us"),
+    "timestamptz": lambda pa: pa.timestamp("us", tz="UTC"),
+    "duration": lambda pa: pa.duration("us"),
+}
 
 
 @overload
@@ -155,22 +219,88 @@ def arrow_type_from_token(token: str) -> Any:
     return factory(pa)
 
 
-_ARROW_TOKEN_FACTORIES: "dict[str, Callable[[Any], Any]]" = {
-    "bool": lambda pa: pa.bool_(),
-    "int16": lambda pa: pa.int16(),
-    "int32": lambda pa: pa.int32(),
-    "int64": lambda pa: pa.int64(),
-    "float32": lambda pa: pa.float32(),
-    "float64": lambda pa: pa.float64(),
-    "decimal": lambda pa: pa.decimal128(38, 9),
-    "string": lambda pa: pa.string(),
-    "binary": lambda pa: pa.binary(),
-    "date": lambda pa: pa.date32(),
-    "time": lambda pa: pa.time64("us"),
-    "timestamp": lambda pa: pa.timestamp("us"),
-    "timestamptz": lambda pa: pa.timestamp("us", tz="UTC"),
-    "duration": lambda pa: pa.duration("us"),
-}
+def sql_type_from_arrow_type(arrow_type: Any, dialect: str | None = None) -> str:
+    """Return a SQL column type string for a PyArrow DataType.
+
+    Args:
+        arrow_type: PyArrow DataType instance.
+        dialect: Optional target SQL dialect name.
+
+    Returns:
+        Dialect-optimal or standard SQL type string.
+    """
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if _arrow_type_is_uuid(arrow_type):
+        return sql_type_for_category("uuid", dialect)
+
+    unwrapped = arrow_type
+    if pa.types.is_dictionary(unwrapped):
+        unwrapped = unwrapped.value_type
+    is_extension = getattr(pa.types, "is_extension", None)
+    if is_extension is not None and is_extension(unwrapped) and not _arrow_type_is_uuid(unwrapped):
+        unwrapped = unwrapped.storage_type
+
+    if _arrow_type_is_uuid(unwrapped):
+        return sql_type_for_category("uuid", dialect)
+    if pa.types.is_decimal(unwrapped):
+        return sql_type_for_category("decimal", dialect, precision=unwrapped.precision, scale=unwrapped.scale)
+    if pa.types.is_timestamp(unwrapped):
+        return sql_type_for_category("timestamptz" if getattr(unwrapped, "tz", None) else "timestamp", dialect)
+    return sql_type_for_category(_arrow_type_category(pa, unwrapped), dialect)
+
+
+def sql_type_for_category(
+    category: str, dialect: str | None = None, *, precision: int | None = None, scale: int | None = None
+) -> str:
+    """Return a dialect-aware SQL column type for a neutral value category.
+
+    This is the single mapping shared by Arrow schema conversion and Python value
+    inference. Categories are ``uuid``, ``boolean``, ``smallint``, ``integer``,
+    ``bigint``, ``real``, ``double``, ``decimal``, ``date``, ``time``,
+    ``timestamp`` (naive), ``timestamptz`` (timezone-aware), ``interval``,
+    ``blob``, ``json``, ``text``, and ``key_text`` (text used in a primary key,
+    which must be bounded on engines that cannot index unbounded text).
+
+    Args:
+        category: Neutral value category.
+        dialect: Optional target SQL dialect name.
+        precision: Decimal precision for the ``decimal`` category.
+        scale: Decimal scale for the ``decimal`` category.
+
+    Returns:
+        Dialect-specific SQL type string.
+
+    Raises:
+        SQLBuilderError: When a decimal precision exceeds what the dialect can store exactly.
+    """
+    config = _resolve_dialect_config(dialect)
+    name = config.name if config is not None else None
+    if category in _CONFIG_CATEGORY_DEFAULTS:
+        return config.get_optimal_type(category) if config is not None else _CONFIG_CATEGORY_DEFAULTS[category]
+    if category == "key_text":
+        if name in _BOUNDED_KEY_TEXT_DIALECTS and config is not None:
+            return config.get_optimal_type("varchar", length=_KEY_TEXT_LENGTH)
+        return config.get_optimal_type("text") if config is not None else "TEXT"
+    if category == "double":
+        if name in {"duckdb", "mysql", "mariadb"}:
+            return "DOUBLE"
+        if name in {"bigquery", "spanner"} and config is not None:
+            return config.get_optimal_type("float")
+        return "DOUBLE PRECISION"
+    if category == "decimal":
+        return _decimal_sql_type(name, precision, scale)
+    if category == "timestamp":
+        return _NAIVE_TIMESTAMP_TYPES.get(name or "", "TIMESTAMP")
+    if category == "timestamptz":
+        if name is None:
+            return "TIMESTAMP WITH TIME ZONE"
+        return _AWARE_TIMESTAMP_TYPES.get(name, "TIMESTAMP")
+    if category in _PLAIN_CATEGORY_TYPES:
+        return _PLAIN_CATEGORY_TYPES[category]
+    msg = f"Unknown SQL type category: {category!r}"
+    raise SQLBuilderError(msg)
 
 
 def convert_dict_to_arrow_with_schema(
@@ -476,6 +606,92 @@ def _arrow_schema_has_opaque_uuid(schema: Any) -> bool:
     return any(
         _arrow_type_is_opaque_uuid(field.type) or _arrow_type_is_list_of_opaque_uuid(field.type) for field in schema
     )
+
+
+def _resolve_dialect_config(dialect: str | None) -> "DialectConfig | None":
+    if not dialect:
+        return None
+    with contextlib.suppress(ValueError):
+        return get_dialect_config(str(dialect))
+    return None
+
+
+def _arrow_type_category(pa: Any, data_type: Any) -> str:
+    """Map a non-decimal, non-timestamp PyArrow DataType to a neutral SQL type category."""
+    types = pa.types
+    if types.is_boolean(data_type):
+        return "boolean"
+    if types.is_int8(data_type) or types.is_int16(data_type) or types.is_uint8(data_type):
+        return "smallint"
+    if types.is_int32(data_type) or types.is_uint16(data_type):
+        return "integer"
+    if types.is_int64(data_type) or types.is_uint32(data_type) or types.is_uint64(data_type):
+        return "bigint"
+    if types.is_float16(data_type) or types.is_float32(data_type):
+        return "real"
+    if types.is_float64(data_type):
+        return "double"
+    if types.is_date(data_type):
+        return "date"
+    if types.is_time(data_type):
+        return "time"
+    if types.is_duration(data_type) or types.is_interval(data_type):
+        return "interval"
+    if (
+        types.is_binary(data_type)
+        or types.is_large_binary(data_type)
+        or types.is_fixed_size_binary(data_type)
+        or getattr(types, "is_binary_view", lambda _: False)(data_type)
+    ):
+        return "blob"
+    if (
+        types.is_list(data_type)
+        or types.is_large_list(data_type)
+        or types.is_fixed_size_list(data_type)
+        or types.is_struct(data_type)
+        or types.is_map(data_type)
+        or getattr(types, "is_list_view", lambda _: False)(data_type)
+        or getattr(types, "is_large_list_view", lambda _: False)(data_type)
+    ):
+        return "json"
+    return "text"
+
+
+def _decimal_sql_type(dialect_name: str | None, precision: int | None, scale: int | None) -> str:
+    """Render an exact decimal type, refusing precisions the dialect cannot store exactly."""
+    resolved_precision = _DEFAULT_DECIMAL_PRECISION if precision is None else int(precision)
+    resolved_scale = _DEFAULT_DECIMAL_SCALE if scale is None else int(scale)
+    if dialect_name == "spanner":
+        if (
+            resolved_scale > _SPANNER_NUMERIC_SCALE
+            or resolved_precision - resolved_scale > _SPANNER_NUMERIC_INTEGER_DIGITS
+        ):
+            msg = (
+                f"DECIMAL({resolved_precision}, {resolved_scale}) does not fit Spanner NUMERIC "
+                f"(at most {_SPANNER_NUMERIC_INTEGER_DIGITS} integer digits and {_SPANNER_NUMERIC_SCALE} fractional digits)"
+            )
+            raise SQLBuilderError(msg)
+        return "NUMERIC"
+    if dialect_name == "bigquery":
+        if resolved_precision <= _BIGQUERY_NUMERIC_MAX_PRECISION and resolved_scale <= _BIGQUERY_NUMERIC_MAX_SCALE:
+            return f"NUMERIC({resolved_precision}, {resolved_scale})"
+        if resolved_precision <= _BIGQUERY_BIGNUMERIC_MAX_PRECISION:
+            return f"BIGNUMERIC({resolved_precision}, {resolved_scale})"
+    max_precision = _DECIMAL_MAX_PRECISION.get(dialect_name or "")
+    if max_precision is not None and resolved_precision > max_precision:
+        msg = (
+            f"DECIMAL({resolved_precision}, {resolved_scale}) exceeds the maximum precision {max_precision} "
+            f"supported by {dialect_name}; cast the column to a narrower decimal or a text type explicitly"
+        )
+        raise SQLBuilderError(msg)
+    return f"DECIMAL({resolved_precision}, {resolved_scale})"
+
+
+def _arrow_type_is_uuid(data_type: Any) -> bool:
+    if _arrow_type_is_opaque_uuid(data_type):
+        return True
+    ext_name = getattr(data_type, "extension_name", None)
+    return isinstance(ext_name, str) and "uuid" in ext_name.casefold()
 
 
 def _arrow_type_is_opaque_uuid(data_type: Any) -> bool:

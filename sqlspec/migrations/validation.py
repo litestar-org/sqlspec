@@ -5,11 +5,10 @@ which can occur when branches with migrations merge in different orders across
 staging and production environments.
 """
 
+import importlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-
-from rich.console import Console
 
 from sqlspec.exceptions import OutOfOrderMigrationError, SquashValidationError
 from sqlspec.migrations.version import VersionType, parse_version
@@ -30,7 +29,6 @@ __all__ = (
     "validate_squash_range",
 )
 
-console = Console()
 logger = get_logger("sqlspec.migrations.validation")
 
 
@@ -184,6 +182,7 @@ def validate_migration_order(
         return
     if not echo:
         return
+    console = importlib.import_module("rich.console").Console()
     console.print("[yellow]Out-of-order migrations detected[/]")
     console.print(f"[yellow]{warning_message}[/]")
 
@@ -215,23 +214,11 @@ def validate_squash_range(
         msg = f"Squash range versions must be numeric: {start_version} to {end_version}"
         raise SquashValidationError(msg) from exc
 
-    if (
-        parsed_start.type != VersionType.SEQUENTIAL
-        or parsed_end.type != VersionType.SEQUENTIAL
-        or parsed_start.sequence is None
-        or parsed_end.sequence is None
-    ):
-        msg = f"Squash range versions must be numeric: {start_version} to {end_version}"
-        raise SquashValidationError(msg)
-
     if parsed_start.extension != parsed_end.extension:
         msg = f"Cannot squash migrations from different extensions: {start_version} to {end_version}"
         raise SquashValidationError(msg)
 
-    start_int = parsed_start.sequence
-    end_int = parsed_end.sequence
-
-    if start_int > end_int:
+    if parsed_start > parsed_end:
         msg = f"Invalid range: start version {start_version} is greater than end version {end_version}"
         raise SquashValidationError(msg)
 
@@ -256,12 +243,7 @@ def validate_squash_range(
             parsed = parse_version(version)
         except ValueError:
             continue
-        if (
-            parsed.type == VersionType.SEQUENTIAL
-            and parsed.extension == parsed_start.extension
-            and parsed.sequence is not None
-            and start_int <= parsed.sequence <= end_int
-        ):
+        if parsed.extension == parsed_start.extension and parsed_start <= parsed <= parsed_end:
             result.append((version, path))
 
     result.sort(key=lambda x: parse_version(x[0]))
@@ -271,10 +253,18 @@ def validate_squash_range(
         raise SquashValidationError(msg)
 
     if not allow_gaps and len(result) > 1:
-        sorted_versions = [parse_version(v).sequence or 0 for v, _ in result]
-        for i in range(1, len(sorted_versions)):
-            if sorted_versions[i] - sorted_versions[i - 1] != 1:
-                msg = f"Gap detected in version sequence between {sorted_versions[i - 1]:04d} and {sorted_versions[i]:04d}"
+        parsed_versions = [parse_version(v) for v, _ in result]
+        for i in range(1, len(parsed_versions)):
+            prev_ver = parsed_versions[i - 1]
+            curr_ver = parsed_versions[i]
+            if (
+                prev_ver.type == VersionType.SEQUENTIAL
+                and curr_ver.type == VersionType.SEQUENTIAL
+                and prev_ver.sequence is not None
+                and curr_ver.sequence is not None
+                and curr_ver.sequence - prev_ver.sequence != 1
+            ):
+                msg = f"Gap detected in version sequence between {prev_ver.sequence:04d} and {curr_ver.sequence:04d}"
                 raise SquashValidationError(msg)
 
     return result
@@ -313,7 +303,13 @@ def validate_extension_consistency(migrations: "list[tuple[str, Path]]") -> None
         raise SquashValidationError(msg)
 
 
-def validate_squash_idempotency(source_files: "list[Path]", target_file: "Path") -> str:
+def validate_squash_idempotency(
+    source_files: "list[Path]",
+    target_file: "Path",
+    *,
+    all_source_files: "set[Path] | None" = None,
+    all_target_files: "set[Path] | None" = None,
+) -> str:
     """Check if a squash operation has already been performed.
 
     Determines the current state of a squash operation based on file existence.
@@ -321,30 +317,33 @@ def validate_squash_idempotency(source_files: "list[Path]", target_file: "Path")
     Args:
         source_files: List of original migration file paths that would be squashed.
         target_file: Path where the squashed migration would be written.
+        all_source_files: Optional full set of source files across a multi-plan squash batch.
+        all_target_files: Optional full set of target files across a multi-plan squash batch.
 
     Returns:
         Status string: "ready" (can squash), "already_squashed" (already done),
             or "partial" (inconsistent state - target exists but some sources remain).
     """
+    source_set = all_source_files if all_source_files is not None else set(source_files)
+    target_set = all_target_files if all_target_files is not None else {target_file}
     target_exists = target_file.exists()
-    sources_exist = [f.exists() for f in source_files]
+    remaining_sources = [f for f in source_files if f not in target_set]
+    sources_exist = [f.exists() for f in remaining_sources]
     any_source_exists = any(sources_exist)
 
-    if not target_exists and any_source_exists:
+    if not target_exists and any(f.exists() for f in source_files):
         return "ready"
 
-    if target_file in source_files:
-        remaining_sources = [f for f in source_files if f != target_file]
+    if target_file in source_set:
         if not remaining_sources:
             if target_exists and "Squashed from:" in target_file.read_text(encoding="utf-8"):
                 return "already_squashed"
             return "ready"
-        remaining_exist = [f.exists() for f in remaining_sources]
-        if target_exists and all(remaining_exist):
+        if target_exists and all(sources_exist):
             return "ready"
-        if target_exists and not any(remaining_exist):
+        if target_exists and not any_source_exists:
             return "already_squashed"
-        if target_exists and any(remaining_exist):
+        if target_exists and any_source_exists:
             return "partial"
 
     if target_exists and not any_source_exists:

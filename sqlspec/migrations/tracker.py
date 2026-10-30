@@ -17,6 +17,8 @@ from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from rich.console import Console
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -78,6 +80,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         checksum: str,
         *,
         commit: bool = True,
+        replaces: "Sequence[str] | None" = None,
     ) -> None:
         """Record a successfully applied migration.
 
@@ -91,17 +94,29 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
             commit: Whether to commit immediately after recording.
+            replaces: Optional sequence of replaced migration versions for squashed migrations.
         """
         version_type = self._derive_version_type(version)
 
         seq_result = driver.execute(self._next_execution_sequence_query())
         next_sequence = self._extract_next_sequence(seq_result)
 
-        driver.execute(
-            self._record_migration_statement(
+        if replaces:
+            statement = self._record_squashed_migration_statement(
+                version,
+                version_type,
+                next_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                self._applied_by(),
+                ",".join(replaces),
+            )
+        else:
+            statement = self._record_migration_statement(
                 version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by()
             )
-        )
+        driver.execute(statement)
         if commit:
             self._safe_commit(driver)
         _log_migration_recorded(driver, version)
@@ -316,6 +331,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         checksum: str,
         *,
         commit: bool = True,
+        replaces: "Sequence[str] | None" = None,
     ) -> None:
         """Record a successfully applied migration.
 
@@ -329,17 +345,29 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
             commit: Whether to commit immediately after recording.
+            replaces: Optional sequence of replaced migration versions for squashed migrations.
         """
         version_type = self._derive_version_type(version)
 
         seq_result = await driver.execute(self._next_execution_sequence_query())
         next_sequence = self._extract_next_sequence(seq_result)
 
-        await driver.execute(
-            self._record_migration_statement(
+        if replaces:
+            statement = self._record_squashed_migration_statement(
+                version,
+                version_type,
+                next_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                self._applied_by(),
+                ",".join(replaces),
+            )
+        else:
+            statement = self._record_migration_statement(
                 version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by()
             )
-        )
+        await driver.execute(statement)
         if commit:
             await self._safe_commit(driver)
         _log_migration_recorded(driver, version)

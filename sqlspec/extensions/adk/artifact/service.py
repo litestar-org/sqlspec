@@ -37,25 +37,6 @@ logger = get_logger("sqlspec.extensions.adk.artifact.service")
 _REWIND_TOMBSTONE = types.Part(inline_data=types.Blob(mime_type="application/octet-stream", data=b""))
 
 
-def _file_has_user_namespace(filename: str) -> bool:
-    """Return True when *filename* uses ADK's ``user:`` user-scoped prefix."""
-    return filename.startswith("user:")
-
-
-def _resolve_scoped_session_id(
-    filename: str, session_id: "str | None", *, require_session_id: bool = False
-) -> "str | None":
-    """Resolve effective ``session_id`` honoring ``user:`` prefix and flat-storage validation."""
-    if session_id is not None:
-        artifact_util._validate_session_id_for_flat_storage(session_id)
-    if _file_has_user_namespace(filename):
-        return None
-    if require_session_id and session_id is None:
-        msg = "Session ID must be provided for session-scoped artifacts."
-        raise InputValidationError(msg)
-    return session_id
-
-
 class SQLSpecArtifactService(BaseArtifactService):
     """SQLSpec-backed implementation of BaseArtifactService.
 
@@ -620,3 +601,22 @@ async def _call_storage_backend(
     if async_method is not None:
         return await async_method(*args, **kwargs)
     return await async_(getattr(backend, sync_method_name))(*args, **kwargs)
+
+
+def _file_has_user_namespace(filename: str) -> bool:
+    """Return True when *filename* uses ADK's ``user:`` user-scoped prefix."""
+    return filename.startswith("user:")
+
+
+def _resolve_scoped_session_id(
+    filename: str, session_id: "str | None", *, require_session_id: bool = False
+) -> "str | None":
+    """Resolve effective ``session_id`` honoring ``user:`` prefix and flat-storage validation."""
+    if session_id is not None:
+        artifact_util._validate_session_id_for_flat_storage(session_id)
+    if _file_has_user_namespace(filename):
+        return None
+    if require_session_id and session_id is None:
+        msg = "Session ID must be provided for session-scoped artifacts."
+        raise InputValidationError(msg)
+    return session_id

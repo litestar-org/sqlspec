@@ -9,7 +9,14 @@ SELECT
     s.seqincrement AS increment,
     s.seqcycle AS cycles,
     pg_catalog.obj_description(c.oid, 'pg_class')::text AS comment,
-    dep.refobjid IS NOT NULL AS is_extension_owned
+    dep.refobjid IS NOT NULL AS is_extension_owned,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_depend AS identity_dep
+        WHERE identity_dep.classid = 'pg_catalog.pg_class'::regclass
+          AND identity_dep.objid = c.oid
+          AND identity_dep.deptype = 'i'
+    ) AS is_identity_owned
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_catalog.pg_sequence s ON s.seqrelid = c.oid

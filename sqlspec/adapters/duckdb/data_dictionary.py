@@ -1,16 +1,23 @@
 """DuckDB-specific data dictionary for metadata queries."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+import re
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
+    DDL_PARENT_TABLE_CONTEXT_KEY,
     ColumnMetadata,
+    DDLResult,
+    DependencyEdge,
+    DependencyEdgeKind,
     DependencyMetadata,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataFidelity,
     MetadataResult,
     MetadataSource,
+    MetadataSupport,
     ObjectIdentity,
     TableMetadata,
     VersionInfo,
@@ -19,6 +26,8 @@ from sqlspec.data_dictionary import (
 from sqlspec.driver import SyncDataDictionaryBase
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
 
 __all__ = ("DuckDBDataDictionary",)
@@ -132,21 +141,64 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
     def get_foreign_keys(
         self, driver: "DuckDBDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
-        """Get foreign key metadata."""
+        """Get foreign key metadata, including ON DELETE / ON UPDATE actions."""
         schema_name = self.resolve_schema(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
-            return driver.select(
-                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
-            )
+            rows = driver.select(self.get_query("foreign_keys", "by_schema"), schema_name=schema_name)
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+            rows = driver.select(self.get_query("foreign_keys", "by_table"), table_name=table, schema_name=schema_name)
+        return [ForeignKeyMetadata.from_row(row) for row in rows]
 
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
-        return driver.select(
-            self.get_query("foreign_keys", "by_table"),
-            table_name=table,
-            schema_name=schema_name,
-            schema_type=ForeignKeyMetadata,
-        )
+    def get_constraints(
+        self, driver: "DuckDBDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult":
+        """Get PRIMARY KEY, UNIQUE, and CHECK constraint metadata from duckdb_constraints().
+
+        Foreign keys are reported by :meth:`get_foreign_keys`; NOT NULL is reported on columns.
+        """
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            rows = driver.select(self._get_domain_query_text("constraints", "by_schema"), schema_name=schema_name)
+        else:
+            rows = driver.select(
+                self._get_domain_query_text("constraints", "by_table"), schema_name=schema_name, table_name=table
+            )
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            constraint_type = str(row.get("constraint_type") or "").upper()
+            if constraint_type not in _DUCKDB_TABLE_CONSTRAINT_TYPES:
+                continue
+            item: dict[str, Any] = {
+                "schema_name": row.get("schema_name"),
+                "table_name": row.get("table_name"),
+                "constraint_name": row.get("constraint_name"),
+                "constraint_type": constraint_type,
+                "columns": [str(column) for column in row.get("constraint_column_names") or ()],
+            }
+            if constraint_type == "CHECK":
+                item["check_clause"] = row.get("expression") or row.get("constraint_text")
+            items.append(item)
+        return MetadataResult("constraints", items=tuple(items))
+
+    def get_views(self, driver: "DuckDBDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Get view metadata including the catalog CREATE VIEW statement."""
+        schema_name = self.resolve_schema(schema)
+        rows = driver.select(self._get_domain_query_text("views", "by_schema"), schema_name=schema_name)
+        return MetadataResult("views", items=tuple(rows))
+
+    def get_sequences(self, driver: "DuckDBDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Get sequence metadata from duckdb_sequences()."""
+        schema_name = self.resolve_schema(schema)
+        rows = driver.select(self._get_domain_query_text("sequences", "by_schema"), schema_name=schema_name)
+        return MetadataResult("sequences", items=tuple(rows))
+
+    def get_types(self, driver: "DuckDBDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Get user-defined type metadata from duckdb_types()."""
+        schema_name = self.resolve_schema(schema)
+        rows = driver.select(self._get_domain_query_text("types", "by_schema"), schema_name=schema_name)
+        return MetadataResult("types", items=tuple(rows))
 
     def get_dependencies(
         self, driver: "DuckDBDriver", object_name: "str | None" = None, schema: "str | None" = None
@@ -174,6 +226,136 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
             )
             items.append(DependencyMetadata(identity, attributes=dict(row)))
         return MetadataResult("dependencies", items=tuple(items))
+
+    def _get_native_object_ddl(
+        self,
+        driver: "DuckDBDriver",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return catalog DDL for one object, reporting tables with foreign keys as not faithful."""
+        _ = include_dependencies, redact
+        rows = driver.select(
+            self._get_domain_query_text("ddl", "by_object"),
+            schema_name=schema,
+            object_name=object_name,
+            object_type=object_type,
+        )
+        if not rows:
+            return DDLResult.unsupported(
+                ObjectIdentity(object_name, object_type, schema=schema, dialect=type(self).dialect),
+                source=MetadataSource.CATALOG,
+            )
+        return self._ddl_result_from_row(rows[0])
+
+    def _get_native_schema_ddl(
+        self, driver: "DuckDBDriver", schema: "str | None", *, include_dependencies: bool, redact: bool
+    ) -> "list[DDLResult] | None":
+        """Return catalog DDL for every schema object with dependency edges."""
+        _ = include_dependencies, redact
+        rows = driver.select(self._get_domain_query_text("ddl", "by_schema"), schema_name=self.resolve_schema(schema))
+        results = [self._ddl_result_from_row(row) for row in rows]
+        raw_sql = {
+            (str(row.get("object_type") or "").lower(), str(row.get("object_name") or "")): str(row.get("ddl") or "")
+            for row in rows
+        }
+        relations = {
+            item.identity.name.lower(): item.identity
+            for item in results
+            if item.identity.object_type in {"table", "temporary_table", "view"}
+        }
+        referenced = {
+            item.identity.name.lower(): item.identity
+            for item in results
+            if item.identity.object_type in {"sequence", "type"}
+        }
+        linked: list[DDLResult] = []
+        for item in results:
+            edges: list[DependencyEdge] = []
+            ddl_text = raw_sql.get((item.identity.object_type, item.identity.name), "")
+            object_type = item.identity.object_type
+            parent = item.context.get(DDL_PARENT_TABLE_CONTEXT_KEY)
+            if object_type == "index" and parent is not None:
+                parent_identity = relations.get(str(parent).lower())
+                if parent_identity is not None:
+                    edges.append(
+                        DependencyEdge(
+                            item.identity,
+                            parent_identity,
+                            DependencyEdgeKind.INDEX_EXPRESSION,
+                            source=MetadataSource.CATALOG,
+                        )
+                    )
+            elif object_type in {"table", "temporary_table", "view"} and ddl_text:
+                candidates = referenced if object_type != "view" else {**relations, **referenced}
+                edges.extend(
+                    DependencyEdge(
+                        item.identity,
+                        ref_identity,
+                        _DUCKDB_REFERENCE_EDGE_KINDS[ref_identity.object_type],
+                        source=MetadataSource.CATALOG,
+                    )
+                    for ref_key, ref_identity in candidates.items()
+                    if ref_key != item.identity.name.lower() and _references_identifier(ddl_text, ref_identity.name)
+                )
+            linked.append(
+                DDLResult(
+                    identity=item.identity,
+                    status=item.status,
+                    fidelity=item.fidelity,
+                    source=item.source,
+                    ddl=item.ddl,
+                    dependencies=tuple(edges),
+                    context=item.context,
+                    warnings=item.warnings,
+                )
+            )
+        return linked
+
+    def _ddl_result_from_row(self, row: "Mapping[str, Any]") -> DDLResult:
+        """Build a DDLResult from a ``ddl.sql`` row.
+
+        DuckDB's stored table SQL drops self-referencing foreign keys and leaves referenced table
+        names unquoted, so tables with foreign keys are reported as unsupported; the base class
+        then synthesizes them from catalog metadata.
+        """
+        object_type = str(row.get("object_type") or "table").lower()
+        row_schema = row.get("schema_name")
+        identity = ObjectIdentity(
+            name=str(row.get("object_name") or ""),
+            object_type=object_type,
+            schema=str(row_schema) if row_schema is not None else None,
+            dialect=type(self).dialect,
+            source=MetadataSource.CATALOG,
+        )
+        parent = row.get("table_name")
+        context: dict[str, object] = (
+            {DDL_PARENT_TABLE_CONTEXT_KEY: str(parent)} if object_type == "index" and parent is not None else {}
+        )
+        ddl_value = row.get("ddl")
+        if ddl_value is None:
+            return DDLResult.unsupported(
+                identity,
+                source=MetadataSource.CATALOG,
+                context=context,
+                warnings=(f"DuckDB does not expose reconstructable DDL for {object_type} {identity.name}",),
+            )
+        if object_type in {"table", "temporary_table"} and row.get("has_foreign_keys"):
+            return DDLResult.unsupported(
+                identity, source=MetadataSource.CATALOG, warnings=(_DUCKDB_FOREIGN_KEY_WARNING,)
+            )
+        return DDLResult(
+            identity=identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+            ddl=str(ddl_value),
+            context=context,
+        )
 
     def _get_domain_query_text(self, domain: str, query_name: str) -> str:
         """Return a required direct-domain query for DuckDB."""
@@ -225,3 +407,22 @@ def _duckdb_index_columns(value: Any) -> list[str]:
     if not cleaned:
         return []
     return [part.strip().strip('"') for part in cleaned.split(",")]
+
+
+_DUCKDB_TABLE_CONSTRAINT_TYPES: Final = frozenset({"PRIMARY KEY", "UNIQUE", "CHECK"})
+_DUCKDB_FOREIGN_KEY_WARNING: Final = (
+    "DuckDB catalog SQL omits self-referencing foreign keys and leaves referenced table names unquoted; "
+    "table DDL was synthesized from catalog metadata"
+)
+_DUCKDB_REFERENCE_EDGE_KINDS: Final = {
+    "table": DependencyEdgeKind.VIEW_REFERENCE,
+    "temporary_table": DependencyEdgeKind.VIEW_REFERENCE,
+    "view": DependencyEdgeKind.VIEW_REFERENCE,
+    "sequence": DependencyEdgeKind.SEQUENCE_USE,
+    "type": DependencyEdgeKind.DEFAULT_EXPRESSION,
+}
+
+
+def _references_identifier(sql_text: str, name: str) -> bool:
+    """Return True when ``name`` appears in ``sql_text`` as a whole identifier."""
+    return re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", sql_text, re.IGNORECASE) is not None

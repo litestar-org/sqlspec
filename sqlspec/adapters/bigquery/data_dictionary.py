@@ -1,11 +1,15 @@
 """BigQuery-specific data dictionary for metadata queries."""
 
+import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    DDLResult,
+    DependencyEdge,
+    DependencyEdgeKind,
     ForeignKeyMetadata,
     IndexMetadata,
     MetadataCapability,
@@ -14,6 +18,7 @@ from sqlspec.data_dictionary import (
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
+    ObjectIdentity,
     TableMetadata,
     VersionInfo,
     get_data_dictionary_loader,
@@ -272,6 +277,52 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         capabilities = tuple(_bigquery_capability_for_domain(domain) for domain in requested_domains)
         return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
 
+    def _get_native_object_ddl(
+        self,
+        driver: "BigQueryDriver",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return native BigQuery DDL for a table, view, or routine from INFORMATION_SCHEMA."""
+        _ = include_dependencies, redact
+        norm_type = object_type.lower()
+        if norm_type not in {"table", "view", "materialized_view", "routine", "function", "procedure"}:
+            return None
+        scope = BigQueryMetadataScope.from_schema(_resolve_bigquery_schema(driver, schema))
+        if norm_type in {"routine", "function", "procedure"}:
+            routines_table = scope.dataset_information_schema_table("ROUTINES")
+            query_text = _get_domain_query_text("routines", "by_dataset").format(routines_table=routines_table)
+            rows = driver.select(query_text, schema_name=scope.schema_name, routine_name=object_name)
+        else:
+            tables_table = scope.dataset_information_schema_table("TABLES")
+            query_text = _get_domain_query_text("ddl", "by_object").format(tables_table=tables_table)
+            rows = driver.select(query_text, schema_name=scope.schema_name, table_name=object_name)
+        return _bigquery_ddl_result_from_rows(
+            dialect=type(self).dialect,
+            object_name=object_name,
+            object_type=object_type,
+            schema=scope.schema_name,
+            rows=rows,
+        )
+
+    def _get_native_schema_ddl(
+        self, driver: "BigQueryDriver", schema: "str | None", *, include_dependencies: bool, redact: bool
+    ) -> "list[DDLResult] | None":
+        """Return native BigQuery DDL for every dataset object."""
+        _ = include_dependencies, redact
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
+        query_text = _get_domain_query_text("ddl", "by_schema").format(
+            schema_prefix=format_bigquery_schema_prefix(resolved_schema)
+        )
+        return _bigquery_schema_ddl_results(
+            driver.select(query_text, schema_name=scope.schema_name), schema=scope.schema_name
+        )
+
 
 def _resolve_bigquery_schema(driver: "BigQueryDriver", schema: "str | None") -> "str | None":
     if schema is not None:
@@ -357,3 +408,95 @@ def _bigquery_capability_for_domain(domain: str) -> "MetadataCapability":
             warnings=_BIGQUERY_INFORMATION_SCHEMA_WARNINGS,
         )
     return MetadataCapability.unsupported(domain)
+
+
+def _bigquery_ddl_result_from_rows(
+    *, dialect: str, object_name: str, object_type: str, schema: "str | None", rows: "Sequence[dict[str, Any]]"
+) -> DDLResult:
+    row = rows[0] if rows else None
+    resolved_schema = (
+        (row.get("schema_name") or row.get("table_schema") or row.get("routine_schema")) if row is not None else schema
+    )
+    resolved_catalog = (
+        (row.get("catalog_name") or row.get("table_catalog") or row.get("routine_catalog")) if row is not None else None
+    )
+    resolved_type = str(row.get("object_type") or object_type) if row is not None else object_type
+    ddl_value = (row.get("ddl") or row.get("routine_definition")) if row is not None else None
+    req_type = object_type.lower()
+    row_type = resolved_type.lower()
+    type_mismatch = row is not None and req_type not in ("routine", row_type)
+    identity = ObjectIdentity(
+        name=object_name,
+        object_type=object_type if type_mismatch else resolved_type,
+        catalog=str(resolved_catalog) if resolved_catalog is not None else None,
+        schema=str(resolved_schema) if resolved_schema is not None else None,
+        dialect=dialect,
+        source=MetadataSource.INFORMATION_SCHEMA,
+    )
+    if ddl_value is None or type_mismatch:
+        return DDLResult.unsupported(
+            identity, source=MetadataSource.INFORMATION_SCHEMA, warnings=_BIGQUERY_INFORMATION_SCHEMA_WARNINGS
+        )
+    return DDLResult(
+        identity=identity,
+        status=MetadataSupport.SUPPORTED,
+        fidelity=MetadataFidelity.NATIVE,
+        source=MetadataSource.INFORMATION_SCHEMA,
+        ddl=str(ddl_value),
+        warnings=_BIGQUERY_INFORMATION_SCHEMA_WARNINGS,
+    )
+
+
+def _bigquery_schema_ddl_results(rows: "Sequence[dict[str, Any]]", *, schema: "str | None") -> "list[DDLResult]":
+    """Build native DDL results from ``ddl.sql`` ``by_schema`` rows with view reference edges."""
+    entries: list[tuple[ObjectIdentity, str]] = []
+    relations: dict[str, ObjectIdentity] = {}
+    for row in rows:
+        object_name = str(row.get("object_name") or row.get("table_name") or row.get("routine_name") or "")
+        raw_type = row.get("object_type") or row.get("table_type") or row.get("routine_type") or "table"
+        normalized_type = str(raw_type).lower()
+        if normalized_type == "base table":
+            normalized_type = "table"
+        elif normalized_type == "materialized view":
+            normalized_type = "materialized_view"
+        ddl_value = row.get("ddl") or row.get("routine_definition")
+        if not object_name or ddl_value is None:
+            continue
+        row_schema = row.get("schema_name") or row.get("table_schema") or row.get("routine_schema") or schema
+        row_catalog = row.get("catalog_name") or row.get("table_catalog") or row.get("routine_catalog")
+        identity = ObjectIdentity(
+            name=object_name,
+            object_type=normalized_type,
+            catalog=str(row_catalog) if row_catalog is not None else None,
+            schema=str(row_schema) if row_schema is not None else None,
+            dialect="bigquery",
+            source=MetadataSource.INFORMATION_SCHEMA,
+        )
+        entries.append((identity, str(ddl_value)))
+        if normalized_type in {"table", "view", "materialized_view"}:
+            relations[object_name.lower()] = identity
+
+    results: list[DDLResult] = []
+    for identity, ddl_text in entries:
+        edges: list[DependencyEdge] = []
+        if identity.object_type in {"view", "materialized_view"}:
+            edges.extend(
+                DependencyEdge(
+                    identity, ref_identity, DependencyEdgeKind.VIEW_REFERENCE, source=MetadataSource.INFORMATION_SCHEMA
+                )
+                for ref_key, ref_identity in relations.items()
+                if ref_key != identity.name.lower()
+                and re.search(rf"(?<![\w$]){re.escape(ref_identity.name)}(?![\w$])", ddl_text, re.IGNORECASE)
+            )
+        results.append(
+            DDLResult(
+                identity=identity,
+                status=MetadataSupport.SUPPORTED,
+                fidelity=MetadataFidelity.NATIVE,
+                source=MetadataSource.INFORMATION_SCHEMA,
+                ddl=ddl_text,
+                dependencies=tuple(edges),
+                warnings=_BIGQUERY_INFORMATION_SCHEMA_WARNINGS,
+            )
+        )
+    return results

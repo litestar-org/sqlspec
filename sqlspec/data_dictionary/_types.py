@@ -1,7 +1,7 @@
 """Data dictionary metadata types, capabilities, and redaction policies."""
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -13,8 +13,10 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary._dependencies import DependencyEdge
 
 __all__ = (
+    "DDL_PARENT_TABLE_CONTEXT_KEY",
     "ColumnDetails",
     "ColumnMetadata",
+    "ColumnProfileMetadata",
     "CommentMetadata",
     "ConstraintMetadata",
     "DDLResult",
@@ -52,6 +54,9 @@ __all__ = (
     "VersionInfo",
     "ViewMetadata",
 )
+
+DDL_PARENT_TABLE_CONTEXT_KEY: Final = "parent_table"
+"""``DDLResult.context`` key naming the table an index or trigger belongs to."""
 
 
 class MetadataSupport(StrEnum):
@@ -1259,11 +1264,17 @@ class IndexMetadata(TypedDict, total=False):
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ForeignKeyMetadata:
-    """Metadata for a foreign key constraint."""
+    """Metadata for one column of a foreign key constraint.
+
+    ``on_delete`` and ``on_update`` hold the referential action (``CASCADE``, ``SET NULL``,
+    ``SET DEFAULT``, ``RESTRICT``, ``NO ACTION``) when the catalog exposes it, otherwise ``None``.
+    """
 
     __slots__ = (
         "column_name",
         "constraint_name",
+        "on_delete",
+        "on_update",
         "referenced_column",
         "referenced_schema",
         "referenced_table",
@@ -1280,6 +1291,8 @@ class ForeignKeyMetadata:
         constraint_name: str | None = None,
         schema: str | None = None,
         referenced_schema: str | None = None,
+        on_delete: str | None = None,
+        on_update: str | None = None,
     ) -> None:
         self.table_name = table_name
         self.column_name = column_name
@@ -1288,30 +1301,63 @@ class ForeignKeyMetadata:
         self.constraint_name = constraint_name
         self.schema = schema
         self.referenced_schema = referenced_schema
+        self.on_delete = on_delete
+        self.on_update = on_update
 
     def __repr__(self) -> str:
         return (
             f"ForeignKeyMetadata(table_name={self.table_name!r}, column_name={self.column_name!r}, "
             f"referenced_table={self.referenced_table!r}, referenced_column={self.referenced_column!r}, "
             f"constraint_name={self.constraint_name!r}, schema={self.schema!r}, "
-            f"referenced_schema={self.referenced_schema!r})"
+            f"referenced_schema={self.referenced_schema!r}, on_delete={self.on_delete!r}, "
+            f"on_update={self.on_update!r})"
         )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ForeignKeyMetadata):
             return NotImplemented
-        return (
-            self.table_name == other.table_name
-            and self.column_name == other.column_name
-            and self.referenced_table == other.referenced_table
-            and self.referenced_column == other.referenced_column
-            and self.constraint_name == other.constraint_name
-            and self.schema == other.schema
-            and self.referenced_schema == other.referenced_schema
-        )
+        return self._key() == other._key()
 
     def __hash__(self) -> int:
-        return hash((
+        return hash(self._key())
+
+    def __reduce__(
+        self,
+    ) -> "tuple[type[ForeignKeyMetadata], tuple[str, str, str, str, str | None, str | None, str | None, str | None, str | None]]":
+        return (self.__class__, self._key())
+
+    @classmethod
+    def from_row(cls, row: "Mapping[str, Any]") -> "ForeignKeyMetadata":
+        """Build foreign key metadata from a catalog row.
+
+        Accepts the column aliases emitted by the dialect ``foreign_keys`` query packs
+        (``referenced_table_name``, ``referenced_column_name``, ``table_schema``,
+        ``referenced_table_schema``, ``delete_rule``, ``update_rule``). Referential actions
+        are normalized to upper-case words separated by single spaces.
+
+        Args:
+            row: Catalog row mapping.
+
+        Returns:
+            Foreign key metadata.
+        """
+        constraint_name = row.get("constraint_name")
+        schema = row.get("schema") or row.get("table_schema") or row.get("schema_name")
+        referenced_schema = row.get("referenced_schema") or row.get("referenced_table_schema")
+        return cls(
+            table_name=str(row.get("table_name") or row.get("table") or ""),
+            column_name=str(row.get("column_name") or row.get("column") or ""),
+            referenced_table=str(row.get("referenced_table") or row.get("referenced_table_name") or ""),
+            referenced_column=str(row.get("referenced_column") or row.get("referenced_column_name") or ""),
+            constraint_name=str(constraint_name) if constraint_name is not None else None,
+            schema=str(schema) if schema is not None else None,
+            referenced_schema=str(referenced_schema) if referenced_schema is not None else None,
+            on_delete=_normalize_referential_action(row.get("on_delete") or row.get("delete_rule")),
+            on_update=_normalize_referential_action(row.get("on_update") or row.get("update_rule")),
+        )
+
+    def _key(self) -> "tuple[str, str, str, str, str | None, str | None, str | None, str | None, str | None]":
+        return (
             self.table_name,
             self.column_name,
             self.referenced_table,
@@ -1319,22 +1365,8 @@ class ForeignKeyMetadata:
             self.constraint_name,
             self.schema,
             self.referenced_schema,
-        ))
-
-    def __reduce__(
-        self,
-    ) -> "tuple[type[ForeignKeyMetadata], tuple[str, str, str, str, str | None, str | None, str | None]]":
-        return (
-            self.__class__,
-            (
-                self.table_name,
-                self.column_name,
-                self.referenced_table,
-                self.referenced_column,
-                self.constraint_name,
-                self.schema,
-                self.referenced_schema,
-            ),
+            self.on_delete,
+            self.on_update,
         )
 
 
@@ -1534,6 +1566,118 @@ class TableStatisticsMetadata(TypedDict, total=False):
     """Whether the reported value is an optimizer estimate rather than an exact count."""
 
 
+class ColumnProfileMetadata:
+    """Profile statistics and inferred SQL type for a database table column."""
+
+    __slots__ = (
+        "column_name",
+        "declared_type",
+        "distinct_count",
+        "inferred_type",
+        "is_unique_candidate",
+        "max_char_length",
+        "null_count",
+        "nullable",
+        "row_count",
+    )
+
+    def __init__(
+        self,
+        column_name: str,
+        declared_type: str,
+        inferred_type: str,
+        row_count: int,
+        null_count: int,
+        distinct_count: int,
+        nullable: bool,
+        max_char_length: int | None = None,
+        is_unique_candidate: bool = False,
+    ) -> None:
+        self.column_name = column_name
+        self.declared_type = declared_type
+        self.inferred_type = inferred_type
+        self.row_count = row_count
+        self.null_count = null_count
+        self.distinct_count = distinct_count
+        self.nullable = nullable
+        self.max_char_length = max_char_length
+        self.is_unique_candidate = is_unique_candidate
+
+    def __repr__(self) -> str:
+        return (
+            f"ColumnProfileMetadata(column_name={self.column_name!r}, declared_type={self.declared_type!r}, "
+            f"inferred_type={self.inferred_type!r}, row_count={self.row_count!r}, null_count={self.null_count!r}, "
+            f"distinct_count={self.distinct_count!r}, nullable={self.nullable!r}, "
+            f"max_char_length={self.max_char_length!r}, is_unique_candidate={self.is_unique_candidate!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ColumnProfileMetadata):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((
+            self.column_name,
+            self.declared_type,
+            self.inferred_type,
+            self.row_count,
+            self.null_count,
+            self.distinct_count,
+            self.nullable,
+            self.max_char_length,
+            self.is_unique_candidate,
+        ))
+
+    def __reduce__(
+        self,
+    ) -> "tuple[type[ColumnProfileMetadata], tuple[str, str, str, int, int, int, bool, int | None, bool]]":
+        return (
+            self.__class__,
+            (
+                self.column_name,
+                self.declared_type,
+                self.inferred_type,
+                self.row_count,
+                self.null_count,
+                self.distinct_count,
+                self.nullable,
+                self.max_char_length,
+                self.is_unique_candidate,
+            ),
+        )
+
+    def to_dict(self) -> "dict[str, object]":
+        """Serialize column profile metadata to a plain dictionary."""
+        return {
+            "column_name": self.column_name,
+            "declared_type": self.declared_type,
+            "inferred_type": self.inferred_type,
+            "row_count": self.row_count,
+            "null_count": self.null_count,
+            "distinct_count": self.distinct_count,
+            "nullable": self.nullable,
+            "max_char_length": self.max_char_length,
+            "is_unique_candidate": self.is_unique_candidate,
+        }
+
+    @classmethod
+    def from_dict(cls, data: "Mapping[str, Any]") -> "ColumnProfileMetadata":
+        """Create a ColumnProfileMetadata instance from a dictionary."""
+        max_len_raw = data.get("max_char_length")
+        return cls(
+            column_name=str(data["column_name"]),
+            declared_type=str(data.get("declared_type") or "TEXT"),
+            inferred_type=str(data.get("inferred_type") or data.get("declared_type") or "TEXT"),
+            row_count=int(data.get("row_count") or 0),
+            null_count=int(data.get("null_count") or 0),
+            distinct_count=int(data.get("distinct_count") or 0),
+            nullable=bool(data.get("nullable", True)),
+            max_char_length=int(max_len_raw) if max_len_raw is not None else None,
+            is_unique_candidate=bool(data.get("is_unique_candidate", False)),
+        )
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class DialectConfig:
     """Static configuration for a database dialect."""
@@ -1680,3 +1824,11 @@ def _looks_like_connection_string(value: object) -> bool:
     if "password=" in lowered or "pwd=" in lowered:
         return True
     return "user id=" in lowered and ("server=" in lowered or "host=" in lowered)
+
+
+def _normalize_referential_action(value: object) -> "str | None":
+    """Normalize a catalog referential action to upper-case words separated by single spaces."""
+    if value is None:
+        return None
+    normalized = " ".join(str(value).replace("_", " ").split()).upper()
+    return normalized or None

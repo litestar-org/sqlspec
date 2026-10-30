@@ -4,17 +4,27 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.adapters.aiosqlite.core import format_identifier
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataResult,
     TableMetadata,
     VersionInfo,
     get_data_dictionary_loader,
     get_dialect_config,
 )
 from sqlspec.data_dictionary.dialects.sqlite import list_sqlite_available_features, resolve_sqlite_json_type
+from sqlspec.data_dictionary.dialects.sqlite.config import (
+    format_sqlite_schema_prefix,
+    normalize_sqlite_schema_name,
+    sqlite_check_constraints,
+    sqlite_constraint_metadata,
+    sqlite_generated_expressions,
+    sqlite_object_ddl_result,
+    sqlite_schema_ddl_results,
+)
 from sqlspec.driver import AsyncDataDictionaryBase
 
 if TYPE_CHECKING:
@@ -40,9 +50,9 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
         return get_dialect_config(type(self).dialect)
 
     def resolve_schema(self, schema: "str | None") -> "str | None":
-        """Return a schema name using dialect defaults when missing."""
+        """Return a validated schema name using dialect defaults when missing."""
         if schema is not None:
-            return schema
+            return normalize_sqlite_schema_name(schema)
         return self.get_dialect_config().default_schema
 
     def list_available_features(self) -> "list[str]":
@@ -119,32 +129,40 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
     async def get_columns(
         self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ColumnMetadata]":
-        """Get column information for a table or schema."""
+        """Get column information for a table or schema, including generated-column expressions."""
         schema_name = self.resolve_schema(schema)
-        schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+        schema_prefix = format_sqlite_schema_prefix(schema_name)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             query_text = self._get_domain_query_text("columns", "by_schema").format(schema_prefix=schema_prefix)
-            return await driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
-
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
-        query_text = self._get_domain_query_text("columns", "by_table").format(schema_prefix=schema_prefix)
-        return await driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
+            rows = await driver.select(query_text, schema_name=schema_name)
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+            query_text = self._get_domain_query_text("columns", "by_table").format(schema_prefix=schema_prefix)
+            rows = await driver.select(query_text, table_name=table, schema_name=schema_name)
+        if any(str(row.get("extra") or "").endswith("generated") for row in rows):
+            table_sql = await self._get_table_sql(driver, schema_name, table)
+            for row in rows:
+                if str(row.get("extra") or "").endswith("generated"):
+                    expressions = sqlite_generated_expressions(table_sql.get(str(row.get("table_name"))))
+                    expression = expressions.get(str(row.get("column_name")))
+                    if expression is not None:
+                        row["generation_expression"] = expression
+        return cast("list[ColumnMetadata]", rows)
 
     async def get_indexes(
         self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[IndexMetadata]":
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
+        schema_prefix = format_sqlite_schema_prefix(schema_name)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
-            schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
             query_text = self._get_domain_query_text("indexes", "by_schema").format(schema_prefix=schema_prefix)
             rows = await driver.select(query_text, schema_name=schema_name)
             return _sqlite_index_rows_to_metadata(rows, schema_name)
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
-        schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
         query_text = self._get_domain_query_text("indexes", "by_table").format(schema_prefix=schema_prefix)
         rows = await driver.select(query_text, table_name=table, schema_name=schema_name)
         return _sqlite_index_rows_to_metadata(rows, schema_name)
@@ -152,18 +170,108 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
     async def get_foreign_keys(
         self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
-        """Get foreign key metadata."""
+        """Get foreign key metadata, including ON DELETE / ON UPDATE actions."""
         schema_name = self.resolve_schema(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
-            query_text = self._get_domain_query_text("foreign_keys", "by_schema")
-            return await driver.select(query_text, schema_name=schema_name, schema_type=ForeignKeyMetadata)
+            rows = await driver.select(
+                self._get_domain_query_text("foreign_keys", "by_schema"), schema_name=schema_name
+            )
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+            rows = await driver.select(
+                self._get_domain_query_text("foreign_keys", "by_table"), table_name=table, schema_name=schema_name
+            )
+        return [ForeignKeyMetadata.from_row(row) for row in rows]
 
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
-        query_text = self._get_domain_query_text("foreign_keys", "by_table")
-        return await driver.select(
-            query_text, table_name=table, schema_name=schema_name, schema_type=ForeignKeyMetadata
+    async def get_constraints(
+        self, driver: "AiosqliteDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "MetadataResult":
+        """Get PRIMARY KEY, UNIQUE, and CHECK constraint metadata.
+
+        PRIMARY KEY and UNIQUE come from index pragmas; CHECK constraints are parsed from the
+        stored CREATE TABLE statement because SQLite exposes them nowhere else.
+        """
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            rows = await driver.select(
+                self._get_domain_query_text("constraints", "by_schema"), schema_name=schema_name, table_name=None
+            )
+        else:
+            rows = await driver.select(
+                self._get_domain_query_text("constraints", "by_table"), schema_name=schema_name, table_name=table
+            )
+        items: list[dict[str, Any]] = sqlite_constraint_metadata(rows)
+        warnings: list[str] = []
+        for table_name, create_sql in (await self._get_table_sql(driver, schema_name, table)).items():
+            checks, check_warnings = sqlite_check_constraints(table_name, create_sql, schema_name=schema_name)
+            items.extend(checks)
+            warnings.extend(check_warnings)
+        return MetadataResult("constraints", items=tuple(items), warnings=tuple(warnings))
+
+    async def get_views(self, driver: "AiosqliteDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Get view metadata including the stored CREATE VIEW statement."""
+        schema_name = self.resolve_schema(schema)
+        schema_prefix = format_sqlite_schema_prefix(schema_name)
+        query_text = self._get_domain_query_text("views", "by_schema").format(schema_prefix=schema_prefix)
+        return MetadataResult("views", items=tuple(await driver.select(query_text, schema_name=schema_name)))
+
+    async def get_sequences(self, driver: "AiosqliteDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Return an empty sequence result because SQLite has no sequence objects."""
+        _ = driver, schema
+        return MetadataResult("sequences", items=())
+
+    async def get_types(self, driver: "AiosqliteDriver", schema: "str | None" = None) -> "MetadataResult":
+        """Return an empty type result because SQLite has no user-defined types."""
+        _ = driver, schema
+        return MetadataResult("types", items=())
+
+    async def _get_native_object_ddl(
+        self,
+        driver: "AiosqliteDriver",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return the stored SQL for an object from sqlite_schema."""
+        _ = include_dependencies, redact
+        schema_name = self.resolve_schema(schema)
+        schema_prefix = format_sqlite_schema_prefix(schema_name)
+        query_text = self._get_domain_query_text("ddl", "by_object").format(schema_prefix=schema_prefix)
+        rows = await driver.select(
+            query_text, schema_name=schema_name, object_name=object_name, object_type=object_type
         )
+        return sqlite_object_ddl_result(rows, object_name=object_name, object_type=object_type, schema=schema_name)
+
+    async def _get_native_schema_ddl(
+        self, driver: "AiosqliteDriver", schema: "str | None", *, include_dependencies: bool, redact: bool
+    ) -> "list[DDLResult] | None":
+        """Return the stored SQL for every sqlite_schema object."""
+        _ = include_dependencies, redact
+        schema_name = self.resolve_schema(schema)
+        schema_prefix = format_sqlite_schema_prefix(schema_name)
+        query_text = self._get_domain_query_text("ddl", "by_schema").format(schema_prefix=schema_prefix)
+        return sqlite_schema_ddl_results(await driver.select(query_text, schema_name=schema_name), schema=schema_name)
+
+    async def _get_table_sql(
+        self, driver: "AiosqliteDriver", schema_name: "str | None", table: "str | None"
+    ) -> "dict[str, str]":
+        """Return stored CREATE TABLE statements keyed by table name for one table or the whole schema."""
+        schema_prefix = format_sqlite_schema_prefix(schema_name)
+        if table is None:
+            query_text = self._get_domain_query_text("ddl", "by_schema").format(schema_prefix=schema_prefix)
+            rows = await driver.select(query_text, schema_name=schema_name)
+        else:
+            query_text = self._get_domain_query_text("ddl", "by_object").format(schema_prefix=schema_prefix)
+            rows = await driver.select(query_text, schema_name=schema_name, object_name=table, object_type="table")
+        return {
+            str(row["object_name"]): str(row["ddl"])
+            for row in rows
+            if str(row.get("object_type") or "").lower() == "table" and row.get("ddl") is not None
+        }
 
     def _get_domain_query_text(self, domain: str, query_name: str) -> str:
         """Return a required direct-domain query for SQLite."""

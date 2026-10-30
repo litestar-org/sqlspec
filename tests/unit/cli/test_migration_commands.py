@@ -20,7 +20,6 @@ def cleanup_test_modules() -> Iterator[None]:
     """Fixture to clean up test modules from sys.modules after each test."""
     modules_before = set(sys.modules.keys())
     yield
-    # Remove any test modules that were imported during the test
     modules_after = set(sys.modules.keys())
     test_modules = {m for m in modules_after - modules_before if m.startswith(MODULE_PREFIX)}
     for module in test_modules:
@@ -119,9 +118,7 @@ def get_config():
     result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.get_config", "show-config"])
 
     assert result.exit_code == 0
-    assert (
-        "No configurations with migrations detected" in result.output or "no_migrations" in result.output
-    )  # Depends on validation logic
+    assert "No configurations with migrations detected" in result.output or "no_migrations" in result.output
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -132,9 +129,8 @@ def test_show_current_revision_command(
     runner = CliRunner()
     monkeypatch.chdir(tmp_path)
 
-    # Mock the migration commands
     mock_commands = Mock()
-    mock_commands.current = Mock(return_value=None)  # Sync function
+    mock_commands.current = Mock(return_value=None)
     mock_create_commands.return_value = mock_commands
 
     config_module = """
@@ -278,7 +274,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.revision.assert_called_once_with(message="test migration", file_type=None)
+    mock_commands.revision.assert_called_once_with(
+        message="test migration", file_type=None, from_schema=False, from_data=None, schema=None, target_table=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -310,7 +308,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.revision.assert_called_once_with(message="test migration", file_type=None)
+    mock_commands.revision.assert_called_once_with(
+        message="test migration", file_type=None, from_schema=False, from_data=None, schema=None, target_table=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -350,7 +350,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.revision.assert_called_once_with(message="test migration", file_type="py")
+    mock_commands.revision.assert_called_once_with(
+        message="test migration", file_type="py", from_schema=False, from_data=None, schema=None, target_table=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -390,7 +392,9 @@ def get_config():
     )
 
     assert result.exit_code == 0
-    mock_commands.revision.assert_called_once_with(message="test migration", file_type="sql")
+    mock_commands.revision.assert_called_once_with(
+        message="test migration", file_type="sql", from_schema=False, from_data=None, schema=None, target_table=None
+    )
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")
@@ -422,7 +426,13 @@ def get_config():
 
     assert result.exit_code == 0
     mock_commands.upgrade.assert_called_once_with(
-        revision="head", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
+        revision="head",
+        allow_missing=False,
+        auto_sync=True,
+        dry_run=False,
+        use_logger=False,
+        echo=None,
+        summary_only=None,
     )
 
 
@@ -455,7 +465,13 @@ def get_config():
 
     assert result.exit_code == 0
     mock_commands.upgrade.assert_called_once_with(
-        revision="abc123", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
+        revision="abc123",
+        allow_missing=False,
+        auto_sync=True,
+        dry_run=False,
+        use_logger=False,
+        echo=None,
+        summary_only=None,
     )
 
 
@@ -556,7 +572,6 @@ def get_configs():
     )
 
     assert result.exit_code == 0
-    # Should process only the included configuration
     assert "sqlite_multi" in result.output
 
 
@@ -593,7 +608,6 @@ def get_configs():
     assert result.exit_code == 0
     assert "Dry run" in result.output
     assert "Would upgrade" in result.output
-    # Should not actually call the upgrade method with dry-run
     mock_commands.upgrade.assert_not_called()
 
 
@@ -680,14 +694,12 @@ def get_configs():
 """
     module_name = _create_module(config_module, tmp_path)
 
-    # Test filtering for sqlite_db only
     result = runner.invoke(
         add_migration_commands(), ["--config", f"{module_name}.get_configs", "show-config", "--bind-key", "sqlite_db"]
     )
 
     assert result.exit_code == 0
     assert "sqlite_db" in result.output
-    # Should only show one config, not all three
     assert "Found 1 configuration(s)" in result.output or "sqlite_migrations" in result.output
     assert "duckdb_db" not in result.output
     assert "postgres_db" not in result.output
@@ -760,9 +772,14 @@ def get_multi_configs():
     )
 
     assert result.exit_code == 0
-    # Should only process the analytics_db config
     mock_commands.upgrade.assert_called_once_with(
-        revision="head", auto_sync=True, dry_run=False, use_logger=False, echo=None, summary_only=None
+        revision="head",
+        allow_missing=False,
+        auto_sync=True,
+        dry_run=False,
+        use_logger=False,
+        echo=None,
+        summary_only=None,
     )
 
 
@@ -788,6 +805,7 @@ def test_squash_version_range_formats(version_range: str) -> None:
         yes=True,
         allow_gaps=False,
         output_format="sql",
+        strategy="concat",
     )
 
 

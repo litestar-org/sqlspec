@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     )
     from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, create_migration_runner
     from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, ensure_schema_async, ensure_schema_sync
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
+    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan, fold_migration_ddl
     from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
     from sqlspec.migrations.utils import create_migration_file, get_author
 
@@ -44,6 +44,7 @@ __all__ = (
     "create_migration_runner",
     "ensure_schema_async",
     "ensure_schema_sync",
+    "fold_migration_ddl",
     "get_author",
     "get_migration_loader",
 )
@@ -69,6 +70,7 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "create_migration_runner": ("sqlspec.migrations.runner", "create_migration_runner"),
     "ensure_schema_async": ("sqlspec.migrations.schema", "ensure_schema_async"),
     "ensure_schema_sync": ("sqlspec.migrations.schema", "ensure_schema_sync"),
+    "fold_migration_ddl": ("sqlspec.migrations.squash", "fold_migration_ddl"),
     "get_author": ("sqlspec.migrations.utils", "get_author"),
     "get_migration_loader": ("sqlspec.migrations.loaders", "get_migration_loader"),
     "loaders": ("sqlspec.migrations.loaders", None),

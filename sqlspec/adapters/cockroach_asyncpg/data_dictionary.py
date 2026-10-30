@@ -132,32 +132,9 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
             driver, "dependencies", "by_schema", schema_name=self.resolve_schema(schema), object_name=resolved_object
         )
 
-    async def get_ddl(
-        self,
-        driver: "CockroachAsyncpgDriver",
-        object_name: str,
-        schema: str | None = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Get lossy CockroachDB DDL status without parameterized identifiers."""
-        _ = include_dependencies, prefer_native, redact
-        schema_name = self.resolve_schema(schema)
-        resolved_object = self.resolve_identifier(object_name)
-        result = await self._select_domain(
-            driver, "ddl", "by_object", schema_name=schema_name, object_name=resolved_object, object_type=object_type
-        )
-        return _cockroach_ddl_result_from_rows(
-            dialect=type(self).dialect,
-            object_name=resolved_object,
-            object_type=object_type,
-            schema=schema_name,
-            rows=result.items,
-            warnings=result.warnings,
-        )
+    async def get_sequences(self, driver: "CockroachAsyncpgDriver", schema: str | None = None) -> MetadataResult:
+        """Get sequence metadata."""
+        return await self._select_domain(driver, "sequences", "by_schema", schema_name=self.resolve_schema(schema))
 
     async def get_system_metadata(
         self, driver: "CockroachAsyncpgDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
@@ -257,20 +234,45 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
     async def get_foreign_keys(
         self, driver: "CockroachAsyncpgDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata, including ON DELETE / ON UPDATE actions."""
         schema_name = self.resolve_schema(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
-            return await driver.select(
-                self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, schema_type=ForeignKeyMetadata
+            rows = await driver.select(self.get_query("foreign_keys", "by_schema"), schema_name=schema_name)
+        else:
+            table_name = self.resolve_identifier(table)
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
+            rows = await driver.select(
+                self.get_query("foreign_keys", "by_table"), table_name=table_name, schema_name=schema_name
             )
+        return [ForeignKeyMetadata.from_row(row) for row in rows]
 
-        table_name = self.resolve_identifier(table)
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
-        return await driver.select(
-            self.get_query("foreign_keys", "by_table"),
-            table_name=table_name,
-            schema_name=schema_name,
-            schema_type=ForeignKeyMetadata,
+    async def _get_native_object_ddl(
+        self,
+        driver: "CockroachAsyncpgDriver",
+        object_name: str,
+        *,
+        schema: str | None,
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> DDLResult | None:
+        """Return CockroachDB DDL for one object from the stable query pack.
+
+        The stable pack cannot emit ``SHOW CREATE`` output, so it reports lossy DDL with a warning
+        and the base class synthesizes table DDL from stable catalog metadata.
+        """
+        _ = include_dependencies, redact
+        result = await self._select_domain(
+            driver, "ddl", "by_object", schema_name=schema, object_name=object_name, object_type=object_type
+        )
+        return _cockroach_ddl_result_from_rows(
+            dialect=type(self).dialect,
+            object_name=object_name,
+            object_type=object_type,
+            schema=schema,
+            rows=result.items,
+            warnings=result.warnings,
         )
 
     async def _select_domain(
@@ -364,12 +366,17 @@ def _cockroach_ddl_result_from_rows(
         dialect=dialect,
         source=MetadataSource.INFORMATION_SCHEMA,
     )
-    return DDLResult.lossy(
-        identity,
-        ddl=str(ddl) if ddl is not None else None,
-        source=MetadataSource.INFORMATION_SCHEMA,
-        warnings=result_warnings,
-    )
+    if ddl is not None:
+        row_fidelity = _row_value(row, "fidelity") if row is not None else None
+        return DDLResult(
+            identity=identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=str(row_fidelity) if row_fidelity is not None else MetadataFidelity.NATIVE,
+            source=MetadataSource.INFORMATION_SCHEMA,
+            ddl=str(ddl),
+            warnings=result_warnings,
+        )
+    return DDLResult.lossy(identity, ddl=None, source=MetadataSource.INFORMATION_SCHEMA, warnings=result_warnings)
 
 
 def _cockroach_domain_sql(domain: str, query_name: str) -> "SQL":

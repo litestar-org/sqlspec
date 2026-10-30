@@ -284,19 +284,18 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
         )
         return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
 
-    def get_ddl(
+    def _get_native_object_ddl(
         self,
         driver: Any,
         object_name: str,
-        schema: "str | None" = None,
         *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Get Spanner DDL through the Database Admin API."""
-        _ = include_dependencies, prefer_native, redact
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return Spanner DDL through the Database Admin API."""
+        _ = include_dependencies, redact
         ddl_statements = _get_spanner_ddl_statements(driver)
         identity = ObjectIdentity(
             name=object_name,
@@ -308,6 +307,8 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
         if not ddl_statements:
             return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
         ddl = _select_spanner_ddl_for_object(ddl_statements, object_name, object_type=object_type)
+        if ddl is None:
+            return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
         return DDLResult(
             identity=identity,
             status=MetadataSupport.SUPPORTED,
@@ -535,19 +536,18 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
         )
         return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
 
-    async def get_ddl(
+    async def _get_native_object_ddl(
         self,
         driver: Any,
         object_name: str,
-        schema: "str | None" = None,
         *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> DDLResult:
-        """Get Spanner DDL through the Database Admin API."""
-        _ = include_dependencies, prefer_native, redact
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return Spanner DDL through the Database Admin API."""
+        _ = include_dependencies, redact
         ddl_statements = await _get_spanner_ddl_statements_async(driver)
         identity = ObjectIdentity(
             name=object_name,
@@ -559,6 +559,8 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
         if not ddl_statements:
             return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
         ddl = _select_spanner_ddl_for_object(ddl_statements, object_name, object_type=object_type)
+        if ddl is None:
+            return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
         return DDLResult(
             identity=identity,
             status=MetadataSupport.SUPPORTED,
@@ -667,7 +669,7 @@ def _get_spanner_database_admin_api(database: Any) -> Any:
 
 def _select_spanner_ddl_for_object(
     statements: "tuple[str, ...]", object_name: str, *, object_type: str = "table"
-) -> str:
+) -> str | None:
     escaped_name = re.escape(object_name.strip('`"'))
     normalized_type = object_type.strip().replace("_", r"\s+")
     typed_pattern = re.compile(
@@ -678,12 +680,4 @@ def _select_spanner_ddl_for_object(
     for statement in statements:
         if typed_pattern.search(statement):
             return statement
-    any_object_pattern = re.compile(
-        rf"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:[A-Z_]+\s+)+?(?:IF\s+NOT\s+EXISTS\s+)?"
-        rf"(?:[`\"]?\w+[`\"]?\.)?[`\"]?{escaped_name}[`\"]?(?=\s|\(|;|$)",
-        re.IGNORECASE,
-    )
-    for statement in statements:
-        if any_object_pattern.search(statement):
-            return statement
-    return "\n".join(statements)
+    return None

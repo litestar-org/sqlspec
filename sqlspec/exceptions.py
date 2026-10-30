@@ -1,3 +1,5 @@
+"""Exception hierarchy and SQLSTATE error mapping for SQLSpec."""
+
 from typing import Any, Final
 
 __all__ = (

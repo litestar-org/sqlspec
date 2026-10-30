@@ -10,11 +10,17 @@ from pathlib import Path
 
 import pytest
 
+from sqlspec.exceptions import SquashValidationError
+from sqlspec.migrations.squash import parse_version_range
+from sqlspec.migrations.validation import (
+    validate_extension_consistency,
+    validate_squash_idempotency,
+    validate_squash_range,
+)
+
 
 def test_validate_squash_range_validate_squash_range_valid_range() -> None:
     """Test validate_squash_range returns sorted migrations for valid range."""
-    from sqlspec.migrations.validation import validate_squash_range
-
     migrations: list[tuple[str, Path]] = [
         ("0001", Path("0001_initial.sql")),
         ("0002", Path("0002_users.sql")),
@@ -30,18 +36,12 @@ def test_validate_squash_range_validate_squash_range_valid_range() -> None:
 
 def test_validate_squash_range_retypes_nonnumeric_bounds() -> None:
     """Nonnumeric range bounds should use the migration exception contract."""
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.validation import validate_squash_range
-
     with pytest.raises(SquashValidationError, match="must be numeric"):
         validate_squash_range([("0001", Path("0001.sql"))], "bad", "0001")
 
 
 def test_validate_squash_range_validate_squash_range_gap_detected() -> None:
     """Test validate_squash_range raises error when gap detected."""
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.validation import validate_squash_range
-
     migrations: list[tuple[str, Path]] = [
         ("0001", Path("0001_initial.sql")),
         ("0002", Path("0002_users.sql")),
@@ -53,8 +53,6 @@ def test_validate_squash_range_validate_squash_range_gap_detected() -> None:
 
 def test_validate_squash_range_validate_squash_range_allow_gaps_true() -> None:
     """Test validate_squash_range allows gaps when flag is set."""
-    from sqlspec.migrations.validation import validate_squash_range
-
     migrations: list[tuple[str, Path]] = [
         ("0001", Path("0001_initial.sql")),
         ("0002", Path("0002_users.sql")),
@@ -67,9 +65,6 @@ def test_validate_squash_range_validate_squash_range_allow_gaps_true() -> None:
 
 def test_validate_squash_range_validate_squash_range_invalid_start() -> None:
     """Test validate_squash_range raises error when start version not found."""
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.validation import validate_squash_range
-
     migrations: list[tuple[str, Path]] = [("0002", Path("0002_users.sql")), ("0003", Path("0003_posts.sql"))]
     with pytest.raises(SquashValidationError, match="Start version 0001 not found"):
         validate_squash_range(migrations, "0001", "0003")
@@ -77,9 +72,6 @@ def test_validate_squash_range_validate_squash_range_invalid_start() -> None:
 
 def test_validate_squash_range_validate_squash_range_invalid_end() -> None:
     """Test validate_squash_range raises error when end version not found."""
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.validation import validate_squash_range
-
     migrations: list[tuple[str, Path]] = [("0001", Path("0001_initial.sql")), ("0002", Path("0002_users.sql"))]
     with pytest.raises(SquashValidationError, match="End version 0005 not found"):
         validate_squash_range(migrations, "0001", "0005")
@@ -87,9 +79,6 @@ def test_validate_squash_range_validate_squash_range_invalid_end() -> None:
 
 def test_validate_squash_range_validate_squash_range_reversed() -> None:
     """Test validate_squash_range raises error when start > end."""
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.validation import validate_squash_range
-
     migrations: list[tuple[str, Path]] = [
         ("0001", Path("0001_initial.sql")),
         ("0002", Path("0002_users.sql")),
@@ -101,9 +90,6 @@ def test_validate_squash_range_validate_squash_range_reversed() -> None:
 
 def test_validate_squash_range_validate_squash_range_version_not_found() -> None:
     """Test validate_squash_range raises error when version not in list."""
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.validation import validate_squash_range
-
     migrations: list[tuple[str, Path]] = [("0001", Path("0001_initial.sql")), ("0010", Path("0010_final.sql"))]
     with pytest.raises(SquashValidationError, match="Start version 0005 not found"):
         validate_squash_range(migrations, "0005", "0007")
@@ -111,8 +97,6 @@ def test_validate_squash_range_validate_squash_range_version_not_found() -> None
 
 def test_validate_squash_range_validate_squash_range_single_migration() -> None:
     """Test validate_squash_range works with single migration in range."""
-    from sqlspec.migrations.validation import validate_squash_range
-
     migrations: list[tuple[str, Path]] = [
         ("0001", Path("0001_initial.sql")),
         ("0002", Path("0002_users.sql")),
@@ -125,8 +109,6 @@ def test_validate_squash_range_validate_squash_range_single_migration() -> None:
 
 def test_validate_extension_consistency_validate_extension_all_core() -> None:
     """Test validate_extension_consistency passes for all core migrations."""
-    from sqlspec.migrations.validation import validate_extension_consistency
-
     migrations: list[tuple[str, Path]] = [
         ("0001", Path("0001_initial.sql")),
         ("0002", Path("0002_users.sql")),
@@ -137,8 +119,6 @@ def test_validate_extension_consistency_validate_extension_all_core() -> None:
 
 def test_validate_extension_consistency_validate_extension_all_same_ext() -> None:
     """Test validate_extension_consistency passes for all same extension."""
-    from sqlspec.migrations.validation import validate_extension_consistency
-
     migrations: list[tuple[str, Path]] = [
         ("ext_litestar_0001", Path("ext_litestar_0001_init.sql")),
         ("ext_litestar_0002", Path("ext_litestar_0002_tables.sql")),
@@ -148,9 +128,6 @@ def test_validate_extension_consistency_validate_extension_all_same_ext() -> Non
 
 def test_validate_extension_consistency_validate_extension_mixed_core_and_ext() -> None:
     """Test validate_extension_consistency raises error for mixed core and ext."""
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.validation import validate_extension_consistency
-
     migrations: list[tuple[str, Path]] = [
         ("0001", Path("0001_initial.sql")),
         ("ext_litestar_0001", Path("ext_litestar_0001_init.sql")),
@@ -161,9 +138,6 @@ def test_validate_extension_consistency_validate_extension_mixed_core_and_ext() 
 
 def test_validate_extension_consistency_validate_extension_mixed_different_exts() -> None:
     """Test validate_extension_consistency raises error for different extensions."""
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.validation import validate_extension_consistency
-
     migrations: list[tuple[str, Path]] = [
         ("ext_litestar_0001", Path("ext_litestar_0001_init.sql")),
         ("ext_adk_0001", Path("ext_adk_0001_init.sql")),
@@ -174,8 +148,6 @@ def test_validate_extension_consistency_validate_extension_mixed_different_exts(
 
 def test_validate_squash_idempotency_idempotency_ready(tmp_path: Path) -> None:
     """Test validate_squash_idempotency returns 'ready' when target doesn't exist."""
-    from sqlspec.migrations.validation import validate_squash_idempotency
-
     (tmp_path / "0001_initial.sql").write_text("-- migration")
     (tmp_path / "0002_users.sql").write_text("-- migration")
     source_files = [tmp_path / "0001_initial.sql", tmp_path / "0002_users.sql"]
@@ -186,8 +158,6 @@ def test_validate_squash_idempotency_idempotency_ready(tmp_path: Path) -> None:
 
 def test_validate_squash_idempotency_idempotency_already_squashed(tmp_path: Path) -> None:
     """Test validate_squash_idempotency returns 'already_squashed' when target exists and sources gone."""
-    from sqlspec.migrations.validation import validate_squash_idempotency
-
     (tmp_path / "0001_squashed.sql").write_text("-- squashed migration")
     source_files = [tmp_path / "0001_initial.sql", tmp_path / "0002_users.sql"]
     target_file = tmp_path / "0001_squashed.sql"
@@ -197,8 +167,6 @@ def test_validate_squash_idempotency_idempotency_already_squashed(tmp_path: Path
 
 def test_validate_squash_idempotency_idempotency_partial(tmp_path: Path) -> None:
     """Test validate_squash_idempotency returns 'partial' when target and some sources exist."""
-    from sqlspec.migrations.validation import validate_squash_idempotency
-
     (tmp_path / "0001_initial.sql").write_text("-- migration")
     (tmp_path / "0001_squashed.sql").write_text("-- squashed migration")
     source_files = [tmp_path / "0001_initial.sql", tmp_path / "0002_users.sql"]
@@ -209,49 +177,77 @@ def test_validate_squash_idempotency_idempotency_partial(tmp_path: Path) -> None
 
 def test_parse_version_range_colon_separator() -> None:
     """Test START:END format."""
-    from sqlspec.migrations.squash import parse_version_range
-
     assert parse_version_range("1:7") == ("0001", "0007")
 
 
 def test_parse_version_range_double_dot_separator() -> None:
     """Test START..END format."""
-    from sqlspec.migrations.squash import parse_version_range
-
     assert parse_version_range("1..7") == ("0001", "0007")
 
 
 def test_parse_version_range_hyphen_separator() -> None:
     """Test START-END format."""
-    from sqlspec.migrations.squash import parse_version_range
-
     assert parse_version_range("1-7") == ("0001", "0007")
 
 
 def test_parse_version_range_zero_padded_input() -> None:
     """Test that already-padded input is preserved."""
-    from sqlspec.migrations.squash import parse_version_range
-
     assert parse_version_range("0001:0007") == ("0001", "0007")
 
 
 def test_parse_version_range_whitespace_stripped() -> None:
     """Test that whitespace around versions is stripped."""
-    from sqlspec.migrations.squash import parse_version_range
-
     assert parse_version_range(" 1 : 7 ") == ("0001", "0007")
 
 
 def test_parse_version_range_invalid_format_raises() -> None:
     """Test that unsupported format raises ValueError."""
-    from sqlspec.migrations.squash import parse_version_range
-
     with pytest.raises(ValueError, match="Invalid VERSION_RANGE"):
         parse_version_range("1to7")
 
 
 def test_parse_version_range_double_dot_preferred_over_hyphen() -> None:
     """Test that '..' separator is tried before '-' to avoid ambiguity."""
-    from sqlspec.migrations.squash import parse_version_range
-
     assert parse_version_range("1..7") == ("0001", "0007")
+
+
+def test_parse_version_range_preserves_timestamps_and_mixed_endpoints() -> None:
+    """Timestamp endpoints must not be truncated or mis-padded across ':', '..', or '-'."""
+    assert parse_version_range("20251011120000:20251012153000") == ("20251011120000", "20251012153000")
+    assert parse_version_range("20251011120000..20251012153000") == ("20251011120000", "20251012153000")
+    assert parse_version_range("20251011120000-20251012153000") == ("20251011120000", "20251012153000")
+    assert parse_version_range("1..20251012153000") == ("0001", "20251012153000")
+
+
+def test_validate_squash_range_supports_timestamp_and_mixed_ranges() -> None:
+    """validate_squash_range should accept timestamped and mixed sequential+timestamp ranges."""
+    ts_migrations: list[tuple[str, Path]] = [
+        ("20251011120000", Path("20251011120000_init.sql")),
+        ("20251012153000", Path("20251012153000_users.sql")),
+        ("20251013090000", Path("20251013090000_posts.sql")),
+    ]
+    ts_result = validate_squash_range(ts_migrations, "20251011120000", "20251013090000")
+    assert [v for v, _ in ts_result] == ["20251011120000", "20251012153000", "20251013090000"]
+
+    mixed_migrations: list[tuple[str, Path]] = [
+        ("0001", Path("0001_init.sql")),
+        ("0002", Path("0002_users.sql")),
+        ("20251011120000", Path("20251011120000_posts.sql")),
+    ]
+    mixed_result = validate_squash_range(mixed_migrations, "0001", "20251011120000")
+    assert [v for v, _ in mixed_result] == ["0001", "0002", "20251011120000"]
+
+    gapped_mixed: list[tuple[str, Path]] = [
+        ("0001", Path("0001_init.sql")),
+        ("0003", Path("0003_users.sql")),
+        ("20251011120000", Path("20251011120000_posts.sql")),
+    ]
+    with pytest.raises(SquashValidationError, match="Gap detected"):
+        validate_squash_range(gapped_mixed, "0001", "20251011120000")
+
+
+@pytest.mark.parametrize("range_str", ["1-", ":7", "1..", " - 7", "1: "])
+def test_parse_version_range_rejects_missing_endpoint(range_str: str) -> None:
+    """A range with an empty START or END fails instead of normalizing to version 0000."""
+    with pytest.raises(ValueError, match="both START and END are required"):
+        parse_version_range(range_str)

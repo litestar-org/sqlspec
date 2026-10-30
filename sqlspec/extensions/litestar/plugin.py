@@ -1,3 +1,5 @@
+"""Litestar plugin for SQLSpec database configuration, lifecycle, and dependency injection."""
+
 import logging
 from collections.abc import Iterable
 from contextlib import suppress

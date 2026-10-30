@@ -1,3 +1,5 @@
+"""FastAPI extension for SQLSpec database session and dependency management."""
+
 from typing import TYPE_CHECKING, Any, overload
 
 from fastapi import Request

@@ -275,6 +275,16 @@ class MigrationConfig(TypedDict):
     templates: NotRequired[MigrationTemplates]
     """Template fragment overrides applied when generating migration files."""
 
+    schema_dump_path: NotRequired["str | Path | None"]
+    """Default file path written by ``dump_schema()`` when ``output_path`` is omitted."""
+
+    auto_dump_schema: NotRequired["bool | str | Path | None"]
+    """Automatically dump the current database schema after ``upgrade()`` applies migrations.
+
+    ``True`` writes to ``schema_dump_path`` (or ``<script_location>/schema.sql``); a path writes there. The dump runs
+    after the migrations have committed, so a dump failure is logged as a warning and does not fail the upgrade.
+    """
+
 
 MIGRATION_CONFIG_KEYS: "frozenset[str]" = MigrationConfig.__required_keys__ | MigrationConfig.__optional_keys__
 MIGRATION_TEMPLATES_KEYS: "frozenset[str]" = MigrationTemplates.__required_keys__ | MigrationTemplates.__optional_keys__

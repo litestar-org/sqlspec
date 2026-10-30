@@ -125,7 +125,10 @@ nav = [
       { "Migrations" = "reference/migrations.md" },
       { "CLI" = "reference/cli.md" },
       { "Storage & Arrow" = "reference/storage.md" },
-      { "Data Dictionary" = "reference/data-dictionary.md" },
+      { "Data Dictionary" = [
+        "reference/data-dictionary.md",
+        { "Runtime & DDL" = "reference/data-dictionary/runtime.md" },
+      ] },
       { "Observability" = "reference/observability.md" },
       { "Service Layer" = "reference/service.md" },
       { "Dialects" = "reference/dialects.md" },

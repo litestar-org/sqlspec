@@ -42,12 +42,12 @@ from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_jso
 from sqlspec.data_dictionary.dialects.mysql import resolve_mysql_json_type
 from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components, resolve_oracle_json_type
 from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
-from sqlspec.data_dictionary.dialects.sqlite import resolve_sqlite_json_type
+from sqlspec.data_dictionary.dialects.sqlite import format_sqlite_schema_prefix, resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import OperationalError, SQLFileNotFoundError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
-from sqlspec.utils.text import normalize_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -61,7 +61,7 @@ logger = get_logger("sqlspec.adapters.adbc")
 _pa: Any = import_optional("pyarrow")
 
 _NATIVE_TABLE_TYPES: Final = frozenset({"table", "base table"})
-_NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError)
+_NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError, AttributeError)
 _ADBC_METADATA_DOMAINS: Final = (
     "schemas",
     "objects",
@@ -232,7 +232,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(query_text, schema_type=TableMetadata)
 
         if dialect == "sqlite":
-            schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+            schema_prefix = format_sqlite_schema_prefix(schema_name)
             query_text = self._get_query_text(dialect, "tables", "by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_name=schema_name, schema_type=TableMetadata)
 
@@ -267,11 +267,14 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(query_text, table_name=table_name, schema_name=schema_name, schema_type=ColumnMetadata)
 
         if dialect == "sqlite":
-            schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+            schema_prefix = format_sqlite_schema_prefix(schema_name)
             if table is None:
                 query_text = self._get_query_text(dialect, "columns", "by_schema").format(schema_prefix=schema_prefix)
                 return driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
-            query_text = self._get_query_text(dialect, "columns", "by_table").format(schema_prefix=schema_prefix)
+            query_text = self._get_query_text(dialect, "columns", "by_table").format(
+                schema_prefix=schema_prefix,
+                table_name=format_identifier(f"{schema_name}.{table}" if schema_name else table),
+            )
             return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
 
         if table is None:
@@ -309,11 +312,12 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 return indexes
 
             table_name = table
+            schema_prefix = format_sqlite_schema_prefix(schema_name)
             table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
             index_list_sql = self._get_query_text(dialect, "indexes", "by_table").format(
-                table_name=format_identifier(table_identifier)
+                schema_prefix=schema_prefix, table_name=format_identifier(table_identifier)
             )
-            index_list_rows = driver.select(index_list_sql)
+            index_list_rows = driver.select(index_list_sql, table_name=table_name, schema_name=schema_name)
             index_metadata_list: list[IndexMetadata] = []
             for row in index_list_rows:
                 index_name = row.get("name")
@@ -323,7 +327,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 columns_sql = self._get_query_text(dialect, "indexes", "columns_by_index").format(
                     index_name=format_identifier(index_identifier)
                 )
-                columns_rows = driver.select(columns_sql)
+                columns_rows = driver.select(columns_sql, index_name=index_name, schema_name=schema_name)
                 columns: list[str] = []
                 for col in columns_rows:
                     column_name = col.get("name")
@@ -390,17 +394,17 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
         if dialect == "sqlite":
             if table is None:
-                schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+                schema_prefix = format_sqlite_schema_prefix(schema_name)
                 query_text = self._get_query_text(dialect, "foreign_keys", "by_schema").format(
                     schema_prefix=schema_prefix
                 )
-                return driver.select(query_text, schema_type=ForeignKeyMetadata)
+                return driver.select(query_text, schema_name=schema_name, schema_type=ForeignKeyMetadata)
             table_label = table.replace("'", "''")
             table_identifier = f"{schema_name}.{table}" if schema_name else table
             query_text = self._get_query_text(dialect, "foreign_keys", "by_table").format(
                 table_name=format_identifier(table_identifier), table_label=table_label
             )
-            return driver.select(query_text, schema_type=ForeignKeyMetadata)
+            return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ForeignKeyMetadata)
 
         if table is None:
             query_text_optional = self._get_query_text_or_none(dialect, "foreign_keys", "by_schema")
@@ -474,31 +478,23 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             warnings=capability.warnings,
         )
 
-    def get_ddl(
-        self,
-        driver: "AdbcDriver",
-        object_name: str,
-        schema: "str | None" = None,
-        *,
-        object_type: str = "table",
-        include_dependencies: bool = True,
-        prefer_native: bool = True,
-        redact: bool = True,
-    ) -> "DDLResult":
-        """Fail closed because ADBC metadata is not a lossless DDL source."""
-        _ = include_dependencies, prefer_native, redact
+    def resolve_ddl_dialect(self, driver: "AdbcDriver") -> "str | None":
+        """Return the dialect detected from the ADBC driver for parsing and rendering DDL."""
         dialect = self._normalize_dialect(driver)
-        schema_name = self._resolve_schema(dialect, schema)
-        identity = ObjectIdentity(
-            name=object_name,
-            object_type=object_type,
-            schema=schema_name,
-            dialect=dialect,
-            source=MetadataSource.DRIVER_METADATA,
-        )
-        return DDLResult.unsupported(
-            identity, source=MetadataSource.DRIVER_METADATA, warnings=(_ADBC_DDL_UNSUPPORTED_WARNING,)
-        )
+        return None if dialect in {"", "generic", "unknown"} else dialect
+
+    def resolve_ddl_object_name(
+        self, driver: "AdbcDriver", object_name: str, schema: "str | None"
+    ) -> "tuple[str, str | None]":
+        """Resolve a DDL object name against the dialect detected from the ADBC driver."""
+        dialect = self._normalize_dialect(driver)
+        return (self._resolve_identifier(dialect, object_name), self._resolve_schema(dialect, schema))
+
+    def exact_catalog_identifier(self, driver: "AdbcDriver", name: str) -> str:
+        """Return ``name`` in the form ADBC metadata getters resolve back to the exact catalog name."""
+        if self._resolve_identifier(self._normalize_dialect(driver), name) == name:
+            return name
+        return quote_identifier(name)
 
     def get_system_metadata_capabilities(
         self, driver: Any, domains: "Sequence[str] | None" = None
@@ -537,6 +533,31 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         rows = tuple(cast("dict[str, object]", entry) for entry in statistics)
         return SystemMetadataResult.from_rows(
             metadata_request, capability, rows=rows, source=MetadataSource.DRIVER_METADATA
+        )
+
+    def _get_native_object_ddl(
+        self,
+        driver: "AdbcDriver",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Fail closed because ADBC metadata is not a lossless DDL source; tables fall back to synthesis."""
+        _ = include_dependencies, redact
+        identity = ObjectIdentity(
+            name=object_name,
+            object_type=object_type,
+            schema=schema,
+            dialect=self._normalize_dialect(driver),
+            source=MetadataSource.DRIVER_METADATA,
+        )
+        return DDLResult.unsupported(
+            identity,
+            source=MetadataSource.DRIVER_METADATA,
+            warnings=(_ADBC_DDL_UNSUPPORTED_WARNING, _ADBC_TRANSPORT_WARNING),
         )
 
     def _system_metadata_capability(self, domain: str) -> "SystemMetadataCapability":

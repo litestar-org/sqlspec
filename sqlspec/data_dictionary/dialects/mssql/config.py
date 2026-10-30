@@ -1,9 +1,10 @@
 """SQL Server dialect static configuration and reflection helpers."""
 
 import re
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
+from sqlspec.builder._ddl import compile_table_ddl_results
 from sqlspec.data_dictionary import (
     DDLResult,
     DialectConfig,
@@ -26,6 +27,8 @@ from sqlspec.data_dictionary import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.data_dictionary import TableMetadata
 
 __all__ = (
@@ -460,6 +463,9 @@ def build_mssql_table_ddl_result(
     column_rows: "Sequence[Any]",
     index_rows: "Sequence[Any] | None" = None,
     *,
+    constraint_rows: "Sequence[Any] | None" = None,
+    foreign_key_rows: "Sequence[Any] | None" = None,
+    target_dialect: str | None = None,
     object_type: str = "table",
 ) -> DDLResult:
     """Generate SQL Server table DDL from structured catalog rows."""
@@ -468,8 +474,8 @@ def build_mssql_table_ddl_result(
         name=table_name,
         object_type=object_type,
         schema=schema,
-        dialect="mssql",
-        quoted_name=_mssql_qualified_name(schema, table_name),
+        dialect=target_dialect or "mssql",
+        quoted_name=_mssql_qualified_name(schema, table_name) if not target_dialect else None,
         source=MetadataSource.GENERATED,
     )
     if not column_rows:
@@ -479,33 +485,28 @@ def build_mssql_table_ddl_result(
             warnings=(f"No SQL Server catalog columns found for {schema or '<default>'}.{table_name}",),
         )
 
-    rows = [_row_to_dict(row) for row in column_rows]
-    primary_key_name = _first_non_empty(row.get("primary_key_name") for row in rows)
-    primary_columns = [
-        row for row in rows if row.get("primary_key_ordinal") is not None and str(row.get("primary_key_ordinal")) != "0"
-    ]
-    primary_columns.sort(key=lambda row: int(cast("Any", row.get("primary_key_ordinal") or 0)))
-
-    ddl_lines = [_render_mssql_column_definition(row) for row in sorted(rows, key=_column_ordinal)]
-    if primary_key_name and primary_columns:
-        columns = ", ".join(_quote_mssql_identifier(str(row["column_name"])) for row in primary_columns)
-        ddl_lines.append(f"CONSTRAINT {_quote_mssql_identifier(str(primary_key_name))} PRIMARY KEY ({columns})")
-
-    table_ddl = "CREATE TABLE " + _mssql_qualified_name(schema, table_name) + " (\n"
-    table_ddl += ",\n".join(f"    {line}" for line in ddl_lines)
-    table_ddl += "\n);"
-
-    index_statements = [
-        _render_mssql_index_definition(_row_to_dict(row), schema, table_name) for row in index_rows or ()
-    ]
-    ddl_text = "\n\n".join(statement for statement in (table_ddl, *index_statements) if statement)
+    compiled = compile_table_ddl_results(
+        table_name,
+        column_rows,
+        schema=schema,
+        constraints=constraint_rows,
+        foreign_keys=foreign_key_rows,
+        indexes=index_rows,
+        dialect=target_dialect or "tsql",
+        source_dialect="tsql",
+        object_type=object_type,
+        warnings=(MSSQL_DDL_WARNING,),
+    )
     return DDLResult(
         identity,
-        MetadataSupport.SUPPORTED,
-        fidelity=MetadataFidelity.GENERATED,
-        source=MetadataSource.GENERATED,
-        ddl=ddl_text,
-        warnings=(MSSQL_DDL_WARNING,),
+        compiled.status,
+        fidelity=compiled.fidelity,
+        source=compiled.source,
+        ddl=compiled.ddl,
+        dependencies=compiled.dependencies,
+        redactions=compiled.redactions,
+        context=compiled.context,
+        warnings=compiled.warnings,
     )
 
 
@@ -532,28 +533,12 @@ def merge_mssql_table_lists(ordered: "list[TableMetadata]", all_rows: "list[Tabl
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
-    if isinstance(row, dict):
+    if isinstance(row, Mapping):
         return dict(row)
     if hasattr(row, "_asdict"):
         return dict(row._asdict())
-    return {key: getattr(row, key) for key in dir(row) if not key.startswith("_") and not callable(getattr(row, key))}
-
-
-def _truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
-    return bool(value)
-
-
-def _column_ordinal(row: dict[str, Any]) -> int:
-    try:
-        return int(cast("Any", row.get("ordinal_position") or 0))
-    except (TypeError, ValueError):
-        return 0
+    msg = f"Unsupported SQL Server catalog row type: {type(row).__name__}"
+    raise TypeError(msg)
 
 
 def _quote_mssql_identifier(value: str) -> str:
@@ -564,81 +549,3 @@ def _mssql_qualified_name(schema: str | None, name: str) -> str:
     if schema:
         return f"{_quote_mssql_identifier(schema)}.{_quote_mssql_identifier(name)}"
     return _quote_mssql_identifier(name)
-
-
-def _first_non_empty(values: Any) -> Any:
-    for value in values:
-        if value:
-            return value
-    return None
-
-
-def _render_mssql_column_definition(row: dict[str, Any]) -> str:
-    column_name = _quote_mssql_identifier(str(row["column_name"]))
-    if _truthy(row.get("is_computed")) and row.get("computed_definition"):
-        definition = f"{column_name} AS {row['computed_definition']}"
-        if _truthy(row.get("is_persisted_computed")):
-            definition += " PERSISTED"
-        return definition
-
-    parts = [column_name, _render_mssql_type(row)]
-    if _truthy(row.get("is_identity")):
-        seed = row.get("identity_seed") or 1
-        increment = row.get("identity_increment") or 1
-        parts.append(f"IDENTITY({seed},{increment})")
-    if row.get("column_default"):
-        parts.append(f"DEFAULT {row['column_default']}")
-    parts.append("NULL" if _truthy(row.get("is_nullable")) else "NOT NULL")
-    return " ".join(parts)
-
-
-def _render_mssql_type(row: dict[str, Any]) -> str:
-    data_type = str(row.get("data_type") or "sql_variant")
-    normalized = data_type.lower()
-    max_length = row.get("max_length")
-    precision = row.get("numeric_precision")
-    scale = row.get("numeric_scale")
-    if normalized in {"nchar", "nvarchar"}:
-        if max_length in {-1, "-1"}:
-            return f"{data_type}(MAX)"
-        if max_length is not None:
-            return f"{data_type}({int(cast('Any', max_length)) // 2})"
-    if normalized in {"binary", "char", "varbinary", "varchar"}:
-        if max_length in {-1, "-1"}:
-            return f"{data_type}(MAX)"
-        if max_length is not None:
-            return f"{data_type}({max_length})"
-    if normalized in {"decimal", "numeric"} and precision is not None and scale is not None:
-        return f"{data_type}({precision},{scale})"
-    if normalized in {"datetime2", "datetimeoffset", "time"} and scale is not None:
-        return f"{data_type}({scale})"
-    return data_type
-
-
-def _render_mssql_index_definition(row: dict[str, Any], schema: str | None, table_name: str) -> str | None:
-    index_name = row.get("index_name")
-    columns = _split_mssql_column_list(row.get("columns"))
-    if not index_name or not columns:
-        return None
-    unique = "UNIQUE " if _truthy(row.get("is_unique")) else ""
-    index_type = str(row.get("type_desc") or "NONCLUSTERED").replace("_", " ")
-    statement = (
-        f"CREATE {unique}{index_type} INDEX {_quote_mssql_identifier(str(index_name))} "
-        f"ON {_mssql_qualified_name(schema, table_name)} ({', '.join(_quote_mssql_identifier(column) for column in columns)})"
-    )
-    included = _split_mssql_column_list(row.get("included_columns"))
-    if included:
-        statement += f" INCLUDE ({', '.join(_quote_mssql_identifier(column) for column in included)})"
-    if _truthy(row.get("has_filter")) and row.get("filter_definition"):
-        statement += f" WHERE {row['filter_definition']}"
-    return statement + ";"
-
-
-def _split_mssql_column_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [part.strip() for part in value.split(",") if part.strip()]
-    if isinstance(value, Sequence):
-        return [str(part) for part in value if str(part)]
-    return [str(value)]

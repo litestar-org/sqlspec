@@ -20,9 +20,11 @@ from sqlspec.core.result import DMLResult
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.data_dictionary import (
     DEFAULT_SYSTEM_METADATA_DOMAINS,
+    ColumnProfileMetadata,
     DDLResult,
     MetadataCapabilityProfile,
     MetadataResult,
+    MetadataSupport,
     ObjectIdentity,
     ensure_system_metadata_request,
     system_metadata_capabilities_from_domains,
@@ -38,6 +40,7 @@ from sqlspec.driver._common import (
     StackExecutionObserver,
     _raise_database_exception,
     _resolve_fast_params,
+    _sqlglot_dialect,
     describe_stack_statement,
     handle_single_row_error,
     validate_savepoint_name,
@@ -2069,6 +2072,14 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         """Get dependency metadata or an unsupported-domain result."""
         return self._unsupported_metadata("dependencies")
 
+    async def get_sequences(self, driver: Any, schema: "str | None" = None) -> "MetadataResult":
+        """Get sequence metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("sequences")
+
+    async def get_types(self, driver: Any, schema: "str | None" = None) -> "MetadataResult":
+        """Get user-defined type metadata or an unsupported-domain result."""
+        return self._unsupported_metadata("types")
+
     async def get_ddl(
         self,
         driver: Any,
@@ -2079,8 +2090,12 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult":
-        """Get object DDL or an explicit unsupported DDL result."""
+        """Get object DDL or an explicit unsupported DDL result.
+
+        Public alias of :meth:`get_object_ddl` that accepts ``schema`` positionally.
+        """
         return await self.get_object_ddl(
             driver,
             object_name,
@@ -2089,6 +2104,7 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             include_dependencies=include_dependencies,
             prefer_native=prefer_native,
             redact=redact,
+            target_dialect=target_dialect,
         )
 
     async def get_object_ddl(
@@ -2101,9 +2117,39 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "DDLResult":
-        """Get one object's DDL or an explicit unsupported DDL result."""
-        return self._unsupported_ddl(object_name, schema=schema, object_type=object_type)
+        """Get one object's DDL or an explicit unsupported DDL result.
+
+        ``object_name`` and ``schema`` are caller input and follow the dialect's identifier
+        normalization (quote a name to match it exactly). Native catalog DDL is preferred; table
+        DDL is synthesized from catalog metadata when ``prefer_native`` is False, when a
+        ``target_dialect`` is requested, or when native DDL is unavailable.
+
+        Args:
+            driver: Database driver instance.
+            object_name: Object name.
+            schema: Schema name, or None for the dialect default.
+            object_type: Object kind such as ``table``, ``view``, or ``sequence``.
+            include_dependencies: Whether native helpers should report dependencies.
+            prefer_native: Prefer native catalog DDL over synthesized DDL.
+            redact: Whether native helpers should redact sensitive values.
+            target_dialect: Dialect to render or transpile the DDL into.
+
+        Returns:
+            DDL result for the object.
+        """
+        resolved_name, resolved_schema = self.resolve_ddl_object_name(driver, object_name, schema)
+        return await self._get_exact_object_ddl(
+            driver,
+            resolved_name,
+            schema=resolved_schema,
+            object_type=object_type,
+            include_dependencies=include_dependencies,
+            prefer_native=prefer_native,
+            redact=redact,
+            target_dialect=target_dialect,
+        )
 
     async def get_schema_ddl(
         self,
@@ -2112,12 +2158,144 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         *,
         include_domains: "Sequence[str] | None" = None,
         exclude_domains: "Sequence[str] | None" = None,
+        exclude_tables: "Sequence[str] | None" = (),
+        direction: "Literal['create', 'drop']" = "create",
         include_dependencies: bool = True,
         prefer_native: bool = True,
         redact: bool = True,
+        target_dialect: "str | None" = None,
     ) -> "MetadataResult":
-        """Get schema DDL items or an unsupported-domain result."""
-        return self._unsupported_metadata("ddl")
+        """Get schema DDL items in topological dependency order.
+
+        When ``prefer_native`` is set and no ``target_dialect`` is requested, adapters with a
+        native schema DDL source supply the objects; tables whose native DDL is not faithful are
+        synthesized from catalog metadata. Otherwise types, sequences, tables, and views are
+        collected, and tables are synthesized from schema-wide catalog queries. ``direction="drop"``
+        only collects object identities and dependency edges; it never synthesizes table DDL.
+        Domains that cannot be collected are reported in the result warnings.
+
+        Args:
+            driver: Database driver instance.
+            schema: Schema name, or None for the dialect default.
+            include_domains: Domains to include (``tables``, ``views``, ``sequences``, ``types``, ...).
+            exclude_domains: Domains to exclude.
+            exclude_tables: Table names to omit, matched as bare, unquoted, case-insensitive names
+                with any schema qualification stripped.
+            direction: ``create`` for CREATE statements in dependency order, ``drop`` for
+                ``DROP ... IF EXISTS`` statements in reverse dependency order.
+            include_dependencies: Collect foreign keys and dependencies to order the output.
+            prefer_native: Prefer native catalog DDL over synthesized DDL.
+            redact: Whether native helpers should redact sensitive values.
+            target_dialect: Dialect to render or transpile the DDL into.
+
+        Returns:
+            Schema DDL result.
+        """
+        warnings: list[str] = []
+        exact_schema, getter_schema = self._resolve_schema_ddl_input(driver, schema)
+        native_items: list[DDLResult] | None = None
+        loaded_foreign_keys: list[Any] | None = None
+        if prefer_native and target_dialect is None:
+            native_items = await self._get_native_schema_ddl(
+                driver, exact_schema, include_dependencies=include_dependencies, redact=redact
+            )
+        if native_items is not None:
+            ddl_results = (
+                native_items
+                if direction == "drop"
+                else await self._replace_unfaithful_native_tables(driver, getter_schema, native_items, warnings)
+            )
+        else:
+            ddl_results, loaded_foreign_keys = await self._collect_synthesized_schema_ddl(
+                driver,
+                getter_schema,
+                default_schema=exact_schema,
+                domains=self._schema_ddl_collect_domains(include_domains, exclude_domains),
+                exclude_tables=exclude_tables,
+                direction=direction,
+                include_dependencies=include_dependencies,
+                prefer_native=prefer_native,
+                redact=redact,
+                target_dialect=target_dialect,
+                warnings=warnings,
+            )
+        foreign_keys: list[Any] = []
+        dependency_items: tuple[Any, ...] = ()
+        if include_dependencies:
+            if loaded_foreign_keys is None:
+                loaded_foreign_keys = list(await self.get_foreign_keys(driver, table=None, schema=getter_schema))
+            foreign_keys = loaded_foreign_keys
+            dependencies = await self.get_dependencies(driver, schema=getter_schema)
+            if dependencies.capability.support == MetadataSupport.SUPPORTED:
+                dependency_items = dependencies.items
+        return self._finalize_schema_ddl_results(
+            ddl_results,
+            foreign_keys=foreign_keys,
+            dependency_items=dependency_items,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+            exclude_tables=exclude_tables,
+            direction=direction,
+            target_dialect=target_dialect,
+            warnings=tuple(warnings),
+        )
+
+    async def get_table_profile(
+        self,
+        driver: Any,
+        table: str,
+        schema: "str | None" = None,
+        *,
+        sample_size: int = 1000,
+        target_dialect: "str | None" = None,
+    ) -> "list[ColumnProfileMetadata]":
+        """Profile live table columns and infer refined SQL types from existing data.
+
+        Query failures (for example missing privileges) propagate to the caller.
+        """
+        resolved_table, resolved_schema = self.resolve_ddl_object_name(driver, table, schema)
+        columns = await self.get_columns(
+            driver,
+            table=self.exact_catalog_identifier(driver, resolved_table),
+            schema=self.exact_catalog_identifier(driver, resolved_schema) if resolved_schema is not None else None,
+        )
+        if not columns:
+            return []
+        stats_rows = await driver.select(self._build_table_profile_sql(resolved_table, columns, schema=resolved_schema))
+        stats_row: Mapping[str, Any] | None = stats_rows[0] if stats_rows else None
+        sample_rows: list[Mapping[str, Any]] = list(
+            await driver.select(
+                self._build_table_sample_sql(resolved_table, schema=resolved_schema, sample_size=sample_size)
+            )
+        )
+        return self._compile_column_profiles(columns, stats_row, sample_rows, target_dialect=target_dialect)
+
+    async def infer_table_ddl_from_data(
+        self,
+        driver: Any,
+        table: str,
+        schema: "str | None" = None,
+        *,
+        target_table: "str | None" = None,
+        target_dialect: "str | None" = None,
+        sample_size: int = 1000,
+        primary_key: "str | Sequence[str] | None" = None,
+    ) -> "DDLResult":
+        """Synthesize a refined table DDLResult by profiling live table data."""
+        profiles = await self.get_table_profile(
+            driver, table, schema=schema, sample_size=sample_size, target_dialect=target_dialect
+        )
+        resolved_table, resolved_schema = self.resolve_ddl_object_name(driver, table, schema)
+        if not profiles:
+            return self._unsupported_ddl(target_table or resolved_table, schema=resolved_schema, object_type="table")
+        return self._compile_profiled_table_ddl(
+            resolved_table,
+            profiles,
+            schema=resolved_schema,
+            target_table=target_table,
+            target_dialect=target_dialect,
+            primary_key=primary_key,
+        )
 
     async def get_system_metadata(
         self, driver: Any, request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
@@ -2219,13 +2397,375 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             List of foreign key metadata
         """
 
+    async def _get_native_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return native catalog DDL for one object, or None when the adapter has no native source.
+
+        Adapters with native DDL override this hook. ``object_name`` and ``schema`` are exact
+        catalog names and must not be normalized again. Return an unsupported DDLResult with
+        warnings when native DDL exists in principle but is unavailable or not faithful for this
+        object; tables then fall back to synthesized DDL carrying those warnings.
+        """
+        return None
+
+    async def _get_native_schema_ddl(
+        self, driver: Any, schema: "str | None", *, include_dependencies: bool, redact: bool
+    ) -> "list[DDLResult] | None":
+        """Return native CREATE DDL for every schema object, or None when the adapter has no native source.
+
+        Adapters with a schema-wide native DDL source override this hook. Returned items may carry
+        dependency edges and a ``DDL_PARENT_TABLE_CONTEXT_KEY`` context entry for indexes and
+        triggers. Tables returned as unsupported are replaced by synthesized DDL. Filtering,
+        exclusion, ordering, transpiling, and DROP generation are handled by the base class.
+        """
+        return None
+
+    async def _get_exact_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        prefer_native: bool,
+        redact: bool,
+        target_dialect: "str | None",
+    ) -> "DDLResult":
+        """Resolve one object's DDL from exact catalog names, choosing native or synthesized DDL."""
+        is_table = self._is_table_object_type(object_type)
+        if is_table and (not prefer_native or target_dialect is not None):
+            return await self._synthesize_table_ddl(driver, object_name, schema=schema, target_dialect=target_dialect)
+        native = await self._get_native_object_ddl(
+            driver,
+            object_name,
+            schema=schema,
+            object_type=object_type,
+            include_dependencies=include_dependencies,
+            redact=redact,
+        )
+        if native is not None and native.status == MetadataSupport.SUPPORTED and native.ddl:
+            return self._transpile_ddl_result(native, target_dialect=target_dialect)
+        if is_table:
+            return await self._synthesize_table_ddl(
+                driver,
+                object_name,
+                schema=schema,
+                target_dialect=target_dialect,
+                warnings=native.warnings if native is not None else (),
+            )
+        if native is not None:
+            return native
+        return self._unsupported_ddl(object_name, schema=schema, object_type=object_type)
+
+    async def _replace_unfaithful_native_tables(
+        self, driver: Any, schema: "str | None", items: "list[DDLResult]", warnings: "list[str]"
+    ) -> "list[DDLResult]":
+        """Replace unsupported native table items with DDL synthesized from schema-wide catalog queries."""
+        replace_names = [
+            item.identity.name
+            for item in items
+            if self._is_table_object_type(item.identity.object_type) and item.status != MetadataSupport.SUPPORTED
+        ]
+        if not replace_names:
+            return items
+        catalog = await self._load_table_catalog(driver, schema, replace_names, warnings)
+        source_dialect = self.resolve_ddl_dialect(driver)
+        resolved: list[DDLResult] = []
+        replaced_tables: set[tuple[str, str]] = set()
+        for item in items:
+            if self._is_table_object_type(item.identity.object_type) and item.status != MetadataSupport.SUPPORTED:
+                table_schema = (
+                    None
+                    if schema is None
+                    and item.identity.schema is not None
+                    and item.identity.schema.lower() == "main"
+                    and _sqlglot_dialect(source_dialect) in {"sqlite", "duckdb"}
+                    else item.identity.schema
+                )
+                synthesized = self._synthesize_table_from_catalog(
+                    item.identity.name,
+                    table_schema,
+                    catalog,
+                    source_dialect=source_dialect,
+                    target_dialect=None,
+                    warnings=item.warnings,
+                )
+                resolved.append(self._with_dependencies(synthesized, item.dependencies))
+                replaced_tables.add(((item.identity.schema or "").lower(), item.identity.name.lower()))
+                continue
+            resolved.append(item)
+        return self._replace_synthesized_table_dependents(resolved, replaced_tables)
+
+    async def _collect_synthesized_schema_ddl(
+        self,
+        driver: Any,
+        schema: "str | None",
+        *,
+        default_schema: "str | None" = None,
+        domains: "set[str]",
+        exclude_tables: "Sequence[str] | None",
+        direction: "Literal['create', 'drop']",
+        include_dependencies: bool,
+        prefer_native: bool,
+        redact: bool,
+        target_dialect: "str | None",
+        warnings: "list[str]",
+    ) -> "tuple[list[DDLResult], list[Any] | None]":
+        """Collect types, sequences, tables, and views for schema DDL.
+
+        Tables are synthesized from one schema-wide query per catalog domain. For ``drop`` only
+        table identities are collected. Returns the DDL results plus the schema foreign keys when
+        they were already loaded for every table, so callers can reuse them for ordering.
+        """
+        resolved_default_schema = default_schema if default_schema is not None else schema
+        source_dialect = self.resolve_ddl_dialect(driver)
+        excluded_names = self._normalize_excluded_table_names(exclude_tables)
+        results: list[DDLResult] = []
+        loaded_foreign_keys: list[Any] | None = None
+        grouped_columns: dict[str, list[Any]] = {}
+        if "types" in domains:
+            types = await self.get_types(driver, schema=schema)
+            if types.capability.support == MetadataSupport.SUPPORTED:
+                for row in types.items:
+                    type_ddl = self._build_type_ddl_from_row(
+                        row, default_schema=resolved_default_schema, dialect=source_dialect
+                    )
+                    if type_ddl is not None:
+                        results.append(type_ddl)
+            else:
+                warnings.append(self._uncollected_domain_warning("types", source_dialect))
+        if "sequences" in domains:
+            sequences = await self.get_sequences(driver, schema=schema)
+            if sequences.capability.support == MetadataSupport.SUPPORTED:
+                for row in sequences.items:
+                    sequence_ddl = self._build_sequence_ddl_from_row(
+                        row, default_schema=resolved_default_schema, dialect=source_dialect
+                    )
+                    if sequence_ddl is None:
+                        continue
+                    if direction == "create" and prefer_native and target_dialect is None:
+                        native_sequence = await self._get_native_object_ddl(
+                            driver,
+                            sequence_ddl.identity.name,
+                            schema=sequence_ddl.identity.schema,
+                            object_type="sequence",
+                            include_dependencies=include_dependencies,
+                            redact=redact,
+                        )
+                        if native_sequence is not None and native_sequence.status == MetadataSupport.SUPPORTED:
+                            sequence_ddl = native_sequence
+                    results.append(sequence_ddl)
+            else:
+                warnings.append(self._uncollected_domain_warning("sequences", source_dialect))
+        if "tables" in domains:
+            table_results, grouped_columns, loaded_foreign_keys = await self._collect_schema_table_ddl(
+                driver,
+                schema,
+                default_schema=resolved_default_schema,
+                excluded_names=excluded_names,
+                direction=direction,
+                include_dependencies=include_dependencies,
+                prefer_native=prefer_native,
+                redact=redact,
+                target_dialect=target_dialect,
+                source_dialect=source_dialect,
+                warnings=warnings,
+            )
+            results.extend(table_results)
+        if "views" in domains:
+            views = await self.get_views(driver, schema=schema)
+            if views.capability.support == MetadataSupport.SUPPORTED:
+                for view_row in views.items:
+                    view_ddl = self._build_view_ddl_from_row(
+                        view_row, default_schema=resolved_default_schema, dialect=source_dialect
+                    )
+                    if view_ddl is None:
+                        warnings.append(
+                            f"Omitted a view from schema DDL because its definition is unavailable: {view_row!r}"
+                        )
+                        continue
+                    results.append(view_ddl)
+            else:
+                warnings.append(self._uncollected_domain_warning("views", source_dialect))
+        return (
+            self._link_schema_references(results, self._column_reference_text(grouped_columns)),
+            loaded_foreign_keys,
+        )
+
+    async def _collect_schema_table_ddl(
+        self,
+        driver: Any,
+        schema: "str | None",
+        *,
+        default_schema: "str | None" = None,
+        excluded_names: "set[str]",
+        direction: "Literal['create', 'drop']",
+        include_dependencies: bool,
+        prefer_native: bool,
+        redact: bool,
+        target_dialect: "str | None",
+        source_dialect: "str | None",
+        warnings: "list[str]",
+    ) -> "tuple[list[DDLResult], dict[str, list[Any]], list[Any] | None]":
+        """Collect table DDL (or identities for drop) with schema-wide catalog queries.
+
+        Returns the table results, catalog columns grouped by table, and the schema foreign keys
+        when they were loaded for every table.
+        """
+        resolved_default_schema = default_schema if default_schema is not None else schema
+        results: list[DDLResult] = []
+        loaded_foreign_keys: list[Any] | None = None
+        grouped_columns: dict[str, list[Any]] = {}
+        table_refs: list[tuple[str, str | None]] = []
+        for table_item in await self.get_tables(driver, schema=schema):
+            table_name, table_schema = self._extract_table_name_and_schema(
+                table_item, default_schema=resolved_default_schema
+            )
+            if table_name and table_name.lower() not in excluded_names:
+                table_refs.append((table_name, table_schema))
+        table_names = [name for name, _ in table_refs]
+        if direction == "drop":
+            columns = await self.get_columns(driver, table=None, schema=schema)
+            grouped_columns = self._group_rows_by_table(columns, table_names) or {}
+            results.extend(
+                self._catalog_object_identity_result(name, "table", table_schema, source_dialect)
+                for name, table_schema in table_refs
+            )
+        else:
+            native_tables: dict[str, DDLResult] = {}
+            native_warnings: dict[str, tuple[str, ...]] = {}
+            if prefer_native and target_dialect is None:
+                for name, table_schema in table_refs:
+                    native = await self._get_native_object_ddl(
+                        driver,
+                        name,
+                        schema=table_schema,
+                        object_type="table",
+                        include_dependencies=include_dependencies,
+                        redact=redact,
+                    )
+                    if native is not None and native.status == MetadataSupport.SUPPORTED and native.ddl:
+                        native_tables[name] = native
+                    elif native is not None:
+                        native_warnings[name] = native.warnings
+            pending = [name for name in table_names if name not in native_tables]
+            catalog: dict[str, dict[str, list[Any]]] = {}
+            if pending:
+                catalog = await self._load_table_catalog(driver, schema, pending, warnings)
+                grouped_columns = catalog["columns"]
+                if len(pending) == len(table_names):
+                    loaded_foreign_keys = [fk for rows in catalog["foreign_keys"].values() for fk in rows]
+            for name, table_schema in table_refs:
+                table_result = native_tables.get(name)
+                if table_result is None:
+                    table_result = self._synthesize_table_from_catalog(
+                        name,
+                        table_schema,
+                        catalog,
+                        source_dialect=source_dialect,
+                        target_dialect=target_dialect,
+                        warnings=native_warnings.get(name, ()),
+                    )
+                results.append(table_result)
+        return (results, grouped_columns, loaded_foreign_keys)
+
+    async def _load_table_catalog(
+        self, driver: Any, schema: "str | None", table_names: "list[str]", warnings: "list[str]"
+    ) -> "dict[str, dict[str, list[Any]]]":
+        """Load columns, constraints, foreign keys, and indexes for ``table_names`` grouped by table.
+
+        Each domain is fetched with one schema-wide call; a domain whose rows do not name their
+        table falls back to one call per table.
+        """
+        columns = await self.get_columns(driver, table=None, schema=schema)
+        constraints_result = await self.get_constraints(driver, table=None, schema=schema)
+        warnings.extend(constraints_result.warnings)
+        constraints = (
+            constraints_result.items if constraints_result.capability.support == MetadataSupport.SUPPORTED else ()
+        )
+        foreign_keys = await self.get_foreign_keys(driver, table=None, schema=schema)
+        indexes = await self.get_indexes(driver, table=None, schema=schema)
+        catalog: dict[str, dict[str, list[Any]]] = {}
+        for domain, rows in (
+            ("columns", columns),
+            ("constraints", constraints),
+            ("foreign_keys", foreign_keys),
+            ("indexes", indexes),
+        ):
+            grouped = self._group_rows_by_table(rows, table_names)
+            if grouped is None:
+                grouped = {}
+                for table_name in table_names:
+                    grouped[table_name] = await self._load_table_rows(driver, domain, table_name, schema)
+            catalog[domain] = grouped
+        return catalog
+
+    async def _load_table_rows(self, driver: Any, domain: str, table_name: str, schema: "str | None") -> "list[Any]":
+        """Load one catalog domain for one table using its exact catalog name."""
+        lookup_table = self.exact_catalog_identifier(driver, table_name)
+        if domain == "columns":
+            return list(await self.get_columns(driver, table=lookup_table, schema=schema))
+        if domain == "foreign_keys":
+            return list(await self.get_foreign_keys(driver, table=lookup_table, schema=schema))
+        if domain == "indexes":
+            return list(await self.get_indexes(driver, table=lookup_table, schema=schema))
+        constraints_result = await self.get_constraints(driver, table=lookup_table, schema=schema)
+        if constraints_result.capability.support != MetadataSupport.SUPPORTED:
+            return []
+        return list(constraints_result.items)
+
+    async def _synthesize_table_ddl(
+        self,
+        driver: Any,
+        table_name: str,
+        *,
+        schema: "str | None" = None,
+        target_dialect: "str | None" = None,
+        warnings: tuple[str, ...] = (),
+    ) -> "DDLResult":
+        """Synthesize table DDL from exact catalog names using columns, constraints, foreign keys, and indexes."""
+        lookup_table = self.exact_catalog_identifier(driver, table_name)
+        lookup_schema = self.exact_catalog_identifier(driver, schema) if schema is not None else None
+        columns = await self.get_columns(driver, table=lookup_table, schema=lookup_schema)
+        if not columns:
+            return self._unsupported_ddl(table_name, schema=schema, object_type="table", warnings=warnings)
+        constraints_result = await self.get_constraints(driver, table=lookup_table, schema=lookup_schema)
+        constraints = (
+            constraints_result.items if constraints_result.capability.support == MetadataSupport.SUPPORTED else ()
+        )
+        warnings = (*warnings, *constraints_result.warnings)
+        foreign_keys = await self.get_foreign_keys(driver, table=lookup_table, schema=lookup_schema)
+        indexes = await self.get_indexes(driver, table=lookup_table, schema=lookup_schema)
+        return self.build_synthesized_table_ddl(
+            table_name,
+            columns,
+            schema=schema,
+            constraints=constraints,
+            foreign_keys=foreign_keys,
+            indexes=indexes,
+            target_dialect=target_dialect,
+            source_dialect=self.resolve_ddl_dialect(driver),
+            warnings=warnings,
+        )
+
     def _unsupported_metadata(self, domain: str) -> "MetadataResult":
         return MetadataResult.unsupported(domain)
 
-    def _unsupported_ddl(self, object_name: str, *, schema: "str | None", object_type: str) -> "DDLResult":
+    def _unsupported_ddl(
+        self, object_name: str, *, schema: "str | None", object_type: str, warnings: tuple[str, ...] = ()
+    ) -> "DDLResult":
         return DDLResult.unsupported(
             ObjectIdentity(object_name, object_type, schema=schema, dialect=self.dialect),
-            warnings=(f"{self.dialect} DDL extraction is not implemented",),
+            warnings=(*warnings, f"{self.dialect} DDL extraction is not implemented"),
         )
 
 

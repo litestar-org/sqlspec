@@ -218,10 +218,25 @@ def format_mysql_identifier(identifier: str) -> str:
     return formatted or quote_backtick_identifier(cleaned)
 
 
+MYSQL_SHOW_CREATE_OBJECT_TYPES: "frozenset[str]" = frozenset({
+    "TABLE",
+    "VIEW",
+    "TRIGGER",
+    "FUNCTION",
+    "PROCEDURE",
+    "EVENT",
+    "SEQUENCE",
+})
+
+
 def build_mysql_show_create_statement(object_name: str, schema: str | None = None, object_type: str = "TABLE") -> str:
     """Build a SHOW CREATE statement using quoted identifiers for object names."""
+    normalized_type = object_type.strip().upper()
+    if normalized_type not in MYSQL_SHOW_CREATE_OBJECT_TYPES:
+        msg = f"Unsupported MySQL SHOW CREATE object type: {object_type!r}"
+        raise ValueError(msg)
     qualified_name = f"{schema}.{object_name}" if schema else object_name
-    return f"SHOW CREATE {object_type.upper()} {format_mysql_identifier(qualified_name)}"
+    return f"SHOW CREATE {normalized_type} {format_mysql_identifier(qualified_name)}"
 
 
 def make_mysql_ddl_result(

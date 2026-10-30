@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
 __all__ = (
     "MigrationTemplateProfile",
@@ -40,12 +40,29 @@ class SQLTemplateDefinition:
     body: str = ""
     description_keys: "tuple[str, ...]" = ("Description",)
 
-    def render(self, context: "Mapping[str, str]") -> str:
+    def render(
+        self,
+        context: "Mapping[str, str]",
+        *,
+        up_sql: "str | Sequence[str] | None" = None,
+        down_sql: "str | Sequence[str] | None" = None,
+    ) -> str:
         """Render the SQL template using the supplied context."""
 
         rendered_lines: list[str] = [_format_template(self.header, context, "SQL")]
         rendered_lines.extend(_format_template(line, context, "SQL") for line in self.metadata if line)
-        rendered_lines.extend(("", _format_template(self.body, context, "SQL")))
+        if up_sql is not None or down_sql is not None:
+            version = context.get("version", "")
+            up_statements = _normalize_sql_statements(up_sql)
+            down_statements = _normalize_sql_statements(down_sql)
+            body_lines: list[str] = [f"-- name: migrate-{version}-up"]
+            if up_statements:
+                body_lines.append("\n\n".join(up_statements))
+            if down_statements:
+                body_lines.extend(("", f"-- name: migrate-{version}-down", "\n\n".join(down_statements)))
+            rendered_lines.extend(("", "\n".join(body_lines)))
+        else:
+            rendered_lines.extend(("", _format_template(self.body, context, "SQL")))
         return "\n".join(_normalize_newlines(rendered_lines)).rstrip() + "\n"
 
 
@@ -58,7 +75,13 @@ class PythonTemplateDefinition:
     imports: "list[str]" = field(default_factory=list)
     description_keys: "tuple[str, ...]" = ("Description",)
 
-    def render(self, context: "Mapping[str, str]") -> str:
+    def render(
+        self,
+        context: "Mapping[str, str]",
+        *,
+        up_sql: "str | Sequence[str] | None" = None,
+        down_sql: "str | Sequence[str] | None" = None,
+    ) -> str:
         """Render the Python template using the supplied context."""
 
         docstring_block = f'"""{_format_template(self.docstring, context, "Python")}"""'
@@ -66,7 +89,30 @@ class PythonTemplateDefinition:
         rendered_lines.extend(self.imports)
         if self.imports:
             rendered_lines.append("")
-        rendered_lines.append(_format_template(self.body, context, "Python"))
+        if up_sql is not None or down_sql is not None:
+            up_statements = _normalize_sql_statements(up_sql)
+            down_statements = _normalize_sql_statements(down_sql)
+            py_lines: list[str] = [
+                "def up(context: object | None = None) -> str | Iterable[str]:",
+                '    """Apply the migration (upgrade)."""',
+                "    return [",
+            ]
+            py_lines.extend(f"        {stmt!r}," for stmt in up_statements)
+            py_lines.extend([
+                "    ]",
+                "",
+                "def down(context: object | None = None) -> str | Iterable[str] | None:",
+                '    """Reverse the migration."""',
+            ])
+            if down_statements:
+                py_lines.append("    return [")
+                py_lines.extend(f"        {stmt!r}," for stmt in down_statements)
+                py_lines.append("    ]")
+            else:
+                py_lines.append("    return None")
+            rendered_lines.append("\n".join(py_lines))
+        else:
+            rendered_lines.append(_format_template(self.body, context, "Python"))
         return "\n".join(_normalize_newlines(rendered_lines)).rstrip() + "\n"
 
 
@@ -162,6 +208,15 @@ def _coerce_string_list(value: Any, default: "list[str]") -> "list[str]":
 def _normalize_newlines(lines: "list[str]") -> "list[str]":
     normalized: list[str] = [line.rstrip("\r") for line in lines]
     return normalized
+
+
+def _normalize_sql_statements(statements: "str | Sequence[str] | None") -> "list[str]":
+    if statements is None:
+        return []
+    if isinstance(statements, str):
+        stripped = statements.strip()
+        return [stripped] if stripped else []
+    return [item.strip() for item in statements if item and item.strip()]
 
 
 def _format_template(template: str, context: "Mapping[str, str]", template_kind: str) -> str:

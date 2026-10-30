@@ -1,11 +1,13 @@
 # ruff: noqa: C901
+"""Command-line interface for SQLSpec database migrations and extension management."""
+
+import inspect
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import rich_click as click
-from click.core import ParameterSource
 from rich import get_console
 from rich.markup import escape
 from rich.prompt import Confirm, Prompt
@@ -13,6 +15,7 @@ from rich.table import Table
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.migrations import commands as migration_commands_module
 from sqlspec.migrations.squash import parse_version_range
 from sqlspec.utils.config_tools import discover_config_from_pyproject, resolve_config_sync
 from sqlspec.utils.logging import get_logger
@@ -253,14 +256,33 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         adk_config = cast("dict[str, Any]", config.extension_config.get("adk", {}))
         return bool(adk_config.get("enable_memory", True))
 
+    async def _close_cli_created_pool(config: Any, *, had_pool: bool) -> None:
+        """Close an async pool initialized by a short-lived CLI event loop."""
+        if had_pool or getattr(config, "connection_instance", None) is None:
+            return
+        close_pool = getattr(config, "close_pool", None)
+        if close_pool is None:
+            return
+        maybe_awaitable = close_pool()
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
+
     async def _cleanup_memory_entries_async(store: "BaseAsyncADKMemoryStore[Any]", days: int) -> int:
-        return await store.delete_entries_older_than(days)
+        had_pool = getattr(store.config, "connection_instance", None) is not None
+        try:
+            return await store.delete_entries_older_than(days)
+        finally:
+            await _close_cli_created_pool(store.config, had_pool=had_pool)
 
     async def _verify_memory_table_async(
         config: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]", sql: str
     ) -> None:
-        async with config.provide_session() as driver:
-            await driver.execute(sql)
+        had_pool = getattr(config, "connection_instance", None) is not None
+        try:
+            async with config.provide_session() as driver:
+                await driver.execute(sql)
+        finally:
+            await _close_cli_created_pool(config, had_pool=had_pool)
 
     def get_configs_with_migrations(
         ctx: "click.Context", enabled_only: bool = False
@@ -324,11 +346,22 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             The result of the executed function.
         """
         if config.is_async:
-            return run_(async_fn)()
+            had_pool = getattr(config, "connection_instance", None) is not None
+
+            async def _run_with_cleanup() -> Any:
+                try:
+                    return await async_fn()
+                finally:
+                    await _close_cli_created_pool(config, had_pool=had_pool)
+
+            return run_(_run_with_cleanup)()
         return sync_fn()
 
     def _dispatch_migration_call(config: Any, method_name: str, **kwargs: Any) -> Any:
         """Run a migration command method with sync/async dispatch for one config.
+
+        SQLSpec errors become ``click.ClickException`` so the CLI exits non-zero with the message instead of a
+        traceback.
 
         Args:
             config: The database configuration.
@@ -337,11 +370,12 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         Returns:
             The result of the command method.
-        """
-        from sqlspec.migrations.commands import create_migration_commands
 
-        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
-            config=config
+        Raises:
+            click.ClickException: When the command raises a SQLSpec error.
+        """
+        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
+            migration_commands_module.create_migration_commands(config=config)
         )
         method = getattr(migration_commands, method_name)
 
@@ -351,7 +385,10 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         async def _async_call() -> Any:
             return await method(**kwargs)
 
-        return _execute_for_config(config, _sync_call, _async_call)
+        try:
+            return _execute_for_config(config, _sync_call, _async_call)
+        except SQLSpecError as exc:
+            raise click.ClickException(str(exc)) from exc
 
     async def _dispatch_migration_call_async(config: Any, method_name: str, **kwargs: Any) -> Any:
         """Await a migration command method inside an already-running event loop.
@@ -363,13 +400,17 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         Returns:
             The result of the command method.
-        """
-        from sqlspec.migrations.commands import create_migration_commands
 
-        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
-            config=config
+        Raises:
+            click.ClickException: When the command raises a SQLSpec error.
+        """
+        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
+            migration_commands_module.create_migration_commands(config=config)
         )
-        return await getattr(migration_commands, method_name)(**kwargs)
+        try:
+            return await getattr(migration_commands, method_name)(**kwargs)
+        except SQLSpecError as exc:
+            raise click.ClickException(str(exc)) from exc
 
     def _partition_configs_by_async(
         configs: "list[tuple[str, Any]]",
@@ -429,6 +470,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
             async def _run_async_configs() -> None:
                 for config_name, config in async_configs:
+                    had_pool = getattr(config, "connection_instance", None) is not None
                     if progress_message is not None and should_echo(config):
                         console.print(progress_message(config_name))
                     try:
@@ -439,6 +481,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         errors.append((config_name, e))
                         if should_echo(config):
                             console.print(failure_message(config_name, e))
+                    finally:
+                        await _close_cli_created_pool(config, had_pool=had_pool)
 
             run_(_run_async_configs)()
 
@@ -674,6 +718,12 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @no_echo_option
     @summary_only_option
     @no_auto_sync_option
+    @click.option(
+        "--allow-missing",
+        is_flag=True,
+        default=False,
+        help="Allow out-of-order migrations even when strict ordering is enabled.",
+    )
     @click.argument("revision", type=str, default="head")
     def upgrade_database(  # pyright: ignore[reportUnusedFunction]
         bind_key: str | None,
@@ -686,41 +736,33 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         no_echo: bool,
         summary_only: bool,
         no_auto_sync: bool,
+        allow_missing: bool,
     ) -> None:
         """Upgrade the database to the latest revision."""
         ctx = _ensure_click_context()
         echo_setting, summary_setting, echo_enabled, _should_echo = _create_echo_settings(
             no_echo, summary_only, use_logger
         )
+        upgrade_kwargs: dict[str, Any] = {
+            "revision": revision,
+            "allow_missing": allow_missing,
+            "auto_sync": not no_auto_sync,
+            "dry_run": dry_run,
+            "use_logger": use_logger,
+            "echo": echo_setting,
+            "summary_only": summary_setting,
+        }
 
         def _upgrade_for_config(config: Any) -> None:
             """Upgrade a single config with sync/async dispatch."""
-            _dispatch_migration_call(
-                config,
-                "upgrade",
-                revision=revision,
-                auto_sync=not no_auto_sync,
-                dry_run=dry_run,
-                use_logger=use_logger,
-                echo=echo_setting,
-                summary_only=summary_setting,
-            )
+            _dispatch_migration_call(config, "upgrade", **upgrade_kwargs)
 
         configs_to_process = process_multiple_configs(
             ctx, bind_key, include, exclude, dry_run, operation_name=f"upgrade to {revision}", echo=echo_enabled
         )
 
         async def _async_upgrade(config: Any) -> None:
-            await _dispatch_migration_call_async(
-                config,
-                "upgrade",
-                revision=revision,
-                auto_sync=not no_auto_sync,
-                dry_run=dry_run,
-                use_logger=use_logger,
-                echo=echo_setting,
-                summary_only=summary_setting,
-            )
+            await _dispatch_migration_call_async(config, "upgrade", **upgrade_kwargs)
 
         if configs_to_process is not None:
             if not configs_to_process:
@@ -779,8 +821,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         Sync configs are handled inline while async configs run via a single ``run_`` call so migrations stay in sync.
         """
-        from sqlspec.migrations.commands import create_migration_commands
-
         ctx = _ensure_click_context()
 
         console.rule("[yellow]Initializing database migrations.", align="left")
@@ -801,7 +841,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 str(migration_config_dict.get("script_location", "migrations")) if directory is None else directory
             )
             migration_commands: SyncMigrationCommands[Any] = cast(
-                "SyncMigrationCommands[Any]", create_migration_commands(config=cast("Any", config))
+                "SyncMigrationCommands[Any]",
+                migration_commands_module.create_migration_commands(config=cast("Any", config)),
             )
             migration_commands.init(directory=target_directory, package=package)
 
@@ -816,7 +857,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         else directory
                     )
                     migration_commands: AsyncMigrationCommands[Any] = cast(
-                        "AsyncMigrationCommands[Any]", create_migration_commands(config=cast("Any", config))
+                        "AsyncMigrationCommands[Any]",
+                        migration_commands_module.create_migration_commands(config=cast("Any", config)),
                     )
                     await migration_commands.init(directory=target_directory, package=package)
 
@@ -835,9 +877,30 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         default=None,
         help="File format for the generated migration (defaults to template profile)",
     )
+    @click.option(
+        "--from-schema", is_flag=True, default=False, help="Bootstrap migration with current database schema DDL."
+    )
+    @click.option(
+        "--from-data",
+        default=None,
+        type=str,
+        help=(
+            "Bootstrap migration DDL from a data file or existing staging table. Values containing a path separator "
+            "or ending in a data suffix are files; other values are table names."
+        ),
+    )
+    @click.option("--schema", default=None, type=str, help="Database schema name for --from-schema or --from-data.")
+    @click.option("--target-table", default=None, type=str, help="Target table name when bootstrapping from data.")
     @no_prompt_option
-    def create_revision(  # pyright: ignore[reportUnusedFunction]
-        bind_key: str | None, message: str | None, file_format: str | None, no_prompt: bool
+    def create_revision(
+        bind_key: str | None,
+        message: str | None,
+        file_format: str | None,
+        from_schema: bool,
+        from_data: str | None,
+        schema: str | None,
+        target_table: str | None,
+        no_prompt: bool,
     ) -> None:
         """Create a new database revision."""
         ctx = _ensure_click_context()
@@ -850,31 +913,86 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             )
 
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        param_source = ctx.get_parameter_source("file_format")
-        effective_format = None if param_source is ParameterSource.DEFAULT else file_format
-        _dispatch_migration_call(sqlspec_config, "revision", message=message_text, file_type=effective_format)
+        _dispatch_migration_call(
+            sqlspec_config,
+            "revision",
+            message=message_text,
+            file_type=file_format,
+            from_schema=from_schema,
+            from_data=from_data,
+            schema=schema,
+            target_table=target_table,
+        )
 
     @database_group.command(name="fix", help="Convert timestamp migrations to sequential format.")
     @bind_key_option
     @dry_run_option
-    @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+    @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+    @no_prompt_option
+    @include_option
+    @exclude_option
+    @use_logger_option
+    @no_echo_option
     @click.option("--no-database", is_flag=True, help="Skip database record updates")
-    def fix_migrations(  # pyright: ignore[reportUnusedFunction]
-        bind_key: str | None, dry_run: bool, yes: bool, no_database: bool
+    def fix_migrations(
+        bind_key: str | None,
+        dry_run: bool,
+        yes: bool,
+        no_prompt: bool,
+        include: "tuple[str, ...]",
+        exclude: "tuple[str, ...]",
+        use_logger: bool,
+        no_echo: bool,
+        no_database: bool,
     ) -> None:
         """Convert timestamp migrations to sequential format."""
         ctx = _ensure_click_context()
+        _, _, echo_enabled, _should_echo = _create_echo_settings(no_echo, False, use_logger)
+        skip_prompt = yes or no_prompt
 
-        console.rule("[yellow]Migration Fix Command[/]", align="left")
+        def _fix_for_config(config: Any) -> None:
+            _dispatch_migration_call(config, "fix", dry_run=dry_run, update_database=not no_database, yes=skip_prompt)
+
+        async def _async_fix(config: Any) -> None:
+            await _dispatch_migration_call_async(
+                config, "fix", dry_run=dry_run, update_database=not no_database, yes=skip_prompt
+            )
+
+        configs_to_process = process_multiple_configs(
+            ctx, bind_key, include, exclude, dry_run=dry_run, operation_name="fix migrations", echo=echo_enabled
+        )
+        if configs_to_process is not None:
+            if not configs_to_process:
+                return
+            if echo_enabled:
+                console.rule("[yellow]Migration Fix Command[/]", align="left")
+            _run_multi_config_operation(
+                configs_to_process,
+                sync_apply=_fix_for_config,
+                async_apply=_async_fix,
+                should_echo=_should_echo,
+                progress_message=lambda name: f"[blue]Fixing configuration: {name}[/]",
+                success_message=lambda name: f"[green]✓ Successfully fixed: {name}[/]",
+                failure_message=lambda name, e: f"[red]✗ Failed to fix {name}: {e}[/]",
+            )
+            return
+
+        if echo_enabled:
+            console.rule("[yellow]Migration Fix Command[/]", align="left")
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        _dispatch_migration_call(sqlspec_config, "fix", dry_run=dry_run, update_database=not no_database, yes=yes)
+        _fix_for_config(sqlspec_config)
 
     @database_group.command(name="squash")
     @bind_key_option
-    @click.argument("version_range", required=True)
-    @click.option("-m", "--message", required=True, help="Description for squashed migration")
+    @click.argument("version_range", required=False, default=None)
+    @click.option("-m", "--message", required=False, default=None, help="Description for the squashed migration.")
     @dry_run_option
-    @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+    @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+    @no_prompt_option
+    @include_option
+    @exclude_option
+    @use_logger_option
+    @no_echo_option
     @click.option("--no-database", is_flag=True, help="Skip database record updates")
     @click.option("--allow-gaps", is_flag=True, help="Allow gaps in version sequence")
     @click.option(
@@ -883,42 +1001,246 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         default="sql",
         help="Output format for squashed migration (default: sql)",
     )
+    @click.option(
+        "--strategy",
+        type=click.Choice(["ddl", "schema", "concat"], case_sensitive=False),
+        default="concat",
+        show_default=True,
+        help=(
+            "Squash strategy: keep every statement in order (concat), fold DDL into its final shape and refuse "
+            "ranges that cannot be folded faithfully (ddl), or reflect the live database schema (schema)."
+        ),
+    )
     def squash_migrations(
         bind_key: str | None,
-        version_range: str,
-        message: str,
+        version_range: str | None,
+        message: str | None,
         dry_run: bool,
         yes: bool,
+        no_prompt: bool,
+        include: "tuple[str, ...]",
+        exclude: "tuple[str, ...]",
+        use_logger: bool,
+        no_echo: bool,
         no_database: bool,
         allow_gaps: bool,
         output_format: str,
+        strategy: str,
     ) -> None:
         """Squash multiple sequential migrations into a single file.
 
         VERSION_RANGE accepts START:END, START..END, or START-END, for example 1:7.
         """
         ctx = _ensure_click_context()
+        _, _, echo_enabled, _should_echo = _create_echo_settings(no_echo, False, use_logger)
 
-        try:
-            start_version, end_version = parse_version_range(version_range)
-        except ValueError as exc:
-            console.print(f"[red]Error: {escape(str(exc))}[/]")
-            raise SystemExit(1) from None
+        start_version: str | None = None
+        end_version: str | None = None
+        if version_range is not None:
+            try:
+                start_version, end_version = parse_version_range(version_range)
+            except ValueError as exc:
+                console.print(f"[red]Error: {escape(str(exc))}[/]")
+                raise SystemExit(1) from None
 
-        console.rule("[yellow]Migration Squash Command[/]", align="left")
-        sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        _dispatch_migration_call(
-            sqlspec_config,
-            "squash",
-            start_version=start_version,
-            end_version=end_version,
-            description=message,
-            dry_run=dry_run,
-            update_database=not no_database,
-            yes=yes,
-            allow_gaps=allow_gaps,
-            output_format=output_format,
+        skip_prompt = yes or no_prompt
+        squash_kwargs: dict[str, Any] = {
+            "start_version": start_version,
+            "end_version": end_version,
+            "description": message,
+            "dry_run": dry_run,
+            "update_database": not no_database,
+            "yes": skip_prompt,
+            "allow_gaps": allow_gaps,
+            "output_format": output_format.lower(),
+            "strategy": strategy.lower(),
+        }
+
+        def _squash_for_config(config: Any) -> None:
+            _dispatch_migration_call(config, "squash", **squash_kwargs)
+
+        async def _async_squash(config: Any) -> None:
+            await _dispatch_migration_call_async(config, "squash", **squash_kwargs)
+
+        configs_to_process = process_multiple_configs(
+            ctx, bind_key, include, exclude, dry_run=False, operation_name="squash migrations", echo=echo_enabled
         )
+        if configs_to_process is not None:
+            if not configs_to_process:
+                return
+            if echo_enabled:
+                console.rule("[yellow]Migration Squash Command[/]", align="left")
+            _run_multi_config_operation(
+                configs_to_process,
+                sync_apply=_squash_for_config,
+                async_apply=_async_squash,
+                should_echo=_should_echo,
+                progress_message=lambda name: f"[blue]Squashing configuration: {name}[/]",
+                success_message=lambda name: f"[green]✓ Successfully squashed: {name}[/]",
+                failure_message=lambda name, e: f"[red]✗ Failed to squash {name}: {e}[/]",
+            )
+            return
+
+        if echo_enabled:
+            console.rule("[yellow]Migration Squash Command[/]", align="left")
+        sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+        _squash_for_config(sqlspec_config)
+
+    @database_group.command(name="dump-schema", help="Export the current database schema DDL.")
+    @click.option(
+        "-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file path for schema DDL."
+    )
+    @click.option("--schema", default=None, help="Database schema name to inspect.")
+    @click.option(
+        "--include-migrations-table",
+        is_flag=True,
+        default=False,
+        help="Include the migration tracking table in the exported DDL.",
+    )
+    @click.option(
+        "--prefer-native/--synthesize",
+        default=True,
+        help="Prefer engine-native catalog DDL when available or synthesize via SQLSpec builders.",
+    )
+    @click.option("--target-dialect", default=None, help="Target SQLGlot dialect for cross-dialect DDL transpilation.")
+    @bind_key_option
+    @include_option
+    @exclude_option
+    @no_echo_option
+    def dump_schema_cmd(
+        output: Path | None,
+        schema: str | None,
+        include_migrations_table: bool,
+        prefer_native: bool,
+        target_dialect: str | None,
+        bind_key: str | None,
+        include: "tuple[str, ...]",
+        exclude: "tuple[str, ...]",
+        no_echo: bool,
+    ) -> None:
+        """Export current database schema DDL.
+
+        Without ``--output`` the DDL is written to stdout byte-for-byte (no Rich markup or wrapping) so it can be
+        redirected to a file.
+        """
+        ctx = _ensure_click_context()
+        echo_value = not no_echo
+
+        def _write_ddl(rendered: str) -> None:
+            if output is None and echo_value:
+                sys.stdout.write(rendered)
+                sys.stdout.flush()
+
+        def _dump_for_config(config: Any) -> None:
+            _write_ddl(
+                _dispatch_migration_call(
+                    config,
+                    "dump_schema",
+                    output_path=output,
+                    schema=schema,
+                    include_migrations_table=include_migrations_table,
+                    prefer_native=prefer_native,
+                    target_dialect=target_dialect,
+                    echo=echo_value,
+                )
+            )
+
+        async def _async_dump(config: Any) -> None:
+            _write_ddl(
+                await _dispatch_migration_call_async(
+                    config,
+                    "dump_schema",
+                    output_path=output,
+                    schema=schema,
+                    include_migrations_table=include_migrations_table,
+                    prefer_native=prefer_native,
+                    target_dialect=target_dialect,
+                    echo=echo_value,
+                )
+            )
+
+        configs_to_process = process_multiple_configs(
+            ctx, bind_key, include, exclude, dry_run=False, operation_name="dump schema", echo=echo_value
+        )
+        if configs_to_process is not None:
+            if not configs_to_process:
+                return
+            _run_multi_config_operation(
+                configs_to_process,
+                sync_apply=_dump_for_config,
+                async_apply=_async_dump,
+                should_echo=lambda _cfg: echo_value,
+                progress_message=lambda name: f"[blue]Dumping schema for configuration: {name}[/]",
+                success_message=None,
+                failure_message=lambda name, e: f"[red]✗ Failed to dump schema for {name}: {e}[/]",
+            )
+            return
+
+        sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+        _dump_for_config(sqlspec_config)
+
+    @database_group.command(
+        name="verify", help="Verify database migration tracking records against migration files on disk."
+    )
+    @click.option(
+        "--strict",
+        is_flag=True,
+        default=False,
+        help="Exit non-zero on checksum mismatch, orphaned applied migration, or partially applied squash.",
+    )
+    @click.option("--fail-on-pending", is_flag=True, default=False, help="Exit non-zero when migrations are pending.")
+    @bind_key_option
+    @include_option
+    @exclude_option
+    @use_logger_option
+    @no_echo_option
+    def verify_migrations_cmd(
+        strict: bool,
+        fail_on_pending: bool,
+        bind_key: str | None,
+        include: "tuple[str, ...]",
+        exclude: "tuple[str, ...]",
+        use_logger: bool,
+        no_echo: bool,
+    ) -> None:
+        """Verify database migration tracking records against migration files on disk.
+
+        Verification is read-only and never creates the tracking table.
+        """
+        ctx = _ensure_click_context()
+        echo_setting, _, echo_enabled, _should_echo = _create_echo_settings(no_echo, False, use_logger)
+        verify_kwargs: dict[str, Any] = {
+            "strict": strict,
+            "fail_on_pending": fail_on_pending,
+            "use_logger": use_logger,
+            "echo": echo_setting,
+        }
+
+        def _verify_for_config(config: Any) -> None:
+            _dispatch_migration_call(config, "verify", **verify_kwargs)
+
+        async def _async_verify(config: Any) -> None:
+            await _dispatch_migration_call_async(config, "verify", **verify_kwargs)
+
+        configs_to_process = process_multiple_configs(
+            ctx, bind_key, include, exclude, dry_run=False, operation_name="verify migrations", echo=echo_enabled
+        )
+        if configs_to_process is not None:
+            if not configs_to_process:
+                return
+            _run_multi_config_operation(
+                configs_to_process,
+                sync_apply=_verify_for_config,
+                async_apply=_async_verify,
+                should_echo=_should_echo,
+                progress_message=lambda name: f"[blue]Verifying configuration: {name}[/]",
+                success_message=None,
+                failure_message=lambda name, e: f"[red]✗ Verification failed for {name}: {e}[/]",
+            )
+            return
+
+        sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+        _verify_for_config(sqlspec_config)
 
     @database_group.command(name="show-config", help="Show all configurations with migrations enabled.")
     @bind_key_option

@@ -5,18 +5,24 @@
 compiled mypyc callers re-raise outside the context-manager ABI boundary.
 """
 
+import contextlib
 import hashlib
 import logging
 import re
 from collections.abc import Mapping
+from datetime import date, datetime
+from decimal import Decimal
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, Self, cast, overload
+from uuid import UUID
 
 import sqlglot
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 from sqlspec.builder import QueryBuilder
+from sqlspec.builder._ddl import compile_table_ddl_results
 from sqlspec.core import (
     SQL,
     CachedStatement,
@@ -47,12 +53,24 @@ from sqlspec.core.result._base import RowFormat
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
 from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary import (
+    DDL_PARENT_TABLE_CONTEXT_KEY,
+    ColumnProfileMetadata,
+    DDLResult,
+    DependencyEdge,
+    DependencyEdgeKind,
+    DependencyStrength,
     ForeignKeyMetadata,
+    MetadataCapability,
+    MetadataFidelity,
+    MetadataResult,
+    MetadataSource,
+    MetadataSupport,
     ObjectIdentity,
     VersionCacheResult,
     VersionInfo,
     dependency_edges_from_foreign_keys,
     get_data_dictionary_loader,
+    sort_ddl_results,
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import get_dialect_config
@@ -79,7 +97,8 @@ from sqlspec.observability import ObservabilityRuntime, get_trace_context, resol
 from sqlspec.protocols import StatementProtocol
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
-from sqlspec.utils.text import normalize_identifier
+from sqlspec.utils.serializers import from_json as decode_json
+from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import (
     has_asdict_method,
     has_cursor_metadata,
@@ -135,6 +154,10 @@ _SAVEPOINT_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-
 
 VERSION_GROUPS_MIN_FOR_MINOR = 1
 VERSION_GROUPS_MIN_FOR_PATCH = 2
+_MIN_QUOTED_IDENTIFIER_LEN: Final[int] = 2
+_INT64_MIN: Final[int] = -9223372036854775808
+_INT64_MAX: Final[int] = 9223372036854775807
+_MAX_NUMERIC_PRECISION: Final[int] = 38
 
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
@@ -379,6 +402,44 @@ class DataDictionaryDialectMixin:
         """Return a dialect-normalized identifier value."""
         return normalize_identifier(identifier, self.get_dialect_config().name)
 
+    def resolve_ddl_object_name(self, driver: Any, object_name: str, schema: "str | None") -> "tuple[str, str | None]":
+        """Normalize a caller-supplied object name and schema into exact catalog names.
+
+        Unquoted names follow the dialect's identifier folding; quoted names are kept verbatim.
+        Multi-dialect data dictionaries override this to resolve against the dialect detected
+        from ``driver``.
+
+        Args:
+            driver: Database driver instance.
+            object_name: Caller-supplied object name.
+            schema: Caller-supplied schema name, or None for the dialect default.
+
+        Returns:
+            Exact catalog object name and schema name.
+        """
+        _ = driver
+        return (self.resolve_identifier(object_name), self.resolve_schema(schema))
+
+    def exact_catalog_identifier(self, driver: Any, name: str) -> str:
+        """Return ``name`` in the form metadata getters resolve back to the exact catalog name.
+
+        Metadata getters such as ``get_columns`` normalize their ``table``/``schema`` arguments
+        as caller input (for example PostgreSQL folds unquoted names to lower case). Names read
+        from the catalog are already exact, so any name that normalization would change is
+        passed quoted.
+
+        Args:
+            driver: Database driver instance.
+            name: Exact catalog identifier.
+
+        Returns:
+            Identifier text that round-trips through the dictionary's normalization unchanged.
+        """
+        _ = driver
+        if self.resolve_identifier(name) == name:
+            return name
+        return quote_identifier(name)
+
     def resolve_feature_flag(self, feature: str, version: "VersionInfo | None") -> bool:
         """Resolve a feature flag using dialect config and version info."""
         config = self.get_dialect_config()
@@ -504,6 +565,1103 @@ class DataDictionaryMixin:
         result = sort_dependencies(table_objects, dependency_edges_from_foreign_keys(foreign_keys, source="unknown"))
         result.raise_for_cycles()
         return [identity.name for identity in result.ordered]
+
+    def build_synthesized_table_ddl(
+        self,
+        table_name: str,
+        columns: "abc.Sequence[Any]",
+        *,
+        schema: str | None = None,
+        constraints: "abc.Sequence[Any] | None" = None,
+        foreign_keys: "abc.Sequence[Any] | None" = None,
+        indexes: "abc.Sequence[Any] | None" = None,
+        target_dialect: str | None = None,
+        source_dialect: str | None = None,
+        warnings: tuple[str, ...] = (),
+    ) -> "DDLResult":
+        """Synthesize a table DDLResult from catalog metadata rows via sqlspec.builder.
+
+        Args:
+            table_name: Exact catalog table name.
+            columns: Column metadata rows.
+            schema: Exact catalog schema name.
+            constraints: Constraint metadata rows.
+            foreign_keys: Foreign key metadata rows.
+            indexes: Index metadata rows.
+            target_dialect: Dialect to render; defaults to the source dialect.
+            source_dialect: Dialect the catalog types, defaults, and expressions are written in;
+                defaults to this dictionary's dialect.
+            warnings: Warnings to attach to the result.
+
+        Returns:
+            Generated table DDL result.
+        """
+        resolved_source = _ddl_dialect_or_none(source_dialect or type(self).dialect)
+        return compile_table_ddl_results(
+            table_name,
+            columns,
+            schema=schema,
+            constraints=constraints,
+            foreign_keys=foreign_keys,
+            indexes=indexes,
+            dialect=_ddl_dialect_or_none(target_dialect) or resolved_source,
+            source_dialect=resolved_source,
+            warnings=warnings,
+        )
+
+    def resolve_ddl_dialect(self, driver: Any) -> "str | None":
+        """Return the SQLGlot dialect used to parse and render DDL for ``driver``.
+
+        Multi-dialect data dictionaries override this to report the dialect detected from the driver.
+
+        Args:
+            driver: Database driver instance.
+
+        Returns:
+            SQLGlot dialect name, or None for generic SQL.
+        """
+        _ = driver
+        return _ddl_dialect_or_none(type(self).dialect)
+
+    def _transpile_ddl_result(self, result: "DDLResult", target_dialect: str | None = None) -> "DDLResult":
+        """Transpile a supported DDLResult into ``target_dialect``.
+
+        Returns an explicit unsupported result carrying the parser error when SQLGlot cannot
+        transpile the statement, instead of returning untranslated SQL labelled as the target.
+        """
+        if not target_dialect or not result.ddl or result.status != MetadataSupport.SUPPORTED:
+            return result
+        source_dialect = _ddl_dialect_or_none(result.identity.dialect or type(self).dialect)
+        if source_dialect == target_dialect:
+            return result
+        identity = self._copy_identity(result.identity, dialect=target_dialect)
+        try:
+            transpiled = sqlglot.transpile(
+                result.ddl, read=_sqlglot_dialect(source_dialect), write=_sqlglot_dialect(target_dialect)
+            )
+        except SqlglotError as exc:
+            return DDLResult.unsupported(
+                identity,
+                source=result.source,
+                warnings=(
+                    *result.warnings,
+                    (
+                        f"Could not transpile {result.identity.object_type} {result.identity.name} DDL "
+                        f"from {source_dialect or 'generic'} to {target_dialect}: {exc}"
+                    ),
+                ),
+            )
+        statements = [stmt.rstrip(";").strip() for stmt in transpiled if stmt.strip()]
+        if not statements:
+            return DDLResult.unsupported(
+                identity,
+                source=result.source,
+                warnings=(*result.warnings, f"Transpiling {result.identity.name} DDL produced no statements"),
+            )
+        return DDLResult(
+            identity=identity,
+            status=result.status,
+            fidelity=result.fidelity,
+            source=result.source,
+            ddl=";\n\n".join(statements) + ";",
+            dependencies=result.dependencies,
+            redactions=result.redactions,
+            context=result.context,
+            warnings=result.warnings,
+        )
+
+    def _build_drop_ddl_result(self, result: "DDLResult", target_dialect: str | None = None) -> "DDLResult":
+        """Build a ``DROP <kind> IF EXISTS`` DDLResult for a schema object.
+
+        Identifiers are always quoted so the statement targets the exact catalog name.
+        Object kinds without a portable DROP form return an explicit unsupported result.
+        """
+        identity = result.identity
+        dialect = _ddl_dialect_or_none(target_dialect or identity.dialect or type(self).dialect)
+        drop_identity = self._copy_identity(identity, dialect=dialect or identity.dialect)
+        drop_kind = _DROP_OBJECT_KINDS.get(identity.object_type.lower())
+        if drop_kind is None:
+            return DDLResult.unsupported(
+                drop_identity,
+                source=result.source,
+                warnings=(f"No DROP statement form is defined for {identity.object_type} {identity.name}",),
+            )
+        kind, materialized = drop_kind
+        drop_expr = exp.Drop(
+            tables=[self._quoted_table(identity.name, identity.schema, identity.catalog)],
+            kind=kind,
+            exists=True,
+            materialized=materialized,
+        )
+        return DDLResult(
+            identity=drop_identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=result.fidelity,
+            source=result.source,
+            ddl=f"{drop_expr.sql(dialect=_sqlglot_dialect(dialect))};",
+            dependencies=result.dependencies,
+            redactions=result.redactions,
+            context=result.context,
+            warnings=result.warnings,
+        )
+
+    def _extract_table_name_and_schema(
+        self, item: Any, default_schema: str | None = None
+    ) -> tuple[str | None, str | None]:
+        """Extract table name and schema from a table metadata row or object."""
+        resolved_name: str | None = None
+        resolved_schema: str | None = default_schema
+        if isinstance(item, Mapping):
+            name = item.get("table_name") or item.get("name") or item.get("object_name")
+            tbl_schema = item.get("schema_name") or item.get("table_schema") or default_schema
+            resolved_name = str(name) if name else None
+            resolved_schema = str(tbl_schema) if tbl_schema else default_schema
+        else:
+            ident = getattr(item, "identity", None)
+            if isinstance(ident, ObjectIdentity):
+                resolved_name = ident.name
+                resolved_schema = ident.schema or default_schema
+            else:
+                name = getattr(item, "table_name", None) or getattr(item, "name", None)
+                tbl_schema = getattr(item, "schema_name", None) or default_schema
+                resolved_name = str(name) if name else None
+                resolved_schema = str(tbl_schema) if tbl_schema else default_schema
+        if (
+            resolved_schema
+            and resolved_schema.lower() == "main"
+            and default_schema is None
+            and _sqlglot_dialect(type(self).dialect) in {"sqlite", "duckdb"}
+        ):
+            resolved_schema = None
+        return (resolved_name, resolved_schema)
+
+    def _resolve_schema_ddl_input(self, driver: Any, schema: str | None) -> tuple[str | None, str | None]:
+        """Resolve caller-supplied ``schema`` into ``(exact_catalog_schema, getter_schema_arg)``."""
+        if schema is None:
+            return (None, None)
+        if _ddl_dialect_or_none(type(self).dialect) is not None and isinstance(self, DataDictionaryDialectMixin):
+            with contextlib.suppress(ValueError):
+                _, exact_schema = self.resolve_ddl_object_name(driver, "_", schema)
+                getter_schema = (
+                    self.exact_catalog_identifier(driver, exact_schema) if exact_schema is not None else None
+                )
+                return (exact_schema, getter_schema)
+        stripped = schema.strip()
+        if len(stripped) >= _MIN_QUOTED_IDENTIFIER_LEN and (
+            (stripped[0] == stripped[-1] and stripped[0] in {'"', "`"}) or (stripped[0] == "[" and stripped[-1] == "]")
+        ):
+            return (stripped[1:-1], schema)
+        return (stripped, schema)
+
+    def _build_view_ddl_from_row(
+        self, row: Any, *, default_schema: str | None = None, dialect: str | None = None
+    ) -> "DDLResult | None":
+        """Build a view DDLResult from a view metadata row when a definition is present.
+
+        Full ``CREATE`` statements from the catalog are kept verbatim. Body-only definitions are
+        wrapped in ``CREATE VIEW`` with a quoted view name. The result identity carries the
+        source ``dialect`` so a later transpile step can convert it to a target dialect.
+        """
+        attrs: Mapping[str, Any]
+        ident = getattr(row, "identity", None)
+        raw_attrs = getattr(row, "attributes", None)
+        if isinstance(row, Mapping):
+            attrs = row
+            view_name_raw = (
+                attrs.get("view_name") or attrs.get("table_name") or attrs.get("object_name") or attrs.get("name")
+            )
+            view_schema_raw = attrs.get("schema_name") or attrs.get("table_schema") or default_schema
+        elif isinstance(ident, ObjectIdentity) and isinstance(raw_attrs, Mapping):
+            attrs = raw_attrs
+            view_name_raw = ident.name
+            view_schema_raw = ident.schema or default_schema
+        else:
+            return None
+
+        if not view_name_raw:
+            return None
+        view_name = str(view_name_raw)
+        view_schema = str(view_schema_raw) if view_schema_raw else default_schema
+        definition_raw = (
+            attrs.get("ddl")
+            or attrs.get("view_definition")
+            or attrs.get("definition")
+            or attrs.get("text")
+            or attrs.get("native_sql")
+        )
+        if not definition_raw or not str(definition_raw).strip():
+            return None
+
+        definition_text = str(definition_raw).strip().rstrip(";").strip()
+        is_native_statement = definition_text.upper().startswith("CREATE")
+        if is_native_statement:
+            ddl_text = f"{definition_text};"
+        else:
+            quoted_view = self._quoted_table(view_name, view_schema).sql(dialect=_sqlglot_dialect(dialect))
+            ddl_text = f"CREATE VIEW {quoted_view} AS {definition_text};"
+        source = MetadataSource.CATALOG if is_native_statement else MetadataSource.GENERATED
+        return DDLResult(
+            identity=ObjectIdentity(
+                name=view_name, object_type="view", schema=view_schema, dialect=dialect, source=source
+            ),
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE if is_native_statement else MetadataFidelity.GENERATED,
+            source=source,
+            ddl=ddl_text,
+        )
+
+    def _build_sequence_ddl_from_row(
+        self, row: Any, *, default_schema: str | None = None, dialect: str | None = None
+    ) -> "DDLResult | None":
+        """Build a ``CREATE SEQUENCE`` DDLResult from a sequence metadata row.
+
+        The sequence name is quoted and options are rendered through SQLGlot for ``dialect``.
+        Sequences owned by identity columns or extensions are skipped because their owner
+        recreates them. Dialects whose sequence options cannot be rebuilt from catalog rows
+        return an explicit unsupported result.
+        """
+        attrs: Mapping[str, Any]
+        ident = getattr(row, "identity", None)
+        raw_attrs = getattr(row, "attributes", None)
+        if isinstance(row, Mapping):
+            attrs = row
+            name_raw = attrs.get("sequence_name") or attrs.get("object_name") or attrs.get("name")
+            schema_raw = attrs.get("schema_name") or attrs.get("sequence_schema") or default_schema
+        elif isinstance(ident, ObjectIdentity) and isinstance(raw_attrs, Mapping):
+            attrs = raw_attrs
+            name_raw = ident.name
+            schema_raw = ident.schema or default_schema
+        else:
+            return None
+        if not name_raw or attrs.get("is_identity_owned") or attrs.get("is_extension_owned"):
+            return None
+        identity = ObjectIdentity(
+            name=str(name_raw),
+            object_type="sequence",
+            schema=str(schema_raw) if schema_raw else None,
+            dialect=dialect,
+            source=MetadataSource.GENERATED,
+        )
+        if dialect in _SEQUENCE_SYNTHESIS_UNSUPPORTED_DIALECTS:
+            return DDLResult.unsupported(
+                identity,
+                source=MetadataSource.GENERATED,
+                warnings=(f"{dialect} sequence options cannot be rebuilt from catalog rows",),
+            )
+        properties: dict[str, Any] = {}
+        for prop_name, keys in _SEQUENCE_NUMERIC_PROPERTIES:
+            value = next((attrs.get(key) for key in keys if attrs.get(key) is not None), None)
+            if value is not None:
+                properties[prop_name] = exp.Literal.number(str(value))
+        cycle_raw = next(
+            (attrs.get(key) for key in ("cycle", "cycles", "cycle_option") if attrs.get(key) is not None), None
+        )
+        cycles = str(cycle_raw).strip().upper() in {"TRUE", "YES", "1", "Y"} if cycle_raw is not None else False
+        properties["options"] = [exp.var("CYCLE" if cycles else "NO CYCLE")]
+        create_expr = exp.Create(
+            this=self._quoted_table(identity.name, identity.schema),
+            kind="SEQUENCE",
+            properties=exp.Properties(expressions=[exp.SequenceProperties(**properties)]),
+        )
+        return DDLResult(
+            identity=identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.GENERATED,
+            source=MetadataSource.GENERATED,
+            ddl=f"{create_expr.sql(dialect=_sqlglot_dialect(dialect))};",
+        )
+
+    def _build_type_ddl_from_row(
+        self, row: Any, *, default_schema: str | None = None, dialect: str | None = None
+    ) -> "DDLResult | None":
+        """Build a ``CREATE TYPE ... AS ENUM`` DDLResult from a user-defined type row.
+
+        Only enum types can be rebuilt from catalog rows; other kinds return an explicit
+        unsupported result with a warning.
+        """
+        if not isinstance(row, Mapping):
+            return None
+        name_raw = row.get("type_name") or row.get("name")
+        if not name_raw:
+            return None
+        schema_raw = row.get("schema_name") or default_schema
+        identity = ObjectIdentity(
+            name=str(name_raw),
+            object_type="type",
+            schema=str(schema_raw) if schema_raw else None,
+            dialect=dialect,
+            source=MetadataSource.GENERATED,
+        )
+        logical_type = str(row.get("logical_type") or "").strip().upper()
+        labels = row.get("labels")
+        if logical_type != "ENUM" or labels is None:
+            return DDLResult.unsupported(
+                identity,
+                source=MetadataSource.GENERATED,
+                warnings=(f"{logical_type or 'unknown'} type {identity.name} cannot be rebuilt from catalog rows",),
+            )
+        render_dialect = _sqlglot_dialect(dialect)
+        quoted_type = self._quoted_table(identity.name, identity.schema).sql(dialect=render_dialect)
+        rendered_labels = ", ".join(exp.Literal.string(str(label)).sql(dialect=render_dialect) for label in labels)
+        return DDLResult(
+            identity=identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.GENERATED,
+            source=MetadataSource.GENERATED,
+            ddl=f"CREATE TYPE {quoted_type} AS ENUM ({rendered_labels});",
+        )
+
+    def _synthesize_table_from_catalog(
+        self,
+        table_name: str,
+        schema: str | None,
+        catalog: "Mapping[str, Mapping[str, abc.Sequence[Any]]]",
+        *,
+        source_dialect: str | None,
+        target_dialect: str | None,
+        warnings: tuple[str, ...] = (),
+    ) -> "DDLResult":
+        """Synthesize one table's DDL from schema-wide catalog rows grouped by table."""
+        columns = catalog.get("columns", {}).get(table_name, ())
+        if not columns:
+            return DDLResult.unsupported(
+                ObjectIdentity(table_name, "table", schema=schema, dialect=type(self).dialect),
+                warnings=(*warnings, f"No catalog columns found for table {table_name}"),
+            )
+        return self.build_synthesized_table_ddl(
+            table_name,
+            columns,
+            schema=schema,
+            constraints=catalog.get("constraints", {}).get(table_name, ()),
+            foreign_keys=catalog.get("foreign_keys", {}).get(table_name, ()),
+            indexes=catalog.get("indexes", {}).get(table_name, ()),
+            target_dialect=target_dialect,
+            source_dialect=source_dialect,
+            warnings=warnings,
+        )
+
+    def _group_rows_by_table(
+        self, rows: "abc.Iterable[Any]", table_names: "abc.Sequence[str]"
+    ) -> "dict[str, list[Any]] | None":
+        """Group schema-wide catalog rows by exact table name.
+
+        Returns None when a row does not name its table, so callers fall back to per-table queries.
+        """
+        grouped: dict[str, list[Any]] = {name: [] for name in table_names}
+        for row in rows:
+            table_name = row.get("table_name") if isinstance(row, Mapping) else getattr(row, "table_name", None)
+            if not table_name:
+                return None
+            bucket = grouped.get(str(table_name))
+            if bucket is not None:
+                bucket.append(row)
+        return grouped
+
+    def _catalog_object_identity_result(
+        self, name: str, object_type: str, schema: str | None, dialect: str | None
+    ) -> "DDLResult":
+        """Return an identity-only DDLResult used when only the object's existence matters (drop DDL)."""
+        return DDLResult(
+            identity=ObjectIdentity(
+                name, object_type, schema=schema, dialect=dialect or type(self).dialect, source=MetadataSource.CATALOG
+            ),
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.GENERATED,
+            source=MetadataSource.CATALOG,
+        )
+
+    def _column_reference_text(self, grouped_columns: "Mapping[str, abc.Sequence[Any]]") -> "dict[str, str]":
+        """Join each table's column types and defaults into text searched for type and sequence references."""
+        texts: dict[str, str] = {}
+        for table_name, columns in grouped_columns.items():
+            parts: list[str] = []
+            for column in columns:
+                if isinstance(column, Mapping):
+                    parts.extend(str(column.get(key) or "") for key in ("data_type", "column_default"))
+            texts[table_name] = " ".join(parts)
+        return texts
+
+    def _link_schema_references(
+        self, items: "list[DDLResult]", reference_text: "Mapping[str, str]"
+    ) -> "list[DDLResult]":
+        """Add dependency edges from tables to the types and sequences they reference and from views to relations.
+
+        References are found by whole-identifier search in the table DDL plus ``reference_text``
+        (column types and defaults) and in the view DDL.
+        """
+        referenced = [item.identity for item in items if item.identity.object_type.lower() in {"sequence", "type"}]
+        relations = [
+            item.identity
+            for item in items
+            if self._is_table_object_type(item.identity.object_type) or "view" in item.identity.object_type.lower()
+        ]
+        linked: list[DDLResult] = []
+        for item in items:
+            object_type = item.identity.object_type.lower()
+            if self._is_table_object_type(object_type):
+                text = f"{item.ddl or ''} {reference_text.get(item.identity.name, '')}"
+                candidates = referenced
+            elif "view" in object_type:
+                text = item.ddl or ""
+                candidates = relations
+            else:
+                linked.append(item)
+                continue
+            edges = tuple(
+                DependencyEdge(
+                    item.identity,
+                    target,
+                    _REFERENCE_EDGE_KINDS.get(target.object_type.lower(), DependencyEdgeKind.VIEW_REFERENCE),
+                    source=item.identity.source,
+                )
+                for target in candidates
+                if target != item.identity and self._references_identifier(text, target.name)
+            )
+            linked.append(self._with_dependencies(item, (*item.dependencies, *edges)) if edges else item)
+        return linked
+
+    def _resolve_schema_object_identity(
+        self,
+        lookup: "Mapping[tuple[str, str, str], ObjectIdentity]",
+        object_type: str | None,
+        schema: str | None,
+        name: str | None,
+    ) -> "ObjectIdentity | None":
+        """Resolve an object reference to its canonical ObjectIdentity in the schema DDL graph."""
+        if not name:
+            return None
+        t_key = (object_type or "").strip().lower()
+        s_key = (schema or "").strip().lower()
+        n_key = name.strip().lower()
+        for candidate in ((t_key, s_key, n_key), (t_key, "", n_key), ("", s_key, n_key), ("", "", n_key)):
+            found = lookup.get(candidate)
+            if found is not None:
+                return found
+        return None
+
+    def _extract_fk_endpoints(self, fk: Any) -> tuple[str | None, str | None, str | None, str | None]:
+        """Extract (table_name, schema, referenced_table, referenced_schema) from a foreign key item."""
+        if isinstance(fk, ForeignKeyMetadata):
+            return (fk.table_name, fk.schema, fk.referenced_table, fk.referenced_schema or fk.schema)
+        if isinstance(fk, Mapping):
+            t_name = fk.get("table_name")
+            s_name = fk.get("schema") or fk.get("schema_name") or fk.get("table_schema")
+            r_table = fk.get("referenced_table") or fk.get("references_table") or fk.get("referenced_table_name")
+            r_schema = fk.get("referenced_schema") or fk.get("references_schema") or s_name
+            return (
+                str(t_name) if t_name else None,
+                str(s_name) if s_name else None,
+                str(r_table) if r_table else None,
+                str(r_schema) if r_schema else None,
+            )
+        return (None, None, None, None)
+
+    def _extract_dependency_endpoints(
+        self, dep: Any
+    ) -> tuple[str | None, str | None, str | None, str | None, str | None, str | None]:
+        """Extract (from_type, from_schema, from_name, to_type, to_schema, to_name) from a dependency item."""
+        ident = getattr(dep, "identity", None)
+        raw_attrs = getattr(dep, "attributes", None)
+        attrs: Mapping[str, Any]
+        if isinstance(dep, Mapping):
+            attrs = dep
+            from_name = (
+                attrs.get("object_name")
+                or attrs.get("dependent_name")
+                or attrs.get("referencing_entity_name")
+                or attrs.get("name")
+            )
+            from_schema = (
+                attrs.get("schema_name") or attrs.get("dependent_schema") or attrs.get("referencing_schema_name")
+            )
+            from_type = attrs.get("object_type") or attrs.get("dependent_type")
+        elif isinstance(ident, ObjectIdentity) and isinstance(raw_attrs, Mapping):
+            attrs = raw_attrs
+            from_name = ident.name
+            from_schema = ident.schema
+            from_type = ident.object_type
+        else:
+            return (None, None, None, None, None, None)
+
+        to_name = (
+            attrs.get("referenced_name")
+            or attrs.get("referenced_object")
+            or attrs.get("referenced_object_name")
+            or attrs.get("referenced_entity_name")
+            or attrs.get("parent_name")
+        )
+        to_schema = (
+            attrs.get("referenced_schema")
+            or attrs.get("referenced_schema_name")
+            or attrs.get("parent_schema")
+            or from_schema
+        )
+        to_type = attrs.get("referenced_type") or attrs.get("referenced_object_type") or attrs.get("parent_type")
+        return (
+            str(from_type) if from_type else None,
+            str(from_schema) if from_schema else None,
+            str(from_name) if from_name else None,
+            str(to_type) if to_type else None,
+            str(to_schema) if to_schema else None,
+            str(to_name) if to_name else None,
+        )
+
+    def _schema_ddl_collect_domains(
+        self, include_domains: "abc.Sequence[str] | None", exclude_domains: "abc.Sequence[str] | None"
+    ) -> "set[str]":
+        """Return the synthesizable schema DDL domains selected by include/exclude filters."""
+        allowed = {"sequences", "tables", "types", "views"}
+        if include_domains is not None:
+            allowed &= self._normalize_schema_ddl_domains(include_domains)
+        if exclude_domains is not None:
+            allowed -= self._normalize_schema_ddl_domains(exclude_domains)
+        return allowed
+
+    def _replace_synthesized_table_dependents(
+        self, items: "abc.Sequence[DDLResult]", replaced_tables: "set[tuple[str, str]]"
+    ) -> "list[DDLResult]":
+        """Drop native index items whose parent table was replaced by synthesized DDL.
+
+        Synthesized table DDL already includes the table's indexes, so the native index
+        statements for that table would be duplicates.
+        """
+        kept: list[DDLResult] = []
+        for item in items:
+            parent = item.context.get(DDL_PARENT_TABLE_CONTEXT_KEY)
+            if (
+                item.identity.object_type.lower() == "index"
+                and parent is not None
+                and ((item.identity.schema or "").lower(), str(parent).lower()) in replaced_tables
+            ):
+                continue
+            kept.append(item)
+        return kept
+
+    def _finalize_schema_ddl_results(
+        self,
+        ddl_results: "abc.Sequence[DDLResult]",
+        *,
+        foreign_keys: "abc.Sequence[Any] | None" = None,
+        dependency_items: "abc.Sequence[Any] | None" = None,
+        include_domains: "abc.Sequence[str] | None" = None,
+        exclude_domains: "abc.Sequence[str] | None" = None,
+        exclude_tables: "abc.Sequence[str] | None" = (),
+        direction: "Literal['create', 'drop']" = "create",
+        target_dialect: str | None = None,
+        warnings: tuple[str, ...] = (),
+    ) -> "MetadataResult":
+        """Filter, attach dependency edges, topologically sort, and wrap schema DDL results.
+
+        ``exclude_tables`` entries are compared as bare, unquoted, case-insensitive names with any
+        schema qualification stripped; indexes and triggers of excluded tables are excluded too.
+        Objects without usable CREATE DDL are reported in the result warnings instead of being
+        dropped silently; drop direction needs only object identities, so every collected object is
+        kept. For ``direction="drop"`` each object is converted into ``DROP ... IF EXISTS``
+        in reverse dependency order; indexes and triggers are omitted because dropping their
+        table removes them. Table-to-table ordering comes from ``foreign_keys``; catalog dependency
+        rows whose dependent is a table are ignored because engines such as DuckDB record foreign
+        keys there in the opposite direction.
+        """
+        excluded_names = self._normalize_excluded_table_names(exclude_tables)
+        included = self._normalize_schema_ddl_domains(include_domains) if include_domains is not None else None
+        excluded_domains = self._normalize_schema_ddl_domains(exclude_domains) if exclude_domains is not None else set()
+        result_warnings: list[str] = list(warnings)
+        filtered: list[DDLResult] = []
+        for item in ddl_results:
+            object_type = item.identity.object_type.lower()
+            domain = _SCHEMA_DDL_OBJECT_DOMAINS.get(object_type, f"{object_type}s")
+            if (included is not None and domain not in included) or domain in excluded_domains:
+                continue
+            if self._is_excluded_schema_object(item, excluded_names):
+                continue
+            candidate = item
+            if direction == "create":
+                if candidate.status == MetadataSupport.SUPPORTED and candidate.ddl:
+                    candidate = self._transpile_ddl_result(candidate, target_dialect=target_dialect)
+                if candidate.status != MetadataSupport.SUPPORTED or not candidate.ddl:
+                    result_warnings.append(self._skipped_schema_object_warning(candidate))
+                    continue
+            filtered.append(candidate)
+
+        identity_lookup: dict[tuple[str, str, str], ObjectIdentity] = {}
+        for item in filtered:
+            ident = item.identity
+            t_key = ident.object_type.lower()
+            s_key = (ident.schema or "").lower()
+            n_key = ident.name.lower()
+            identity_lookup[t_key, s_key, n_key] = ident
+            identity_lookup.setdefault((t_key, "", n_key), ident)
+            identity_lookup.setdefault(("", s_key, n_key), ident)
+            identity_lookup.setdefault(("", "", n_key), ident)
+
+        edges_by_source: dict[ObjectIdentity, list[DependencyEdge]] = {}
+        for item in filtered:
+            edges_by_source.setdefault(item.identity, [])
+            for edge in item.dependencies:
+                target_ident = self._resolve_schema_object_identity(
+                    identity_lookup, edge.to_object.object_type, edge.to_object.schema, edge.to_object.name
+                )
+                if target_ident is not None and target_ident != item.identity:
+                    edges_by_source[item.identity].append(
+                        DependencyEdge(
+                            item.identity,
+                            target_ident,
+                            edge.kind,
+                            strength=edge.strength,
+                            confidence=edge.confidence,
+                            source=item.identity.source,
+                        )
+                    )
+
+        for fk in foreign_keys or ():
+            fk_table, fk_schema, ref_table, ref_schema = self._extract_fk_endpoints(fk)
+            if not fk_table or not ref_table:
+                continue
+            from_ident = self._resolve_schema_object_identity(identity_lookup, "table", fk_schema, fk_table)
+            to_ident = self._resolve_schema_object_identity(
+                identity_lookup, "table", ref_schema or fk_schema, ref_table
+            )
+            if from_ident is not None and to_ident is not None and from_ident != to_ident:
+                edges_by_source.setdefault(from_ident, []).append(
+                    DependencyEdge(
+                        from_ident,
+                        to_ident,
+                        DependencyEdgeKind.FOREIGN_KEY,
+                        strength=DependencyStrength.HARD,
+                        source=from_ident.source,
+                    )
+                )
+
+        for dep in dependency_items or ():
+            from_type, from_schema, from_name, to_type, to_schema, to_name = self._extract_dependency_endpoints(dep)
+            if not from_name or not to_name:
+                continue
+            from_ident = self._resolve_schema_object_identity(identity_lookup, from_type, from_schema, from_name)
+            to_ident = self._resolve_schema_object_identity(identity_lookup, to_type, to_schema or from_schema, to_name)
+            if (
+                from_ident is not None
+                and to_ident is not None
+                and from_ident != to_ident
+                and not self._is_table_object_type(from_ident.object_type)
+            ):
+                edge_kind = (
+                    DependencyEdgeKind.MATERIALIZED_VIEW
+                    if from_ident.object_type.lower() == "materialized_view"
+                    else DependencyEdgeKind.VIEW_REFERENCE
+                    if "view" in from_ident.object_type.lower()
+                    else DependencyEdgeKind.ROUTINE_REFERENCE
+                )
+                edges_by_source.setdefault(from_ident, []).append(
+                    DependencyEdge(
+                        from_ident, to_ident, edge_kind, strength=DependencyStrength.HARD, source=from_ident.source
+                    )
+                )
+
+        enriched: list[DDLResult] = [
+            DDLResult(
+                identity=item.identity,
+                status=item.status,
+                fidelity=item.fidelity,
+                source=item.source,
+                ddl=item.ddl,
+                dependencies=tuple(edges_by_source.get(item.identity, ())),
+                redactions=item.redactions,
+                context=item.context,
+                warnings=item.warnings,
+            )
+            for item in filtered
+        ]
+
+        sort_input = list(reversed(enriched)) if direction == "drop" else enriched
+        sorted_results: tuple[DDLResult, ...] = sort_ddl_results(sort_input, order=direction, raise_on_cycles=False)
+        if direction == "drop":
+            drop_results: list[DDLResult] = []
+            for item in sorted_results:
+                if item.identity.object_type.lower() in _TABLE_DEPENDENT_OBJECT_TYPES:
+                    continue
+                drop_result = self._build_drop_ddl_result(item, target_dialect=target_dialect)
+                if drop_result.status != MetadataSupport.SUPPORTED:
+                    result_warnings.append(self._skipped_schema_object_warning(drop_result))
+                    continue
+                drop_results.append(drop_result)
+            sorted_results = tuple(drop_results)
+
+        for item in sorted_results:
+            result_warnings.extend(item.warnings)
+        unique_warnings = tuple(dict.fromkeys(result_warnings))
+        fidelities = {item.fidelity for item in sorted_results}
+        sources = {item.source for item in sorted_results}
+        capability = MetadataCapability(
+            domain="ddl",
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE if fidelities == {MetadataFidelity.NATIVE} else MetadataFidelity.GENERATED,
+            source=next(iter(sources)) if len(sources) == 1 else MetadataSource.GENERATED,
+            warnings=unique_warnings,
+        )
+        return MetadataResult("ddl", capability=capability, items=sorted_results, warnings=unique_warnings)
+
+    def _is_table_object_type(self, object_type: str) -> bool:
+        """Return True when ``object_type`` names a table."""
+        return object_type.lower() in _TABLE_OBJECT_TYPES
+
+    def _uncollected_domain_warning(self, domain: str, dialect: str | None) -> str:
+        """Describe a schema DDL domain the data dictionary cannot collect."""
+        return f"{dialect or 'generic'} data dictionary does not expose {domain}; {domain} were omitted from schema DDL"
+
+    def _with_dependencies(self, result: "DDLResult", dependencies: "tuple[DependencyEdge, ...]") -> "DDLResult":
+        """Return ``result`` with ``dependencies`` re-anchored on its own identity."""
+        if not dependencies:
+            return result
+        return DDLResult(
+            identity=result.identity,
+            status=result.status,
+            fidelity=result.fidelity,
+            source=result.source,
+            ddl=result.ddl,
+            dependencies=tuple(
+                DependencyEdge(
+                    result.identity,
+                    edge.to_object,
+                    edge.kind,
+                    strength=edge.strength,
+                    confidence=edge.confidence,
+                    source=edge.source,
+                )
+                for edge in dependencies
+            ),
+            redactions=result.redactions,
+            context=result.context,
+            warnings=result.warnings,
+        )
+
+    def _is_excluded_schema_object(self, item: "DDLResult", excluded_names: "set[str]") -> bool:
+        """Return True when the object or its parent table matches an excluded table name."""
+        if not excluded_names:
+            return False
+        if item.identity.object_type.lower() in _TABLE_OBJECT_TYPES and item.identity.name.lower() in excluded_names:
+            return True
+        parent = item.context.get(DDL_PARENT_TABLE_CONTEXT_KEY)
+        return parent is not None and str(parent).lower() in excluded_names
+
+    def _skipped_schema_object_warning(self, item: "DDLResult") -> str:
+        """Describe a schema object omitted from schema DDL output."""
+        qualified = f"{item.identity.schema}.{item.identity.name}" if item.identity.schema else item.identity.name
+        reason = "; ".join(item.warnings) if item.warnings else "no DDL is available"
+        return f"Omitted {item.identity.object_type} {qualified} from schema DDL: {reason}"
+
+    def _build_table_profile_sql(self, table: str, columns: "abc.Sequence[Any]", schema: str | None = None) -> SQL:
+        """Build a single-pass aggregate query for column profile statistics.
+
+        Table, schema, and column identifiers are exact catalog names and are always quoted.
+        """
+        effective_dialect = _ddl_dialect_or_none(type(self).dialect)
+        sqlglot_dialect = _sqlglot_dialect(effective_dialect)
+        cast_target = _profile_text_cast_type(sqlglot_dialect)
+        projections: list[exp.Expr] = [
+            exp.Alias(this=exp.Count(this=exp.Star()), alias=exp.to_identifier("__row_count"))
+        ]
+        for idx, col_item in enumerate(columns):
+            col_name = (
+                str(col_item.get("column_name") or col_item.get("name") or "")
+                if isinstance(col_item, Mapping)
+                else str(getattr(col_item, "column_name", None) or getattr(col_item, "name", None) or "")
+            )
+            if not col_name:
+                continue
+            col_type = (
+                str(col_item.get("data_type") or col_item.get("type") or "")
+                if isinstance(col_item, Mapping)
+                else str(getattr(col_item, "data_type", None) or getattr(col_item, "type", None) or "")
+            )
+            col_expr = exp.column(col_name, quoted=True)
+            if _is_non_comparable_profile_type(col_type, sqlglot_dialect):
+                projections.extend((
+                    exp.Alias(this=exp.Count(this=col_expr.copy()), alias=exp.to_identifier(f"__non_null_{idx}")),
+                    exp.Alias(
+                        this=exp.Cast(this=exp.Null(), to=exp.DataType.build("BIGINT")),
+                        alias=exp.to_identifier(f"__distinct_{idx}"),
+                    ),
+                    exp.Alias(
+                        this=exp.Cast(this=exp.Null(), to=exp.DataType.build("BIGINT")),
+                        alias=exp.to_identifier(f"__max_len_{idx}"),
+                    ),
+                ))
+            else:
+                projections.extend((
+                    exp.Alias(this=exp.Count(this=col_expr.copy()), alias=exp.to_identifier(f"__non_null_{idx}")),
+                    exp.Alias(
+                        this=exp.Count(this=exp.Distinct(expressions=[col_expr.copy()])),
+                        alias=exp.to_identifier(f"__distinct_{idx}"),
+                    ),
+                    exp.Alias(
+                        this=exp.Max(
+                            this=exp.Length(
+                                this=exp.Cast(
+                                    this=col_expr.copy(), to=exp.DataType.build(cast_target, dialect=sqlglot_dialect)
+                                )
+                            )
+                        ),
+                        alias=exp.to_identifier(f"__max_len_{idx}"),
+                    ),
+                ))
+
+        select_expr = exp.select(*projections).from_(self._quoted_table(table, schema))
+        return SQL(select_expr.sql(dialect=sqlglot_dialect))
+
+    def _build_table_sample_sql(self, table: str, schema: str | None = None, sample_size: int = 1000) -> SQL:
+        """Build a query sampling rows from a table, quoting the exact catalog identifiers."""
+        effective_dialect = _ddl_dialect_or_none(type(self).dialect)
+        select_expr = exp.select(exp.Star()).from_(self._quoted_table(table, schema)).limit(max(1, sample_size))
+        return SQL(select_expr.sql(dialect=_sqlglot_dialect(effective_dialect)))
+
+    def _infer_column_type_from_sample(
+        self, declared_type: str, values: "abc.Sequence[Any]", *, target_dialect: str | None = None
+    ) -> str:
+        """Infer a refined SQL column type from declared catalog type and sampled non-null values."""
+        effective_dialect = target_dialect or type(self).dialect
+        config = None
+        if _ddl_dialect_or_none(effective_dialect) is not None:
+            with contextlib.suppress(ValueError):
+                config = get_dialect_config(effective_dialect)
+
+        clean_declared = declared_type.strip()
+        base_declared = clean_declared.split("(", 1)[0].strip().upper()
+        if base_declared not in _LOOSE_PROFILE_TYPES:
+            if target_dialect and target_dialect != type(self).dialect:
+                src_dialect = _ddl_dialect_or_none(type(self).dialect)
+                with contextlib.suppress(SqlglotError):
+                    return exp.DataType.build(clean_declared, dialect=_sqlglot_dialect(src_dialect)).sql(
+                        dialect=_sqlglot_dialect(target_dialect)
+                    )
+            return clean_declared or "TEXT"
+
+        non_empty = [val for val in values if val is not None and (not isinstance(val, str) or val.strip() != "")]
+        if not non_empty:
+            if clean_declared and (target_dialect is None or target_dialect == type(self).dialect):
+                return clean_declared
+            if config is not None:
+                return config.get_optimal_type("text")
+            return clean_declared or "TEXT"
+
+        if all(
+            isinstance(val, bool) or (isinstance(val, str) and val.strip().lower() in {"true", "false"})
+            for val in non_empty
+        ):
+            return config.get_optimal_type("boolean") if config is not None else "BOOLEAN"
+
+        if all(
+            (isinstance(val, int) and not isinstance(val, bool))
+            or (isinstance(val, str) and bool(_PROFILE_INT_RE.match(val.strip())))
+            for val in non_empty
+        ):
+            int_vals = [int(val.strip()) if isinstance(val, str) else int(val) for val in non_empty]
+            if all(_INT64_MIN <= item <= _INT64_MAX for item in int_vals):
+                return config.get_optimal_type("bigint") if config is not None else "BIGINT"
+            max_digits = max(len(str(abs(item))) for item in int_vals)
+            if max_digits <= _MAX_NUMERIC_PRECISION:
+                return f"NUMERIC({max(10, max_digits)}, 0)"
+            if config is not None and target_dialect is not None and target_dialect != type(self).dialect:
+                return config.get_optimal_type("text")
+            return clean_declared or (config.get_optimal_type("text") if config is not None else "TEXT")
+
+        if all(_is_valid_profile_decimal(val) for val in non_empty):
+            max_int_digits = 1
+            max_frac_digits = 2
+            for val in non_empty:
+                int_digits, frac_digits = _decimal_digit_counts(val)
+                max_int_digits = max(max_int_digits, int_digits)
+                max_frac_digits = max(max_frac_digits, frac_digits)
+            if max_int_digits + max_frac_digits <= _MAX_NUMERIC_PRECISION:
+                precision = max(10, min(_MAX_NUMERIC_PRECISION, max_int_digits + max_frac_digits + 2))
+                scale = min(precision - max_int_digits, max(2, max_frac_digits))
+                return f"NUMERIC({precision}, {scale})"
+
+        if all(
+            isinstance(val, UUID) or (isinstance(val, str) and bool(_PROFILE_UUID_RE.match(val.strip())))
+            for val in non_empty
+        ):
+            return config.get_optimal_type("uuid") if config is not None else "UUID"
+
+        if all(_is_valid_profile_date(val) for val in non_empty):
+            return "DATE"
+
+        if all(_is_valid_profile_datetime(val) for val in non_empty):
+            return config.get_optimal_type("timestamp") if config is not None else "TIMESTAMP WITH TIME ZONE"
+
+        if all(_is_valid_profile_json(val) for val in non_empty):
+            return config.get_optimal_type("json") if config is not None else "JSON"
+
+        if config is not None and target_dialect is not None and target_dialect != type(self).dialect:
+            return config.get_optimal_type("text")
+        return clean_declared or (config.get_optimal_type("text") if config is not None else "TEXT")
+
+    def _compile_column_profiles(
+        self,
+        columns: "abc.Sequence[Any]",
+        stats_row: "Mapping[str, Any] | None",
+        sample_rows: "abc.Sequence[Mapping[str, Any]]",
+        *,
+        target_dialect: str | None = None,
+    ) -> "list[ColumnProfileMetadata]":
+        """Compile ColumnProfileMetadata items from catalog columns, aggregate stats, and sampled rows."""
+        normalized_stats: dict[str, Any] = {}
+        if stats_row is not None:
+            for k, v in stats_row.items():
+                normalized_stats[str(k).lower()] = v
+
+        row_count_raw = normalized_stats.get("__row_count")
+        row_count = int(row_count_raw) if row_count_raw is not None else len(sample_rows)
+
+        profiles: list[ColumnProfileMetadata] = []
+        for idx, col_item in enumerate(columns):
+            if isinstance(col_item, Mapping):
+                col_name = str(col_item.get("column_name") or col_item.get("name") or "")
+                declared_type = str(col_item.get("data_type") or col_item.get("type") or "TEXT")
+                is_null_raw = col_item.get("is_nullable")
+            else:
+                col_name = str(getattr(col_item, "column_name", None) or getattr(col_item, "name", None) or "")
+                declared_type = str(getattr(col_item, "data_type", None) or getattr(col_item, "type", None) or "TEXT")
+                is_null_raw = getattr(col_item, "is_nullable", None)
+            if not col_name:
+                continue
+
+            declared_nullable = (
+                str(is_null_raw).strip().upper() not in {"NO", "FALSE", "0", "N"} if is_null_raw is not None else True
+            )
+
+            col_samples: list[Any] = []
+            col_lower = col_name.lower()
+            for s_row in sample_rows:
+                if col_name in s_row:
+                    col_samples.append(s_row[col_name])
+                else:
+                    for k, v in s_row.items():
+                        if str(k).lower() == col_lower:
+                            col_samples.append(v)
+                            break
+
+            non_null_raw = normalized_stats.get(f"__non_null_{idx}")
+            if non_null_raw is not None:
+                non_null_count = int(non_null_raw)
+            else:
+                non_null_count = sum(1 for v in col_samples if v is not None)
+
+            null_count = max(0, row_count - non_null_count)
+            distinct_raw = normalized_stats.get(f"__distinct_{idx}")
+            if distinct_raw is not None:
+                distinct_count = int(distinct_raw)
+            else:
+                distinct_count = len({repr(v) for v in col_samples if v is not None})
+
+            max_len_raw = normalized_stats.get(f"__max_len_{idx}")
+            if max_len_raw is not None:
+                max_char_length: int | None = int(max_len_raw)
+            else:
+                str_lengths = [len(str(v)) for v in col_samples if v is not None]
+                max_char_length = max(str_lengths) if str_lengths else None
+
+            nullable = (null_count > 0) if row_count > 0 else declared_nullable
+            is_unique_candidate = row_count > 0 and null_count == 0 and distinct_count == row_count
+            inferred_type = self._infer_column_type_from_sample(
+                declared_type, col_samples, target_dialect=target_dialect
+            )
+
+            profiles.append(
+                ColumnProfileMetadata(
+                    column_name=col_name,
+                    declared_type=declared_type,
+                    inferred_type=inferred_type,
+                    row_count=row_count,
+                    null_count=null_count,
+                    distinct_count=distinct_count,
+                    nullable=nullable,
+                    max_char_length=max_char_length,
+                    is_unique_candidate=is_unique_candidate,
+                )
+            )
+
+        return profiles
+
+    def _compile_profiled_table_ddl(
+        self,
+        table_name: str,
+        profiles: "abc.Sequence[ColumnProfileMetadata]",
+        *,
+        schema: str | None = None,
+        target_table: str | None = None,
+        target_dialect: str | None = None,
+        primary_key: "str | abc.Sequence[str] | None" = None,
+    ) -> "DDLResult":
+        """Compile a DDLResult from ColumnProfileMetadata items."""
+        pk_cols = (
+            {primary_key.lower()}
+            if isinstance(primary_key, str)
+            else {str(c).lower() for c in (primary_key or ()) if c}
+        )
+        synthesized_columns: list[dict[str, Any]] = []
+        for idx, prof in enumerate(profiles, start=1):
+            is_pk = prof.column_name.lower() in pk_cols
+            synthesized_columns.append({
+                "column_name": prof.column_name,
+                "data_type": prof.inferred_type,
+                "is_nullable": "NO" if (is_pk or not prof.nullable) else "YES",
+                "ordinal_position": idx,
+                "is_primary": is_pk,
+            })
+
+        return compile_table_ddl_results(
+            target_table or table_name,
+            synthesized_columns,
+            schema=schema,
+            dialect=_ddl_dialect_or_none(target_dialect or type(self).dialect),
+        )
+
+    @staticmethod
+    def _references_identifier(sql_text: str, name: str) -> bool:
+        """Return True when ``name`` appears in ``sql_text`` as a whole identifier."""
+        return re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", sql_text, re.IGNORECASE) is not None
+
+    @staticmethod
+    def _normalize_schema_ddl_domains(domains: "abc.Sequence[str]") -> "set[str]":
+        """Normalize schema DDL domain names, accepting singular object types or plural domains."""
+        normalized: set[str] = set()
+        for domain in domains:
+            key = domain.strip().lower().replace(" ", "_")
+            if key:
+                normalized.add(_SCHEMA_DDL_OBJECT_DOMAINS.get(key, key))
+        return normalized
+
+    @staticmethod
+    def _normalize_excluded_table_names(exclude_tables: "abc.Sequence[str] | None") -> "set[str]":
+        """Normalize excluded table names to bare, unquoted, lower-case names without schema qualification."""
+        normalized: set[str] = set()
+        for name in exclude_tables or ():
+            parts = split_qualified_identifier(name) if name else ()
+            if parts and parts[-1]:
+                normalized.add(parts[-1].lower())
+        return normalized
+
+    @staticmethod
+    def _quoted_table(name: str, schema: str | None = None, catalog: str | None = None) -> "exp.Table":
+        """Build a table expression whose parts are quoted to preserve exact catalog names."""
+        return exp.Table(
+            this=exp.to_identifier(name, quoted=True),
+            db=exp.to_identifier(schema, quoted=True) if schema else None,
+            catalog=exp.to_identifier(catalog, quoted=True) if catalog else None,
+        )
+
+    @staticmethod
+    def _copy_identity(identity: "ObjectIdentity", *, dialect: str | None) -> "ObjectIdentity":
+        """Copy an ObjectIdentity with a different dialect."""
+        return ObjectIdentity(
+            name=identity.name,
+            object_type=identity.object_type,
+            catalog=identity.catalog,
+            schema=identity.schema,
+            dialect=dialect,
+            quoted_name=identity.quoted_name,
+            source=identity.source,
+        )
 
     def _log_version_detected(self, adapter: str, version: VersionInfo) -> None:
         """Log detected database version with db.system context."""
@@ -2405,3 +3563,222 @@ def _check_declared_parameters(sql_statement: "SQL") -> None:
         sql_statement._named_parameters = named_copy
     else:
         _check_declared_named_row(declared, named_params)
+
+
+_GENERIC_DDL_DIALECTS: Final = frozenset({"", "generic", "unknown"})
+_SQLGLOT_DIALECT_ALIASES: Final[dict[str, str]] = {
+    "cockroach": "postgres",
+    "cockroachdb": "postgres",
+    "mariadb": "mysql",
+    "mssql": "tsql",
+    "postgresql": "postgres",
+}
+_TABLE_OBJECT_TYPES: Final = frozenset({"table", "temporary_table", "base table"})
+_TABLE_DEPENDENT_OBJECT_TYPES: Final = frozenset({"index", "trigger"})
+_SCHEMA_DDL_OBJECT_DOMAINS: Final[dict[str, str]] = {
+    "table": "tables",
+    "temporary_table": "tables",
+    "base table": "tables",
+    "index": "tables",
+    "trigger": "tables",
+    "view": "views",
+    "materialized_view": "views",
+    "materialized view": "views",
+    "sequence": "sequences",
+    "type": "types",
+    "routine": "routines",
+    "function": "routines",
+    "procedure": "routines",
+    "table function": "routines",
+}
+_DROP_OBJECT_KINDS: Final[dict[str, tuple[str, bool]]] = {
+    "table": ("TABLE", False),
+    "temporary_table": ("TABLE", False),
+    "base table": ("TABLE", False),
+    "view": ("VIEW", False),
+    "materialized_view": ("VIEW", True),
+    "materialized view": ("VIEW", True),
+    "sequence": ("SEQUENCE", False),
+    "type": ("TYPE", False),
+    "index": ("INDEX", False),
+    "function": ("FUNCTION", False),
+    "procedure": ("PROCEDURE", False),
+    "table function": ("TABLE FUNCTION", False),
+}
+_SEQUENCE_SYNTHESIS_UNSUPPORTED_DIALECTS: Final = frozenset({"spanner"})
+_REFERENCE_EDGE_KINDS: Final[dict[str, DependencyEdgeKind]] = {
+    "sequence": DependencyEdgeKind.SEQUENCE_USE,
+    "type": DependencyEdgeKind.DEFAULT_EXPRESSION,
+}
+_SEQUENCE_NUMERIC_PROPERTIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("start", ("start_value", "start_with", "start")),
+    ("increment", ("increment_by", "increment_value", "increment")),
+    ("minvalue", ("min_value", "minimum_value")),
+    ("maxvalue", ("max_value", "maximum_value")),
+)
+
+
+def _ddl_dialect_or_none(dialect: str | None) -> str | None:
+    """Return ``dialect`` or None when it names generic SQL."""
+    if dialect is None or dialect in _GENERIC_DDL_DIALECTS:
+        return None
+    return dialect
+
+
+def _sqlglot_dialect(dialect: str | None) -> str | None:
+    """Map a data dictionary dialect name to the SQLGlot dialect used to parse and render it."""
+    resolved = _ddl_dialect_or_none(dialect)
+    if resolved is None:
+        return None
+    return _SQLGLOT_DIALECT_ALIASES.get(resolved, resolved)
+
+
+_LOOSE_PROFILE_TYPES: Final = frozenset({
+    "",
+    "TEXT",
+    "VARCHAR",
+    "CHARACTER VARYING",
+    "NVARCHAR",
+    "CHAR",
+    "NCHAR",
+    "CHARACTER",
+    "STRING",
+    "CLOB",
+    "NCLOB",
+    "LONGTEXT",
+    "MEDIUMTEXT",
+    "TINYTEXT",
+    "BPCHAR",
+    "ANY",
+    "VARIANT",
+    "OBJECT",
+})
+_NON_COMPARABLE_PROFILE_TYPES: Final = frozenset({
+    "JSON",
+    "JSONB",
+    "XML",
+    "BLOB",
+    "CLOB",
+    "NCLOB",
+    "BFILE",
+    "LONG",
+    "RAW",
+    "LONG RAW",
+    "BYTEA",
+    "VARBINARY",
+    "BINARY",
+    "IMAGE",
+    "STRUCT",
+    "ARRAY",
+    "MAP",
+    "GEOMETRY",
+    "GEOGRAPHY",
+    "SUPER",
+    "VARIANT",
+})
+_PROFILE_INT_RE: Final = re.compile(r"^[+-]?(?:0|[1-9]\d*)$")
+_PROFILE_NUM_RE: Final = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+_PROFILE_UUID_RE: Final = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_PROFILE_DATE_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_PROFILE_DATETIME_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
+
+
+def _profile_text_cast_type(sqlglot_dialect: str | None) -> str:
+    """Return a dialect-valid text cast target for ``LENGTH(CAST(col AS ...))``."""
+    if sqlglot_dialect == "oracle":
+        return "VARCHAR2(4000)"
+    if sqlglot_dialect == "db2":
+        return "VARCHAR(32672)"
+    if sqlglot_dialect == "tsql":
+        return "NVARCHAR(MAX)"
+    if sqlglot_dialect in {"bigquery", "spanner"}:
+        return "STRING"
+    if sqlglot_dialect == "mysql":
+        return "CHAR"
+    return "VARCHAR"
+
+
+def _is_non_comparable_profile_type(data_type: str, sqlglot_dialect: str | None) -> bool:
+    """Return True when a column type cannot participate in ``COUNT(DISTINCT)`` or ``CAST(... AS VARCHAR)``."""
+    base_type = re.sub(r"\s+", " ", data_type.split("(", 1)[0].split("<", 1)[0].strip().upper())
+    if not base_type:
+        return False
+    if base_type in _NON_COMPARABLE_PROFILE_TYPES or base_type.endswith("[]"):
+        return True
+    return sqlglot_dialect == "tsql" and base_type in {"TEXT", "NTEXT"}
+
+
+def _is_valid_profile_decimal(value: Any) -> bool:
+    """Return True when ``value`` is a finite numeric value or decimal string."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, (float, Decimal)):
+        try:
+            return Decimal(str(value)).is_finite()
+        except Exception:
+            return False
+    if isinstance(value, str) and bool(_PROFILE_NUM_RE.match(value.strip())):
+        try:
+            return Decimal(value.strip()).is_finite()
+        except Exception:
+            return False
+    return False
+
+
+def _decimal_digit_counts(value: Any) -> tuple[int, int]:
+    """Return ``(integer_digits, fractional_digits)`` for a finite numeric sample value."""
+    dec = Decimal(str(value).strip())
+    _, digits, exponent = dec.as_tuple()
+    exp_int = int(exponent) if isinstance(exponent, int) else 0
+    total_sig = len(digits)
+    if exp_int >= 0:
+        return (max(1, total_sig + exp_int), 0)
+    frac_digits = -exp_int
+    int_digits = max(1, total_sig - frac_digits)
+    return (int_digits, frac_digits)
+
+
+def _is_valid_profile_date(value: Any) -> bool:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return True
+    if not isinstance(value, str) or not _PROFILE_DATE_RE.match(value.strip()):
+        return False
+    try:
+        date.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
+def _is_valid_profile_datetime(value: Any) -> bool:
+    if isinstance(value, datetime):
+        return True
+    if not isinstance(value, str) or not _PROFILE_DATETIME_RE.match(value.strip()):
+        return False
+    normalized = value.strip()
+    if normalized.endswith(("Z", "z")):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_valid_profile_json(value: Any) -> bool:
+    if isinstance(value, (Mapping, list)):
+        return True
+    if not isinstance(value, str):
+        return False
+    stripped = value.strip()
+    if not (
+        (stripped.startswith("{") and stripped.endswith("}")) or (stripped.startswith("[") and stripped.endswith("]"))
+    ):
+        return False
+    try:
+        parsed = decode_json(stripped)
+    except ValueError:
+        return False
+    return isinstance(parsed, (Mapping, list))

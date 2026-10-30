@@ -11,13 +11,16 @@ SELECT
     ti.pk AS is_primary,
     CASE
         WHEN ti.hidden = 1 THEN 'hidden'
-        WHEN ti.hidden IN (2, 3) THEN 'generated'
+        WHEN ti.hidden = 2 THEN 'virtual generated'
+        WHEN ti.hidden = 3 THEN 'stored generated'
+        WHEN ti.pk = 1 AND UPPER(ti.type) = 'INTEGER' AND UPPER(sm.sql) LIKE '%AUTOINCREMENT%' THEN 'autoincrement'
         ELSE NULL
     END AS extra,
     ti.hidden IN (2, 3) AS is_generated,
     CASE WHEN ti.hidden = 1 THEN 1 ELSE 0 END AS is_hidden
 FROM pragma_table_list AS tl
 JOIN pragma_table_xinfo(tl.name, COALESCE(:schema_name, 'main')) AS ti
+LEFT JOIN {schema_prefix}sqlite_schema AS sm ON sm.type = 'table' AND sm.name = tl.name
 WHERE tl.schema = COALESCE(:schema_name, 'main')
   AND tl.type IN ('table', 'virtual')
   AND tl.name NOT LIKE 'sqlite_%'
@@ -36,10 +39,13 @@ SELECT
     ti.pk AS is_primary,
     CASE
         WHEN ti.hidden = 1 THEN 'hidden'
-        WHEN ti.hidden IN (2, 3) THEN 'generated'
+        WHEN ti.hidden = 2 THEN 'virtual generated'
+        WHEN ti.hidden = 3 THEN 'stored generated'
+        WHEN ti.pk = 1 AND UPPER(ti.type) = 'INTEGER' AND UPPER(sm.sql) LIKE '%AUTOINCREMENT%' THEN 'autoincrement'
         ELSE NULL
     END AS extra,
     ti.hidden IN (2, 3) AS is_generated,
     CASE WHEN ti.hidden = 1 THEN 1 ELSE 0 END AS is_hidden
 FROM pragma_table_xinfo(:table_name, :schema_name) AS ti
+LEFT JOIN {schema_prefix}sqlite_schema AS sm ON sm.type = 'table' AND sm.name = :table_name
 ORDER BY ti.cid;
