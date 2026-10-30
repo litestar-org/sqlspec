@@ -5,11 +5,13 @@ passed as strings to builder methods.
 """
 
 import contextlib
+import importlib
 import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp, maybe_parse
+from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.builder._column import Column
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
@@ -437,7 +439,17 @@ def _normalize_dialect(dialect: "DialectType | None") -> str | None:
         name = dialect.__name__.lower()
     else:
         name = type(dialect).__name__.lower()
-    return {"mssql": "tsql", "mariadb": "mysql", "cockroachdb": "postgres", "postgresql": "postgres"}.get(name, name)
+    resolved = {
+        "mssql": "tsql",
+        "mariadb": "mysql",
+        "cockroachdb": "postgres",
+        "postgresql": "postgres",
+        "ase": "sybase",
+        "sa": "sqlanywhere",
+    }.get(name, name)
+    if resolved in {"sybase", "sqlanywhere"} and resolved not in Dialect.classes:
+        importlib.import_module("sqlspec.dialects.sybase")
+    return resolved
 
 
 def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
