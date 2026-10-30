@@ -439,6 +439,8 @@ class FSSpecBackend:
         """
         validate_parquet_stream_options(pattern, file_format, batch_size)
         pq = import_pyarrow_parquet()
+        arrow_schema = kwargs.pop("arrow_schema", None)
+        kwargs.pop("read_buffer_bytes", None)
         for obj_path in self.glob_sync(pattern):
             file_handle = execute_sync_storage_operation(
                 partial(self.fs.open, obj_path, mode="rb"),
@@ -453,7 +455,9 @@ class FSSpecBackend:
                     operation="stream_arrow",
                     path=str(obj_path),
                 )
-                yield from iter_parquet_row_groups(parquet_file, batch_size=batch_size, **kwargs)
+                yield from iter_parquet_row_groups(
+                    parquet_file, batch_size=batch_size, arrow_schema=arrow_schema, **kwargs
+                )
 
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from storage asynchronously."""

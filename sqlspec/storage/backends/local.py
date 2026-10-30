@@ -154,6 +154,7 @@ class LocalStore:
 
             When the prefix resembles a directory (contains a slash or ends with '/'), we treat it as a path; otherwise we filter filenames within the base path.
         """
+        rel_prefix = prefix
         if prefix:
             reject_parent_traversal(prefix)
             if prefix.endswith("/") or "/" in prefix:
@@ -162,6 +163,8 @@ class LocalStore:
                     return []
                 if search_path.is_file():
                     return [str(search_path.relative_to(self.base_path))]
+                rel_path = search_path.relative_to(self.base_path)
+                rel_prefix = "" if str(rel_path) == "." else str(rel_path)
             else:
                 search_path = self.base_path
         else:
@@ -178,7 +181,7 @@ class LocalStore:
                 except ValueError:
                     continue
                 relative_str = str(relative)
-                if not prefix or relative_str.startswith(prefix):
+                if not rel_prefix or relative_str.startswith(rel_prefix):
                     files.append(relative_str)
 
         return sorted(files)
@@ -305,6 +308,8 @@ class LocalStore:
         """
         validate_parquet_stream_options(pattern, file_format, batch_size)
         pq = import_pyarrow_parquet()
+        arrow_schema = kwargs.pop("arrow_schema", None)
+        kwargs.pop("read_buffer_bytes", None)
         files = self.glob_sync(pattern)
         for file_path in files:
             resolved = self._resolve_path(file_path)
@@ -315,7 +320,7 @@ class LocalStore:
                 operation="stream_arrow",
                 path=resolved_str,
             )
-            yield from iter_parquet_row_groups(parquet_file, batch_size=batch_size, **kwargs)
+            yield from iter_parquet_row_groups(parquet_file, batch_size=batch_size, arrow_schema=arrow_schema, **kwargs)
 
     @overload
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...

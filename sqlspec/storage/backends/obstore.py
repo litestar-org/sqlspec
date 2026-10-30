@@ -16,7 +16,8 @@ from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import StorageOperationFailedError
+from sqlspec.exceptions import StorageOperationFailedError, StoragePathTraversalError
+from sqlspec.storage._arrow_payload import resolve_parquet_use_dictionary
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
     ensure_path_within_root,
@@ -323,11 +324,17 @@ class ObStoreBackend:
         if not pattern:
             return []
         reject_parent_traversal(pattern)
-        resolved_pattern = (
-            pattern
-            if getattr(self, "_is_local_store", False)
-            else resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
-        )
+        if getattr(self, "_is_local_store", False):
+            pattern_path = Path(pattern)
+            if pattern_path.is_absolute() and self._local_store_root:
+                try:
+                    resolved_pattern = pattern_path.relative_to(Path(self._local_store_root)).as_posix()
+                except ValueError as exc:
+                    raise StoragePathTraversalError(pattern, self._local_store_root) from exc
+            else:
+                resolved_pattern = pattern
+        else:
+            resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=True)
         all_objects = self._list_resolved_sync(extract_glob_static_prefix(resolved_pattern), recursive=True)
         matcher = glob_to_regex(resolved_pattern)
         results = [obj for obj in all_objects if matcher.match(obj)]
@@ -465,9 +472,11 @@ class ObStoreBackend:
 
         validate_parquet_stream_options(pattern, file_format, batch_size)
         pq = import_pyarrow_parquet()
+        read_buffer_bytes = kwargs.pop("read_buffer_bytes", 16_777_216)
+        arrow_schema = kwargs.pop("arrow_schema", None)
         for obj_path in self.glob_sync(pattern):
             reader = execute_sync_storage_operation(
-                partial(obs.open_reader, self.store, obj_path),
+                partial(_open_obstore_reader, obs, self.store, obj_path, read_buffer_bytes),
                 backend=self.backend_type,
                 operation="stream_open",
                 path=obj_path,
@@ -476,7 +485,9 @@ class ObStoreBackend:
                 parquet_file = execute_sync_storage_operation(
                     partial(pq.ParquetFile, stream), backend=self.backend_type, operation="stream_arrow", path=obj_path
                 )
-                yield from iter_parquet_row_groups(parquet_file, batch_size=batch_size, **kwargs)
+                yield from iter_parquet_row_groups(
+                    parquet_file, batch_size=batch_size, arrow_schema=arrow_schema, **kwargs
+                )
 
     @overload
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
@@ -813,8 +824,9 @@ class ObStoreBackend:
         is_local = getattr(self, "_is_local_store", False)
         if not prefix:
             return "" if is_local else (self.base_path or "")
-        base = "" if is_local else self.base_path
-        return resolve_storage_path(prefix, base, self.protocol, strip_file_scheme=True)
+        if is_local:
+            return self._local_store_path(prefix)
+        return resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=True)
 
     def _local_store_path(self, path: "str | Path") -> str:
         """Resolve path for LocalStore, which expects relative paths from its root.
@@ -940,6 +952,8 @@ class ObStoreBackend:
             table = table.cast(pa.schema(new_fields))
 
         row_group_size = kwargs.pop("row_group_size", None)
+        if "use_dictionary" not in kwargs:
+            kwargs["use_dictionary"] = resolve_parquet_use_dictionary(table.schema)
         sink = obs.open_writer(self.store, resolved_path)
         sink_adapter = _ObstoreSink(sink)
         writer: Any = None
@@ -1028,6 +1042,15 @@ async def _read_obstore_bytes_async(store: Any, resolved_path: str) -> bytes:
     return cast("bytes", bytes_obj.to_bytes())
 
 
+def _open_obstore_reader(obs: Any, store: Any, obj_path: str, read_buffer_bytes: int | None) -> Any:
+    if read_buffer_bytes is not None:
+        try:
+            return obs.open_reader(store, obj_path, buffer_size=int(read_buffer_bytes))
+        except TypeError:
+            pass
+    return obs.open_reader(store, obj_path)
+
+
 def _read_obstore_bytes(store: Any, resolved_path: str) -> bytes:
     """Read bytes via obstore."""
     result = store.get(resolved_path)
@@ -1108,7 +1131,8 @@ class _ObstoreSink:
                 abort_fn()
 
     def write(self, data: Any) -> int:
-        return int(self._writer.write(data))
+        payload = bytes(data) if isinstance(data, (bytearray, memoryview)) else data
+        return int(self._writer.write(payload))
 
     def flush(self) -> None:
         if not self._aborted:
