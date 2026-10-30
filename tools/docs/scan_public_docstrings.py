@@ -6,8 +6,7 @@ import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-
-import msgspec
+from typing import NamedTuple
 
 __all__ = (
     "DocstringLeakViolation",
@@ -32,7 +31,7 @@ _OVERLOAD_DECORATORS: frozenset[str] = frozenset({"overload", "typing.overload",
 _TYPEDDICT_BASES: frozenset[str] = frozenset({"TypedDict", "typing.TypedDict", "typing_extensions.TypedDict"})
 
 
-class DocstringLeakViolation(msgspec.Struct, frozen=True, gc=False):
+class DocstringLeakViolation(NamedTuple):
     """Public class, function, or method docstring containing internal compiler or layout notes."""
 
     path: Path
@@ -46,7 +45,7 @@ class DocstringLeakViolation(msgspec.Struct, frozen=True, gc=False):
         return f"{self.path}:{self.line}: {self.symbol} leaks internal pattern(s) {joined}"
 
 
-class OverloadDocstringViolation(msgspec.Struct, frozen=True, gc=False):
+class OverloadDocstringViolation(NamedTuple):
     """Overload stub carrying a docstring instead of leaving documentation on the implementation."""
 
     path: Path
@@ -58,7 +57,7 @@ class OverloadDocstringViolation(msgspec.Struct, frozen=True, gc=False):
         return f"{self.path}:{self.line}: @overload {self.symbol} must not define a docstring"
 
 
-class TypedDictDocstringViolation(msgspec.Struct, frozen=True, gc=False):
+class TypedDictDocstringViolation(NamedTuple):
     """Public or inherited TypedDict missing inline PEP 257 field docstrings or duplicating class Attributes."""
 
     path: Path

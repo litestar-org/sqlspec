@@ -5721,6 +5721,7 @@ dev = [
     { name = "fsspec", extra = ["s3"] },
     { name = "hatch-mypyc" },
     { name = "mkdocstrings-python" },
+    { name = "msgspec" },
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pgvector" },
@@ -5757,6 +5758,7 @@ dev = [
 ]
 doc = [
     { name = "mkdocstrings-python" },
+    { name = "msgspec" },
     { name = "pymdown-extensions" },
     { name = "ruff" },
     { name = "zensical" },
@@ -5899,6 +5901,7 @@ dev = [
     { name = "fsspec", extras = ["s3"] },
     { name = "hatch-mypyc" },
     { name = "mkdocstrings-python", specifier = ">=2.0.1" },
+    { name = "msgspec" },
     { name = "mypy", specifier = ">=2.0.0" },
     { name = "pandas-stubs", specifier = "<3" },
     { name = "pgvector" },
@@ -5935,6 +5938,7 @@ dev = [
 ]
 doc = [
     { name = "mkdocstrings-python", specifier = ">=2.0.1" },
+    { name = "msgspec" },
     { name = "pymdown-extensions", specifier = ">=10.16" },
     { name = "ruff", specifier = ">=0.16.0" },
     { name = "zensical", specifier = ">=0.0.71" },
