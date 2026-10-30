@@ -12,6 +12,13 @@ from unittest.mock import Mock
 
 import pytest
 
+from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.exceptions import MigrationError, SquashValidationError
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, extract_replaces_versions
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+
 
 def _mock_result(**kwargs: Any) -> Mock:
     """Create a Mock result with get_data() returning .data."""
@@ -22,8 +29,6 @@ def _mock_result(**kwargs: Any) -> Mock:
 
 def test_tracker_schema_squash_create_table_sql_includes_replaces_column() -> None:
     """Test that _tracking_table_ddl includes replaces column."""
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     create_sql = tracker._tracking_table_ddl()
     column_names = [col.name.lower() for col in create_sql.columns]
@@ -32,8 +37,6 @@ def test_tracker_schema_squash_create_table_sql_includes_replaces_column() -> No
 
 def test_tracker_schema_squash_replaces_column_is_nullable() -> None:
     """Test that replaces column is nullable (not_null=False)."""
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     create_sql = tracker._tracking_table_ddl()
     replaces_col = next((col for col in create_sql.columns if col.name.lower() == "replaces"), None)
@@ -43,8 +46,6 @@ def test_tracker_schema_squash_replaces_column_is_nullable() -> None:
 
 def test_sync_tracker_squash_methods_replace_with_squash_deletes_replaced_versions() -> None:
     """Test replace_with_squash deletes all replaced version records."""
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     driver = Mock()
     driver.driver_features = {"autocommit": False}
@@ -68,8 +69,6 @@ def test_sync_tracker_squash_methods_replace_with_squash_deletes_replaced_versio
 
 def test_sync_tracker_squash_methods_replace_with_squash_inserts_squashed_record() -> None:
     """Test replace_with_squash inserts squashed version with replaces metadata."""
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     driver = Mock()
     driver.driver_features = {"autocommit": False}
@@ -93,8 +92,6 @@ def test_sync_tracker_squash_methods_replace_with_squash_inserts_squashed_record
 
 def test_sync_tracker_squash_methods_is_squash_already_applied_returns_true_when_replaced_exists() -> None:
     """Test is_squash_already_applied returns True when replaced version found."""
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     driver = Mock()
     driver.execute.return_value = _mock_result(
@@ -108,8 +105,6 @@ def test_sync_tracker_squash_methods_is_squash_already_applied_returns_true_when
 
 def test_sync_tracker_squash_methods_is_squash_already_applied_returns_false_for_fresh_db() -> None:
     """Test is_squash_already_applied returns False when no replaced versions found."""
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     driver = Mock()
     driver.execute.return_value = _mock_result(data=[])
@@ -122,8 +117,6 @@ def test_sync_tracker_squash_methods_is_squash_already_applied_returns_false_for
 @pytest.mark.anyio
 async def test_async_tracker_squash_methods_async_replace_with_squash_deletes_replaced_versions() -> None:
     """Test async replace_with_squash deletes all replaced version records."""
-    from sqlspec.migrations.tracker import AsyncMigrationTracker
-
     tracker = AsyncMigrationTracker()
     driver = Mock()
     driver.driver_features = {"autocommit": False}
@@ -152,8 +145,6 @@ async def test_async_tracker_squash_methods_async_replace_with_squash_deletes_re
 @pytest.mark.anyio
 async def test_async_tracker_squash_methods_async_is_squash_already_applied_returns_true_when_exists() -> None:
     """Test async is_squash_already_applied returns True when replaced version found."""
-    from sqlspec.migrations.tracker import AsyncMigrationTracker
-
     tracker = AsyncMigrationTracker()
     driver = Mock()
 
@@ -170,8 +161,6 @@ async def test_async_tracker_squash_methods_async_is_squash_already_applied_retu
 @pytest.mark.anyio
 async def test_async_tracker_squash_methods_async_is_squash_already_applied_returns_false_for_fresh_db() -> None:
     """Test async is_squash_already_applied returns False when no replaced versions found."""
-    from sqlspec.migrations.tracker import AsyncMigrationTracker
-
     tracker = AsyncMigrationTracker()
     driver = Mock()
 
@@ -186,8 +175,6 @@ async def test_async_tracker_squash_methods_async_is_squash_already_applied_retu
 
 
 def test_check_versions_exist_sql_uses_where_in_clause() -> None:
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     query = str(tracker._check_versions_query(["0001", "0002"])).upper()
     assert "WHERE" in query
@@ -196,8 +183,6 @@ def test_check_versions_exist_sql_uses_where_in_clause() -> None:
 
 
 def test_sync_is_squash_already_applied_executes_filtered_where_in_query() -> None:
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     driver = Mock()
     driver.execute.return_value = _mock_result(data=[{"version_num": "0001"}, {"version_num": "0002"}])
@@ -212,8 +197,6 @@ def test_sync_is_squash_already_applied_executes_filtered_where_in_query() -> No
 
 
 def test_sync_is_squash_already_applied_returns_false_for_empty_filtered_result() -> None:
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     driver = Mock()
     driver.execute.return_value = _mock_result(data=[])
@@ -225,8 +208,6 @@ def test_sync_is_squash_already_applied_returns_false_for_empty_filtered_result(
 
 @pytest.mark.anyio
 async def test_async_is_squash_already_applied_executes_filtered_where_in_query() -> None:
-    from sqlspec.migrations.tracker import AsyncMigrationTracker
-
     tracker = AsyncMigrationTracker()
     driver = Mock()
     captured: list[Any] = []
@@ -248,8 +229,6 @@ async def test_async_is_squash_already_applied_executes_filtered_where_in_query(
 
 @pytest.mark.anyio
 async def test_async_is_squash_already_applied_returns_true_for_filtered_result() -> None:
-    from sqlspec.migrations.tracker import AsyncMigrationTracker
-
     tracker = AsyncMigrationTracker()
     driver = Mock()
 
@@ -268,8 +247,6 @@ async def test_async_is_squash_already_applied_returns_true_for_filtered_result(
 
 @pytest.mark.anyio
 async def test_async_is_squash_already_applied_returns_false_for_empty_filtered_result() -> None:
-    from sqlspec.migrations.tracker import AsyncMigrationTracker
-
     tracker = AsyncMigrationTracker()
     driver = Mock()
 
@@ -287,9 +264,6 @@ async def test_async_is_squash_already_applied_returns_false_for_empty_filtered_
 
 
 def test_sync_is_squash_already_applied_raises_on_partial_overlap() -> None:
-    from sqlspec.exceptions import MigrationError
-    from sqlspec.migrations.tracker import SyncMigrationTracker
-
     tracker = SyncMigrationTracker()
     driver = Mock()
     driver.execute.return_value = _mock_result(data=[{"version_num": "0001"}])
@@ -299,9 +273,6 @@ def test_sync_is_squash_already_applied_raises_on_partial_overlap() -> None:
 
 @pytest.mark.anyio
 async def test_async_is_squash_already_applied_raises_on_partial_overlap() -> None:
-    from sqlspec.exceptions import MigrationError
-    from sqlspec.migrations.tracker import AsyncMigrationTracker
-
     tracker = AsyncMigrationTracker()
     driver = Mock()
 
@@ -319,8 +290,6 @@ async def test_async_is_squash_already_applied_raises_on_partial_overlap() -> No
 @pytest.mark.anyio
 async def test_runner_load_migration_extracts_replaces_from_sql_and_python_files(tmp_path: Path) -> None:
     """Verify SyncMigrationRunner and AsyncMigrationRunner populate replaces from SQL and Python migrations."""
-    from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, extract_replaces_versions
-
     sql_file = tmp_path / "0001_initial_schema.sql"
     sql_file.write_text(
         "-- SQLSpec Migration\n"
@@ -380,9 +349,6 @@ async def test_runner_load_migration_extracts_replaces_from_sql_and_python_files
 
 def test_sync_upgrade_fresh_db_records_replaces_metadata(tmp_path: Path) -> None:
     """Verify upgrading a fresh database with a squashed migration populates the replaces column."""
-    from sqlspec.adapters.sqlite.config import SqliteConfig
-    from sqlspec.migrations.commands import SyncMigrationCommands
-
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
     (migrations_dir / "0001_initial_schema.sql").write_text(
@@ -418,9 +384,6 @@ def test_sync_upgrade_fresh_db_records_replaces_metadata(tmp_path: Path) -> None
 
 def test_sync_upgrade_reconciles_fully_applied_pre_squash_db_and_allows_downgrade(tmp_path: Path) -> None:
     """Verify upgrade reconciles a pre-squash DB with 0001..0003 applied and downgrade succeeds."""
-    from sqlspec.adapters.sqlite.config import SqliteConfig
-    from sqlspec.migrations.commands import SyncMigrationCommands
-
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
     (migrations_dir / "0001_users.sql").write_text(
@@ -475,10 +438,6 @@ def test_sync_upgrade_reconciles_fully_applied_pre_squash_db_and_allows_downgrad
 
 def test_sync_upgrade_raises_on_partially_applied_pre_squash_db(tmp_path: Path) -> None:
     """Verify upgrade raises SquashValidationError when only a subset of replaced versions is applied."""
-    from sqlspec.adapters.sqlite.config import SqliteConfig
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.commands import SyncMigrationCommands
-
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
     (migrations_dir / "0001_users.sql").write_text(
@@ -520,10 +479,6 @@ def test_sync_upgrade_raises_on_partially_applied_pre_squash_db(tmp_path: Path) 
 @pytest.mark.anyio
 async def test_async_upgrade_reconciles_fully_applied_and_rejects_partial_squash(tmp_path: Path) -> None:
     """Verify AsyncMigrationCommands reconciles fully applied squash ranges and rejects partial states."""
-    from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.commands import AsyncMigrationCommands
-
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
     (migrations_dir / "0001_users.sql").write_text(
@@ -550,34 +505,37 @@ async def test_async_upgrade_reconciles_fully_applied_and_rejects_partial_squash
     partial_config = AiosqliteConfig(
         connection_config={"database": str(partial_db)}, migration_config={"script_location": str(migrations_dir)}
     )
+    try:
+        await AsyncMigrationCommands(full_config).upgrade(echo=False)
+        await AsyncMigrationCommands(partial_config).upgrade(revision="0001", echo=False)
 
-    await AsyncMigrationCommands(full_config).upgrade(echo=False)
-    await AsyncMigrationCommands(partial_config).upgrade(revision="0001", echo=False)
+        await AsyncMigrationCommands(full_config).squash(
+            "0001", "0002", "initial_schema", update_database=False, yes=True
+        )
 
-    await AsyncMigrationCommands(full_config).squash("0001", "0002", "initial_schema", update_database=False, yes=True)
+        reconcile_full = AsyncMigrationCommands(full_config)
+        await reconcile_full.upgrade(echo=False)
+        async with full_config.provide_session() as driver:
+            applied = await reconcile_full.tracker.get_applied_migrations(driver)
+        assert len(applied) == 1
+        assert applied[0]["version_num"] == "0001"
+        assert applied[0]["replaces"] in {"0001,0002", "0001, 0002"}
 
-    reconcile_full = AsyncMigrationCommands(full_config)
-    await reconcile_full.upgrade(echo=False)
-    async with full_config.provide_session() as driver:
-        applied = await reconcile_full.tracker.get_applied_migrations(driver)
-    assert len(applied) == 1
-    assert applied[0]["version_num"] == "0001"
-    assert applied[0]["replaces"] in {"0001,0002", "0001, 0002"}
+        await reconcile_full.downgrade(revision="-1", echo=False)
+        async with full_config.provide_session() as driver:
+            after_downgrade = await reconcile_full.tracker.get_applied_migrations(driver)
+        assert after_downgrade == []
 
-    await reconcile_full.downgrade(revision="-1", echo=False)
-    async with full_config.provide_session() as driver:
-        after_downgrade = await reconcile_full.tracker.get_applied_migrations(driver)
-    assert after_downgrade == []
-
-    reconcile_partial = AsyncMigrationCommands(partial_config)
-    with pytest.raises(SquashValidationError, match="0002"):
-        await reconcile_partial.upgrade(echo=False)
+        reconcile_partial = AsyncMigrationCommands(partial_config)
+        with pytest.raises(SquashValidationError, match="0002"):
+            await reconcile_partial.upgrade(echo=False)
+    finally:
+        await full_config.close_pool()
+        await partial_config.close_pool()
 
 
 def test_extract_replaces_versions_reads_only_the_sql_header() -> None:
     """Only the leading SQL comment header declares replaced versions; trailing punctuation is stripped."""
-    from sqlspec.migrations.runner import extract_replaces_versions
-
     header = "-- SQLSpec Migration\n\n-- Squashed from: 0001, 0002;\n-- name: migrate-0003-up\nSELECT 1;\n"
     body_comment = "-- name: migrate-0003-up\n-- Squashed from: 0001\nCREATE TABLE t (id INT);\n"
     prose_header = "-- Replaces: the legacy audit table\n-- name: migrate-0004-up\nSELECT 1;\n"
@@ -592,8 +550,6 @@ def test_extract_replaces_versions_reads_only_the_sql_header() -> None:
 
 def test_extract_replaces_versions_reads_python_docstring_or_module_attribute() -> None:
     """Python migrations use the module docstring or ``__replaces__``, never body comments or strings."""
-    from sqlspec.migrations.runner import extract_replaces_versions
-
     attribute_wins = '"""Squashed from: 0001."""\n\n__replaces__ = ("0004", "0005")\n'
     body_only = '"""Plain migration."""\n\n# Replaces: 0001\ndef up():\n    return ["-- Replaces: 0002"]\n'
 
@@ -603,9 +559,6 @@ def test_extract_replaces_versions_reads_python_docstring_or_module_attribute() 
 
 def test_extract_replaces_versions_rejects_invalid_versions() -> None:
     """A malformed version in the header fails loudly instead of corrupting tracking rows."""
-    from sqlspec.exceptions import MigrationError
-    from sqlspec.migrations.runner import extract_replaces_versions
-
     with pytest.raises(MigrationError, match="'see ticket 12'"):
         extract_replaces_versions(
             "-- Squashed from: 0001, see ticket 12\n-- name: migrate-0002-up\nSELECT 1;\n", ".sql"
@@ -618,9 +571,6 @@ def test_extract_replaces_versions_rejects_invalid_versions() -> None:
 
 def test_sync_upgrade_ignores_replaces_comment_in_migration_body(tmp_path: Path) -> None:
     """Replaces-style comments in a header or body neither delete nor rewrite tracking rows."""
-    from sqlspec.adapters.sqlite.config import SqliteConfig
-    from sqlspec.migrations.commands import SyncMigrationCommands
-
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
     (migrations_dir / "0001_users.sql").write_text(

@@ -35,12 +35,12 @@ def _write_three_migrations(migrations_dir: Path) -> None:
     (migrations_dir / "0003_posts.sql").write_text(POSTS_UP, encoding="utf-8")
 
 
-def _sqlite_objects(db_path: Path) -> "list[tuple[str, str]]":
+def _sqlite_objects(db_path: Path) -> list[tuple[str, str]]:
     with sqlite3.connect(db_path) as connection:
         return connection.execute("SELECT type, name FROM sqlite_master ORDER BY type, name").fetchall()
 
 
-def _tracking_rows(db_path: Path, table: str = "ddl_migrations") -> "list[tuple[str, str | None]]":
+def _tracking_rows(db_path: Path, table: str = "ddl_migrations") -> list[tuple[str, str | None]]:
     with sqlite3.connect(db_path) as connection:
         return connection.execute(f"SELECT version_num, replaces FROM {table} ORDER BY version_num").fetchall()
 
@@ -60,12 +60,12 @@ def _async_config(db_path: Path, migrations_dir: Path) -> AiosqliteConfig:
     )
 
 
-def _replay(statements: "list[str]", connection: sqlite3.Connection) -> None:
+def _replay(statements: list[str], connection: sqlite3.Connection) -> None:
     for statement in statements:
         connection.execute(statement)
 
 
-def _migration_sections(file_path: Path) -> "tuple[list[str], list[str]]":
+def _migration_sections(file_path: Path) -> tuple[list[str], list[str]]:
     """Return the UP and DOWN statements of a generated SQL migration file."""
     content = file_path.read_text(encoding="utf-8")
     up_text, down_text = content.split("-- name: migrate-", 2)[1:]
@@ -169,16 +169,18 @@ async def test_async_dump_schema_uses_configured_schema_dump_path(tmp_path: Path
             "schema_dump_path": str(configured_dump),
         },
     )
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade(echo=False)
+    try:
+        commands = AsyncMigrationCommands(config)
+        await commands.upgrade(echo=False)
 
-    rendered = await commands.dump_schema(echo=False)
-    assert configured_dump.read_text(encoding="utf-8") == rendered
-    with sqlite3.connect(":memory:") as replay:
-        replay.executescript(rendered)
-        tables = [row[0] for row in replay.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-    assert tables == ["projects"]
-    await config.close_pool()
+        rendered = await commands.dump_schema(echo=False)
+        assert configured_dump.read_text(encoding="utf-8") == rendered
+        with sqlite3.connect(":memory:") as replay:
+            replay.executescript(rendered)
+            tables = [row[0] for row in replay.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        assert tables == ["projects"]
+    finally:
+        await config.close_pool()
 
 
 def test_sync_verify_detects_checksum_drift_and_orphaned_records(tmp_path: Path) -> None:
@@ -248,9 +250,10 @@ async def test_async_verify_on_empty_database_creates_nothing(tmp_path: Path) ->
     _write_three_migrations(migrations_dir)
     sqlite3.connect(db_path).close()
     config = _async_config(db_path, migrations_dir)
-
-    report = await AsyncMigrationCommands(config).verify(strict=True, echo=False)
-    await config.close_pool()
+    try:
+        report = await AsyncMigrationCommands(config).verify(strict=True, echo=False)
+    finally:
+        await config.close_pool()
 
     assert report["pending_versions"] == ["0001", "0002", "0003"]
     assert _sqlite_objects(db_path) == []
@@ -265,14 +268,16 @@ async def test_async_verify_handles_squashed_migrations_and_strict_mode(tmp_path
     (migrations_dir / "0001_users.sql").write_text(USERS_UP, encoding="utf-8")
     (migrations_dir / "0002_email.sql").write_text(EMAIL_UP, encoding="utf-8")
     config = _async_config(db_path, migrations_dir)
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade(echo=False)
-    await commands.squash(yes=True)
+    try:
+        commands = AsyncMigrationCommands(config)
+        await commands.upgrade(echo=False)
+        await commands.squash(yes=True)
 
-    squashed_report = await commands.verify(strict=True, echo=False)
-    assert squashed_report["valid"] is True
-    assert _tracking_rows(db_path) == [("0001", "0001,0002")]
-    await config.close_pool()
+        squashed_report = await commands.verify(strict=True, echo=False)
+        assert squashed_report["valid"] is True
+        assert _tracking_rows(db_path) == [("0001", "0001,0002")]
+    finally:
+        await config.close_pool()
 
 
 def test_sync_upgrade_dry_run_does_not_reconcile_squashed_records(tmp_path: Path) -> None:
@@ -315,15 +320,17 @@ async def test_async_upgrade_dry_run_does_not_reconcile_squashed_records(tmp_pat
     _write_three_migrations(migrations_dir)
     db_path = tmp_path / "full_async.db"
     config = _async_config(db_path, migrations_dir)
-    await AsyncMigrationCommands(config).upgrade(echo=False)
-    _sync_commands(tmp_path / "author.db", migrations_dir).squash(yes=True, update_database=False)
+    try:
+        await AsyncMigrationCommands(config).upgrade(echo=False)
+        _sync_commands(tmp_path / "author.db", migrations_dir).squash(yes=True, update_database=False)
 
-    commands = AsyncMigrationCommands(config)
-    await commands.upgrade(dry_run=True, echo=False)
-    assert _tracking_rows(db_path) == [("0001", None), ("0002", None), ("0003", None)]
+        commands = AsyncMigrationCommands(config)
+        await commands.upgrade(dry_run=True, echo=False)
+        assert _tracking_rows(db_path) == [("0001", None), ("0002", None), ("0003", None)]
 
-    await commands.upgrade(echo=False)
-    await config.close_pool()
+        await commands.upgrade(echo=False)
+    finally:
+        await config.close_pool()
     assert _tracking_rows(db_path) == [("0001", "0001,0002,0003")]
 
 
@@ -450,7 +457,7 @@ def test_revision_from_data_quotes_target_table_in_up_and_down(
 
 @pytest.mark.parametrize(("from_data", "schema"), [("raw_staging_users", None), ("main.raw_staging_users", None)])
 def test_revision_from_data_staging_table(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, from_data: str, schema: "str | None"
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, from_data: str, schema: str | None
 ) -> None:
     """Plain and schema-qualified table names profile the staging table; DOWN drops the created table."""
     monkeypatch.chdir(tmp_path)
@@ -488,23 +495,27 @@ async def test_async_revision_from_data_file_and_staging_table(tmp_path: Path) -
         encoding="utf-8",
     )
     config = _async_config(db_path, migrations_dir)
-    async with config.provide_session() as driver:
-        await driver.execute("CREATE TABLE raw_staging_users (id TEXT, score TEXT)")
-        await driver.execute("INSERT INTO raw_staging_users (id, score) VALUES ('10', '98.5')")
-        await driver.execute("INSERT INTO raw_staging_users (id, score) VALUES ('20', '87.25')")
-        await driver.commit()
+    try:
+        async with config.provide_session() as driver:
+            await driver.execute("CREATE TABLE raw_staging_users (id TEXT, score TEXT)")
+            await driver.execute("INSERT INTO raw_staging_users (id, score) VALUES ('10', '98.5')")
+            await driver.execute("INSERT INTO raw_staging_users (id, score) VALUES ('20', '87.25')")
+            await driver.commit()
 
-    commands = AsyncMigrationCommands(config)
-    for source in (fixture_file, "raw_staging_users"):
-        created = await commands.revision("bootstrap", from_data=source, target_table="users")
-        up_statements, down_statements = _migration_sections(created)
-        with sqlite3.connect(":memory:") as replay:
-            _replay(up_statements, replay)
-            assert [row[0] for row in replay.execute("SELECT name FROM sqlite_master WHERE type='table'")] == ["users"]
-            _replay(down_statements, replay)
-            assert replay.execute("SELECT count(*) FROM sqlite_master").fetchone() == (0,)
-        created.unlink()
-    await config.close_pool()
+        commands = AsyncMigrationCommands(config)
+        for source in (fixture_file, "raw_staging_users"):
+            created = await commands.revision("bootstrap", from_data=source, target_table="users")
+            up_statements, down_statements = _migration_sections(created)
+            with sqlite3.connect(":memory:") as replay:
+                _replay(up_statements, replay)
+                assert [row[0] for row in replay.execute("SELECT name FROM sqlite_master WHERE type='table'")] == [
+                    "users"
+                ]
+                _replay(down_statements, replay)
+                assert replay.execute("SELECT count(*) FROM sqlite_master").fetchone() == (0,)
+            created.unlink()
+    finally:
+        await config.close_pool()
 
 
 def test_upgrade_auto_dump_schema_writes_schema_sql(tmp_path: Path) -> None:
@@ -556,9 +567,10 @@ async def test_async_upgrade_auto_dump_failure_does_not_fail_committed_upgrade(t
             "auto_dump_schema": str(blocker / "schema.sql"),
         },
     )
-
-    await AsyncMigrationCommands(config).upgrade(echo=False)
-    await config.close_pool()
+    try:
+        await AsyncMigrationCommands(config).upgrade(echo=False)
+    finally:
+        await config.close_pool()
 
     assert _tracking_rows(db_path) == [("0001", None), ("0002", None), ("0003", None)]
 

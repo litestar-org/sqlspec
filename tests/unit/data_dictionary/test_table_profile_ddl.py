@@ -168,33 +168,36 @@ def test_duckdb_table_profile_and_infer_ddl_preserves_strong_types() -> None:
 async def test_aiosqlite_async_table_profile_and_infer_ddl() -> None:
     """AiosqliteDataDictionary should profile columns and infer DDL asynchronously."""
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
-    async with config.provide_session() as session:
-        await session.execute(
-            """
-            CREATE TABLE raw_users (
-                user_id TEXT,
-                active_flag TEXT,
-                profile_json TEXT
+    try:
+        async with config.provide_session() as session:
+            await session.execute(
+                """
+                CREATE TABLE raw_users (
+                    user_id TEXT,
+                    active_flag TEXT,
+                    profile_json TEXT
+                )
+                """
             )
-            """
-        )
-        await session.execute("INSERT INTO raw_users VALUES (?, ?, ?)", ("42", "true", '{"role": "admin"}'))
-        await session.execute("INSERT INTO raw_users VALUES (?, ?, ?)", ("43", "false", '{"role": "member"}'))
+            await session.execute("INSERT INTO raw_users VALUES (?, ?, ?)", ("42", "true", '{"role": "admin"}'))
+            await session.execute("INSERT INTO raw_users VALUES (?, ?, ?)", ("43", "false", '{"role": "member"}'))
 
-        dictionary = session.data_dictionary
-        profiles = await dictionary.get_table_profile(session, "raw_users", target_dialect="postgres")
-        by_name = {p.column_name: p for p in profiles}
+            dictionary = session.data_dictionary
+            profiles = await dictionary.get_table_profile(session, "raw_users", target_dialect="postgres")
+            by_name = {p.column_name: p for p in profiles}
 
-        assert by_name["user_id"].inferred_type == "BIGINT"
-        assert by_name["active_flag"].inferred_type == "BOOLEAN"
-        assert by_name["profile_json"].inferred_type == "JSONB"
+            assert by_name["user_id"].inferred_type == "BIGINT"
+            assert by_name["active_flag"].inferred_type == "BOOLEAN"
+            assert by_name["profile_json"].inferred_type == "JSONB"
 
-        ddl_res = await dictionary.infer_table_ddl_from_data(
-            session, "raw_users", target_table="users", target_dialect="postgres", primary_key="user_id"
-        )
-        assert ddl_res.status == MetadataSupport.SUPPORTED
-        assert ddl_res.ddl is not None
-        assert 'CREATE TABLE "users"' in ddl_res.ddl
-        assert '"user_id" BIGINT NOT NULL PRIMARY KEY' in ddl_res.ddl
-        assert '"active_flag" BOOLEAN NOT NULL' in ddl_res.ddl
-        assert '"profile_json" JSONB NOT NULL' in ddl_res.ddl
+            ddl_res = await dictionary.infer_table_ddl_from_data(
+                session, "raw_users", target_table="users", target_dialect="postgres", primary_key="user_id"
+            )
+            assert ddl_res.status == MetadataSupport.SUPPORTED
+            assert ddl_res.ddl is not None
+            assert 'CREATE TABLE "users"' in ddl_res.ddl
+            assert '"user_id" BIGINT NOT NULL PRIMARY KEY' in ddl_res.ddl
+            assert '"active_flag" BOOLEAN NOT NULL' in ddl_res.ddl
+            assert '"profile_json" JSONB NOT NULL' in ddl_res.ddl
+    finally:
+        await config.close_pool()
