@@ -1136,8 +1136,7 @@ class SQLFactory:
 
         Args:
             column: Column to compare.
-            *args: Alternating search values and results, with optional default at the end.
-            Format: search1, result1, search2, result2, ..., [default]
+            *args: Alternating search values and results (`search1, result1, ...`), with optional default at the end.
 
         Raises:
             ValueError: If fewer than two search/result pairs are provided.

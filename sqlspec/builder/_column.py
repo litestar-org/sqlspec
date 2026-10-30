@@ -327,11 +327,7 @@ class Column(_ScalarExpressionMixin):
 
         Args:
             other_vector: Vector to compare against (list, Column, or SQLGlot expression).
-            metric: Distance metric to use. Options:
-            - "euclidean": L2 distance (default)
-            - "cosine": Cosine distance
-            - "inner_product": Negative inner product
-            - "euclidean_squared": L2² distance (Oracle only)
+            metric: Distance metric to use (`"euclidean"`, `"cosine"`, `"inner_product"`, or `"euclidean_squared"`).
 
         Returns:
             FunctionColumn expression for use in SELECT, WHERE, ORDER BY.

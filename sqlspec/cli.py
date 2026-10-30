@@ -25,7 +25,9 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 
-__all__ = ("add_migration_commands", "get_sqlspec_group")
+    cli: Group
+
+__all__ = ("add_migration_commands", "cli", "get_sqlspec_group")
 
 AnyDatabaseConfig: TypeAlias = (
     AsyncDatabaseConfig[Any, Any, Any]
@@ -1034,6 +1036,14 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 console.print(f"[red]✗[/] {config_name}: {exc}")
 
     return database_group
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily construct the root Click command group for CLI documentation tools."""
+    if name == "cli":
+        return add_migration_commands()
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
 
 
 def _safe_group_command(
