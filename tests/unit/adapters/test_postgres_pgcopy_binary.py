@@ -5,18 +5,20 @@ import datetime as dt
 import struct
 import uuid
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import numpy as np
 import pyarrow as pa
-import pytest
 
-from sqlspec.adapters.asyncpg import AsyncpgDriver, default_statement_config as asyncpg_statement_config
+from sqlspec.adapters.asyncpg import AsyncpgDriver
+from sqlspec.adapters.asyncpg import default_statement_config as asyncpg_statement_config
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgDriver
 from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
 from sqlspec.adapters.cockroach_psycopg.core import build_copy_from_command as crdb_build_copy_from_command
-from sqlspec.adapters.psqlpy import PsqlpyDriver, default_statement_config as psqlpy_statement_config
-from sqlspec.adapters.psycopg import PsycopgAsyncDriver, PsycopgSyncDriver, default_statement_config as psycopg_statement_config
+from sqlspec.adapters.psqlpy import PsqlpyDriver
+from sqlspec.adapters.psqlpy import default_statement_config as psqlpy_statement_config
+from sqlspec.adapters.psycopg import PsycopgAsyncDriver, PsycopgSyncDriver
+from sqlspec.adapters.psycopg import default_statement_config as psycopg_statement_config
 from sqlspec.adapters.psycopg.core import build_copy_from_command as pg_build_copy_from_command
 from sqlspec.utils.arrow_helpers import (
     PG_BINARY_COPY_HEADER,
@@ -56,10 +58,7 @@ def test_encode_arrow_batch_pg_binary_fast_path_1_fixed_width_and_pgvector() -> 
             pa.array([3.125, -6.25], type=pa.float64()),
             pa.array([dt.date(2000, 1, 1), dt.date(2000, 1, 3)], type=pa.date32()),
             pa.array(
-                [
-                    dt.datetime(2000, 1, 1, 0, 0, 0, tzinfo=dt.timezone.utc),
-                    dt.datetime(2000, 1, 1, 0, 0, 2, tzinfo=dt.timezone.utc),
-                ],
+                [dt.datetime(2000, 1, 1, 0, 0, 0, tzinfo=dt.UTC), dt.datetime(2000, 1, 1, 0, 0, 2, tzinfo=dt.UTC)],
                 type=pa.timestamp("us", tz="UTC"),
             ),
             pa.array([uid.bytes, uid.bytes], type=pa.binary(16)),
@@ -68,19 +67,7 @@ def test_encode_arrow_batch_pg_binary_fast_path_1_fixed_width_and_pgvector() -> 
                 pa.array([np.float16(0.5), np.float16(1.5), np.float16(2.5), np.float16(3.5)], type=pa.float16()), 2
             ),
         ],
-        names=[
-            "flag",
-            "i16",
-            "i32",
-            "i64",
-            "f32",
-            "f64",
-            "dt",
-            "ts",
-            "uid",
-            "vec_f32",
-            "vec_f16",
-        ],
+        names=["flag", "i16", "i32", "i64", "f32", "f64", "dt", "ts", "uid", "vec_f32", "vec_f16"],
     )
 
     payload = encode_arrow_batch_pg_binary(batch, include_header=True, include_trailer=True)
@@ -196,13 +183,13 @@ class _DummyPsycopgCopy:
         self._writes = writes
         self._rows = rows
 
-    def __enter__(self) -> "_DummyPsycopgCopy":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: Any) -> None:
         return None
 
-    async def __aenter__(self) -> "_DummyPsycopgCopy":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: Any) -> None:
@@ -220,7 +207,7 @@ class _DummyPsycopgAsyncCopy:
         self._writes = writes
         self._rows = rows
 
-    async def __aenter__(self) -> "_DummyPsycopgAsyncCopy":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: Any) -> None:
@@ -237,7 +224,7 @@ class _DummyPsycopgSyncCursor:
     def __init__(self, conn: "_DummyPsycopgSyncConn") -> None:
         self._conn = conn
 
-    def __enter__(self) -> "_DummyPsycopgSyncCursor":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: Any) -> None:
@@ -267,7 +254,7 @@ class _DummyPsycopgAsyncCursor:
     def __init__(self, conn: "_DummyPsycopgAsyncConn") -> None:
         self._conn = conn
 
-    async def __aenter__(self) -> "_DummyPsycopgAsyncCursor":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: Any) -> None:
@@ -332,8 +319,7 @@ async def test_psycopg_and_cockroach_async_load_from_arrow_streams_binary_copy()
             driver_features={"storage_capabilities": _CAPS},
         )
         reader = pa.RecordBatchReader.from_batches(
-            schema,
-            [pa.RecordBatch.from_pydict({"id": [10, 20], "label": ["x", "y"]}, schema=schema)],
+            schema, [pa.RecordBatch.from_pydict({"id": [10, 20], "label": ["x", "y"]}, schema=schema)]
         )
         job = await driver.load_from_arrow("public.items", reader)
 
@@ -407,12 +393,7 @@ class _DummyPsqlpyBinaryConn:
         self.binary_calls: list[dict[str, Any]] = []
 
     async def binary_copy_to_table(
-        self,
-        source: bytes,
-        table_name: str,
-        *,
-        columns: list[str] | None = None,
-        schema_name: str | None = None,
+        self, source: bytes, table_name: str, *, columns: list[str] | None = None, schema_name: str | None = None
     ) -> int:
         self.binary_calls.append({
             "source": bytes(source),
@@ -430,8 +411,7 @@ async def test_psqlpy_load_from_arrow_supports_binary_copy_to_table() -> None:
     """PsqlpyDriver streams PGCOPY binary payloads to binary_copy_to_table when enable_pgcopy_binary=True."""
     schema = pa.schema([("id", pa.int64()), ("name", pa.string())])
     reader = pa.RecordBatchReader.from_batches(
-        schema,
-        [pa.RecordBatch.from_pydict({"id": [1, 2], "name": ["alpha", "beta"]}, schema=schema)],
+        schema, [pa.RecordBatch.from_pydict({"id": [1, 2], "name": ["alpha", "beta"]}, schema=schema)]
     )
     conn = _DummyPsqlpyBinaryConn()
     driver = PsqlpyDriver(

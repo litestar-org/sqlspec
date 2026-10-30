@@ -82,10 +82,10 @@ def _train_type_dispatch() -> None:
 
 def _train_query_cache() -> None:
     """Exercise QueryCache LRU operations — cache hits, misses, and eviction."""
+    from sqlspec.core.cache import CachedQuery, QueryCache
     from sqlspec.core.compiler import OperationProfile
     from sqlspec.core.parameters._types import ParameterInfo, ParameterProfile, ParameterStyle
     from sqlspec.core.statement import ProcessedState
-    from sqlspec.driver._query_cache import CachedQuery, QueryCache
 
     cache = QueryCache(max_size=64)
 

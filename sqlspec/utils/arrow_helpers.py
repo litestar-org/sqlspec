@@ -904,7 +904,7 @@ def _encode_pg_binary_fast_path_1(
 
         if pa.types.is_fixed_size_list(field_type) and pa.types.is_floating(field_type.value_type):
             dim = int(field_type.list_size)
-            flat_values = col.values[col.offset * dim : (col.offset + num_rows) * dim]
+            flat_values = col.flatten()
             if flat_values.null_count > 0:
                 return None
             is_f16 = pa.types.is_float16(field_type.value_type)
@@ -921,12 +921,7 @@ def _encode_pg_binary_fast_path_1(
                 (unused_key, ">u2"),
                 (val_key, elem_dtype, (dim,)),
             ])
-            assignments.extend([
-                (len_key, 4 + elem_size * dim),
-                (dim_key, dim),
-                (unused_key, 0),
-                (val_key, arr_2d),
-            ])
+            assignments.extend([(len_key, 4 + elem_size * dim), (dim_key, dim), (unused_key, 0), (val_key, arr_2d)])
             continue
 
         return None
@@ -938,204 +933,203 @@ def _encode_pg_binary_fast_path_1(
     return out.tobytes()
 
 
-def _encode_pg_binary_fast_path_2(
-    batch: "ArrowRecordBatch",
-    columns: "list[str]",
-    vector_columns: frozenset[str],
-    jsonb_columns: frozenset[str],
-) -> bytes:
-    """Encode variable-width and nullable columns by slicing Arrow buffers directly."""
+def _create_pg_fixed_column_encoder(
+    col: Any, field_type: Any, num_rows: int, null_mask: Any
+) -> "Callable[[int, bytearray], None] | None":
+    """Create an encoder for fixed-width columns or fixed-size list vectors."""
     import numpy as np
     import pyarrow as pa
 
-    num_rows = int(batch.num_rows)
-    row_header = struct.pack(">h", len(columns))
-    col_encoders: list[Callable[[int, bytearray], None]] = []
+    fixed_info = _extract_pg_fixed_column_array(col, field_type, num_rows)
+    if fixed_info is not None:
+        byte_width, np_dtype, arr = fixed_info
+        packed = np.empty(num_rows, dtype=np.dtype([("len", ">i4"), ("val", np_dtype)]))
+        packed["len"] = byte_width
+        packed["val"] = arr
+        packed_mv = memoryview(packed.tobytes())
+        stride = 4 + byte_width
 
-    for col_name in columns:
-        col = batch.column(col_name)
-        if isinstance(col, pa.ChunkedArray):
-            col = col.combine_chunks()
-        field_type = col.type
-        has_nulls = col.null_count > 0
-        null_mask = col.is_null().to_numpy(zero_copy_only=False) if has_nulls else None
-
-        if col_name not in jsonb_columns:
-            fixed_info = _extract_pg_fixed_column_array(col, field_type, num_rows)
-            if fixed_info is not None:
-                byte_width, np_dtype, arr = fixed_info
-                packed = np.empty(num_rows, dtype=np.dtype([("len", ">i4"), ("val", np_dtype)]))
-                packed["len"] = byte_width
-                packed["val"] = arr
-                packed_mv = memoryview(packed.tobytes())
-                stride = 4 + byte_width
-
-                def _emit_fixed(
-                    row_idx: int,
-                    out_buf: bytearray,
-                    _mv: memoryview = packed_mv,
-                    _stride: int = stride,
-                    _nulls: Any = null_mask,
-                ) -> None:
-                    if _nulls is not None and _nulls[row_idx]:
-                        out_buf.extend(_PG_NULL_MARKER)
-                    else:
-                        start = row_idx * _stride
-                        out_buf.extend(_mv[start : start + _stride])
-
-                col_encoders.append(_emit_fixed)
-                continue
-
-            if pa.types.is_fixed_size_list(field_type) and pa.types.is_floating(field_type.value_type):
-                dim = int(field_type.list_size)
-                flat_values = col.values[col.offset * dim : (col.offset + num_rows) * dim]
-                is_f16 = pa.types.is_float16(field_type.value_type)
-                elem_dtype = ">f2" if is_f16 else ">f4"
-                elem_size = 2 if is_f16 else 4
-                arr_2d = (
-                    flat_values.to_numpy(zero_copy_only=False).astype(elem_dtype, copy=False).reshape(num_rows, dim)
-                )
-                packed = np.empty(
-                    num_rows,
-                    dtype=np.dtype([
-                        ("len", ">i4"),
-                        ("dim", ">u2"),
-                        ("unused", ">u2"),
-                        ("val", elem_dtype, (dim,)),
-                    ]),
-                )
-                packed["len"] = 4 + elem_size * dim
-                packed["dim"] = dim
-                packed["unused"] = 0
-                packed["val"] = arr_2d
-                packed_mv = memoryview(packed.tobytes())
-                stride = 8 + elem_size * dim
-
-                def _emit_fixed_vec(
-                    row_idx: int,
-                    out_buf: bytearray,
-                    _mv: memoryview = packed_mv,
-                    _stride: int = stride,
-                    _nulls: Any = null_mask,
-                ) -> None:
-                    if _nulls is not None and _nulls[row_idx]:
-                        out_buf.extend(_PG_NULL_MARKER)
-                    else:
-                        start = row_idx * _stride
-                        out_buf.extend(_mv[start : start + _stride])
-
-                col_encoders.append(_emit_fixed_vec)
-                continue
-
-        if (
-            pa.types.is_string(field_type)
-            or pa.types.is_large_string(field_type)
-            or pa.types.is_binary(field_type)
-            or pa.types.is_large_binary(field_type)
-        ):
-            offset_dtype = (
-                np.int64 if (pa.types.is_large_string(field_type) or pa.types.is_large_binary(field_type)) else np.int32
-            )
-            offsets = np.frombuffer(col.buffers()[1], dtype=offset_dtype, count=col.offset + num_rows + 1)[
-                col.offset :
-            ]
-            data_buf = col.buffers()[2]
-            data_mv = memoryview(data_buf) if data_buf is not None else memoryview(b"")
-            is_jsonb = col_name in jsonb_columns
-            diffs = np.diff(offsets)
-            lengths_mv = memoryview((diffs + (1 if is_jsonb else 0)).astype(">i4").tobytes())
-
-            def _emit_varlen(
-                row_idx: int,
-                out_buf: bytearray,
-                _offsets: Any = offsets,
-                _data_mv: memoryview = data_mv,
-                _len_mv: memoryview = lengths_mv,
-                _nulls: Any = null_mask,
-                _is_jsonb: bool = is_jsonb,
-            ) -> None:
-                if _nulls is not None and _nulls[row_idx]:
-                    out_buf.extend(_PG_NULL_MARKER)
-                    return
-                out_buf.extend(_len_mv[row_idx * 4 : (row_idx + 1) * 4])
-                if _is_jsonb:
-                    out_buf.append(1)
-                start = int(_offsets[row_idx])
-                end = int(_offsets[row_idx + 1])
-                if end > start:
-                    out_buf.extend(_data_mv[start:end])
-
-            col_encoders.append(_emit_varlen)
-            continue
-
-        if (pa.types.is_list(field_type) or pa.types.is_large_list(field_type)) and (
-            col_name in vector_columns or pa.types.is_floating(field_type.value_type)
-        ):
-            offset_dtype = np.int64 if pa.types.is_large_list(field_type) else np.int32
-            offsets = np.frombuffer(col.buffers()[1], dtype=offset_dtype, count=col.offset + num_rows + 1)[
-                col.offset :
-            ]
-            is_f16 = pa.types.is_float16(field_type.value_type)
-            elem_dtype = ">f2" if is_f16 else ">f4"
-            elem_size = 2 if is_f16 else 4
-            flat_bytes = col.values.to_numpy(zero_copy_only=False).astype(elem_dtype, copy=False).tobytes()
-            flat_mv = memoryview(flat_bytes)
-            dims = np.diff(offsets)
-            headers = np.empty(num_rows, dtype=np.dtype([("len", ">i4"), ("dim", ">u2"), ("unused", ">u2")]))
-            headers["len"] = 4 + elem_size * dims
-            headers["dim"] = dims
-            headers["unused"] = 0
-            headers_mv = memoryview(headers.tobytes())
-
-            def _emit_var_vec(
-                row_idx: int,
-                out_buf: bytearray,
-                _offsets: Any = offsets,
-                _flat_mv: memoryview = flat_mv,
-                _hdr_mv: memoryview = headers_mv,
-                _elem_size: int = elem_size,
-                _nulls: Any = null_mask,
-            ) -> None:
-                if _nulls is not None and _nulls[row_idx]:
-                    out_buf.extend(_PG_NULL_MARKER)
-                    return
-                out_buf.extend(_hdr_mv[row_idx * 8 : (row_idx + 1) * 8])
-                start = int(_offsets[row_idx]) * _elem_size
-                end = int(_offsets[row_idx + 1]) * _elem_size
-                if end > start:
-                    out_buf.extend(_flat_mv[start:end])
-
-            col_encoders.append(_emit_var_vec)
-            continue
-
-        py_values = col.to_pylist()
-        is_jsonb = col_name in jsonb_columns
-
-        def _emit_fallback(
+        def _emit_fixed(
             row_idx: int,
             out_buf: bytearray,
-            _vals: list[Any] = py_values,
+            _mv: memoryview = packed_mv,
+            _stride: int = stride,
+            _nulls: Any = null_mask,
+        ) -> None:
+            if _nulls is not None and _nulls[row_idx]:
+                out_buf.extend(_PG_NULL_MARKER)
+            else:
+                start = row_idx * _stride
+                out_buf.extend(_mv[start : start + _stride])
+
+        return _emit_fixed
+
+    if pa.types.is_fixed_size_list(field_type) and pa.types.is_floating(field_type.value_type):
+        dim = int(field_type.list_size)
+        flat_values = col.flatten()
+        is_f16 = pa.types.is_float16(field_type.value_type)
+        elem_dtype = ">f2" if is_f16 else ">f4"
+        elem_size = 2 if is_f16 else 4
+        arr_2d = flat_values.to_numpy(zero_copy_only=False).astype(elem_dtype, copy=False).reshape(num_rows, dim)
+        packed = np.empty(
+            num_rows, dtype=np.dtype([("len", ">i4"), ("dim", ">u2"), ("unused", ">u2"), ("val", elem_dtype, (dim,))])
+        )
+        packed["len"] = 4 + elem_size * dim
+        packed["dim"] = dim
+        packed["unused"] = 0
+        packed["val"] = arr_2d
+        packed_mv = memoryview(packed.tobytes())
+        stride = 8 + elem_size * dim
+
+        def _emit_fixed_vec(
+            row_idx: int,
+            out_buf: bytearray,
+            _mv: memoryview = packed_mv,
+            _stride: int = stride,
+            _nulls: Any = null_mask,
+        ) -> None:
+            if _nulls is not None and _nulls[row_idx]:
+                out_buf.extend(_PG_NULL_MARKER)
+            else:
+                start = row_idx * _stride
+                out_buf.extend(_mv[start : start + _stride])
+
+        return _emit_fixed_vec
+
+    return None
+
+
+def _create_pg_column_encoder(
+    col: Any, col_name: str, num_rows: int, vector_columns: frozenset[str], jsonb_columns: frozenset[str]
+) -> Callable[[int, bytearray], None]:
+    """Create an encoder function for a single column."""
+    import numpy as np
+    import pyarrow as pa
+
+    if isinstance(col, pa.ChunkedArray):
+        col = col.combine_chunks()
+    field_type = col.type
+    has_nulls = col.null_count > 0
+    null_mask = col.is_null().to_numpy(zero_copy_only=False) if has_nulls else None
+
+    if col_name not in jsonb_columns:
+        fixed_encoder = _create_pg_fixed_column_encoder(col, field_type, num_rows, null_mask)
+        if fixed_encoder is not None:
+            return fixed_encoder
+
+    if (
+        pa.types.is_string(field_type)
+        or pa.types.is_large_string(field_type)
+        or pa.types.is_binary(field_type)
+        or pa.types.is_large_binary(field_type)
+    ):
+        offset_dtype = (
+            np.int64 if (pa.types.is_large_string(field_type) or pa.types.is_large_binary(field_type)) else np.int32
+        )
+        offsets = np.frombuffer(col.buffers()[1], dtype=offset_dtype, count=col.offset + num_rows + 1)[col.offset :]
+        data_buf = col.buffers()[2]
+        data_mv = memoryview(data_buf) if data_buf is not None else memoryview(b"")
+        is_jsonb = col_name in jsonb_columns
+        diffs = np.diff(offsets)
+        lengths_mv = memoryview((diffs + (1 if is_jsonb else 0)).astype(">i4").tobytes())
+
+        def _emit_varlen(
+            row_idx: int,
+            out_buf: bytearray,
+            _offsets: Any = offsets,
+            _data_mv: memoryview = data_mv,
+            _len_mv: memoryview = lengths_mv,
+            _nulls: Any = null_mask,
             _is_jsonb: bool = is_jsonb,
         ) -> None:
-            val = _vals[row_idx]
-            if val is None:
+            if _nulls is not None and _nulls[row_idx]:
                 out_buf.extend(_PG_NULL_MARKER)
                 return
-            if isinstance(val, (bytes, bytearray, memoryview)):
-                raw = bytes(val)
-            elif isinstance(val, str):
-                raw = val.encode("utf-8")
-            elif isinstance(val, (dict, list, tuple)):
-                raw = to_json(val).encode("utf-8")
-            else:
-                raw = str(val).encode("utf-8")
+            out_buf.extend(_len_mv[row_idx * 4 : (row_idx + 1) * 4])
             if _is_jsonb:
-                out_buf.extend(struct.pack(">iB", len(raw) + 1, 1))
-            else:
-                out_buf.extend(struct.pack(">i", len(raw)))
-            out_buf.extend(raw)
+                out_buf.append(1)
+            start = int(_offsets[row_idx])
+            end = int(_offsets[row_idx + 1])
+            if end > start:
+                out_buf.extend(_data_mv[start:end])
 
-        col_encoders.append(_emit_fallback)
+        return _emit_varlen
+
+    if (pa.types.is_list(field_type) or pa.types.is_large_list(field_type)) and (
+        col_name in vector_columns or pa.types.is_floating(field_type.value_type)
+    ):
+        offset_dtype = np.int64 if pa.types.is_large_list(field_type) else np.int32
+        offsets = np.frombuffer(col.buffers()[1], dtype=offset_dtype, count=col.offset + num_rows + 1)[col.offset :]
+        is_f16 = pa.types.is_float16(field_type.value_type)
+        elem_dtype = ">f2" if is_f16 else ">f4"
+        elem_size = 2 if is_f16 else 4
+        values_attr = "values"
+        flat_bytes = getattr(col, values_attr).to_numpy(zero_copy_only=False).astype(elem_dtype, copy=False).tobytes()
+        flat_mv = memoryview(flat_bytes)
+        dims = np.diff(offsets)
+        headers = np.empty(num_rows, dtype=np.dtype([("len", ">i4"), ("dim", ">u2"), ("unused", ">u2")]))
+        headers["len"] = 4 + elem_size * dims
+        headers["dim"] = dims
+        headers["unused"] = 0
+        headers_mv = memoryview(headers.tobytes())
+
+        def _emit_var_vec(
+            row_idx: int,
+            out_buf: bytearray,
+            _offsets: Any = offsets,
+            _flat_mv: memoryview = flat_mv,
+            _hdr_mv: memoryview = headers_mv,
+            _elem_size: int = elem_size,
+            _nulls: Any = null_mask,
+        ) -> None:
+            if _nulls is not None and _nulls[row_idx]:
+                out_buf.extend(_PG_NULL_MARKER)
+                return
+            out_buf.extend(_hdr_mv[row_idx * 8 : (row_idx + 1) * 8])
+            start = int(_offsets[row_idx]) * _elem_size
+            end = int(_offsets[row_idx + 1]) * _elem_size
+            if end > start:
+                out_buf.extend(_flat_mv[start:end])
+
+        return _emit_var_vec
+
+    py_values = col.to_pylist()
+    is_jsonb = col_name in jsonb_columns
+
+    def _emit_fallback(
+        row_idx: int, out_buf: bytearray, _vals: list[Any] = py_values, _is_jsonb: bool = is_jsonb
+    ) -> None:
+        val = _vals[row_idx]
+        if val is None:
+            out_buf.extend(_PG_NULL_MARKER)
+            return
+        if isinstance(val, (bytes, bytearray, memoryview)):
+            raw = bytes(val)
+        elif isinstance(val, str):
+            raw = val.encode("utf-8")
+        elif isinstance(val, (dict, list, tuple)):
+            raw = to_json(val).encode("utf-8")
+        else:
+            raw = str(val).encode("utf-8")
+        if _is_jsonb:
+            out_buf.extend(struct.pack(">iB", len(raw) + 1, 1))
+        else:
+            out_buf.extend(struct.pack(">i", len(raw)))
+        out_buf.extend(raw)
+
+    return _emit_fallback
+
+
+def _encode_pg_binary_fast_path_2(
+    batch: "ArrowRecordBatch", columns: "list[str]", vector_columns: frozenset[str], jsonb_columns: frozenset[str]
+) -> bytes:
+    """Encode variable-width and nullable columns by slicing Arrow buffers directly."""
+    num_rows = int(batch.num_rows)
+    row_header = struct.pack(">h", len(columns))
+    col_encoders = [
+        _create_pg_column_encoder(batch.column(col_name), col_name, num_rows, vector_columns, jsonb_columns)
+        for col_name in columns
+    ]
 
     out_buf = bytearray()
     for row_idx in range(num_rows):

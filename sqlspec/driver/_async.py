@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, Self, 
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core import SQL, StackResult, create_arrow_result
+from sqlspec.core import SQL, CachedQuery, StackResult, create_arrow_result
 from sqlspec.core.result import DMLResult
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.data_dictionary import (
@@ -46,7 +46,6 @@ from sqlspec.driver._common import (
     validate_savepoint_name,
 )
 from sqlspec.driver._exception_handler import _run_with_async_exception_handler
-from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
 from sqlspec.driver._storage_helpers import (

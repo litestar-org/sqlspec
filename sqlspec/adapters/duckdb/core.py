@@ -1,6 +1,7 @@
 """DuckDB adapter compiled helpers."""
 
 import contextlib
+import os
 import re
 import tempfile
 from datetime import date, datetime
@@ -22,12 +23,14 @@ from sqlspec.adapters.duckdb._typing import (
     DuckDBParserException,
     DuckDBPermissionException,
     DuckDBTransactionException,
+    duckdb_module,
 )
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
     DataError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     NotNullViolationError,
@@ -42,6 +45,7 @@ from sqlspec.exceptions import (
 from sqlspec.storage import ResolvedStorageTarget
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 from sqlspec.storage.backends.obstore import ObStoreBackend
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
@@ -73,11 +77,33 @@ __all__ = (
     "format_identifier",
     "normalize_execute_parameters",
     "read_duckdb_profile_json",
+    "resolve_duckdb_memory_limit",
     "resolve_rowcount",
+    "validate_duckdb_temp_directory",
 )
+
+logger = get_logger("sqlspec.adapters.duckdb.core")
 
 ARROW_MIN_ROWS: Final[int] = 64
 _VERSION_COMPONENTS: Final[int] = 3
+_CGROUP_UNBOUNDED_THRESHOLD: Final[int] = 1 << 60
+_MEMORY_LIMIT_RE: Final[re.Pattern[str]] = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([A-Za-z]*)\s*$")
+_MEMORY_UNIT_MULTIPLIERS: Final[dict[str, int]] = {
+    "": 1,
+    "B": 1,
+    "KB": 1000,
+    "KIB": 1024,
+    "K": 1024,
+    "MB": 1000**2,
+    "MIB": 1024**2,
+    "M": 1024**2,
+    "GB": 1000**3,
+    "GIB": 1024**3,
+    "G": 1024**3,
+    "TB": 1000**4,
+    "TIB": 1024**4,
+    "T": 1024**4,
+}
 
 _FIXED_ARRAY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\[\d+\]")
 _ARROW_SAFE_SCALAR_TYPES: Final[frozenset[str]] = frozenset({
@@ -167,6 +193,156 @@ def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | Non
     return fetched_data, column_names
 
 
+def _parse_memory_size_bytes(memory_limit: str) -> "int | None":
+    match = _MEMORY_LIMIT_RE.match(memory_limit)
+    if match is None:
+        return None
+    amount = float(match.group(1))
+    unit = match.group(2).upper()
+    multiplier = _MEMORY_UNIT_MULTIPLIERS.get(unit)
+    if multiplier is None:
+        return None
+    return int(amount * multiplier)
+
+
+def _detect_available_memory_bytes(
+    *,
+    cgroup_v2_path: "Path | None" = None,
+    cgroup_v1_path: "Path | None" = None,
+    host_memory_bytes: "int | None" = None,
+) -> "int | None":
+    v2_file = cgroup_v2_path if cgroup_v2_path is not None else Path("/sys/fs/cgroup/memory.max")
+    if v2_file.exists():
+        with contextlib.suppress(OSError, ValueError):
+            raw_v2 = v2_file.read_text(encoding="utf-8").strip()
+            if raw_v2 and raw_v2.lower() != "max":
+                parsed_v2 = int(raw_v2)
+                if 0 < parsed_v2 < _CGROUP_UNBOUNDED_THRESHOLD:
+                    return parsed_v2
+
+    v1_file = cgroup_v1_path if cgroup_v1_path is not None else Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    if v1_file.exists():
+        with contextlib.suppress(OSError, ValueError):
+            raw_v1 = v1_file.read_text(encoding="utf-8").strip()
+            if raw_v1:
+                parsed_v1 = int(raw_v1)
+                if 0 < parsed_v1 < _CGROUP_UNBOUNDED_THRESHOLD:
+                    return parsed_v1
+
+    if host_memory_bytes is not None and host_memory_bytes > 0:
+        return host_memory_bytes
+
+    with contextlib.suppress(ValueError, OSError, AttributeError):
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        phys_pages = os.sysconf("SC_PHYS_PAGES")
+        if isinstance(page_size, int) and isinstance(phys_pages, int) and page_size > 0 and phys_pages > 0:
+            return page_size * phys_pages
+    return None
+
+
+def resolve_duckdb_memory_limit(
+    memory_limit: "str | None" = None,
+    *,
+    memory_ceiling_fraction: float = 0.8,
+    cgroup_v2_path: "Path | None" = None,
+    cgroup_v1_path: "Path | None" = None,
+    host_memory_bytes: "int | None" = None,
+) -> "str | None":
+    """Resolve or clamp DuckDB ``memory_limit`` against container cgroup or host memory.
+
+    Args:
+        memory_limit: Explicit memory limit string (such as ``'4GB'`` or ``'512MB'``), or ``None``.
+        memory_ceiling_fraction: Fraction of available memory used as the maximum ceiling.
+        cgroup_v2_path: Optional override path for cgroup v2 ``memory.max``.
+        cgroup_v1_path: Optional override path for cgroup v1 ``memory.limit_in_bytes``.
+        host_memory_bytes: Optional override for host physical memory in bytes.
+
+    Returns:
+        Resolved DuckDB memory limit string, or ``memory_limit`` when system memory cannot be determined.
+    """
+    available_bytes = _detect_available_memory_bytes(
+        cgroup_v2_path=cgroup_v2_path, cgroup_v1_path=cgroup_v1_path, host_memory_bytes=host_memory_bytes
+    )
+    if available_bytes is None or memory_ceiling_fraction <= 0:
+        return memory_limit
+
+    ceiling_bytes = max(1024 * 1024, int(available_bytes * memory_ceiling_fraction))
+    ceiling_mb_str = f"{max(1, ceiling_bytes // (1024 * 1024))}MB"
+    if memory_limit is None:
+        return ceiling_mb_str
+
+    requested_bytes = _parse_memory_size_bytes(memory_limit)
+    if requested_bytes is not None and requested_bytes > ceiling_bytes:
+        logger.warning(
+            "Requested DuckDB memory_limit %r exceeds %.0f%% of available memory (%s); clamping to %s",
+            memory_limit,
+            memory_ceiling_fraction * 100,
+            ceiling_mb_str,
+            ceiling_mb_str,
+        )
+        return ceiling_mb_str
+    return memory_limit
+
+
+def validate_duckdb_temp_directory(
+    temp_directory: "str | Path", *, reject_tmpfs: bool = False, mounts_content: "str | None" = None
+) -> bool:
+    """Validate whether a DuckDB spill ``temp_directory`` resides on an in-memory ``tmpfs``/``ramfs`` mount.
+
+    Args:
+        temp_directory: Target spill directory path.
+        reject_tmpfs: Raise ``ImproperConfigurationError`` when the directory is backed by ``tmpfs`` or ``ramfs``.
+        mounts_content: Optional ``/proc/mounts`` text override for testing.
+
+    Returns:
+        ``True`` when the spill directory is not on ``tmpfs``/``ramfs``, or ``False`` when a warning was emitted.
+
+    Raises:
+        ImproperConfigurationError: If ``reject_tmpfs=True`` and the path resides on ``tmpfs`` or ``ramfs``.
+    """
+    raw_mounts = mounts_content
+    if raw_mounts is None:
+        mounts_path = Path("/proc/mounts")
+        if mounts_path.exists():
+            with contextlib.suppress(OSError):
+                raw_mounts = mounts_path.read_text(encoding="utf-8")
+    if not raw_mounts:
+        return True
+
+    target_path = Path(temp_directory)
+    with contextlib.suppress(OSError):
+        if target_path.exists():
+            target_path = target_path.resolve()
+        elif target_path.parent.exists():
+            target_path = target_path.parent.resolve() / target_path.name
+    target_str = str(target_path)
+
+    best_mount_point = ""
+    best_fs_type = ""
+    for line in raw_mounts.splitlines():
+        with contextlib.suppress(ValueError):
+            _device, mount_point, raw_fs_type, *_rest = line.split()
+            fs_type = raw_fs_type.lower()
+            normalized_mount = mount_point.rstrip("/") or "/"
+            matches = target_str == normalized_mount or target_str.startswith(
+                "/" if normalized_mount == "/" else f"{normalized_mount}/"
+            )
+            if matches and len(normalized_mount) >= len(best_mount_point):
+                best_mount_point = normalized_mount
+                best_fs_type = fs_type
+
+    if best_fs_type in {"tmpfs", "ramfs"}:
+        msg = (
+            f"DuckDB temp_directory {str(temp_directory)!r} resides on in-memory filesystem "
+            f"{best_fs_type!r} (mount {best_mount_point!r}), which risks container OOM during out-of-core spills."
+        )
+        if reject_tmpfs:
+            raise ImproperConfigurationError(msg)
+        logger.warning(msg)
+        return False
+    return True
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build connection configuration for pool creation.
 
@@ -176,7 +352,15 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     Returns:
         Dictionary with connection parameters.
     """
-    pool_only_keys = {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "health_check_interval"}
+    pool_only_keys = {
+        "pool_min_size",
+        "pool_max_size",
+        "pool_timeout",
+        "pool_recycle_seconds",
+        "health_check_interval",
+        "memory_ceiling_fraction",
+        "reject_tmpfs_temp_directory",
+    }
     alias_keys = {"db", "path", "file"}
     connect_parameters: dict[str, Any] = {}
     duckdb_config: dict[str, Any] = {}
@@ -205,6 +389,20 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     extra = connection_config.get("extra")
     if isinstance(extra, dict):
         duckdb_config.update({key: value for key, value in extra.items() if value is not None})
+
+    if duckdb_config.get("temp_directory"):
+        validate_duckdb_temp_directory(
+            duckdb_config["temp_directory"],
+            reject_tmpfs=bool(connection_config.get("reject_tmpfs_temp_directory", False)),
+        )
+
+    if "memory_ceiling_fraction" in connection_config or "memory_limit" in duckdb_config:
+        fraction = float(connection_config.get("memory_ceiling_fraction", 0.8))
+        resolved_limit = resolve_duckdb_memory_limit(
+            cast("str | None", duckdb_config.get("memory_limit")), memory_ceiling_fraction=fraction
+        )
+        if resolved_limit is not None:
+            duckdb_config["memory_limit"] = resolved_limit
 
     if duckdb_config:
         connect_parameters["config"] = duckdb_config
@@ -448,9 +646,7 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
 def duckdb_version_tuple() -> "tuple[int, int, int]":
     """Return the installed DuckDB version as a 3-tuple of integers."""
     try:
-        import duckdb
-
-        raw = getattr(duckdb, "__version__", "")
+        raw = getattr(duckdb_module, "__version__", "")
         parts = [int(part) for part in raw.split(".") if part.isdigit()]
         while len(parts) < _VERSION_COMPONENTS:
             parts.append(0)
@@ -482,9 +678,13 @@ def _build_storage_copy_sql(sql: str, file_format: str) -> str | None:
     )
 
 
-def _build_storage_read_sql(table: str, uri: str, file_format: str) -> str | None:
-    """Build a single-object reader with a validated, quoted target identifier."""
-    if file_format != "parquet" or any(char in uri for char in "*?[]"):
+def _build_storage_read_sql(table: str, uri: str, file_format: str, *, allow_globs: bool = False) -> str | None:
+    """Build a single-object or glob reader with a validated, quoted target identifier."""
+    normalized_format = file_format.lower()
+    allowed_formats = {"parquet", "csv", "jsonl", "ndjson"} if allow_globs else {"parquet"}
+    if normalized_format not in allowed_formats:
+        return None
+    if not allow_globs and any(char in uri for char in "*?[]"):
         return None
     try:
         targets = Dialect.get_or_raise("duckdb").parse_into(exp.Table, table)
@@ -502,13 +702,32 @@ def _build_storage_read_sql(table: str, uri: str, file_format: str) -> str | Non
     target = targets[0]
     for part in target.parts:
         part.set("quoted", True)
-    reader = exp.Anonymous(
-        this="read_parquet",
-        expressions=[
-            exp.Placeholder(),
-            exp.Kwarg(this=exp.Var(this="hive_partitioning"), expression=exp.Boolean(this=False)),
-        ],
-    )
+    if normalized_format == "parquet":
+        reader = exp.Anonymous(
+            this="read_parquet",
+            expressions=[
+                exp.Placeholder(),
+                exp.Kwarg(this=exp.Var(this="hive_partitioning"), expression=exp.Boolean(this=False)),
+            ],
+        )
+    elif normalized_format == "csv":
+        reader = exp.Anonymous(
+            this="read_csv",
+            expressions=[
+                exp.Placeholder(),
+                exp.Kwarg(this=exp.Var(this="auto_detect"), expression=exp.Boolean(this=True)),
+                exp.Kwarg(this=exp.Var(this="header"), expression=exp.Boolean(this=True)),
+            ],
+        )
+    else:
+        reader = exp.Anonymous(
+            this="read_json",
+            expressions=[
+                exp.Placeholder(),
+                exp.Kwarg(this=exp.Var(this="format"), expression=exp.Literal.string("newline_delimited")),
+                exp.Kwarg(this=exp.Var(this="auto_detect"), expression=exp.Boolean(this=True)),
+            ],
+        )
     return exp.Insert(this=target, expression=exp.select("*").from_(reader, copy=False)).sql(
         dialect="duckdb", copy=False
     )
@@ -637,11 +856,13 @@ def _native_storage_eligible(
 def _s3_storage_options_match(
     backend_options: "Mapping[str, Any]", native: "Mapping[str, Any]", provider_type: str
 ) -> bool:
-    """Compare static credentials and endpoint options for S3-compatible providers."""
+    """Compare static credentials, OAuth bearer tokens, and endpoint options for S3/GCS/R2 providers."""
     if native.keys() - {
         "key_id",
         "secret",
         "session_token",
+        "bearer_token",
+        "token",
         "region",
         "endpoint",
         "url_style",
@@ -652,7 +873,7 @@ def _s3_storage_options_match(
 
     options: dict[str, Any] = {}
     for key, value in backend_options.items():
-        normalized = key.removeprefix("aws_")
+        normalized = key.removeprefix("aws_").removeprefix("google_")
         if normalized in options and options[normalized] != value:
             return False
         options[normalized] = value
@@ -663,6 +884,12 @@ def _s3_storage_options_match(
         if "allow_http" in options and options["allow_http"] != client["allow_http"]:
             return False
         options["allow_http"] = client["allow_http"]
+    if provider_type == "gcs" and ("bearer_token" in native or "token" in native):
+        if options.keys() - {"bearer_token", "token"}:
+            return False
+        native_token = native.get("bearer_token") or native.get("token")
+        option_token = options.get("bearer_token") or options.get("token")
+        return bool(native_token and option_token == native_token)
     if options.keys() - {
         "access_key_id",
         "secret_access_key",

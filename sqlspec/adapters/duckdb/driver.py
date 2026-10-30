@@ -55,10 +55,9 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, CachedQuery, SQLResult, Statement, StatementFilter
     from sqlspec.core.result._base import RowFormat
     from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._query_cache import CachedQuery
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 else:

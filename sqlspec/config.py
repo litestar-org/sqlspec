@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, NotRequired, 
 
 from typing_extensions import TypedDict
 
-from sqlspec.core import TypeCoercionCapabilities
+from sqlspec.core import StatementCacheHolder, TypeCoercionCapabilities, resolve_statement_cache_size
 from sqlspec.core.config_runtime import (
     build_default_statement_config,
     close_async_pool,
@@ -28,7 +28,6 @@ from sqlspec.core.config_runtime import (
     create_sync_pool,
     seed_runtime_driver_features,
 )
-from sqlspec.driver._query_cache import StatementCacheHolder, resolve_statement_cache_size
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader

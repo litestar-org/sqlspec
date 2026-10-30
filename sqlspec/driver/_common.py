@@ -39,6 +39,7 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
+from sqlspec.core.cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import (
@@ -74,7 +75,6 @@ from sqlspec.data_dictionary import (
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import get_dialect_config
-from sqlspec.driver._query_cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
 from sqlspec.driver._storage_helpers import (
     CAPABILITY_HINTS,
     arrow_batch_to_rows,

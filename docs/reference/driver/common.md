@@ -27,7 +27,7 @@ Shared driver execution results, exception handler protocols and base classes, m
       heading_level: 3
       members: false
 
-::: sqlspec.driver._query_cache.CachedQuery
+::: sqlspec.core.cache.CachedQuery
     options:
       heading_level: 3
       members: false
