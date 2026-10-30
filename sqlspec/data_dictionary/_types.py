@@ -1206,11 +1206,31 @@ class ColumnMetadata(TypedDict, total=False):
     column_key: str
     """Catalog key classification code (such as MySQL ``PRI``, ``UNI``, or ``MUL``)."""
     identity_generation: str | None
-    """Identity generation mode (``a``/``ALWAYS`` or ``d``/``BY DEFAULT``), if applicable."""
+    """Identity generation mode (``a``/``ALWAYS``, ``d``/``BY DEFAULT``, or ``BY DEFAULT ON NULL``), if applicable."""
+    default_on_null: str | bool | int | None
+    """Oracle catalog indicator (``YES``/``NO``) when default or identity values apply on explicit ``NULL``."""
+    is_identity: bool | int | str | None
+    """Whether the column is an identity column reported by the catalog."""
+    identity_column: str | None
+    """Oracle catalog indicator (``YES``/``NO``) for identity columns."""
     sequence_name: str | None
     """Backing sequence name owned by a serial or identity column."""
-    is_generated: bool | int
+    is_generated: bool | int | str | None
     """Whether the column is a computed or virtual/stored generated column."""
+    generated_kind: str | None
+    """PostgreSQL catalog code for generated columns (such as ``s`` for stored)."""
+    generation_expression: str | None
+    """SQL expression defining a virtual or stored generated column."""
+    is_computed: bool | int | None
+    """SQL Server catalog flag indicating whether the column is computed."""
+    computed_definition: str | None
+    """SQL Server catalog expression defining a computed column."""
+    generated_always_type_desc: str | None
+    """SQL Server catalog description for system-versioned temporal period columns."""
+    virtual_column: str | None
+    """Oracle catalog indicator (``YES``/``NO``) for virtual columns."""
+    hidden_column: str | None
+    """Oracle catalog indicator (``YES``/``NO``) for hidden columns."""
 
 
 class TableMetadata(TypedDict, total=False):

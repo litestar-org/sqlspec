@@ -121,8 +121,8 @@ async def test_db2_get_columns(case: DictionaryCase) -> None:
         "is_generated",
     )
     rows = [
-        ("MYSCHEMA", "USERS", "ID", "BIGINT", 0, None, 1, 8, 0, 1, 1, "A", "A"),
-        ("MYSCHEMA", "USERS", "NAME", "VARCHAR", 1, "'anonymous'", 2, 255, 0, 0, 0, None, None),
+        ("MYSCHEMA", "USERS", "ID", "BIGINT", 0, None, 1, 8, 0, 1, 1, "ALWAYS", 0),
+        ("MYSCHEMA", "USERS", "NAME", "VARCHAR", 1, "'anonymous'", 2, 255, 0, 0, 0, "N", 0),
     ]
     driver, connection = _driver_with_results((names, rows))
 
@@ -141,8 +141,8 @@ async def test_db2_get_columns(case: DictionaryCase) -> None:
         numeric_scale=0,
         is_primary=True,
         is_unique=True,
-        identity_generation="A",
-        is_generated=True,
+        identity_generation="ALWAYS",
+        is_generated=False,
     )
     assert columns[1] == ColumnMetadata(
         schema_name="MYSCHEMA",

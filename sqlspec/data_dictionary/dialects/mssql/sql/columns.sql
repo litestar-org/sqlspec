@@ -103,6 +103,6 @@ OUTER APPLY (
       AND idx.is_unique = 1
       AND idx_col.column_id = c.column_id
 ) AS unique_cols
-WHERE s.name = :schema_name
+WHERE s.name = COALESCE(:schema_name, SCHEMA_NAME())
   AND tab.name = :table_name
 ORDER BY c.column_id;

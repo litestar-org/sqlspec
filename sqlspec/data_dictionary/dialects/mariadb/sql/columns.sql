@@ -33,7 +33,8 @@ SELECT
     column_default AS `column_default`,
     column_key AS `column_key`,
     column_key = 'PRI' AS `is_primary`,
-    extra AS `extra`
+    extra AS `extra`,
+    generation_expression AS `generation_expression`
 FROM information_schema.columns
 WHERE table_name = :table_name
   AND table_schema = COALESCE(:schema_name, DATABASE())
