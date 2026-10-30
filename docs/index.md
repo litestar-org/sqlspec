@@ -14,12 +14,12 @@ hide:
     <span class="sqlspec-brand-text">SQLSpec</span>
   </div>
   <p class="sqlspec-hero-lead">
-    SQL-first database execution for Python across 20 sync and async adapters. Write raw SQL, load named statements from <code>.sql</code> files, or compose dialect-portable queries with SQLGlot while SQLSpec handles parameter compilation, statement caching, migrations, Apache Arrow streaming, and typed row mapping.
+    SQL-first database execution for Python across synchronous and asynchronous database adapters. Write raw SQL, load named statements from <code>.sql</code> files, or compose dialect-portable queries with SQLGlot while SQLSpec handles parameter compilation, statement caching, migrations, Apache Arrow streaming, and typed row mapping.
   </p>
   <div class="sqlspec-hero-actions">
     <a class="sqlspec-cta sqlspec-cta--primary" href="learn/quickstart/">Get Started</a>
     <a class="sqlspec-cta" href="playground/">Interactive Playground</a>
-    <a class="sqlspec-cta" href="databases/">20 Database Adapters</a>
+    <a class="sqlspec-cta" href="databases/">Database Adapters</a>
   </div>
 </div>
 
@@ -42,7 +42,7 @@ uv add "sqlspec[asyncpg,msgspec,litestar]"
 Register an adapter configuration on `SQLSpec`, open a managed session, execute parameterized SQL, and read dictionary or typed model rows:
 
 ```python
---8 < --"docs/examples/quickstart/first_query.py:example"
+--8<-- "docs/examples/quickstart/first_query.py:example"
 ```
 
 Run live SQLite queries directly in your browser in the [Interactive Playground](playground.md).
@@ -52,7 +52,7 @@ Run live SQLite queries directly in your browser in the [Interactive Playground]
 | Section | What You Will Find |
 | --- | --- |
 | **[Learn](learn/index.md)** | Progressive SQLite-first tutorials covering configuration, querying, parameters, typed schema mapping, transactions, `.sql` files, query builders, filtering, migrations, Arrow pipelines, observability, testing, and production recipes. |
-| **[Databases](/databases/)** | Central 20-adapter Capability Matrix plus concise setup, connection pool, type coercion, and dialect guides for PostgreSQL, CockroachDB, SQLite, MySQL, MariaDB, Oracle, SQL Server, Db2, DuckDB, BigQuery, Spanner, ADBC, and Arrow ODBC. |
+| **[Databases](/databases/)** | Central Capability Matrix plus concise setup, connection pool, type coercion, and dialect guides for PostgreSQL, CockroachDB, SQLite, MySQL, MariaDB, Oracle, SQL Server, Db2, DuckDB, BigQuery, Spanner, ADBC, and Arrow ODBC. |
 | **[Integrations](/integrations/)** | Unified plugin, dependency injection, session store, event queue, and agent memory guides for Litestar, Google ADK, Events, FastAPI, Starlette, Flask, Sanic, and Dishka. |
 | **[Playground](playground.md)** | Zero-install WebAssembly (Pyodide) SQLite environment running `SQLSpec` directly in your browser tab. |
 | **[Reference](/reference/)** | Focused API reference pages for `SQLSpec`, configurations, drivers, statements, builders, migrations, storage, data dictionaries, extensions, CLI commands, and adapter classes. |

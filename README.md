@@ -6,7 +6,7 @@
   <img alt="SQLSpec" src="docs/assets/banner-inline-light.svg" width="520">
 </picture>
 
-<p><strong>SQL-first database execution for Python across 20 sync and async adapters.</strong></p>
+<p><strong>SQL-first database execution for Python across synchronous and asynchronous database adapters.</strong></p>
 
 [![PyPI](https://img.shields.io/pypi/v/sqlspec)](https://pypi.org/project/sqlspec/)
 [![Python](https://img.shields.io/pypi/pyversions/sqlspec)](https://pypi.org/project/sqlspec/)
@@ -46,7 +46,9 @@ class User(msgspec.Struct, frozen=True, gc=False):
 
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(config) as session:
     session.execute(
@@ -80,7 +82,7 @@ with spec.provide_session(config) as session:
 | Area | Overview |
 | --- | --- |
 | **Unified Execution** | Consistent `execute`, `select`, `select_one`, `select_one_or_none`, `select_value`, `execute_many`, `select_stream`, and transaction APIs across sync and `asyncio` drivers. |
-| **20 Database Adapters** | PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`), CockroachDB, SQLite (`sqlite3`, `aiosqlite`), DuckDB, MySQL & MariaDB, Oracle, SQL Server, Db2, BigQuery, Cloud Spanner, ADBC, and Arrow ODBC. |
+| **Database Adapters** | PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`), CockroachDB, SQLite (`sqlite3`, `aiosqlite`), DuckDB, MySQL & MariaDB, Oracle, SQL Server, Db2, BigQuery, Cloud Spanner, ADBC, and Arrow ODBC. |
 | **SQL Files & Builder** | Load named queries from `.sql` files via `SQLFileLoader` or build statements with `sql.select`, `sql.insert`, `sql.update`, `sql.delete`, and `sql.merge` with cached AST compilation. |
 | **Typed Rows & Arrow** | Project rows into `msgspec.Struct`, `Pydantic`, `dataclass`, `TypedDict`, or `attrs` models, or stream `pyarrow`, `polars`, and `pandas` datasets across local, `fsspec`, and `obstore` backends. |
 | **Integrations & Ops** | First-party plugins and stores for Litestar, Google ADK, FastAPI, Starlette, Flask, Sanic, Dishka, and Events, plus OpenTelemetry spans, Prometheus metrics, and CLI migrations. |

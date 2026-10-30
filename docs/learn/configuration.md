@@ -18,7 +18,7 @@ You can open sessions either through the `SQLSpec` registry (`spec.provide_sessi
 A single `SQLSpec` instance can coordinate multiple databases—such as an OLTP primary database alongside an analytical or audit store—and share loaded `.sql` files across them:
 
 ```python
---8 < --"docs/examples/configuration/multi_database.py:example"
+--8<-- "docs/examples/configuration/multi_database.py:example"
 ```
 
 When integrating with the CLI or web frameworks, assign `bind_key="primary"` and `bind_key="analytics"` on each config so migrations (`sqlspec --bind-key analytics upgrade`) and framework dependency keys (`db_session`, `analytics_session`) address each database unambiguously.
@@ -64,7 +64,11 @@ class DatabaseSettings(BaseSettings):
                 "include_extensions": ["litestar", "adk"],
             },
             extension_config={
-                "litestar": {"disable_di": True, "manage_lifespan": True, "session_table": "app_session"}
+                "litestar": {
+                    "disable_di": True,
+                    "manage_lifespan": True,
+                    "session_table": "app_session",
+                }
             },
         )
 
@@ -72,7 +76,12 @@ class DatabaseSettings(BaseSettings):
         """Configure worker database pool without request timeout bounds."""
         return AsyncpgConfig(
             bind_key="app-worker",
-            connection_config={"dsn": self.url, "min_size": 2, "max_size": 10, "command_timeout": None},
+            connection_config={
+                "dsn": self.url,
+                "min_size": 2,
+                "max_size": 10,
+                "command_timeout": None,
+            },
             extension_config={"litestar": {"session_key": "worker_session"}},
         )
 
@@ -123,7 +132,10 @@ from sqlspec.adapters.sqlite import SqliteConfig
 config = SqliteConfig(
     connection_config={"database": ":memory:"},
     statement_config=StatementConfig(
-        dialect="sqlite", enable_caching=True, enable_validation=True, enable_sqlcommenter=False
+        dialect="sqlite",
+        enable_caching=True,
+        enable_validation=True,
+        enable_sqlcommenter=False,
     ),
 )
 ```
@@ -151,8 +163,14 @@ def on_connect(context: dict[str, Any]) -> None:
     conn.execute("PRAGMA busy_timeout = 5000")
 
 
-spec = SQLSpec(observability_config=ObservabilityConfig(lifecycle={"on_connection_create": [on_connect]}))
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+spec = SQLSpec(
+    observability_config=ObservabilityConfig(
+        lifecycle={"on_connection_create": [on_connect]}
+    )
+)
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 ```
 
 Supported `LifecycleConfig` hook keys include `on_pool_create`, `on_pool_destroy`, `on_connection_create`, `on_connection_destroy`, `on_session_start`, `on_session_end`, `on_query_start`, `on_query_complete`, and `on_error`.
@@ -162,7 +180,7 @@ Supported `LifecycleConfig` hook keys include `on_pool_create`, `on_pool_destroy
 In long-running web workers or CLI tools, verify connectivity and pre-initialize migration commands during startup, and always close the pool during shutdown:
 
 ```python
---8 < --"docs/examples/configuration/migration_warmup.py:example"
+--8<-- "docs/examples/configuration/migration_warmup.py:example"
 ```
 
 When you integrate SQLSpec through `SQLSpecPlugin` (Litestar), an ASGI lifespan context manager (FastAPI / Starlette), or Dishka `Scope.APP` providers, pool creation and `close_pool()` are handled for you automatically.

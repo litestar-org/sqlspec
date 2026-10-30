@@ -27,12 +27,18 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(config) as session:
-    session.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, active INTEGER)")
+    session.execute(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, active INTEGER)"
+    )
     insert_result = session.execute(
-        "INSERT INTO items (name, active) VALUES (:name, :active)", name="Keyboard", active=1
+        "INSERT INTO items (name, active) VALUES (:name, :active)",
+        name="Keyboard",
+        active=1,
     )
     assert insert_result.rows_affected == 1
 

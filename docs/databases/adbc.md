@@ -33,9 +33,10 @@ SQLSpec resolves the underlying ADBC DB-API driver in three ways:
    SQLSpec automatically binds the driver without requiring `driver` or
    `driver_name`:
    ```python
-   # Driver inferred automatically from URI scheme:
    connection_config = {"uri": "duckdb:///data/analytics.duckdb"}
-   connection_config = {"uri": "snowflake://app:secret@org-account/db/schema?warehouse=wh"}
+   connection_config = {
+       "uri": "snowflake://app:secret@org-account/db/schema?warehouse=wh"
+   }
    connection_config = {"uri": "bigquery://my-project/my_dataset"}
    ```
 
@@ -44,17 +45,21 @@ SQLSpec resolves the underlying ADBC DB-API driver in three ways:
    file paths or cloud credentials passed via dictionary parameters), set the
    short `driver` parameter to the engine name:
    ```python
-   # DuckDB in-process file:
    connection_config = {"driver": "duckdb", "path": "analytics.duckdb"}
 
-   # Snowflake warehouse credentials:
    connection_config = {
        "driver": "snowflake",
-       "db_kwargs": {"adbc.snowflake.sql.account": "my_org-my_account", "adbc.snowflake.sql.warehouse": "COMPUTE_WH"},
+       "db_kwargs": {
+           "adbc.snowflake.sql.account": "my_org-my_account",
+           "adbc.snowflake.sql.warehouse": "COMPUTE_WH",
+       },
    }
 
-   # BigQuery project configuration:
-   connection_config = {"driver": "bigquery", "project_id": "my-project", "dataset_id": "analytics"}
+   connection_config = {
+       "driver": "bigquery",
+       "project_id": "my-project",
+       "dataset_id": "analytics",
+   }
    ```
 
 3. **`driver` vs. `driver_name`**:
@@ -80,13 +85,17 @@ from sqlspec.adapters.adbc import AdbcConfig
 spec = SQLSpec()
 config = spec.add_config(
     AdbcConfig(
-        connection_config={"uri": "postgresql://app:secret@localhost:5432/prod"},
+        connection_config={
+            "uri": "postgresql://app:secret@localhost:5432/prod"
+        },
         statement_config=StatementConfig(dialect="postgres"),
     )
 )
 
 with spec.provide_session(config) as session:
-    arrow_result = session.select_to_arrow("SELECT id, total_cents FROM orders WHERE status = :s", s="paid")
+    arrow_result = session.select_to_arrow(
+        "SELECT id, total_cents FROM orders WHERE status = :s", s="paid"
+    )
 ```
 
 ## Key Driver Features and Pool Tuning

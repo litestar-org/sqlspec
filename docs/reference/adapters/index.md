@@ -1,6 +1,6 @@
 # Database Adapters
 
-Curated API reference for all 20 SQLSpec database adapters (`sqlspec.adapters.*`). Each adapter page documents its own configuration class(es), `TypedDict` connection and pool parameter schemas, `DriverFeatures` flags, driver adapter class(es), and extension stores (`litestar`, `adk`, `events`) while linking inherited execution methods directly to [`SyncDriverAdapterBase`](../driver/sync.md) and [`AsyncDriverAdapterBase`](../driver/async.md).
+Curated API reference for all SQLSpec database adapters (`sqlspec.adapters.*`). Each adapter page documents its own configuration class(es), `TypedDict` connection and pool parameter schemas, `DriverFeatures` flags, driver adapter class(es), and extension stores (`litestar`, `adk`, `events`) while linking inherited execution methods directly to [`SyncDriverAdapterBase`](../driver/sync.md) and [`AsyncDriverAdapterBase`](../driver/async.md).
 
 ## PostgreSQL & CockroachDB
 

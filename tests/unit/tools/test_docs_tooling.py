@@ -164,6 +164,8 @@ def test_verify_site_artifacts_rejects_missing_inventories(tmp_path: Path) -> No
         "prevent ABI boundary violations",
         "NameError: name 'tmp_path' is not defined",
         'db_path = tmp_path / "demo.db"',
+        '--8<-- "docs/examples/quickstart/first_query.py:example"',
+        '--8 < --"docs/examples/quickstart/first_query.py:example"',
     ],
 )
 def test_verify_site_artifacts_rejects_leaked_docstrings_and_tmp_path(tmp_path: Path, leaked_phrase: str) -> None:

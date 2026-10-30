@@ -96,12 +96,8 @@
 
 .md-header,
 .md-tabs {
+  background-color: var(--md-default-bg-color);
   border-bottom: 1px solid var(--md-default-fg-color--lightest);
-}
-
-[data-md-color-scheme="default"] .md-header,
-[data-md-color-scheme="default"] .md-tabs {
-  background-color: rgba(255, 255, 255, 0.92);
 }
 
 .md-header__button.md-logo {

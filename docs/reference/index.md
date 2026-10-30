@@ -1,6 +1,6 @@
 # API Reference
 
-Curated module-by-module and per-adapter API reference for SQLSpec. Every page opens with the canonical public import path, links to the corresponding conceptual guide, and documents public classes, protocols, `TypedDict` schemas, and functions without duplicating inherited driver methods across 20 adapters.
+Curated module-by-module and per-adapter API reference for SQLSpec. Every page opens with the canonical public import path, links to the corresponding conceptual guide, and documents public classes, protocols, `TypedDict` schemas, and functions without duplicating inherited driver methods across database adapters.
 
 ## Core & Root Modules
 
@@ -34,4 +34,4 @@ Curated module-by-module and per-adapter API reference for SQLSpec. Every page o
 | `sqlspec.typing` | [Typing & Schema Aliases](typing.md) | `SupportedSchemaModel`, `StatementParameters`, `ArrowReturnFormat`, and optional dependency sentinels. |
 | `sqlspec.utils` | [Utilities](utils.md) | Type guards, serializers, schema converters, UUID/NanoID generators, fixture loaders, and sync/async bridges. |
 | `sqlspec.extensions.*` | [Extensions](extensions/index.md) | [Litestar](extensions/litestar.md), [Google ADK](extensions/adk.md), [Events](extensions/events.md), [FastAPI](extensions/fastapi.md), [Starlette](extensions/starlette.md), [Flask](extensions/flask.md), [Sanic](extensions/sanic.md), [OpenTelemetry](extensions/opentelemetry.md), and [Prometheus](extensions/prometheus.md). |
-| `sqlspec.adapters.*` | [Database Adapters](adapters/index.md) | Adapter-specific configurations, connection/pool `TypedDict` parameters, drivers, and extension stores across all 20 adapters. |
+| `sqlspec.adapters.*` | [Database Adapters](adapters/index.md) | Adapter-specific configurations, connection/pool `TypedDict` parameters, drivers, and extension stores across all database adapters. |

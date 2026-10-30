@@ -47,7 +47,14 @@ Revisions execute in lexical prefix order (`0001_...`, `0002_...` or timestamp p
 
     ```python
     def up() -> list[str]:
-        return ["CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)"]
+        return [
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE
+            )
+            """
+        ]
 
 
     def down() -> list[str]:

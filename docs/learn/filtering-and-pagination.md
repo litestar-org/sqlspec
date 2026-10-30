@@ -35,56 +35,57 @@ from sqlspec.core import (
 )
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
-    with spec.provide_session(config) as session:
-        session.execute(
-            """
-            CREATE TABLE articles (
-                id INTEGER PRIMARY KEY,
-                title TEXT,
-                status TEXT,
-                published_at TEXT
-            )
-            """
+with spec.provide_session(config) as session:
+    session.execute(
+        """
+        CREATE TABLE articles (
+            id INTEGER PRIMARY KEY,
+            title TEXT,
+            status TEXT,
+            published_at TEXT
         )
-        session.execute_many(
-            """
-            INSERT INTO articles (title, status, published_at)
-            VALUES (:title, :status, :published_at)
-            """,
-            [
-                {
-                    "title": "SQLite WAL Tuning",
-                    "status": "published",
-                    "published_at": "2026-03-01T10:00:00Z",
-                },
-                {
-                    "title": "Postgres Poolers",
-                    "status": "published",
-                    "published_at": "2026-04-15T12:00:00Z",
-                },
-                {
-                    "title": "Draft Notes",
-                    "status": "draft",
-                    "published_at": "2026-04-20T09:00:00Z",
-                },
-            ],
-        )
+        """
+    )
+    session.execute_many(
+        """
+        INSERT INTO articles (title, status, published_at)
+        VALUES (:title, :status, :published_at)
+        """,
+        [
+            {
+                "title": "SQLite WAL Tuning",
+                "status": "published",
+                "published_at": "2026-03-01T10:00:00Z",
+            },
+            {
+                "title": "Postgres Poolers",
+                "status": "published",
+                "published_at": "2026-04-15T12:00:00Z",
+            },
+            {
+                "title": "Draft Notes",
+                "status": "draft",
+                "published_at": "2026-04-20T09:00:00Z",
+            },
+        ],
+    )
 
-        base_query = SQL("SELECT id, title, status FROM articles")
-        rows = session.select(
-            base_query,
-            InCollectionFilter("status", ["published"]),
-            SearchFilter("title", "Pool", ignore_case=True),
-            BeforeAfterFilter(
-                "published_at",
-                after=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
-            ),
-            OrderByFilter("published_at", sort_order="desc"),
-            LimitOffsetFilter(limit=10, offset=0),
-        )
-        assert [row["title"] for row in rows] == ["Postgres Poolers"]
+    base_query = SQL("SELECT id, title, status FROM articles")
+    rows = session.select(
+        base_query,
+        InCollectionFilter("status", ["published"]),
+        SearchFilter("title", "Pool", ignore_case=True),
+        BeforeAfterFilter(
+            "published_at", after=datetime(2026, 1, 1, tzinfo=UTC).isoformat()
+        ),
+        OrderByFilter("published_at", sort_order="desc"),
+        LimitOffsetFilter(limit=10, offset=0),
+    )
+    assert [row["title"] for row in rows] == ["Postgres Poolers"]
 ```
 
 ## Offset Pagination and Total Counts
@@ -92,7 +93,7 @@ config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}
 For classic page-number navigation, chain `.paginate(page=..., page_size=...)` on a `SQL` statement and call `session.select_with_total(...)` (or `service.paginate_limit_offset(...)` to receive an `OffsetPagination` envelope):
 
 ```python
---8 < --"docs/examples/patterns/pagination.py:example"
+--8<-- "docs/examples/patterns/pagination.py:example"
 ```
 
 When paginating complex queries containing `JOIN`, `GROUP BY`, or CTEs with named parameters, running an explicit scalar `SELECT COUNT(*)` query alongside `session.select(query, LimitOffsetFilter(...), **named_params)` avoids wrapping large projections inside a derived count subquery.
@@ -102,7 +103,7 @@ When paginating complex queries containing `JOIN`, `GROUP BY`, or CTEs with name
 Large tables degrade under deep `OFFSET 100000` scans because the database must read and discard skipped rows. `CursorFilter` and `SQLSpecSyncService.paginate_cursor` / `SQLSpecAsyncService.paginate_cursor` implement indexed keyset seek pagination with opaque forward (`next_cursor`) and backward (`previous_cursor`) tokens:
 
 ```python
---8 < --"docs/examples/patterns/cursor_pagination.py:example"
+--8<-- "docs/examples/patterns/cursor_pagination.py:example"
 ```
 
 Always include a unique tie-breaker column (such as `("id", "desc")`) as the final key in `CursorKeys` so rows with identical timestamps paginate deterministically without duplicates or gaps.
@@ -112,7 +113,7 @@ Always include a unique tie-breaker column (such as `("id", "desc")`) as the fin
 In Litestar services, `create_filter_dependencies` generates typed query-parameter dependency providers (`id_filter`, `created_at`, `updated_at`, `search`, `sort_field`, and `limit_offset`) from a single `FilterConfig` dictionary:
 
 ```python
---8 < --"docs/examples/patterns/filter_dependencies.py:example"
+--8<-- "docs/examples/patterns/filter_dependencies.py:example"
 ```
 
 Always pass an explicit `sort_field` allowlist (and optional `sort_field_aliases`) so untrusted query strings can only sort by indexed, permitted columns.
@@ -131,7 +132,10 @@ import msgspec
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.core import FilterTypes, OffsetPagination
-from sqlspec.extensions.litestar.providers import FilterConfig, create_filter_dependencies
+from sqlspec.extensions.litestar.providers import (
+    FilterConfig,
+    create_filter_dependencies,
+)
 
 
 class Product(msgspec.Struct, frozen=True, gc=False):

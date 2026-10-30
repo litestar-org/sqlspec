@@ -15,6 +15,8 @@ BANNED_PHRASES: tuple[str, ...] = (
     "NameError: name 'tmp_path'",
     "tmp_path /",
     "Made with Zensical",
+    "--8<--",
+    "--8 < --",
 )
 
 _REQUIRED_ROOT_FILES: tuple[str, ...] = ("objects.inv", "llms.txt", "llms-full.txt")

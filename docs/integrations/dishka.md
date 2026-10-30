@@ -23,10 +23,18 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 
 class DatabaseProvider(Provider):
     @provide(scope=Scope.APP)
-    async def provide_config(self) -> AsyncIterator[tuple[SQLSpec, AsyncpgConfig]]:
+    async def provide_config(
+        self,
+    ) -> AsyncIterator[tuple[SQLSpec, AsyncpgConfig]]:
         spec = SQLSpec()
         config = spec.add_config(
-            AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/mydb", "min_size": 2, "max_size": 20})
+            AsyncpgConfig(
+                connection_config={
+                    "dsn": "postgresql://localhost/mydb",
+                    "min_size": 2,
+                    "max_size": 20,
+                }
+            )
         )
         try:
             yield spec, config
@@ -34,7 +42,9 @@ class DatabaseProvider(Provider):
             await config.close_pool()
 
     @provide(scope=Scope.REQUEST)
-    async def provide_driver(self, app_deps: tuple[SQLSpec, AsyncpgConfig]) -> AsyncIterator[AsyncpgDriver]:
+    async def provide_driver(
+        self, app_deps: tuple[SQLSpec, AsyncpgConfig]
+    ) -> AsyncIterator[AsyncpgDriver]:
         spec, config = app_deps
         async with spec.provide_session(config) as driver:
             yield driver
@@ -58,7 +68,9 @@ class UserService(SQLSpecAsyncService[AsyncpgDriver]):
         super().__init__(session=driver)
 
     async def get_user(self, user_id: int) -> dict[str, Any] | None:
-        return await self.get_one_or_none("SELECT id, email FROM users WHERE id = :id", id=user_id)
+        return await self.get_one_or_none(
+            "SELECT id, email FROM users WHERE id = :id", id=user_id
+        )
 
 
 class ServiceProvider(Provider):

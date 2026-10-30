@@ -1,7 +1,13 @@
 # SQL File Loader
 
 ```python
-from sqlspec.loader import NamedStatement, SlotDeclaration, SQLFile, SQLFileCacheEntry, SQLFileLoader
+from sqlspec.loader import (
+    NamedStatement,
+    SlotDeclaration,
+    SQLFile,
+    SQLFileCacheEntry,
+    SQLFileLoader,
+)
 ```
 
 Load, cache, and compose named SQL queries (`-- name:`), reusable fragments (`-- fragment:` / `/* include: */`), and dynamic slots (`-- slot:` / `/* slot: */`) from local files or remote object storage. See the [SQL Files Guide](../learn/sql-files.md) for syntax and usage examples.

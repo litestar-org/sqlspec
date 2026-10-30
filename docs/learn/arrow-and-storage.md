@@ -11,13 +11,19 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(config) as session:
     session.execute("CREATE TABLE metrics (host TEXT, cpu_pct REAL)")
-    session.execute_many("INSERT INTO metrics VALUES (?, ?)", [("web-1", 41.5), ("web-2", 68.0)])
+    session.execute_many(
+        "INSERT INTO metrics VALUES (?, ?)", [("web-1", 41.5), ("web-2", 68.0)]
+    )
 
-    arrow_result = session.select_to_arrow("SELECT host, cpu_pct FROM metrics ORDER BY host")
+    arrow_result = session.select_to_arrow(
+        "SELECT host, cpu_pct FROM metrics ORDER BY host"
+    )
     arrow_table = arrow_result.data
 ```
 
@@ -41,15 +47,22 @@ from sqlspec.storage import SyncStoragePipeline, storage_registry
 
 with tempfile.TemporaryDirectory() as tmp_dir:
     archive_dir = Path(tmp_dir)
-    storage_registry.register_alias("exports", archive_dir.as_uri(), backend="local")
+    storage_registry.register_alias(
+        "exports", archive_dir.as_uri(), backend="local"
+    )
 
     pipeline = SyncStoragePipeline(registry=storage_registry)
     pipeline.write_rows(
-        [{"host": "web-1", "cpu_pct": 41.5}, {"host": "web-2", "cpu_pct": 68.0}],
+        [
+            {"host": "web-1", "cpu_pct": 41.5},
+            {"host": "web-2", "cpu_pct": 68.0},
+        ],
         "alias://exports/metrics.parquet",
         format="parquet",
     )
-    table = pipeline.read_arrow("alias://exports/metrics.parquet", file_format="parquet")
+    table = pipeline.read_arrow(
+        "alias://exports/metrics.parquet", file_format="parquet"
+    )
 ```
 
 You can also write an `ArrowResult` directly to any storage destination via `arrow_result.write_to_storage_sync("alias://exports/metrics.parquet")` (or `await arrow_result.write_to_storage_async(...)`). On Windows environments where `obstore` is installed alongside local filesystem paths, pass `backend="local"` when registering local directory aliases so Windows drive prefixes resolve cleanly.
@@ -64,17 +77,29 @@ import tempfile
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.utils.fixtures import export_table_fixtures_sync, load_table_fixtures_sync
+from sqlspec.utils.fixtures import (
+    export_table_fixtures_sync,
+    load_table_fixtures_sync,
+)
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
-with tempfile.TemporaryDirectory() as tmp_dir, spec.provide_session(config) as session:
+with (
+    tempfile.TemporaryDirectory() as tmp_dir,
+    spec.provide_session(config) as session,
+):
     fixtures_dir = Path(tmp_dir)
-    session.execute("CREATE TABLE roles (id INTEGER PRIMARY KEY, slug TEXT UNIQUE)")
+    session.execute(
+        "CREATE TABLE roles (id INTEGER PRIMARY KEY, slug TEXT UNIQUE)"
+    )
     session.execute("INSERT INTO roles (slug) VALUES ('admin'), ('reader')")
 
-    export_table_fixtures_sync(session, fixtures_dir, ["roles"], jsonl=True, compress=False)
+    export_table_fixtures_sync(
+        session, fixtures_dir, ["roles"], jsonl=True, compress=False
+    )
     counts = load_table_fixtures_sync(
         session,
         fixtures_dir,

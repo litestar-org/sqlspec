@@ -22,7 +22,9 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 
 @contextmanager
@@ -75,7 +77,10 @@ On PostgreSQL (`AsyncpgConfig`, `PsycopgAsyncConfig`, `PsqlpyConfig`), enforce d
 ```python
 async with config.provide_session() as session:
     await session.begin()
-    await session.execute("SELECT set_config('app.tenant_id', :tenant_id, true)", tenant_id=tenant_id)
+    await session.execute(
+        "SELECT set_config('app.tenant_id', :tenant_id, true)",
+        tenant_id=tenant_id,
+    )
     rows = await session.select(
         """
         SELECT id, name
@@ -107,8 +112,16 @@ from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
 tenant_configs = {
-    "acme": spec.add_config(SqliteConfig(bind_key="acme", connection_config={"database": ":memory:"})),
-    "globex": spec.add_config(SqliteConfig(bind_key="globex", connection_config={"database": ":memory:"})),
+    "acme": spec.add_config(
+        SqliteConfig(
+            bind_key="acme", connection_config={"database": ":memory:"}
+        )
+    ),
+    "globex": spec.add_config(
+        SqliteConfig(
+            bind_key="globex", connection_config={"database": ":memory:"}
+        )
+    ),
 }
 
 with spec.provide_session(tenant_configs["acme"]) as session:

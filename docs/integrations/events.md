@@ -1,6 +1,6 @@
 # Events and Message Queues
 
-`sqlspec.extensions.events` provides synchronous (`SyncEventChannel`) and asynchronous (`AsyncEventChannel`) pub/sub and competing-consumer event channels backed by your existing database configuration, supporting native PostgreSQL `LISTEN`/`NOTIFY`, durable hybrid `notify_queue` wakeups, Oracle Advanced Queuing (`aq` and `txeventq`), and portable table-backed polling (`poll_queue`) across 19 adapters.
+`sqlspec.extensions.events` provides synchronous (`SyncEventChannel`) and asynchronous (`AsyncEventChannel`) pub/sub and competing-consumer event channels backed by your existing database configuration, supporting native PostgreSQL `LISTEN`/`NOTIFY`, durable hybrid `notify_queue` wakeups, Oracle Advanced Queuing (`aq` and `txeventq`), and portable table-backed polling (`poll_queue`) across supported database adapters.
 
 ## Choosing a Transport Backend
 
@@ -10,7 +10,7 @@ Set `extension_config["events"]["backend"]` according to your delivery and durab
 | --- | --- | --- | --- | --- |
 | `"notify"` | `asyncpg`, `psycopg`, `psqlpy` | Transient (in-memory wire notification) | Fire-and-forget broadcast wakeup (`<= 7,999` UTF-8 bytes) | PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`) |
 | `"notify_queue"` | `asyncpg`, `psycopg`, `psqlpy` | Durable table row + native `NOTIFY` wakeup | Competing-consumer queue with instant push wakeup and periodic poll reconciliation | Opt-in on PostgreSQL |
-| `"poll_queue"` | All 19 event-capable adapters | Durable table row (`sqlspec_event_queue`) | Competing-consumer queue with leased claims, `ack`/`nack`, and retry backoff | All non-PostgreSQL adapters |
+| `"poll_queue"` | All event-capable adapters | Durable table row (`sqlspec_event_queue`) | Competing-consumer queue with leased claims, `ack`/`nack`, and retry backoff | All non-PostgreSQL adapters |
 | `"aq"` | `oracledb` (sync & async) | Durable Oracle Advanced Queuing table | Native `DBMS_AQ` enqueue/dequeue in `python-oracledb` Thin mode | Opt-in on Oracle 21c+ / 26ai |
 | `"txeventq"` | `oracledb` (sync & async) | Durable Oracle Transactional Event Queue | Native high-throughput partitioned TxEventQ in Thin mode | Opt-in on Oracle 21c+ / 26ai |
 
@@ -45,7 +45,9 @@ async def main() -> None:
         await channel.store.create_table()
 
         event_id = await channel.publish(
-            "orders.created", {"order_id": 101, "status": "paid"}, metadata={"source": "checkout"}
+            "orders.created",
+            {"order_id": 101, "status": "paid"},
+            metadata={"source": "checkout"},
         )
 
         message = await channel.dequeue("orders.created", poll_interval=0.1)
@@ -75,11 +77,21 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.asyncpg.events import AsyncpgEventsConfig
 
 config = AsyncpgConfig(
-    connection_config={"dsn": "postgresql://pgbouncer:6432/app", "min_size": 2, "max_size": 20},
-    driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://postgres-primary:5432/app"},
+    connection_config={
+        "dsn": "postgresql://pgbouncer:6432/app",
+        "min_size": 2,
+        "max_size": 20,
+    },
+    driver_features={
+        "pooler_mode": "transaction",
+        "direct_dsn": "postgresql://postgres-primary:5432/app",
+    },
     extension_config={
         "events": AsyncpgEventsConfig(
-            backend="notify_queue", event_poll_interval=1.0, listener_queue_capacity=256, fillfactor=80
+            backend="notify_queue",
+            event_poll_interval=1.0,
+            listener_queue_capacity=256,
+            fillfactor=80,
         )
     },
 )
@@ -101,6 +113,6 @@ Several adapters export typed `EventsConfig` subclasses under `sqlspec.adapters.
 
 ## Recap
 
-- Choose `notify_queue` on PostgreSQL for instant wakeup with durable table storage, `aq` / `txeventq` on Oracle for native broker queues, and `poll_queue` for zero-dependency portable queues across all 19 adapters.
+- Choose `notify_queue` on PostgreSQL for instant wakeup with durable table storage, `aq` / `txeventq` on Oracle for native broker queues, and `poll_queue` for zero-dependency portable queues across all event-capable adapters.
 - Set `direct_dsn` alongside `pooler_mode="transaction"` on PostgreSQL so `ListenerHub` bypasses transaction poolers automatically.
 - See the [Events Extension Reference](/reference/extensions/events/) for `AsyncEventChannel`, `SyncEventChannel`, `EventMessage`, and `EventsConfig` details.

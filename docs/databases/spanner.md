@@ -42,7 +42,11 @@ Choose `SpannerAsyncConfig` or `SpannerSyncConfig` for globally distributed, ext
     spec = SQLSpec()
     config = spec.add_config(
         SpannerAsyncConfig(
-            connection_config={"project": "my-gcp-project", "instance_id": "prod-instance", "database_id": "pg_app_db"},
+            connection_config={
+                "project": "my-gcp-project",
+                "instance_id": "prod-instance",
+                "database_id": "pg_app_db",
+            },
             statement_config=StatementConfig(dialect="spangres"),
         )
     )

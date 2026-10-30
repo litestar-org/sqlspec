@@ -18,7 +18,7 @@ flowchart LR
 SQLSpec keeps each layer explicit:
 
 1. **Registry and Config**: `SQLSpec` and typed `*Config` classes own connection pools, statement caches, named `.sql` loaders, and observability hooks.
-2. **Driver Session**: Short-lived `session` context managers expose consistent `select*`, `execute*`, `select_stream`, and `select_to_arrow` methods across all 20 adapters.
+2. **Driver Session**: Short-lived `session` context managers expose consistent `select*`, `execute*`, `select_stream`, and `select_to_arrow` methods across all database adapters.
 3. **Statement Compiler**: Parameter styles (`:name`, `?`, `$1`, `@name`), `StatementFilter` predicates, and fluent `sql.*` builders compile once per SQL shape and reuse cached plans across sessions.
 
 ## How to Read This Guide
@@ -36,6 +36,7 @@ Start here to install `sqlspec`, run your first parameterized query, and wire da
 | [Installation](installation.md) | Install `sqlspec` with `uv` or `pip` and select optional extras by database family, web framework, serializer, or storage backend. |
 | [Quickstart](quickstart.md) | Execute synchronous and asynchronous SQLite queries and decode rows into `msgspec.Struct` models in under five minutes. |
 | [Configuration](configuration.md) | Register single or multiple databases on `SQLSpec`, choose pooled vs direct configs, customize `StatementConfig`, and attach lifecycle hooks. |
+| [Interactive Playground](../playground.md) | Run live SQLSpec and SQLite queries in your browser via WebAssembly and Pyodide without installing local tools. |
 
 ## Core Querying and Transactions
 
@@ -80,3 +81,10 @@ Combine SQLSpec primitives into reusable application patterns in [Production Rec
 - [Multi-Tenancy](recipes/multi-tenancy.md) — isolate tenants by `bind_key`, schema search paths, or row-level predicates.
 - [Health Checks](recipes/health-checks.md) — build lightweight readiness and liveness probes across pooled sync and async adapters.
 - [ETL and Bulk Ingest](recipes/etl-and-bulk-ingest.md) — stream chunks, Arrow batches, and batched writes between operational and analytical stores.
+
+## Project and Contributing
+
+- [Contribution Guide](../contributing/index.md) — local `uv` setup, test and lint workflows, and pull request standards.
+- [Creating Adapters](../contributing/creating-adapters.md) — implement custom database adapters, parameter profiles, and extension stores.
+- [Releases](../releases.md) — release cadence, versioning policy, and pre-compiled wheel distribution.
+- [Changelog](../changelog.md) — release history, new capabilities, and upgrade notes.

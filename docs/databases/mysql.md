@@ -69,7 +69,13 @@ SQLSpec supports four MySQL and MariaDB adapters sharing unified error translati
     spec = SQLSpec()
     config = spec.add_config(
         AiomysqlConfig(
-            connection_config={"host": "localhost", "port": 3306, "user": "app", "password": "secret", "db": "app_db"}
+            connection_config={
+                "host": "localhost",
+                "port": 3306,
+                "user": "app",
+                "password": "secret",
+                "db": "app_db",
+            }
         )
     )
     ```

@@ -16,7 +16,7 @@ from sqlspec.driver import (
 )
 ```
 
-Base driver adapter classes, row streaming iterators, exception handler context managers, and data dictionary mixins shared by all 20 database adapters.
+Base driver adapter classes, row streaming iterators, exception handler context managers, and data dictionary mixins shared by all database adapters.
 
 ## Reference Pages
 

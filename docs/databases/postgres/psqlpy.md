@@ -19,7 +19,10 @@ from sqlspec.adapters.psqlpy import PsqlpyConfig
 spec = SQLSpec()
 config = spec.add_config(
     PsqlpyConfig(
-        connection_config={"dsn": "postgresql://app:secret@localhost:5432/prod", "max_db_pool_size": 20},
+        connection_config={
+            "dsn": "postgresql://app:secret@localhost:5432/prod",
+            "max_db_pool_size": 20,
+        },
         driver_features={"pooler_mode": "session", "enable_pgvector": True},
     )
 )

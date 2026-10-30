@@ -23,7 +23,11 @@ For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-
     spec = SQLSpec()
     config = spec.add_config(
         AsyncpgConfig(
-            connection_config={"dsn": "postgresql://app:secret@localhost:5432/prod", "min_size": 2, "max_size": 20}
+            connection_config={
+                "dsn": "postgresql://app:secret@localhost:5432/prod",
+                "min_size": 2,
+                "max_size": 20,
+            }
         )
     )
     ```
@@ -37,7 +41,11 @@ For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-
     spec = SQLSpec()
     config = spec.add_config(
         PsycopgAsyncConfig(
-            connection_config={"conninfo": "postgresql://app:secret@localhost:5432/prod", "min_size": 2, "max_size": 20}
+            connection_config={
+                "conninfo": "postgresql://app:secret@localhost:5432/prod",
+                "min_size": 2,
+                "max_size": 20,
+            }
         )
     )
     ```
@@ -50,7 +58,12 @@ For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-
 
     spec = SQLSpec()
     config = spec.add_config(
-        PsqlpyConfig(connection_config={"dsn": "postgresql://app:secret@localhost:5432/prod", "max_db_pool_size": 20})
+        PsqlpyConfig(
+            connection_config={
+                "dsn": "postgresql://app:secret@localhost:5432/prod",
+                "max_db_pool_size": 20,
+            }
+        )
     )
     ```
 
@@ -76,7 +89,11 @@ Transaction-mode poolers multiplex backend server connections across clients aft
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 config = AsyncpgConfig(
-    connection_config={"dsn": "postgresql://app:secret@pgbouncer:6432/prod", "min_size": 5, "max_size": 25},
+    connection_config={
+        "dsn": "postgresql://app:secret@pgbouncer:6432/prod",
+        "min_size": 5,
+        "max_size": 25,
+    },
     driver_features={
         "pooler_mode": "transaction",
         "direct_dsn": ("postgresql://app:secret@postgres-primary:5432/prod"),

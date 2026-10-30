@@ -31,11 +31,17 @@ Import `sql` from `sqlspec` to compose `SELECT`, `INSERT`, `UPDATE`, and `DELETE
     from sqlspec.adapters.sqlite import SqliteConfig
 
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+    config = spec.add_config(
+        SqliteConfig(connection_config={"database": ":memory:"})
+    )
 
     with spec.provide_session(config) as session:
-        session.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, expired INTEGER)")
-        session.execute_many("INSERT INTO sessions (expired) VALUES (?)", [(0,), (1,), (1,)])
+        session.execute(
+            "CREATE TABLE sessions (id INTEGER PRIMARY KEY, expired INTEGER)"
+        )
+        session.execute_many(
+            "INSERT INTO sessions (expired) VALUES (?)", [(0,), (1,), (1,)]
+        )
 
         delete_expired = sql.delete().from_("sessions").where_eq("expired", 1)
         result = session.execute(delete_expired)
@@ -58,7 +64,12 @@ Chain `.join(...)`, `.left_join(...)`, `.right_join(...)`, or `.cross_join(...)`
 ```
 
 ```python
-high_value = sql.select("customer_id", "amount").from_("orders").where("amount >= :min_amount", min_amount=100)
+high_value = (
+    sql
+    .select("customer_id", "amount")
+    .from_("orders")
+    .where("amount >= :min_amount", min_amount=100)
+)
 summary = (
     sql
     .select("customer_id", sql.raw("COUNT(*) AS order_count"))
