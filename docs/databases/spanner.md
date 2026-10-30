@@ -59,7 +59,7 @@ Choose `SpannerAsyncConfig` or `SpannerSyncConfig` for globally distributed, ext
 | `directed_read_options` | `driver_features` | Routes read-only snapshot queries to specific replica regions or types (`READ_ONLY` / `READ_WRITE`). |
 | `query_options` / `request_options` | `driver_features` | Sets Spanner optimizer version, statistics package, request priority, and transaction tags. |
 | `timeout` / `retry` | `driver_features` | Customizes gRPC deadline and retry policies per statement. |
-| `enable_uuid_conversion` | `driver_features` | Converts Spanner `UUID` / string columns seamlessly to Python `uuid.UUID`. |
+| `enable_uuid_conversion` | `driver_features` | Converts Spanner `UUID` / string columns to Python `uuid.UUID`. |
 
 See [Spanner API Reference](/reference/adapters/spanner/) for full `SpannerConnectionParams`, `SpannerPoolParams`, and `SpannerDriverFeatures` TypedDict tables.
 

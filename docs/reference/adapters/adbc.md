@@ -1,13 +1,7 @@
 # adbc Adapter
 
 ```python
-from sqlspec.adapters.adbc import (
-    AdbcConfig,
-    AdbcConnectionParams,
-    AdbcDriver,
-    AdbcDriverFeatures,
-    AdbcExceptionHandler,
-)
+from sqlspec.adapters.adbc import AdbcConfig, AdbcConnectionParams, AdbcDriver, AdbcDriverFeatures, AdbcExceptionHandler
 ```
 
 Apache Arrow Database Connectivity (ADBC) adapter supporting zero-copy Arrow ingest and result streaming across PostgreSQL, SQLite, DuckDB, Snowflake, BigQuery, FlightSQL, GizmoSQL, Oracle, and IBM Db2. Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md). See the [ADBC Setup Guide](../../databases/adbc.md) for driver URI patterns and bulk Arrow ingestion.

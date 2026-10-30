@@ -115,7 +115,7 @@ Documentation is authored in Markdown under `docs/`, configured via `zensical.to
 - **Standalone Tested Examples**: Place runnable code examples under `docs/examples/**/*.py` as standalone zero-comment modules exposing a `def main()` entrypoint. Include them in Markdown pages via `pymdownx.snippets` (`--8<-- "docs/examples/..."`) inside braced SuperFences blocks:
   ````markdown
   ```{ .python title="docs/examples/quickstart/first_query.py" hl_lines="10-16" }
-  --8<-- "docs/examples/quickstart/first_query.py"
+  &#45;&#45;8&lt;&#45;&#45; "docs/examples/quickstart/first_query.py"
   ```
   ````
   Every example module is executed automatically by `pytest tests/unit/docs/test_examples.py`.

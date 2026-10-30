@@ -69,6 +69,9 @@ def test_generate_llms_files_fallback_nav_uses_frontmatter_title(tmp_path: Path)
 
 def test_emit_legacy_html_redirects_preserves_hashes(tmp_path: Path) -> None:
     config_path, _, site_dir = _write_sample_project(tmp_path)
+    oracle_dir = site_dir / "reference" / "adapters" / "oracledb"
+    oracle_dir.mkdir(parents=True, exist_ok=True)
+    (oracle_dir / "index.html").write_text("<!doctype html><html><body>Oracle</body></html>\n", encoding="utf-8")
 
     emit_legacy_html_redirects(config_path=config_path, site_dir=site_dir)
 
@@ -83,6 +86,11 @@ def test_emit_legacy_html_redirects_preserves_hashes(tmp_path: Path) -> None:
 
     root_stub = (site_dir / "index_legacy.html").read_text(encoding="utf-8")
     assert "url=/" in root_stub
+
+    oracle_stub = (site_dir / "reference" / "adapters" / "oracledb.html").read_text(encoding="utf-8")
+    assert "url=/reference/adapters/oracledb/" in oracle_stub
+    assert 'href="https://sqlspec.dev/reference/adapters/oracledb/"' in oracle_stub
+    assert "window.location.hash" in oracle_stub
 
 
 def test_build_postbuild_artifacts_and_cli_main(tmp_path: Path) -> None:

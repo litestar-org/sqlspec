@@ -270,10 +270,10 @@ important operational fixes.
 
 **Changed:**
 
-* Upgraded the minimum supported Python version to 3.11+ ([requires-python = ">=3.11,](4.0"`), removed the `tomli` fallback in favor of stdlib
+* Upgraded the minimum supported Python version to 3.11+ (`requires-python = ">=3.11, <4.0"`), removed the `tomli` fallback in favor of stdlib
   `tomllib`, and modernized `enum.StrEnum`, `datetime.UTC`, builtin
   `TimeoutError`, and stdlib `typing` usage across the codebase.
-  (`#835 <https://github.com/litestar-org/sqlspec/pull/835))
+  ([#835](https://github.com/litestar-org/sqlspec/pull/835))
 * Standardized driver session lifecycles, statement compilation caching, SQLGlot
   builder immutability, migration version tracking, `driver_features`
   type-system coverage, PEP 562 lazy package exports, and MyPyC compilation
@@ -1754,7 +1754,7 @@ important operational fixes.
   PostgreSQL `uuid` values across ordinary, batch, streaming, and Arrow
   execution routes. ([#650](https://github.com/litestar-org/sqlspec/issues/650))
 * Psycopg sync and async transactions now restore the connection's original
-  autocommit mode after SQLSpec-owned commit or rollback operations (`#648`_).
+  autocommit mode after SQLSpec-owned commit or rollback operations ([#648](https://github.com/litestar-org/sqlspec/issues/648)).
 * Spanner data-dictionary queries now cast nullable metadata filters to their
   concrete `STRING` or `TIMESTAMP` types, avoiding conflicting parameter
   inference when optional filters are omitted.
@@ -1920,8 +1920,6 @@ important operational fixes.
 * Documentation builds now filter the known `pymssql` stub-only
   `QueryParams` guarded-import warning through the custom Sphinx tooling
   instead of changing adapter runtime code.
-
-.. _#648: https://github.com/litestar-org/sqlspec/issues/648
 
 ### v0.52.0 - SQL Server adapters, ADK profiles, and cloud connectors
 

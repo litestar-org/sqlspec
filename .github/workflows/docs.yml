@@ -4,10 +4,8 @@ on:
   push:
     branches:
       - main
-    # Skip the docs build on pushes that only touch ignorable surfaces.
-    # docs/** is NOT ignored here — building docs is this workflow's job.
     paths-ignore:
-      - '*.md'
+      - '.agents/**'
 
 permissions:
   contents: read
@@ -22,6 +20,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,7 +36,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --group doc
 
       - name: Build documentation
         run: make docs
@@ -45,7 +44,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
-          path: docs/_build/html
+          path: site
 
   deploy:
     needs: build

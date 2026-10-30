@@ -88,7 +88,6 @@ dev = [
   { include-group = "benchmarks" },
 ]
 doc = [
-  "mkdocs-click>=0.9.0",
   "mkdocstrings-python>=2.0.1",
   "pymdown-extensions>=10.16",
   "ruff>=0.16.0",
@@ -659,8 +658,7 @@ known-first-party = ["sqlspec", "tests"]
 split-on-trailing-comma = false
 
 [tool.ruff.lint.per-file-ignores]
-"docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127", "PLR2004"]
-"docs/examples/**" = ["T201"]
+"docs/examples/**" = ["B", "DTZ", "PLR2004", "RET", "S", "T201", "TC"]
 "sqlspec/adapters/spanner/config.py" = ["PLC2801"]
 "sqlspec/extensions/adk/converters.py" = ["S403"]
 "sqlspec/migrations/utils.py" = ["S404"]

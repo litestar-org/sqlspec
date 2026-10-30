@@ -9,11 +9,7 @@ import click
 
 from sqlspec.cli import cli
 
-__all__ = (
-    "DEFAULT_OUTPUT_PATH",
-    "main",
-    "render_cli_reference",
-)
+__all__ = ("DEFAULT_OUTPUT_PATH", "main", "render_cli_reference")
 
 DEFAULT_OUTPUT_PATH = Path("docs/reference/cli.md")
 
@@ -21,19 +17,8 @@ _RICH_TAG_PATTERN = re.compile(
     r"\[/?(?:dim|bold|italic|underline|cyan|green|yellow|red|blue|magenta|white)(?:\s+[a-z]+)?\]"
 )
 _ENV_HINT_PATTERN = re.compile(r"\(env:\s*([A-Z0-9_]+)\)")
-_INSPECTION_COMMANDS: tuple[str, ...] = (
-    "show-config",
-    "show-current-revision",
-    "init",
-)
-_MIGRATION_COMMANDS: tuple[str, ...] = (
-    "create-migration",
-    "upgrade",
-    "downgrade",
-    "stamp",
-    "squash",
-    "fix",
-)
+_INSPECTION_COMMANDS: tuple[str, ...] = ("show-config", "show-current-revision", "init")
+_MIGRATION_COMMANDS: tuple[str, ...] = ("create-migration", "upgrade", "downgrade", "stamp", "squash", "fix")
 
 
 def render_cli_reference(group: click.Group | None = None) -> str:
@@ -180,18 +165,10 @@ def _render_command_section(full_name: str, command: click.Command) -> list[str]
     usage_line = f"{full_name}{opt_synopsis}" + (f" {arg_synopsis}" if arg_synopsis else "")
 
     summary = _clean_text(command.help or command.short_help or "")
-    section: list[str] = [
-        f"#### `{full_name}`",
-        "",
-    ]
+    section: list[str] = [f"#### `{full_name}`", ""]
     if summary:
         section.extend([summary, ""])
-    section.extend([
-        "```bash",
-        usage_line,
-        "```",
-        "",
-    ])
+    section.extend(["```bash", usage_line, "```", ""])
     if arguments:
         section.extend(_render_arguments_table(arguments))
         section.append("")
@@ -203,10 +180,7 @@ def _render_command_section(full_name: str, command: click.Command) -> list[str]
 
 def _render_arguments_table(arguments: list[click.Argument]) -> list[str]:
     """Render a Markdown table for positional Click arguments."""
-    rows: list[str] = [
-        "| Argument | Type | Required | Default |",
-        "| --- | --- | --- | --- |",
-    ]
+    rows: list[str] = ["| Argument | Type | Required | Default |", "| --- | --- | --- | --- |"]
     for arg in arguments:
         name = f"`{arg.name}`" if arg.name else "`arg`"
         type_name = f"`{_format_param_type(arg)}`"
@@ -218,10 +192,7 @@ def _render_arguments_table(arguments: list[click.Argument]) -> list[str]:
 
 def _render_options_table(options: list[click.Option]) -> list[str]:
     """Render a Markdown table for Click options."""
-    rows: list[str] = [
-        "| Option | Type | Default | Description |",
-        "| --- | --- | --- | --- |",
-    ]
+    rows: list[str] = ["| Option | Type | Default | Description |", "| --- | --- | --- | --- |"]
     for opt in options:
         flags = ", ".join(f"`{flag}`" for flag in [*opt.opts, *opt.secondary_opts])
         type_name = "`flag`" if opt.is_flag else f"`{_format_param_type(opt)}`"
@@ -264,8 +235,7 @@ def _clean_text(text: str) -> str:
     stripped = _RICH_TAG_PATTERN.sub("", text).strip()
     stripped = _ENV_HINT_PATTERN.sub(r"(env: `\1`)", stripped)
     paragraphs = [
-        " ".join(line.strip() for line in block.splitlines() if line.strip())
-        for block in stripped.split("\n\n")
+        " ".join(line.strip() for line in block.splitlines() if line.strip()) for block in stripped.split("\n\n")
     ]
     return "\n\n".join(p for p in paragraphs if p)
 

@@ -1,3 +1,7 @@
+---
+title: Contribution Guide
+---
+
 --8<-- "CONTRIBUTING.md"
 
 ## Next Steps for Contributors

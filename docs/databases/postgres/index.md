@@ -8,7 +8,7 @@ SQLSpec provides three dedicated PostgreSQL adapters—[`asyncpg`](asyncpg.md), 
 | --- | --- | --- |
 | [`asyncpg`](asyncpg.md) | `uv add "sqlspec[asyncpg]"` | Lowest-latency pure `asyncio` OLTP services using PostgreSQL's binary wire protocol. |
 | [`psycopg`](psycopg.md) | `uv add "sqlspec[psycopg]"` | Applications needing both synchronous and `asyncio` pools, libpq parity, `NullConnectionPool`, or streaming `COPY`. |
-| [`psqlpy`](psqlpy.md) | `uv add "sqlspec[psqlpy]"` | High-concurrency `asyncio` services leveraging a Rust/Tokio connection pool, native `PgVector` binding, and wire pipelining. |
+| [`psqlpy`](psqlpy.md) | `uv add "sqlspec[psqlpy]"` | High-concurrency `asyncio` services using a Rust/Tokio connection pool, native `PgVector` binding, and wire pipelining. |
 
 For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-connector`) or `sqlspec[alloydb]` (`google-cloud-alloydb-connector`).
 

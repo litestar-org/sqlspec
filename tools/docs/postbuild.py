@@ -12,6 +12,7 @@ from typing import Any
 
 __all__ = (
     "build_postbuild_artifacts",
+    "compact_site_html",
     "emit_legacy_html_redirects",
     "generate_llms_files",
     "main",
@@ -23,6 +24,9 @@ _FRONTMATTER_TITLE_PATTERN = re.compile(r"^[ \t]*title:[ \t]*(.+?)[ \t]*$", re.M
 _SNIPPET_PATTERN = re.compile(r'^([ \t]*)--8<--[ \t]+"([^"\n]+)"[ \t]*$', re.MULTILINE)
 _HEADING_PATTERN = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 _HTML_BLOCK_PATTERN = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+_PRE_BLOCK_PATTERN = re.compile(r"(<pre\b[^>]*>.*?</pre>)", re.IGNORECASE | re.DOTALL)
+_LEADING_SPACE_PATTERN = re.compile(r"^[ \t]+", re.MULTILINE)
+_MULTI_NEWLINE_PATTERN = re.compile(r"\n{2,}")
 _MIN_SNIPPET_RANGE_PARTS = 2
 _FULL_SNIPPET_RANGE_PARTS = 3
 _MIN_QUOTED_SCALAR_LENGTH = 2
@@ -40,9 +44,30 @@ _ROOT_BRAND_ASSETS: tuple[str, ...] = (
 
 def build_postbuild_artifacts(config_path: Path, docs_dir: Path, site_dir: Path) -> None:
     """Generate llms.txt, llms-full.txt, root favicons, and flat .html redirect files in site_dir."""
+    compact_site_html(site_dir=site_dir)
     generate_llms_files(config_path=config_path, docs_dir=docs_dir, site_dir=site_dir)
     sync_root_brand_assets(docs_dir=docs_dir, site_dir=site_dir)
     emit_legacy_html_redirects(config_path=config_path, site_dir=site_dir)
+
+
+def compact_site_html(site_dir: Path) -> int:
+    """Strip non-semantic Jinja indentation whitespace outside <pre> blocks in built HTML files."""
+    if not site_dir.is_dir():
+        return 0
+    compacted = 0
+    for html_file in sorted(site_dir.rglob("*.html")):
+        raw = html_file.read_text(encoding="utf-8", errors="replace")
+        parts = _PRE_BLOCK_PATTERN.split(raw)
+        updated = "".join(
+            part
+            if part.lower().startswith("<pre")
+            else _LEADING_SPACE_PATTERN.sub("", _MULTI_NEWLINE_PATTERN.sub("\n", part))
+            for part in parts
+        )
+        if updated != raw:
+            html_file.write_text(updated, encoding="utf-8")
+            compacted += 1
+    return compacted
 
 
 def sync_root_brand_assets(docs_dir: Path, site_dir: Path) -> int:
@@ -127,7 +152,7 @@ def generate_llms_files(config_path: Path, docs_dir: Path, site_dir: Path) -> No
 
 
 def emit_legacy_html_redirects(config_path: Path, site_dir: Path) -> int:
-    """Emit flat site/<legacy>.html redirect stubs for every redirect_maps entry."""
+    """Emit flat site/<legacy>.html redirect stubs for redirect_maps and directory index pages."""
     config = _load_config(config_path)
     project = config.get("project", {})
     site_url = str(project.get("site_url", "")).rstrip("/")
@@ -135,7 +160,7 @@ def emit_legacy_html_redirects(config_path: Path, site_dir: Path) -> int:
     redirects_cfg = plugins.get("redirects", {})
     redirect_maps = redirects_cfg.get("redirect_maps", {})
     if not isinstance(redirect_maps, dict):
-        return 0
+        redirect_maps = {}
 
     written = 0
     for raw_old, raw_new in sorted(redirect_maps.items()):
@@ -165,6 +190,24 @@ def emit_legacy_html_redirects(config_path: Path, site_dir: Path) -> int:
         )
         written += 1
 
+    for index_file in sorted(site_dir.rglob("index.html")):
+        if index_file == site_dir / "index.html":
+            continue
+        rel_dir = index_file.parent.relative_to(site_dir).as_posix()
+        flat_stub = site_dir / f"{rel_dir}.html"
+        if flat_stub.exists():
+            continue
+        target_path = f"/{rel_dir}/"
+        canonical_url = f"{site_url}{target_path}" if site_url else target_path
+        flat_stub.parent.mkdir(parents=True, exist_ok=True)
+        flat_stub.write_text(
+            _render_redirect_html(
+                target_path=target_path, default_hash="", refresh_url=target_path, canonical_url=canonical_url
+            ),
+            encoding="utf-8",
+        )
+        written += 1
+
     return written
 
 
@@ -176,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--site-dir", type=Path, default=Path("site"), help="Built site output directory.")
     args = parser.parse_args(argv)
 
+    compact_site_html(site_dir=args.site_dir)
     generate_llms_files(config_path=args.config, docs_dir=args.docs_dir, site_dir=args.site_dir)
     sync_root_brand_assets(docs_dir=args.docs_dir, site_dir=args.site_dir)
     redirects_count = emit_legacy_html_redirects(config_path=args.config, site_dir=args.site_dir)
