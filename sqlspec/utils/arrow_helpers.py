@@ -418,7 +418,7 @@ def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
     if hasattr(source, "__arrow_c_stream__"):
         import pyarrow as pa
 
-        return pa.RecordBatchReader.from_stream(source).read_all()
+        return pa.RecordBatchReader.from_stream(cast("Any", source)).read_all()
     if isinstance(source, Mapping):
         import pyarrow as pa
 
@@ -457,7 +457,7 @@ def coerce_arrow_batches(
     if isinstance(unwrapped, pa.Table):
         return list(unwrapped.schema.names), iter(unwrapped.to_batches(max_chunksize=batch_size))
     if hasattr(unwrapped, "__arrow_c_stream__"):
-        reader = pa.RecordBatchReader.from_stream(unwrapped)
+        reader = pa.RecordBatchReader.from_stream(cast("Any", unwrapped))
         return list(reader.schema.names), iter(reader)
     table = coerce_arrow_table(unwrapped)
     return list(table.schema.names), iter(table.to_batches(max_chunksize=batch_size))
