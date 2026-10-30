@@ -69,11 +69,26 @@ def test_encode_row_payload_jsonl_returns_line_delimited_bytes() -> None:
 class DummyAsyncpgConnection:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None, list[tuple[object, ...]], list[str]]] = []
+        self.binary_chunks: list[bytes] = []
 
     async def copy_records_to_table(
         self, table: str, *, records: list[tuple[object, ...]], columns: list[str], schema_name: str | None = None
     ) -> None:
         self.calls.append((table, schema_name, records, columns))
+
+    async def copy_to_table(
+        self,
+        table: str,
+        *,
+        source: Any,
+        columns: list[str] | None = None,
+        schema_name: str | None = None,
+        format: str | None = None,
+    ) -> None:
+        _ = format
+        async for chunk in source:
+            self.binary_chunks.append(bytes(chunk))
+        self.calls.append((table, schema_name, [], list(columns or [])))
 
 
 class DummyPsqlpyConnection:

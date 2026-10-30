@@ -4,6 +4,7 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
+from itertools import chain
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.psqlpy._typing import (
@@ -343,7 +344,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """Load Arrow-formatted data into PostgreSQL via psqlpy binary COPY."""
 
         self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             qualified = format_table_identifier(table)
             exc_handler = self.handle_database_exceptions()
@@ -352,25 +352,45 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
+        columns, batch_iter = self._coerce_arrow_batches(source)
+        first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
+        metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
+        if first_batch is not None:
+            all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             schema_name, table_name = split_schema_and_table(table)
+            use_binary_wire = bool(self.driver_features.get("enable_pgcopy_binary", False))
             exc_handler = self.handle_database_exceptions()
             async with exc_handler, self.with_cursor(self.connection) as cursor:
                 copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
-                json_columns = await self._resolve_json_columns(schema_name, table_name)
-                deserializer = cast("Callable[[str], Any]", self.driver_features.get("json_deserializer", from_json))
-                await cursor.copy_records_to_table(
-                    table_name,
-                    coerce_json_columns(records, columns, json_columns, deserializer=deserializer),
-                    **copy_kwargs,
-                )
+                if use_binary_wire and hasattr(cursor, "binary_copy_to_table"):
+                    for batch in all_batches:
+                        metrics["rows_processed"] += int(batch.num_rows)
+                        metrics["bytes_processed"] += int(batch.nbytes)
+                        payload = self._encode_arrow_batch_pg_binary(
+                            batch, columns=columns, include_header=True, include_trailer=True
+                        )
+                        await cursor.binary_copy_to_table(payload, table_name, **copy_kwargs)
+                else:
+                    json_columns = await self._resolve_json_columns(schema_name, table_name)
+                    deserializer = cast("Callable[[str], Any]", self.driver_features.get("json_deserializer", from_json))
+                    for batch in all_batches:
+                        metrics["rows_processed"] += int(batch.num_rows)
+                        metrics["bytes_processed"] += int(batch.nbytes)
+                        records = self._arrow_batch_to_rows(batch, columns)
+                        if records:
+                            await cursor.copy_records_to_table(
+                                table_name,
+                                coerce_json_columns(records, columns, json_columns, deserializer=deserializer),
+                                **copy_kwargs,
+                            )
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 
-        telemetry_payload = self._ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry_from_batches(
+            metrics["rows_processed"], metrics["bytes_processed"]
+        )
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)

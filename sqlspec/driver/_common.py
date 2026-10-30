@@ -85,7 +85,10 @@ from sqlspec.driver._storage_helpers import (
     coerce_arrow_batches,
     coerce_arrow_table,
     create_storage_job,
+    encode_arrow_batch_pg_binary,
     ingest_telemetry_from_batches,
+    iter_pgcopy_binary_chunks,
+    iter_pgcopy_binary_chunks_async,
     records_to_arrow_table,
 )
 from sqlspec.exceptions import (
@@ -3147,6 +3150,70 @@ class CommonDriverAttributesMixin:
     def _arrow_batch_to_rows(batch: "ArrowRecordBatch", columns: "list[str] | None" = None) -> "list[tuple[Any, ...]]":
         """Convert a single Arrow RecordBatch into row tuples."""
         return arrow_batch_to_rows(batch, columns)
+
+    @staticmethod
+    def _encode_arrow_batch_pg_binary(
+        batch: "ArrowRecordBatch",
+        *,
+        columns: "abc.Sequence[str] | None" = None,
+        vector_columns: frozenset[str] = frozenset(),
+        jsonb_columns: frozenset[str] = frozenset(),
+        include_header: bool = False,
+        include_trailer: bool = False,
+    ) -> bytes:
+        """Encode an Arrow RecordBatch into PostgreSQL COPY BINARY format."""
+        return encode_arrow_batch_pg_binary(
+            batch,
+            columns=columns,
+            vector_columns=vector_columns,
+            jsonb_columns=jsonb_columns,
+            include_header=include_header,
+            include_trailer=include_trailer,
+        )
+
+    @staticmethod
+    def _iter_pgcopy_binary_chunks(
+        source: "ArrowResult | Any",
+        *,
+        columns: "abc.Sequence[str] | None" = None,
+        batch_size: int = 65_536,
+        chunk_bytes: int = 8_388_608,
+        vector_columns: frozenset[str] = frozenset(),
+        jsonb_columns: frozenset[str] = frozenset(),
+        metrics: "dict[str, int] | None" = None,
+    ) -> "abc.Iterator[bytes]":
+        """Yield PostgreSQL COPY BINARY chunks from an Arrow source in bounded memory."""
+        return iter_pgcopy_binary_chunks(
+            source,
+            columns=columns,
+            batch_size=batch_size,
+            chunk_bytes=chunk_bytes,
+            vector_columns=vector_columns,
+            jsonb_columns=jsonb_columns,
+            metrics=metrics,
+        )
+
+    @staticmethod
+    def _iter_pgcopy_binary_chunks_async(
+        source: "ArrowResult | Any",
+        *,
+        columns: "abc.Sequence[str] | None" = None,
+        batch_size: int = 65_536,
+        chunk_bytes: int = 8_388_608,
+        vector_columns: frozenset[str] = frozenset(),
+        jsonb_columns: frozenset[str] = frozenset(),
+        metrics: "dict[str, int] | None" = None,
+    ) -> Any:
+        """Return an async iterator of PostgreSQL COPY BINARY chunks from an Arrow source."""
+        return iter_pgcopy_binary_chunks_async(
+            source,
+            columns=columns,
+            batch_size=batch_size,
+            chunk_bytes=chunk_bytes,
+            vector_columns=vector_columns,
+            jsonb_columns=jsonb_columns,
+            metrics=metrics,
+        )
 
     @staticmethod
     def _arrow_table_to_rows(

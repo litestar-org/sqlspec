@@ -8,23 +8,28 @@ when compiled drivers touch Arrow objects.
 """
 
 import contextlib
-from collections.abc import Callable, Iterable, Iterator, Mapping
+import struct
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.exceptions import ImproperConfigurationError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
+from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
 from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult
     from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.storage import StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable, PandasDataFrame, PolarsDataFrame
 
 __all__ = (
+    "PG_BINARY_COPY_HEADER",
+    "PG_BINARY_COPY_TRAILER",
     "arrow_batch_to_rows",
     "arrow_reader_to_return_format",
     "arrow_reader_with_deferred_close",
@@ -44,11 +49,19 @@ __all__ = (
     "coerce_arrow_table",
     "convert_dict_to_arrow",
     "convert_dict_to_arrow_with_schema",
+    "encode_arrow_batch_pg_binary",
     "ensure_arrow_table",
+    "iter_pgcopy_binary_chunks",
+    "iter_pgcopy_binary_chunks_async",
     "records_to_arrow_table",
     "sql_type_for_category",
     "sql_type_from_arrow_type",
 )
+PG_BINARY_COPY_HEADER: Final[bytes] = b"PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+PG_BINARY_COPY_TRAILER: Final[bytes] = b"\xff\xff"
+_PG_DATE_EPOCH_DAYS: Final[int] = 10957
+_PG_EPOCH_OFFSET_US: Final[int] = 946_684_800_000_000
+_PG_NULL_MARKER: Final[bytes] = b"\xff\xff\xff\xff"
 _ARROW_TABLE_COERCER: "TypeDispatcher[Any] | None" = None
 _ARROW_SCHEMA_DECISION_CACHE_SIZE = 512
 _CONFIG_CATEGORY_DEFAULTS: "dict[str, str]" = {
@@ -610,7 +623,7 @@ def arrow_table_to_polars(table: "ArrowTable") -> "PolarsDataFrame":
     return result
 
 
-def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "dict[str, int | str]":
+def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
     """Build telemetry dict from Arrow table statistics."""
     if has_arrow_table_stats(table):
         rows = int(table.num_rows)
@@ -658,6 +671,478 @@ def arrow_reader_to_return_format(
     table = reader.read_all()
     shaped = arrow_table_to_return_format(table, return_format=return_format, batch_size=batch_size)
     return shaped, int(table.num_rows)
+
+
+def encode_arrow_batch_pg_binary(
+    batch: "ArrowRecordBatch",
+    *,
+    columns: "Sequence[str] | None" = None,
+    vector_columns: frozenset[str] = frozenset(),
+    jsonb_columns: frozenset[str] = frozenset(),
+    include_header: bool = False,
+    include_trailer: bool = False,
+) -> bytes:
+    """Encode an Arrow RecordBatch into PostgreSQL COPY BINARY format.
+
+    Uses zero-loop structured NumPy dtype packing when all columns have fixed
+    wire widths and no nulls, falling back to direct Arrow buffer slicing for
+    variable-width and nullable columns.
+
+    Args:
+        batch: Arrow RecordBatch to encode.
+        columns: Optional subset or order of columns to encode.
+        vector_columns: Column names using pgvector binary wire format.
+        jsonb_columns: Column names requiring PostgreSQL jsonb version byte prefix.
+        include_header: Whether to prepend ``PG_BINARY_COPY_HEADER``.
+        include_trailer: Whether to append ``PG_BINARY_COPY_TRAILER``.
+
+    Returns:
+        PostgreSQL ``COPY ... WITH (FORMAT BINARY)`` byte payload.
+    """
+    ensure_pyarrow()
+    resolved_columns = list(columns) if columns is not None else list(batch.schema.names)
+    body = b""
+    if resolved_columns and batch.num_rows > 0:
+        fast_body = _encode_pg_binary_fast_path_1(batch, resolved_columns, jsonb_columns)
+        if fast_body is not None:
+            body = fast_body
+        else:
+            body = _encode_pg_binary_fast_path_2(batch, resolved_columns, vector_columns, jsonb_columns)
+    parts: list[bytes] = []
+    if include_header:
+        parts.append(PG_BINARY_COPY_HEADER)
+    if body:
+        parts.append(body)
+    if include_trailer:
+        parts.append(PG_BINARY_COPY_TRAILER)
+    return b"".join(parts)
+
+
+def iter_pgcopy_binary_chunks(
+    source: "ArrowResult | Any",
+    *,
+    columns: "Sequence[str] | None" = None,
+    batch_size: int = 65_536,
+    chunk_bytes: int = 8_388_608,
+    vector_columns: frozenset[str] = frozenset(),
+    jsonb_columns: frozenset[str] = frozenset(),
+    metrics: "dict[str, int] | None" = None,
+) -> "Iterator[bytes]":
+    """Yield PostgreSQL COPY BINARY chunks from an Arrow source in bounded memory.
+
+    Args:
+        source: Arrow Table, RecordBatch, RecordBatchReader, ArrowResult, or RecordBatch iterator.
+        columns: Optional explicit column order.
+        batch_size: Maximum rows per batch when splitting a Table.
+        chunk_bytes: Target byte size for yielded chunks (default 8 MiB).
+        vector_columns: Column names using pgvector binary wire format.
+        jsonb_columns: Column names requiring PostgreSQL jsonb version byte prefix.
+        metrics: Optional mutable dict updated in-place with ``rows_processed`` and ``bytes_processed``.
+
+    Yields:
+        Byte chunks forming a complete ``PGCOPY`` binary stream.
+    """
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if columns is not None and isinstance(source, Iterator) and not isinstance(source, pa.RecordBatchReader):
+        resolved_columns = list(columns)
+        batches: Iterator[ArrowRecordBatch] = source
+    else:
+        inferred_columns, batches = coerce_arrow_batches(source, batch_size=batch_size)
+        resolved_columns = list(columns) if columns is not None else inferred_columns
+
+    buffer = bytearray(PG_BINARY_COPY_HEADER)
+    threshold = max(1, int(chunk_bytes))
+    total_rows = 0
+    total_bytes = 0
+    for batch in batches:
+        if batch.num_rows == 0:
+            continue
+        total_rows += int(batch.num_rows)
+        total_bytes += int(batch.nbytes)
+        encoded = encode_arrow_batch_pg_binary(
+            batch,
+            columns=resolved_columns,
+            vector_columns=vector_columns,
+            jsonb_columns=jsonb_columns,
+            include_header=False,
+            include_trailer=False,
+        )
+        buffer.extend(encoded)
+        if len(buffer) >= threshold:
+            yield bytes(buffer)
+            buffer.clear()
+    if metrics is not None:
+        metrics["rows_processed"] = total_rows
+        metrics["bytes_processed"] = total_bytes
+    buffer.extend(PG_BINARY_COPY_TRAILER)
+    yield bytes(buffer)
+
+
+def iter_pgcopy_binary_chunks_async(
+    source: "ArrowResult | Any",
+    *,
+    columns: "Sequence[str] | None" = None,
+    batch_size: int = 65_536,
+    chunk_bytes: int = 8_388_608,
+    vector_columns: frozenset[str] = frozenset(),
+    jsonb_columns: frozenset[str] = frozenset(),
+    metrics: "dict[str, int] | None" = None,
+) -> Any:
+    """Return an async byte-chunk iterator of PostgreSQL COPY BINARY payloads."""
+    return _AsyncBytesIterator(
+        iter_pgcopy_binary_chunks(
+            source,
+            columns=columns,
+            batch_size=batch_size,
+            chunk_bytes=chunk_bytes,
+            vector_columns=vector_columns,
+            jsonb_columns=jsonb_columns,
+            metrics=metrics,
+        )
+    )
+
+
+def _extract_pg_fixed_column_array(col: Any, dtype: Any, num_rows: int) -> "tuple[int, str, Any] | None":
+    """Return ``(byte_width, numpy_dtype_str, numpy_array)`` for fixed-width scalar columns."""
+    import numpy as np
+    import pyarrow as pa
+
+    is_extension = getattr(pa.types, "is_extension", None)
+    if is_extension is not None and is_extension(dtype):
+        dtype = dtype.storage_type
+        col = col.storage if hasattr(col, "storage") else col
+
+    if pa.types.is_boolean(dtype):
+        filled = col.fill_null(False) if col.null_count > 0 else col
+        arr = filled.to_numpy(zero_copy_only=False).astype("|u1", copy=False)
+        return 1, "|u1", arr
+    if pa.types.is_int8(dtype):
+        raw = np.frombuffer(col.buffers()[1], dtype=np.int8, count=col.offset + num_rows)[col.offset :]
+        return 2, ">i2", raw.astype(">i2")
+    if pa.types.is_uint8(dtype):
+        raw = np.frombuffer(col.buffers()[1], dtype=np.uint8, count=col.offset + num_rows)[col.offset :]
+        return 2, ">i2", raw.astype(">i2")
+    if pa.types.is_int16(dtype) or pa.types.is_uint16(dtype):
+        raw = np.frombuffer(col.buffers()[1], dtype=np.int16, count=col.offset + num_rows)[col.offset :]
+        return 2, ">i2", raw.astype(">i2", copy=False)
+    if pa.types.is_int32(dtype) or pa.types.is_uint32(dtype):
+        raw = np.frombuffer(col.buffers()[1], dtype=np.int32, count=col.offset + num_rows)[col.offset :]
+        return 4, ">i4", raw.astype(">i4", copy=False)
+    if pa.types.is_int64(dtype) or pa.types.is_uint64(dtype):
+        raw = np.frombuffer(col.buffers()[1], dtype=np.int64, count=col.offset + num_rows)[col.offset :]
+        return 8, ">i8", raw.astype(">i8", copy=False)
+    if pa.types.is_float16(dtype):
+        raw = np.frombuffer(col.buffers()[1], dtype=np.float16, count=col.offset + num_rows)[col.offset :]
+        return 4, ">f4", raw.astype(">f4")
+    if pa.types.is_float32(dtype):
+        raw = np.frombuffer(col.buffers()[1], dtype=np.float32, count=col.offset + num_rows)[col.offset :]
+        return 4, ">f4", raw.astype(">f4", copy=False)
+    if pa.types.is_float64(dtype):
+        raw = np.frombuffer(col.buffers()[1], dtype=np.float64, count=col.offset + num_rows)[col.offset :]
+        return 8, ">f8", raw.astype(">f8", copy=False)
+    if pa.types.is_date32(dtype):
+        buf = col.buffers()[1]
+        raw = np.frombuffer(buf, dtype=np.int32, count=col.offset + num_rows)[col.offset :]
+        return 4, ">i4", (raw - _PG_DATE_EPOCH_DAYS).astype(">i4")
+    if pa.types.is_date64(dtype):
+        buf = col.buffers()[1]
+        raw = np.frombuffer(buf, dtype=np.int64, count=col.offset + num_rows)[col.offset :]
+        return 4, ">i4", ((raw // 86_400_000) - _PG_DATE_EPOCH_DAYS).astype(">i4")
+    if pa.types.is_timestamp(dtype):
+        buf = col.buffers()[1]
+        raw = np.frombuffer(buf, dtype=np.int64, count=col.offset + num_rows)[col.offset :]
+        unit = dtype.unit
+        if unit == "us":
+            shifted = raw - _PG_EPOCH_OFFSET_US
+        elif unit == "ms":
+            shifted = raw * 1_000 - _PG_EPOCH_OFFSET_US
+        elif unit == "s":
+            shifted = raw * 1_000_000 - _PG_EPOCH_OFFSET_US
+        else:
+            shifted = (raw // 1_000) - _PG_EPOCH_OFFSET_US
+        return 8, ">i8", shifted.astype(">i8")
+    if pa.types.is_fixed_size_binary(dtype):
+        width = int(dtype.byte_width)
+        buf = col.buffers()[1]
+        arr = np.frombuffer(buf, dtype=f"|V{width}", count=col.offset + num_rows)[col.offset :]
+        return width, f"|V{width}", arr
+    return None
+
+
+def _encode_pg_binary_fast_path_1(
+    batch: "ArrowRecordBatch", columns: "list[str]", jsonb_columns: frozenset[str]
+) -> bytes | None:
+    """Pack non-null fixed-width and FixedSizeList float vector columns via structured NumPy dtype."""
+    import numpy as np
+    import pyarrow as pa
+
+    num_rows = int(batch.num_rows)
+    dtype_fields: list[Any] = [("ncols", ">i2")]
+    assignments: list[tuple[str, Any]] = [("ncols", len(columns))]
+
+    for idx, col_name in enumerate(columns):
+        if col_name in jsonb_columns:
+            return None
+        col = batch.column(col_name)
+        if col.null_count > 0:
+            return None
+        if isinstance(col, pa.ChunkedArray):
+            col = col.combine_chunks()
+        field_type = col.type
+        fixed_info = _extract_pg_fixed_column_array(col, field_type, num_rows)
+        if fixed_info is not None:
+            byte_width, np_dtype, arr = fixed_info
+            len_key = f"c{idx}_len"
+            val_key = f"c{idx}_val"
+            dtype_fields.append((len_key, ">i4"))
+            dtype_fields.append((val_key, np_dtype))
+            assignments.append((len_key, byte_width))
+            assignments.append((val_key, arr))
+            continue
+
+        if pa.types.is_fixed_size_list(field_type) and pa.types.is_floating(field_type.value_type):
+            dim = int(field_type.list_size)
+            flat_values = col.values[col.offset * dim : (col.offset + num_rows) * dim]
+            if flat_values.null_count > 0:
+                return None
+            is_f16 = pa.types.is_float16(field_type.value_type)
+            elem_dtype = ">f2" if is_f16 else ">f4"
+            elem_size = 2 if is_f16 else 4
+            arr_2d = flat_values.to_numpy(zero_copy_only=False).astype(elem_dtype, copy=False).reshape(num_rows, dim)
+            len_key = f"c{idx}_len"
+            dim_key = f"c{idx}_dim"
+            unused_key = f"c{idx}_unused"
+            val_key = f"c{idx}_val"
+            dtype_fields.extend([
+                (len_key, ">i4"),
+                (dim_key, ">u2"),
+                (unused_key, ">u2"),
+                (val_key, elem_dtype, (dim,)),
+            ])
+            assignments.extend([
+                (len_key, 4 + elem_size * dim),
+                (dim_key, dim),
+                (unused_key, 0),
+                (val_key, arr_2d),
+            ])
+            continue
+
+        return None
+
+    row_dtype = np.dtype(dtype_fields)
+    out = np.empty(num_rows, dtype=row_dtype)
+    for field_key, value in assignments:
+        out[field_key] = value
+    return out.tobytes()
+
+
+def _encode_pg_binary_fast_path_2(
+    batch: "ArrowRecordBatch",
+    columns: "list[str]",
+    vector_columns: frozenset[str],
+    jsonb_columns: frozenset[str],
+) -> bytes:
+    """Encode variable-width and nullable columns by slicing Arrow buffers directly."""
+    import numpy as np
+    import pyarrow as pa
+
+    num_rows = int(batch.num_rows)
+    row_header = struct.pack(">h", len(columns))
+    col_encoders: list[Callable[[int, bytearray], None]] = []
+
+    for col_name in columns:
+        col = batch.column(col_name)
+        if isinstance(col, pa.ChunkedArray):
+            col = col.combine_chunks()
+        field_type = col.type
+        has_nulls = col.null_count > 0
+        null_mask = col.is_null().to_numpy(zero_copy_only=False) if has_nulls else None
+
+        if col_name not in jsonb_columns:
+            fixed_info = _extract_pg_fixed_column_array(col, field_type, num_rows)
+            if fixed_info is not None:
+                byte_width, np_dtype, arr = fixed_info
+                packed = np.empty(num_rows, dtype=np.dtype([("len", ">i4"), ("val", np_dtype)]))
+                packed["len"] = byte_width
+                packed["val"] = arr
+                packed_mv = memoryview(packed.tobytes())
+                stride = 4 + byte_width
+
+                def _emit_fixed(
+                    row_idx: int,
+                    out_buf: bytearray,
+                    _mv: memoryview = packed_mv,
+                    _stride: int = stride,
+                    _nulls: Any = null_mask,
+                ) -> None:
+                    if _nulls is not None and _nulls[row_idx]:
+                        out_buf.extend(_PG_NULL_MARKER)
+                    else:
+                        start = row_idx * _stride
+                        out_buf.extend(_mv[start : start + _stride])
+
+                col_encoders.append(_emit_fixed)
+                continue
+
+            if pa.types.is_fixed_size_list(field_type) and pa.types.is_floating(field_type.value_type):
+                dim = int(field_type.list_size)
+                flat_values = col.values[col.offset * dim : (col.offset + num_rows) * dim]
+                is_f16 = pa.types.is_float16(field_type.value_type)
+                elem_dtype = ">f2" if is_f16 else ">f4"
+                elem_size = 2 if is_f16 else 4
+                arr_2d = (
+                    flat_values.to_numpy(zero_copy_only=False).astype(elem_dtype, copy=False).reshape(num_rows, dim)
+                )
+                packed = np.empty(
+                    num_rows,
+                    dtype=np.dtype([
+                        ("len", ">i4"),
+                        ("dim", ">u2"),
+                        ("unused", ">u2"),
+                        ("val", elem_dtype, (dim,)),
+                    ]),
+                )
+                packed["len"] = 4 + elem_size * dim
+                packed["dim"] = dim
+                packed["unused"] = 0
+                packed["val"] = arr_2d
+                packed_mv = memoryview(packed.tobytes())
+                stride = 8 + elem_size * dim
+
+                def _emit_fixed_vec(
+                    row_idx: int,
+                    out_buf: bytearray,
+                    _mv: memoryview = packed_mv,
+                    _stride: int = stride,
+                    _nulls: Any = null_mask,
+                ) -> None:
+                    if _nulls is not None and _nulls[row_idx]:
+                        out_buf.extend(_PG_NULL_MARKER)
+                    else:
+                        start = row_idx * _stride
+                        out_buf.extend(_mv[start : start + _stride])
+
+                col_encoders.append(_emit_fixed_vec)
+                continue
+
+        if (
+            pa.types.is_string(field_type)
+            or pa.types.is_large_string(field_type)
+            or pa.types.is_binary(field_type)
+            or pa.types.is_large_binary(field_type)
+        ):
+            offset_dtype = (
+                np.int64 if (pa.types.is_large_string(field_type) or pa.types.is_large_binary(field_type)) else np.int32
+            )
+            offsets = np.frombuffer(col.buffers()[1], dtype=offset_dtype, count=col.offset + num_rows + 1)[
+                col.offset :
+            ]
+            data_buf = col.buffers()[2]
+            data_mv = memoryview(data_buf) if data_buf is not None else memoryview(b"")
+            is_jsonb = col_name in jsonb_columns
+            diffs = np.diff(offsets)
+            lengths_mv = memoryview((diffs + (1 if is_jsonb else 0)).astype(">i4").tobytes())
+
+            def _emit_varlen(
+                row_idx: int,
+                out_buf: bytearray,
+                _offsets: Any = offsets,
+                _data_mv: memoryview = data_mv,
+                _len_mv: memoryview = lengths_mv,
+                _nulls: Any = null_mask,
+                _is_jsonb: bool = is_jsonb,
+            ) -> None:
+                if _nulls is not None and _nulls[row_idx]:
+                    out_buf.extend(_PG_NULL_MARKER)
+                    return
+                out_buf.extend(_len_mv[row_idx * 4 : (row_idx + 1) * 4])
+                if _is_jsonb:
+                    out_buf.append(1)
+                start = int(_offsets[row_idx])
+                end = int(_offsets[row_idx + 1])
+                if end > start:
+                    out_buf.extend(_data_mv[start:end])
+
+            col_encoders.append(_emit_varlen)
+            continue
+
+        if (pa.types.is_list(field_type) or pa.types.is_large_list(field_type)) and (
+            col_name in vector_columns or pa.types.is_floating(field_type.value_type)
+        ):
+            offset_dtype = np.int64 if pa.types.is_large_list(field_type) else np.int32
+            offsets = np.frombuffer(col.buffers()[1], dtype=offset_dtype, count=col.offset + num_rows + 1)[
+                col.offset :
+            ]
+            is_f16 = pa.types.is_float16(field_type.value_type)
+            elem_dtype = ">f2" if is_f16 else ">f4"
+            elem_size = 2 if is_f16 else 4
+            flat_bytes = col.values.to_numpy(zero_copy_only=False).astype(elem_dtype, copy=False).tobytes()
+            flat_mv = memoryview(flat_bytes)
+            dims = np.diff(offsets)
+            headers = np.empty(num_rows, dtype=np.dtype([("len", ">i4"), ("dim", ">u2"), ("unused", ">u2")]))
+            headers["len"] = 4 + elem_size * dims
+            headers["dim"] = dims
+            headers["unused"] = 0
+            headers_mv = memoryview(headers.tobytes())
+
+            def _emit_var_vec(
+                row_idx: int,
+                out_buf: bytearray,
+                _offsets: Any = offsets,
+                _flat_mv: memoryview = flat_mv,
+                _hdr_mv: memoryview = headers_mv,
+                _elem_size: int = elem_size,
+                _nulls: Any = null_mask,
+            ) -> None:
+                if _nulls is not None and _nulls[row_idx]:
+                    out_buf.extend(_PG_NULL_MARKER)
+                    return
+                out_buf.extend(_hdr_mv[row_idx * 8 : (row_idx + 1) * 8])
+                start = int(_offsets[row_idx]) * _elem_size
+                end = int(_offsets[row_idx + 1]) * _elem_size
+                if end > start:
+                    out_buf.extend(_flat_mv[start:end])
+
+            col_encoders.append(_emit_var_vec)
+            continue
+
+        py_values = col.to_pylist()
+        is_jsonb = col_name in jsonb_columns
+
+        def _emit_fallback(
+            row_idx: int,
+            out_buf: bytearray,
+            _vals: list[Any] = py_values,
+            _is_jsonb: bool = is_jsonb,
+        ) -> None:
+            val = _vals[row_idx]
+            if val is None:
+                out_buf.extend(_PG_NULL_MARKER)
+                return
+            if isinstance(val, (bytes, bytearray, memoryview)):
+                raw = bytes(val)
+            elif isinstance(val, str):
+                raw = val.encode("utf-8")
+            elif isinstance(val, (dict, list, tuple)):
+                raw = to_json(val).encode("utf-8")
+            else:
+                raw = str(val).encode("utf-8")
+            if _is_jsonb:
+                out_buf.extend(struct.pack(">iB", len(raw) + 1, 1))
+            else:
+                out_buf.extend(struct.pack(">i", len(raw)))
+            out_buf.extend(raw)
+
+        col_encoders.append(_emit_fallback)
+
+    out_buf = bytearray()
+    for row_idx in range(num_rows):
+        out_buf.extend(row_header)
+        for encoder in col_encoders:
+            encoder(row_idx, out_buf)
+    return bytes(out_buf)
 
 
 @lru_cache(maxsize=_ARROW_SCHEMA_DECISION_CACHE_SIZE)
@@ -899,3 +1384,21 @@ class _DeferredCloseBatchIterator:
             self._closed = True
             with contextlib.suppress(Exception):
                 self._close_callback()
+
+
+class _AsyncBytesIterator:
+    """Wrap a synchronous byte-chunk iterator as an async iterator."""
+
+    __slots__ = ("_iterator",)
+
+    def __init__(self, iterator: "Iterator[bytes]") -> None:
+        self._iterator = iterator
+
+    def __aiter__(self) -> "_AsyncBytesIterator":
+        return self
+
+    async def __anext__(self) -> bytes:
+        try:
+            return next(self._iterator)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc

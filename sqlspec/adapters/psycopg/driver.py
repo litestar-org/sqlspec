@@ -2,6 +2,7 @@
 
 from collections.abc import Sized
 from contextlib import AsyncExitStack, ExitStack
+from itertools import chain
 from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 from sqlspec.adapters.psycopg._typing import (
@@ -522,7 +523,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Load Arrow data into PostgreSQL using COPY."""
 
         self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             truncate_sql = build_truncate_command(table)
             exc_handler = self.handle_database_exceptions()
@@ -530,23 +530,33 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                 cursor.execute(truncate_sql)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        if arrow_table.num_rows > 0:
-            columns, records = self._arrow_table_to_rows(arrow_table)
-            if self._arrow_rows_need_preparation(arrow_table):
-                records = cast(
-                    "list[Any]", self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                )
-            copy_sql = build_copy_from_command(table, columns)
+        columns, batch_iter = self._coerce_arrow_batches(source)
+        first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
+        metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
+        if first_batch is not None:
+            use_binary = bool(self.driver_features.get("enable_pgcopy_binary", True))
+            copy_sql = build_copy_from_command(table, columns, binary=use_binary)
+            all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             exc_handler = self.handle_database_exceptions()
             with ExitStack() as stack:
                 stack.enter_context(exc_handler)
                 cursor = stack.enter_context(self.with_cursor(self.connection))
                 copy_ctx = stack.enter_context(cursor.copy(copy_sql))
-                for record in records:
-                    copy_ctx.write_row(record)
+                if use_binary:
+                    for chunk in self._iter_pgcopy_binary_chunks(all_batches, columns=columns, metrics=metrics):
+                        copy_ctx.write(chunk)
+                else:
+                    for batch in all_batches:
+                        metrics["rows_processed"] += int(batch.num_rows)
+                        metrics["bytes_processed"] += int(batch.nbytes)
+                        records = self._arrow_batch_to_rows(batch, columns)
+                        for record in records:
+                            copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        telemetry_payload = self._ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry_from_batches(
+            metrics["rows_processed"], metrics["bytes_processed"]
+        )
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
@@ -1054,7 +1064,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Load Arrow data into PostgreSQL asynchronously via COPY."""
 
         self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             truncate_sql = build_truncate_command(table)
             exc_handler = self.handle_database_exceptions()
@@ -1062,23 +1071,33 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 await cursor.execute(truncate_sql)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        if arrow_table.num_rows > 0:
-            columns, records = self._arrow_table_to_rows(arrow_table)
-            if self._arrow_rows_need_preparation(arrow_table):
-                records = cast(
-                    "list[Any]", self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                )
-            copy_sql = build_copy_from_command(table, columns)
+        columns, batch_iter = self._coerce_arrow_batches(source)
+        first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
+        metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
+        if first_batch is not None:
+            use_binary = bool(self.driver_features.get("enable_pgcopy_binary", True))
+            copy_sql = build_copy_from_command(table, columns, binary=use_binary)
+            all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             exc_handler = self.handle_database_exceptions()
             async with AsyncExitStack() as stack:
                 await stack.enter_async_context(exc_handler)
                 cursor = await stack.enter_async_context(self.with_cursor(self.connection))
                 copy_ctx = await stack.enter_async_context(cursor.copy(copy_sql))
-                for record in records:
-                    await copy_ctx.write_row(record)
+                if use_binary:
+                    for chunk in self._iter_pgcopy_binary_chunks(all_batches, columns=columns, metrics=metrics):
+                        await copy_ctx.write(chunk)
+                else:
+                    for batch in all_batches:
+                        metrics["rows_processed"] += int(batch.num_rows)
+                        metrics["bytes_processed"] += int(batch.nbytes)
+                        records = self._arrow_batch_to_rows(batch, columns)
+                        for record in records:
+                            await copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        telemetry_payload = self._ingest_telemetry(arrow_table)
+        telemetry_payload = self._ingest_telemetry_from_batches(
+            metrics["rows_processed"], metrics["bytes_processed"]
+        )
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
