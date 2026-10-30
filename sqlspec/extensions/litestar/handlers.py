@@ -1,8 +1,9 @@
 """Litestar ASGI lifecycle and dependency injection providers for SQLSpec.
 
-This module stays uncompiled under mypyc because session providers combine variadic
-async generators with runtime ``__signature__`` and ``__annotations__`` mutation for
-Litestar dependency injection.
+This module stays uncompiled under mypyc because session providers combine
+*args/**kwargs with yield in async def, participate in Litestar's
+@contextlib.asynccontextmanager dependency wrapping, and mutate
+__signature__/__annotations__ at runtime for dependency injection.
 """
 
 import contextlib
@@ -279,11 +280,6 @@ def session_provider_maker(
     config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", connection_dependency_key: str
 ) -> "Callable[[Any], AsyncGenerator[DriverT, None]]":
     """Create a Litestar dependency provider yielding a configured SQLSpec driver session.
-
-    Note:
-        This provider intentionally stays out of mypyc: it combines *args/**kwargs
-        with yield in async def, participates in Litestar's @contextlib.asynccontextmanager
-        dependency wrapping, and mutates __signature__/__annotations__ at runtime.
 
     Args:
         config: Database configuration supplying the driver class and statement settings.
