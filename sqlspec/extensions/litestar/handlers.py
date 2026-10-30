@@ -280,6 +280,11 @@ def session_provider_maker(
 ) -> "Callable[[Any], AsyncGenerator[DriverT, None]]":
     """Create a Litestar dependency provider yielding a configured SQLSpec driver session.
 
+    Note:
+        This provider intentionally stays out of mypyc: it combines *args/**kwargs
+        with yield in async def, participates in Litestar's @contextlib.asynccontextmanager
+        dependency wrapping, and mutates __signature__/__annotations__ at runtime.
+
     Args:
         config: Database configuration supplying the driver class and statement settings.
         connection_dependency_key: Dependency key used to inject the active connection.

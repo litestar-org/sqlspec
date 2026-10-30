@@ -485,7 +485,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 if copy_sql is not None:
                     return self._native_storage_job(
                         copy_sql,
-                        [target.uri, *cast("Sequence[Any]", driver_params or ())],
+                        [*cast("Sequence[Any]", driver_params or ()), target.uri],
                         destination=str(destination),
                         format_choice=format_choice,
                         operation="write",
