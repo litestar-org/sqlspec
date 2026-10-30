@@ -276,8 +276,16 @@ def test_oracle_columns_uses_all_tab_cols_for_hidden_columns() -> None:
 
     assert "all_tab_cols" in columns_by_schema
     assert "all_tab_columns" not in columns_by_schema
+    assert "all_tab_identity_cols" in columns_by_schema
+    assert "as identity_generation" in columns_by_schema
+    assert "as sequence_name" in columns_by_schema
+    assert "as is_primary" in columns_by_schema
     assert "all_tab_cols" in columns_by_table
     assert "all_tab_columns" not in columns_by_table
+    assert "all_tab_identity_cols" in columns_by_table
+    assert "as identity_generation" in columns_by_table
+    assert "as sequence_name" in columns_by_table
+    assert "as is_primary" in columns_by_table
 
 
 def test_oracle_domain_query_packs_cover_c5_sources() -> None:

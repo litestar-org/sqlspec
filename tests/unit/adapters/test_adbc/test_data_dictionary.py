@@ -542,3 +542,60 @@ def test_oracle_optimal_json_type_resolution(version_str: str, expected_type: st
 
     dictionary = AdbcDataDictionary()
     assert dictionary.get_optimal_type(driver, "json") == expected_type
+
+
+def test_adbc_sqlite_get_columns_fallback_passes_bind_parameters() -> None:
+    """SQLite fallback column queries should bind table_name and schema_name."""
+    driver = Mock()
+    driver.dialect = "sqlite"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select.return_value = [{"column_name": "id", "data_type": "INTEGER", "is_primary": 1}]
+
+    result = AdbcDataDictionary().get_columns(driver, table="users", schema="main")
+
+    assert result == [{"column_name": "id", "data_type": "INTEGER", "is_primary": 1}]
+    driver.select.assert_called_once()
+    assert driver.select.call_args.kwargs["table_name"] == "users"
+    assert driver.select.call_args.kwargs["schema_name"] == "main"
+
+
+def test_normalize_native_columns_marks_autoincrement_and_generated() -> None:
+    """Native column normalization should populate is_identity and is_generated from xdbc flags."""
+    payload: list[dict[str, Any]] = [
+        {
+            "catalog_name": "main",
+            "catalog_db_schemas": [
+                {
+                    "db_schema_name": "public",
+                    "db_schema_tables": [
+                        {
+                            "table_name": "items",
+                            "table_type": "BASE TABLE",
+                            "table_columns": [
+                                {
+                                    "column_name": "id",
+                                    "ordinal_position": 1,
+                                    "xdbc_type_name": "INTEGER",
+                                    "xdbc_is_nullable": "NO",
+                                    "xdbc_is_autoincrement": "YES",
+                                },
+                                {
+                                    "column_name": "slug",
+                                    "ordinal_position": 2,
+                                    "xdbc_type_name": "TEXT",
+                                    "xdbc_is_nullable": "YES",
+                                    "xdbc_is_generatedcolumn": "YES",
+                                },
+                            ],
+                            "table_constraints": [],
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+    columns = _normalize_native_columns(payload, table_name_exact="items")
+    by_name = {entry["column_name"]: entry for entry in columns}
+
+    assert by_name["id"]["is_identity"] is True
+    assert by_name["slug"]["is_generated"] is True

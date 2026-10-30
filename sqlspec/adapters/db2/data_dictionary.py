@@ -80,7 +80,11 @@ def build_column_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ColumnMetad
             numeric_scale=int(r.get("numeric_scale", 0)) if r.get("numeric_scale") is not None else 0,
             is_primary=bool(r.get("is_primary")),
             is_unique=bool(r.get("is_unique")),
-            identity_generation=str(r["identity_generation"]) if r.get("identity_generation") else None,
+            identity_generation=(
+                str(r["identity_generation"]).strip()
+                if r.get("identity_generation") and str(r["identity_generation"]).strip().upper() != "N"
+                else None
+            ),
             is_generated=bool(r.get("is_generated")),
         )
         for r in rows

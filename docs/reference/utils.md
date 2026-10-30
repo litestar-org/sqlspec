@@ -54,7 +54,15 @@ Reusable helpers for runtime type narrowing, JSON serialization, schema model co
 
 ## Table Fixtures & Environment Helpers
 
+::: sqlspec.utils.fixtures.load_table_fixtures_sync
+    options:
+      heading_level: 4
+
 ::: sqlspec.utils.fixtures.load_table_fixtures_async
+    options:
+      heading_level: 4
+
+::: sqlspec.utils.fixtures.export_table_fixtures_sync
     options:
       heading_level: 4
 

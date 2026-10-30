@@ -54,16 +54,51 @@ ORDER BY n.nspname, c.relname, a.attnum;
 -- name: by_table
 -- dialect: postgres
 SELECT
+    current_database()::text AS table_catalog,
+    n.nspname::text AS table_schema,
+    n.nspname::text AS schema_name,
+    c.relname::text AS table_name,
     a.attname::text AS column_name,
-    pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+    a.attnum::integer AS ordinal_position,
+    pg_catalog.format_type(a.atttypid, a.atttypmod)::text AS data_type,
+    t.typname::text AS type_name,
     CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
-    pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default
+    pg_catalog.pg_get_expr(d.adbin, d.adrelid)::text AS column_default,
+    a.attidentity::text AS identity_generation,
+    a.attgenerated::text AS generated_kind,
+    col_description(c.oid, a.attnum)::text AS comment,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_constraint pk
+        WHERE pk.conrelid = c.oid
+          AND pk.contype = 'p'
+          AND a.attnum = ANY(pk.conkey)
+    ) AS is_primary,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_constraint uq
+        WHERE uq.conrelid = c.oid
+          AND uq.contype = 'u'
+          AND a.attnum = ANY(uq.conkey)
+    ) AS is_unique,
+    pg_catalog.pg_get_serial_sequence(
+        pg_catalog.quote_ident(n.nspname) || '.' || pg_catalog.quote_ident(c.relname), a.attname
+    )::text AS sequence_name
 FROM pg_catalog.pg_attribute a
 JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
 JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
 LEFT JOIN pg_catalog.pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
 WHERE c.relname = :table_name
-  AND n.nspname = :schema_name
+  AND n.nspname = COALESCE(
+      :schema_name::text,
+      (
+          SELECT rn.nspname::text
+          FROM pg_catalog.pg_class rc
+          JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+          WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
+      )
+  )
   AND a.attnum > 0
   AND NOT a.attisdropped
 ORDER BY a.attnum;

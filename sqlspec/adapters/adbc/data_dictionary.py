@@ -234,7 +234,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         if dialect == "sqlite":
             schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
             query_text = self._get_query_text(dialect, "tables", "by_schema").format(schema_prefix=schema_prefix)
-            return driver.select(query_text, schema_type=TableMetadata)
+            return driver.select(query_text, schema_name=schema_name, schema_type=TableMetadata)
 
         return driver.select(
             self._get_query(dialect, "tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata
@@ -270,12 +270,9 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
             if table is None:
                 query_text = self._get_query_text(dialect, "columns", "by_schema").format(schema_prefix=schema_prefix)
-                return driver.select(query_text, schema_type=ColumnMetadata)
-            table_identifier = f"{schema_name}.{table}" if schema_name else table
-            query_text = self._get_query_text(dialect, "columns", "by_table").format(
-                table_name=format_identifier(table_identifier)
-            )
-            return driver.select(query_text, schema_type=ColumnMetadata)
+                return driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
+            query_text = self._get_query_text(dialect, "columns", "by_table").format(schema_prefix=schema_prefix)
+            return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
 
         if table is None:
             return driver.select(
@@ -884,6 +881,12 @@ def _normalize_native_columns(
             digits = column.get("xdbc_decimal_digits")
             if digits is not None:
                 entry["numeric_scale"] = int(digits)
+            autoincrement = column.get("xdbc_is_autoincrement")
+            if autoincrement is not None and str(autoincrement).strip().upper() in {"YES", "TRUE", "1", "Y"}:
+                entry["is_identity"] = True
+            generated = column.get("xdbc_is_generatedcolumn")
+            if generated is not None and str(generated).strip().upper() in {"YES", "TRUE", "1", "Y"}:
+                entry["is_generated"] = True
             if entry["column_name"] in primary_columns:
                 entry["is_primary"] = True
             columns.append(entry)

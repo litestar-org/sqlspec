@@ -224,6 +224,11 @@ def test_mariadb_complete_query_pack_and_mysql_single_version_probe() -> None:
     mariadb_tables = loader.get_domain_query_text("mariadb", "tables", "by_schema")
     assert mariadb_tables is not None and "dependency_levels" in mariadb_tables
 
+    mysql_cols_by_table = loader.get_domain_query_text("mysql", "columns", "by_table")
+    mariadb_cols_by_table = loader.get_domain_query_text("mariadb", "columns", "by_table")
+    assert mysql_cols_by_table is not None and "generation_expression" in mysql_cols_by_table
+    assert mariadb_cols_by_table is not None and "generation_expression" in mariadb_cols_by_table
+
     driver = _SyncDDLDriver()
     dictionary = PyMysqlDataDictionary()
     version = dictionary.get_version(cast(Any, driver))

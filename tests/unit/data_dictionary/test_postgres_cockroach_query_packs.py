@@ -134,3 +134,18 @@ def test_postgres_and_cockroach_foreign_keys_and_indexes_contracts() -> None:
         and "AS columns" in crdb_indexes_by_table
         and "AS is_unique" in crdb_indexes_by_table
     )
+
+    pg_columns_by_table = loader.get_domain_query_text("postgres", "columns", "by_table")
+    crdb_columns_by_table = loader.get_domain_query_text("cockroachdb", "columns", "by_table")
+    assert pg_columns_by_table is not None
+    assert "AS sequence_name" in pg_columns_by_table
+    assert "AS identity_generation" in pg_columns_by_table
+    assert "AS is_primary" in pg_columns_by_table
+    assert "AS generated_kind" in pg_columns_by_table
+    assert "COALESCE(" in pg_columns_by_table
+    assert crdb_columns_by_table is not None
+    assert "AS sequence_name" in crdb_columns_by_table
+    assert "AS identity_generation" in crdb_columns_by_table
+    assert "AS is_primary" in crdb_columns_by_table
+    assert "AS generation_expression" in crdb_columns_by_table
+    assert "COALESCE(" in crdb_columns_by_table

@@ -20,8 +20,13 @@ SELECT
           AND i.COLCOUNT = 1
           AND SUBSTR(i.COLNAMES, 2) = c.COLNAME
     ) THEN 1 ELSE 0 END AS is_unique,
-    c.IDENTITY AS identity_generation,
-    CASE WHEN c.GENERATED IN ('A', 'D') THEN 1 ELSE 0 END AS is_generated,
+    CASE
+        WHEN c.IDENTITY = 'Y' AND c.GENERATED = 'A' THEN 'ALWAYS'
+        WHEN c.IDENTITY = 'Y' AND c.GENERATED = 'D' THEN 'BY DEFAULT'
+        WHEN c.IDENTITY = 'Y' THEN 'Y'
+        ELSE NULL
+    END AS identity_generation,
+    CASE WHEN c.GENERATED IN ('A', 'D') AND COALESCE(c.IDENTITY, 'N') <> 'Y' THEN 1 ELSE 0 END AS is_generated,
     c.REMARKS AS column_comment
 FROM SYSCAT.COLUMNS c
 JOIN SYSCAT.TABLES t ON c.TABSCHEMA = t.TABSCHEMA AND c.TABNAME = t.TABNAME
@@ -54,8 +59,13 @@ SELECT
           AND i.COLCOUNT = 1
           AND SUBSTR(i.COLNAMES, 2) = c.COLNAME
     ) THEN 1 ELSE 0 END AS is_unique,
-    c.IDENTITY AS identity_generation,
-    CASE WHEN c.GENERATED IN ('A', 'D') THEN 1 ELSE 0 END AS is_generated,
+    CASE
+        WHEN c.IDENTITY = 'Y' AND c.GENERATED = 'A' THEN 'ALWAYS'
+        WHEN c.IDENTITY = 'Y' AND c.GENERATED = 'D' THEN 'BY DEFAULT'
+        WHEN c.IDENTITY = 'Y' THEN 'Y'
+        ELSE NULL
+    END AS identity_generation,
+    CASE WHEN c.GENERATED IN ('A', 'D') AND COALESCE(c.IDENTITY, 'N') <> 'Y' THEN 1 ELSE 0 END AS is_generated,
     c.REMARKS AS column_comment
 FROM SYSCAT.COLUMNS c
 WHERE c.TABSCHEMA NOT LIKE 'SYS%'
