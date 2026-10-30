@@ -13,9 +13,8 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Generic, NoReturn, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, NamedTuple, NoReturn, ParamSpec, TypeVar, cast
 
-import msgspec
 import sqlglot
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
@@ -208,7 +207,7 @@ def _command_metadata(args: dict[str, Any]) -> tuple[str | None, dict[str, Any]]
     return revision, metadata
 
 
-class SquashReconciliation(msgspec.Struct, frozen=True, gc=False):
+class SquashReconciliation(NamedTuple):
     """Tracking-table change that collapses applied replaced versions into one squashed migration record."""
 
     target_version: str
@@ -217,7 +216,7 @@ class SquashReconciliation(msgspec.Struct, frozen=True, gc=False):
     checksum: str
 
 
-class VersionRename(msgspec.Struct, frozen=True, gc=False):
+class VersionRename(NamedTuple):
     """Tracking-table change that renames an applied version to the version of its migration file on disk.
 
     ``claimed_versions`` is the set of versions already accounted for when the rename was planned; the tracker uses
@@ -229,7 +228,7 @@ class VersionRename(msgspec.Struct, frozen=True, gc=False):
     claimed_versions: frozenset[str]
 
 
-class VersionReconciliationPlan(msgspec.Struct, frozen=True, gc=False):
+class VersionReconciliationPlan(NamedTuple):
     """Tracking-table changes needed to match the applied records to the migration files on disk.
 
     ``applied_versions`` lists the applied versions as they will look once the changes are written, which lets a
