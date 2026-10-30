@@ -2,7 +2,7 @@
 """Unit tests for streaming storage pipeline batches, vector Parquet defaults, schema-pinned JSONL/CSV/IPC, and ObStoreSink safety."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pyarrow as pa
@@ -16,13 +16,18 @@ from sqlspec.storage.pipeline import AsyncStoragePipeline, SyncStoragePipeline
 
 def test_resolve_parquet_use_dictionary_disables_float_vector_columns() -> None:
     """resolve_parquet_use_dictionary disables dictionary encoding on float vector columns while preserving scalar columns."""
-    schema = pa.schema([
-        ("id", pa.int64()),
-        ("category", pa.string()),
-        ("embedding_f32", pa.list_(pa.float32(), 4)),
-        ("embedding_var", pa.list_(pa.float32())),
-        ("tags", pa.list_(pa.string())),
-    ])
+    schema = pa.schema(
+        cast(
+            "Any",
+            [
+                ("id", pa.int64()),
+                ("category", pa.string()),
+                ("embedding_f32", pa.list_(pa.float32(), 4)),
+                ("embedding_var", pa.list_(pa.float32())),
+                ("tags", pa.list_(pa.string())),
+            ],
+        )
+    )
 
     resolved = resolve_parquet_use_dictionary(schema)
     assert resolved == ["id", "category", "tags"]
@@ -30,13 +35,15 @@ def test_resolve_parquet_use_dictionary_disables_float_vector_columns() -> None:
     explicit = resolve_parquet_use_dictionary(schema, explicit_use_dictionary=False)
     assert explicit is False
 
-    scalar_only_schema = pa.schema([("id", pa.int64()), ("category", pa.string())])
+    scalar_only_schema = pa.schema(cast("Any", [("id", pa.int64()), ("category", pa.string())]))
     assert resolve_parquet_use_dictionary(scalar_only_schema) is True
 
 
 def test_encode_arrow_payload_applies_vector_use_dictionary_and_write_options() -> None:
     """encode_arrow_payload forwards write_options and disables dictionary encoding for float vector columns."""
-    schema = pa.schema([("id", pa.int64()), ("category", pa.string()), ("embedding", pa.list_(pa.float32(), 2))])
+    schema = pa.schema(
+        cast("Any", [("id", pa.int64()), ("category", pa.string()), ("embedding", pa.list_(pa.float32(), 2))])
+    )
     table = pa.Table.from_arrays(
         [
             pa.array([1, 2, 3], type=pa.int64()),
@@ -110,20 +117,20 @@ def test_sync_pipeline_write_and_read_arrow_batches_parquet_and_jsonl(tmp_path: 
 
     jsonl_path = tmp_path / "vectors.jsonl"
     jsonl_path.write_text('{"id": 1, "embedding": [0.25, 0.75]}\n{"id": 2, "embedding": [1.25, 1.75]}\n')
-    jsonl_schema = pa.schema([("id", pa.int64()), ("embedding", pa.list_(pa.float32()))])
+    jsonl_schema = pa.schema(cast("Any", [("id", pa.int64()), ("embedding", pa.list_(pa.float32()))]))
     jsonl_batches = list(
         pipeline.read_arrow_batches(jsonl_path, file_format="jsonl", arrow_schema=jsonl_schema, batch_size=10)
     )
     assert sum(b.num_rows for b in jsonl_batches) == 2
     assert jsonl_batches[0].schema.field("embedding").type == pa.list_(pa.float32())
-    assert np.allclose(jsonl_batches[0].column("embedding").to_pylist()[0], [0.25, 0.75])
+    assert np.allclose(cast("Any", jsonl_batches[0].column("embedding").to_pylist()[0]), [0.25, 0.75])
 
 
 async def test_async_pipeline_write_and_read_arrow_batches_and_arrow_result(tmp_path: Path) -> None:
     """AsyncStoragePipeline and ArrowResult stream batches without full-table materialization."""
     pipeline = AsyncStoragePipeline()
     parquet_path = tmp_path / "async_items.parquet"
-    schema = pa.schema([("id", pa.int64()), ("name", pa.string())])
+    schema = pa.schema(cast("Any", [("id", pa.int64()), ("name", pa.string())]))
     batch = pa.RecordBatch.from_pydict({"id": [10, 20], "name": ["x", "y"]}, schema=schema)
 
     telemetry = await pipeline.write_arrow_batches_async(parquet_path, [batch], file_format="parquet")
@@ -135,7 +142,7 @@ async def test_async_pipeline_write_and_read_arrow_batches_and_arrow_result(tmp_
     assert [b.num_rows for b in read_batches] == [1, 1]
 
     reader = pa.RecordBatchReader.from_batches(schema, [batch])
-    arrow_result = ArrowResult(statement=None, data=reader)
+    arrow_result = ArrowResult(statement=cast("Any", None), data=reader)
     out_path = tmp_path / "from_reader.parquet"
     res_telemetry = await arrow_result.write_to_storage_async(out_path, pipeline=pipeline)
     assert res_telemetry["rows_processed"] == 2

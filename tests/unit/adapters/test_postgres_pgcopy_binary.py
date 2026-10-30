@@ -152,7 +152,7 @@ def test_encode_arrow_batch_pg_binary_fast_path_2_variable_width_jsonb_and_nulls
 
 def test_iter_pgcopy_binary_chunks_streams_reader_batches() -> None:
     """iter_pgcopy_binary_chunks emits header, batch payloads, and trailer across RecordBatchReader."""
-    schema = pa.schema([("id", pa.int64()), ("name", pa.string())])
+    schema = pa.schema(cast("Any", [("id", pa.int64()), ("name", pa.string())]))
     batches = [
         pa.RecordBatch.from_pydict({"id": [1, 2], "name": ["a", "b"]}, schema=schema),
         pa.RecordBatch.from_pydict({"id": [3, 4], "name": ["c", "d"]}, schema=schema),
@@ -282,7 +282,7 @@ class _DummyPsycopgAsyncConn:
 
 def test_psycopg_and_cockroach_sync_load_from_arrow_streams_binary_copy() -> None:
     """PsycopgSyncDriver and CockroachPsycopgSyncDriver stream RecordBatchReader via binary COPY."""
-    schema = pa.schema([("id", pa.int64()), ("label", pa.string())])
+    schema = pa.schema(cast("Any", [("id", pa.int64()), ("label", pa.string())]))
     for driver_cls in (PsycopgSyncDriver, CockroachPsycopgSyncDriver):
         conn = _DummyPsycopgSyncConn()
         driver = driver_cls(
@@ -310,7 +310,7 @@ def test_psycopg_and_cockroach_sync_load_from_arrow_streams_binary_copy() -> Non
 
 async def test_psycopg_and_cockroach_async_load_from_arrow_streams_binary_copy() -> None:
     """PsycopgAsyncDriver and CockroachPsycopgAsyncDriver stream RecordBatchReader via async binary COPY."""
-    schema = pa.schema([("id", pa.int64()), ("label", pa.string())])
+    schema = pa.schema(cast("Any", [("id", pa.int64()), ("label", pa.string())]))
     for driver_cls in (PsycopgAsyncDriver, CockroachPsycopgAsyncDriver):
         conn = _DummyPsycopgAsyncConn()
         driver = driver_cls(
@@ -409,7 +409,7 @@ class _DummyPsqlpyBinaryConn:
 
 async def test_psqlpy_load_from_arrow_supports_binary_copy_to_table() -> None:
     """PsqlpyDriver streams PGCOPY binary payloads to binary_copy_to_table when enable_pgcopy_binary=True."""
-    schema = pa.schema([("id", pa.int64()), ("name", pa.string())])
+    schema = pa.schema(cast("Any", [("id", pa.int64()), ("name", pa.string())]))
     reader = pa.RecordBatchReader.from_batches(
         schema, [pa.RecordBatch.from_pydict({"id": [1, 2], "name": ["alpha", "beta"]}, schema=schema)]
     )

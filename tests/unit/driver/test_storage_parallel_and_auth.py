@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
@@ -69,7 +69,7 @@ def test_checkpoint_sql_builders_generate_dialect_valid_sql() -> None:
 
 def test_sync_load_from_storage_multi_uri_checkpoint_and_schema(tmp_path: Path) -> None:
     """Sync load_from_storage ingests multiple URIs concurrently and skips checkpointed URIs on rerun."""
-    schema = pa.schema([("id", pa.int64()), ("name", pa.string())])
+    schema = pa.schema(cast("Any", [("id", pa.int64()), ("name", pa.string())]))
     file1 = tmp_path / "part1.parquet"
     file2 = tmp_path / "part2.parquet"
     pq.write_table(pa.Table.from_pydict({"id": [1, 2], "name": ["a", "b"]}, schema=schema), file1)
@@ -110,7 +110,7 @@ def test_sync_load_from_storage_multi_uri_checkpoint_and_schema(tmp_path: Path) 
 @pytest.mark.anyio
 async def test_async_load_from_storage_multi_uri_checkpoint_and_schema(tmp_path: Path) -> None:
     """Async load_from_storage ingests multiple URIs with bounded concurrency and checkpointing."""
-    schema = pa.schema([("id", pa.int64()), ("name", pa.string())])
+    schema = pa.schema(cast("Any", [("id", pa.int64()), ("name", pa.string())]))
     file1 = tmp_path / "async_part1.parquet"
     file2 = tmp_path / "async_part2.parquet"
     pq.write_table(pa.Table.from_pydict({"id": [10, 20], "name": ["x", "y"]}, schema=schema), file1)

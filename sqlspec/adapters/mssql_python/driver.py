@@ -2,7 +2,7 @@
 
 import contextlib
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.mssql_python._typing import (
     MssqlPythonConnection,
@@ -42,7 +42,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
@@ -436,14 +436,14 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
-        stage_table: bool | str = False,
+        stage_table: "bool | str | None" = False,
         conflict_keys: "Sequence[str] | None" = None,
-        on_conflict: str = "update",
+        on_conflict: Literal["update", "nothing"] = "update",
         exclude_update_columns: "Sequence[str] | None" = None,
         drop_stage_table: bool = True,
         drop_indexes: bool = False,
         concurrent_indexes: bool = True,
-        type_casts: "dict[str, str] | None" = None,
+        type_casts: "Mapping[str, str] | None" = None,
         batch_size: int = 0,
         timeout: int = 30,
         table_lock: bool = False,

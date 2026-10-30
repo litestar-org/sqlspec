@@ -8,7 +8,8 @@ import io
 from collections.abc import Mapping
 from contextlib import suppress
 from itertools import chain
-from typing import TYPE_CHECKING, Any, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlglot import exp
 
@@ -680,6 +681,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
         *,
         columns: "list[str] | None" = None,
         overwrite: bool = False,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load in-memory records through BigQuery's newline-delimited JSON load API."""
         rows = _records_to_json_rows(records, columns)
@@ -705,14 +714,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
-        stage_table: bool | str = False,
+        stage_table: "bool | str | None" = False,
         conflict_keys: "Sequence[str] | None" = None,
-        on_conflict: str = "update",
+        on_conflict: Literal["update", "nothing"] = "update",
         exclude_update_columns: "Sequence[str] | None" = None,
         drop_stage_table: bool = True,
         drop_indexes: bool = False,
         concurrent_indexes: bool = True,
-        type_casts: "dict[str, str] | None" = None,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into BigQuery (Parquet load job, or opt-in Storage Write API)."""
 
@@ -797,9 +806,14 @@ class BigQueryDriver(SyncDriverAdapterBase):
         **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into BigQuery."""
-        if kwargs:
+        if kwargs or not isinstance(source, (str, Path)):
             return super().load_from_storage(
-                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+                table,
+                source,
+                file_format=cast("StorageFormat", file_format),
+                partitioner=partitioner,
+                overwrite=overwrite,
+                **kwargs,
             )
 
         job_config = build_load_job_config(file_format, overwrite)

@@ -2,7 +2,7 @@
 
 import contextlib
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.pymssql._typing import (
     PymssqlConnection,
@@ -40,7 +40,7 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from sqlspec.adapters.pymssql._typing import PymssqlQueryParams as QueryParams
     from sqlspec.builder import QueryBuilder
@@ -347,14 +347,14 @@ class PymssqlDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
-        stage_table: bool | str = False,
+        stage_table: "bool | str | None" = False,
         conflict_keys: "Sequence[str] | None" = None,
-        on_conflict: str = "update",
+        on_conflict: Literal["update", "nothing"] = "update",
         exclude_update_columns: "Sequence[str] | None" = None,
         drop_stage_table: bool = True,
         drop_indexes: bool = False,
         concurrent_indexes: bool = True,
-        type_casts: "dict[str, str] | None" = None,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into the target table via executemany."""
         self._require_capability("arrow_import_enabled")

@@ -819,49 +819,83 @@ def _extract_pg_fixed_column_array(col: Any, dtype: Any, num_rows: int) -> "tupl
         arr = filled.to_numpy(zero_copy_only=False).astype("|u1", copy=False)
         return 1, "|u1", arr
     if pa.types.is_int8(dtype):
-        raw = np.frombuffer(col.buffers()[1], dtype=np.int8, count=col.offset + num_rows)[col.offset :]
-        return 2, ">i2", raw.astype(">i2")
+        return (
+            2,
+            ">i2",
+            np.frombuffer(col.buffers()[1], dtype=np.int8, count=col.offset + num_rows)[col.offset :].astype(">i2"),
+        )
     if pa.types.is_uint8(dtype):
-        raw = np.frombuffer(col.buffers()[1], dtype=np.uint8, count=col.offset + num_rows)[col.offset :]
-        return 2, ">i2", raw.astype(">i2")
+        return (
+            2,
+            ">i2",
+            np.frombuffer(col.buffers()[1], dtype=np.uint8, count=col.offset + num_rows)[col.offset :].astype(">i2"),
+        )
     if pa.types.is_int16(dtype) or pa.types.is_uint16(dtype):
-        raw = np.frombuffer(col.buffers()[1], dtype=np.int16, count=col.offset + num_rows)[col.offset :]
-        return 2, ">i2", raw.astype(">i2", copy=False)
+        return (
+            2,
+            ">i2",
+            np.frombuffer(col.buffers()[1], dtype=np.int16, count=col.offset + num_rows)[col.offset :].astype(
+                ">i2", copy=False
+            ),
+        )
     if pa.types.is_int32(dtype) or pa.types.is_uint32(dtype):
-        raw = np.frombuffer(col.buffers()[1], dtype=np.int32, count=col.offset + num_rows)[col.offset :]
-        return 4, ">i4", raw.astype(">i4", copy=False)
+        return (
+            4,
+            ">i4",
+            np.frombuffer(col.buffers()[1], dtype=np.int32, count=col.offset + num_rows)[col.offset :].astype(
+                ">i4", copy=False
+            ),
+        )
     if pa.types.is_int64(dtype) or pa.types.is_uint64(dtype):
-        raw = np.frombuffer(col.buffers()[1], dtype=np.int64, count=col.offset + num_rows)[col.offset :]
-        return 8, ">i8", raw.astype(">i8", copy=False)
+        return (
+            8,
+            ">i8",
+            np.frombuffer(col.buffers()[1], dtype=np.int64, count=col.offset + num_rows)[col.offset :].astype(
+                ">i8", copy=False
+            ),
+        )
     if pa.types.is_float16(dtype):
-        raw = np.frombuffer(col.buffers()[1], dtype=np.float16, count=col.offset + num_rows)[col.offset :]
-        return 4, ">f4", raw.astype(">f4")
+        return (
+            4,
+            ">f4",
+            np.frombuffer(col.buffers()[1], dtype=np.float16, count=col.offset + num_rows)[col.offset :].astype(">f4"),
+        )
     if pa.types.is_float32(dtype):
-        raw = np.frombuffer(col.buffers()[1], dtype=np.float32, count=col.offset + num_rows)[col.offset :]
-        return 4, ">f4", raw.astype(">f4", copy=False)
+        return (
+            4,
+            ">f4",
+            np.frombuffer(col.buffers()[1], dtype=np.float32, count=col.offset + num_rows)[col.offset :].astype(
+                ">f4", copy=False
+            ),
+        )
     if pa.types.is_float64(dtype):
-        raw = np.frombuffer(col.buffers()[1], dtype=np.float64, count=col.offset + num_rows)[col.offset :]
-        return 8, ">f8", raw.astype(">f8", copy=False)
+        return (
+            8,
+            ">f8",
+            np.frombuffer(col.buffers()[1], dtype=np.float64, count=col.offset + num_rows)[col.offset :].astype(
+                ">f8", copy=False
+            ),
+        )
     if pa.types.is_date32(dtype):
         buf = col.buffers()[1]
-        raw = np.frombuffer(buf, dtype=np.int32, count=col.offset + num_rows)[col.offset :]
-        return 4, ">i4", (raw - _PG_DATE_EPOCH_DAYS).astype(">i4")
+        raw_date32 = np.frombuffer(buf, dtype=np.int32, count=col.offset + num_rows)[col.offset :]
+        return 4, ">i4", (raw_date32 - _PG_DATE_EPOCH_DAYS).astype(">i4")
     if pa.types.is_date64(dtype):
         buf = col.buffers()[1]
-        raw = np.frombuffer(buf, dtype=np.int64, count=col.offset + num_rows)[col.offset :]
-        return 4, ">i4", ((raw // 86_400_000) - _PG_DATE_EPOCH_DAYS).astype(">i4")
+        raw_date64 = np.frombuffer(buf, dtype=np.int64, count=col.offset + num_rows)[col.offset :]
+        return 4, ">i4", ((raw_date64 // 86_400_000) - _PG_DATE_EPOCH_DAYS).astype(">i4")
     if pa.types.is_timestamp(dtype):
         buf = col.buffers()[1]
-        raw = np.frombuffer(buf, dtype=np.int64, count=col.offset + num_rows)[col.offset :]
+        raw_ts = np.frombuffer(buf, dtype=np.int64, count=col.offset + num_rows)[col.offset :]
         unit = dtype.unit
         if unit == "us":
-            shifted = raw - _PG_EPOCH_OFFSET_US
+            shifted = raw_ts - _PG_EPOCH_OFFSET_US
         elif unit == "ms":
-            shifted = raw * 1_000 - _PG_EPOCH_OFFSET_US
+            shifted = raw_ts * 1_000 - _PG_EPOCH_OFFSET_US
         elif unit == "s":
-            shifted = raw * 1_000_000 - _PG_EPOCH_OFFSET_US
+            shifted = raw_ts * 1_000_000 - _PG_EPOCH_OFFSET_US
         else:
-            shifted = (raw // 1_000) - _PG_EPOCH_OFFSET_US
+            shifted = (raw_ts // 1_000) - _PG_EPOCH_OFFSET_US
         return 8, ">i8", shifted.astype(">i8")
     if pa.types.is_fixed_size_binary(dtype):
         width = int(dtype.byte_width)
@@ -904,7 +938,7 @@ def _encode_pg_binary_fast_path_1(
 
         if pa.types.is_fixed_size_list(field_type) and pa.types.is_floating(field_type.value_type):
             dim = int(field_type.list_size)
-            flat_values = col.flatten()
+            flat_values = cast("Any", col).flatten()
             if flat_values.null_count > 0:
                 return None
             is_f16 = pa.types.is_float16(field_type.value_type)

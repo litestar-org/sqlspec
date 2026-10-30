@@ -1,7 +1,7 @@
 """Spanner driver implementation."""
 
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, overload
 
 from sqlglot import exp as _sqlglot_exp
 
@@ -58,7 +58,7 @@ from sqlspec.exceptions import SQLConversionError
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -525,14 +525,14 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
-        stage_table: bool | str = False,
+        stage_table: "bool | str | None" = False,
         conflict_keys: "Sequence[str] | None" = None,
-        on_conflict: str = "update",
+        on_conflict: Literal["update", "nothing"] = "update",
         exclude_update_columns: "Sequence[str] | None" = None,
         drop_stage_table: bool = True,
         drop_indexes: bool = False,
         concurrent_indexes: bool = True,
-        type_casts: "dict[str, str] | None" = None,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into Spanner table via batch mutations."""
         self._require_capability("arrow_import_enabled")
@@ -1186,14 +1186,14 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
-        stage_table: bool | str = False,
+        stage_table: "bool | str | None" = False,
         conflict_keys: "Sequence[str] | None" = None,
-        on_conflict: str = "update",
+        on_conflict: Literal["update", "nothing"] = "update",
         exclude_update_columns: "Sequence[str] | None" = None,
         drop_stage_table: bool = True,
         drop_indexes: bool = False,
         concurrent_indexes: bool = True,
-        type_casts: "dict[str, str] | None" = None,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into Spanner table via batch mutations."""
         self._require_capability("arrow_import_enabled")

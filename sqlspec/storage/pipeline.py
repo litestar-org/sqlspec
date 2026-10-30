@@ -1,6 +1,7 @@
 """Storage pipeline scaffolding for driver-aware storage bridge."""
 
 from collections import deque
+from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
 from time import perf_counter
@@ -54,7 +55,7 @@ __all__ = (
     "reset_storage_bridge_metrics",
 )
 
-StorageDestination: TypeAlias = str | Path
+StorageDestination: TypeAlias = str | Path | Sequence[str | Path]
 StorageDiagnostics: TypeAlias = dict[str, float]
 
 

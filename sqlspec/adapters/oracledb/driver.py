@@ -1,7 +1,8 @@
 """Oracle Database driver implementation."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, overload
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, cast, overload
 
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
@@ -833,14 +834,14 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
-        stage_table: bool | str = False,
+        stage_table: "bool | str | None" = False,
         conflict_keys: "Sequence[str] | None" = None,
-        on_conflict: str = "update",
+        on_conflict: Literal["update", "nothing"] = "update",
         exclude_update_columns: "Sequence[str] | None" = None,
         drop_stage_table: bool = True,
         drop_indexes: bool = False,
         concurrent_indexes: bool = True,
-        type_casts: "dict[str, str] | None" = None,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into Oracle using batched executemany calls."""
         self._require_capability("arrow_import_enabled")
@@ -956,7 +957,11 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 if isinstance(source, str) and source.startswith("alias://")
                 else source
             )
-            remote_uri = resolve_dbms_cloud_source_uri(resolved_source, file_format=file_format)
+            remote_uri = (
+                resolve_dbms_cloud_source_uri(resolved_source, file_format=file_format)
+                if isinstance(resolved_source, (str, Path))
+                else None
+            )
             if remote_uri is not None:
                 plsql, binds = build_dbms_cloud_copy_data_sql(
                     table,
@@ -1656,14 +1661,14 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
-        stage_table: bool | str = False,
+        stage_table: "bool | str | None" = False,
         conflict_keys: "Sequence[str] | None" = None,
-        on_conflict: str = "update",
+        on_conflict: Literal["update", "nothing"] = "update",
         exclude_update_columns: "Sequence[str] | None" = None,
         drop_stage_table: bool = True,
         drop_indexes: bool = False,
         concurrent_indexes: bool = True,
-        type_casts: "dict[str, str] | None" = None,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Asynchronously load Arrow data into Oracle."""
         self._require_capability("arrow_import_enabled")
@@ -1775,7 +1780,11 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 if isinstance(source, str) and source.startswith("alias://")
                 else source
             )
-            remote_uri = resolve_dbms_cloud_source_uri(resolved_source, file_format=file_format)
+            remote_uri = (
+                resolve_dbms_cloud_source_uri(resolved_source, file_format=file_format)
+                if isinstance(resolved_source, (str, Path))
+                else None
+            )
             if remote_uri is not None:
                 plsql, binds = build_dbms_cloud_copy_data_sql(
                     table,

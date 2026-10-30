@@ -26,15 +26,15 @@ def batches_to_arrow_table(batches: Any) -> "ArrowTable":
     """Coalesce an Arrow RecordBatchReader, RecordBatch, Table, or batch iterable into an ArrowTable."""
     pa = import_pyarrow()
     if isinstance(batches, pa.Table):
-        return batches
+        return cast("ArrowTable", batches)
     if isinstance(batches, pa.RecordBatchReader):
-        return batches.read_all()
+        return cast("ArrowTable", batches.read_all())
     if isinstance(batches, pa.RecordBatch):
-        return pa.Table.from_batches([batches])
+        return cast("ArrowTable", pa.Table.from_batches([batches]))
     batch_list = list(batches)
     if not batch_list:
-        return pa.table({})
-    return pa.Table.from_batches(batch_list, schema=batch_list[0].schema)
+        return cast("ArrowTable", pa.table({}))
+    return cast("ArrowTable", pa.Table.from_batches(batch_list, schema=batch_list[0].schema))
 
 
 def resolve_parquet_use_dictionary(
