@@ -24,7 +24,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 @pytest.fixture
 def db_config(tmp_path: Path) -> Iterator[SqliteConfig]:
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "test.db")}))
+    config = spec.add_config(
+        SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
+    )
     try:
         yield config
     finally:
@@ -61,7 +63,9 @@ async def test_postgres_users(postgres_service: PostgresService) -> None:
     )
     try:
         async with config.provide_session() as session:
-            version = await session.select_value("SELECT current_setting('server_version_num')::int")
+            version = await session.select_value(
+                "SELECT current_setting('server_version_num')::int"
+            )
             assert version >= 140000
     finally:
         await config.close_pool()

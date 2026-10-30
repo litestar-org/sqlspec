@@ -11,10 +11,14 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(config) as session:
-    session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
+    session.execute(
+        "CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)"
+    )
     session.execute(
         """
         CREATE TABLE members (
@@ -37,7 +41,9 @@ with spec.provide_session(config) as session:
 
     ```python
     tables = session.data_dictionary.get_tables(session, schema="public")
-    columns = session.data_dictionary.get_columns(session, table="members", schema="public")
+    columns = session.data_dictionary.get_columns(
+        session, table="members", schema="public"
+    )
     version = session.data_dictionary.get_version(session)
     ```
 
@@ -45,7 +51,9 @@ with spec.provide_session(config) as session:
 
     ```python
     tables = await session.data_dictionary.get_tables(session, schema="public")
-    columns = await session.data_dictionary.get_columns(session, table="members", schema="public")
+    columns = await session.data_dictionary.get_columns(
+        session, table="members", schema="public"
+    )
     version = await session.data_dictionary.get_version(session)
     ```
 
@@ -75,7 +83,10 @@ with spec.provide_session(config) as session:
 When exporting schemas, seeding fixtures, or truncating tables in foreign-key order, combine `get_foreign_keys` with `dependency_edges_from_foreign_keys` and `sort_dependencies` from `sqlspec.data_dictionary`:
 
 ```python
-from sqlspec.data_dictionary import dependency_edges_from_foreign_keys, sort_dependencies
+from sqlspec.data_dictionary import (
+    dependency_edges_from_foreign_keys,
+    sort_dependencies,
+)
 
 edges = dependency_edges_from_foreign_keys(foreign_keys)
 sorted_plan = sort_dependencies(edges)
@@ -89,6 +100,6 @@ Catalog views store unquoted identifier names (`schema_versions`, not `"schema_v
 
 ## Recap
 
-- Access `session.data_dictionary` to inspect live schemas portably across all 20 adapters.
+- Access `session.data_dictionary` to inspect live schemas portably across all database adapters.
 - Use `get_version` and `get_optimal_type` when generating cross-database DDL for extensions or multi-engine libraries.
 - Pair `dependency_edges_from_foreign_keys` and `sort_dependencies` to determine safe parent-before-child load order.

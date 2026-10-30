@@ -21,7 +21,11 @@ Choose `psycopg` when your service mixes synchronous CLI/worker processes with `
     spec = SQLSpec()
     config = spec.add_config(
         PsycopgAsyncConfig(
-            connection_config={"conninfo": "postgresql://app:secret@localhost:5432/prod", "min_size": 2, "max_size": 20}
+            connection_config={
+                "conninfo": "postgresql://app:secret@localhost:5432/prod",
+                "min_size": 2,
+                "max_size": 20,
+            }
         )
     )
     ```
@@ -35,7 +39,11 @@ Choose `psycopg` when your service mixes synchronous CLI/worker processes with `
     spec = SQLSpec()
     config = spec.add_config(
         PsycopgSyncConfig(
-            connection_config={"conninfo": "postgresql://app:secret@localhost:5432/prod", "min_size": 2, "max_size": 10}
+            connection_config={
+                "conninfo": "postgresql://app:secret@localhost:5432/prod",
+                "min_size": 2,
+                "max_size": 10,
+            }
         )
     )
     ```

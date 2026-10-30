@@ -1,7 +1,14 @@
 # SQLGlot Dialects
 
 ```python
-from sqlspec.dialects import DB2, ParadeDB, PGTextSearch, PGVector, Spangres, Spanner
+from sqlspec.dialects import (
+    DB2,
+    ParadeDB,
+    PGTextSearch,
+    PGVector,
+    Spangres,
+    Spanner,
+)
 ```
 
 Custom SQLGlot dialect implementations registered automatically via Python entry points (`sqlglot.dialects`) when SQLSpec is installed. See the [Query Builder Guide](../learn/query-builder.md) for syntax translations and dialect features.

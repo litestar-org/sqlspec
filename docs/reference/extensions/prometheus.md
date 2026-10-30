@@ -1,7 +1,10 @@
 # Prometheus Extension
 
 ```python
-from sqlspec.extensions.prometheus import PrometheusStatementObserver, enable_metrics
+from sqlspec.extensions.prometheus import (
+    PrometheusStatementObserver,
+    enable_metrics,
+)
 ```
 
 Prometheus statement observer and configuration helper exporting statement counters and duration histograms via [`ObservabilityConfig`](../observability.md). See the [Observability Guide](../../learn/observability.md) for usage examples.

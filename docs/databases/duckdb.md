@@ -19,8 +19,15 @@ from sqlspec.adapters.duckdb import DuckDBConfig
 spec = SQLSpec()
 config = spec.add_config(
     DuckDBConfig(
-        connection_config={"database": ":memory:", "pool_min_size": 1, "pool_max_size": 4},
-        driver_features={"extensions": [{"name": "httpfs"}, {"name": "json"}], "enable_statement_profiling": False},
+        connection_config={
+            "database": ":memory:",
+            "pool_min_size": 1,
+            "pool_max_size": 4,
+        },
+        driver_features={
+            "extensions": [{"name": "httpfs"}, {"name": "json"}],
+            "enable_statement_profiling": False,
+        },
     )
 )
 ```

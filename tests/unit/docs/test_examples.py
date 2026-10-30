@@ -184,9 +184,9 @@ def test_examples_define_valid_snippet_sections() -> None:
 
 
 def test_markdown_code_blocks_and_snippets_fit_viewport_width() -> None:
-    """Verify Markdown code blocks and included snippets fit viewport width budgets."""
+    """Verify Markdown code blocks, snippet directives, and inline Python blocks."""
     docs_dir = REPO_ROOT / "docs"
-    snippet_pattern = re.compile(r"--8<--\s+[\"'](docs/examples/[^\"']+)[\"']")
+    snippet_pattern = re.compile(r"^--8<--\s+[\"']([^\"']+)[\"']$")
     hl_lines_pattern = re.compile(r"hl_lines\s*=")
     fence_pattern = re.compile(r"^```")
 
@@ -198,32 +198,86 @@ def test_markdown_code_blocks_and_snippets_fit_viewport_width() -> None:
         lines = md_path.read_text(encoding="utf-8").splitlines()
         in_fence = False
         fence_lang = ""
+        fence_start_line = 0
+        fence_lines: list[tuple[int, str]] = []
 
         for line_num, line in enumerate(lines, start=1):
             stripped = line.strip()
             if fence_pattern.match(stripped):
                 if in_fence:
+                    if fence_lang.startswith("```python") and rel != "docs/changelog.md":
+                        _validate_python_fence(rel, fence_start_line, fence_lines, snippet_pattern, violations)
                     in_fence = False
+                    fence_lines = []
                 else:
                     in_fence = True
                     fence_lang = stripped
+                    fence_start_line = line_num
+                    fence_lines = []
                     if hl_lines_pattern.search(stripped):
                         violations.append(f"{rel}:{line_num}: stale hl_lines on code block: {stripped}")
                 continue
 
             if in_fence:
+                fence_lines.append((line_num, line))
                 if "mermaid" not in fence_lang and len(line) > 84:
                     violations.append(
                         f"{rel}:{line_num}: fenced code line exceeds 84 chars ({len(line)}): {line[:60]}..."
                     )
-                for match in snippet_pattern.finditer(line):
+                if ("--8" in stripped or "8<--" in stripped) and not snippet_pattern.match(stripped):
+                    violations.append(f"{rel}:{line_num}: malformed snippet directive: {stripped}")
+                match = snippet_pattern.match(stripped)
+                if match:
                     target = match.group(1)
                     if ":" not in target:
                         violations.append(
                             f"{rel}:{line_num}: whole-file snippet include without named section: {target}"
                         )
+                    else:
+                        file_part, section_name = target.split(":", 1)
+                        target_path = REPO_ROOT / file_part
+                        if not target_path.is_file():
+                            violations.append(f"{rel}:{line_num}: missing snippet file: {file_part}")
+                        else:
+                            target_text = target_path.read_text(encoding="utf-8")
+                            if f"# --8<-- [start:{section_name}]" not in target_text:
+                                violations.append(
+                                    f"{rel}:{line_num}: missing start marker [start:{section_name}] in {file_part}"
+                                )
+                            if f"# --8<-- [end:{section_name}]" not in target_text:
+                                violations.append(
+                                    f"{rel}:{line_num}: missing end marker [end:{section_name}] in {file_part}"
+                                )
+            elif stripped.startswith(("--8<--", "--8 < --")) and not snippet_pattern.match(stripped):
+                violations.append(f"{rel}:{line_num}: malformed top-level snippet directive: {stripped}")
 
     assert not violations, f"Markdown code block violations ({len(violations)}):\n" + "\n".join(violations[:30])
+
+
+def _validate_python_fence(
+    rel: str,
+    fence_start_line: int,
+    fence_lines: list[tuple[int, str]],
+    snippet_pattern: re.Pattern[str],
+    violations: list[str],
+) -> None:
+    """Validate syntax and comment hygiene of an inline Python code block."""
+    if not fence_lines:
+        return
+    if any(snippet_pattern.match(line.strip()) or "--8" in line for _, line in fence_lines):
+        return
+    dedented = textwrap.dedent("\n".join(line for _, line in fence_lines))
+    if "..." in dedented:
+        return
+    try:
+        ast.parse(dedented, filename=f"{rel}:{fence_start_line}")
+    except SyntaxError as exc:
+        violations.append(f"{rel}:{fence_start_line}: invalid Python syntax in code block: {exc.msg}")
+        return
+    for token in tokenize.generate_tokens(io.StringIO(dedented).readline):
+        if token.type == tokenize.COMMENT and not _is_directive_comment(token.string):
+            line_no = fence_start_line + token.start[0]
+            violations.append(f"{rel}:{line_no}: inline comment in Python code block: {token.string.strip()}")
 
 
 @pytest.mark.parametrize(

@@ -30,7 +30,12 @@ For production file-backed SQLite databases, enable Write-Ahead Logging (`WAL`),
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
 config = AiosqliteConfig(
-    connection_config={"database": "var/app.db", "timeout": 30.0, "pool_min_size": 1, "pool_max_size": 4},
+    connection_config={
+        "database": "var/app.db",
+        "timeout": 30.0,
+        "pool_min_size": 1,
+        "pool_max_size": 4,
+    },
     driver_features={
         "pragmas": {
             "journal_mode": "WAL",

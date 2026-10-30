@@ -567,6 +567,7 @@ target-version = "py311"
 [tool.ruff.format]
 docstring-code-format = true
 docstring-code-line-length = 60
+exclude = ["*.md"]
 preview = true
 skip-magic-trailing-comma = true
 

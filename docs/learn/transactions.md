@@ -26,10 +26,18 @@ When coordinating writes in domain services, `SQLSpecSyncService.begin_transacti
     service = SQLSpecSyncService(config=config)
 
     with service.begin_transaction() as session:
-        session.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER)")
-        session.execute("INSERT INTO accounts (id, balance) VALUES (1, 500), (2, 200)")
-        session.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
-        session.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
+        session.execute(
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER)"
+        )
+        session.execute(
+            "INSERT INTO accounts (id, balance) VALUES (1, 500), (2, 200)"
+        )
+        session.execute(
+            "UPDATE accounts SET balance = balance - 100 WHERE id = 1"
+        )
+        session.execute(
+            "UPDATE accounts SET balance = balance + 100 WHERE id = 2"
+        )
     ```
 
 === "Async"
@@ -42,10 +50,18 @@ When coordinating writes in domain services, `SQLSpecSyncService.begin_transacti
     service = SQLSpecAsyncService(config=config)
 
     async with service.begin_transaction() as session:
-        await session.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER)")
-        await session.execute("INSERT INTO accounts (id, balance) VALUES (1, 500), (2, 200)")
-        await session.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
-        await session.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
+        await session.execute(
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER)"
+        )
+        await session.execute(
+            "INSERT INTO accounts (id, balance) VALUES (1, 500), (2, 200)"
+        )
+        await session.execute(
+            "UPDATE accounts SET balance = balance - 100 WHERE id = 1"
+        )
+        await session.execute(
+            "UPDATE accounts SET balance = balance + 100 WHERE id = 2"
+        )
     ```
 
 ## Savepoints and Partial Rollbacks
@@ -58,7 +74,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import SQLSpecError
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(config) as session:
     session.execute("CREATE TABLE tags (name TEXT PRIMARY KEY)")
@@ -82,7 +100,9 @@ When using `sqlspec[mypyc]` compiled wheels, avoid executing fallback database q
 ```python
 should_retry_fallback = False
 try:
-    session.execute("INSERT INTO audit_log (event) VALUES (:event)", event="login")
+    session.execute(
+        "INSERT INTO audit_log (event) VALUES (:event)", event="login"
+    )
 except Exception:
     should_retry_fallback = True
 

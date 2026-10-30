@@ -7,7 +7,7 @@ Moving data between operational databases, analytical engines, and cloud object 
 Register source and target configurations on a single `SQLSpec` instance to extract filtered rows from an upstream store and batch-load transformed records into a downstream target:
 
 ```python
---8 < --"docs/examples/patterns/etl_pipeline.py:example"
+--8<-- "docs/examples/patterns/etl_pipeline.py:example"
 ```
 
 ## Bounded-Memory Chunked Streaming
@@ -21,8 +21,12 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
-source = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-target = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+source = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
+target = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(source) as src, spec.provide_session(target) as dst:
     src.execute(
@@ -30,7 +34,10 @@ with spec.provide_session(source) as src, spec.provide_session(target) as dst:
         CREATE TABLE raw_events (id INTEGER PRIMARY KEY, kind TEXT)
         """
     )
-    src.execute_many("INSERT INTO raw_events (kind) VALUES (?)", [("click",), ("signup",), ("click",)])
+    src.execute_many(
+        "INSERT INTO raw_events (kind) VALUES (?)",
+        [("click",), ("signup",), ("click",)],
+    )
     dst.execute(
         """
         CREATE TABLE event_archive (id INTEGER PRIMARY KEY, kind TEXT)
@@ -68,16 +75,27 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
-with tempfile.TemporaryDirectory() as tmp_dir, spec.provide_session(config) as session:
+with (
+    tempfile.TemporaryDirectory() as tmp_dir,
+    spec.provide_session(config) as session,
+):
     parquet_file = Path(tmp_dir) / "orders.parquet"
     session.execute("CREATE TABLE orders (id INTEGER, amount REAL)")
     session.execute("CREATE TABLE orders_copy (id INTEGER, amount REAL)")
-    session.execute_many("INSERT INTO orders VALUES (?, ?)", [(1, 49.95), (2, 125.00)])
+    session.execute_many(
+        "INSERT INTO orders VALUES (?, ?)", [(1, 49.95), (2, 125.00)]
+    )
 
-    export_job = session.select_to_storage("SELECT id, amount FROM orders", parquet_file, format_hint="parquet")
-    import_job = session.load_from_storage("orders_copy", parquet_file, file_format="parquet")
+    export_job = session.select_to_storage(
+        "SELECT id, amount FROM orders", parquet_file, format_hint="parquet"
+    )
+    import_job = session.load_from_storage(
+        "orders_copy", parquet_file, file_format="parquet"
+    )
     assert export_job.telemetry["rows_processed"] == 2
     assert import_job.telemetry["rows_processed"] == 2
 ```

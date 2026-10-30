@@ -32,19 +32,31 @@ Execute a lightweight scalar query inside a bounded timeout and return structure
         error: str | None = None
 
 
-    async def check_async_database(config: AiosqliteConfig, *, timeout_s: float = 1.5) -> DatabaseHealth:
+    async def check_async_database(
+        config: AiosqliteConfig, *, timeout_s: float = 1.5
+    ) -> DatabaseHealth:
         name = config.bind_key or "default"
         started = time.perf_counter()
         try:
-            async with asyncio.timeout(timeout_s), config.provide_session() as session:
+            async with (
+                asyncio.timeout(timeout_s),
+                config.provide_session() as session,
+            ):
                 probe = await session.select_value("SELECT 1", value_type=int)
                 healthy = probe == 1
         except Exception as exc:
             elapsed = round((time.perf_counter() - started) * 1000, 2)
-            return DatabaseHealth(bind_key=name, healthy=False, latency_ms=elapsed, error=type(exc).__name__)
+            return DatabaseHealth(
+                bind_key=name,
+                healthy=False,
+                latency_ms=elapsed,
+                error=type(exc).__name__,
+            )
 
         elapsed = round((time.perf_counter() - started) * 1000, 2)
-        return DatabaseHealth(bind_key=name, healthy=healthy, latency_ms=elapsed)
+        return DatabaseHealth(
+            bind_key=name, healthy=healthy, latency_ms=elapsed
+        )
     ```
 
 === "Sync Readiness Check"
@@ -72,10 +84,17 @@ Execute a lightweight scalar query inside a bounded timeout and return structure
                 healthy = probe == 1
         except Exception as exc:
             elapsed = round((time.perf_counter() - started) * 1000, 2)
-            return DatabaseHealth(bind_key=name, healthy=False, latency_ms=elapsed, error=type(exc).__name__)
+            return DatabaseHealth(
+                bind_key=name,
+                healthy=False,
+                latency_ms=elapsed,
+                error=type(exc).__name__,
+            )
 
         elapsed = round((time.perf_counter() - started) * 1000, 2)
-        return DatabaseHealth(bind_key=name, healthy=healthy, latency_ms=elapsed)
+        return DatabaseHealth(
+            bind_key=name, healthy=healthy, latency_ms=elapsed
+        )
     ```
 
 ## Dialect-Specific Ping Queries

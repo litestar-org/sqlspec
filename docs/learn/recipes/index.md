@@ -73,7 +73,11 @@ Construct `SQLSpec` once per process, register your configurations with explicit
 ```python
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.observability import ObservabilityConfig, RedactionConfig, SamplingConfig
+from sqlspec.observability import (
+    ObservabilityConfig,
+    RedactionConfig,
+    SamplingConfig,
+)
 from sqlspec.service import SQLSpecSyncService
 
 spec = SQLSpec(
@@ -82,6 +86,8 @@ spec = SQLSpec(
         redaction=RedactionConfig(mask_parameters=True),
     )
 )
-primary = spec.add_config(SqliteConfig(bind_key="primary", connection_config={"database": ":memory:"}))
+primary = spec.add_config(
+    SqliteConfig(bind_key="primary", connection_config={"database": ":memory:"})
+)
 billing_service = SQLSpecSyncService(config=primary, loader=spec.loader)
 ```

@@ -32,14 +32,30 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(config) as session:
-    session.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, region TEXT, balance INTEGER)")
-    session.execute_many("INSERT INTO accounts (region, balance) VALUES (?, ?)", [("us-east", 500), ("eu-west", 900)])
+    session.execute(
+        """
+        CREATE TABLE accounts (
+            id INTEGER PRIMARY KEY,
+            region TEXT,
+            balance INTEGER
+        )
+        """
+    )
+    session.execute_many(
+        "INSERT INTO accounts (region, balance) VALUES (?, ?)",
+        [("us-east", 500), ("eu-west", 900)],
+    )
 
     for region in ("us-east", "eu-west"):
-        rows = session.select("SELECT id, balance FROM accounts WHERE region = :region", region=region)
+        rows = session.select(
+            "SELECT id, balance FROM accounts WHERE region = :region",
+            region=region,
+        )
         assert len(rows) == 1
 ```
 

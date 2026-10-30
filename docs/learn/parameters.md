@@ -21,11 +21,19 @@ from sqlspec import SQL, SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(config) as session:
-    session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, role TEXT)")
-    session.execute("INSERT INTO users (email, role) VALUES (:email, :role)", email="ada@example.com", role="admin")
+    session.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, role TEXT)"
+    )
+    session.execute(
+        "INSERT INTO users (email, role) VALUES (:email, :role)",
+        email="ada@example.com",
+        role="admin",
+    )
 
     lookup = SQL("SELECT id, email FROM users WHERE role = :role", role="admin")
     admins = session.select(lookup)
@@ -39,7 +47,10 @@ with spec.provide_session(config) as session:
 ```python
 session.execute_many(
     "INSERT INTO users (email, role) VALUES (:email, :role)",
-    [{"email": "grace@example.com", "role": "maintainer"}, {"email": "linus@example.com", "role": "reviewer"}],
+    [
+        {"email": "grace@example.com", "role": "maintainer"},
+        {"email": "linus@example.com", "role": "reviewer"},
+    ],
 )
 ```
 
@@ -65,14 +76,26 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import LimitOffsetFilter
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 
 with spec.provide_session(config) as session:
-    session.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY, owner_id INTEGER, title TEXT)")
-    session.execute("INSERT INTO tasks (owner_id, title) VALUES (:owner_id, :title)", owner_id=7, title="Write docs")
+    session.execute(
+        "CREATE TABLE tasks (id INTEGER PRIMARY KEY, owner_id INTEGER, title TEXT)"
+    )
+    session.execute(
+        "INSERT INTO tasks (owner_id, title) VALUES (:owner_id, :title)",
+        owner_id=7,
+        title="Write docs",
+    )
 
     page_filter = LimitOffsetFilter(limit=20, offset=0)
-    rows = session.select("SELECT id, title FROM tasks WHERE owner_id = :owner_id ORDER BY id", page_filter, owner_id=7)
+    rows = session.select(
+        "SELECT id, title FROM tasks WHERE owner_id = :owner_id ORDER BY id",
+        page_filter,
+        owner_id=7,
+    )
 ```
 
 ## Dialect Type Inference Tips

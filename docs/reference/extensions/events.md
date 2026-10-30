@@ -18,7 +18,7 @@ from sqlspec.extensions.events import (
 )
 ```
 
-Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable table-backed event queues across all 20 adapters. See the [Event Channels Guide](../../integrations/events.md) for usage examples.
+Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable table-backed event queues across all supported adapters. See the [Event Channels Guide](../../integrations/events.md) for usage examples.
 
 ## Event Channels & Listeners
 

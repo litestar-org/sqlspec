@@ -29,7 +29,11 @@ config = spec.add_config(
             )
         },
         statement_config=StatementConfig(dialect="tsql"),
-        driver_features={"enable_driver_pooling": True, "chunk_size": 65536, "fetch_concurrently": True},
+        driver_features={
+            "enable_driver_pooling": True,
+            "chunk_size": 65536,
+            "fetch_concurrently": True,
+        },
     )
 )
 ```

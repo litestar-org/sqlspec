@@ -21,6 +21,7 @@ nav = [
       { "Installation" = "learn/installation.md" },
       { "Quickstart" = "learn/quickstart.md" },
       { "Configuration" = "learn/configuration.md" },
+      { "Interactive Playground" = "playground.md" },
     ] },
     { "Core Execution" = [
       { "Querying" = "learn/querying.md" },
@@ -48,6 +49,12 @@ nav = [
       { "Multi-Tenancy" = "learn/recipes/multi-tenancy.md" },
       { "Health Checks" = "learn/recipes/health-checks.md" },
       { "ETL & Bulk Ingest" = "learn/recipes/etl-and-bulk-ingest.md" },
+    ] },
+    { "Project & Contributing" = [
+      { "Contribution Guide" = "contributing/index.md" },
+      { "Creating Adapters" = "contributing/creating-adapters.md" },
+      { "Releases" = "releases.md" },
+      { "Changelog" = "changelog.md" },
     ] },
   ] },
   { "Databases" = [
@@ -160,13 +167,6 @@ nav = [
       { "arrow-odbc" = "reference/adapters/arrow-odbc.md" },
     ] },
   ] },
-  { "Playground" = "playground.md" },
-  { "Project" = [
-    "contributing/index.md",
-    { "Creating Adapters" = "contributing/creating-adapters.md" },
-    { "Releases" = "releases.md" },
-    { "Changelog" = "changelog.md" },
-  ] },
 ]
 
 [project.theme]
@@ -276,10 +276,10 @@ generator = false
 [project.plugins.mkdocstrings]
 default_handler = "python"
 custom_templates = "tools/docs/templates"
+enable_inventory = true
 
 [project.plugins.mkdocstrings.handlers.python]
 paths = ["."]
-enable_inventory = true
 inventories = [
   "https://docs.python.org/3/objects.inv",
   "https://typing-extensions.readthedocs.io/en/stable/objects.inv",

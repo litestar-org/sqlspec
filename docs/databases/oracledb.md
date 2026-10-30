@@ -21,8 +21,17 @@ uv add "sqlspec[oracledb]"
     spec = SQLSpec()
     config = spec.add_config(
         OracleAsyncConfig(
-            connection_config={"user": "app", "password": "secret", "dsn": "localhost:1521/FREEPDB1", "min": 2, "max": 20},
-            driver_features={"enable_lowercase_column_names": True, "enable_session_tracing": True},
+            connection_config={
+                "user": "app",
+                "password": "secret",
+                "dsn": "localhost:1521/FREEPDB1",
+                "min": 2,
+                "max": 20,
+            },
+            driver_features={
+                "enable_lowercase_column_names": True,
+                "enable_session_tracing": True,
+            },
         )
     )
     ```
@@ -36,7 +45,13 @@ uv add "sqlspec[oracledb]"
     spec = SQLSpec()
     config = spec.add_config(
         OracleSyncConfig(
-            connection_config={"user": "app", "password": "secret", "dsn": "localhost:1521/FREEPDB1", "min": 2, "max": 10}
+            connection_config={
+                "user": "app",
+                "password": "secret",
+                "dsn": "localhost:1521/FREEPDB1",
+                "min": 2,
+                "max": 10,
+            }
         )
     )
     ```

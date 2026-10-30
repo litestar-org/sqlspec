@@ -1,6 +1,6 @@
 # Databases
 
-SQLSpec supports **20 database adapters** spanning embedded engines, relational OLTP servers, enterprise mainframes, distributed SQL clusters, and cloud analytical warehouses. Every adapter exposes the same `provide_session()` lifecycle, parameter compiler, migration runner, data dictionary, Litestar store, Events queue store, and Google ADK session/memory stores.
+SQLSpec supports synchronous and asynchronous **database adapters** spanning embedded engines, relational OLTP servers, enterprise mainframes, distributed SQL clusters, and cloud analytical warehouses. Every adapter exposes the same `provide_session()` lifecycle, parameter compiler, migration runner, data dictionary, Litestar store, Events queue store, and Google ADK session/memory stores.
 
 ## Adapter Capability Matrix
 

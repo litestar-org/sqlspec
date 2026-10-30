@@ -7,7 +7,7 @@
 When constructed with `config=`, a service checks out a short-lived pooled session automatically for standalone read helpers (`service.get_one(...)`, `service.exists(...)`, `service.paginate(...)`) and opens an explicit commit-or-rollback session inside `with service.begin_transaction() as session:`:
 
 ```python
---8 < --"docs/examples/drivers/service_config.py:example"
+--8<-- "docs/examples/drivers/service_config.py:example"
 ```
 
 ## Core Service Methods
@@ -61,14 +61,20 @@ class CustomerService(SQLSpecAsyncService[AsyncpgDriver]):
         query = self.get_sql("get-customer-by-email").where("email = :email")
         return await self.get_one(query, email=email, schema_type=Customer)
 
-    async def list_customers(self, *, limit: int = 25, offset: int = 0) -> OffsetPagination[Customer]:
+    async def list_customers(
+        self, *, limit: int = 25, offset: int = 0
+    ) -> OffsetPagination[Customer]:
         """Paginate customers without holding a connection between pages."""
         query = self.get_sql("list-customers")
         return await self.paginate_limit_offset(
-            query, LimitOffsetFilter(limit=limit, offset=offset), schema_type=Customer
+            query,
+            LimitOffsetFilter(limit=limit, offset=offset),
+            schema_type=Customer,
         )
 
-    async def upgrade_tier_with_audit(self, customer_id: int, new_tier: str, audit_events: Sequence[str]) -> None:
+    async def upgrade_tier_with_audit(
+        self, customer_id: int, new_tier: str, audit_events: Sequence[str]
+    ) -> None:
         """Execute atomic multi-table updates inside an explicit transaction."""
         stack = (
             StatementStack()
@@ -86,7 +92,10 @@ class CustomerService(SQLSpecAsyncService[AsyncpgDriver]):
                 INSERT INTO tier_audit (customer_id, new_tier, event_type)
                 VALUES (:id, :tier, :event)
                 """,
-                [{"id": customer_id, "tier": new_tier, "event": evt} for evt in audit_events],
+                [
+                    {"id": customer_id, "tier": new_tier, "event": evt}
+                    for evt in audit_events
+                ],
             )
         )
         async with self.begin_transaction() as session:
@@ -129,7 +138,9 @@ class ProductService(SQLSpecAsyncService[AsyncpgDriver]):
         query = self.spec.get_sql("get-product").where("id = :id")
         return await self.get_one(query, id=product_id, schema_type=Product)
 
-    async def list_products(self, *filters: FilterTypes) -> OffsetPagination[Product]:
+    async def list_products(
+        self, *filters: FilterTypes
+    ) -> OffsetPagination[Product]:
         """Filter and paginate products using precompiled SQL templates."""
         query = self.spec.get_sql("list-products")
         return await self.paginate(query, *filters, schema_type=Product)
@@ -145,7 +156,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.service import SQLSpecSyncService
 
 spec = SQLSpec()
-config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+config = spec.add_config(
+    SqliteConfig(connection_config={"database": ":memory:"})
+)
 orders_svc = SQLSpecSyncService(config=config)
 ledger_svc = SQLSpecSyncService(config=config)
 

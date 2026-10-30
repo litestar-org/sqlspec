@@ -42,7 +42,11 @@ High-throughput services can sample routine queries deterministically while alwa
 from sqlspec.observability import ObservabilityConfig, RedactionConfig
 
 observability = ObservabilityConfig(
-    redaction=RedactionConfig(mask_parameters=True, mask_literals=False, parameter_allow_list=("tenant_id",))
+    redaction=RedactionConfig(
+        mask_parameters=True,
+        mask_literals=False,
+        parameter_allow_list=("tenant_id",),
+    )
 )
 ```
 
