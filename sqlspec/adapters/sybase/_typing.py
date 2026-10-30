@@ -7,15 +7,11 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import pymssql as _pymssql
 from mypy_extensions import mypyc_attr
-from pymssql import Connection as _SybaseConnection
-from pymssql import Cursor as _SybaseRawCursor
-from pymssql import Error as SybaseError
 
 from sqlspec.utils.module_loader import import_optional_attr
 
-PYMSSQL_MODULE = _pymssql
+PYMSSQL_MODULE: Any = None
 _DRIVER_CLS: Any = None
 
 if TYPE_CHECKING:
@@ -23,6 +19,9 @@ if TYPE_CHECKING:
     from types import TracebackType
     from typing import TypeAlias
 
+    from pymssql import Connection as _SybaseConnection
+    from pymssql import Cursor as _SybaseRawCursor
+    from pymssql import Error as _SybaseError
     from pymssql._pymssql import QueryParams as SybaseQueryParams
 
     from sqlspec.adapters.sybase.driver import SybaseDriver
@@ -30,11 +29,13 @@ if TYPE_CHECKING:
 
     SybaseConnection: TypeAlias = _SybaseConnection
     SybaseRawCursor: TypeAlias = _SybaseRawCursor
+    SybaseError: TypeAlias = _SybaseError
 
 if not TYPE_CHECKING:
     SybaseQueryParams = Any
-    SybaseConnection = _SybaseConnection
-    SybaseRawCursor = _SybaseRawCursor
+    SybaseConnection = Any
+    SybaseRawCursor = Any
+    SybaseError = Exception
 
 __all__ = (
     "PYMSSQL_MODULE",

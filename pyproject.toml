@@ -73,7 +73,9 @@ pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 sanic = ["sanic"]
 spanner = ["google-cloud-spanner>=3.64.0"]
+sqlanywhere = ["sqlanydb>=1.0.14"]
 starlette = ["starlette"]
+sybase = ["pymssql"]
 uuid = ["uuid-utils>=0.17.0"]
 
 [dependency-groups]
@@ -156,6 +158,8 @@ pg_textsearch = "sqlspec.dialects.postgres:PGTextSearch"
 pgvector = "sqlspec.dialects.postgres:PGVector"
 spangres = "sqlspec.dialects.spanner:Spangres"
 spanner = "sqlspec.dialects.spanner:Spanner"
+sqlanywhere = "sqlspec.dialects.sybase:SQLAnywhere"
+sybase = "sqlspec.dialects.sybase:Sybase"
 
 [tool.uv]
 exclude-newer = "7 days"
@@ -260,6 +264,9 @@ include = [
   "sqlspec/dialects/db2/_generators.py",           # Db2 custom dialect render hooks
   "sqlspec/dialects/db2/_parsers.py",              # Db2 custom dialect parser hooks
   "sqlspec/dialects/db2/_transforms.py",           # Db2 custom dialect transform helpers
+  "sqlspec/dialects/sybase/_generators.py",        # Sybase and SQL Anywhere custom dialect render hooks
+  "sqlspec/dialects/sybase/_parsers.py",           # Sybase and SQL Anywhere custom dialect parser hooks
+  "sqlspec/dialects/sybase/_transforms.py",        # Sybase and SQL Anywhere custom dialect transform helpers
   "sqlspec/storage/registry.py",                   # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",                     # Safe storage error normalization
   "sqlspec/storage/_paths.py",                     # Pure storage path handling
@@ -484,6 +491,8 @@ markers = [
   "mysql_connector: marks tests using mysql-connector",
   "pymysql: marks tests using pymysql",
   "psqlpy: marks tests using psqlpy",
+  "sqlanywhere: marks tests using the sqlanywhere adapter",
+  "sybase: marks tests using the sybase adapter",
 ]
 python_files = ["test_*.py"]
 testpaths = ["tests"]
@@ -539,6 +548,8 @@ module = [
   "ibm_db.*",
   "ibm_db_dbi",
   "ibm_db_dbi.*",
+  "sqlanydb",
+  "sqlanydb.*",
   "sqlglot",
   "sqlglot.*",
 ]

@@ -9,15 +9,10 @@ from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.utils.module_loader import import_optional, import_optional_attr
+from sqlspec.utils.module_loader import import_optional_attr
 
-SQLANYDB_MODULE = import_optional("sqlanydb")
+SQLANYDB_MODULE: Any = None
 _DRIVER_CLS: Any = None
-
-
-class _SqlanywhereFallbackError(Exception):
-    """Fallback exception base when sqlanydb is not installed."""
-
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -33,10 +28,10 @@ if TYPE_CHECKING:
     SqlanywhereError: TypeAlias = Exception
 
 if not TYPE_CHECKING:
-    SqlanywhereConnection = import_optional_attr("sqlanydb", "Connection") or Any
-    SqlanywhereRawCursor = import_optional_attr("sqlanydb", "Cursor") or Any
+    SqlanywhereConnection = Any
+    SqlanywhereRawCursor = Any
     SqlanywhereQueryParams = Any
-    SqlanywhereError = import_optional_attr("sqlanydb", "Error") or _SqlanywhereFallbackError
+    SqlanywhereError = Exception
 
 __all__ = (
     "SQLANYDB_MODULE",

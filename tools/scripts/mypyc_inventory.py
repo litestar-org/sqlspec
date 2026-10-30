@@ -111,6 +111,14 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Spanner data-dictionary dialect configuration is in the compiled dialect surface.",
     },
+    "sqlspec/data_dictionary/dialects/sqlanywhere/config.py": {
+        "classification": "compile_now",
+        "reason": "SQL Anywhere data-dictionary dialect configuration and feature helpers compile with the dialect surface.",
+    },
+    "sqlspec/data_dictionary/dialects/sybase/config.py": {
+        "classification": "compile_now",
+        "reason": "Sybase ASE data-dictionary dialect configuration and feature helpers compile with the dialect surface.",
+    },
     "sqlspec/data_dictionary/dialects/bigquery/config.py": {
         "classification": "compile_now",
         "reason": "Shared BigQuery INFORMATION_SCHEMA formatting helpers for native BigQuery and ADBC-as-BigQuery dictionaries.",
@@ -161,6 +169,18 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
     "sqlspec/dialects/db2/_parsers.py": {"classification": "compile_now", "reason": "Db2 AST normalisation helpers."},
     "sqlspec/dialects/db2/_transforms.py": {"classification": "compile_now", "reason": "Db2 render helper functions."},
+    "sqlspec/dialects/sybase/_generators.py": {
+        "classification": "compile_now",
+        "reason": "Sybase and SQL Anywhere render handlers compile as explicit-argument callables with per-instance generator dispatch.",
+    },
+    "sqlspec/dialects/sybase/_parsers.py": {
+        "classification": "compile_now",
+        "reason": "Sybase and SQL Anywhere AST normalisation helpers.",
+    },
+    "sqlspec/dialects/sybase/_transforms.py": {
+        "classification": "compile_now",
+        "reason": "Sybase and SQL Anywhere render helper functions.",
+    },
     "sqlspec/adapters/mysql_common.py": {
         "classification": "compile_now",
         "reason": "Shared MySQL-family adapter helpers compile with the adapter core surface.",
@@ -250,6 +270,22 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/adapters/sqlite/pool.py": {
         "classification": "compile_now",
         "reason": "Pool runtime compiles without adapter driver exception-handler subclasses.",
+    },
+    "sqlspec/adapters/sqlanywhere/core.py": {
+        "classification": "compile_now",
+        "reason": "SQL Anywhere parameter normalization, row collection, and exception mapping helpers compile with the adapter core surface.",
+    },
+    "sqlspec/adapters/sqlanywhere/pool.py": {
+        "classification": "compile_now",
+        "reason": "SQL Anywhere thread-local pool runtime compiles without adapter driver subclasses.",
+    },
+    "sqlspec/adapters/sybase/core.py": {
+        "classification": "compile_now",
+        "reason": "Sybase ASE parameter normalization, percent escaping, row collection, and exception mapping helpers compile with the adapter core surface.",
+    },
+    "sqlspec/adapters/sybase/pool.py": {
+        "classification": "compile_now",
+        "reason": "Sybase ASE thread-local pool runtime with TDSVER='5.0' negotiation compiles without adapter driver subclasses.",
     },
     "sqlspec/adapters/aiosqlite/pool.py": {
         "classification": "compile_now",

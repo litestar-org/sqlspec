@@ -6,10 +6,12 @@ import os
 import threading
 import time
 from contextlib import contextmanager
+from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sybase._typing import PYMSSQL_MODULE, SybaseConnection
 from sqlspec.adapters.sybase.core import DEFAULT_SYBASE_CONN_PROPERTIES, DEFAULT_SYBASE_TDS_VERSION
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -22,6 +24,14 @@ logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sybase"
 _TDSVER_LOCK = threading.RLock()
 pymssql = PYMSSQL_MODULE
+
+
+def _load_pymssql_module() -> Any:
+    """Import ``pymssql`` lazily or raise ``MissingDependencyError``."""
+    try:
+        return import_module("pymssql")
+    except ImportError as exc:
+        raise MissingDependencyError(package="pymssql", install_package="sybase") from exc
 
 
 class SybaseConnectionPool:
@@ -90,11 +100,14 @@ class SybaseConnectionPool:
         Returns:
             SybaseConnection: A newly opened, fully configured connection.
         """
+        module = pymssql
+        if module is None:
+            module = _load_pymssql_module()
         with _TDSVER_LOCK:
             prior_tdsver = os.environ.get("TDSVER")
             os.environ["TDSVER"] = self._tds_version
             try:
-                connection = pymssql.connect(**self._connection_parameters)
+                connection = module.connect(**self._connection_parameters)
             finally:
                 if prior_tdsver is None:
                     os.environ.pop("TDSVER", None)

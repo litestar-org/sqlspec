@@ -44,11 +44,16 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("storage_backend_fsspec", "sqlspec.storage.backends.fsspec", "FSSpecBackend", True),
     SmokeImport("storage_backend_obstore", "sqlspec.storage.backends.obstore", "ObStoreBackend", True),
     SmokeImport("sqlite_pool", "sqlspec.adapters.sqlite.pool", "SqliteConnectionPool", True),
+    SmokeImport("sybase_pool", "sqlspec.adapters.sybase.pool", "SybaseConnectionPool", True),
+    SmokeImport("sqlanywhere_pool", "sqlspec.adapters.sqlanywhere.pool", "SqlanywhereConnectionPool", True),
     SmokeImport("data_dictionary_registry", "sqlspec.data_dictionary._registry", "get_dialect_config", True),
     SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
     SmokeImport("pgvector_dialect", "sqlspec.dialects.postgres._pgvector", "PGVector"),
     SmokeImport("spanner_dialect", "sqlspec.dialects.spanner._spanner", "Spanner"),
     SmokeImport("db2_dialect", "sqlspec.dialects.db2", "DB2"),
+    SmokeImport("sybase_dialect", "sqlspec.dialects.sybase", "Sybase"),
+    SmokeImport("sqlanywhere_dialect", "sqlspec.dialects.sybase", "SQLAnywhere"),
+    SmokeImport("sybase_generators", "sqlspec.dialects.sybase._generators", "sybase_select_sql", True),
     SmokeImport("fastapi_providers", "sqlspec.extensions.fastapi.providers", "provide_filters", True, "fastapi"),
     SmokeImport(
         "litestar_providers", "sqlspec.extensions.litestar.providers", "create_filter_dependencies", True, "litestar"
@@ -587,6 +592,7 @@ def _discover_adapter_config_classes(*, skipped: "list[str] | None" = None) -> "
                 "psycopg_pool",
                 "pymssql",
                 "pymysql",
+                "sqlanydb",
             }:
                 raise
             skipped.append(f"{module_name}: optional dependency missing: {exc.name}")
