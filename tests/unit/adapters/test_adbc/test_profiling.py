@@ -1,5 +1,7 @@
 """Unit tests for ADBC DuckDB JSON statement profiling and per-statement script events."""
 
+import subprocess
+import sys
 from pathlib import Path
 
 from sqlspec.adapters.adbc import AdbcConfig
@@ -59,3 +61,41 @@ def test_adbc_duckdb_enable_statement_profiling_and_execute_script_events() -> N
     assert outer_event.operation == "SCRIPT"
     assert outer_event.is_script is True
     assert outer_event.script_ordinal is None
+
+
+def test_adbc_duckdb_statement_profiling_without_duckdb_package() -> None:
+    """ADBC statement profiling with DuckDB backend works without the duckdb Python library."""
+    script = """
+import importlib.abc
+import sys
+
+class BlockDuckDB(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "duckdb" or fullname.startswith("duckdb."):
+            raise ModuleNotFoundError("duckdb blocked", name=fullname)
+
+sys.meta_path.insert(0, BlockDuckDB())
+
+from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.observability import ObservabilityConfig, StatementEvent
+
+events: list[StatementEvent] = []
+config = AdbcConfig(
+    connection_config={"driver_name": "duckdb"},
+    driver_features={"enable_statement_profiling": True},
+    observability_config=ObservabilityConfig(statement_observers=(events.append,)),
+)
+
+with config.provide_session() as session:
+    result = session.execute("SELECT 42 AS val")
+    assert result.one()["val"] == 42
+
+assert len(events) == 1
+event = events[0]
+assert isinstance(event.profile, dict)
+assert "cpu_time" in event.profile
+assert "children" in event.profile
+assert "duckdb" not in sys.modules
+assert "sqlspec.adapters.duckdb" not in sys.modules
+"""
+    subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)

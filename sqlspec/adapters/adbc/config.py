@@ -7,7 +7,9 @@ from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcCursor, AdbcSessio
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     build_connection_config,
+    cleanup_duckdb_profile_path,
     configure_adbc_duckdb_profiling,
+    create_duckdb_profile_path,
     detect_postgres_extensions,
     get_statement_config,
     is_postgres_dialect,
@@ -17,7 +19,6 @@ from sqlspec.adapters.adbc.core import (
     resolve_driver_connect_func,
 )
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
-from sqlspec.adapters.duckdb.core import cleanup_duckdb_profile_path, create_duckdb_profile_path
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
