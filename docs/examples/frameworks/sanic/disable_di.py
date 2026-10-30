@@ -12,6 +12,7 @@ __all__ = ("main",)
 
 def main() -> Sanic:
     """Create a Sanic application acquiring connections manually from app.ctx.db_pool."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     config = AiosqliteConfig(
         connection_config={"database": ":memory:"},
@@ -29,6 +30,7 @@ def main() -> Sanic:
             return response.json(await db.select_one("SELECT 1 AS ok"))
 
     db_plugin.init_app(app)
+    # --8<-- [end:example]
     return app
 
 

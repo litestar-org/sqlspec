@@ -7,8 +7,10 @@ __all__ = ("main",)
 
 def main() -> ObservabilityConfig:
     """Create an ObservabilityConfig with 10% deterministic sampling and forced error capture."""
+    # --8<-- [start:example]
     sampling = SamplingConfig(sample_rate=0.1, force_sample_on_error=True, deterministic=True)
     observability = ObservabilityConfig(sampling=sampling, print_sql=False)
+    # --8<-- [end:example]
     assert observability.sampling is sampling
     return observability
 

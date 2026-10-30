@@ -6,8 +6,8 @@ Database reliability depends on clear, predictable transaction boundaries. SQLSp
 
 Call `session.begin()`, `session.commit()`, and `session.rollback()` (`await session.begin()`, `await session.commit()`, `await session.rollback()` on async drivers) to group multiple statements into an atomic unit of work:
 
-```{ .python title="docs/examples/drivers/transaction_handling.py" hl_lines="18 20 22 24" }
---8<-- "docs/examples/drivers/transaction_handling.py"
+```{ .python title="docs/examples/drivers/transaction_handling.py" }
+--8<-- "docs/examples/drivers/transaction_handling.py:example"
 ```
 
 If an unhandled exception escapes a `provide_session()` context while a transaction is active, SQLSpec rolls back uncommitted changes before returning the connection to the pool.

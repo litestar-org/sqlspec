@@ -12,10 +12,19 @@ def main() -> int:
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+        session.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                name TEXT
+            )
+            """
+        )
         session.execute("INSERT INTO users (name) VALUES ('Old')")
+        # --8<-- [start:example]
         query = sql.update("users").set("name", "New").where("id = 1")
         result = session.execute(query)
+        # --8<-- [end:example]
         assert result.rows_affected == 1
         return result.rows_affected
 

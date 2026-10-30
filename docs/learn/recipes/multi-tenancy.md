@@ -32,14 +32,41 @@ def tenant_session(tenant_id: str) -> Iterator[tuple[SqliteDriver, str]]:
 
 
 with spec.provide_session(config) as setup:
-    setup.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL)")
-    setup.execute("INSERT INTO projects (tenant_id, name) VALUES (:tenant_id, :name)", tenant_id="acme", name="Billing")
     setup.execute(
-        "INSERT INTO projects (tenant_id, name) VALUES (:tenant_id, :name)", tenant_id="globex", name="Search"
+        """
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            name TEXT NOT NULL
+        )
+        """
+    )
+    setup.execute(
+        """
+        INSERT INTO projects (tenant_id, name)
+        VALUES (:tenant_id, :name)
+        """,
+        tenant_id="acme",
+        name="Billing",
+    )
+    setup.execute(
+        """
+        INSERT INTO projects (tenant_id, name)
+        VALUES (:tenant_id, :name)
+        """,
+        tenant_id="globex",
+        name="Search",
     )
 
 with tenant_session("acme") as (session, tenant_id):
-    rows = session.select("SELECT id, name FROM projects WHERE tenant_id = :tenant_id", tenant_id=tenant_id)
+    rows = session.select(
+        """
+        SELECT id, name
+        FROM projects
+        WHERE tenant_id = :tenant_id
+        """,
+        tenant_id=tenant_id,
+    )
     assert rows == [{"id": 1, "name": "Billing"}]
 ```
 
@@ -49,7 +76,13 @@ On PostgreSQL (`AsyncpgConfig`, `PsycopgAsyncConfig`, `PsqlpyConfig`), enforce d
 async with config.provide_session() as session:
     await session.begin()
     await session.execute("SELECT set_config('app.tenant_id', :tenant_id, true)", tenant_id=tenant_id)
-    rows = await session.select("SELECT id, name FROM projects ORDER BY id")
+    rows = await session.select(
+        """
+        SELECT id, name
+        FROM projects
+        ORDER BY id
+        """
+    )
     await session.commit()
 ```
 

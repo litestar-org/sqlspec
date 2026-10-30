@@ -22,7 +22,10 @@ config = spec.add_config(
         connection_config={
             "connection_string": (
                 "Driver={ODBC Driver 18 for SQL Server};"
-                "Server=localhost,1433;Database=analytics;UID=sa;PWD=StrongPassword123;TrustServerCertificate=yes;"
+                "Server=localhost,1433;"
+                "Database=analytics;"
+                "UID=sa;PWD=StrongPassword123;"
+                "TrustServerCertificate=yes;"
             )
         },
         statement_config=StatementConfig(dialect="tsql"),

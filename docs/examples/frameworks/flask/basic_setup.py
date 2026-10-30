@@ -8,9 +8,10 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.extensions.flask import SQLSpecPlugin
 
-__all__ = ("create_app", "main")
+__all__ = ("app", "create_app", "main")
 
 
+# --8<-- [start:example]
 def create_app(plugin: SQLSpecPlugin) -> Flask:
     """Create a Flask application initialized with SQLSpecPlugin."""
     app = Flask(__name__)
@@ -24,12 +25,16 @@ def create_app(plugin: SQLSpecPlugin) -> Flask:
     return app
 
 
+spec = SQLSpec()
+spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+plugin = SQLSpecPlugin(spec)
+app = create_app(plugin)
+# --8<-- [end:example]
+
+
 def main() -> Flask:
     """Build the SQLSpec plugin and return the configured Flask application."""
-    spec = SQLSpec()
-    spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-    plugin = SQLSpecPlugin(spec)
-    return create_app(plugin)
+    return app
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ __all__ = ("main",)
 
 def main() -> dict[str, Any]:
     """Build filter, sort, search, and pagination dependency providers for a users endpoint."""
+    # --8<-- [start:example]
     user_filters: FilterConfig = {
         "id_filter": str,
         "id_field": "id",
@@ -23,6 +24,7 @@ def main() -> dict[str, Any]:
         "updated_at": True,
     }
     deps = create_filter_dependencies(user_filters)
+    # --8<-- [end:example]
     assert deps
     return deps
 

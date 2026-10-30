@@ -1,18 +1,54 @@
 """Map query results automatically into typed msgspec.Struct models with schema_type."""
 
+from typing import Any
+
 import msgspec
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
-__all__ = ("User", "main")
+__all__ = ("User", "fetch_users", "main")
 
 
+# --8<-- [start:example]
 class User(msgspec.Struct, frozen=True, gc=False):
     """Typed user row projection."""
 
     id: int
     name: str
+
+
+def fetch_users(session: Any) -> tuple[list[User], User, User | None]:
+    users = session.select(
+        """
+        SELECT id, name
+        FROM users
+        ORDER BY id
+        """,
+        schema_type=User,
+    )
+    alice = session.select_one(
+        """
+        SELECT id, name
+        FROM users
+        WHERE name = ?
+        """,
+        "Alice",
+        schema_type=User,
+    )
+    nobody = session.select_one_or_none(
+        """
+        SELECT id, name
+        FROM users
+        WHERE name = ?
+        """,
+        "Nobody",
+        schema_type=User,
+    )
+    return users, alice, nobody
+
+
+# --8<-- [end:example]
 
 
 def main() -> tuple[list[User], User, User | None]:
@@ -27,9 +63,7 @@ def main() -> tuple[list[User], User, User | None]:
         raw_rows = session.select("SELECT id, name FROM users ORDER BY id")
         assert raw_rows == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
 
-        users = session.select("SELECT id, name FROM users ORDER BY id", schema_type=User)
-        alice = session.select_one("SELECT id, name FROM users WHERE name = ?", "Alice", schema_type=User)
-        nobody = session.select_one_or_none("SELECT id, name FROM users WHERE name = ?", "Nobody", schema_type=User)
+        users, alice, nobody = fetch_users(session)
 
     assert isinstance(users[0], User)
     assert alice.name == "Alice"

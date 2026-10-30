@@ -7,7 +7,9 @@ __all__ = ("main",)
 
 def main() -> CockroachPsycopgSyncConfig:
     """Construct a CockroachPsycopgSyncConfig targeting a CockroachDB cluster."""
+    # --8<-- [start:example]
     config = CockroachPsycopgSyncConfig(connection_config={"dsn": "postgresql://user:pass@localhost:26257/defaultdb"})
+    # --8<-- [end:example]
     assert "conninfo" in config.connection_config
     return config
 

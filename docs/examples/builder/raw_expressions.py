@@ -15,12 +15,27 @@ def main() -> dict[str, Any]:
 
     with spec.provide_session(config) as session:
         session.execute(
-            "CREATE TABLE events (id INTEGER PRIMARY KEY, name TEXT, created_at TEXT DEFAULT (datetime('now')))"
+            """
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+            """
         )
-        session.execute("INSERT INTO events (name) VALUES ('signup'), ('login')")
+        session.execute(
+            """
+            INSERT INTO events (name) VALUES
+                ('signup'),
+                ('login')
+            """
+        )
 
+        # --8<-- [start:example]
         raw_count = sql.raw("COUNT(*) AS total")
-        grouped = session.execute(sql.select("name", raw_count).from_("events").group_by("name")).all()
+        query = sql.select("name", raw_count).from_("events").group_by("name")
+        grouped = session.execute(query).all()
+        # --8<-- [end:example]
         assert len(grouped) == 2
 
         insert_returning = sql.insert("events").columns("name").values("logout").returning("id", "name")

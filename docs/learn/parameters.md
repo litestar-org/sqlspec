@@ -6,8 +6,8 @@ Python database drivers disagree on parameter placeholder syntax: PostgreSQL `as
 
 Pass named parameters either as keyword arguments (`status="active"`) or as a dictionary (`{"status": "active"}`), and positional parameters as positional arguments or a tuple/list:
 
-```{ .python title="docs/examples/drivers/parameter_binding.py" hl_lines="17 20" }
---8<-- "docs/examples/drivers/parameter_binding.py"
+```{ .python title="docs/examples/drivers/parameter_binding.py" }
+--8<-- "docs/examples/drivers/parameter_binding.py:example"
 ```
 
 When the same named parameter (`:status`) appears multiple times in a query, SQLSpec binds the value once by name and expands positional placeholders (`$1`, `?`, `%s`) in occurrence order automatically for drivers that only support positional wire binding.

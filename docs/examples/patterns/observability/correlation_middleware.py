@@ -9,6 +9,7 @@ __all__ = ("main",)
 
 def main() -> str:
     """Configure correlation middleware and scope a request correlation identifier."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         SqliteConfig(
@@ -20,6 +21,7 @@ def main() -> str:
     with CorrelationContext.context("req-123") as correlation_id:
         active_id = CorrelationContext.get()
         assert active_id == "req-123"
+    # --8<-- [end:example]
 
     assert CorrelationContext.get() is None
     return correlation_id

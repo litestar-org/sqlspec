@@ -12,8 +12,8 @@ Choose `asyncpg` for pure-`asyncio` APIs and background workers that prioritize 
 
 ## Minimal Connection and Pool Setup
 
-```{ .python title="docs/examples/drivers/asyncpg_connection.py" hl_lines="10 11 12" }
---8<-- "docs/examples/drivers/asyncpg_connection.py"
+```{ .python title="docs/examples/drivers/asyncpg_connection.py" }
+--8<-- "docs/examples/drivers/asyncpg_connection.py:example"
 ```
 
 Open request or task sessions with `async with spec.provide_session(config) as session:` and close the pool on shutdown via `await config.close_pool()`:

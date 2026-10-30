@@ -19,16 +19,35 @@ def main() -> tuple[int, list[dict[str, Any]]]:
 
     try:
         with spec.provide_session(config) as session:
-            session.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, created_at TEXT)")
+            session.execute(
+                """
+                CREATE TABLE items (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    created_at TEXT
+                )
+                """
+            )
             session.execute_many(
-                "INSERT INTO items (id, name, created_at) VALUES (?, ?, ?)",
+                """
+                INSERT INTO items (id, name, created_at)
+                VALUES (?, ?, ?)
+                """,
                 [(i, f"Item {i}", f"2026-01-{1 + i // 5:02d}") for i in range(1, 26)],
             )
+            # --8<-- [start:example]
+            keys: CursorKeys = [("created_at", "desc"), ("id", "desc")]
+            query = """
+                SELECT id, name, created_at
+                FROM items
+            """
+
             service = SQLSpecSyncService(session)
             offset_page = service.paginate_limit_offset(query, LimitOffsetFilter(limit=10, offset=0))
             first_page = service.paginate_cursor(query, CursorFilter(keys, limit=10))
             second_page = service.paginate_cursor(query, CursorFilter(keys, limit=10, cursor=first_page.next_cursor))
             previous_page = service.paginate(query, CursorFilter(keys, limit=10, cursor=second_page.previous_cursor))
+            # --8<-- [end:example]
 
         assert offset_page.total == 25
         assert len(offset_page.items) == 10

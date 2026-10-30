@@ -3,13 +3,19 @@
 from pathlib import Path
 
 import pytest
-from tools.docs.postbuild import build_postbuild_artifacts, emit_legacy_html_redirects, generate_llms_files
+from tools.docs.postbuild import (
+    build_postbuild_artifacts,
+    compact_site_html,
+    emit_legacy_html_redirects,
+    generate_llms_files,
+)
 from tools.docs.postbuild import main as postbuild_main
 from tools.docs.verify_docs_artifacts import DocsVerificationError, verify_site_artifacts
 from tools.docs.verify_docs_artifacts import main as verify_main
 
 __all__ = (
     "test_build_postbuild_artifacts_and_cli_main",
+    "test_compact_site_html_preserves_pre_and_textarea_indentation",
     "test_emit_legacy_html_redirects_preserves_hashes",
     "test_generate_llms_files_expands_snippets_and_orders_nav",
     "test_generate_llms_files_fallback_nav_uses_frontmatter_title",
@@ -17,8 +23,11 @@ __all__ = (
     "test_verify_site_artifacts_rejects_bloated_secondary_toc",
     "test_verify_site_artifacts_rejects_broken_same_page_anchors",
     "test_verify_site_artifacts_rejects_leaked_docstrings_and_tmp_path",
+    "test_verify_site_artifacts_rejects_made_with_zensical",
     "test_verify_site_artifacts_rejects_missing_inventories",
+    "test_verify_site_artifacts_rejects_outer_badge_border",
     "test_verify_site_artifacts_rejects_oversized_pages",
+    "test_verify_site_artifacts_rejects_stripped_playground_textarea",
 )
 
 
@@ -38,7 +47,9 @@ def test_generate_llms_files_expands_snippets_and_orders_nav(tmp_path: Path) -> 
 
     assert "    def main() -> int:" in llms_full
     assert "        return 42" in llms_full
-    assert '--8<-- "docs/examples/demo.py"' not in llms_full
+    assert "--8<--" not in llms_full
+    assert "Standalone demo." not in llms_full
+    assert 'if __name__ == "__main__":' not in llms_full
     assert "<script>console.log(1);</script>" not in llms_full
     assert "hide:" not in llms_full
     assert "frontmatter internal comment" not in llms_full
@@ -205,6 +216,84 @@ def test_verify_site_artifacts_rejects_broken_same_page_anchors(tmp_path: Path) 
         verify_site_artifacts(site_dir)
 
 
+def test_compact_site_html_preserves_pre_and_textarea_indentation(tmp_path: Path) -> None:
+    """Verify compact_site_html preserves indentation inside pre and textarea elements."""
+    site_dir = tmp_path / "site"
+    site_dir.mkdir(parents=True)
+    sample_html = site_dir / "sample.html"
+    sample_html.write_text(
+        "<!doctype html>\n"
+        "<html>\n"
+        "  <body>\n"
+        "    <div>\n"
+        "      <p>Outer text</p>\n"
+        "    </div>\n"
+        "    <pre><code>def foo():\n    return 42\n</code></pre>\n"
+        "    <textarea data-python-editor>with spec.provide_session() as s:\n    s.execute()\n</textarea>\n"
+        "  </body>\n"
+        "</html>\n",
+        encoding="utf-8",
+    )
+
+    compacted_count = compact_site_html(site_dir)
+    assert compacted_count == 1
+
+    compacted_text = sample_html.read_text(encoding="utf-8")
+    assert "<pre><code>def foo():\n    return 42\n</code></pre>" in compacted_text
+    assert (
+        "<textarea data-python-editor>with spec.provide_session() as s:\n    s.execute()\n</textarea>" in compacted_text
+    )
+    assert "  <div>" not in compacted_text
+    assert "<div>\n<p>Outer text</p>\n</div>" in compacted_text
+
+
+def test_verify_site_artifacts_rejects_made_with_zensical(tmp_path: Path) -> None:
+    """Verify built artifacts fail verification when Made with Zensical footer leak is present."""
+    site_dir = tmp_path / "site"
+    _write_clean_site(site_dir)
+    leaked_page = site_dir / "leak.html"
+    leaked_page.write_text(
+        "<!doctype html><html><body><footer>Made with Zensical</footer></body></html>", encoding="utf-8"
+    )
+
+    with pytest.raises(DocsVerificationError, match="Made with Zensical"):
+        verify_site_artifacts(site_dir)
+
+
+def test_verify_site_artifacts_rejects_outer_badge_border(tmp_path: Path) -> None:
+    """Verify built artifacts fail verification when logo or favicon contains an outer badge border."""
+    site_dir = tmp_path / "site"
+    _write_clean_site(site_dir)
+    assets_dir = site_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    (assets_dir / "logo.svg").write_text(
+        '<svg><rect x="8" y="8" width="240" height="240" rx="52"/></svg>', encoding="utf-8"
+    )
+
+    with pytest.raises(DocsVerificationError, match="outer badge border rectangle"):
+        verify_site_artifacts(site_dir)
+
+
+def test_verify_site_artifacts_rejects_stripped_playground_textarea(tmp_path: Path) -> None:
+    """Verify built artifacts fail verification when playground textarea has stripped indentation."""
+    site_dir = tmp_path / "site"
+    _write_clean_site(site_dir)
+    playground_dir = site_dir / "playground"
+    playground_dir.mkdir(parents=True, exist_ok=True)
+    (playground_dir / "index.html").write_text(
+        "<!doctype html><html><body>\n"
+        "<textarea data-python-editor>\n"
+        "with spec.provide_session(config) as session:\n"
+        'session.execute_script("""\n'
+        '""");\n'
+        "</textarea></body></html>",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DocsVerificationError, match="textarea indentation stripped"):
+        verify_site_artifacts(site_dir)
+
+
 def _write_sample_project(root: Path) -> tuple[Path, Path, Path]:
     """Create a synthetic Zensical workspace for post-build testing."""
     docs_dir = root / "docs"
@@ -217,7 +306,15 @@ def _write_sample_project(root: Path) -> tuple[Path, Path, Path]:
     site_dir.mkdir(parents=True)
 
     (examples_dir / "demo.py").write_text(
-        '"""Standalone demo."""\n\n\ndef main() -> int:\n    """Return answer."""\n    return 42\n', encoding="utf-8"
+        '"""Standalone demo."""\n\n\n'
+        "# --8<-- [start:example]\n"
+        "def main() -> int:\n"
+        '    """Return answer."""\n'
+        "    return 42\n"
+        "# --8<-- [end:example]\n\n\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n",
+        encoding="utf-8",
     )
     (includes_dir / "widget.html").write_text(
         '<div id="sqlspec-playground-main"><script>console.log(1);</script></div>\n', encoding="utf-8"
@@ -225,7 +322,7 @@ def _write_sample_project(root: Path) -> tuple[Path, Path, Path]:
     (docs_dir / "index.md").write_text("# SQLSpec\n\nTyped SQL execution for Python.\n", encoding="utf-8")
     (docs_dir / "learn" / "index.md").write_text("# Learn Overview\n\nStart learning SQLSpec.\n", encoding="utf-8")
     (docs_dir / "learn" / "quickstart.md").write_text(
-        '# Quickstart\n\nRun your first query:\n\n=== "Sync"\n\n    ```python\n    --8<-- "docs/examples/demo.py"\n    ```\n',
+        '# Quickstart\n\nRun your first query:\n\n=== "Sync"\n\n    ```python\n    --8<-- "docs/examples/demo.py:example"\n    ```\n',
         encoding="utf-8",
     )
     (docs_dir / "playground.md").write_text(

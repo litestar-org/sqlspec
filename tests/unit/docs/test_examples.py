@@ -5,7 +5,9 @@ import asyncio
 import importlib.util
 import inspect
 import io
+import re
 import sys
+import textwrap
 import tokenize
 from pathlib import Path
 from types import ModuleType
@@ -30,6 +32,7 @@ DIRECTIVE_PREFIXES: tuple[str, ...] = (
     "# isort:",
     "# nosec",
     "# cov:",
+    "# --8<--",
 )
 CONFIG_ONLY_MODULES: frozenset[str] = frozenset({"migration_quickstart_config.py"})
 EXTERNAL_DAEMON_EXAMPLES: frozenset[str] = frozenset({
@@ -134,6 +137,93 @@ def test_examples_define_standalone_structure() -> None:
             )
 
     assert not violations, f"Found {len(violations)} structural issue(s):\n" + "\n".join(violations[:40])
+
+
+def test_examples_define_valid_snippet_sections() -> None:
+    """Verify all example modules define balanced, dedented # --8<-- [start:example] sections."""
+    violations: list[str] = []
+    for path in EXAMPLE_MODULES:
+        rel = path.relative_to(EXAMPLES_DIR).as_posix()
+        source = path.read_text(encoding="utf-8")
+        lines = source.splitlines()
+
+        start_count = sum(1 for line in lines if line.strip() == "# --8<-- [start:example]")
+        end_count = sum(1 for line in lines if line.strip() == "# --8<-- [end:example]")
+
+        if start_count != 1:
+            violations.append(f"{rel}: expected exactly 1 '# --8<-- [start:example]', found {start_count}")
+            continue
+        if end_count != 1:
+            violations.append(f"{rel}: expected exactly 1 '# --8<-- [end:example]', found {end_count}")
+            continue
+
+        start_idx = next(i for i, line in enumerate(lines) if line.strip() == "# --8<-- [start:example]")
+        end_idx = next(i for i, line in enumerate(lines) if line.strip() == "# --8<-- [end:example]")
+
+        if start_idx >= end_idx:
+            violations.append(
+                f"{rel}: [start:example] at line {start_idx + 1} appears after [end:example] at line {end_idx + 1}"
+            )
+            continue
+
+        section_lines = lines[start_idx + 1 : end_idx]
+        dedented = textwrap.dedent("\n".join(section_lines)).splitlines()
+        if not any(line.strip() for line in dedented):
+            violations.append(f"{rel}: snippet section is empty")
+            continue
+
+        for offset, line in enumerate(dedented, start=start_idx + 2):
+            if len(line) > 120:
+                violations.append(f"{rel}:{offset}: dedented line exceeds 120 chars ({len(line)}): {line[:60]}...")
+            if "__all__" in line:
+                violations.append(f"{rel}:{offset}: snippet section leaks __all__")
+            if 'if __name__ == "__main__":' in line:
+                violations.append(f"{rel}:{offset}: snippet section leaks __main__ block")
+
+    assert not violations, f"Snippet section violations ({len(violations)}):\n" + "\n".join(violations[:30])
+
+
+def test_markdown_code_blocks_and_snippets_fit_viewport_width() -> None:
+    """Verify Markdown code blocks and included snippets fit viewport width budgets."""
+    docs_dir = REPO_ROOT / "docs"
+    snippet_pattern = re.compile(r"--8<--\s+[\"'](docs/examples/[^\"']+)[\"']")
+    hl_lines_pattern = re.compile(r"hl_lines\s*=")
+    fence_pattern = re.compile(r"^```")
+
+    violations: list[str] = []
+    markdown_files = sorted([REPO_ROOT / "README.md", REPO_ROOT / "CONTRIBUTING.md", *docs_dir.rglob("*.md")])
+
+    for md_path in markdown_files:
+        rel = md_path.relative_to(REPO_ROOT).as_posix()
+        lines = md_path.read_text(encoding="utf-8").splitlines()
+        in_fence = False
+        fence_lang = ""
+
+        for line_num, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if fence_pattern.match(stripped):
+                if in_fence:
+                    in_fence = False
+                else:
+                    in_fence = True
+                    fence_lang = stripped
+                    if hl_lines_pattern.search(stripped):
+                        violations.append(f"{rel}:{line_num}: stale hl_lines on code block: {stripped}")
+                continue
+
+            if in_fence:
+                if "mermaid" not in fence_lang and len(line) > 84:
+                    violations.append(
+                        f"{rel}:{line_num}: fenced code line exceeds 84 chars ({len(line)}): {line[:60]}..."
+                    )
+                for match in snippet_pattern.finditer(line):
+                    target = match.group(1)
+                    if ":" not in target:
+                        violations.append(
+                            f"{rel}:{line_num}: whole-file snippet include without named section: {target}"
+                        )
+
+    assert not violations, f"Markdown code block violations ({len(violations)}):\n" + "\n".join(violations[:30])
 
 
 @pytest.mark.parametrize(

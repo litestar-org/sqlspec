@@ -13,18 +13,39 @@ def main() -> list[dict[str, Any]]:
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
+    # --8<-- [start:example]
     stack = (
         StatementStack()
-        .push_execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
-        .push_execute_many("INSERT INTO teams (name) VALUES (:name)", [{"name": "Litestar"}, {"name": "SQLSpec"}])
-        .push_execute("SELECT id, name FROM teams ORDER BY id")
+        .push_execute(
+            """
+            CREATE TABLE teams (
+                id INTEGER PRIMARY KEY,
+                name TEXT
+            )
+            """
+        )
+        .push_execute_many(
+            """
+            INSERT INTO teams (name)
+            VALUES (:name)
+            """,
+            [{"name": "Litestar"}, {"name": "SQLSpec"}],
+        )
+        .push_execute(
+            """
+            SELECT id, name
+            FROM teams
+            ORDER BY id
+            """
+        )
     )
 
     with spec.provide_session(config) as session:
         results = session.execute_stack(stack)
+        rows = results[-1].result.all()
+        # --8<-- [end:example]
         final_result = results[-1].result
         assert isinstance(final_result, SQLResult)
-        rows = final_result.all()
         assert rows == [{"id": 1, "name": "Litestar"}, {"id": 2, "name": "SQLSpec"}]
         return rows
 

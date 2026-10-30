@@ -9,6 +9,7 @@ __all__ = ("main",)
 
 def main() -> SQLSpecPlugin:
     """Configure primary and analytics SQLite binds with explicit Litestar session_key values."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         SqliteConfig(
@@ -25,6 +26,7 @@ def main() -> SQLSpecPlugin:
         )
     )
     plugin = SQLSpecPlugin(sqlspec=spec)
+    # --8<-- [end:example]
     assert plugin.get_config("analytics").bind_key == "analytics"
     assert plugin.get_config("primary").bind_key == "primary"
     return plugin

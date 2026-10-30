@@ -12,8 +12,8 @@ uv add "sqlspec[litestar]"
 
 Register one or more database configurations on a `SQLSpec` instance, configure `extension_config["litestar"]`, and pass `SQLSpecPlugin(sqlspec=spec)` to `Litestar(plugins=[...])`:
 
-```{ .python title="docs/examples/extensions/litestar/plugin_setup.py" hl_lines="15-18 23-29" }
---8<-- "docs/examples/extensions/litestar/plugin_setup.py"
+```python
+--8 < --"docs/examples/extensions/litestar/plugin_setup.py:example"
 ```
 
 By default, a single configuration registers `db_session`, `db_connection`, and `db_pool` in Litestar's dependency graph. Override `session_key`, `connection_key`, or `pool_key` inside `extension_config["litestar"]` to customize parameter names.
@@ -22,8 +22,8 @@ By default, a single configuration registers `db_session`, `db_connection`, and 
 
 When an application connects to multiple databases (for example, a transactional primary database and a read-heavy analytics database), assign a distinct `bind_key` and `session_key` to each configuration:
 
-```{ .python title="docs/examples/extensions/litestar/dependency_keys.py" hl_lines="13-27" }
---8<-- "docs/examples/extensions/litestar/dependency_keys.py"
+```python
+--8 < --"docs/examples/extensions/litestar/dependency_keys.py:example"
 ```
 
 ## Transaction Commit Modes
@@ -36,8 +36,8 @@ Configure `commit_mode` inside `extension_config["litestar"]` to control how req
 | `"autocommit"` | HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`) or unhandled exceptions | JSON REST APIs where every `2xx` handler mutates state |
 | `"autocommit_include_redirect"` | HTTP `200`–`399` responses | HTTP `>= 400` responses or unhandled exceptions | HTML / HTMX form handlers that commit and return `302` / `303` redirects |
 
-```{ .python title="docs/examples/frameworks/litestar/commit_modes.py" hl_lines="13-24" }
---8<-- "docs/examples/frameworks/litestar/commit_modes.py"
+```python
+--8 < --"docs/examples/frameworks/litestar/commit_modes.py:example"
 ```
 
 Add `extra_commit_statuses` or `extra_rollback_statuses` in `LitestarConfig` when specific status codes require custom commit or rollback treatment.
@@ -88,14 +88,95 @@ For bidirectional keyset pagination (`CursorPagination`), set `cursor_key="id"` 
 
 Thirteen adapters expose a Litestar `Store` implementation under `sqlspec.adapters.<adapter>.litestar` (`AsyncpgStore`, `PsycopgAsyncStore`, `PsqlpyStore`, `AiosqliteStore`, `SqliteStore`, `AsyncmyStore`, `AiomysqlStore`, `PymysqlStore`, `MysqlConnectorAsyncStore`, `OracleAsyncStore`, `SpannerSyncStore`, `SpannerAsyncStore`, `DuckDBStore`, `AdbcStore`, `ArrowOdbcStore`, and `Db2SyncStore`):
 
-```{ .python title="docs/examples/frameworks/litestar/session_stores.py" hl_lines="9-12" }
---8<-- "docs/examples/frameworks/litestar/session_stores.py"
+```python
+--8 < --"docs/examples/frameworks/litestar/session_stores.py:example"
 ```
 
 Call `await store.create_table()` during application startup (or include the extension migration via `enable_extensions=["litestar"]` in `migration_config`) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
+
+## Production Litestar + Dishka Architecture
+
+In enterprise microservices, teams often combine Litestar's HTTP routing, OpenAPI documentation, and lifecycle management with Dishka's unified dependency container. To prevent conflicting dependency injection providers while allowing Litestar to manage database pool startup and teardown, configure `SQLSpecPlugin` with `disable_di=True` and `manage_lifespan=True`:
+
+```python
+"""Production Litestar and Dishka composition root."""
+
+from collections.abc import AsyncIterator
+from typing import Annotated
+
+from dishka import FromDishka, Provider, Scope, make_async_container, provide
+from dishka.integrations.litestar import DishkaPlugin, setup_dishka
+from litestar import Controller, Litestar, get
+import msgspec
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.extensions.litestar import SQLSpecPlugin
+
+
+class Account(msgspec.Struct, frozen=True, gc=False):
+    """Account projection entity."""
+
+    id: int
+    name: str
+
+
+class DatabaseProvider(Provider):
+    """Scoped Dishka provider managing config and driver lifecycles."""
+
+    @provide(scope=Scope.APP)
+    def provide_spec(self) -> tuple[SQLSpec, AsyncpgConfig]:
+        spec = SQLSpec()
+        config = spec.add_config(
+            AsyncpgConfig(
+                bind_key="primary",
+                connection_config={"dsn": "postgresql://localhost/app"},
+                extension_config={
+                    "litestar": {"disable_di": True, "manage_lifespan": True, "session_table": "app_session"}
+                },
+                migration_config={"include_extensions": ["litestar", "adk"]},
+            )
+        )
+        return spec, config
+
+    @provide(scope=Scope.REQUEST)
+    async def provide_driver(self, app_deps: tuple[SQLSpec, AsyncpgConfig]) -> AsyncIterator[AsyncpgDriver]:
+        spec, config = app_deps
+        async with spec.provide_session(config) as session:
+            yield session
+
+
+class AccountController(Controller):
+    path = "/accounts"
+
+    @get("/{account_id:int}")
+    async def get_account(self, account_id: int, driver: Annotated[AsyncpgDriver, FromDishka()]) -> Account:
+        """Fetch account record using Dishka-injected driver session."""
+        return await driver.select_one(
+            """
+            SELECT id, name
+            FROM accounts
+            WHERE id = :id
+            """,
+            id=account_id,
+            schema_type=Account,
+        )
+
+
+def create_app() -> Litestar:
+    """Build Litestar application wired with SQLSpec and Dishka."""
+    provider = DatabaseProvider()
+    spec, _ = provider.provide_spec()
+    container = make_async_container(provider)
+
+    app = Litestar(route_handlers=[AccountController], plugins=[SQLSpecPlugin(sqlspec=spec), DishkaPlugin()])
+    setup_dishka(container, app)
+    return app
+```
 
 ## Recap
 
 - `SQLSpecPlugin` manages pool lifecycles, injects `db_session` / `db_connection` / `db_pool`, and registers `litestar database` CLI commands automatically.
 - Set `commit_mode`, `session_key`, `enable_correlation_middleware`, and `enable_sqlcommenter_middleware` in `extension_config["litestar"]`.
+- When integrating with Dishka, set `disable_di=True` and `manage_lifespan=True` on `extension_config["litestar"]`.
 - See the [Litestar Extension Reference](/reference/extensions/litestar/) for `SQLSpecPlugin`, `LitestarConfig`, and `FilterConfig` signatures.

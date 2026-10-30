@@ -14,9 +14,29 @@ def main() -> list[dict[str, Any]]:
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
-        session.execute("INSERT INTO notes (body) VALUES (?)", "Hello, SQLSpec")
-        rows = session.select("SELECT id, body FROM notes")
+        session.execute(
+            """
+            CREATE TABLE notes (
+                id INTEGER PRIMARY KEY,
+                body TEXT
+            )
+            """
+        )
+        # --8<-- [start:example]
+        session.execute(
+            """
+            INSERT INTO notes (body)
+            VALUES (?)
+            """,
+            "Hello, SQLSpec",
+        )
+        rows = session.select(
+            """
+            SELECT id, body
+            FROM notes
+            """
+        )
+        # --8<-- [end:example]
         assert rows == [{"id": 1, "body": "Hello, SQLSpec"}]
         return rows
 

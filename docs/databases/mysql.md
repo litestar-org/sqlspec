@@ -13,8 +13,8 @@ SQLSpec supports four MySQL and MariaDB adapters sharing unified error translati
 
 ## Minimal Connection and Pool Setup
 
-```{ .python title="docs/examples/drivers/mysqlconnector_connection.py" hl_lines="10 11 12" }
---8<-- "docs/examples/drivers/mysqlconnector_connection.py"
+```{ .python title="docs/examples/drivers/mysqlconnector_connection.py" }
+--8<-- "docs/examples/drivers/mysqlconnector_connection.py:example"
 ```
 
 === "asyncmy (Async)"
@@ -92,5 +92,5 @@ See [AsyncMy](/reference/adapters/asyncmy/), [PyMySQL](/reference/adapters/pymys
 - **Placeholder Syntax**: Write `:named` or `?` parameters in SQLSpec; all four MySQL adapters compile placeholders to `%s` automatically while preserving literal `%` signs in `LIKE '100%'` expressions.
 - **`utf8mb4` Collation**: Always use `utf8mb4` (default in MySQL 8+ and configured automatically where supported) so 4-byte UTF-8 characters and emojis never truncate under legacy 3-byte `utf8`.
 - **Implicit DDL Commits**: MySQL and MariaDB issue an implicit `COMMIT` before and after `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`, and `TRUNCATE TABLE`. Keep schema migrations separate from transactional application tests that rely on rollback isolation.
-- **`RETURNING` Support**: MariaDB 10.5+ supports `INSERT ... RETURNING` and `DELETE ... RETURNING`; standard MySQL 8.x/9.x does not support `RETURNING` on `INSERT`/`UPDATE`, so inspect `cursor.lastrowid` or query by natural key after writes.
+- **`RETURNING` and Generated Keys**: MariaDB 10.5+ supports `INSERT ... RETURNING` and `DELETE ... RETURNING` directly via `session.select(...)`. Standard MySQL does not support `RETURNING`, but SQLSpec handles this automatically: `result = await session.execute("INSERT ...")` captures the generated key into `result.last_inserted_id` and row count into `result.rows_affected` on the returned `SQLResult`.
 - **`SHOW` and `DESCRIBE` Queries**: All four adapters classify `SHOW ...`, `DESCRIBE ...`, and `EXPLAIN ...` as row-returning statements automatically in `session.select(...)`.

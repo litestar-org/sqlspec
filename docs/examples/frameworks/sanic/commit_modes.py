@@ -12,6 +12,7 @@ __all__ = ("main",)
 
 def main() -> Sanic:
     """Create a Sanic application rolling back automatically on HTTP 409 responses."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         AiosqliteConfig(
@@ -28,10 +29,17 @@ def main() -> Sanic:
     @app.post("/users")
     async def create_user(request: Request) -> HTTPResponse:
         db = db_plugin.get_session(request, "db")
-        await db.execute("INSERT INTO users (name) VALUES (:name)", name=request.json["name"])
+        await db.execute(
+            """
+            INSERT INTO users (name)
+            VALUES (:name)
+            """,
+            name=request.json["name"],
+        )
         return response.json({"created": True}, status=201)
 
     db_plugin.init_app(app)
+    # --8<-- [end:example]
     return app
 
 

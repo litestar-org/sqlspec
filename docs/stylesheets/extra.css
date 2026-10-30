@@ -123,19 +123,6 @@
   fill: none;
 }
 
-[data-md-color-scheme="slate"] .md-header__button.md-logo {
-  background: url("../assets/badge-dark.svg") center / 1.75rem 1.75rem no-repeat;
-}
-
-[data-md-color-scheme="slate"] .md-nav__button.md-logo {
-  background: url("../assets/badge-dark.svg") center / 1.65rem 1.65rem no-repeat;
-}
-
-[data-md-color-scheme="slate"] .md-header__button.md-logo img,
-[data-md-color-scheme="slate"] .md-nav__button.md-logo img {
-  opacity: 0;
-}
-
 .md-header__title {
   font-family: var(--md-text-font-family);
   letter-spacing: normal;
@@ -148,10 +135,12 @@
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: #202235;
+  text-shadow: 0 0 12px rgba(237, 182, 65, 0.28);
 }
 
 [data-md-color-scheme="slate"] .md-header__topic:first-child {
   color: #f8fafc;
+  text-shadow: 0 0 14px rgba(237, 182, 65, 0.45), 0 0 24px rgba(237, 182, 65, 0.22);
 }
 
 .md-header__topic + .md-header__topic {
@@ -202,15 +191,75 @@
   border-bottom: 1px solid var(--md-default-fg-color--lightest);
 }
 
-.sqlspec-hero-banner {
+.sqlspec-hero-lockup {
   display: flex;
+  align-items: center;
   justify-content: center;
-  margin: 0 0 1rem;
+  gap: 1.5rem;
+  margin: 1.5rem 0 2rem;
 }
 
-.sqlspec-hero-banner img {
-  max-width: min(100%, 32rem);
-  height: auto;
+.sqlspec-hero-logo {
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 14px rgba(237, 182, 65, 0.35));
+}
+
+.sqlspec-hero-divider {
+  width: 1px;
+  height: 54px;
+  background-color: var(--md-default-fg-color--lighter, #cbd5e1);
+}
+
+[data-md-color-scheme="slate"] .sqlspec-hero-divider {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.sqlspec-brand-text {
+  font-family: var(--md-text-font-family);
+  font-size: 2.75rem;
+  font-weight: 300;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: #1e293b;
+  text-shadow: 0 0 20px rgba(237, 182, 65, 0.25), 0 0 40px rgba(237, 182, 65, 0.15);
+  animation: sqlspecFadeInScale 0.8s ease-out;
+  line-height: 1;
+}
+
+[data-md-color-scheme="slate"] .sqlspec-brand-text {
+  color: #f8fafc;
+  text-shadow: 0 0 15px rgba(237, 182, 65, 0.42), 0 0 30px rgba(237, 182, 65, 0.26), 0 0 45px rgba(237, 182, 65, 0.16);
+}
+
+@keyframes sqlspecFadeInScale {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 480px) {
+  .sqlspec-hero-lockup {
+    gap: 1rem;
+    margin: 1rem 0 1.5rem;
+  }
+  .sqlspec-hero-logo {
+    width: 52px;
+    height: 52px;
+  }
+  .sqlspec-hero-divider {
+    height: 40px;
+  }
+  .sqlspec-brand-text {
+    font-size: 2rem;
+    letter-spacing: 0.18em;
+  }
 }
 
 .sqlspec-hero-lead {
@@ -644,4 +693,8 @@
 
 .md-typeset > .md-typeset__scrollwrap table:not([class]) td code {
   white-space: nowrap;
+}
+
+.md-footer-meta:not(:has(.md-copyright__highlight, .md-social)) {
+  display: none;
 }

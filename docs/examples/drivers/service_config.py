@@ -16,17 +16,23 @@ __all__ = ("main", "run_async_service_example", "run_sync_service_example")
 def run_sync_service_example(db_path: Path) -> int:
     """Execute synchronous service helpers and atomic transaction blocks."""
     config = SqliteConfig(connection_config={"database": str(db_path)})
+    # --8<-- [start:example]
     service = SQLSpecSyncService(config=config, loader=SQLFileLoader())
     users = sql.select("name").from_("users")
 
-    try:
-        with service.begin_transaction() as session:
-            session.execute("CREATE TABLE users (name TEXT)")
-            session.execute("INSERT INTO users VALUES (:name)", name="Ada")
+    with service.begin_transaction() as session:
+        session.execute("CREATE TABLE users (name TEXT)")
+        session.execute("INSERT INTO users VALUES (:name)", name="Ada")
 
-        assert service.get_one(users) == {"name": "Ada"}
-        assert service.exists(users)
-        assert service.paginate(users).total == 1
+    user = service.get_one(users)
+    has_users = service.exists(users)
+    paged = service.paginate(users)
+    # --8<-- [end:example]
+
+    try:
+        assert user == {"name": "Ada"}
+        assert has_users
+        assert paged.total == 1
 
         with service.provide_session() as session:
             assert service.exists(users, session=session)
@@ -34,7 +40,8 @@ def run_sync_service_example(db_path: Path) -> int:
 
         with service.begin_transaction() as session:
             session.execute("INSERT INTO users VALUES (:name)", name="Grace")
-            assert service.exists(sql.select("name").from_("users").where_eq("name", "Grace"))
+            grace_query = sql.select("name").from_("users").where_eq("name", "Grace")
+            assert service.exists(grace_query)
             assert service.paginate(users).total == 2
 
         try:
@@ -64,7 +71,8 @@ async def run_async_service_example(db_path: Path) -> int:
 
         assert await service.get_one(users) == {"name": "Ada"}
         assert await service.exists(users)
-        assert (await service.paginate(users)).total == 1
+        paged = await service.paginate(users)
+        assert paged.total == 1
 
         async with service.provide_session() as session:
             assert await service.exists(users, session=session)
@@ -72,8 +80,10 @@ async def run_async_service_example(db_path: Path) -> int:
 
         async with service.begin_transaction() as session:
             await session.execute("INSERT INTO users VALUES (:name)", name="Grace")
-            assert await service.exists(sql.select("name").from_("users").where_eq("name", "Grace"))
-            assert (await service.paginate(users)).total == 2
+            grace_query = sql.select("name").from_("users").where_eq("name", "Grace")
+            assert await service.exists(grace_query)
+            paged = await service.paginate(users)
+            assert paged.total == 2
 
         try:
             async with service.begin_transaction() as session:
@@ -82,27 +92,30 @@ async def run_async_service_example(db_path: Path) -> int:
         except ValueError:
             pass
 
-        total = (await service.paginate(users)).total
+        paged = await service.paginate(users)
+        total = paged.total
         assert total == 2
         return total
     finally:
         await config.close_pool()
 
 
-async def main() -> tuple[int, int]:
-    """Run both synchronous and asynchronous service examples in a temporary directory."""
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        base_dir = Path(tmp_dir)
-        sync_total = run_sync_service_example(base_dir / "sync_users.sqlite")
-        async_total = await run_async_service_example(base_dir / "async_users.sqlite")
-        return sync_total, async_total
-
-
 def _abort_transaction() -> NoReturn:
-    """Raise an error inside a transaction block to demonstrate automatic rollback."""
-    msg = "Cancel this change"
+    """Trigger a rollback within a begin_transaction context manager."""
+    msg = "Forced transaction rollback"
     raise ValueError(msg)
 
 
+def main() -> tuple[int, int]:
+    """Execute both sync and async service flows against temporary databases."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        base_dir = Path(tmp_dir)
+        sync_total = run_sync_service_example(base_dir / "sync.db")
+        async_total = asyncio.run(run_async_service_example(base_dir / "async.db"))
+    assert sync_total == 2
+    assert async_total == 2
+    return sync_total, async_total
+
+
 if __name__ == "__main__":
-    print(asyncio.run(main()))
+    print(main())

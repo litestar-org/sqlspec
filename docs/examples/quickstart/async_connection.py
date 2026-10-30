@@ -15,10 +15,30 @@ async def main() -> list[dict[str, Any]]:
     config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
 
     try:
+        # --8<-- [start:example]
         async with spec.provide_session(config) as session:
-            await session.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
-            await session.execute("INSERT INTO notes (body) VALUES (?)", "Hello, Async SQLSpec")
-            rows = await session.select("SELECT id, body FROM notes")
+            await session.execute(
+                """
+                CREATE TABLE notes (
+                    id INTEGER PRIMARY KEY,
+                    body TEXT
+                )
+                """
+            )
+            await session.execute(
+                """
+                INSERT INTO notes (body)
+                VALUES (?)
+                """,
+                "Hello, Async SQLSpec",
+            )
+            rows = await session.select(
+                """
+                SELECT id, body
+                FROM notes
+                """
+            )
+            # --8<-- [end:example]
             assert rows == [{"id": 1, "body": "Hello, Async SQLSpec"}]
             return rows
     finally:

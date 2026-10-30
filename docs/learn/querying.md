@@ -37,7 +37,14 @@ with spec.provide_session(config) as session:
     assert insert_result.rows_affected == 1
 
     returning_result = session.execute(
-        "UPDATE items SET active = :active WHERE name = :name RETURNING id, name", active=0, name="Keyboard"
+        """
+        UPDATE items
+        SET active = :active
+        WHERE name = :name
+        RETURNING id, name
+        """,
+        active=0,
+        name="Keyboard",
     )
     updated_row = returning_result.one()
     assert updated_row == {"id": 1, "name": "Keyboard"}
@@ -49,16 +56,16 @@ Use `.one()`, `.one_or_none()`, or `.all()` on `SQLResult` when executing DML st
 
 Use `execute_many` for multi-row inserts or updates, `select_value` / `select_value_or_none` for scalar aggregates or lookups, and `select_with_total` when pairing a paginated query with a count query:
 
-```{ .python title="docs/examples/querying/batch_operations.py" hl_lines="18 23 24 25 26" }
---8<-- "docs/examples/querying/batch_operations.py"
+```{ .python title="docs/examples/querying/batch_operations.py" }
+--8<-- "docs/examples/querying/batch_operations.py:example"
 ```
 
 ## Multi-Step Execution with `StatementStack`
 
 When you want to group ordered DDL, batched DML, and `SELECT` operations into a single logical sequence—taking advantage of native driver pipelining where supported (such as PostgreSQL `asyncpg` or Oracle 23ai/26ai)—compose a `StatementStack` and pass it to `session.execute_stack(stack)`:
 
-```{ .python title="docs/examples/querying/statement_stack.py" hl_lines="16 17 18 19 20 24 25" }
---8<-- "docs/examples/querying/statement_stack.py"
+```{ .python title="docs/examples/querying/statement_stack.py" }
+--8<-- "docs/examples/querying/statement_stack.py:example"
 ```
 
 Each entry in the returned sequence wraps the step's `SQLResult` so you can inspect `rows_affected` or call `.all()` on row-returning steps.
@@ -67,14 +74,15 @@ Each entry in the returned sequence wraps the step's `SQLResult` so you can insp
 
 Materializing millions of rows with `select()` buffers the entire result set in memory. Use `session.select_stream(..., chunk_size=...)` (`async with session.select_stream(...)` on async drivers) to iterate over rows in bounded chunks:
 
-```{ .python title="docs/examples/querying/streaming_results.py" hl_lines="19 20 21" }
---8<-- "docs/examples/querying/streaming_results.py"
+```{ .python title="docs/examples/querying/streaming_results.py" }
+--8<-- "docs/examples/querying/streaming_results.py:example"
 ```
 
 === "Sync"
 
     ```python
-    with session.select_stream("SELECT id, payload FROM events ORDER BY id", chunk_size=500) as stream:
+    query = "SELECT id, payload FROM events ORDER BY id"
+    with session.select_stream(query, chunk_size=500) as stream:
         for row in stream:
             process_row(row)
     ```
@@ -82,7 +90,8 @@ Materializing millions of rows with `select()` buffers the entire result set in 
 === "Async"
 
     ```python
-    async with session.select_stream("SELECT id, payload FROM events ORDER BY id", chunk_size=500) as stream:
+    query = "SELECT id, payload FROM events ORDER BY id"
+    async with session.select_stream(query, chunk_size=500) as stream:
         async for row in stream:
             await process_row(row)
     ```

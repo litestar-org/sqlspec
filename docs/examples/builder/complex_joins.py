@@ -14,11 +14,26 @@ def main() -> list[dict[str, Any]]:
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT)")
-        session.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER)")
+        session.execute(
+            """
+            CREATE TABLE customers (
+                id INTEGER PRIMARY KEY,
+                name TEXT
+            )
+            """
+        )
+        session.execute(
+            """
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY,
+                customer_id INTEGER
+            )
+            """
+        )
         session.execute("INSERT INTO customers (name) VALUES ('Ada')")
         session.execute("INSERT INTO orders (customer_id) VALUES (1)")
 
+        # --8<-- [start:example]
         query = (
             sql
             .select("orders.id", "customers.name")
@@ -26,6 +41,7 @@ def main() -> list[dict[str, Any]]:
             .join("customers", "orders.customer_id = customers.id")
         )
         rows = session.execute(query).all()
+        # --8<-- [end:example]
         assert rows == [{"id": 1, "name": "Ada"}]
         return rows
 

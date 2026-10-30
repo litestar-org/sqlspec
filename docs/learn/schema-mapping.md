@@ -6,8 +6,8 @@ By default, `select`, `select_one`, and `select_one_or_none` return `dict[str, A
 
 `msgspec.Struct` is the fastest and lowest-memory target for typed row hydration in SQLSpec (`uv add "sqlspec[msgspec]"`). Declaring `frozen=True, gc=False` omits CPython cyclic garbage-collection headers on every row object:
 
-```{ .python title="docs/examples/querying/schema_mapping.py" hl_lines="11 30 31 32" }
---8<-- "docs/examples/querying/schema_mapping.py"
+```{ .python title="docs/examples/querying/schema_mapping.py" }
+--8<-- "docs/examples/querying/schema_mapping.py:example"
 ```
 
 Notice how `schema_type=User` narrows each method's static return type automatically:

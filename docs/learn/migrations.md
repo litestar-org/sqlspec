@@ -6,8 +6,8 @@ SQLSpec includes a built-in schema migration runner supporting sequential `.sql`
 
 Enable migrations on any adapter configuration by supplying `migration_config`:
 
-```{ .python title="docs/examples/migration_quickstart_config.py" hl_lines="7 10" }
---8<-- "docs/examples/migration_quickstart_config.py"
+```{ .python title="docs/examples/migration_quickstart_config.py" }
+--8<-- "docs/examples/migration_quickstart_config.py:example"
 ```
 
 Point `[tool.sqlspec]` in `pyproject.toml` at your module attribute or factory callable so the `sqlspec` CLI discovers configurations automatically:
@@ -58,8 +58,8 @@ Revisions execute in lexical prefix order (`0001_...`, `0002_...` or timestamp p
 
 Enterprise deployments frequently store application tables in `app_schema` while isolating migration tracking metadata in `admin_schema`. Configure `default_schema` and `version_table_schema` together—or invoke `SyncMigrationCommands` / `AsyncMigrationCommands` programmatically:
 
-```{ .python title="docs/examples/patterns/migrations_with_schema.py" hl_lines="34 35 36 37 38 47 48 50" }
---8<-- "docs/examples/patterns/migrations_with_schema.py"
+```{ .python title="docs/examples/patterns/migrations_with_schema.py" }
+--8<-- "docs/examples/patterns/migrations_with_schema.py:example"
 ```
 
 When PostgreSQL adapters (`AsyncpgConfig`, `PsycopgSyncConfig`, `PsycopgAsyncConfig`, `PsqlpyConfig`) run behind transaction-mode PgBouncer (`pooler_mode="transaction"`) and define `direct_dsn`, `MigrationCommands` automatically routes DDL execution through `config.derive_direct_config()` so session-level locks and DDL statements bypass the transaction pooler.
