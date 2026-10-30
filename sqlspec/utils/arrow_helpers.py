@@ -8,7 +8,7 @@ when compiled drivers touch Arrow objects.
 """
 
 import contextlib
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable, PandasDataFrame, PolarsDataFrame
 
 __all__ = (
+    "arrow_batch_to_rows",
     "arrow_reader_to_return_format",
     "arrow_reader_with_deferred_close",
     "arrow_table_column_names",
@@ -39,6 +40,7 @@ __all__ = (
     "arrow_type_from_token",
     "build_ingest_telemetry",
     "cast_arrow_table_schema",
+    "coerce_arrow_batches",
     "coerce_arrow_table",
     "convert_dict_to_arrow",
     "convert_dict_to_arrow_with_schema",
@@ -392,13 +394,18 @@ def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
 
     if has_get_data(source):
         table = source.get_data()
-        if _get_arrow_table_coercer().get(table) is _coerce_arrow_table_identity:
-            return cast("ArrowTable", table)
+        coercer = _get_arrow_table_coercer().get(table)
+        if coercer is not None:
+            return cast("ArrowTable", coercer(table))
         msg = "ArrowResult did not return a pyarrow.Table instance"
         raise TypeError(msg)
     coercer = _get_arrow_table_coercer().get(source)
     if coercer is not None:
         return cast("ArrowTable", coercer(source))
+    if hasattr(source, "__arrow_c_stream__"):
+        import pyarrow as pa
+
+        return pa.RecordBatchReader.from_stream(source).read_all()
     if isinstance(source, Mapping):
         import pyarrow as pa
 
@@ -409,6 +416,58 @@ def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
         return pa.Table.from_pylist(list(source))
     msg = f"Unsupported Arrow source type: {type(source).__name__}"
     raise TypeError(msg)
+
+
+def coerce_arrow_batches(
+    source: "ArrowResult | Any", *, batch_size: int = 65_536
+) -> "tuple[list[str], Iterator[ArrowRecordBatch]]":
+    """Coerce an Arrow source into column names and a lazy RecordBatch iterator.
+
+    Streams ``pyarrow.RecordBatchReader`` and ``__arrow_c_stream__`` sources one
+    batch at a time without materializing the full table into memory.
+
+    Args:
+        source: ArrowResult, RecordBatchReader, RecordBatch, Table, C stream, or dict/row iterable.
+        batch_size: Maximum rows per batch when splitting an in-memory Table.
+
+    Returns:
+        Tuple of ``(column_names, batch_iterator)``.
+    """
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    unwrapped = source.get_data() if has_get_data(source) else source
+    if isinstance(unwrapped, pa.RecordBatchReader):
+        return list(unwrapped.schema.names), iter(unwrapped)
+    if isinstance(unwrapped, pa.RecordBatch):
+        return list(unwrapped.schema.names), iter((unwrapped,))
+    if isinstance(unwrapped, pa.Table):
+        return list(unwrapped.schema.names), iter(unwrapped.to_batches(max_chunksize=batch_size))
+    if hasattr(unwrapped, "__arrow_c_stream__"):
+        reader = pa.RecordBatchReader.from_stream(unwrapped)
+        return list(reader.schema.names), iter(reader)
+    table = coerce_arrow_table(unwrapped)
+    return list(table.schema.names), iter(table.to_batches(max_chunksize=batch_size))
+
+
+def arrow_batch_to_rows(batch: "ArrowRecordBatch", columns: "list[str] | None" = None) -> "list[tuple[Any, ...]]":
+    """Convert a single Arrow RecordBatch to a list of row tuples.
+
+    Args:
+        batch: Arrow RecordBatch to extract rows from.
+        columns: Optional subset or ordering of column names.
+
+    Returns:
+        List of row tuples for the batch.
+    """
+    ensure_pyarrow()
+    resolved_columns = columns or list(batch.schema.names)
+    if not resolved_columns or batch.num_rows == 0:
+        return []
+    col_data = [batch.column(col).to_pylist() for col in resolved_columns]
+    if not col_data or not col_data[0]:
+        return []
+    return [tuple(row) for row in zip(*col_data, strict=False)]
 
 
 def ensure_arrow_table(data: Any) -> "ArrowTable":
@@ -759,6 +818,10 @@ def _coerce_arrow_record_batch(source: Any) -> Any:
     return pa.Table.from_batches([source])
 
 
+def _coerce_arrow_record_batch_reader(source: Any) -> Any:
+    return source.read_all()
+
+
 def _get_arrow_table_coercer() -> "TypeDispatcher[Any]":
     global _ARROW_TABLE_COERCER
     if _ARROW_TABLE_COERCER is None:
@@ -768,6 +831,7 @@ def _get_arrow_table_coercer() -> "TypeDispatcher[Any]":
         dispatcher = TypeDispatcher[Any]()
         dispatcher.register(pa.Table, _coerce_arrow_table_identity)
         dispatcher.register(pa.RecordBatch, _coerce_arrow_record_batch)
+        dispatcher.register(pa.RecordBatchReader, _coerce_arrow_record_batch_reader)
         _ARROW_TABLE_COERCER = dispatcher
     return _ARROW_TABLE_COERCER
 

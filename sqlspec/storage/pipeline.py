@@ -94,6 +94,20 @@ class StorageTelemetry(TypedDict, total=False):
     """Number of partitioned output objects written during export."""
     duration_s: float
     """Elapsed wall-clock transfer time in seconds."""
+    read_duration_s: float
+    """Elapsed time spent reading source storage or Arrow batches in seconds."""
+    encode_duration_s: float
+    """Elapsed time spent encoding batches into wire payloads in seconds."""
+    write_duration_s: float
+    """Elapsed time spent writing payloads to the database or storage sink in seconds."""
+    commit_duration_s: float
+    """Elapsed time spent committing the transaction or finalizing the sink in seconds."""
+    shards_processed: int
+    """Number of storage shards loaded during a multi-shard operation."""
+    shards_skipped: int
+    """Number of already-checkpointed storage shards skipped during resume."""
+    wal_bytes: int
+    """Estimated or observed Write-Ahead Log bytes generated during ingestion."""
     format: str
     """Serialized wire/file format (such as ``parquet``, ``arrow``, ``csv``, or ``jsonl``)."""
     extra: "dict[str, object]"

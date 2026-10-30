@@ -77,12 +77,15 @@ from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._query_cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
 from sqlspec.driver._storage_helpers import (
     CAPABILITY_HINTS,
+    arrow_batch_to_rows,
     arrow_table_needs_parameter_preparation,
     arrow_table_to_rows,
     attach_partition_telemetry,
     build_ingest_telemetry,
+    coerce_arrow_batches,
     coerce_arrow_table,
     create_storage_job,
+    ingest_telemetry_from_batches,
     records_to_arrow_table,
 )
 from sqlspec.exceptions import (
@@ -124,7 +127,7 @@ if TYPE_CHECKING:
         StorageTelemetry,
         SyncStoragePipeline,
     )
-    from sqlspec.typing import ArrowTable, SchemaT, StatementParameters
+    from sqlspec.typing import ArrowRecordBatch, ArrowTable, SchemaT, StatementParameters
 
 
 __all__ = (
@@ -3134,6 +3137,18 @@ class CommonDriverAttributesMixin:
         return coerce_arrow_table(source)
 
     @staticmethod
+    def _coerce_arrow_batches(
+        source: "ArrowResult | Any", *, batch_size: int = 65_536
+    ) -> "tuple[list[str], abc.Iterator[ArrowRecordBatch]]":
+        """Coerce an Arrow source into column names and a lazy RecordBatch iterator."""
+        return coerce_arrow_batches(source, batch_size=batch_size)
+
+    @staticmethod
+    def _arrow_batch_to_rows(batch: "ArrowRecordBatch", columns: "list[str] | None" = None) -> "list[tuple[Any, ...]]":
+        """Convert a single Arrow RecordBatch into row tuples."""
+        return arrow_batch_to_rows(batch, columns)
+
+    @staticmethod
     def _arrow_table_to_rows(
         table: "ArrowTable", columns: "list[str] | None" = None
     ) -> "tuple[list[str], list[tuple[Any, ...]]]":
@@ -3155,6 +3170,36 @@ class CommonDriverAttributesMixin:
     def _ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
         """Build telemetry dict from Arrow table statistics."""
         return build_ingest_telemetry(table, format_label=format_label)
+
+    @staticmethod
+    def _ingest_telemetry_from_batches(
+        rows_processed: int,
+        bytes_processed: int,
+        *,
+        duration_s: float | None = None,
+        format_label: str = "arrow",
+        read_duration_s: float | None = None,
+        encode_duration_s: float | None = None,
+        write_duration_s: float | None = None,
+        commit_duration_s: float | None = None,
+        shards_processed: int | None = None,
+        shards_skipped: int | None = None,
+        wal_bytes: int | None = None,
+    ) -> "StorageTelemetry":
+        """Build telemetry dict from accumulated batch metrics."""
+        return ingest_telemetry_from_batches(
+            rows_processed,
+            bytes_processed,
+            duration_s=duration_s,
+            format_label=format_label,
+            read_duration_s=read_duration_s,
+            encode_duration_s=encode_duration_s,
+            write_duration_s=write_duration_s,
+            commit_duration_s=commit_duration_s,
+            shards_processed=shards_processed,
+            shards_skipped=shards_skipped,
+            wal_bytes=wal_bytes,
+        )
 
     @staticmethod
     def _records_to_arrow_table(
