@@ -109,7 +109,7 @@ class DDLStateFolder:
     whenever the folded output could differ from applying the statements in order:
     statements against objects created before the range, DML that a later structural
     change would invalidate, unsupported statement kinds or ``ALTER`` actions,
-    procedural or unparseable statements, and rewrites of statements SQLGlot cannot
+    procedural or unparsable statements, and rewrites of statements SQLGlot cannot
     reproduce faithfully. The synthesized down statements drop exactly the objects the
     folded up statements create, which restores the pre-range schema because nothing
     outside the range may be touched.

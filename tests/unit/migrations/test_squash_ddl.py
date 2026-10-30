@@ -604,13 +604,13 @@ def test_folder_emits_unmodified_statements_verbatim() -> None:
     """Statements never rewritten by later migrations keep their original text."""
     folder = DDLStateFolder(dialect="postgres")
     folder.feed("create table Orders (id serial primary key, created_at timestamptz default now());", origin="0001")
-    folder.feed("create index idx_orders_created on Orders using brin (created_at);", origin="0002")
+    folder.feed("create index idx_orders_created on Orders using BRIN (created_at);", origin="0002")
 
     up_sql, down_sql = folder.to_statements()
 
     assert up_sql == [
         "create table Orders (id serial primary key, created_at timestamptz default now());",
-        "create index idx_orders_created on Orders using brin (created_at);",
+        "create index idx_orders_created on Orders using BRIN (created_at);",
     ]
     assert down_sql == ["DROP TABLE IF EXISTS Orders;"]
 

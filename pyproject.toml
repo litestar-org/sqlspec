@@ -365,7 +365,7 @@ version = "{current_version}"
 """
 
 [tool.codespell]
-ignore-words-list = "te,ECT,SELCT,froms,ccompiler,BRIN,ageIn,notin"
+ignore-words-list = "te,ECT,SELCT,froms,ccompiler,BRIN,ageIn,notin,DOUB"
 skip = 'uv.lock'
 
 [tool.coverage.run]

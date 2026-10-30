@@ -1,4 +1,5 @@
 # ruff: noqa: C901
+import inspect
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -252,14 +253,33 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         adk_config = cast("dict[str, Any]", config.extension_config.get("adk", {}))
         return bool(adk_config.get("enable_memory", True))
 
+    async def _close_cli_created_pool(config: Any, *, had_pool: bool) -> None:
+        """Close an async pool initialized by a short-lived CLI event loop."""
+        if had_pool or getattr(config, "connection_instance", None) is None:
+            return
+        close_pool = getattr(config, "close_pool", None)
+        if close_pool is None:
+            return
+        maybe_awaitable = close_pool()
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
+
     async def _cleanup_memory_entries_async(store: "BaseAsyncADKMemoryStore[Any]", days: int) -> int:
-        return await store.delete_entries_older_than(days)
+        had_pool = getattr(store.config, "connection_instance", None) is not None
+        try:
+            return await store.delete_entries_older_than(days)
+        finally:
+            await _close_cli_created_pool(store.config, had_pool=had_pool)
 
     async def _verify_memory_table_async(
         config: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]", sql: str
     ) -> None:
-        async with config.provide_session() as driver:
-            await driver.execute(sql)
+        had_pool = getattr(config, "connection_instance", None) is not None
+        try:
+            async with config.provide_session() as driver:
+                await driver.execute(sql)
+        finally:
+            await _close_cli_created_pool(config, had_pool=had_pool)
 
     def get_configs_with_migrations(
         ctx: "click.Context", enabled_only: bool = False
@@ -323,7 +343,15 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             The result of the executed function.
         """
         if config.is_async:
-            return run_(async_fn)()
+            had_pool = getattr(config, "connection_instance", None) is not None
+
+            async def _run_with_cleanup() -> Any:
+                try:
+                    return await async_fn()
+                finally:
+                    await _close_cli_created_pool(config, had_pool=had_pool)
+
+            return run_(_run_with_cleanup)()
         return sync_fn()
 
     def _dispatch_migration_call(config: Any, method_name: str, **kwargs: Any) -> Any:
@@ -443,6 +471,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
             async def _run_async_configs() -> None:
                 for config_name, config in async_configs:
+                    had_pool = getattr(config, "connection_instance", None) is not None
                     if progress_message is not None and should_echo(config):
                         console.print(progress_message(config_name))
                     try:
@@ -453,6 +482,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         errors.append((config_name, e))
                         if should_echo(config):
                             console.print(failure_message(config_name, e))
+                    finally:
+                        await _close_cli_created_pool(config, had_pool=had_pool)
 
             run_(_run_async_configs)()
 

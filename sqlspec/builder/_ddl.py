@@ -2855,7 +2855,7 @@ def compile_table_ddl_results(
 
     Catalog attributes that cannot be reproduced on ``dialect`` (unreported generated
     expressions, partial-index predicates, expression index keys, unsupported referential
-    actions, unparseable defaults) are listed in ``DDLResult.warnings`` and the result's
+    actions, unparsable defaults) are listed in ``DDLResult.warnings`` and the result's
     fidelity becomes ``LOSSY`` instead of ``GENERATED``.
 
     Args:

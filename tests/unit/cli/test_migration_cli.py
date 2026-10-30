@@ -1,11 +1,12 @@
 """Click CLI migration tests: option forwarding, byte-exact dump-schema output, and real exit codes."""
 
+import gc
 import sqlite3
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
@@ -38,7 +39,7 @@ def _sqlite_config(db_path: Path, migrations_dir: Path) -> SqliteConfig:
     )
 
 
-def _invoke(config: object, *args: str) -> "object":
+def _invoke(config: object, *args: str) -> Result:
     with patch("sqlspec.cli.resolve_config_sync", return_value=config):
         return CliRunner().invoke(add_migration_commands(), ["--config", "test.config", *args])
 
@@ -487,3 +488,22 @@ def test_upgrade_no_auto_sync_on_partial_squash_exits_non_zero(tmp_path: Path) -
     assert "Cannot reconcile squashed migration 0001" in result.output
     assert "Already at latest version" not in result.output
     assert _tracking_rows(db_path) == [("0001", None), ("0002", None)]
+
+
+def test_async_cli_command_closes_temporary_aiosqlite_pool(tmp_path: Path) -> None:
+    """Async CLI execution closes pools opened on its short-lived event loop before loop teardown."""
+    migrations_dir = tmp_path / "migrations"
+    _write_migrations(migrations_dir)
+    db_path = tmp_path / "async_cli.db"
+    SyncMigrationCommands(_sqlite_config(db_path, migrations_dir)).upgrade(echo=False)
+    async_config = AiosqliteConfig(
+        bind_key="primary",
+        connection_config={"database": str(db_path)},
+        migration_config={"enabled": True, "script_location": str(migrations_dir)},
+    )
+
+    result = _invoke(async_config, "dump-schema")
+    gc.collect()
+
+    assert result.exit_code == 0, result.output
+    assert async_config.connection_instance is None
