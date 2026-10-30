@@ -15,6 +15,7 @@ def main() -> list[dict[str, Any]]:
 
     with spec.provide_session(config) as session:
         session.execute("CREATE TABLE ledger (id INTEGER PRIMARY KEY, note TEXT)")
+        # --8<-- [start:example]
         session.begin()
         session.execute("INSERT INTO ledger (note) VALUES ('committed')")
         session.commit()
@@ -24,6 +25,7 @@ def main() -> list[dict[str, Any]]:
         session.rollback()
 
         rows = session.select("SELECT note FROM ledger ORDER BY id")
+        # --8<-- [end:example]
         assert rows == [{"note": "committed"}]
         return rows
 

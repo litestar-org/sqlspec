@@ -8,8 +8,10 @@ __all__ = ("main",)
 
 def main() -> AiosqliteStore:
     """Create an AiosqliteStore backed by an in-memory SQLite database."""
+    # --8<-- [start:example]
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     return AiosqliteStore(config)
+    # --8<-- [end:example]
 
 
 if __name__ == "__main__":

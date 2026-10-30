@@ -12,16 +12,16 @@ uv add "sqlspec[starlette]"
 
 Register your database config on `SQLSpec`, create `db_plugin = SQLSpecPlugin(spec)`, call `db_plugin.init_app(app)`, and retrieve the session in route handlers via `db_plugin.get_session(request)`:
 
-```{ .python title="docs/examples/frameworks/starlette/basic_setup.py" hl_lines="15-27" }
---8<-- "docs/examples/frameworks/starlette/basic_setup.py"
+```{ .python title="docs/examples/frameworks/starlette/basic_setup.py" }
+--8<-- "docs/examples/frameworks/starlette/basic_setup.py:example"
 ```
 
 ## Multi-Database Setup
 
 Bind multiple async or sync configurations by specifying unique `session_key`, `connection_key`, and `pool_key` values inside `extension_config["starlette"]` (`StarletteConfig`):
 
-```{ .python title="docs/examples/frameworks/starlette/multi_database.py" hl_lines="18-47" }
---8<-- "docs/examples/frameworks/starlette/multi_database.py"
+```{ .python title="docs/examples/frameworks/starlette/multi_database.py" }
+--8<-- "docs/examples/frameworks/starlette/multi_database.py:example"
 ```
 
 ## `StarletteConfig` Options

@@ -36,8 +36,8 @@ Comma-separated dotted paths (`--config app.oltp:config,app.analytics:config`) a
 
 The example below exercises the end-to-end CLI lifecycle (`show-config`, `init`, `create-migration`, `upgrade`, `show-current-revision`) programmatically with Click's `CliRunner`:
 
-```{ .python title="docs/examples/quickstart_migrations.py" hl_lines="26 27 28 29 30 31 32 35" }
---8<-- "docs/examples/quickstart_migrations.py"
+```{ .python title="docs/examples/quickstart_migrations.py" }
+--8<-- "docs/examples/quickstart_migrations.py:example"
 ```
 
 From your terminal, run the equivalent commands directly:

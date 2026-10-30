@@ -13,6 +13,7 @@ __all__ = ("main",)
 
 def main() -> FastAPI:
     """Create a FastAPI application with an injected AiosqliteDriver route."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
 
@@ -22,6 +23,8 @@ def main() -> FastAPI:
     @app.get("/teams")
     async def list_teams(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_session())]) -> dict[str, Any]:
         return await db.select_one("SELECT 1 AS ok")
+
+    # --8<-- [end:example]
 
     return app
 

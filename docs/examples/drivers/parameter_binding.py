@@ -14,10 +14,21 @@ def main() -> dict[str, Any]:
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        named = session.select_one("SELECT :status AS status, :status AS status_copy", status="active")
+        # --8<-- [start:example]
+        named = session.select_one(
+            """
+            SELECT :status AS status, :status AS status_copy
+            """,
+            status="active",
+        )
+        positional = session.select_one(
+            """
+            SELECT ? AS value
+            """,
+            42,
+        )
+        # --8<-- [end:example]
         assert named == {"status": "active", "status_copy": "active"}
-
-        positional = session.select_one("SELECT ? AS value", 42)
         assert positional == {"value": 42}
         return positional
 

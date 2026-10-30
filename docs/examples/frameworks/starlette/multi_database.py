@@ -15,6 +15,7 @@ __all__ = ("main",)
 
 def main() -> Starlette:
     """Create a Starlette application wired to async and sync SQLite databases."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         AiosqliteConfig(
@@ -38,12 +39,21 @@ def main() -> Starlette:
     async def report(request: Request) -> JSONResponse:
         db: AiosqliteDriver = db_plugin.get_session(request, "db")
         etl_db: SqliteDriver = db_plugin.get_session(request, "etl_db")
-        users = await db.select("SELECT 1 AS id, 'Alice' AS name")
-        metrics = etl_db.select("SELECT 'metric1' AS name, 100 AS value")
+        users = await db.select(
+            """
+            SELECT 1 AS id, 'Alice' AS name
+            """
+        )
+        metrics = etl_db.select(
+            """
+            SELECT 'metric1' AS name, 100 AS value
+            """
+        )
         return JSONResponse({"users": users, "metrics": metrics})
 
     app = Starlette(routes=[Route("/report", report)])
     db_plugin.init_app(app)
+    # --8<-- [end:example]
     return app
 
 

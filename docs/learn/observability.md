@@ -6,8 +6,8 @@ SQLSpec ships an opt-in observability pipeline (`sqlspec.observability`) with ze
 
 Register one or more `StatementObserver` functions on `ObservabilityConfig` to inspect `StatementEvent` records (`sql`, `operation`, `driver`, `duration_s`, `rows_affected`, `correlation_id`, `profile`):
 
-```{ .python title="docs/examples/patterns/observability/custom_observer.py" hl_lines="14 17 18" }
---8<-- "docs/examples/patterns/observability/custom_observer.py"
+```{ .python title="docs/examples/patterns/observability/custom_observer.py" }
+--8<-- "docs/examples/patterns/observability/custom_observer.py:example"
 ```
 
 ### `StatementEvent` Fields
@@ -34,8 +34,8 @@ Register one or more `StatementObserver` functions on `ObservabilityConfig` to i
 
 High-throughput services can sample routine queries deterministically while always capturing failed statements (`force_sample_on_error=True`) and masking sensitive bind parameters via `RedactionConfig`:
 
-```{ .python title="docs/examples/patterns/observability/sampling_config.py" hl_lines="10 11" }
---8<-- "docs/examples/patterns/observability/sampling_config.py"
+```{ .python title="docs/examples/patterns/observability/sampling_config.py" }
+--8<-- "docs/examples/patterns/observability/sampling_config.py:example"
 ```
 
 ```python
@@ -62,16 +62,16 @@ config = SqliteConfig(
 )
 ```
 
-```{ .python title="docs/examples/patterns/observability/cloud_formatters.py" hl_lines="10 11" }
---8<-- "docs/examples/patterns/observability/cloud_formatters.py"
+```{ .python title="docs/examples/patterns/observability/cloud_formatters.py" }
+--8<-- "docs/examples/patterns/observability/cloud_formatters.py:example"
 ```
 
 ## Request Correlation and Wire-Level `sqlcommenter`
 
 Bind request IDs with `CorrelationContext` (or enable `enable_correlation_middleware` in Litestar) so logs, spans, and database slow-query logs share the same trace context:
 
-```{ .python title="docs/examples/patterns/observability/correlation_middleware.py" hl_lines="16 20 21" }
---8<-- "docs/examples/patterns/observability/correlation_middleware.py"
+```{ .python title="docs/examples/patterns/observability/correlation_middleware.py" }
+--8<-- "docs/examples/patterns/observability/correlation_middleware.py:example"
 ```
 
 Setting `StatementConfig(enable_sqlcommenter=True)` appends W3C `traceparent` and `CorrelationContext` tags at wire dispatch time (`append_wire_sqlcomment`), keeping compiled SQL cache keys stable across requests so statement caching stays active. On Oracle (`python-oracledb`), `driver_features={"enable_session_tracing": True}` piggybacks `module`, `action`, `client_identifier`, and `econtext_id` onto the next TTC packet with zero extra round-trips.

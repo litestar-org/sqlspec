@@ -18,6 +18,7 @@ class ExampleExceptionHandler(BaseSyncExceptionHandler):
     """Adapter-specific exception handler wrapping database errors."""
 
 
+# --8<-- [start:example]
 class ExampleDriver(SyncDriverAdapterBase):
     """Minimal synchronous database driver adapter skeleton."""
 
@@ -69,6 +70,9 @@ class ExampleDriver(SyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Check whether the active connection is in an open transaction."""
         return False
+
+
+# --8<-- [end:example]
 
 
 def main() -> type[ExampleDriver]:

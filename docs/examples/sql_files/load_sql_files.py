@@ -17,13 +17,22 @@ def main() -> list[dict[str, Any]]:
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         sql_file = Path(tmp_dir) / "queries.sql"
-        sql_file.write_text("-- name: list_teams\nSELECT id, name FROM teams ORDER BY id;\n", encoding="utf-8")
+        sql_file.write_text(
+            """-- name: list_teams
+SELECT id, name
+FROM teams
+ORDER BY id;
+""",
+            encoding="utf-8",
+        )
+        # --8<-- [start:example]
         spec.load_sql_files(sql_file)
 
-    with spec.provide_session(config) as session:
-        session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
-        session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
-        rows = session.execute(spec.get_sql("list_teams")).all()
+        with spec.provide_session(config) as session:
+            session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
+            session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
+            rows = session.execute(spec.get_sql("list_teams")).all()
+        # --8<-- [end:example]
         assert rows == [{"id": 1, "name": "Litestar"}, {"id": 2, "name": "SQLSpec"}]
         return rows
 

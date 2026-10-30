@@ -16,7 +16,16 @@ def main() -> dict[str, Any] | None:
     with spec.provide_session(config) as session:
         session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
         session.execute("INSERT INTO users (name) VALUES ('Ada')")
-        row = session.select_one_or_none("SELECT name FROM users WHERE id = ?", 1)
+        # --8<-- [start:example]
+        row = session.select_one_or_none(
+            """
+            SELECT name
+            FROM users
+            WHERE id = ?
+            """,
+            1,
+        )
+        # --8<-- [end:example]
         assert row == {"name": "Ada"}
         return row
 

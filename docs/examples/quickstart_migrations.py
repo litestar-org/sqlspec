@@ -23,6 +23,7 @@ def main() -> None:
         sys.path.insert(0, str(temp_path))
         os.chdir(temp_path)
         try:
+            # --8<-- [start:example]
             config_path = "database:database_config"
             commands = (
                 ["show-config"],
@@ -34,6 +35,7 @@ def main() -> None:
             for command in commands:
                 result = runner.invoke(add_migration_commands(), ["--config", config_path, *command])
                 print(result.output, end="")
+                # --8<-- [end:example]
                 if result.exit_code:
                     message = f"Migration command failed: {' '.join(command)}"
                     raise RuntimeError(message) from result.exception

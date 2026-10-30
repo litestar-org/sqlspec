@@ -8,9 +8,10 @@ hide:
 <h1 id="sqlspec" class="sqlspec-sr-only">SQLSpec</h1>
 
 <div class="sqlspec-hero">
-  <div class="sqlspec-hero-banner">
-    <img src="assets/banner-inline-light.svg#only-light" alt="SQLSpec" width="520" height="126">
-    <img src="assets/banner-inline-dark.svg#only-dark" alt="SQLSpec" width="520" height="126">
+  <div class="sqlspec-hero-lockup">
+    <img class="sqlspec-hero-logo" src="assets/logo.svg" alt="SQLSpec Logo" width="72" height="72" />
+    <div class="sqlspec-hero-divider" aria-hidden="true"></div>
+    <span class="sqlspec-brand-text">SQLSpec</span>
   </div>
   <p class="sqlspec-hero-lead">
     SQL-first database execution for Python across 20 sync and async adapters. Write raw SQL, load named statements from <code>.sql</code> files, or compose dialect-portable queries with SQLGlot while SQLSpec handles parameter compilation, statement caching, migrations, Apache Arrow streaming, and typed row mapping.
@@ -40,8 +41,8 @@ uv add "sqlspec[asyncpg,msgspec,litestar]"
 
 Register an adapter configuration on `SQLSpec`, open a managed session, execute parameterized SQL, and read dictionary or typed model rows:
 
-```{ .python title="docs/examples/quickstart/first_query.py" hl_lines="13 14 16 19 20" }
---8<-- "docs/examples/quickstart/first_query.py"
+```python
+--8 < --"docs/examples/quickstart/first_query.py:example"
 ```
 
 Run live SQLite queries directly in your browser in the [Interactive Playground](playground.md).

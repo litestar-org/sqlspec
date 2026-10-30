@@ -11,11 +11,13 @@ def main() -> list[StatementEvent]:
     """Capture per-statement telemetry events across DDL, DML, and SELECT operations."""
     captured_events: list[StatementEvent] = []
 
+    # --8<-- [start:example]
     def observe_statement(event: StatementEvent) -> None:
         captured_events.append(event)
 
     observability = ObservabilityConfig(statement_observers=(observe_statement,), print_sql=False)
     spec = SQLSpec(observability_config=observability)
+    # --8<-- [end:example]
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:

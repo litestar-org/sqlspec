@@ -20,8 +20,8 @@ Choose **`SqliteConfig`** for CLI tools, synchronous web apps, embedded local st
 
 ## Minimal Connection and Pool Setup
 
-```{ .python title="docs/examples/drivers/sqlite_connection.py" hl_lines="14 16 17 18" }
---8<-- "docs/examples/drivers/sqlite_connection.py"
+```{ .python title="docs/examples/drivers/sqlite_connection.py" }
+--8<-- "docs/examples/drivers/sqlite_connection.py:example"
 ```
 
 For production file-backed SQLite databases, enable Write-Ahead Logging (`WAL`), foreign key enforcement, and a bounded `busy_timeout` via `driver_features={"pragmas": ...}`:

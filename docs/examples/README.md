@@ -17,7 +17,7 @@ Embed any example module in Markdown documentation pages using `pymdownx.snippet
 
 ````markdown
 ```python
---8<-- "docs/examples/quickstart/first_query.py"
+--8<-- "docs/examples/quickstart/first_query.py:example"
 ```
 ````
 

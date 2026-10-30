@@ -9,6 +9,7 @@ __all__ = ("main",)
 
 def main() -> SQLSpecPlugin:
     """Create a Litestar SQLSpecPlugin with autocommit and manual binds."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         SqliteConfig(
@@ -22,7 +23,9 @@ def main() -> SQLSpecPlugin:
             extension_config={"litestar": {"commit_mode": "manual"}},
         )
     )
-    return SQLSpecPlugin(sqlspec=spec)
+    plugin = SQLSpecPlugin(sqlspec=spec)
+    # --8<-- [end:example]
+    return plugin
 
 
 if __name__ == "__main__":

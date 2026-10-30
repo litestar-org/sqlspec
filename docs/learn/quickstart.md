@@ -2,8 +2,8 @@
 
 Run your first parameterized query with zero external setup using Python's built-in SQLite driver:
 
-```{ .python title="docs/examples/quickstart/first_query.py" hl_lines="13 14 16 18 19 20" }
---8<-- "docs/examples/quickstart/first_query.py"
+```python
+--8 < --"docs/examples/quickstart/first_query.py:example"
 ```
 
 Execute the script with `uv`:
@@ -20,20 +20,20 @@ Expected output:
 
 ## Recap
 
-Walk through the highlighted lines in `first_query.py`:
+Key steps in `first_query.py`:
 
-- **Line 13 (`SQLSpec()`)**: Creates the central registry that manages database configurations, connection pools, and named SQL files.
-- **Line 14 (`spec.add_config(...)`)**: Registers a `SqliteConfig` pointing at an `:memory:` SQLite database and returns a typed handle.
-- **Line 16 (`with spec.provide_session(config) as session`)**: Acquires a pooled connection and yields a `SqliteDriver` session that cleans up automatically on block exit.
-- **Line 18 (`session.execute(..., name="Ada", points=42)`)**: Compiles `:name` and `:points` placeholders for SQLite and binds keyword arguments safely without string interpolation.
-- **Lines 19–20 (`select_value` and `select_one`)**: `select_value` extracts a single scalar column (`int`), while `select_one` returns the single matching row as a `dict[str, Any]` (raising `NotFoundError` if zero rows match).
+- **`SQLSpec()`**: Creates the central registry that manages database configurations, connection pools, and named SQL files.
+- **`spec.add_config(...)`**: Registers a `SqliteConfig` pointing at an in-memory SQLite database and returns a typed handle.
+- **`with spec.provide_session(config) as session:`**: Acquires a pooled connection and yields a `SqliteDriver` session that cleans up automatically on block exit.
+- **`session.execute(..., name="Ada", points=42)`**: Compiles `:name` and `:points` placeholders for SQLite and binds keyword arguments safely without string interpolation.
+- **`select_value` and `select_one`**: `select_value` extracts a single scalar column (`int`), while `select_one` returns the single matching row as a `dict[str, Any]` (raising `NotFoundError` if zero rows match).
 
 ## Positional vs Named Parameters
 
 SQLSpec accepts both named keyword parameters (`:name`) and positional placeholders (`?` or `$1`) on any adapter, translating them to the underlying driver's wire syntax automatically:
 
-```{ .python title="docs/examples/quickstart/basic_connection.py" hl_lines="17 18 19" }
---8<-- "docs/examples/quickstart/basic_connection.py"
+```python
+--8 < --"docs/examples/quickstart/basic_connection.py:example"
 ```
 
 Use positional parameters for quick single-column statements and named parameters whenever a query binds multiple fields or composes `StatementFilter` objects.
@@ -42,8 +42,8 @@ Use positional parameters for quick single-column statements and named parameter
 
 Switching from synchronous `sqlite3` to `asyncio` uses the exact same session methods with `await` and `async with`. Install `sqlspec[aiosqlite]` and swap `SqliteConfig` for `AiosqliteConfig`:
 
-```{ .python title="docs/examples/quickstart/async_connection.py" hl_lines="15 18 20 21 25" }
---8<-- "docs/examples/quickstart/async_connection.py"
+```python
+--8 < --"docs/examples/quickstart/async_connection.py:example"
 ```
 
 Always call `await config.close_pool()` during application shutdown (or let a framework plugin manage lifespan cleanup automatically).
@@ -52,8 +52,8 @@ Always call `await config.close_pool()` during application shutdown (or let a fr
 
 By default, `select` and `select_one` return `dict[str, Any]` rows. Pass `schema_type=` to decode rows directly into `msgspec.Struct`, `TypedDict`, `pydantic.BaseModel`, `dataclass`, or `attrs` instances (`uv add "sqlspec[msgspec]"`):
 
-```{ .python title="docs/examples/quickstart/typed_mapping.py" hl_lines="11 27" }
---8<-- "docs/examples/quickstart/typed_mapping.py"
+```python
+--8 < --"docs/examples/quickstart/typed_mapping.py:example"
 ```
 
 Defining `msgspec.Struct(..., frozen=True, gc=False)` gives you immutable attribute access, static type checking, and lower allocation overhead than plain dictionaries.

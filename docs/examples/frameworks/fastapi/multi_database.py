@@ -14,6 +14,7 @@ __all__ = ("main",)
 
 def main() -> FastAPI:
     """Create a FastAPI application wired to both primary async and ETL sync databases."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         AiosqliteConfig(
@@ -40,9 +41,19 @@ def main() -> FastAPI:
         db: Annotated[AiosqliteDriver, Depends(db_plugin.provide_session("db"))],
         etl_db: Annotated[SqliteDriver, Depends(db_plugin.provide_session("etl_db"))],
     ) -> dict[str, list[dict[str, Any]]]:
-        users = await db.select("SELECT 1 AS id, 'Alice' AS name")
-        metrics = etl_db.select("SELECT 'metric1' AS name, 100 AS value")
+        users = await db.select(
+            """
+            SELECT 1 AS id, 'Alice' AS name
+            """
+        )
+        metrics = etl_db.select(
+            """
+            SELECT 'metric1' AS name, 100 AS value
+            """
+        )
         return {"users": users, "metrics": metrics}
+
+    # --8<-- [end:example]
 
     return app
 

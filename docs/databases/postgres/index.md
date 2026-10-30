@@ -77,7 +77,10 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 config = AsyncpgConfig(
     connection_config={"dsn": "postgresql://app:secret@pgbouncer:6432/prod", "min_size": 5, "max_size": 25},
-    driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://app:secret@postgres-primary:5432/prod"},
+    driver_features={
+        "pooler_mode": "transaction",
+        "direct_dsn": ("postgresql://app:secret@postgres-primary:5432/prod"),
+    },
 )
 ```
 

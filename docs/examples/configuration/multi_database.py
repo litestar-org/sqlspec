@@ -17,6 +17,7 @@ def main() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         base_dir = Path(tmp_dir)
+        # --8<-- [start:example]
         primary = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "primary.db")}))
         analytics = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "analytics.db")}))
 
@@ -26,14 +27,29 @@ def main() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         spec.load_sql_files(sql_dir)
 
         with spec.provide_session(primary) as session:
-            session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+            session.execute(
+                """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT
+                )
+                """
+            )
             session.execute("INSERT INTO users (name) VALUES ('Alice')")
             users = session.execute(spec.get_sql("list_users")).all()
 
         with spec.provide_session(analytics) as session:
-            session.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, event TEXT)")
+            session.execute(
+                """
+                CREATE TABLE events (
+                    id INTEGER PRIMARY KEY,
+                    event TEXT
+                )
+                """
+            )
             session.execute("INSERT INTO events (event) VALUES ('page_view')")
             events = session.execute("SELECT id, event FROM events").all()
+        # --8<-- [end:example]
 
     assert users == [{"id": 1, "name": "Alice"}]
     assert events == [{"id": 1, "event": "page_view"}]

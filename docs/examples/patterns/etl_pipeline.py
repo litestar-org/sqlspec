@@ -19,22 +19,59 @@ def main() -> float:
         target_config = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "target.db")}))
 
         with spec.provide_session(source_config) as session:
-            session.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, amount REAL, status TEXT)")
+            session.execute(
+                """
+                CREATE TABLE orders (
+                    id INTEGER PRIMARY KEY,
+                    amount REAL,
+                    status TEXT
+                )
+                """
+            )
             session.execute_many(
-                "INSERT INTO orders (amount, status) VALUES (?, ?)",
+                """
+                INSERT INTO orders (amount, status)
+                VALUES (?, ?)
+                """,
                 [(100.0, "complete"), (50.0, "pending"), (200.0, "complete")],
             )
 
+        # --8<-- [start:example]
         with spec.provide_session(source_config) as session:
-            completed = session.select("SELECT id, amount FROM orders WHERE status = ?", "complete")
+            completed = session.select(
+                """
+                SELECT id, amount
+                FROM orders
+                WHERE status = ?
+                """,
+                "complete",
+            )
 
         with spec.provide_session(target_config) as session:
-            session.execute("CREATE TABLE revenue (order_id INTEGER, amount REAL)")
+            session.execute(
+                """
+                CREATE TABLE revenue (
+                    order_id INTEGER,
+                    amount REAL
+                )
+                """
+            )
             session.execute_many(
-                "INSERT INTO revenue (order_id, amount) VALUES (?, ?)",
+                """
+                INSERT INTO revenue (order_id, amount)
+                VALUES (?, ?)
+                """,
                 [(row["id"], row["amount"]) for row in completed],
             )
-            total = float(session.select_value("SELECT SUM(amount) FROM revenue"))
+            total = float(
+                session.select_value(
+                    """
+                    SELECT SUM(amount)
+                    FROM revenue
+                    """
+                )
+            )
+        # --8<-- [end:example]
 
     assert total == 300.0
     return total

@@ -16,7 +16,13 @@ config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}
 with spec.provide_session(config) as session:
     session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
     session.execute(
-        "CREATE TABLE members (id INTEGER PRIMARY KEY, team_id INTEGER REFERENCES teams(id), email TEXT NOT NULL)"
+        """
+        CREATE TABLE members (
+            id INTEGER PRIMARY KEY,
+            team_id INTEGER REFERENCES teams(id),
+            email TEXT NOT NULL
+        )
+        """
     )
     session.execute("CREATE INDEX idx_members_team_id ON members (team_id)")
 

@@ -6,8 +6,8 @@ Moving data between operational databases, analytical engines, and cloud object 
 
 Register source and target configurations on a single `SQLSpec` instance to extract filtered rows from an upstream store and batch-load transformed records into a downstream target:
 
-```{ .python title="docs/examples/patterns/etl_pipeline.py" hl_lines="18 19 29 33 34 35" }
---8<-- "docs/examples/patterns/etl_pipeline.py"
+```python
+--8 < --"docs/examples/patterns/etl_pipeline.py:example"
 ```
 
 ## Bounded-Memory Chunked Streaming
@@ -25,14 +25,35 @@ source = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}
 target = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
 with spec.provide_session(source) as src, spec.provide_session(target) as dst:
-    src.execute("CREATE TABLE raw_events (id INTEGER PRIMARY KEY, kind TEXT)")
+    src.execute(
+        """
+        CREATE TABLE raw_events (id INTEGER PRIMARY KEY, kind TEXT)
+        """
+    )
     src.execute_many("INSERT INTO raw_events (kind) VALUES (?)", [("click",), ("signup",), ("click",)])
-    dst.execute("CREATE TABLE event_archive (id INTEGER PRIMARY KEY, kind TEXT)")
+    dst.execute(
+        """
+        CREATE TABLE event_archive (id INTEGER PRIMARY KEY, kind TEXT)
+        """
+    )
 
-    with src.select_stream("SELECT id, kind FROM raw_events ORDER BY id", chunk_size=500) as stream:
+    with src.select_stream(
+        """
+        SELECT id, kind
+        FROM raw_events
+        ORDER BY id
+        """,
+        chunk_size=500,
+    ) as stream:
         iterator = ((row["id"], row["kind"]) for row in stream)
         while batch := list(islice(iterator, 500)):
-            dst.execute_many("INSERT INTO event_archive (id, kind) VALUES (?, ?)", batch)
+            dst.execute_many(
+                """
+                INSERT INTO event_archive (id, kind)
+                VALUES (?, ?)
+                """,
+                batch,
+            )
 ```
 
 ## Columnar Transfers with Arrow and Parquet Storage

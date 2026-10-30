@@ -34,14 +34,13 @@ uv add "sqlspec[asyncpg,msgspec,litestar]"
 ## Quickstart
 
 ```python
-from dataclasses import dataclass
+import msgspec
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 
-@dataclass(frozen=True, slots=True)
-class User:
+class User(msgspec.Struct, frozen=True, gc=False):
     id: int
     name: str
 
@@ -50,9 +49,30 @@ spec = SQLSpec()
 config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
 with spec.provide_session(config) as session:
-    session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
-    session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
-    user = session.select_one("SELECT id, name FROM users WHERE name = :name", name="Ada", schema_type=User)
+    session.execute(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            name TEXT
+        )
+        """
+    )
+    session.execute(
+        """
+        INSERT INTO users (name)
+        VALUES (:name)
+        """,
+        name="Ada",
+    )
+    user = session.select_one(
+        """
+        SELECT id, name
+        FROM users
+        WHERE name = :name
+        """,
+        name="Ada",
+        schema_type=User,
+    )
 ```
 
 ## Capabilities

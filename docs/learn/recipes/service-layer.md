@@ -6,8 +6,8 @@
 
 When constructed with `config=`, a service checks out a short-lived pooled session automatically for standalone read helpers (`service.get_one(...)`, `service.exists(...)`, `service.paginate(...)`) and opens an explicit commit-or-rollback session inside `with service.begin_transaction() as session:`:
 
-```{ .python title="docs/examples/drivers/service_config.py" hl_lines="19 23 27 28 29 31 57 61" }
---8<-- "docs/examples/drivers/service_config.py"
+```python
+--8 < --"docs/examples/drivers/service_config.py:example"
 ```
 
 ## Core Service Methods
@@ -22,44 +22,117 @@ When constructed with `config=`, a service checks out a short-lived pooled sessi
 | `provide_session()` | Context manager yielding a pooled read/write driver session. |
 | `begin_transaction()` | Context manager yielding a session inside an active transaction that commits on exit and rolls back on exception. |
 
-## Structuring Domain Services
+## Production Service Architecture Patterns
 
-Subclass or compose `SQLSpecAsyncService` (or `SQLSpecSyncService`) around your domain's `.sql` file loader so route handlers express domain operations rather than SQL mechanics:
+In real-world architectures, services fall into two lifetime patterns:
+
+### Pattern 1: Bounded-Session Domain Services (`config=` + `provide_session()`)
+
+When a service coordinates external asynchronous I/O (such as password hashing, third-party REST APIs, or LLM embeddings), do not keep a database connection checked out during the entire operation. Instead, initialize the service with `config=` and check out short-lived sessions only when executing database commands:
 
 ```python
+"""Bounded-session customer domain service using AsyncpgConfig and SQLFileLoader."""
+
+from collections.abc import Sequence
 import msgspec
 
-from sqlspec import SQLFileLoader, sql
-from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec import SQLFileLoader, StatementStack
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.core import LimitOffsetFilter, OffsetPagination
 from sqlspec.service import SQLSpecAsyncService
 
 
 class Customer(msgspec.Struct, frozen=True, gc=False):
+    """Customer entity representation."""
+
     id: int
     email: str
     tier: str
 
 
-class CustomerService:
-    def __init__(self, config: AiosqliteConfig, loader: SQLFileLoader) -> None:
-        self._db = SQLSpecAsyncService(config=config, loader=loader)
+class CustomerService(SQLSpecAsyncService[AsyncpgDriver]):
+    """Domain service managing customer accounts and tier lifecycle."""
+
+    def __init__(self, config: AsyncpgConfig, loader: SQLFileLoader) -> None:
+        super().__init__(config=config, loader=loader)
 
     async def get_by_email(self, email: str) -> Customer:
-        query = sql.select("id", "email", "tier").from_("customers").where_eq("email", email)
-        row = await self._db.get_one(query)
-        return msgspec.convert(row, type=Customer)
+        """Fetch customer by email, checking out a short-lived connection."""
+        query = self.get_sql("get-customer-by-email").where("email = :email")
+        return await self.get_one(query, email=email, schema_type=Customer)
 
-    async def list_customers(self, *, limit: int = 25, offset: int = 0) -> OffsetPagination[dict[str, object]]:
-        query = sql.select("id", "email", "tier").from_("customers").order_by("id")
-        return await self._db.paginate_limit_offset(query, LimitOffsetFilter(limit=limit, offset=offset))
+    async def list_customers(self, *, limit: int = 25, offset: int = 0) -> OffsetPagination[Customer]:
+        """Paginate customers without holding a connection between pages."""
+        query = self.get_sql("list-customers")
+        return await self.paginate_limit_offset(
+            query, LimitOffsetFilter(limit=limit, offset=offset), schema_type=Customer
+        )
 
-    async def upgrade_tier(self, customer_id: int, new_tier: str) -> None:
-        async with self._db.begin_transaction() as session:
-            await session.execute("UPDATE customers SET tier = :tier WHERE id = :id", tier=new_tier, id=customer_id)
-            await session.execute(
-                "INSERT INTO tier_audit (customer_id, new_tier) VALUES (:id, :tier)", id=customer_id, tier=new_tier
+    async def upgrade_tier_with_audit(self, customer_id: int, new_tier: str, audit_events: Sequence[str]) -> None:
+        """Execute atomic multi-table updates inside an explicit transaction."""
+        stack = (
+            StatementStack()
+            .push_execute(
+                """
+                UPDATE customers
+                SET tier = :tier
+                WHERE id = :id
+                """,
+                tier=new_tier,
+                id=customer_id,
             )
+            .push_execute_many(
+                """
+                INSERT INTO tier_audit (customer_id, new_tier, event_type)
+                VALUES (:id, :tier, :event)
+                """,
+                [{"id": customer_id, "tier": new_tier, "event": evt} for evt in audit_events],
+            )
+        )
+        async with self.begin_transaction() as session:
+            await session.execute_stack(stack)
+```
+
+### Pattern 2: Request-Scoped Driver Services (`session=driver`)
+
+When using dependency injection frameworks like Dishka or Litestar where a driver connection is already checked out for the lifetime of an HTTP request, inject the `driver` directly into `SQLSpecAsyncService(session)`:
+
+```python
+"""Request-scoped product service receiving an injected driver instance."""
+
+import msgspec
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgDriver
+from sqlspec.core import FilterTypes, OffsetPagination
+from sqlspec.service import SQLSpecAsyncService
+
+
+class Product(msgspec.Struct, frozen=True, gc=False):
+    """Product domain entity."""
+
+    id: int
+    sku: str
+    name: str
+    price_cents: int
+
+
+class ProductService(SQLSpecAsyncService[AsyncpgDriver]):
+    """Request-scoped service operating on a checked-out driver session."""
+
+    def __init__(self, driver: AsyncpgDriver, spec: SQLSpec) -> None:
+        super().__init__(driver)
+        self.spec = spec
+
+    async def get_by_id(self, product_id: int) -> Product:
+        """Retrieve a product by ID or raise NotFoundError."""
+        query = self.spec.get_sql("get-product").where("id = :id")
+        return await self.get_one(query, id=product_id, schema_type=Product)
+
+    async def list_products(self, *filters: FilterTypes) -> OffsetPagination[Product]:
+        """Filter and paginate products using precompiled SQL templates."""
+        query = self.spec.get_sql("list-products")
+        return await self.paginate(query, *filters, schema_type=Product)
 ```
 
 ## Sharing an Existing Session Across Multiple Services
@@ -77,19 +150,59 @@ orders_svc = SQLSpecSyncService(config=config)
 ledger_svc = SQLSpecSyncService(config=config)
 
 with orders_svc.begin_transaction() as session:
-    session.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, total INTEGER)")
-    session.execute("CREATE TABLE ledger (id INTEGER PRIMARY KEY, order_id INTEGER, amount INTEGER)")
-    session.execute("INSERT INTO orders (id, total) VALUES (:id, :total)", id=101, total=2500)
-
-    order = orders_svc.get_one("SELECT id, total FROM orders WHERE id = :id", session=session, id=101)
     session.execute(
-        "INSERT INTO ledger (order_id, amount) VALUES (:order_id, :amount)", order_id=order["id"], amount=order["total"]
+        """
+        CREATE TABLE orders (id INTEGER PRIMARY KEY, total INTEGER)
+        """
     )
-    assert ledger_svc.exists("SELECT 1 FROM ledger WHERE order_id = :id", session=session, id=101)
+    session.execute(
+        """
+        CREATE TABLE ledger (
+            id INTEGER PRIMARY KEY,
+            order_id INTEGER,
+            amount INTEGER
+        )
+        """
+    )
+    session.execute(
+        """
+        INSERT INTO orders (id, total)
+        VALUES (:id, :total)
+        """,
+        id=101,
+        total=2500,
+    )
+
+    order = orders_svc.get_one(
+        """
+        SELECT id, total
+        FROM orders
+        WHERE id = :id
+        """,
+        session=session,
+        id=101,
+    )
+    session.execute(
+        """
+        INSERT INTO ledger (order_id, amount)
+        VALUES (:order_id, :amount)
+        """,
+        order_id=order["id"],
+        amount=order["total"],
+    )
+    assert ledger_svc.exists(
+        """
+        SELECT 1
+        FROM ledger
+        WHERE order_id = :id
+        """,
+        session=session,
+        id=101,
+    )
 ```
 
 ## Recap
 
 - Construct `SQLSpecSyncService(config=...)` or `SQLSpecAsyncService(config=...)` to eliminate repetitive `with config.provide_session()` boilerplate on single-statement reads.
-- Group multi-statement domain mutations inside `service.begin_transaction()` for automatic commit on success and rollback on failure.
+- Group multi-statement domain mutations inside `service.begin_transaction()` or `session.execute_stack(...)` for atomic execution.
 - Pass `session=session` when coordinating multiple domain services within one shared transaction.

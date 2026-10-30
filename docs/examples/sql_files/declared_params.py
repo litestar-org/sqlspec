@@ -10,15 +10,19 @@ from sqlspec.exceptions import SQLSpecError
 
 __all__ = ("main",)
 
-TEAMS_SQL = (
-    "-- name: get_team_by_name\n"
-    "-- param: name str  The team name to look up\n"
-    "SELECT id, name FROM teams WHERE name = :name;\n"
-    "\n"
-    "-- name: list_teams\n"
-    "-- param: name str?  Optional team name filter\n"
-    "SELECT id, name FROM teams WHERE (:name IS NULL OR name = :name) ORDER BY id;\n"
-)
+TEAMS_SQL = """-- name: get_team_by_name
+-- param: name str  The team name to look up
+SELECT id, name
+FROM teams
+WHERE name = :name;
+
+-- name: list_teams
+-- param: name str?  Optional team name filter
+SELECT id, name
+FROM teams
+WHERE (:name IS NULL OR name = :name)
+ORDER BY id;
+"""
 
 
 def main() -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -31,11 +35,8 @@ def main() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         sql_file.write_text(TEAMS_SQL, encoding="utf-8")
         spec.load_sql_files(sql_file)
 
+    # --8<-- [start:example]
     declarations = spec.get_query_parameters("get_team_by_name")
-    assert declarations[0].name == "name"
-    assert declarations[0].type_str == "str"
-    assert declarations[0].description == "The team name to look up"
-
     query = spec.get_sql("get_team_by_name")
     assert query.declared_parameters == declarations
 
@@ -45,6 +46,7 @@ def main() -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
         row = session.execute(query, name="SQLSpec").one()
         optional_rows = session.execute(spec.get_sql("list_teams")).all()
+        # --8<-- [end:example]
 
         missing_error = ""
         try:

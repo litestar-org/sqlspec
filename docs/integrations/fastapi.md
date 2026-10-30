@@ -12,8 +12,8 @@ uv add "sqlspec[fastapi]"
 
 Attach `SQLSpecPlugin(spec, app)` to your `FastAPI` instance and inject the session into route handlers using `Depends(db_ext.provide_session())`:
 
-```{ .python title="docs/examples/frameworks/fastapi/basic_setup.py" hl_lines="16-25" }
---8<-- "docs/examples/frameworks/fastapi/basic_setup.py"
+```{ .python title="docs/examples/frameworks/fastapi/basic_setup.py" }
+--8<-- "docs/examples/frameworks/fastapi/basic_setup.py:example"
 ```
 
 `SQLSpecPlugin` automatically opens configured connection pools when FastAPI starts and closes them when the application shuts down.
@@ -22,8 +22,8 @@ Attach `SQLSpecPlugin(spec, app)` to your `FastAPI` instance and inject the sess
 
 Register multiple synchronous or asynchronous adapters on `SQLSpec` with distinct `session_key` names under `extension_config["fastapi"]`, then pass the key to `db_plugin.provide_session("<key>")`:
 
-```{ .python title="docs/examples/frameworks/fastapi/multi_database.py" hl_lines="18-45" }
---8<-- "docs/examples/frameworks/fastapi/multi_database.py"
+```{ .python title="docs/examples/frameworks/fastapi/multi_database.py" }
+--8<-- "docs/examples/frameworks/fastapi/multi_database.py:example"
 ```
 
 ## Transaction Commit Modes and Options

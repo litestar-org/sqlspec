@@ -13,6 +13,7 @@ __all__ = ("main",)
 
 def main() -> Sanic:
     """Create a Sanic application wired to primary async and analytics sync databases."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         AiosqliteConfig(
@@ -48,11 +49,20 @@ def main() -> Sanic:
     async def report(request: Request) -> HTTPResponse:
         primary: AiosqliteDriver = db_plugin.get_session(request, "primary_db")
         analytics: SqliteDriver = db_plugin.get_session(request, "analytics_db")
-        users = await primary.select("SELECT 1 AS id, 'Alice' AS name")
-        metrics = analytics.select("SELECT 'active_users' AS name, 100 AS value")
+        users = await primary.select(
+            """
+            SELECT 1 AS id, 'Alice' AS name
+            """
+        )
+        metrics = analytics.select(
+            """
+            SELECT 'active_users' AS name, 100 AS value
+            """
+        )
         return response.json({"users": users, "metrics": metrics})
 
     db_plugin.init_app(app)
+    # --8<-- [end:example]
     return app
 
 

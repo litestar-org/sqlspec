@@ -29,6 +29,7 @@ def main() -> tuple[str, str]:
         migration_dir = base_dir / "migrations"
         db_path = base_dir / "app.duckdb"
 
+        # --8<-- [start:example]
         config = DuckDBConfig(
             connection_config={"database": str(db_path)},
             migration_config={
@@ -48,18 +49,27 @@ def main() -> tuple[str, str]:
             commands.init(str(migration_dir), package=True)
             (migration_dir / "0001_create_users.py").write_text(MIGRATION_SCRIPT, encoding="utf-8")
             commands.upgrade()
+            # --8<-- [end:example]
 
             with config.provide_session() as session:
                 users_table = str(
                     session.select_value(
-                        "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
+                        """
+                        SELECT table_name
+                        FROM information_schema.tables
+                        WHERE table_schema = ? AND table_name = ?
+                        """,
                         "app_schema",
                         "users",
                     )
                 )
                 tracker_table = str(
                     session.select_value(
-                        "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
+                        """
+                        SELECT table_name
+                        FROM information_schema.tables
+                        WHERE table_schema = ? AND table_name = ?
+                        """,
                         "admin_schema",
                         "schema_versions",
                     )

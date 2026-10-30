@@ -7,8 +7,10 @@ __all__ = ("main",)
 
 def main() -> tuple[ObservabilityConfig, ObservabilityConfig]:
     """Create ObservabilityConfig instances for GCP and AWS structured log output."""
+    # --8<-- [start:example]
     gcp_logs = ObservabilityConfig(cloud_formatter=GCPLogFormatter())
     aws_logs = ObservabilityConfig(cloud_formatter=AWSLogFormatter())
+    # --8<-- [end:example]
     assert gcp_logs.cloud_formatter is not None
     assert aws_logs.cloud_formatter is not None
     return gcp_logs, aws_logs

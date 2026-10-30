@@ -12,8 +12,8 @@ uv add "sqlspec[flask]"
 
 Create a `SQLSpecPlugin(spec)` instance, initialize it inside your `create_app` factory with `plugin.init_app(app)`, and retrieve the active request session via `plugin.get_session()`:
 
-```{ .python title="docs/examples/frameworks/flask/basic_setup.py" hl_lines="14-32" }
---8<-- "docs/examples/frameworks/flask/basic_setup.py"
+```{ .python title="docs/examples/frameworks/flask/basic_setup.py" }
+--8<-- "docs/examples/frameworks/flask/basic_setup.py:example"
 ```
 
 Calling `plugin.get_session()` multiple times within the same HTTP request returns the same `flask.g`-cached driver session.
@@ -22,8 +22,8 @@ Calling `plugin.get_session()` multiple times within the same HTTP request retur
 
 Configure distinct `session_key`, `connection_key`, and `pool_key` values under `extension_config["flask"]` (`FlaskConfig`) and pass the key to `plugin.get_session("<key>")`:
 
-```{ .python title="docs/examples/frameworks/flask/multi_database.py" hl_lines="19-48" }
---8<-- "docs/examples/frameworks/flask/multi_database.py"
+```{ .python title="docs/examples/frameworks/flask/multi_database.py" }
+--8<-- "docs/examples/frameworks/flask/multi_database.py:example"
 ```
 
 ## `FlaskConfig` Options

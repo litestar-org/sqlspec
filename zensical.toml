@@ -204,6 +204,9 @@ primary = "custom"
 accent = "indigo"
 toggle = { icon = "lucide/moon", name = "Switch to light mode" }
 
+[project.extra]
+generator = false
+
 [project.plugins.search]
 
 [project.plugins.redirects.redirect_maps]

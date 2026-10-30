@@ -6,8 +6,8 @@ SQLSpec's thin session contract makes database code straightforward to test at t
 
 For domain logic, parameter binding, `SQLFileLoader` validation, and service-layer workflows that use portable SQL, provision a fresh SQLite database per test:
 
-```{ .python title="docs/examples/patterns/integration_testing.py" hl_lines="13 15 16 20 31 32 33" }
---8<-- "docs/examples/patterns/integration_testing.py"
+```{ .python title="docs/examples/patterns/integration_testing.py" }
+--8<-- "docs/examples/patterns/integration_testing.py:example"
 ```
 
 In `pytest`, wrap `create_test_spec` inside a fixture using `tmp_path` (or `":memory:"` for single-connection tests) and close the pool in `finally:`:

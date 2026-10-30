@@ -14,6 +14,7 @@ BANNED_PHRASES: tuple[str, ...] = (
     "ABI boundary violations",
     "NameError: name 'tmp_path'",
     "tmp_path /",
+    "Made with Zensical",
 )
 
 _REQUIRED_ROOT_FILES: tuple[str, ...] = ("objects.inv", "llms.txt", "llms-full.txt")
@@ -77,6 +78,22 @@ def verify_site_artifacts(
             for fragment in parser.same_page_fragments
             if fragment not in parser.element_ids and unquote(fragment) not in parser.element_ids
         )
+
+        if rel_posix == "index.html" and "sqlspec-hero" in text and "sqlspec-brand-text" not in text:
+            violations.append(f"{rel_posix}: missing glowing brand text element 'sqlspec-brand-text'")
+
+        if (
+            rel_posix in {"playground.html", "playground/index.html"}
+            and "<textarea data-python-editor" in text
+            and "\nwith spec.provide_session(config) as session:\nsession.execute_script" in text
+        ):
+            violations.append(f"{rel_posix}: textarea indentation stripped in playground Python snippet")
+
+    for brand_file in (site_dir / "assets" / "logo.svg", site_dir / "assets" / "favicon.svg"):
+        if brand_file.is_file():
+            content = brand_file.read_text(encoding="utf-8", errors="replace")
+            if 'x="8" y="8" width="240" height="240"' in content or 'class="badge-bg"' in content:
+                violations.append(f"{brand_file.name}: contains outer badge border rectangle")
 
     if violations:
         raise DocsVerificationError(violations)

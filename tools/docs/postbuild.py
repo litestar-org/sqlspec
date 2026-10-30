@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import sys
+import textwrap
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -24,9 +25,10 @@ _FRONTMATTER_TITLE_PATTERN = re.compile(r"^[ \t]*title:[ \t]*(.+?)[ \t]*$", re.M
 _SNIPPET_PATTERN = re.compile(r'^([ \t]*)--8<--[ \t]+"([^"\n]+)"[ \t]*$', re.MULTILINE)
 _HEADING_PATTERN = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 _HTML_BLOCK_PATTERN = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
-_PRE_BLOCK_PATTERN = re.compile(r"(<pre\b[^>]*>.*?</pre>)", re.IGNORECASE | re.DOTALL)
+_PRE_BLOCK_PATTERN = re.compile(r"(<(?:pre|textarea)\b[^>]*>.*?</(?:pre|textarea)>)", re.IGNORECASE | re.DOTALL)
 _LEADING_SPACE_PATTERN = re.compile(r"^[ \t]+", re.MULTILINE)
 _MULTI_NEWLINE_PATTERN = re.compile(r"\n{2,}")
+_SECTION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _MIN_SNIPPET_RANGE_PARTS = 2
 _FULL_SNIPPET_RANGE_PARTS = 3
 _MIN_QUOTED_SCALAR_LENGTH = 2
@@ -51,7 +53,7 @@ def build_postbuild_artifacts(config_path: Path, docs_dir: Path, site_dir: Path)
 
 
 def compact_site_html(site_dir: Path) -> int:
-    """Strip non-semantic Jinja indentation whitespace outside <pre> blocks in built HTML files."""
+    """Strip non-semantic Jinja indentation whitespace outside <pre> and <textarea> blocks in built HTML files."""
     if not site_dir.is_dir():
         return 0
     compacted = 0
@@ -60,7 +62,7 @@ def compact_site_html(site_dir: Path) -> int:
         parts = _PRE_BLOCK_PATTERN.split(raw)
         updated = "".join(
             part
-            if part.lower().startswith("<pre")
+            if part.lower().startswith(("<pre", "<textarea"))
             else _LEADING_SPACE_PATTERN.sub("", _MULTI_NEWLINE_PATTERN.sub("\n", part))
             for part in parts
         )
@@ -339,23 +341,62 @@ def _expand_markdown_for_llms(markdown_text: str, repo_root: Path, page_url: str
     def _replace_snippet(match: re.Match[str]) -> str:
         indent = match.group(1)
         spec = match.group(2).strip()
-        path_part, line_slice = _split_snippet_spec(spec)
+        path_part, line_slice, section_name = _split_snippet_spec(spec)
         snippet_path = (repo_root / path_part).resolve()
         if not snippet_path.is_relative_to(repo_root) or not snippet_path.is_file():
             return match.group(0)
         if snippet_path.suffix.lower() in {".html", ".htm"}:
             return f"{indent}[Interactive HTML widget omitted; open {page_url} in a browser.]"
         content = snippet_path.read_text(encoding="utf-8")
-        if line_slice is not None:
+        if section_name is not None:
+            content = _extract_named_section(content, section_name)
+        elif line_slice is not None:
             start_line, end_line = line_slice
             lines = content.splitlines()
             start_idx = max(start_line - 1, 0)
             end_idx = end_line if end_line is not None else len(lines)
-            content = "\n".join(lines[start_idx:end_idx])
+            content = _strip_snippet_markers("\n".join(lines[start_idx:end_idx]))
+        else:
+            content = _strip_snippet_markers(content)
         return _indent_block(content.rstrip("\n"), indent)
 
     expanded = _SNIPPET_PATTERN.sub(_replace_snippet, body)
     return _HTML_BLOCK_PATTERN.sub("", expanded)
+
+
+def _extract_named_section(content: str, section_name: str) -> str:
+    """Extract and dedent lines inside # --8<-- [start:<section_name>] .. [end:<section_name>]."""
+    lines = content.splitlines()
+    in_section = False
+    extracted: list[str] = []
+    start_tag = f"[start:{section_name}]"
+    end_tag = f"[end:{section_name}]"
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("# --8<--") and start_tag in stripped:
+            in_section = True
+            continue
+        if stripped.startswith("# --8<--") and end_tag in stripped:
+            in_section = False
+            continue
+        if in_section and not (stripped.startswith("# --8<--") and "[" in stripped and "]" in stripped):
+            extracted.append(line)
+
+    if not extracted:
+        return ""
+    joined = "\n".join(extracted)
+    return textwrap.dedent(joined)
+
+
+def _strip_snippet_markers(content: str) -> str:
+    """Remove all # --8<-- [start:...] and # --8<-- [end:...] marker lines."""
+    lines = [
+        line
+        for line in content.splitlines()
+        if not (line.strip().startswith("# --8<--") and "[" in line and "]" in line)
+    ]
+    return "\n".join(lines)
 
 
 def _indent_block(text: str, indent: str) -> str:
@@ -365,17 +406,20 @@ def _indent_block(text: str, indent: str) -> str:
     return "\n".join(f"{indent}{line}" if line else "" for line in text.splitlines())
 
 
-def _split_snippet_spec(spec: str) -> tuple[str, tuple[int, int | None] | None]:
-    """Parse optional pymdownx.snippets path:start:end line range syntax."""
+def _split_snippet_spec(spec: str) -> tuple[str, tuple[int, int | None] | None, str | None]:
+    """Parse optional pymdownx.snippets path:start:end line range or path:section syntax."""
     parts = spec.split(":")
-    if len(parts) >= _MIN_SNIPPET_RANGE_PARTS and parts[-1].isdigit():
-        if len(parts) >= _FULL_SNIPPET_RANGE_PARTS and (parts[-2].isdigit() or parts[-2] == ""):
-            start = int(parts[-2]) if parts[-2] else 1
-            end = int(parts[-1])
-            return ":".join(parts[:-2]), (start, end)
-        start = int(parts[-1])
-        return ":".join(parts[:-1]), (start, None)
-    return spec, None
+    if len(parts) >= _MIN_SNIPPET_RANGE_PARTS:
+        if parts[-1].isdigit():
+            if len(parts) >= _FULL_SNIPPET_RANGE_PARTS and (parts[-2].isdigit() or parts[-2] == ""):
+                start = int(parts[-2]) if parts[-2] else 1
+                end = int(parts[-1])
+                return ":".join(parts[:-2]), (start, end), None
+            start = int(parts[-1])
+            return ":".join(parts[:-1]), (start, None), None
+        if _SECTION_NAME_PATTERN.match(parts[-1]):
+            return ":".join(parts[:-1]), None, parts[-1]
+    return spec, None, None
 
 
 def _render_redirect_html(*, target_path: str, default_hash: str, refresh_url: str, canonical_url: str) -> str:

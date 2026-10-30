@@ -17,8 +17,16 @@ def main() -> dict[str, Any] | None:
     with spec.provide_session(config) as session:
         session.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
         session.execute("INSERT INTO notes (body) VALUES ('Note')")
-        query = SQL("SELECT id, body FROM notes WHERE id = :note_id OR id = :note_id").select_only("body")
+        # --8<-- [start:example]
+        query = SQL(
+            """
+            SELECT id, body
+            FROM notes
+            WHERE id = :note_id OR id = :note_id
+            """
+        ).select_only("body")
         row = session.execute(query, note_id=1).one_or_none()
+        # --8<-- [end:example]
         assert row == {"body": "Note"}
         return row
 

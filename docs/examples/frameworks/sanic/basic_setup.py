@@ -12,6 +12,7 @@ __all__ = ("main",)
 
 def main() -> Sanic:
     """Create a Sanic application wired with SQLSpecPlugin."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         AiosqliteConfig(
@@ -29,6 +30,7 @@ def main() -> Sanic:
         return response.json(await db.select_one("SELECT 1 AS ok"))
 
     db_plugin.init_app(app)
+    # --8<-- [end:example]
     return app
 
 

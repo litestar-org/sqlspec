@@ -10,6 +10,7 @@ def main() -> int:
     config = SqliteConfig(
         connection_config={"database": ":memory:"}, migration_config={"script_location": "migrations"}
     )
+    # --8<-- [start:example]
     commands = config.get_migration_commands()
 
     try:
@@ -17,6 +18,7 @@ def main() -> int:
             value = session.select_value("SELECT 1")
     finally:
         config.close_pool()
+    # --8<-- [end:example]
 
     assert value == 1
     assert config.get_migration_commands() is commands

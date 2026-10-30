@@ -14,6 +14,7 @@ __all__ = ("main",)
 
 def main() -> Starlette:
     """Create a Starlette application initialized with SQLSpecPlugin."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
     db_plugin = SQLSpecPlugin(spec)
@@ -24,6 +25,7 @@ def main() -> Starlette:
 
     app = Starlette(routes=[Route("/health", health)])
     db_plugin.init_app(app)
+    # --8<-- [end:example]
     return app
 
 

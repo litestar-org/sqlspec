@@ -21,17 +21,17 @@ Every adapter lives under `sqlspec/adapters/<name>/` and follows a consistent fi
 
 ```text
 sqlspec/adapters/<name>/
-├── __init__.py           # Re-exports public Config, Driver, ConnectionParams, DriverFeatures
-├── _typing.py            # Connection, Cursor, Pool, and SessionContext type aliases
-├── config.py             # Typed Config class, ConnectionParams, PoolParams, DriverFeatures
-├── core.py               # default_statement_config, apply_driver_features, exception mapping
-├── driver.py             # Driver adapter and exception handler implementation
-├── pool.py               # Connection pool implementation or native pool wrapper
-├── data_dictionary.py    # Dialect catalog introspection (tables, columns, indexes, FKs)
-├── type_converter.py     # Optional engine-specific type coercion and bind/output handlers
-├── litestar/             # Optional Litestar session Store implementation
-├── adk/                  # Optional Google ADK session, memory, and artifact stores
-└── events/               # Optional Events queue store and adapter EventsConfig
+├── __init__.py        # Re-exports public Config, Driver, features
+├── _typing.py         # Connection, Cursor, Pool, and SessionContext
+├── config.py          # Typed Config, ConnectionParams, DriverFeatures
+├── core.py            # Statement config, features, exception mapping
+├── driver.py          # Driver adapter and exception handler
+├── pool.py            # Connection pool or native pool wrapper
+├── data_dictionary.py # Dialect catalog introspection
+├── type_converter.py  # Optional engine-specific type coercion
+├── litestar/          # Optional Litestar session Store
+├── adk/               # Optional Google ADK stores
+└── events/            # Optional Events queue store
 ```
 
 ### Module Responsibilities
@@ -77,8 +77,8 @@ def apply_driver_features(
 
 Below is a minimal synchronous driver skeleton demonstrating the required `SyncDriverAdapterBase` methods:
 
-```{ .python title="docs/examples/contributing/new_adapter.py" hl_lines="21-72" }
---8<-- "docs/examples/contributing/new_adapter.py"
+```{ .python title="docs/examples/contributing/new_adapter.py" }
+--8<-- "docs/examples/contributing/new_adapter.py:example"
 ```
 
 ## Testing and Quality Gates

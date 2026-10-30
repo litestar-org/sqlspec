@@ -8,20 +8,20 @@ Import `sql` from `sqlspec` to compose `SELECT`, `INSERT`, `UPDATE`, and `DELETE
 
 === "SELECT"
 
-    ```{ .python title="docs/examples/builder/select_query.py" hl_lines="20 21" }
-    --8<-- "docs/examples/builder/select_query.py"
+    ```{ .python title="docs/examples/builder/select_query.py" }
+    --8<-- "docs/examples/builder/select_query.py:example"
     ```
 
 === "INSERT"
 
-    ```{ .python title="docs/examples/builder/insert_query.py" hl_lines="16 17" }
-    --8<-- "docs/examples/builder/insert_query.py"
+    ```{ .python title="docs/examples/builder/insert_query.py" }
+    --8<-- "docs/examples/builder/insert_query.py:example"
     ```
 
 === "UPDATE"
 
-    ```{ .python title="docs/examples/builder/update_query.py" hl_lines="17 18" }
-    --8<-- "docs/examples/builder/update_query.py"
+    ```{ .python title="docs/examples/builder/update_query.py" }
+    --8<-- "docs/examples/builder/update_query.py:example"
     ```
 
 === "DELETE"
@@ -53,8 +53,8 @@ Common predicate helpers on `sql.select(...)`, `sql.update(...)`, and `sql.delet
 
 Chain `.join(...)`, `.left_join(...)`, `.right_join(...)`, or `.cross_join(...)` to combine tables with explicit join predicates, and attach `.with_(alias, subquery)` for readable Common Table Expressions (CTEs):
 
-```{ .python title="docs/examples/builder/complex_joins.py" hl_lines="22 23 24 25 26 27" }
---8<-- "docs/examples/builder/complex_joins.py"
+```{ .python title="docs/examples/builder/complex_joins.py" }
+--8<-- "docs/examples/builder/complex_joins.py:example"
 ```
 
 ```python
@@ -72,16 +72,16 @@ summary = (
 
 Use `.on_conflict(...).do_nothing()` or `.on_conflict(...).do_update(...)` for conflict-tolerant inserts on SQLite, PostgreSQL, CockroachDB, and DuckDB, or `sql.merge(...)` for ANSI `MERGE INTO` workflows on Oracle, SQL Server, BigQuery, and PostgreSQL 15+:
 
-```{ .python title="docs/examples/builder/upsert.py" hl_lines="19 20 24 25 26 27 28 29 30" }
---8<-- "docs/examples/builder/upsert.py"
+```{ .python title="docs/examples/builder/upsert.py" }
+--8<-- "docs/examples/builder/upsert.py:example"
 ```
 
 ## Raw SQL Fragments and `RETURNING`
 
 Embed dialect-specific aggregate or window expressions inside builder projections with `sql.raw(...)`, and chain `.returning(...)` on `INSERT`, `UPDATE`, or `DELETE` builders to fetch mutated columns in a single round-trip:
 
-```{ .python title="docs/examples/builder/raw_expressions.py" hl_lines="22 23 26 27" }
---8<-- "docs/examples/builder/raw_expressions.py"
+```{ .python title="docs/examples/builder/raw_expressions.py" }
+--8<-- "docs/examples/builder/raw_expressions.py:example"
 ```
 
 Only pass trusted, static SQL expressions to `sql.raw(...)`; bind user-supplied values via builder parameters.

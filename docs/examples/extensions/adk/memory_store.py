@@ -18,6 +18,7 @@ async def main() -> list[StoredEvent]:
     """Create an ADK session, append a user event, and fetch stored events."""
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     try:
+        # --8<-- [start:example]
         store = AiosqliteADKStore(config)
         await store.ensure_tables()
 
@@ -35,6 +36,7 @@ async def main() -> list[StoredEvent]:
         event_record = event_to_record(event, session["app_name"], session["user_id"], session["id"])
         await store.append_event(event_record)
         events = await store.get_events(session["app_name"], session["user_id"], session["id"])
+        # --8<-- [end:example]
         assert len(events) == 1
         return events
     finally:

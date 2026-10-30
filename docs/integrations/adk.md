@@ -20,8 +20,8 @@ uv add "sqlspec[adk]"
 
 Configure table names, full-text indexing, vector dimensions, and optional owner foreign keys on any adapter via `extension_config["adk"]` (`ADKConfig`):
 
-```{ .python title="docs/examples/extensions/adk/backend_config.py" hl_lines="10-19" }
---8<-- "docs/examples/extensions/adk/backend_config.py"
+```python
+--8 < --"docs/examples/extensions/adk/backend_config.py:example"
 ```
 
 ### Key `ADKConfig` Options
@@ -41,8 +41,8 @@ Configure table names, full-text indexing, vector dimensions, and optional owner
 
 Instantiate the adapter's `*ADKStore` (such as `AiosqliteADKStore`, `AsyncpgADKStore`, `OracleAsyncADKStore`, or `SpannerAsyncADKStore`), call `await store.ensure_tables()`, and pass the store to `SQLSpecSessionService(store)` or call the store directly:
 
-```{ .python title="docs/examples/extensions/adk/memory_store.py" hl_lines="19-39" }
---8<-- "docs/examples/extensions/adk/memory_store.py"
+```python
+--8 < --"docs/examples/extensions/adk/memory_store.py:example"
 ```
 
 When wiring an ADK `Runner`, pass `SQLSpecSessionService(store)`, `SQLSpecMemoryService(memory_store)`, and `SQLSpecArtifactService(artifact_store)` inside an async context manager (`async with SQLSpecSessionService(store) as session_service:`) so session locks and resources close cleanly on shutdown.
@@ -56,8 +56,57 @@ When wiring an ADK `Runner`, pass `SQLSpecSessionService(store)`, `SQLSpecMemory
 3. **Vector (`vector`)**: Cosine or inner-product similarity search on `asyncpg`, `psycopg`, `psqlpy`, `adbc` (`pgvector`), `oracledb` (Oracle 26ai HNSW `FETCH APPROX FIRST` or exact top-K), `spanner` (`APPROX_COSINE_DISTANCE`), and `duckdb` (`array_cosine_similarity`).
 4. **Hybrid RRF (`hybrid`)**: Single-round-trip Reciprocal Rank Fusion (`1 / (k + rank)`) combining vector distance and full-text rank in one SQL CTE on PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`, `adbc`), Oracle 26ai (`oracledb`), Cloud Spanner (`spanner`), and DuckDB (`duckdb`).
 
-```{ .python title="docs/examples/extensions/adk/tool_integration.py" hl_lines="15-39" }
---8<-- "docs/examples/extensions/adk/tool_integration.py"
+```python
+--8 < --"docs/examples/extensions/adk/tool_integration.py:example"
+```
+
+## Production Domain AI Runtime Wiring
+
+In production applications, structure agent stores within an `app/domain/ai/runtime/` service factory, enabling `"adk"` extension migrations so revisions are tracked automatically by the CLI:
+
+```python
+"""Domain AI runtime wiring for Google ADK stores."""
+
+from pathlib import Path
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.adapters.asyncpg.adk import AsyncpgADKArtifactStore, AsyncpgADKMemoryStore, AsyncpgADKStore
+from sqlspec.extensions.adk import SQLSpecArtifactService, SQLSpecMemoryService, SQLSpecSessionService
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+
+
+def create_adk_services(spec: SQLSpec) -> tuple[SQLSpecSessionService, SQLSpecMemoryService, SQLSpecArtifactService]:
+    """Wire ADK stores and service adapters on an AsyncpgConfig instance."""
+    config = spec.add_config(
+        AsyncpgConfig(
+            bind_key="ai",
+            connection_config={"dsn": "postgresql://localhost/app"},
+            migration_config={"script_location": str(BASE_DIR / "db" / "migrations"), "include_extensions": ["adk"]},
+            extension_config={
+                "adk": {
+                    "session_table": "adk_sessions",
+                    "events_table": "adk_events",
+                    "memory_table": "adk_memory_entries",
+                    "artifact_table": "adk_artifacts",
+                    "memory_use_fts": True,
+                    "memory_use_vector": True,
+                    "memory_vector_dimensions": 768,
+                }
+            },
+        )
+    )
+
+    session_store = AsyncpgADKStore(config)
+    memory_store = AsyncpgADKMemoryStore(config)
+    artifact_store = AsyncpgADKArtifactStore(config)
+
+    return (
+        SQLSpecSessionService(session_store),
+        SQLSpecMemoryService(memory_store),
+        SQLSpecArtifactService(artifact_store),
+    )
 ```
 
 ## Schema Migrations and CLI Maintenance

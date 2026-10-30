@@ -12,6 +12,7 @@ __all__ = ("main",)
 
 def main() -> Sanic:
     """Create a Sanic application with correlation and SQLCommenter middleware enabled."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         AiosqliteConfig(
@@ -35,6 +36,7 @@ def main() -> Sanic:
         return response.json({"correlation_id": request.ctx.correlation_id})
 
     db_plugin.init_app(app)
+    # --8<-- [end:example]
     return app
 
 

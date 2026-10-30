@@ -14,15 +14,30 @@ def main() -> tuple[list[dict[str, Any]], str]:
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, status TEXT)")
         session.execute(
-            "INSERT INTO users (name, status) VALUES ('Ada', 'active'), ('Bob', 'inactive'), ('Charlie', 'active')"
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                status TEXT
+            )
+            """
+        )
+        session.execute(
+            """
+            INSERT INTO users (name, status) VALUES
+                ('Ada', 'active'),
+                ('Bob', 'inactive'),
+                ('Charlie', 'active')
+            """
         )
 
+        # --8<-- [start:example]
         query = (
             sql.select("id", "name").from_("users").where_eq("status", "active").order_by("name").limit(10).offset(0)
         )
         rows = session.execute(query).all()
+        # --8<-- [end:example]
 
     pg_sql = (
         sql

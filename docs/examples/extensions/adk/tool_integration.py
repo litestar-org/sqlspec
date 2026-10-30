@@ -16,6 +16,7 @@ async def main() -> int:
         connection_config={"database": ":memory:"}, extension_config={"adk": {"memory_use_fts": True}}
     )
     try:
+        # --8<-- [start:example]
         store = AiosqliteADKMemoryStore(config)
         await store.ensure_tables()
 
@@ -36,6 +37,7 @@ async def main() -> int:
         }
         await store.insert_memory_entries([record])
         results = await store.search_entries(query="sqlspec", app_name="docs", user_id="user_1")
+        # --8<-- [end:example]
         assert len(results) == 1
         return len(results)
     finally:

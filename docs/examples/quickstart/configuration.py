@@ -10,11 +10,13 @@ __all__ = ("main",)
 
 def main() -> list[dict[str, Any]]:
     """Register a SqliteConfig with custom statement validation settings."""
+    # --8<-- [start:example]
     statement_config = StatementConfig(enable_validation=False)
     spec = SQLSpec()
     primary = spec.add_config(
         SqliteConfig(connection_config={"database": ":memory:"}, statement_config=statement_config)
     )
+    # --8<-- [end:example]
 
     with spec.provide_session(primary) as session:
         session.execute("CREATE TABLE health (id INTEGER PRIMARY KEY, ok BOOLEAN)")

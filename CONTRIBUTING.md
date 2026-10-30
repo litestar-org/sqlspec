@@ -102,7 +102,8 @@ Benchmark claims need current artifacts rather than estimates:
 ```bash
 uv run python tools/scripts/bench.py --json-output /tmp/sqlspec-bench.json
 uv run python tools/scripts/bench_gate.py --json-output /tmp/sqlspec-bench-gate.json
-uv run python tools/scripts/bench_subsystems.py --json-output /tmp/sqlspec-bench-subsystems.json
+uv run python tools/scripts/bench_subsystems.py \
+    --json-output /tmp/sqlspec-bench-subsystems.json
 ```
 
 ## Project Documentation
@@ -112,10 +113,10 @@ Documentation is authored in Markdown under `docs/`, configured via `zensical.to
 ### Authoring Guidelines and Runnable Examples
 
 - **Page Budgets**: Keep conceptual guides and tutorials focused on one topic (`<= 12` viewports) and Reference pages scoped to one primary class or cohesive symbol group (`<= 120 KB` HTML, `<= 14` `"On this page"` TOC items).
-- **Standalone Tested Examples**: Place runnable code examples under `docs/examples/**/*.py` as standalone zero-comment modules exposing a `def main()` entrypoint. Include them in Markdown pages via `pymdownx.snippets` (`--8<-- "docs/examples/..."`) inside braced SuperFences blocks:
+- **Standalone Tested Examples**: Place runnable code examples under `docs/examples/**/*.py` as standalone zero-comment modules exposing a `def main()` entrypoint and `# --8<-- [start:example]` / `# --8<-- [end:example]` snippet markers. Include them in Markdown pages via `pymdownx.snippets` (`--8<-- "docs/examples/...:example"`) inside braced SuperFences blocks:
   ````markdown
-  ```{ .python title="docs/examples/quickstart/first_query.py" hl_lines="10-16" }
-  &#45;&#45;8&lt;&#45;&#45; "docs/examples/quickstart/first_query.py"
+  ```{ .python title="docs/examples/quickstart/first_query.py" }
+  &#45;&#45;8&lt;&#45;&#45; "docs/examples/quickstart/first_query.py:example"
   ```
   ````
   Every example module is executed automatically by `pytest tests/unit/docs/test_examples.py`.

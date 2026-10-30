@@ -7,6 +7,7 @@ __all__ = ("main",)
 
 def main() -> AdbcConfig:
     """Attach ADK store table settings via extension_config on AdbcConfig."""
+    # --8<-- [start:example]
     adk_config = {
         "session_table": "adk_session",
         "events_table": "adk_event",
@@ -17,6 +18,7 @@ def main() -> AdbcConfig:
         connection_config={"driver_name": "gizmosql", "gizmosql_backend": "duckdb"},
         extension_config={"adk": adk_config},
     )
+    # --8<-- [end:example]
     adk_settings = config.extension_config.get("adk")
     assert isinstance(adk_settings, dict)
     assert adk_settings.get("memory_use_fts") is True

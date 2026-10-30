@@ -14,9 +14,29 @@ def main() -> list[dict[str, Any]]:
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
-        session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
-        rows = session.execute("SELECT id, name FROM teams ORDER BY id").all()
+        session.execute(
+            """
+            CREATE TABLE teams (
+                id INTEGER PRIMARY KEY,
+                name TEXT
+            )
+            """
+        )
+        session.execute(
+            """
+            INSERT INTO teams (name)
+            VALUES ('Litestar'), ('SQLSpec')
+            """
+        )
+        # --8<-- [start:example]
+        rows = session.execute(
+            """
+            SELECT id, name
+            FROM teams
+            ORDER BY id
+            """
+        ).all()
+        # --8<-- [end:example]
         assert rows == [{"id": 1, "name": "Litestar"}, {"id": 2, "name": "SQLSpec"}]
         return rows
 

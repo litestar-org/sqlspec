@@ -13,8 +13,8 @@ uv add "sqlspec[cockroachdb]"
 
 ## Minimal Connection and Pool Setup
 
-```{ .python title="docs/examples/drivers/cockroach_psycopg_connection.py" hl_lines="10" }
---8<-- "docs/examples/drivers/cockroach_psycopg_connection.py"
+```{ .python title="docs/examples/drivers/cockroach_psycopg_connection.py" }
+--8<-- "docs/examples/drivers/cockroach_psycopg_connection.py:example"
 ```
 
 === "Async (`CockroachAsyncpgConfig`)"
@@ -26,7 +26,7 @@ uv add "sqlspec[cockroachdb]"
     spec = SQLSpec()
     config = spec.add_config(
         CockroachAsyncpgConfig(
-            connection_config={"dsn": "postgresql://root@localhost:26257/defaultdb?sslmode=disable", "max_size": 20},
+            connection_config={"dsn": ("postgresql://root@localhost:26257/defaultdb?sslmode=disable"), "max_size": 20},
             driver_features={"enable_auto_retry": True, "max_retries": 5, "enable_follower_reads": False},
         )
     )
@@ -41,7 +41,7 @@ uv add "sqlspec[cockroachdb]"
     spec = SQLSpec()
     config = spec.add_config(
         CockroachPsycopgAsyncConfig(
-            connection_config={"conninfo": "postgresql://root@localhost:26257/defaultdb?sslmode=disable"},
+            connection_config={"conninfo": ("postgresql://root@localhost:26257/defaultdb?sslmode=disable")},
             driver_features={"enable_auto_retry": True, "max_retries": 5},
         )
     )
