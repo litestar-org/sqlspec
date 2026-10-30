@@ -36,7 +36,7 @@ def _metadata(columns: "list[ColumnMetadata]") -> "dict[str, tuple[bool, str, ob
 
 
 EXPECTED = {
-    "id": (True, "a", 'column_metadata."MixedItems_id_seq"'),
+    "id": (True, "ALWAYS", 'column_metadata."MixedItems_id_seq"'),
     "userName": (False, "", None),
     "counter": (False, "", 'column_metadata."MixedItems_counter_seq"'),
     "note": (False, "", None),

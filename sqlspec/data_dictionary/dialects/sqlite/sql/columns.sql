@@ -13,7 +13,9 @@ SELECT
         WHEN ti.hidden = 1 THEN 'hidden'
         WHEN ti.hidden IN (2, 3) THEN 'generated'
         ELSE NULL
-    END AS extra
+    END AS extra,
+    ti.hidden IN (2, 3) AS is_generated,
+    CASE WHEN ti.hidden = 1 THEN 1 ELSE 0 END AS is_hidden
 FROM pragma_table_list AS tl
 JOIN pragma_table_xinfo(tl.name, COALESCE(:schema_name, 'main')) AS ti
 WHERE tl.schema = COALESCE(:schema_name, 'main')
@@ -36,6 +38,8 @@ SELECT
         WHEN ti.hidden = 1 THEN 'hidden'
         WHEN ti.hidden IN (2, 3) THEN 'generated'
         ELSE NULL
-    END AS extra
+    END AS extra,
+    ti.hidden IN (2, 3) AS is_generated,
+    CASE WHEN ti.hidden = 1 THEN 1 ELSE 0 END AS is_hidden
 FROM pragma_table_xinfo(:table_name, :schema_name) AS ti
 ORDER BY ti.cid;
