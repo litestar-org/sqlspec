@@ -9,7 +9,9 @@ from sqlspec.data_dictionary.dialects.mysql import MARIADB_CONFIG, MYSQL_CONFIG
 from sqlspec.data_dictionary.dialects.oracle import ORACLE_CONFIG
 from sqlspec.data_dictionary.dialects.postgres import POSTGRES_CONFIG
 from sqlspec.data_dictionary.dialects.spanner import SPANNER_CONFIG
+from sqlspec.data_dictionary.dialects.sqlanywhere import SQLANYWHERE_CONFIG
 from sqlspec.data_dictionary.dialects.sqlite import SQLITE_CONFIG
+from sqlspec.data_dictionary.dialects.sybase import SYBASE_CONFIG
 
 __all__ = (
     "BIGQUERY_CONFIG",
@@ -22,5 +24,7 @@ __all__ = (
     "ORACLE_CONFIG",
     "POSTGRES_CONFIG",
     "SPANNER_CONFIG",
+    "SQLANYWHERE_CONFIG",
     "SQLITE_CONFIG",
+    "SYBASE_CONFIG",
 )

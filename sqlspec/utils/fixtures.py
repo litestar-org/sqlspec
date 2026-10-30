@@ -90,6 +90,7 @@ _BINARY_TYPES: Final["frozenset[str]"] = frozenset({
     "blob",
     "bytea",
     "image",
+    "long binary",
     "long raw",
     "longblob",
     "mediumblob",
@@ -117,6 +118,8 @@ _UNORDERABLE_FAMILY_TYPES: Final["Mapping[str, frozenset[str]]"] = {
     "mysql": frozenset({"blob", "geometry", "json", "longblob", "mediumblob", "point", "tinyblob", "vector"}),
     "oracle": frozenset({"bfile", "blob", "clob", "long", "long raw", "nclob", "vector", "xmltype"}),
     "spanner": frozenset({"json", "tokenlist"}),
+    "sqlanywhere": frozenset({"long binary", "long nvarchar", "long varchar", "xml"}),
+    "sybase": frozenset({"image", "long binary", "long nvarchar", "long varchar", "text", "unitext"}),
     "tsql": frozenset({"geography", "geometry", "image", "ntext", "text", "xml"}),
 }
 _IDENTITY_GENERATION_VALUES: Final["frozenset[str]"] = frozenset({"always", "by default", "by default on null"})
@@ -883,11 +886,15 @@ def _dialect_name(dialect: "DialectType") -> str:
 
 
 def _dialect_family(dialect_name: str) -> str:
-    """Return ``postgres`` or ``mysql`` for those dialect families, otherwise the dialect name."""
+    """Return canonical dialect family for a dialect name."""
     if dialect_name in _POSTGRES_DIALECTS:
         return "postgres"
     if dialect_name in _MYSQL_DIALECTS:
         return "mysql"
+    if dialect_name == "ase":
+        return "sybase"
+    if dialect_name == "sa":
+        return "sqlanywhere"
     return dialect_name
 
 
@@ -1598,17 +1605,17 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
         return encode_json if family in _JSON_VALUE_FAMILIES else None
     if family == "sqlite":
         return None
-    if data_type.startswith(("timestamp", "datetime")):
+    if data_type.startswith(("timestamp", "datetime", "bigdatetime", "smalldatetime", "datetimetz")):
         return _decode_datetime
     if data_type == "date":
         return _decode_datetime if family == "oracle" else _decode_date
-    if data_type.startswith("time") and family != "mysql":
+    if data_type.startswith(("time", "bigtime")) and family != "mysql":
         return _decode_time
     if data_type.startswith("interval"):
         return _decode_duckdb_interval if family == "duckdb" else _decode_interval
-    if data_type.startswith(("numeric", "decimal")):
+    if data_type.startswith(("numeric", "decimal", "money", "smallmoney")):
         return _decode_decimal
-    if data_type == "uuid":
+    if data_type in {"uuid", "uniqueidentifier"}:
         return _decode_uuid
     return None
 
@@ -1716,14 +1723,16 @@ def _table_insert_statement(
 def _identity_insert_statements(
     dialect: "DialectType", family: str, table: str, columns: "list[str]", table_columns: "list[_TableColumn]"
 ) -> "tuple[str, str] | None":
-    """Return the SQL Server statements that allow and then disallow explicit identity values.
+    """Return the SQL Server and Sybase ASE statements that allow and then disallow explicit identity values.
 
-    SQL Server rejects values for identity columns unless ``IDENTITY_INSERT`` is on for
+    SQL Server and Sybase ASE reject values for identity columns unless ``IDENTITY_INSERT`` is on for
     the table, so inserts that include an identity column run between these statements.
     Other dialects return ``None``.
     """
     inserted = set(columns)
-    if family != "tsql" or not any(column.is_identity and column.name in inserted for column in table_columns):
+    if family not in {"tsql", "sybase"} or not any(
+        column.is_identity and column.name in inserted for column in table_columns
+    ):
         return None
     table_sql = _quoted_table(table).sql(dialect=_sqlglot_dialect(dialect, family))
     return f"SET IDENTITY_INSERT {table_sql} ON", f"SET IDENTITY_INSERT {table_sql} OFF"
@@ -1825,6 +1834,7 @@ def _table_export_query(dialect: "DialectType", family: str, table: str, table_c
     """
     order_columns = [column.name for column in table_columns if column.is_primary] or [
         column.name for column in table_columns if _is_orderable_type(family, column.data_type)
+    ]
     ]
     order_by: list[exp.Expr] = [exp.Column(this=_quoted_identifier(name)) for name in order_columns]
     if not order_by and not table_columns:
@@ -1996,6 +2006,32 @@ def _resync_table_sequences_sync(
     driver: "SyncDriverAdapterBase", family: str, dialect_name: str, table: str, columns: "list[_TableColumn]"
 ) -> None:
     """Resynchronize sequences, identity columns, or auto-increment counters for a table synchronously."""
+    if family == "sybase":
+        for column in columns:
+            if column.is_identity:
+                quoted_col = _quoted_identifier_sql(column.name)
+                query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+                max_val = driver.select_value(query)
+                next_val = int(max_val or 0)
+                if next_val > 0:
+                    escaped_table = table.replace("'", "''")
+                    driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
+        return
+
+    if family == "sqlanywhere":
+        for column in columns:
+            if column.is_identity:
+                quoted_col = _quoted_identifier_sql(column.name)
+                query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+                max_val = driver.select_value(query)
+                next_val = int(max_val or 0)
+                schema_part, _, table_part = table.rpartition(".")
+                escaped_table = table_part.replace("'", "''")
+                escaped_schema = schema_part.replace("'", "''")
+                schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
+                driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+        return
+
     if family == "db2":
         quoted_table = _quoted_table_name(table)
         for column in columns:
@@ -2096,6 +2132,32 @@ async def _resync_table_sequences_async(
     driver: "AsyncDriverAdapterBase", family: str, dialect_name: str, table: str, columns: "list[_TableColumn]"
 ) -> None:
     """Resynchronize sequences, identity columns, or auto-increment counters for a table asynchronously."""
+    if family == "sybase":
+        for column in columns:
+            if column.is_identity:
+                quoted_col = _quoted_identifier_sql(column.name)
+                query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+                max_val = await driver.select_value(query)
+                next_val = int(max_val or 0)
+                if next_val > 0:
+                    escaped_table = table.replace("'", "''")
+                    await driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
+        return
+
+    if family == "sqlanywhere":
+        for column in columns:
+            if column.is_identity:
+                quoted_col = _quoted_identifier_sql(column.name)
+                query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+                max_val = await driver.select_value(query)
+                next_val = int(max_val or 0)
+                schema_part, _, table_part = table.rpartition(".")
+                escaped_table = table_part.replace("'", "''")
+                escaped_schema = schema_part.replace("'", "''")
+                schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
+                await driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+        return
+
     if family == "db2":
         quoted_table = _quoted_table_name(table)
         for column in columns:

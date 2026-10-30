@@ -146,18 +146,19 @@ def parse_table_expression(
     BigQuery's ``\`project.dataset.table\``` are parsed into their qualified parts instead of a
     single literal name.
     """
+    resolved_dialect: DialectType | None = _normalize_dialect(dialect) if isinstance(dialect, str) else dialect
     if explicit_alias is None and " " in table_input.strip():
         parts = table_input.strip().split(None, 1)
         if len(parts) == ALIAS_PARTS_EXPECTED_COUNT:
             base_table, alias = parts
             if _is_simple_identifier(base_table):
-                return exp.to_table(base_table, alias=alias, dialect=dialect)
+                return exp.to_table(base_table, alias=alias, dialect=resolved_dialect)
 
     if _is_simple_identifier(table_input):
-        return exp.to_table(table_input, alias=explicit_alias, dialect=dialect)
+        return exp.to_table(table_input, alias=explicit_alias, dialect=resolved_dialect)
 
     with contextlib.suppress(Exception):
-        parsed: exp.Expr | None = exp.maybe_parse(f"SELECT * FROM {table_input}", dialect=dialect)
+        parsed: exp.Expr | None = exp.maybe_parse(f"SELECT * FROM {table_input}", dialect=resolved_dialect)
         if isinstance(parsed, exp.Select):
             from_clause = parsed.find(exp.From)
             if from_clause is not None:
@@ -168,7 +169,9 @@ def parse_table_expression(
                     return exp.alias_(table_expr, explicit_alias)
                 return table_expr  # type: ignore[no-any-return]
 
-    return _mark_explicit_table_quotes(exp.to_table(table_input, alias=explicit_alias, dialect=dialect), table_input)
+    return _mark_explicit_table_quotes(
+        exp.to_table(table_input, alias=explicit_alias, dialect=resolved_dialect), table_input
+    )
 
 
 def parse_order_expression(order_input: str | exp.Expr) -> exp.Expr:

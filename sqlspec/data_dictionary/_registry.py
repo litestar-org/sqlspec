@@ -24,6 +24,8 @@ DIALECT_ALIASES: dict[str, str] = {
     "cockroach": "cockroachdb",
     "tsql": "mssql",
     "sqlserver": "mssql",
+    "ase": "sybase",
+    "sa": "sqlanywhere",
 }
 
 DIALECT_MODE_ALIASES: dict[tuple[str, str], str] = {
