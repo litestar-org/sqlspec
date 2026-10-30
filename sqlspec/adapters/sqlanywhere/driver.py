@@ -1,0 +1,354 @@
+"""SAP SQL Anywhere database driver implementation over sqlanydb."""
+
+import contextlib
+from collections.abc import Sized
+from typing import TYPE_CHECKING, Any, cast
+
+from sqlspec.adapters.sqlanywhere._typing import (
+    SqlanywhereConnection,
+    SqlanywhereCursor,
+    SqlanywhereError,
+    SqlanywhereRawCursor,
+    SqlanywhereSessionContext,
+)
+from sqlspec.adapters.sqlanywhere.core import (
+    build_insert_statement,
+    collect_rows,
+    create_mapped_exception,
+    default_statement_config,
+    driver_profile,
+    format_identifier,
+    normalize_execute_many_parameters,
+    normalize_execute_parameters,
+    resolve_column_names,
+    resolve_many_rowcount,
+    resolve_rowcount,
+)
+from sqlspec.adapters.sqlanywhere.data_dictionary import SqlanywhereSyncDataDictionary
+from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
+from sqlspec.driver import (
+    BaseSyncExceptionHandler,
+    ExecutionResult,
+    SyncDriverAdapterBase,
+    SyncRowStream,
+    rows_to_dicts,
+    validate_savepoint_name,
+)
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from sqlspec.adapters.sqlanywhere._typing import SqlanywhereQueryParams as QueryParams
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
+    from sqlspec.driver import CachedQuery
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.typing import StatementParameters
+
+__all__ = (
+    "SqlanywhereCursor",
+    "SqlanywhereDriver",
+    "SqlanywhereExceptionHandler",
+    "SqlanywhereSessionContext",
+    "SqlanywhereStreamSource",
+)
+
+logger = get_logger("sqlspec.adapters.sqlanywhere")
+
+
+class SqlanywhereExceptionHandler(BaseSyncExceptionHandler):
+    """Context manager for handling SAP SQL Anywhere sqlanydb exceptions."""
+
+    __slots__ = ()
+
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        if exc_type is None:
+            return False
+        if isinstance(exc_val, (SqlanywhereError, Exception)) and not isinstance(exc_val, SQLSpecError):
+            self.pending_exception = create_mapped_exception(exc_val, logger=logger)
+            return True
+        return False
+
+
+class SqlanywhereStreamSource:
+    """Native SQL Anywhere sqlanydb chunk source backed by ``cursor.fetchmany()``."""
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor_manager", "_driver", "_parameters", "_sql")
+
+    def __init__(self, driver: "SqlanywhereDriver", sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor_manager: SqlanywhereCursor | None = None
+        self._column_names: list[str] | None = None
+
+    def start(self) -> None:
+        cursor_manager = self._driver.with_cursor(self._driver.connection)
+        try:
+            cursor = cursor_manager.__enter__()
+            handler = self._driver.handle_database_exceptions()
+            with handler:
+                normalized_params = normalize_execute_parameters(self._parameters)
+                if normalized_params:
+                    cursor.execute(self._sql, normalized_params)
+                else:
+                    cursor.execute(self._sql)
+            self._driver._check_pending_exception(handler)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+            raise
+        self._cursor_manager = cursor_manager
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        cursor_manager = self._cursor_manager
+        if cursor_manager is None or cursor_manager.cursor is None:
+            return []
+        cursor = cursor_manager.cursor
+        handler = self._driver.handle_database_exceptions()
+        rows: Any = []
+        with handler:
+            rows = cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        column_names = self._column_names
+        if column_names is None:
+            column_names = resolve_column_names(cursor.description or None, self._driver._column_name_cache)
+            self._column_names = column_names
+        return rows_to_dicts(rows, column_names)
+
+    def close(self, error: bool = False) -> None:
+        _ = error
+        cursor_manager = self._cursor_manager
+        self._cursor_manager = None
+        if cursor_manager is not None:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+
+
+class SqlanywhereDriver(SyncDriverAdapterBase):
+    """SAP SQL Anywhere database driver using sqlanydb."""
+
+    __slots__ = ("_column_name_cache", "_data_dictionary", "_transaction_active")
+    dialect = "sqlanywhere"
+
+    def __init__(
+        self,
+        connection: "SqlanywhereConnection",
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+    ) -> None:
+        if statement_config is None:
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: SqlanywhereSyncDataDictionary | None = None
+        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._transaction_active = False
+
+    @property
+    def data_dictionary(self) -> "SqlanywhereSyncDataDictionary":
+        if self._data_dictionary is None:
+            self._data_dictionary = SqlanywhereSyncDataDictionary()
+        return self._data_dictionary
+
+    def dispatch_execute(self, cursor: "SqlanywhereRawCursor", statement: "SQL") -> "ExecutionResult":
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        normalized_params = normalize_execute_parameters(prepared_parameters)
+        if normalized_params:
+            cursor.execute(sql, normalized_params)
+        else:
+            cursor.execute(sql)
+
+        if statement.returns_rows():
+            fetched_data = cursor.fetchall()
+            description = cursor.description or None
+            rows, column_names, row_format = collect_rows(fetched_data, description, self._column_name_cache)
+            return self.create_execution_result(
+                cursor,
+                selected_data=rows,
+                column_names=column_names,
+                data_row_count=len(rows),
+                is_select_result=True,
+                row_format=row_format,
+            )
+
+        return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
+
+    def dispatch_execute_many(self, cursor: "SqlanywhereRawCursor", statement: "SQL") -> "ExecutionResult":
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
+        parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
+        cursor.executemany(sql, cast("Sequence[QueryParams]", prepared_parameters))
+
+        affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    def dispatch_execute_script(self, cursor: "SqlanywhereRawCursor", statement: "SQL") -> "ExecutionResult":
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        normalized_params = normalize_execute_parameters(prepared_parameters)
+
+        successful_count = 0
+        for stmt in statements:
+            if normalized_params:
+                cursor.execute(stmt, normalized_params)
+            else:
+                cursor.execute(stmt)
+            successful_count += 1
+        return self.create_execution_result(
+            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    def begin(self) -> None:
+        """Mark a transaction as active on the SQL Anywhere DB-API 2.0 connection."""
+        self._transaction_active = True
+
+    def commit(self) -> None:
+        try:
+            self.connection.commit()
+            self._transaction_active = False
+        except Exception as exc:
+            msg = f"Failed to commit SQL Anywhere transaction: {exc}"
+            raise SQLSpecError(msg) from exc
+
+    def rollback(self) -> None:
+        try:
+            self.connection.rollback()
+        except Exception as exc:
+            msg = f"Failed to rollback SQL Anywhere transaction: {exc}"
+            raise SQLSpecError(msg) from exc
+        finally:
+            self._transaction_active = False
+
+    def with_cursor(self, connection: "SqlanywhereConnection") -> "SqlanywhereCursor":
+        return SqlanywhereCursor(connection)
+
+    def handle_database_exceptions(self) -> "SqlanywhereExceptionHandler":
+        return SqlanywhereExceptionHandler()
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native SQL Anywhere sqlanydb row stream backed by ``fetchmany()``."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        return SyncRowStream(SqlanywhereStreamSource(self, sql, prepared_parameters, chunk_size))
+
+    def create_savepoint(self, name: str) -> None:
+        self.execute_script(f"SAVEPOINT {validate_savepoint_name(name)}")
+
+    def release_savepoint(self, name: str) -> None:
+        self.execute_script(f"RELEASE SAVEPOINT {validate_savepoint_name(name)}")
+
+    def rollback_to_savepoint(self, name: str) -> None:
+        self.execute_script(f"ROLLBACK TO SAVEPOINT {validate_savepoint_name(name)}")
+
+    def has_schema(self, schema: str) -> bool:
+        """Return whether the specified user/schema exists in SYS.SYSUSER."""
+        result = False
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler, self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT 1 FROM SYS.SYSUSER WHERE user_name = ?", (schema,))
+            result = cursor.fetchone() is not None
+        self._check_pending_exception(exc_handler)
+        return result
+
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and write the Arrow result to storage."""
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        pipeline = self._storage_pipeline()
+        telemetry_payload = self._write_storage_result(
+            arrow_result, destination, format_hint=format_hint, pipeline=pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into the target SQL Anywhere table via executemany."""
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            statement = f"DELETE FROM {format_identifier(table)}"
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler, self.with_cursor(self.connection) as cursor:
+                cursor.execute(statement)
+            self._check_pending_exception(exc_handler)
+
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            insert_sql = build_insert_statement(table, columns)
+            needs_preparation = self._arrow_rows_need_preparation(arrow_table)
+            prepared_records = (
+                self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                if needs_preparation
+                else records
+            )
+            normalized_records = normalize_execute_many_parameters(prepared_records)
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler, self.with_cursor(self.connection) as cursor:
+                cursor.executemany(insert_sql, cast("Sequence[QueryParams]", normalized_records))
+            self._check_pending_exception(exc_handler)
+
+        telemetry_payload = self._ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into the target SQL Anywhere table."""
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+
+    def collect_rows(self, cursor: "SqlanywhereRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        rows, column_names, _row_format = collect_rows(fetched, cursor.description or None, self._column_name_cache)
+        return rows, column_names, len(rows)
+
+    def resolve_rowcount(self, cursor: "SqlanywhereRawCursor") -> int:
+        return resolve_rowcount(cursor)
+
+    def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        normalized_params = normalize_execute_parameters(params) if isinstance(params, list) else params
+        return super()._execute_cache_hit(sql, normalized_params, cached)
+
+    def _connection_in_transaction(self) -> bool:
+        """Return whether a transaction opened by this driver remains active."""
+        return self._transaction_active
+
+
+register_driver_profile("sqlanywhere", driver_profile)
