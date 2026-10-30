@@ -91,8 +91,8 @@ When PostgreSQL adapters (`AsyncpgConfig`, `PsycopgSyncConfig`, `PsycopgAsyncCon
 
 `sqlspec squash` (and `commands.squash(...)`) consolidates sequential or timestamp revisions into one baseline file while recording superseded versions in `-- Squashed from:` (SQL) or `__replaces__` / `Squashed from:` (Python) file headers:
 
-```{ .python title="docs/examples/patterns/migration_squash_and_schema.py" hl_lines="47 50 53 56" }
---8<-- "docs/examples/patterns/migration_squash_and_schema.py"
+```{ .python title="docs/examples/patterns/migration_squash_and_schema.py" }
+--8<-- "docs/examples/patterns/migration_squash_and_schema.py:example"
 ```
 
 Choose the squash strategy that matches your migration history:

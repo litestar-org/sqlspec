@@ -26,7 +26,7 @@ from sqlspec.exceptions import (
 )
 ```
 
-Normalized exception hierarchy raised across all 20 database drivers, query builders, SQL file loaders, migrations, and storage pipelines.
+Normalized exception hierarchy raised across database drivers, query builders, SQL file loaders, migrations, and storage pipelines.
 
 ## Base & Configuration Exceptions
 

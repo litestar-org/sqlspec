@@ -19,7 +19,7 @@ FROM pragma_table_list AS tl
 JOIN pragma_foreign_key_list(tl.name, COALESCE(:schema_name, 'main')) AS fk
 WHERE tl.schema = COALESCE(:schema_name, 'main')
   AND tl.type IN ('table', 'virtual')
-  AND tl.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+  AND tl.name NOT LIKE 'sqlite_%'
 ORDER BY tl.name, fk.id, fk.seq;
 
 -- name: by_table

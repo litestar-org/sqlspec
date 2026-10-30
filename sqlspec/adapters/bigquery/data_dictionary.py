@@ -289,8 +289,11 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
     ) -> "DDLResult | None":
         """Return native BigQuery DDL for a table, view, or routine from INFORMATION_SCHEMA."""
         _ = include_dependencies, redact
+        norm_type = object_type.lower()
+        if norm_type not in {"table", "view", "materialized_view", "routine", "function", "procedure"}:
+            return None
         scope = BigQueryMetadataScope.from_schema(_resolve_bigquery_schema(driver, schema))
-        if object_type.lower() in {"routine", "function", "procedure"}:
+        if norm_type in {"routine", "function", "procedure"}:
             routines_table = scope.dataset_information_schema_table("ROUTINES")
             query_text = _get_domain_query_text("routines", "by_dataset").format(routines_table=routines_table)
             rows = driver.select(query_text, schema_name=scope.schema_name, routine_name=object_name)
@@ -419,15 +422,18 @@ def _bigquery_ddl_result_from_rows(
     )
     resolved_type = str(row.get("object_type") or object_type) if row is not None else object_type
     ddl_value = (row.get("ddl") or row.get("routine_definition")) if row is not None else None
+    req_type = object_type.lower()
+    row_type = resolved_type.lower()
+    type_mismatch = row is not None and req_type not in ("routine", row_type)
     identity = ObjectIdentity(
         name=object_name,
-        object_type=resolved_type,
+        object_type=object_type if type_mismatch else resolved_type,
         catalog=str(resolved_catalog) if resolved_catalog is not None else None,
         schema=str(resolved_schema) if resolved_schema is not None else None,
         dialect=dialect,
         source=MetadataSource.INFORMATION_SCHEMA,
     )
-    if ddl_value is None:
+    if ddl_value is None or type_mismatch:
         return DDLResult.unsupported(
             identity, source=MetadataSource.INFORMATION_SCHEMA, warnings=_BIGQUERY_INFORMATION_SCHEMA_WARNINGS
         )

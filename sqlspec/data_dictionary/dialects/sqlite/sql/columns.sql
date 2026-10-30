@@ -21,7 +21,7 @@ JOIN pragma_table_xinfo(tl.name, COALESCE(:schema_name, 'main')) AS ti
 LEFT JOIN {schema_prefix}sqlite_schema AS sm ON sm.type = 'table' AND sm.name = tl.name
 WHERE tl.schema = COALESCE(:schema_name, 'main')
   AND tl.type IN ('table', 'virtual')
-  AND tl.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+  AND tl.name NOT LIKE 'sqlite_%'
 ORDER BY tl.name, ti.cid;
 
 -- name: by_table

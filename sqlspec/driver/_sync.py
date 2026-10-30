@@ -39,6 +39,7 @@ from sqlspec.driver._common import (
     SyncExceptionHandler,
     _raise_database_exception,
     _resolve_fast_params,
+    _sqlglot_dialect,
     describe_stack_statement,
     handle_single_row_error,
     validate_savepoint_name,
@@ -2095,22 +2096,24 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             Schema DDL result.
         """
         warnings: list[str] = []
+        exact_schema, getter_schema = self._resolve_schema_ddl_input(driver, schema)
         native_items: list[DDLResult] | None = None
         loaded_foreign_keys: list[Any] | None = None
         if prefer_native and target_dialect is None:
             native_items = self._get_native_schema_ddl(
-                driver, schema, include_dependencies=include_dependencies, redact=redact
+                driver, exact_schema, include_dependencies=include_dependencies, redact=redact
             )
         if native_items is not None:
             ddl_results = (
                 native_items
                 if direction == "drop"
-                else self._replace_unfaithful_native_tables(driver, schema, native_items, warnings)
+                else self._replace_unfaithful_native_tables(driver, getter_schema, native_items, warnings)
             )
         else:
             ddl_results, loaded_foreign_keys = self._collect_synthesized_schema_ddl(
                 driver,
-                schema,
+                getter_schema,
+                default_schema=exact_schema,
                 domains=self._schema_ddl_collect_domains(include_domains, exclude_domains),
                 exclude_tables=exclude_tables,
                 direction=direction,
@@ -2124,9 +2127,9 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         dependency_items: tuple[Any, ...] = ()
         if include_dependencies:
             if loaded_foreign_keys is None:
-                loaded_foreign_keys = list(self.get_foreign_keys(driver, table=None, schema=schema))
+                loaded_foreign_keys = list(self.get_foreign_keys(driver, table=None, schema=getter_schema))
             foreign_keys = loaded_foreign_keys
-            dependencies = self.get_dependencies(driver, schema=schema)
+            dependencies = self.get_dependencies(driver, schema=getter_schema)
             if dependencies.capability.support == MetadataSupport.SUPPORTED:
                 dependency_items = dependencies.items
         return self._finalize_schema_ddl_results(
@@ -2382,9 +2385,17 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         replaced_tables: set[tuple[str, str]] = set()
         for item in items:
             if self._is_table_object_type(item.identity.object_type) and item.status != MetadataSupport.SUPPORTED:
+                table_schema = (
+                    None
+                    if schema is None
+                    and item.identity.schema is not None
+                    and item.identity.schema.lower() == "main"
+                    and _sqlglot_dialect(source_dialect) in {"sqlite", "duckdb"}
+                    else item.identity.schema
+                )
                 synthesized = self._synthesize_table_from_catalog(
                     item.identity.name,
-                    item.identity.schema,
+                    table_schema,
                     catalog,
                     source_dialect=source_dialect,
                     target_dialect=None,
@@ -2401,6 +2412,7 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         driver: Any,
         schema: "str | None",
         *,
+        default_schema: "str | None" = None,
         domains: "set[str]",
         exclude_tables: "Sequence[str] | None",
         direction: "Literal['create', 'drop']",
@@ -2416,6 +2428,7 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         table identities are collected. Returns the DDL results plus the schema foreign keys when
         they were already loaded for every table, so callers can reuse them for ordering.
         """
+        resolved_default_schema = default_schema if default_schema is not None else schema
         source_dialect = self.resolve_ddl_dialect(driver)
         excluded_names = self._normalize_excluded_table_names(exclude_tables)
         results: list[DDLResult] = []
@@ -2425,7 +2438,9 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             types = self.get_types(driver, schema=schema)
             if types.capability.support == MetadataSupport.SUPPORTED:
                 for row in types.items:
-                    type_ddl = self._build_type_ddl_from_row(row, default_schema=schema, dialect=source_dialect)
+                    type_ddl = self._build_type_ddl_from_row(
+                        row, default_schema=resolved_default_schema, dialect=source_dialect
+                    )
                     if type_ddl is not None:
                         results.append(type_ddl)
             else:
@@ -2434,7 +2449,9 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             sequences = self.get_sequences(driver, schema=schema)
             if sequences.capability.support == MetadataSupport.SUPPORTED:
                 for row in sequences.items:
-                    sequence_ddl = self._build_sequence_ddl_from_row(row, default_schema=schema, dialect=source_dialect)
+                    sequence_ddl = self._build_sequence_ddl_from_row(
+                        row, default_schema=resolved_default_schema, dialect=source_dialect
+                    )
                     if sequence_ddl is None:
                         continue
                     if direction == "create" and prefer_native and target_dialect is None:
@@ -2455,6 +2472,7 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             table_results, grouped_columns, loaded_foreign_keys = self._collect_schema_table_ddl(
                 driver,
                 schema,
+                default_schema=resolved_default_schema,
                 excluded_names=excluded_names,
                 direction=direction,
                 include_dependencies=include_dependencies,
@@ -2469,7 +2487,9 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             views = self.get_views(driver, schema=schema)
             if views.capability.support == MetadataSupport.SUPPORTED:
                 for view_row in views.items:
-                    view_ddl = self._build_view_ddl_from_row(view_row, default_schema=schema, dialect=source_dialect)
+                    view_ddl = self._build_view_ddl_from_row(
+                        view_row, default_schema=resolved_default_schema, dialect=source_dialect
+                    )
                     if view_ddl is None:
                         warnings.append(
                             f"Omitted a view from schema DDL because its definition is unavailable: {view_row!r}"
@@ -2488,6 +2508,7 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         driver: Any,
         schema: "str | None",
         *,
+        default_schema: "str | None" = None,
         excluded_names: "set[str]",
         direction: "Literal['create', 'drop']",
         include_dependencies: bool,
@@ -2502,12 +2523,15 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         Returns the table results, catalog columns grouped by table, and the schema foreign keys
         when they were loaded for every table.
         """
+        resolved_default_schema = default_schema if default_schema is not None else schema
         results: list[DDLResult] = []
         loaded_foreign_keys: list[Any] | None = None
         grouped_columns: dict[str, list[Any]] = {}
         table_refs: list[tuple[str, str | None]] = []
         for table_item in self.get_tables(driver, schema=schema):
-            table_name, table_schema = self._extract_table_name_and_schema(table_item, default_schema=schema)
+            table_name, table_schema = self._extract_table_name_and_schema(
+                table_item, default_schema=resolved_default_schema
+            )
             if table_name and table_name.lower() not in excluded_names:
                 table_refs.append((table_name, table_schema))
         table_names = [name for name, _ in table_refs]

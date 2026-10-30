@@ -18,6 +18,7 @@ from sqlspec.migrations import (
     create_migration_runner,
     ensure_schema_async,
     ensure_schema_sync,
+    fold_migration_ddl,
 )
 ```
 

@@ -650,6 +650,69 @@ def test_fold_refuses_when_dialect_rewrites_cast_type_in_expression() -> None:
         )
 
 
+def test_alter_column_set_not_null_replaces_explicit_null_constraint() -> None:
+    """ALTER COLUMN ... SET NOT NULL removes any prior explicit NULL constraint."""
+    up_sql, _ = _fold(
+        [
+            "CREATE TABLE accounts (id INT PRIMARY KEY, email VARCHAR(120) NULL);",
+            "ALTER TABLE accounts ALTER COLUMN email SET NOT NULL;",
+        ],
+        "postgres",
+    )
+    assert up_sql == ["CREATE TABLE accounts (id INT PRIMARY KEY, email VARCHAR(120) NOT NULL);"]
+
+
+def test_drop_column_refuses_primary_key_columns() -> None:
+    """Dropping a column participating in a primary key is refused during DDL folding."""
+    with pytest.raises(SquashValidationError, match="dropping primary key column"):
+        _fold(
+            [
+                "CREATE TABLE memberships (tenant_id INT, user_id INT, role TEXT, PRIMARY KEY (tenant_id, user_id));",
+                "ALTER TABLE memberships DROP COLUMN user_id;",
+            ],
+            "postgres",
+        )
+    with pytest.raises(SquashValidationError, match="dropping primary key column"):
+        _fold(
+            ["CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);", "ALTER TABLE items DROP COLUMN id;"], "sqlite"
+        )
+
+
+def test_mysql_modify_column_preserves_inline_primary_key_and_unique() -> None:
+    """MySQL MODIFY COLUMN preserves existing inline PRIMARY KEY and UNIQUE constraints."""
+    up_sql, _ = _fold(
+        [
+            "CREATE TABLE users (id INT PRIMARY KEY, code VARCHAR(16) UNIQUE);",
+            "ALTER TABLE users MODIFY COLUMN id BIGINT NOT NULL;",
+            "ALTER TABLE users MODIFY COLUMN code VARCHAR(32) NOT NULL;",
+        ],
+        "mysql",
+    )
+    assert up_sql == ["CREATE TABLE users (id BIGINT NOT NULL PRIMARY KEY, code VARCHAR(32) NOT NULL UNIQUE);"]
+
+
+def test_cross_schema_index_and_sequence_operations_stay_isolated() -> None:
+    """Schema-qualified indexes and sequences do not collide across schemas."""
+    up_sql, _ = _fold(
+        [
+            "CREATE SEQUENCE s1.order_seq START 1;",
+            "CREATE SEQUENCE s2.order_seq START 10;",
+            "CREATE TABLE s1.orders (id INT DEFAULT nextval('s1.order_seq'), code TEXT);",
+            "CREATE TABLE s2.orders (id INT, code TEXT);",
+            "CREATE INDEX idx_orders_code ON s1.orders (code);",
+            "CREATE INDEX idx_orders_code ON s2.orders (code);",
+            "DROP INDEX s2.idx_orders_code;",
+            "DROP SEQUENCE s2.order_seq;",
+        ],
+        "postgres",
+    )
+    joined = "\n".join(up_sql)
+    assert "CREATE SEQUENCE s1.order_seq" in joined
+    assert "CREATE SEQUENCE s2.order_seq" not in joined
+    assert "CREATE INDEX idx_orders_code ON s1.orders" in joined
+    assert "ON s2.orders" not in joined
+
+
 def _fold(migrations: Sequence[str], dialect: str) -> tuple[list[str], list[str]]:
     return fold_migration_ddl(
         migrations, dialect=dialect, origins=[f"{position:04d}" for position in range(1, len(migrations) + 1)]

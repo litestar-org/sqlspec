@@ -11,7 +11,9 @@ from sqlspec.data_dictionary import (
     IndexMetadata,
     MetadataCapabilityProfile,
     MetadataResult,
+    MetadataSource,
     MetadataSupport,
+    ObjectIdentity,
     SystemMetadataResult,
     TableMetadata,
     VersionInfo,
@@ -20,16 +22,19 @@ from sqlspec.data_dictionary import (
     system_metadata_gated_result,
 )
 from sqlspec.data_dictionary.dialects.mysql.config import (
+    MYSQL_SHOW_CREATE_OBJECT_TYPES,
     MySQLEngineVersion,
     build_mysql_metadata_capability_profile,
     build_mysql_show_create_statement,
     build_mysql_system_metadata_capability,
+    format_mysql_identifier,
     make_mysql_ddl_result,
     mysql_system_metadata_query_name,
     parse_mysql_engine_version,
     resolve_mysql_json_type,
 )
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
+from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -243,11 +248,30 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
     ) -> "DDLResult | None":
         """Return native SHOW CREATE output and replay-sensitive context for an object."""
         _ = include_dependencies, redact
+        if object_type.strip().upper() not in MYSQL_SHOW_CREATE_OBJECT_TYPES:
+            return None
         raw_version = await driver.select_value_or_none(self.get_query_text("version", "current"))
         sql_mode = await driver.select_value_or_none("SELECT @@sql_mode")
         sql_quote_show_create = await driver.select_value_or_none("SELECT @@sql_quote_show_create")
         statement = build_mysql_show_create_statement(object_name, schema, object_type)
-        row = await driver.select_one(statement, schema_type=dict)
+        try:
+            row = await driver.select_one(statement, schema_type=dict)
+        except SQLSpecError:
+            parsed_version = parse_mysql_engine_version(str(raw_version) if raw_version is not None else "")
+            engine_family = parsed_version.engine_family if parsed_version is not None else "mysql"
+            identity = ObjectIdentity(
+                name=object_name,
+                object_type=object_type.lower(),
+                schema=schema,
+                dialect=engine_family,
+                quoted_name=format_mysql_identifier(f"{schema}.{object_name}" if schema else object_name),
+                source=MetadataSource.NATIVE_API,
+            )
+            return DDLResult.unsupported(
+                identity,
+                source=MetadataSource.NATIVE_API,
+                warnings=(f"No SHOW CREATE {object_type.upper()} output available for {object_name}",),
+            )
         return make_mysql_ddl_result(
             object_name,
             schema,
@@ -506,11 +530,30 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
     ) -> "DDLResult | None":
         """Return native SHOW CREATE output and replay-sensitive context for an object."""
         _ = include_dependencies, redact
+        if object_type.strip().upper() not in MYSQL_SHOW_CREATE_OBJECT_TYPES:
+            return None
         raw_version = driver.select_value_or_none(self.get_query_text("version", "current"))
         sql_mode = driver.select_value_or_none("SELECT @@sql_mode")
         sql_quote_show_create = driver.select_value_or_none("SELECT @@sql_quote_show_create")
         statement = build_mysql_show_create_statement(object_name, schema, object_type)
-        row = driver.select_one(statement, schema_type=dict)
+        try:
+            row = driver.select_one(statement, schema_type=dict)
+        except SQLSpecError:
+            parsed_version = parse_mysql_engine_version(str(raw_version) if raw_version is not None else "")
+            engine_family = parsed_version.engine_family if parsed_version is not None else "mysql"
+            identity = ObjectIdentity(
+                name=object_name,
+                object_type=object_type.lower(),
+                schema=schema,
+                dialect=engine_family,
+                quoted_name=format_mysql_identifier(f"{schema}.{object_name}" if schema else object_name),
+                source=MetadataSource.NATIVE_API,
+            )
+            return DDLResult.unsupported(
+                identity,
+                source=MetadataSource.NATIVE_API,
+                warnings=(f"No SHOW CREATE {object_type.upper()} output available for {object_name}",),
+            )
         return make_mysql_ddl_result(
             object_name,
             schema,

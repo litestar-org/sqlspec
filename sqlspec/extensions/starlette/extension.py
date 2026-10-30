@@ -1,3 +1,5 @@
+"""Starlette extension for SQLSpec database session and middleware management."""
+
 import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any

@@ -1,3 +1,5 @@
+"""Core SQLSpec registry and session management entry point."""
+
 import asyncio
 import atexit
 import weakref

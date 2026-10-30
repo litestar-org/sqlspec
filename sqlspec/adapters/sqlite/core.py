@@ -212,11 +212,14 @@ _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
 def format_identifier(identifier: str) -> str:
     cleaned = identifier.strip()
-    if not cleaned:
+    if not cleaned or "\x00" in cleaned:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
 
     parts = split_qualified_identifier(cleaned, quote_chars='"')
+    if not parts:
+        msg = f"Invalid SQLite identifier: {identifier!r}"
+        raise SQLSpecError(msg)
     return ".".join(quote_identifier(part) for part in parts)
 
 

@@ -87,8 +87,8 @@ with spec.provide_session(config) as session:
 
 `get_ddl` and `get_schema_ddl` prefer native catalog DDL where supported (SQLite `sqlite_master`, DuckDB `duckdb_tables()`, CockroachDB `SHOW CREATE`, BigQuery `INFORMATION_SCHEMA.TABLES`) and synthesize dialect-valid AST DDL from catalog metadata otherwise—with optional cross-dialect transpilation via `target_dialect`:
 
-```{ .python title="docs/examples/patterns/schema_ddl_and_inference.py" hl_lines="27 28 29 30 32 33 34" }
---8<-- "docs/examples/patterns/schema_ddl_and_inference.py"
+```{ .python title="docs/examples/patterns/schema_ddl_and_inference.py" }
+--8<-- "docs/examples/patterns/schema_ddl_and_inference.py:example"
 ```
 
 When migrating loosely typed staging tables (`TEXT` / `VARCHAR` landing zones) or raw JSON/Arrow datasets, `get_table_profile` and `infer_table_ddl_from_data` inspect live sample values to recommend tighter types (`BIGINT`, `NUMERIC(p, s)`, `BOOLEAN`, `DATE`, `TIMESTAMP`, `UUID`) and `NOT NULL` constraints.

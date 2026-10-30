@@ -24,23 +24,7 @@ from sqlspec.data_dictionary import (
 )
 ```
 
-Cross-database catalog introspection metadata, DDL extraction, column profiling, capability profiles, dialect registry, and foreign-key topological sorting. Access runtime introspection through `driver.data_dictionary` on any [`SyncDriverAdapterBase`](driver/sync.md) or [`AsyncDriverAdapterBase`](driver/async.md) session.
-
-## Runtime Introspection & DDL Synthesis
-
-::: sqlspec.driver._sync.SyncDataDictionaryBase
-    options:
-      heading_level: 3
-      members:
-        - get_ddl
-        - get_schema_ddl
-        - get_table_profile
-        - infer_table_ddl_from_data
-
-::: sqlspec.driver._async.AsyncDataDictionaryBase
-    options:
-      heading_level: 4
-      members: false
+Cross-database catalog introspection metadata, DDL extraction, column profiling, capability profiles, dialect registry, and foreign-key topological sorting. Access runtime introspection through `driver.data_dictionary` on any [`SyncDriverAdapterBase`](driver/sync.md) or [`AsyncDriverAdapterBase`](driver/async.md) session (see [Runtime Introspection & DDL Synthesis](data-dictionary/runtime.md)).
 
 ## Loader & Dialect Registry
 
@@ -51,6 +35,10 @@ Cross-database catalog introspection metadata, DDL extraction, column profiling,
         - get_query
         - get_query_text
         - list_queries
+        - get_domain_query
+        - get_domain_query_text
+        - get_system_query
+        - list_domains
 
 ::: sqlspec.data_dictionary._loader.get_data_dictionary_loader
     options:

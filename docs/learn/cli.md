@@ -47,7 +47,8 @@ uv run sqlspec show-config
 uv run sqlspec init --no-prompt
 uv run sqlspec create-migration -m "create users table" --no-prompt
 uv run sqlspec create-migration -m "initial_baseline" --from-schema
-uv run sqlspec create-migration -m "seed_events" --from-data seeds/events.jsonl --target-table events
+uv run sqlspec create-migration -m "seed_events" \
+    --from-data seeds/events.jsonl --target-table events
 uv run sqlspec upgrade --no-prompt
 uv run sqlspec show-current-revision
 ```

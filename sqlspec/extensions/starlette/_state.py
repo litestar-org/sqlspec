@@ -1,3 +1,5 @@
+"""Internal configuration state models for the Starlette SQLSpec extension."""
+
 from dataclasses import dataclass
 from typing import Any, Literal
 

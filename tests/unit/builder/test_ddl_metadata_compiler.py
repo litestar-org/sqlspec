@@ -1125,3 +1125,43 @@ def test_sqlite_partial_index_is_omitted_for_duckdb_with_warning() -> None:
 
     with pytest.raises(SQLBuilderError, match="DuckDB does not support partial indexes"):
         CreateIndex("ix", dialect="duckdb").on("staff", "manager_id").where("manager_id IS NOT NULL").build()
+
+
+def test_compile_table_ddl_results_deduplicates_backing_indexes_and_preserves_collation_case() -> None:
+    """Unique/PK constraint backing indexes are skipped and mixed-case collations are preserved."""
+    columns = [
+        {"column_name": "id", "data_type": "INTEGER", "is_nullable": "NO", "is_primary": True, "ordinal_position": 1},
+        {
+            "column_name": "email",
+            "data_type": "VARCHAR",
+            "max_length": 120,
+            "is_nullable": "NO",
+            "collation": "en_US.utf8",
+            "ordinal_position": 2,
+        },
+    ]
+    constraints = [{"constraint_name": "uq_accounts_email", "constraint_type": "UNIQUE", "columns": ["email"]}]
+    indexes = [
+        {
+            "index_name": "uq_accounts_email",
+            "table_name": "accounts",
+            "columns": ["email"],
+            "is_unique": True,
+            "is_primary": False,
+        },
+        {
+            "index_name": "idx_accounts_email_dup_unique",
+            "table_name": "accounts",
+            "columns": ["email"],
+            "is_unique": True,
+            "is_primary": False,
+        },
+    ]
+    result = compile_table_ddl_results(
+        "accounts", columns, constraints=constraints, indexes=indexes, dialect="postgres"
+    )
+    assert result.ddl is not None
+    assert 'COLLATE "en_US.utf8"' in result.ddl
+    assert 'CONSTRAINT "uq_accounts_email" UNIQUE ("email")' in result.ddl
+    assert "CREATE UNIQUE INDEX" not in result.ddl
+    assert "idx_accounts_email_dup_unique" not in result.ddl

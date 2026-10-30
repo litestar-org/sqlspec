@@ -154,6 +154,10 @@ _SAVEPOINT_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-
 
 VERSION_GROUPS_MIN_FOR_MINOR = 1
 VERSION_GROUPS_MIN_FOR_PATCH = 2
+_MIN_QUOTED_IDENTIFIER_LEN: Final[int] = 2
+_INT64_MIN: Final[int] = -9223372036854775808
+_INT64_MAX: Final[int] = 9223372036854775807
+_MAX_NUMERIC_PRECISION: Final[int] = 38
 
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
@@ -722,9 +726,32 @@ class DataDictionaryMixin:
                 tbl_schema = getattr(item, "schema_name", None) or default_schema
                 resolved_name = str(name) if name else None
                 resolved_schema = str(tbl_schema) if tbl_schema else default_schema
-        if resolved_schema and resolved_schema.lower() == "main" and default_schema is None:
+        if (
+            resolved_schema
+            and resolved_schema.lower() == "main"
+            and default_schema is None
+            and _sqlglot_dialect(type(self).dialect) in {"sqlite", "duckdb"}
+        ):
             resolved_schema = None
         return (resolved_name, resolved_schema)
+
+    def _resolve_schema_ddl_input(self, driver: Any, schema: str | None) -> tuple[str | None, str | None]:
+        """Resolve caller-supplied ``schema`` into ``(exact_catalog_schema, getter_schema_arg)``."""
+        if schema is None:
+            return (None, None)
+        if _ddl_dialect_or_none(type(self).dialect) is not None and isinstance(self, DataDictionaryDialectMixin):
+            with contextlib.suppress(ValueError):
+                _, exact_schema = self.resolve_ddl_object_name(driver, "_", schema)
+                getter_schema = (
+                    self.exact_catalog_identifier(driver, exact_schema) if exact_schema is not None else None
+                )
+                return (exact_schema, getter_schema)
+        stripped = schema.strip()
+        if len(stripped) >= _MIN_QUOTED_IDENTIFIER_LEN and (
+            (stripped[0] == stripped[-1] and stripped[0] in {'"', "`"}) or (stripped[0] == "[" and stripped[-1] == "]")
+        ):
+            return (stripped[1:-1], schema)
+        return (stripped, schema)
 
     def _build_view_ddl_from_row(
         self, row: Any, *, default_schema: str | None = None, dialect: str | None = None
@@ -1328,6 +1355,8 @@ class DataDictionaryMixin:
         Table, schema, and column identifiers are exact catalog names and are always quoted.
         """
         effective_dialect = _ddl_dialect_or_none(type(self).dialect)
+        sqlglot_dialect = _sqlglot_dialect(effective_dialect)
+        cast_target = _profile_text_cast_type(sqlglot_dialect)
         projections: list[exp.Expr] = [
             exp.Alias(this=exp.Count(this=exp.Star()), alias=exp.to_identifier("__row_count"))
         ]
@@ -1339,23 +1368,45 @@ class DataDictionaryMixin:
             )
             if not col_name:
                 continue
+            col_type = (
+                str(col_item.get("data_type") or col_item.get("type") or "")
+                if isinstance(col_item, Mapping)
+                else str(getattr(col_item, "data_type", None) or getattr(col_item, "type", None) or "")
+            )
             col_expr = exp.column(col_name, quoted=True)
-            projections.extend((
-                exp.Alias(this=exp.Count(this=col_expr.copy()), alias=exp.to_identifier(f"__non_null_{idx}")),
-                exp.Alias(
-                    this=exp.Count(this=exp.Distinct(expressions=[col_expr.copy()])),
-                    alias=exp.to_identifier(f"__distinct_{idx}"),
-                ),
-                exp.Alias(
-                    this=exp.Max(
-                        this=exp.Length(this=exp.Cast(this=col_expr.copy(), to=exp.DataType.build("VARCHAR")))
+            if _is_non_comparable_profile_type(col_type, sqlglot_dialect):
+                projections.extend((
+                    exp.Alias(this=exp.Count(this=col_expr.copy()), alias=exp.to_identifier(f"__non_null_{idx}")),
+                    exp.Alias(
+                        this=exp.Cast(this=exp.Null(), to=exp.DataType.build("BIGINT")),
+                        alias=exp.to_identifier(f"__distinct_{idx}"),
                     ),
-                    alias=exp.to_identifier(f"__max_len_{idx}"),
-                ),
-            ))
+                    exp.Alias(
+                        this=exp.Cast(this=exp.Null(), to=exp.DataType.build("BIGINT")),
+                        alias=exp.to_identifier(f"__max_len_{idx}"),
+                    ),
+                ))
+            else:
+                projections.extend((
+                    exp.Alias(this=exp.Count(this=col_expr.copy()), alias=exp.to_identifier(f"__non_null_{idx}")),
+                    exp.Alias(
+                        this=exp.Count(this=exp.Distinct(expressions=[col_expr.copy()])),
+                        alias=exp.to_identifier(f"__distinct_{idx}"),
+                    ),
+                    exp.Alias(
+                        this=exp.Max(
+                            this=exp.Length(
+                                this=exp.Cast(
+                                    this=col_expr.copy(), to=exp.DataType.build(cast_target, dialect=sqlglot_dialect)
+                                )
+                            )
+                        ),
+                        alias=exp.to_identifier(f"__max_len_{idx}"),
+                    ),
+                ))
 
         select_expr = exp.select(*projections).from_(self._quoted_table(table, schema))
-        return SQL(select_expr.sql(dialect=_sqlglot_dialect(effective_dialect)))
+        return SQL(select_expr.sql(dialect=sqlglot_dialect))
 
     def _build_table_sample_sql(self, table: str, schema: str | None = None, sample_size: int = 1000) -> SQL:
         """Build a query sampling rows from a table, quoting the exact catalog identifiers."""
@@ -1386,6 +1437,8 @@ class DataDictionaryMixin:
 
         non_empty = [val for val in values if val is not None and (not isinstance(val, str) or val.strip() != "")]
         if not non_empty:
+            if clean_declared and (target_dialect is None or target_dialect == type(self).dialect):
+                return clean_declared
             if config is not None:
                 return config.get_optimal_type("text")
             return clean_declared or "TEXT"
@@ -1401,26 +1454,27 @@ class DataDictionaryMixin:
             or (isinstance(val, str) and bool(_PROFILE_INT_RE.match(val.strip())))
             for val in non_empty
         ):
-            return config.get_optimal_type("bigint") if config is not None else "BIGINT"
+            int_vals = [int(val.strip()) if isinstance(val, str) else int(val) for val in non_empty]
+            if all(_INT64_MIN <= item <= _INT64_MAX for item in int_vals):
+                return config.get_optimal_type("bigint") if config is not None else "BIGINT"
+            max_digits = max(len(str(abs(item))) for item in int_vals)
+            if max_digits <= _MAX_NUMERIC_PRECISION:
+                return f"NUMERIC({max(10, max_digits)}, 0)"
+            if config is not None and target_dialect is not None and target_dialect != type(self).dialect:
+                return config.get_optimal_type("text")
+            return clean_declared or (config.get_optimal_type("text") if config is not None else "TEXT")
 
-        if all(
-            (isinstance(val, (int, float, Decimal)) and not isinstance(val, bool))
-            or (isinstance(val, str) and bool(_PROFILE_NUM_RE.match(val.strip())))
-            for val in non_empty
-        ):
+        if all(_is_valid_profile_decimal(val) for val in non_empty):
             max_int_digits = 1
             max_frac_digits = 2
             for val in non_empty:
-                raw_num = str(val).strip().lstrip("+-")
-                if "." in raw_num:
-                    int_part, frac_part = raw_num.split(".", 1)
-                    max_int_digits = max(max_int_digits, len(int_part) or 1)
-                    max_frac_digits = max(max_frac_digits, len(frac_part) or 1)
-                else:
-                    max_int_digits = max(max_int_digits, len(raw_num) or 1)
-            precision = max(10, min(38, max_int_digits + max_frac_digits + 2))
-            scale = min(precision - 1, max(2, max_frac_digits))
-            return f"NUMERIC({precision}, {scale})"
+                int_digits, frac_digits = _decimal_digit_counts(val)
+                max_int_digits = max(max_int_digits, int_digits)
+                max_frac_digits = max(max_frac_digits, frac_digits)
+            if max_int_digits + max_frac_digits <= _MAX_NUMERIC_PRECISION:
+                precision = max(10, min(_MAX_NUMERIC_PRECISION, max_int_digits + max_frac_digits + 2))
+                scale = min(precision - max_int_digits, max(2, max_frac_digits))
+                return f"NUMERIC({precision}, {scale})"
 
         if all(
             isinstance(val, UUID) or (isinstance(val, str) and bool(_PROFILE_UUID_RE.match(val.strip())))
@@ -3558,7 +3612,7 @@ _REFERENCE_EDGE_KINDS: Final[dict[str, DependencyEdgeKind]] = {
 }
 _SEQUENCE_NUMERIC_PROPERTIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("start", ("start_value", "start_with", "start")),
-    ("increment", ("increment_by", "increment")),
+    ("increment", ("increment_by", "increment_value", "increment")),
     ("minvalue", ("min_value", "minimum_value")),
     ("maxvalue", ("max_value", "maximum_value")),
 )
@@ -3599,11 +3653,91 @@ _LOOSE_PROFILE_TYPES: Final = frozenset({
     "VARIANT",
     "OBJECT",
 })
+_NON_COMPARABLE_PROFILE_TYPES: Final = frozenset({
+    "JSON",
+    "JSONB",
+    "XML",
+    "BLOB",
+    "CLOB",
+    "NCLOB",
+    "BFILE",
+    "LONG",
+    "RAW",
+    "LONG RAW",
+    "BYTEA",
+    "VARBINARY",
+    "BINARY",
+    "IMAGE",
+    "STRUCT",
+    "ARRAY",
+    "MAP",
+    "GEOMETRY",
+    "GEOGRAPHY",
+    "SUPER",
+    "VARIANT",
+})
 _PROFILE_INT_RE: Final = re.compile(r"^[+-]?(?:0|[1-9]\d*)$")
-_PROFILE_NUM_RE: Final = re.compile(r"^[+-]?\d+\.\d+$")
+_PROFILE_NUM_RE: Final = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
 _PROFILE_UUID_RE: Final = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _PROFILE_DATE_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _PROFILE_DATETIME_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
+
+
+def _profile_text_cast_type(sqlglot_dialect: str | None) -> str:
+    """Return a dialect-valid text cast target for ``LENGTH(CAST(col AS ...))``."""
+    if sqlglot_dialect == "oracle":
+        return "VARCHAR2(4000)"
+    if sqlglot_dialect == "db2":
+        return "VARCHAR(32672)"
+    if sqlglot_dialect == "tsql":
+        return "NVARCHAR(MAX)"
+    if sqlglot_dialect in {"bigquery", "spanner"}:
+        return "STRING"
+    if sqlglot_dialect == "mysql":
+        return "CHAR"
+    return "VARCHAR"
+
+
+def _is_non_comparable_profile_type(data_type: str, sqlglot_dialect: str | None) -> bool:
+    """Return True when a column type cannot participate in ``COUNT(DISTINCT)`` or ``CAST(... AS VARCHAR)``."""
+    base_type = re.sub(r"\s+", " ", data_type.split("(", 1)[0].split("<", 1)[0].strip().upper())
+    if not base_type:
+        return False
+    if base_type in _NON_COMPARABLE_PROFILE_TYPES or base_type.endswith("[]"):
+        return True
+    return sqlglot_dialect == "tsql" and base_type in {"TEXT", "NTEXT"}
+
+
+def _is_valid_profile_decimal(value: Any) -> bool:
+    """Return True when ``value`` is a finite numeric value or decimal string."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, (float, Decimal)):
+        try:
+            return Decimal(str(value)).is_finite()
+        except Exception:
+            return False
+    if isinstance(value, str) and bool(_PROFILE_NUM_RE.match(value.strip())):
+        try:
+            return Decimal(value.strip()).is_finite()
+        except Exception:
+            return False
+    return False
+
+
+def _decimal_digit_counts(value: Any) -> tuple[int, int]:
+    """Return ``(integer_digits, fractional_digits)`` for a finite numeric sample value."""
+    dec = Decimal(str(value).strip())
+    _, digits, exponent = dec.as_tuple()
+    exp_int = int(exponent) if isinstance(exponent, int) else 0
+    total_sig = len(digits)
+    if exp_int >= 0:
+        return (max(1, total_sig + exp_int), 0)
+    frac_digits = -exp_int
+    int_digits = max(1, total_sig - frac_digits)
+    return (int_digits, frac_digits)
 
 
 def _is_valid_profile_date(value: Any) -> bool:

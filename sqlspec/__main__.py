@@ -1,3 +1,5 @@
+"""Command-line entry point for executing SQLSpec via ``python -m sqlspec``."""
+
 from sqlspec.cli import add_migration_commands as build_cli_interface
 
 __all__ = ("run_cli",)

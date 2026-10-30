@@ -1,3 +1,5 @@
+"""ASGI scope state utilities for the Litestar SQLSpec plugin."""
+
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:

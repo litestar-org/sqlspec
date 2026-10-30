@@ -9,23 +9,28 @@ Tests for:
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.data_dictionary import DDLResult, ObjectIdentity
-from sqlspec.exceptions import SquashValidationError
+from sqlspec.exceptions import MigrationError, SquashValidationError
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import _load_migration_sql
 from sqlspec.migrations.runner import SyncMigrationRunner
 from sqlspec.migrations.squash import MigrationSquasher, SquashPlan, schema_ddl_statements
+from sqlspec.migrations.templates import (
+    MigrationTemplateProfile,
+    MigrationTemplateSettings,
+    PythonTemplateDefinition,
+    SQLTemplateDefinition,
+)
 
 
 def test_squash_plan_squash_plan_instantiation(tmp_path: Path) -> None:
     """Test SquashPlan dataclass can be instantiated."""
-    from sqlspec.migrations.squash import SquashPlan
-
     plan = SquashPlan(
         source_migrations=[("0001", tmp_path / "0001_initial.sql"), ("0002", tmp_path / "0002_users.sql")],
         target_version="0001",
@@ -41,8 +46,6 @@ def test_squash_plan_squash_plan_instantiation(tmp_path: Path) -> None:
 
 def test_squash_plan_squash_plan_source_versions_required(tmp_path: Path) -> None:
     """Test SquashPlan requires source_versions field."""
-    from sqlspec.migrations.squash import SquashPlan
-
     plan = SquashPlan(
         source_migrations=[("0001", tmp_path / "0001_initial.sql")],
         target_version="0001",
@@ -55,33 +58,23 @@ def test_squash_plan_squash_plan_source_versions_required(tmp_path: Path) -> Non
 
 def test_squash_validation_error_squash_validation_error_exists() -> None:
     """Test SquashValidationError can be imported and raised."""
-    from sqlspec.exceptions import SquashValidationError
-
     with pytest.raises(SquashValidationError):
         raise SquashValidationError("Invalid squash range")
 
 
 def test_squash_validation_error_squash_validation_error_inherits_from_migration_error() -> None:
     """Test SquashValidationError inherits from MigrationError."""
-    from sqlspec.exceptions import MigrationError, SquashValidationError
-
     assert issubclass(SquashValidationError, MigrationError)
 
 
 def test_squash_validation_error_squash_validation_error_message() -> None:
     """Test SquashValidationError preserves error message."""
-    from sqlspec.exceptions import SquashValidationError
-
     error = SquashValidationError("Gap detected between versions 0002 and 0004")
     assert "Gap detected" in str(error)
 
 
 def test_migration_squasher_migration_squasher_instantiation(tmp_path: Path) -> None:
     """Test MigrationSquasher can be instantiated."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-
     runner = Mock()
     squasher = MigrationSquasher(migrations_path=tmp_path, runner=runner)
     assert squasher.migrations_path == tmp_path
@@ -90,11 +83,6 @@ def test_migration_squasher_migration_squasher_instantiation(tmp_path: Path) -> 
 
 def test_migration_squasher_migration_squasher_with_template_settings(tmp_path: Path) -> None:
     """Test MigrationSquasher accepts optional template settings."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-    from sqlspec.migrations.templates import MigrationTemplateSettings
-
     runner = Mock()
     template_settings = Mock(spec=MigrationTemplateSettings)
     squasher = MigrationSquasher(migrations_path=tmp_path, runner=runner, template_settings=template_settings)
@@ -103,20 +91,12 @@ def test_migration_squasher_migration_squasher_with_template_settings(tmp_path: 
 
 def test_migration_squasher_migration_squasher_has_slots(tmp_path: Path) -> None:
     """Test MigrationSquasher uses __slots__ for mypyc compatibility."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-
     squasher = MigrationSquasher(tmp_path, Mock())
     assert not hasattr(squasher, "__dict__") or len(squasher.__dict__) == 0
 
 
 def test_plan_squash_plan_squash_valid_range(tmp_path: Path) -> None:
     """Test plan_squash with valid version range."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-
     (tmp_path / "0001_initial.sql").write_text("-- migration 1")
     (tmp_path / "0002_users.sql").write_text("-- migration 2")
     (tmp_path / "0003_posts.sql").write_text("-- migration 3")
@@ -139,10 +119,6 @@ def test_plan_squash_plan_squash_valid_range(tmp_path: Path) -> None:
 
 def test_plan_squash_plan_squash_partial_range(tmp_path: Path) -> None:
     """Test plan_squash with partial version range."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-
     (tmp_path / "0001_initial.sql").write_text("-- migration 1")
     (tmp_path / "0002_users.sql").write_text("-- migration 2")
     (tmp_path / "0003_posts.sql").write_text("-- migration 3")
@@ -165,13 +141,6 @@ def test_plan_squash_plan_squash_partial_range(tmp_path: Path) -> None:
 
 def test_plan_squash_plan_squash_invalid_range_start_greater_than_end(tmp_path: Path) -> None:
     """Test plan_squash raises error when start > end."""
-    from unittest.mock import Mock
-
-    import pytest
-
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.squash import MigrationSquasher
-
     runner = Mock()
     runner.get_migration_files.return_value = [
         ("0001", tmp_path / "0001_initial.sql"),
@@ -184,13 +153,6 @@ def test_plan_squash_plan_squash_invalid_range_start_greater_than_end(tmp_path: 
 
 def test_plan_squash_plan_squash_gap_in_sequence(tmp_path: Path) -> None:
     """Test plan_squash raises error when gap detected in sequence."""
-    from unittest.mock import Mock
-
-    import pytest
-
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.squash import MigrationSquasher
-
     (tmp_path / "0001_initial.sql").write_text("-- migration 1")
     (tmp_path / "0003_posts.sql").write_text("-- migration 3")
     runner = Mock()
@@ -205,13 +167,6 @@ def test_plan_squash_plan_squash_gap_in_sequence(tmp_path: Path) -> None:
 
 def test_plan_squash_plan_squash_version_not_found(tmp_path: Path) -> None:
     """Test plan_squash raises error when version not found."""
-    from unittest.mock import Mock
-
-    import pytest
-
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.squash import MigrationSquasher
-
     runner = Mock()
     runner.get_migration_files.return_value = [
         ("0001", tmp_path / "0001_initial.sql"),
@@ -224,10 +179,6 @@ def test_plan_squash_plan_squash_version_not_found(tmp_path: Path) -> None:
 
 def test_plan_squash_plan_squash_single_migration(tmp_path: Path) -> None:
     """Test plan_squash with single migration (start == end)."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-
     (tmp_path / "0001_initial.sql").write_text("-- migration 1")
     runner = Mock()
     runner.get_migration_files.return_value = [("0001", tmp_path / "0001_initial.sql")]
@@ -241,10 +192,6 @@ def test_plan_squash_plan_squash_single_migration(tmp_path: Path) -> None:
 
 def test_extract_sql_extract_sql_up_statements_in_order(tmp_path: Path) -> None:
     """Test that UP SQL statements are extracted in version order."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-
     runner = Mock()
     migration1 = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
     migration1["loader"].get_up_sql.return_value = ["CREATE TABLE users (id INT);"]
@@ -261,10 +208,6 @@ def test_extract_sql_extract_sql_up_statements_in_order(tmp_path: Path) -> None:
 
 def test_extract_sql_extract_sql_down_statements_in_reverse_order(tmp_path: Path) -> None:
     """Test that DOWN SQL statements are extracted in REVERSE version order."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-
     runner = Mock()
     migration1 = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
     migration1["loader"].get_up_sql.return_value = ["CREATE TABLE users (id INT);"]
@@ -281,10 +224,6 @@ def test_extract_sql_extract_sql_down_statements_in_reverse_order(tmp_path: Path
 
 def test_extract_sql_extract_sql_handles_missing_down(tmp_path: Path) -> None:
     """Test extract_sql handles migrations without DOWN queries."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-
     runner = Mock()
     migration1 = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
     migration1["loader"].get_up_sql.return_value = ["CREATE TABLE users (id INT);"]
@@ -299,10 +238,6 @@ def test_extract_sql_extract_sql_handles_missing_down(tmp_path: Path) -> None:
 
 def test_extract_sql_extract_sql_multiple_statements_per_migration(tmp_path: Path) -> None:
     """Test extract_sql handles multiple statements per migration."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher
-
     runner = Mock()
     migration = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
     migration["loader"].get_up_sql.return_value = [
@@ -320,10 +255,6 @@ def test_extract_sql_extract_sql_multiple_statements_per_migration(tmp_path: Pat
 
 def test_generate_squashed_content_generate_squashed_content_basic(tmp_path: Path) -> None:
     """Test generate_squashed_content produces valid SQL file."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = Mock()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -346,10 +277,6 @@ def test_generate_squashed_content_generate_squashed_content_basic(tmp_path: Pat
 
 def test_generate_squashed_content_generate_squashed_content_includes_squash_comment(tmp_path: Path) -> None:
     """Test generate_squashed_content includes audit trail comment."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = Mock()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -372,10 +299,6 @@ def test_generate_squashed_content_generate_squashed_content_includes_squash_com
 
 def test_generate_squashed_content_generate_squashed_content_empty_down(tmp_path: Path) -> None:
     """Test generate_squashed_content handles empty DOWN section."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = Mock()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -392,16 +315,6 @@ def test_generate_squashed_content_generate_squashed_content_empty_down(tmp_path
 
 def test_generate_squashed_content_generate_squashed_content_uses_template_settings(tmp_path: Path) -> None:
     """Test generate_squashed_content uses template settings if provided."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-    from sqlspec.migrations.templates import (
-        MigrationTemplateProfile,
-        MigrationTemplateSettings,
-        PythonTemplateDefinition,
-        SQLTemplateDefinition,
-    )
-
     runner = Mock()
     sql_template = SQLTemplateDefinition(
         header="-- Custom Header: {title}", metadata=["-- Version: {version}"], body=""
@@ -425,10 +338,6 @@ def test_generate_squashed_content_generate_squashed_content_uses_template_setti
 
 def test_apply_squash_apply_squash_dry_run(tmp_path: Path) -> None:
     """Test apply_squash in dry_run mode makes no changes."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     (tmp_path / "0001_initial.sql").write_text("-- migration 1")
     (tmp_path / "0002_users.sql").write_text("-- migration 2")
     runner = Mock()
@@ -448,10 +357,6 @@ def test_apply_squash_apply_squash_dry_run(tmp_path: Path) -> None:
 
 def test_apply_squash_skips_already_completed_plan(tmp_path: Path) -> None:
     """Reapplying a completed squash should be a no-op."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     target = tmp_path / "0001_release.sql"
     target.write_text("-- already squashed")
     runner = Mock()
@@ -472,11 +377,6 @@ def test_apply_squash_skips_already_completed_plan(tmp_path: Path) -> None:
 
 def test_apply_squash_rejects_partial_prior_run(tmp_path: Path) -> None:
     """A target plus remaining sources is an inconsistent partial squash."""
-    from unittest.mock import Mock
-
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     source = tmp_path / "0001_initial.sql"
     target = tmp_path / "0001_release.sql"
     source.write_text("-- source")
@@ -496,11 +396,6 @@ def test_apply_squash_rejects_partial_prior_run(tmp_path: Path) -> None:
 
 def test_apply_squash_rejects_mixed_extension_namespaces(tmp_path: Path) -> None:
     """A manual squash plan must not combine different extension namespaces."""
-    from unittest.mock import Mock
-
-    from sqlspec.exceptions import SquashValidationError
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     source_a = tmp_path / "ext_a_0001.sql"
     source_b = tmp_path / "ext_b_0001.sql"
     source_a.write_text("-- a")
@@ -520,10 +415,6 @@ def test_apply_squash_rejects_mixed_extension_namespaces(tmp_path: Path) -> None
 
 def test_apply_squash_apply_squash_writes_squashed_file(tmp_path: Path) -> None:
     """Test apply_squash writes the squashed migration file."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     (tmp_path / "0001_initial.sql").write_text("-- migration 1")
     (tmp_path / "0002_users.sql").write_text("-- migration 2")
     runner = Mock()
@@ -551,10 +442,6 @@ def test_apply_squash_apply_squash_writes_squashed_file(tmp_path: Path) -> None:
 
 def test_apply_squash_apply_squash_deletes_source_files(tmp_path: Path) -> None:
     """Test apply_squash deletes original migration files."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     (tmp_path / "0001_initial.sql").write_text("-- migration 1")
     (tmp_path / "0002_users.sql").write_text("-- migration 2")
     runner = Mock()
@@ -580,10 +467,6 @@ def test_apply_squash_apply_squash_deletes_source_files(tmp_path: Path) -> None:
 
 def test_apply_squash_apply_squash_creates_backup(tmp_path: Path) -> None:
     """Test apply_squash creates backup before modifications."""
-    from unittest.mock import Mock
-
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     (tmp_path / "0001_initial.sql").write_text("-- migration 1")
     runner = Mock()
     migration = {"version": "0001", "loader": Mock(), "file_path": tmp_path / "0001_initial.sql"}
@@ -683,9 +566,6 @@ def test_apply_squash_strategy_schema_emits_live_database_ddl(tmp_path: Path) ->
 
 def test_apply_squash_strategy_concat_omits_down_when_constituent_is_irreversible(tmp_path: Path) -> None:
     """strategy='concat' should omit the down block and emit a note when any source migration lacks down."""
-    from sqlspec.migrations.runner import SyncMigrationRunner
-    from sqlspec.migrations.squash import MigrationSquasher
-
     (tmp_path / "0001_t1.sql").write_text(
         "-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);\n-- name: migrate-0001-down\nDROP TABLE t1;\n",
         encoding="utf-8",
@@ -711,9 +591,6 @@ def test_apply_squash_strategy_concat_omits_down_when_constituent_is_irreversibl
 
 def test_plan_squash_timestamp_range_and_single_file_mixed_migrations(tmp_path: Path) -> None:
     """plan_squash should assign 0001 to initial timestamp ranges and squash mixed migrations into one file when single_file=True."""
-    from sqlspec.migrations.runner import SyncMigrationRunner
-    from sqlspec.migrations.squash import MigrationSquasher
-
     (tmp_path / "20251011120000_init.sql").write_text(
         "-- transactional: false\n-- name: migrate-20251011120000-up\nCREATE TABLE items (id INT PRIMARY KEY);\n",
         encoding="utf-8",
@@ -904,6 +781,41 @@ def test_runner_clear_caches_reloads_rewritten_migration(tmp_path: Path) -> None
     loaded = runner.load_migration(renamed, "0001")
 
     assert _load_migration_sql(loaded["loader"], renamed, "up") == ["CREATE TABLE b (id INT);"]
+
+
+def test_apply_squash_multi_plan_overlapping_target_path(tmp_path: Path) -> None:
+    """Multi-plan apply_squash succeeds when a later plan's target_path was an earlier plan's source file."""
+    f1 = tmp_path / "0001_initial.sql"
+    f2 = tmp_path / "0002_release.sql"
+    f3 = tmp_path / "0003_extra.py"
+    f1.write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);\n", encoding="utf-8")
+    f2.write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);\n", encoding="utf-8")
+    f3.write_text("def up():\n    return ['CREATE TABLE t3 (id INT);']\n", encoding="utf-8")
+
+    runner = SyncMigrationRunner(tmp_path)
+    squasher = MigrationSquasher(tmp_path, runner)
+    plan1 = SquashPlan(
+        source_migrations=[("0001", f1), ("0002", f2)],
+        target_version="0001",
+        target_path=tmp_path / "0001_release.sql",
+        description="release",
+        source_versions=["0001", "0002"],
+    )
+    plan2_same_name = SquashPlan(
+        source_migrations=[("0003", f3)],
+        target_version="0002",
+        target_path=f2,
+        description="release",
+        source_versions=["0003"],
+    )
+
+    squasher.apply_squash([plan1, plan2_same_name])
+
+    assert (tmp_path / "0001_release.sql").exists()
+    assert f2.exists()
+    assert "CREATE TABLE t3" in f2.read_text(encoding="utf-8")
+    assert not f1.exists()
+    assert not f3.exists()
 
 
 def _table_shape(connection: sqlite3.Connection, table: str) -> tuple[object, object]:

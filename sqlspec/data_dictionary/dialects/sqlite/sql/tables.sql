@@ -11,7 +11,7 @@ WITH table_inventory AS (
     FROM pragma_table_list AS tl
     WHERE tl.schema = COALESCE(:schema_name, 'main')
       AND tl.type IN ('table', 'virtual')
-      AND tl.name NOT LIKE 'sqlite\_%' ESCAPE '\'
+      AND tl.name NOT LIKE 'sqlite_%'
 ),
 fk_edges AS MATERIALIZED (
     SELECT

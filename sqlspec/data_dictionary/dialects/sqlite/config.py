@@ -22,6 +22,8 @@ from sqlspec.data_dictionary import (
     VersionInfo,
     register_dialect,
 )
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -32,7 +34,9 @@ __all__ = (
     "SQLITE_FEATURE_VERSIONS",
     "SQLITE_TYPE_MAPPINGS",
     "SQLITE_VERSION_PATTERN",
+    "format_sqlite_schema_prefix",
     "list_sqlite_available_features",
+    "normalize_sqlite_schema_name",
     "resolve_sqlite_json_type",
     "sqlite_check_constraints",
     "sqlite_constraint_metadata",
@@ -43,6 +47,10 @@ __all__ = (
 
 
 SQLITE_VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+_SQLITE_UNQUOTED_SCHEMA_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_$-]*$")
+_ASCII_CONTROL_MAX = 32
+_ASCII_DEL = 127
+_MIN_QUOTED_IDENTIFIER_LEN = 2
 
 SQLITE_FEATURE_VERSIONS: "FeatureVersions" = {
     "supports_json": VersionInfo(3, 38, 0),
@@ -101,6 +109,76 @@ def list_sqlite_available_features() -> "list[str]":
     """List SQLite data-dictionary feature flags."""
     features = set(SQLITE_CONFIG.feature_flags.keys()) | set(SQLITE_CONFIG.feature_versions.keys())
     return sorted(features)
+
+
+def normalize_sqlite_schema_name(schema: "str | None") -> "str | None":
+    """Validate and normalize a SQLite schema identifier into its exact catalog name.
+
+    Args:
+        schema: Attached database/schema name, optionally wrapped in identifier quotes, or None.
+
+    Returns:
+        Unquoted SQLite schema name, or None when ``schema`` is None.
+
+    Raises:
+        SQLSpecError: If ``schema`` is empty, contains NUL/control characters, or is not a single
+            valid SQLite schema identifier.
+    """
+    if schema is None:
+        return None
+    cleaned = schema.strip()
+    if not cleaned or "\x00" in cleaned or any(ord(ch) < _ASCII_CONTROL_MAX or ord(ch) == _ASCII_DEL for ch in cleaned):
+        msg = f"Invalid SQLite schema identifier: {schema!r}"
+        raise SQLSpecError(msg)
+    if len(cleaned) >= _MIN_QUOTED_IDENTIFIER_LEN and cleaned[0] == cleaned[-1] == '"':
+        inner = cleaned[1:-1]
+        if '"' in inner.replace('""', ""):
+            msg = f"Invalid SQLite schema identifier: {schema!r}"
+            raise SQLSpecError(msg)
+        cleaned = inner.replace('""', '"')
+    elif len(cleaned) >= _MIN_QUOTED_IDENTIFIER_LEN and cleaned[0] == cleaned[-1] == "`":
+        inner = cleaned[1:-1]
+        if "`" in inner.replace("``", ""):
+            msg = f"Invalid SQLite schema identifier: {schema!r}"
+            raise SQLSpecError(msg)
+        cleaned = inner.replace("``", "`")
+    elif len(cleaned) >= _MIN_QUOTED_IDENTIFIER_LEN and cleaned[0] == "[" and cleaned[-1] == "]":
+        inner = cleaned[1:-1]
+        if "]" in inner.replace("]]", ""):
+            msg = f"Invalid SQLite schema identifier: {schema!r}"
+            raise SQLSpecError(msg)
+        cleaned = inner.replace("]]", "]")
+    elif _SQLITE_UNQUOTED_SCHEMA_PATTERN.fullmatch(cleaned) is None:
+        msg = f"Invalid SQLite schema identifier: {schema!r}"
+        raise SQLSpecError(msg)
+    if not cleaned:
+        msg = f"Invalid SQLite schema identifier: {schema!r}"
+        raise SQLSpecError(msg)
+    return cleaned
+
+
+def format_sqlite_schema_prefix(schema: "str | None") -> str:
+    """Validate and quote a SQLite schema identifier for ``{schema_prefix}sqlite_schema`` queries.
+
+    SQLite does not allow database/schema qualifiers in ``FROM <schema>.sqlite_schema`` to be
+    bound as SQL parameters. This helper enforces that ``schema`` is a single SQLite database
+    identifier (never a dotted path, statement fragment, or control/NUL sequence) and returns it
+    as a double-quoted identifier prefix with a trailing dot (``"schema".``).
+
+    Args:
+        schema: Attached database/schema name, optionally wrapped in identifier quotes, or None.
+
+    Returns:
+        Quoted ``"<schema>".`` prefix, or ``""`` when ``schema`` is None.
+
+    Raises:
+        SQLSpecError: If ``schema`` is empty, contains NUL/control characters, or is not a single
+            valid SQLite schema identifier.
+    """
+    normalized = normalize_sqlite_schema_name(schema)
+    if normalized is None:
+        return ""
+    return f"{quote_identifier(normalized)}."
 
 
 def sqlite_object_ddl_result(

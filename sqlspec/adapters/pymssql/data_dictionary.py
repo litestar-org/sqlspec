@@ -9,6 +9,7 @@ from sqlspec.data_dictionary import (
     DDLResult,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataResult,
     MetadataSupport,
     SystemMetadataCapability,
     SystemMetadataRequest,
@@ -260,6 +261,49 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
             ),
         )
 
+    def get_constraints(
+        self, driver: "PymssqlDriver", table: str | None = None, schema: str | None = None
+    ) -> MetadataResult:
+        """Get constraint metadata for a table or schema."""
+        schema_name = self.resolve_connection_schema(driver, schema)
+        capability = self.get_metadata_capabilities(driver, ("constraints",)).get("constraints")
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="constraints")
+            rows = driver.select(self.get_domain_query("constraints", "by_schema"), schema_name=schema_name)
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="constraints")
+            rows = driver.select(
+                self.get_domain_query("constraints", "by_table"), schema_name=schema_name, table_name=table
+            )
+        return MetadataResult("constraints", capability=capability, items=tuple(rows))
+
+    def get_views(self, driver: "PymssqlDriver", schema: str | None = None) -> MetadataResult:
+        """Get view metadata for a schema."""
+        schema_name = self.resolve_connection_schema(driver, schema)
+        capability = self.get_metadata_capabilities(driver, ("views",)).get("views")
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="views")
+        rows = driver.select(self.get_domain_query("views", "by_schema"), schema_name=schema_name)
+        return MetadataResult("views", capability=capability, items=tuple(rows))
+
+    def get_sequences(self, driver: "PymssqlDriver", schema: str | None = None) -> MetadataResult:
+        """Get sequence metadata for a schema."""
+        schema_name = self.resolve_connection_schema(driver, schema)
+        capability = self.get_metadata_capabilities(driver, ("sequences",)).get("sequences")
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="sequences")
+        rows = driver.select(self.get_domain_query("sequences", "by_schema"), schema_name=schema_name)
+        return MetadataResult("sequences", capability=capability, items=tuple(rows))
+
+    def get_dependencies(
+        self, driver: "PymssqlDriver", object_name: str | None = None, schema: str | None = None
+    ) -> MetadataResult:
+        """Get SQL expression dependency metadata for a schema."""
+        _ = object_name
+        schema_name = self.resolve_connection_schema(driver, schema)
+        capability = self.get_metadata_capabilities(driver, ("dependencies",)).get("dependencies")
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="dependencies")
+        rows = driver.select(self.get_domain_query("dependencies", "by_schema"), schema_name=schema_name)
+        return MetadataResult("dependencies", capability=capability, items=tuple(rows))
+
     def get_system_metadata(
         self, driver: "PymssqlDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
     ) -> SystemMetadataResult:
@@ -289,13 +333,29 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
     ) -> "DDLResult | None":
         """Return SQL Server table DDL generated from sys catalog rows."""
         _ = include_dependencies, redact
+        if object_type.lower() != "table":
+            return None
         columns = driver.select(
             self.get_domain_query("ddl", "table_inputs_by_table"), schema_name=schema, table_name=object_name
         )
+        if not columns:
+            return build_mssql_table_ddl_result(schema, object_name, columns, object_type=object_type)
         indexes = driver.select(
             self.get_domain_query("ddl", "index_inputs_by_table"), schema_name=schema, table_name=object_name
         )
-        return build_mssql_table_ddl_result(schema, object_name, columns, indexes, object_type=object_type)
+        constraints = driver.select(
+            self.get_domain_query("constraints", "by_table"), schema_name=schema, table_name=object_name
+        )
+        foreign_keys = self.get_foreign_keys(driver, table=object_name, schema=schema)
+        return build_mssql_table_ddl_result(
+            schema,
+            object_name,
+            columns,
+            indexes,
+            constraint_rows=constraints,
+            foreign_key_rows=foreign_keys,
+            object_type=object_type,
+        )
 
 
 def _row_value(row: object, *names: str) -> Any:

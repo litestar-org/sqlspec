@@ -100,7 +100,12 @@ users_ddl = (
     .create_table("users", dialect="postgres")
     .column("id", "BIGINT", primary_key=True, identity="ALWAYS")
     .column("email", "TEXT", not_null=True)
-    .column("email_lower", "TEXT", generated_expression="LOWER(email)", persisted=True)
+    .column(
+        "email_lower",
+        "TEXT",
+        generated_expression="LOWER(email)",
+        persisted=True,
+    )
     .to_sql()
 )
 
@@ -114,10 +119,15 @@ covering_idx = (
     .to_sql()
 )
 
-seq_ddl = sql.create_sequence("order_num_seq", dialect="postgres", start_with=1000, increment_by=1).to_sql()
+seq_ddl = sql.create_sequence(
+    "order_num_seq", dialect="postgres", start_with=1000, increment_by=1
+).to_sql()
 
 events_ddl = CreateTable.from_records(
-    "events", [{"id": 1, "event_type": "signup", "active": True}], primary_key="id", dialect="postgres"
+    "events",
+    [{"id": 1, "event_type": "signup", "active": True}],
+    primary_key="id",
+    dialect="postgres",
 ).to_sql()
 ```
 

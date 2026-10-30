@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
-from sqlspec.adapters.duckdb import DuckDBDriver
-from sqlspec.adapters.sqlite import SqliteDriver
+from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.data_dictionary import DataDictionaryLoader, DependencyMetadata, MetadataSupport
 from tests.conftest import requires_interpreted
@@ -210,8 +210,6 @@ def test_duckdb_dependencies_from_duckdb_dependencies() -> None:
 
 def test_sqlite_columns_report_primary_key_columns() -> None:
     """SQLite column metadata flags primary-key columns with their key position."""
-    from sqlspec.adapters.sqlite import SqliteConfig
-
     config = SqliteConfig(connection_config={"database": ":memory:"})
     with config.provide_session() as driver:
         driver.execute(
@@ -230,8 +228,6 @@ def test_sqlite_columns_report_primary_key_columns() -> None:
 
 def test_duckdb_columns_report_primary_key_columns(tmp_path: Path) -> None:
     """DuckDB column metadata flags primary-key columns for exact-case table names."""
-    from sqlspec.adapters.duckdb import DuckDBConfig
-
     config = DuckDBConfig(connection_config={"database": str(tmp_path / "metadata.duckdb")})
     with config.provide_session() as driver:
         driver.execute(
@@ -254,8 +250,6 @@ def test_duckdb_columns_report_primary_key_columns(tmp_path: Path) -> None:
 
 def test_sqlite_columns_report_generated_columns() -> None:
     """SQLite column metadata marks virtual and stored generated columns in ``extra``."""
-    from sqlspec.adapters.sqlite import SqliteConfig
-
     config = SqliteConfig(connection_config={"database": ":memory:"})
     with config.provide_session() as driver:
         driver.execute(
@@ -275,8 +269,6 @@ def test_sqlite_columns_report_generated_columns() -> None:
 
 def test_duckdb_columns_report_generated_columns(tmp_path: Path) -> None:
     """DuckDB column metadata flags generated columns, including quoted and mixed-case names."""
-    from sqlspec.adapters.duckdb import DuckDBConfig
-
     config = DuckDBConfig(connection_config={"database": str(tmp_path / "generated.duckdb")})
     with config.provide_session() as driver:
         driver.execute(
@@ -299,8 +291,6 @@ def test_duckdb_columns_report_generated_columns(tmp_path: Path) -> None:
 
 def test_duckdb_columns_ignore_generated_text_in_string_literals(tmp_path: Path) -> None:
     """DuckDB generated-column detection ignores DDL text inside string literals and quoted identifiers."""
-    from sqlspec.adapters.duckdb import DuckDBConfig
-
     config = DuckDBConfig(connection_config={"database": str(tmp_path / "literals.duckdb")})
     with config.provide_session() as driver:
         driver.execute("CREATE TABLE t1(id INTEGER, g VARCHAR DEFAULT ', h INTEGER GENERATED ALWAYS AS(', h INTEGER)")
@@ -390,3 +380,19 @@ def test_sqlite_and_duckdb_self_referential_fk_tables_and_constraints() -> None:
         assert [t["table_name"] for t in duck_tables] == ["categories", "items"]
     finally:
         duck_conn.close()
+
+
+def test_sqlite_constraints_include_rowid_alias_primary_key() -> None:
+    """SQLite constraints query reports INTEGER PRIMARY KEY columns that have no autoindex."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as driver:
+            driver.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, code TEXT UNIQUE)")
+            constraints = driver.data_dictionary.get_constraints(driver, table="items")
+    finally:
+        config.close_pool()
+
+    constraint_items = cast("tuple[dict[str, object], ...]", constraints.items)
+    types = {item["constraint_type"]: item["columns"] for item in constraint_items}
+    assert types["PRIMARY KEY"] == ["id"]
+    assert types["UNIQUE"] == ["code"]

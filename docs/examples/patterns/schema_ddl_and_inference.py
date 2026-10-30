@@ -23,6 +23,7 @@ def main() -> tuple[str, int, str, str]:
                 [("evt-1", "12", "2026-01-15"), ("evt-2", "48", "2026-01-16")],
             )
 
+            # --8<-- [start:example]
             dd = session.data_dictionary
             teams_ddl = dd.get_ddl(session, "teams").ddl or ""
             schema_items = dd.get_schema_ddl(session, target_dialect="postgres").items
@@ -32,6 +33,7 @@ def main() -> tuple[str, int, str, str]:
         records_ddl = CreateTable.from_records(
             "audit_events", [{"id": 1, "actor": "system", "active": True}], primary_key="id", dialect="postgres"
         ).to_sql()
+        # --8<-- [end:example]
 
         assert "teams" in teams_ddl
         assert len(schema_items) >= 2

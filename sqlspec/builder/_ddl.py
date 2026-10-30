@@ -2905,7 +2905,25 @@ def compile_table_ddl_results(
         for col_name in (_first_non_empty_str(row, "column_name", "name") for row in normalized_columns)
         if col_name
     ]
+    fragment_dialect = source_dialect if source_dialect is not None else dialect
+    constraint_names: set[str] = {
+        c.name
+        for c in table_builder._constraints
+        if c.name and c.constraint_type in {CONSTRAINT_TYPE_PRIMARY_KEY, CONSTRAINT_TYPE_UNIQUE}
+    }
+    constrained_column_tuples: set[tuple[str, ...]] = {
+        tuple(c.columns)
+        for c in table_builder._constraints
+        if c.columns and c.constraint_type in {CONSTRAINT_TYPE_PRIMARY_KEY, CONSTRAINT_TYPE_UNIQUE}
+    }
+    for col_def in table_builder._columns:
+        if col_def.primary_key or col_def.unique:
+            constrained_column_tuples.add((col_def.name,))
+
     for index_row in _group_metadata_index_rows(indexes or ()):
+        raw_idx_name = _first_non_empty_str(index_row, "index_name", "name")
+        if raw_idx_name and _catalog_name(raw_idx_name, dialect, fragment_dialect) in constraint_names:
+            continue
         idx_builder = CreateIndex.from_metadata(
             index_row,
             table_name=table_name,
@@ -2916,6 +2934,20 @@ def compile_table_ddl_results(
             warnings=lossy,
         )
         if idx_builder is not None:
+            if (
+                idx_builder._unique
+                and not idx_builder._where
+                and not idx_builder._include_columns
+                and all(isinstance(col_expr, exp.Column) for col_expr in idx_builder._columns)
+            ):
+                idx_cols = tuple(
+                    _catalog_name(col, dialect, fragment_dialect)
+                    for col in _split_metadata_columns(
+                        _first_present(index_row, "columns", "column_names", "column_name")
+                    )
+                )
+                if idx_cols and idx_cols in constrained_column_tuples:
+                    continue
             statements.append(idx_builder.build(dialect=dialect).sql.rstrip(";").strip())
 
     quoted_table = _catalog_name(table_name, dialect, source_dialect)
@@ -3468,6 +3500,34 @@ def _metadata_fk_actions(row: Mapping[str, Any], definition: str | None) -> tupl
     return on_delete, on_update
 
 
+def _find_matching_metadata_fk(
+    merged: list[dict[str, Any]],
+    *,
+    quoted_name: str | None,
+    fk_group_id: Any,
+    ref_table: str,
+    quoted_cols: Sequence[str],
+    quoted_ref_cols: Sequence[str],
+) -> dict[str, Any] | None:
+    """Find an existing merged FK entry that belongs to the same constraint group."""
+    for existing in merged:
+        if quoted_name and existing["name"] == quoted_name:
+            return existing
+        if (
+            fk_group_id is not None
+            and existing.get("_fk_group_id") == fk_group_id
+            and existing["ref_table"] == ref_table
+        ):
+            return existing
+        if (
+            tuple(existing["columns"]) == tuple(quoted_cols)
+            and existing["ref_table"] == ref_table
+            and tuple(existing["ref_columns"]) == tuple(quoted_ref_cols)
+        ):
+            return existing
+    return None
+
+
 def _extract_metadata_foreign_keys(
     constraints: Sequence[Mapping[str, Any]],
     foreign_keys: Sequence[Mapping[str, Any]],
@@ -3478,19 +3538,33 @@ def _extract_metadata_foreign_keys(
     warnings: "list[str] | None" = None,
 ) -> list[dict[str, Any]]:
     """Merge FK metadata rows into specs whose names are already quoted for ``dialect``."""
-    raw_items: list[Mapping[str, Any]] = [
-        c_row for c_row in constraints if _normalize_constraint_type(c_row) == CONSTRAINT_TYPE_FOREIGN_KEY
-    ]
+    fk_names = {
+        name for fk_row in foreign_keys if (name := _first_non_empty_str(fk_row, "constraint_name", "name")) is not None
+    }
+    raw_items: list[Mapping[str, Any]] = []
+    for c_row in constraints:
+        if _normalize_constraint_type(c_row) != CONSTRAINT_TYPE_FOREIGN_KEY:
+            continue
+        c_name = _first_non_empty_str(c_row, "constraint_name", "name")
+        has_ref = bool(
+            _first_non_empty_str(
+                c_row, "referenced_table", "references_table", "referenced_table_name", "table", "definition"
+            )
+        )
+        if not has_ref and ((c_name and c_name in fk_names) or bool(foreign_keys)):
+            continue
+        raw_items.append(c_row)
     raw_items.extend(foreign_keys)
 
     merged: list[dict[str, Any]] = []
     for row in raw_items:
         name = _first_non_empty_str(row, "constraint_name", "name")
-        cols = _split_metadata_columns(_first_present(row, "columns", "column_names", "column_name"))
-        ref_table = _first_non_empty_str(row, "referenced_table", "references_table", "referenced_table_name")
+        fk_group_id = row.get("id") if name is None else None
+        cols = _split_metadata_columns(_first_present(row, "columns", "column_names", "column_name", "from"))
+        ref_table = _first_non_empty_str(row, "referenced_table", "references_table", "referenced_table_name", "table")
         ref_cols = _split_metadata_columns(
             _first_present(
-                row, "referenced_columns", "references_columns", "referenced_column", "referenced_column_name"
+                row, "referenced_columns", "references_columns", "referenced_column", "referenced_column_name", "to"
             )
         )
         ref_is_catalog_name = ref_table is not None
@@ -3510,11 +3584,19 @@ def _extract_metadata_foreign_keys(
                 warnings.append(f"Foreign key {name or '<unnamed>'} metadata is incomplete and was omitted")
             continue
 
-        ref_schema = (
-            _first_non_empty_str(row, "referenced_schema", "references_schema", "referenced_table_schema")
-            or table_schema
+        explicit_ref_schema = _first_non_empty_str(
+            row, "referenced_schema", "references_schema", "referenced_table_schema"
         )
-        qualify_ref = bool(ref_schema and table_schema)
+        norm_target = _normalize_dialect(dialect) if dialect else None
+        if (
+            explicit_ref_schema
+            and table_schema is None
+            and norm_target in {"sqlite", "duckdb"}
+            and explicit_ref_schema.lower() == "main"
+        ):
+            explicit_ref_schema = None
+        ref_schema = explicit_ref_schema or table_schema
+        qualify_ref = bool(explicit_ref_schema or (ref_schema and table_schema))
         if ref_is_catalog_name:
             ref_table = _catalog_qualified_name(ref_table, ref_schema if qualify_ref else None, dialect, source_dialect)
         elif qualify_ref and ref_schema and "." not in ref_table:
@@ -3529,18 +3611,14 @@ def _extract_metadata_foreign_keys(
         )
         quoted_name = _catalog_name(name, dialect, source_dialect) if name else None
 
-        matched_existing: dict[str, Any] | None = None
-        for existing in merged:
-            if quoted_name and existing["name"] == quoted_name:
-                matched_existing = existing
-                break
-            if (
-                tuple(existing["columns"]) == tuple(quoted_cols)
-                and existing["ref_table"] == ref_table
-                and tuple(existing["ref_columns"]) == tuple(quoted_ref_cols)
-            ):
-                matched_existing = existing
-                break
+        matched_existing = _find_matching_metadata_fk(
+            merged,
+            quoted_name=quoted_name,
+            fk_group_id=fk_group_id,
+            ref_table=ref_table,
+            quoted_cols=quoted_cols,
+            quoted_ref_cols=quoted_ref_cols,
+        )
 
         if matched_existing is not None:
             if (
@@ -3571,6 +3649,7 @@ def _extract_metadata_foreign_keys(
             "on_update": on_update,
             "deferrable": deferrable,
             "initially_deferred": initially_deferred,
+            "_fk_group_id": fk_group_id,
         })
 
     return [item for item in merged if len(item["columns"]) == len(item["ref_columns"])]
@@ -4050,6 +4129,7 @@ def _build_collate_column_constraint(collate: str, dialect: "DialectType | None"
     ):
         collate_ident.set("quoted", True)
         collate_ident.meta["_explicit_quoted"] = True
+        collate_ident.meta["sqlspec_explicit_table_quote"] = True
     return exp.ColumnConstraint(kind=exp.CollateColumnConstraint(this=collate_ident))
 
 

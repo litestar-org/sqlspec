@@ -1,3 +1,5 @@
+"""HTTP middleware classes for the Starlette SQLSpec extension."""
+
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 

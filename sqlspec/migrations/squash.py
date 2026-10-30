@@ -400,11 +400,12 @@ class DDLStateFolder:
             msg = f"CREATE INDEX targets {table_key}, which is not created within the squash range"
             raise self._refusal(msg)
         name = index.this
-        key = self._ident_key(name) if isinstance(name, exp.Identifier) else f"<unnamed index {self._order}>"
+        base_name = self._name_key(name) if isinstance(name, exp.Expr) else ""
+        key = self._index_catalog_key(base_name, table_key) if base_name else f"<unnamed index {self._order}>"
         if key in self._indexes:
             if expr.args.get("exists"):
                 return
-            msg = f"index {key} is already created earlier in the squash range"
+            msg = f"index {base_name or key} is already created earlier in the squash range"
             raise self._refusal(msg)
         self._indexes[key] = self._new_entry(expr, owner=table_key)
 
@@ -493,19 +494,21 @@ class DDLStateFolder:
         if len(actions) != 1 or not isinstance(actions[0], exp.AlterRename):
             msg = "only ALTER INDEX ... RENAME TO can be folded"
             raise self._refusal(msg)
-        old_key = self._name_key(target)
+        raw_old_key = self._object_key(target)
+        old_key = self._resolve_index_key(raw_old_key)
         entry = self._indexes.get(old_key)
         if entry is None or not isinstance(entry.expr.this, exp.Index):
-            msg = f"ALTER INDEX targets {old_key}, which is not created within the squash range"
+            msg = f"ALTER INDEX targets {raw_old_key}, which is not created within the squash range"
             raise self._refusal(msg)
         new_node = actions[0].this
         new_ident = new_node.this if isinstance(new_node, exp.Table) else None
         if not isinstance(new_ident, exp.Identifier):
             msg = "the RENAME target could not be read"
             raise self._refusal(msg)
-        new_key = self._ident_key(new_ident)
+        new_base = self._ident_key(new_ident)
+        new_key = self._index_catalog_key(new_base, entry.owner)
         if new_key in self._indexes:
-            msg = f"index {new_key} is already created earlier in the squash range"
+            msg = f"index {new_base} is already created earlier in the squash range"
             raise self._refusal(msg)
         self._mark_modified(entry)
         entry.expr.this.set("this", new_ident.copy())
@@ -549,7 +552,8 @@ class DDLStateFolder:
         rename_from = action.args.get("rename_from")
         new_key = self._name_key(new_definition)
         old_key = self._name_key(rename_from) if isinstance(rename_from, exp.Expr) else new_key
-        if self._find_column(schema, old_key) is None:
+        existing = self._find_column(schema, old_key)
+        if existing is None:
             msg = f"column {old_key} does not exist on {table_key}"
             raise self._refusal(msg)
         if old_key != new_key:
@@ -564,10 +568,26 @@ class DDLStateFolder:
         else:
             self._assert_views_allow(table_key, {old_key}, "MODIFY COLUMN")
             self._mark_modified(entry)
+        replacement = new_definition.copy()
+        replacement_constraints = list(replacement.args.get("constraints") or [])
+        existing_key_kinds = {
+            type(c.args.get("kind"))
+            for c in replacement_constraints
+            if isinstance(c.args.get("kind"), (exp.PrimaryKeyColumnConstraint, exp.UniqueColumnConstraint))
+        }
+        for constraint in existing.args.get("constraints") or []:
+            kind = constraint.args.get("kind")
+            if isinstance(kind, (exp.PrimaryKeyColumnConstraint, exp.UniqueColumnConstraint)) and (
+                type(kind) not in existing_key_kinds
+            ):
+                replacement_constraints.append(constraint.copy())
+                existing_key_kinds.add(type(kind))
+        if replacement_constraints:
+            replacement.set("constraints", replacement_constraints)
         schema.set(
             "expressions",
             [
-                new_definition.copy() if isinstance(item, exp.ColumnDef) and self._name_key(item) == new_key else item
+                replacement if isinstance(item, exp.ColumnDef) and self._name_key(item) == new_key else item
                 for item in schema.expressions
             ],
         )
@@ -600,6 +620,13 @@ class DDLStateFolder:
             if if_exists:
                 return
             msg = f"column {column_key} does not exist on {table_key}"
+            raise self._refusal(msg)
+        pk_columns = self._primary_key_columns(table_key)
+        if column_key in pk_columns and (len(pk_columns) > 1 or (self._dialect or "") in {"sqlite", "duckdb"}):
+            msg = (
+                f"dropping primary key column {column_key} on {table_key} leaves dialect-specific primary key and "
+                "NOT NULL state, which the folded CREATE TABLE cannot reproduce"
+            )
             raise self._refusal(msg)
         self._assert_views_allow(table_key, {column_key}, "DROP COLUMN")
         for other_key, other in self._tables.items():
@@ -694,10 +721,11 @@ class DDLStateFolder:
         schema.set("expressions", kept)
 
     def _drop_table_index(self, table_key: str, entry: "_FoldedStatement", schema: exp.Schema, name: str) -> None:
-        index_entry = self._indexes.get(name)
+        resolved_key = self._resolve_index_key(name, owner=table_key)
+        index_entry = self._indexes.get(resolved_key)
         if index_entry is not None and index_entry.owner == table_key:
-            self._indexes.pop(name)
-            self._comments.pop(("INDEX", name), None)
+            self._indexes.pop(resolved_key)
+            self._comments.pop(("INDEX", resolved_key), None)
             return
         inline = [
             item
@@ -837,9 +865,8 @@ class DDLStateFolder:
             constraints.append(exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=default_expr.copy())))
         elif action.args.get("drop") and allow_null is None:
             constraints = [c for c in constraints if not isinstance(c.kind, exp.DefaultColumnConstraint)]
-        if allow_null is False and not any(
-            isinstance(c.kind, exp.NotNullColumnConstraint) and not c.kind.args.get("allow_null") for c in constraints
-        ):
+        if allow_null is False:
+            constraints = [c for c in constraints if not isinstance(c.kind, exp.NotNullColumnConstraint)]
             constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
         elif allow_null is True:
             constraints = [
@@ -877,11 +904,22 @@ class DDLStateFolder:
         for other, ref_table in referencing:
             self._mark_modified(other)
             ref_table.replace(new_table.copy())
-        for index_entry in self._indexes.values():
+        rebuilt_indexes: dict[str, _FoldedStatement] = {}
+        renamed_index_keys: dict[str, str] = {}
+        for index_key, index_entry in self._indexes.items():
             if index_entry.owner == old_key and isinstance(index_entry.expr.this, exp.Index):
                 self._mark_modified(index_entry)
                 index_entry.expr.this.set("table", new_table.copy())
                 index_entry.owner = new_key
+                base_name = index_key.rsplit(".", 1)[-1]
+                new_index_key = (
+                    self._index_catalog_key(base_name, new_key) if not base_name.startswith("<unnamed ") else base_name
+                )
+                rebuilt_indexes[new_index_key] = index_entry
+                renamed_index_keys[index_key] = new_index_key
+            else:
+                rebuilt_indexes[index_key] = index_entry
+        self._indexes = rebuilt_indexes
         rebuilt_comments: dict[tuple[str, str], _FoldedStatement] = {}
         for (comment_kind, comment_key), comment in self._comments.items():
             if comment_kind == "TABLE" and comment_key == old_key:
@@ -896,6 +934,8 @@ class DDLStateFolder:
                     new_db = new_table.args.get("db")
                     column.set("db", new_db.copy() if isinstance(new_db, exp.Expr) else None)
                 rebuilt_comments[comment_kind, f"{new_key}.{comment_key[len(old_key) + 1 :]}"] = comment
+            elif comment_kind == "INDEX" and comment_key in renamed_index_keys:
+                rebuilt_comments[comment_kind, renamed_index_keys[comment_key]] = comment
             else:
                 rebuilt_comments[comment_kind, comment_key] = comment
         self._comments = rebuilt_comments
@@ -910,7 +950,7 @@ class DDLStateFolder:
             elif kind == "VIEW":
                 self._drop_view(self._object_key(target), cascade=cascade)
             elif kind == "INDEX":
-                self._drop_index(self._name_key(target))
+                self._drop_index(self._object_key(target))
             elif kind == "SEQUENCE":
                 self._drop_sequence(self._object_key(target))
             elif kind == "SCHEMA":
@@ -957,11 +997,12 @@ class DDLStateFolder:
         self._forget_object(key)
 
     def _drop_index(self, key: str) -> None:
-        if key not in self._indexes:
+        resolved_key = self._resolve_index_key(key)
+        if resolved_key not in self._indexes:
             msg = f"DROP INDEX targets {key}, which is not created within the squash range"
             raise self._refusal(msg)
-        self._indexes.pop(key)
-        self._comments.pop(("INDEX", key), None)
+        self._indexes.pop(resolved_key)
+        self._comments.pop(("INDEX", resolved_key), None)
 
     def _drop_sequence(self, key: str) -> None:
         if key not in self._sequences:
@@ -1015,7 +1056,11 @@ class DDLStateFolder:
         if node is None:
             return False
         candidate = self._object_key(node)
-        return bool(candidate) and candidate.rsplit(".", 1)[-1] == key.rsplit(".", 1)[-1]
+        if not candidate:
+            return False
+        if "." in candidate and "." in key:
+            return candidate == key
+        return candidate.rsplit(".", 1)[-1] == key.rsplit(".", 1)[-1]
 
     def _drop_schema(self, key: str) -> None:
         if key not in self._schemas:
@@ -1084,9 +1129,10 @@ class DDLStateFolder:
                 raise self._refusal(msg)
             key = f"{table_key}.{column_key}"
         elif kind == "INDEX":
-            key = self._name_key(target)
+            raw_key = self._object_key(target)
+            key = self._resolve_index_key(raw_key)
             if key not in self._indexes:
-                msg = f"COMMENT ON INDEX targets {key}, which is not created within the squash range"
+                msg = f"COMMENT ON INDEX targets {raw_key}, which is not created within the squash range"
                 raise self._refusal(msg)
         else:
             key = self._object_key(target)
@@ -1499,6 +1545,34 @@ class DDLStateFolder:
     def _ident_key(self, ident: exp.Identifier) -> str:
         return self._dialect_impl.normalize_identifier(ident.copy()).name
 
+    def _index_catalog_key(self, base_name: str, table_key: str) -> str:
+        if (self._dialect or "") in _MYSQL_FAMILY | {"tsql", "mssql"}:
+            return f"{table_key}.{base_name}"
+        if "." in table_key:
+            schema_prefix = table_key.rsplit(".", 1)[0]
+            return f"{schema_prefix}.{base_name}"
+        return base_name
+
+    def _resolve_index_key(self, target_key: str, *, owner: str | None = None) -> str:
+        if owner is not None:
+            scoped_key = self._index_catalog_key(target_key.rsplit(".", 1)[-1], owner)
+            if scoped_key in self._indexes:
+                return scoped_key
+        if target_key in self._indexes:
+            return target_key
+        if "." not in target_key:
+            matches = [
+                key
+                for key, entry in self._indexes.items()
+                if key.rsplit(".", 1)[-1] == target_key and (owner is None or entry.owner == owner)
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                msg = f"index reference {target_key} is ambiguous across {', '.join(matches)}"
+                raise self._refusal(msg)
+        return target_key
+
     @staticmethod
     def _token_signature(tokens: list[Token]) -> tuple[set[TokenType], "Counter[str]"]:
         """Return keyword token types and words for non-masked statement tokens."""
@@ -1889,11 +1963,15 @@ class MigrationSquasher:
             logger.debug("Dry run mode - no changes will be made")
             return
 
+        all_source_files = {path for plan in plans for _, path in plan.source_migrations}
+        all_target_files = {plan.target_path for plan in plans}
         ready_plans: list[SquashPlan] = []
         for plan in plans:
             validate_extension_consistency(plan.source_migrations)
             source_files = [path for _, path in plan.source_migrations]
-            status = validate_squash_idempotency(source_files, plan.target_path)
+            status = validate_squash_idempotency(
+                source_files, plan.target_path, all_source_files=all_source_files, all_target_files=all_target_files
+            )
             if status == "already_squashed":
                 logger.debug("Squash target already applied: %s", plan.target_path)
                 continue
@@ -1901,6 +1979,10 @@ class MigrationSquasher:
                 msg = f"Squash plan for {plan.target_path.name} is partially applied"
                 raise SquashValidationError(msg)
             ready_plans.append(plan)
+
+        if ready_plans and len(ready_plans) != len(plans) and (all_source_files & all_target_files):
+            msg = "Multi-plan squash batch with overlapping target filenames is partially applied"
+            raise SquashValidationError(msg)
 
         if not ready_plans:
             return

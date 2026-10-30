@@ -1,3 +1,5 @@
+"""Sanic extension for SQLSpec database session and lifecycle management."""
+
 import logging
 from typing import TYPE_CHECKING, Any
 

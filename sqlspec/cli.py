@@ -1,4 +1,6 @@
 # ruff: noqa: C901
+"""Command-line interface for SQLSpec database migrations and extension management."""
+
 import inspect
 import sys
 from collections.abc import Callable, Sequence
@@ -13,6 +15,7 @@ from rich.table import Table
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.migrations import commands as migration_commands_module
 from sqlspec.migrations.squash import parse_version_range
 from sqlspec.utils.config_tools import discover_config_from_pyproject, resolve_config_sync
 from sqlspec.utils.logging import get_logger
@@ -371,10 +374,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         Raises:
             click.ClickException: When the command raises a SQLSpec error.
         """
-        from sqlspec.migrations.commands import create_migration_commands
-
-        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
-            config=config
+        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
+            migration_commands_module.create_migration_commands(config=config)
         )
         method = getattr(migration_commands, method_name)
 
@@ -403,10 +404,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         Raises:
             click.ClickException: When the command raises a SQLSpec error.
         """
-        from sqlspec.migrations.commands import create_migration_commands
-
-        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = create_migration_commands(
-            config=config
+        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
+            migration_commands_module.create_migration_commands(config=config)
         )
         try:
             return await getattr(migration_commands, method_name)(**kwargs)
@@ -822,8 +821,6 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         Sync configs are handled inline while async configs run via a single ``run_`` call so migrations stay in sync.
         """
-        from sqlspec.migrations.commands import create_migration_commands
-
         ctx = _ensure_click_context()
 
         console.rule("[yellow]Initializing database migrations.", align="left")
@@ -844,7 +841,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 str(migration_config_dict.get("script_location", "migrations")) if directory is None else directory
             )
             migration_commands: SyncMigrationCommands[Any] = cast(
-                "SyncMigrationCommands[Any]", create_migration_commands(config=cast("Any", config))
+                "SyncMigrationCommands[Any]",
+                migration_commands_module.create_migration_commands(config=cast("Any", config)),
             )
             migration_commands.init(directory=target_directory, package=package)
 
@@ -859,7 +857,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         else directory
                     )
                     migration_commands: AsyncMigrationCommands[Any] = cast(
-                        "AsyncMigrationCommands[Any]", create_migration_commands(config=cast("Any", config))
+                        "AsyncMigrationCommands[Any]",
+                        migration_commands_module.create_migration_commands(config=cast("Any", config)),
                     )
                     await migration_commands.init(directory=target_directory, package=package)
 

@@ -307,6 +307,8 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
         if not ddl_statements:
             return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
         ddl = _select_spanner_ddl_for_object(ddl_statements, object_name, object_type=object_type)
+        if ddl is None:
+            return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
         return DDLResult(
             identity=identity,
             status=MetadataSupport.SUPPORTED,
@@ -557,6 +559,8 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
         if not ddl_statements:
             return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
         ddl = _select_spanner_ddl_for_object(ddl_statements, object_name, object_type=object_type)
+        if ddl is None:
+            return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
         return DDLResult(
             identity=identity,
             status=MetadataSupport.SUPPORTED,
@@ -665,7 +669,7 @@ def _get_spanner_database_admin_api(database: Any) -> Any:
 
 def _select_spanner_ddl_for_object(
     statements: "tuple[str, ...]", object_name: str, *, object_type: str = "table"
-) -> str:
+) -> str | None:
     escaped_name = re.escape(object_name.strip('`"'))
     normalized_type = object_type.strip().replace("_", r"\s+")
     typed_pattern = re.compile(
@@ -676,12 +680,4 @@ def _select_spanner_ddl_for_object(
     for statement in statements:
         if typed_pattern.search(statement):
             return statement
-    any_object_pattern = re.compile(
-        rf"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:[A-Z_]+\s+)+?(?:IF\s+NOT\s+EXISTS\s+)?"
-        rf"(?:[`\"]?\w+[`\"]?\.)?[`\"]?{escaped_name}[`\"]?(?=\s|\(|;|$)",
-        re.IGNORECASE,
-    )
-    for statement in statements:
-        if any_object_pattern.search(statement):
-            return statement
-    return "\n".join(statements)
+    return None

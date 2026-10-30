@@ -42,7 +42,7 @@ from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_jso
 from sqlspec.data_dictionary.dialects.mysql import resolve_mysql_json_type
 from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components, resolve_oracle_json_type
 from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
-from sqlspec.data_dictionary.dialects.sqlite import resolve_sqlite_json_type
+from sqlspec.data_dictionary.dialects.sqlite import format_sqlite_schema_prefix, resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import OperationalError, SQLFileNotFoundError
 from sqlspec.utils.logging import get_logger
@@ -232,7 +232,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(query_text, schema_type=TableMetadata)
 
         if dialect == "sqlite":
-            schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+            schema_prefix = format_sqlite_schema_prefix(schema_name)
             query_text = self._get_query_text(dialect, "tables", "by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_name=schema_name, schema_type=TableMetadata)
 
@@ -267,11 +267,14 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(query_text, table_name=table_name, schema_name=schema_name, schema_type=ColumnMetadata)
 
         if dialect == "sqlite":
-            schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+            schema_prefix = format_sqlite_schema_prefix(schema_name)
             if table is None:
                 query_text = self._get_query_text(dialect, "columns", "by_schema").format(schema_prefix=schema_prefix)
                 return driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
-            query_text = self._get_query_text(dialect, "columns", "by_table").format(schema_prefix=schema_prefix)
+            query_text = self._get_query_text(dialect, "columns", "by_table").format(
+                schema_prefix=schema_prefix,
+                table_name=format_identifier(f"{schema_name}.{table}" if schema_name else table),
+            )
             return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
 
         if table is None:
@@ -309,11 +312,12 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 return indexes
 
             table_name = table
+            schema_prefix = format_sqlite_schema_prefix(schema_name)
             table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
             index_list_sql = self._get_query_text(dialect, "indexes", "by_table").format(
-                table_name=format_identifier(table_identifier)
+                schema_prefix=schema_prefix, table_name=format_identifier(table_identifier)
             )
-            index_list_rows = driver.select(index_list_sql)
+            index_list_rows = driver.select(index_list_sql, table_name=table_name, schema_name=schema_name)
             index_metadata_list: list[IndexMetadata] = []
             for row in index_list_rows:
                 index_name = row.get("name")
@@ -323,7 +327,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 columns_sql = self._get_query_text(dialect, "indexes", "columns_by_index").format(
                     index_name=format_identifier(index_identifier)
                 )
-                columns_rows = driver.select(columns_sql)
+                columns_rows = driver.select(columns_sql, index_name=index_name, schema_name=schema_name)
                 columns: list[str] = []
                 for col in columns_rows:
                     column_name = col.get("name")
@@ -390,17 +394,17 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
         if dialect == "sqlite":
             if table is None:
-                schema_prefix = f"{format_identifier(schema_name)}." if schema_name else ""
+                schema_prefix = format_sqlite_schema_prefix(schema_name)
                 query_text = self._get_query_text(dialect, "foreign_keys", "by_schema").format(
                     schema_prefix=schema_prefix
                 )
-                return driver.select(query_text, schema_type=ForeignKeyMetadata)
+                return driver.select(query_text, schema_name=schema_name, schema_type=ForeignKeyMetadata)
             table_label = table.replace("'", "''")
             table_identifier = f"{schema_name}.{table}" if schema_name else table
             query_text = self._get_query_text(dialect, "foreign_keys", "by_table").format(
                 table_name=format_identifier(table_identifier), table_label=table_label
             )
-            return driver.select(query_text, schema_type=ForeignKeyMetadata)
+            return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ForeignKeyMetadata)
 
         if table is None:
             query_text_optional = self._get_query_text_or_none(dialect, "foreign_keys", "by_schema")

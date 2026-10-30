@@ -33,6 +33,7 @@ def main() -> tuple[str, bool, str]:
         migration_dir = base_dir / "migrations"
         db_path = base_dir / "app.sqlite"
 
+        # --8<-- [start:example]
         config = SqliteConfig(
             connection_config={"database": str(db_path)},
             migration_config={"script_location": str(migration_dir), "echo": False},
@@ -54,6 +55,7 @@ def main() -> tuple[str, bool, str]:
             assert "display_name" in squashed_sql
 
             schema_sql = commands.dump_schema(migration_dir / "schema.sql", echo=False)
+            # --8<-- [end:example]
             assert "CREATE TABLE" in schema_sql
             return squashed_file.name, bool(report["valid"]), schema_sql
         finally:

@@ -17,6 +17,7 @@ WITH ddl_objects AS (
         ) AS has_foreign_keys
     FROM duckdb_tables() AS t
     WHERE NOT t.internal
+      AND t.database_name = current_database()
       AND t.sql IS NOT NULL
     UNION ALL
     SELECT
@@ -28,6 +29,7 @@ WITH ddl_objects AS (
         FALSE AS has_foreign_keys
     FROM duckdb_views()
     WHERE NOT internal
+      AND database_name = current_database()
       AND sql IS NOT NULL
     UNION ALL
     SELECT
@@ -38,7 +40,8 @@ WITH ddl_objects AS (
         sql,
         FALSE AS has_foreign_keys
     FROM duckdb_indexes()
-    WHERE sql IS NOT NULL
+    WHERE database_name = current_database()
+      AND sql IS NOT NULL
     UNION ALL
     SELECT
         schema_name,
@@ -56,6 +59,7 @@ WITH ddl_objects AS (
             || ';' AS sql,
         FALSE AS has_foreign_keys
     FROM duckdb_sequences()
+    WHERE database_name = current_database()
     UNION ALL
     SELECT
         schema_name,
@@ -80,6 +84,7 @@ WITH ddl_objects AS (
         FALSE AS has_foreign_keys
     FROM duckdb_types()
     WHERE NOT internal
+      AND database_name = current_database()
 )
 SELECT
     schema_name,
@@ -114,6 +119,7 @@ WITH ddl_objects AS (
         ) AS has_foreign_keys
     FROM duckdb_tables() AS t
     WHERE NOT t.internal
+      AND t.database_name = current_database()
       AND t.sql IS NOT NULL
     UNION ALL
     SELECT
@@ -125,6 +131,7 @@ WITH ddl_objects AS (
         FALSE AS has_foreign_keys
     FROM duckdb_views()
     WHERE NOT internal
+      AND database_name = current_database()
       AND sql IS NOT NULL
     UNION ALL
     SELECT
@@ -135,7 +142,8 @@ WITH ddl_objects AS (
         sql,
         FALSE AS has_foreign_keys
     FROM duckdb_indexes()
-    WHERE sql IS NOT NULL
+    WHERE database_name = current_database()
+      AND sql IS NOT NULL
     UNION ALL
     SELECT
         schema_name,
@@ -153,6 +161,7 @@ WITH ddl_objects AS (
             || ';' AS sql,
         FALSE AS has_foreign_keys
     FROM duckdb_sequences()
+    WHERE database_name = current_database()
     UNION ALL
     SELECT
         schema_name,
@@ -177,6 +186,7 @@ WITH ddl_objects AS (
         FALSE AS has_foreign_keys
     FROM duckdb_types()
     WHERE NOT internal
+      AND database_name = current_database()
 )
 SELECT
     schema_name,

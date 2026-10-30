@@ -21,6 +21,12 @@ from sqlspec.data_dictionary import (
     MetadataSource,
     MetadataSupport,
 )
+from sqlspec.data_dictionary.dialects.bigquery import (
+    format_bigquery_information_schema_tables,
+    format_bigquery_schema_prefix,
+)
+from sqlspec.data_dictionary.dialects.sqlite import format_sqlite_schema_prefix, normalize_sqlite_schema_name
+from sqlspec.exceptions import SQLSpecError
 
 NATIVE_SQLITE_SCHEMA = (
     "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)",
@@ -763,3 +769,60 @@ def test_sqlite_schema_ddl_round_trips_do_not_grow_with_table_count(table_count:
         config.close_pool()
 
     assert counts == {(True, "create"): 2, (True, "drop"): 2, (False, "create"): 7, (False, "drop"): 4}
+
+
+def test_sqlite_schema_prefix_validates_and_quotes_identifiers(tmp_path: Path) -> None:
+    """SQLite schema prefixes quote single database identifiers and reject SQL injection payloads."""
+    assert normalize_sqlite_schema_name(None) is None
+    assert normalize_sqlite_schema_name("main") == "main"
+    assert normalize_sqlite_schema_name('"attached_db"') == "attached_db"
+    assert normalize_sqlite_schema_name('"my""db"') == 'my"db'
+    assert format_sqlite_schema_prefix(None) == ""
+    assert format_sqlite_schema_prefix("main") == '"main".'
+    assert format_sqlite_schema_prefix('"attached_db"') == '"attached_db".'
+    assert format_sqlite_schema_prefix('"my""db"') == '"my""db".'
+
+    for invalid_schema in (
+        "",
+        "   ",
+        'my"db',
+        'aux"; DROP TABLE users; --',
+        '"aux" JOIN sqlite_schema --"',
+        "main.other",
+        "aux\x00bad",
+        "aux\nbad",
+        "aux --",
+        '""',
+        "''",
+    ):
+        with pytest.raises(SQLSpecError, match="Invalid SQLite schema identifier"):
+            format_sqlite_schema_prefix(invalid_schema)
+
+    attached_path = tmp_path / "attached.sqlite"
+    _sqlite_apply(attached_path, ["CREATE TABLE attached_items (id INTEGER PRIMARY KEY, label TEXT NOT NULL)"])
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.execute(f"ATTACH DATABASE '{attached_path}' AS attached_db")
+            ddl = session.data_dictionary.get_ddl(session, "attached_items", schema="attached_db")
+            assert ddl.ddl == "CREATE TABLE attached_items (id INTEGER PRIMARY KEY, label TEXT NOT NULL);"
+            with pytest.raises(SQLSpecError, match="Invalid SQLite schema identifier"):
+                session.data_dictionary.get_ddl(session, "attached_items", schema='attached_db"; DROP TABLE x; --')
+    finally:
+        config.close_pool()
+
+
+def test_bigquery_schema_prefix_rejects_malformed_qualifiers() -> None:
+    """BigQuery schema prefix helpers reject empty segments, quotes, and SQL syntax characters."""
+    assert format_bigquery_schema_prefix("proj.analytics") == "`proj.analytics`."
+    assert format_bigquery_information_schema_tables("`proj.analytics`") == (
+        "`proj.analytics.INFORMATION_SCHEMA.TABLES`",
+        "`proj.analytics.INFORMATION_SCHEMA.KEY_COLUMN_USAGE`",
+        "`proj.analytics.INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS`",
+    )
+
+    for invalid_schema in ("proj..analytics", "proj.analytics; DROP TABLE x", "proj.analytics`", "proj.\x00analytics"):
+        with pytest.raises(ValueError, match="Invalid BigQuery schema qualifier"):
+            format_bigquery_schema_prefix(invalid_schema)
+        with pytest.raises(ValueError, match="Invalid BigQuery schema qualifier"):
+            format_bigquery_information_schema_tables(invalid_schema)

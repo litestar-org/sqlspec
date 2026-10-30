@@ -303,7 +303,13 @@ def validate_extension_consistency(migrations: "list[tuple[str, Path]]") -> None
         raise SquashValidationError(msg)
 
 
-def validate_squash_idempotency(source_files: "list[Path]", target_file: "Path") -> str:
+def validate_squash_idempotency(
+    source_files: "list[Path]",
+    target_file: "Path",
+    *,
+    all_source_files: "set[Path] | None" = None,
+    all_target_files: "set[Path] | None" = None,
+) -> str:
     """Check if a squash operation has already been performed.
 
     Determines the current state of a squash operation based on file existence.
@@ -311,30 +317,33 @@ def validate_squash_idempotency(source_files: "list[Path]", target_file: "Path")
     Args:
         source_files: List of original migration file paths that would be squashed.
         target_file: Path where the squashed migration would be written.
+        all_source_files: Optional full set of source files across a multi-plan squash batch.
+        all_target_files: Optional full set of target files across a multi-plan squash batch.
 
     Returns:
         Status string: "ready" (can squash), "already_squashed" (already done),
             or "partial" (inconsistent state - target exists but some sources remain).
     """
+    source_set = all_source_files if all_source_files is not None else set(source_files)
+    target_set = all_target_files if all_target_files is not None else {target_file}
     target_exists = target_file.exists()
-    sources_exist = [f.exists() for f in source_files]
+    remaining_sources = [f for f in source_files if f not in target_set]
+    sources_exist = [f.exists() for f in remaining_sources]
     any_source_exists = any(sources_exist)
 
-    if not target_exists and any_source_exists:
+    if not target_exists and any(f.exists() for f in source_files):
         return "ready"
 
-    if target_file in source_files:
-        remaining_sources = [f for f in source_files if f != target_file]
+    if target_file in source_set:
         if not remaining_sources:
             if target_exists and "Squashed from:" in target_file.read_text(encoding="utf-8"):
                 return "already_squashed"
             return "ready"
-        remaining_exist = [f.exists() for f in remaining_sources]
-        if target_exists and all(remaining_exist):
+        if target_exists and all(sources_exist):
             return "ready"
-        if target_exists and not any(remaining_exist):
+        if target_exists and not any_source_exists:
             return "already_squashed"
-        if target_exists and any(remaining_exist):
+        if target_exists and any_source_exists:
             return "partial"
 
     if target_exists and not any_source_exists:
