@@ -193,53 +193,6 @@ def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | Non
     return fetched_data, column_names
 
 
-def _parse_memory_size_bytes(memory_limit: str) -> "int | None":
-    match = _MEMORY_LIMIT_RE.match(memory_limit)
-    if match is None:
-        return None
-    amount = float(match.group(1))
-    unit = match.group(2).upper()
-    multiplier = _MEMORY_UNIT_MULTIPLIERS.get(unit)
-    if multiplier is None:
-        return None
-    return int(amount * multiplier)
-
-
-def _detect_available_memory_bytes(
-    *,
-    cgroup_v2_path: "Path | None" = None,
-    cgroup_v1_path: "Path | None" = None,
-    host_memory_bytes: "int | None" = None,
-) -> "int | None":
-    v2_file = cgroup_v2_path if cgroup_v2_path is not None else Path("/sys/fs/cgroup/memory.max")
-    if v2_file.exists():
-        with contextlib.suppress(OSError, ValueError):
-            raw_v2 = v2_file.read_text(encoding="utf-8").strip()
-            if raw_v2 and raw_v2.lower() != "max":
-                parsed_v2 = int(raw_v2)
-                if 0 < parsed_v2 < _CGROUP_UNBOUNDED_THRESHOLD:
-                    return parsed_v2
-
-    v1_file = cgroup_v1_path if cgroup_v1_path is not None else Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
-    if v1_file.exists():
-        with contextlib.suppress(OSError, ValueError):
-            raw_v1 = v1_file.read_text(encoding="utf-8").strip()
-            if raw_v1:
-                parsed_v1 = int(raw_v1)
-                if 0 < parsed_v1 < _CGROUP_UNBOUNDED_THRESHOLD:
-                    return parsed_v1
-
-    if host_memory_bytes is not None and host_memory_bytes > 0:
-        return host_memory_bytes
-
-    with contextlib.suppress(ValueError, OSError, AttributeError):
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        phys_pages = os.sysconf("SC_PHYS_PAGES")
-        if isinstance(page_size, int) and isinstance(phys_pages, int) and page_size > 0 and phys_pages > 0:
-            return page_size * phys_pages
-    return None
-
-
 def resolve_duckdb_memory_limit(
     memory_limit: "str | None" = None,
     *,
@@ -658,6 +611,53 @@ def duckdb_version_tuple() -> "tuple[int, int, int]":
 def duckdb_copy_filename_follows_query() -> bool:
     """Return whether DuckDB COPY TO parameter binding follows query bindings."""
     return duckdb_version_tuple() >= (2, 0, 0)
+
+
+def _parse_memory_size_bytes(memory_limit: str) -> "int | None":
+    match = _MEMORY_LIMIT_RE.match(memory_limit)
+    if match is None:
+        return None
+    amount = float(match.group(1))
+    unit = match.group(2).upper()
+    multiplier = _MEMORY_UNIT_MULTIPLIERS.get(unit)
+    if multiplier is None:
+        return None
+    return int(amount * multiplier)
+
+
+def _detect_available_memory_bytes(
+    *,
+    cgroup_v2_path: "Path | None" = None,
+    cgroup_v1_path: "Path | None" = None,
+    host_memory_bytes: "int | None" = None,
+) -> "int | None":
+    v2_file = cgroup_v2_path if cgroup_v2_path is not None else Path("/sys/fs/cgroup/memory.max")
+    if v2_file.exists():
+        with contextlib.suppress(OSError, ValueError):
+            raw_v2 = v2_file.read_text(encoding="utf-8").strip()
+            if raw_v2 and raw_v2.lower() != "max":
+                parsed_v2 = int(raw_v2)
+                if 0 < parsed_v2 < _CGROUP_UNBOUNDED_THRESHOLD:
+                    return parsed_v2
+
+    v1_file = cgroup_v1_path if cgroup_v1_path is not None else Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    if v1_file.exists():
+        with contextlib.suppress(OSError, ValueError):
+            raw_v1 = v1_file.read_text(encoding="utf-8").strip()
+            if raw_v1:
+                parsed_v1 = int(raw_v1)
+                if 0 < parsed_v1 < _CGROUP_UNBOUNDED_THRESHOLD:
+                    return parsed_v1
+
+    if host_memory_bytes is not None and host_memory_bytes > 0:
+        return host_memory_bytes
+
+    with contextlib.suppress(ValueError, OSError, AttributeError):
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        phys_pages = os.sysconf("SC_PHYS_PAGES")
+        if isinstance(page_size, int) and isinstance(phys_pages, int) and page_size > 0 and phys_pages > 0:
+            return page_size * phys_pages
+    return None
 
 
 def _build_storage_copy_sql(sql: str, file_format: str) -> str | None:

@@ -411,18 +411,6 @@ _statement_cache_holders: "OrderedDict[int, StatementCacheHolder]" = OrderedDict
 _holders_lock = threading.Lock()
 
 
-def _register_statement_cache_holder(holder: "StatementCacheHolder") -> None:
-    """Register a StatementCacheHolder in the bounded process-wide L1 cache registry."""
-    holder_id = id(holder)
-    with _holders_lock:
-        if holder_id in _statement_cache_holders:
-            _statement_cache_holders.move_to_end(holder_id)
-        else:
-            while len(_statement_cache_holders) >= _MAX_REGISTERED_HOLDERS:
-                _statement_cache_holders.popitem(last=False)
-        _statement_cache_holders[holder_id] = holder
-
-
 def get_default_cache() -> LRUCache:
     """Get the default LRU cache instance.
 
@@ -1138,36 +1126,6 @@ def reset_pipeline_registry() -> None:
     reset_statement_pipeline_cache()
 
 
-def _configure_pipeline_cache(config: "CacheConfig") -> None:
-    compiled_cache_enabled = config.compiled_cache_enabled and config.sql_cache_enabled
-    fragment_cache_enabled = config.compiled_cache_enabled and config.fragment_cache_enabled
-    cache_size = config.sql_cache_size if compiled_cache_enabled else 0
-    parse_cache_size = config.fragment_cache_size if fragment_cache_enabled else 0
-    configure_statement_pipeline_cache(
-        cache_size=cache_size, parse_cache_size=parse_cache_size, cache_enabled=compiled_cache_enabled
-    )
-
-
-def _canonicalize_cache_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
-    """Create canonical representation of filters for cache keys.
-
-    Args:
-        filters: List of filters to canonicalize
-
-    Returns:
-        Tuple of unique filters sorted by field_name, operation, then value
-    """
-    if not filters:
-        return ()
-
-    unique_filters = set(filters)
-    return tuple(sorted(unique_filters, key=_filter_sort_key))
-
-
-def _filter_sort_key(filter_obj: "Filter") -> "tuple[str, str, str]":
-    return filter_obj.field_name, filter_obj.operation, str(filter_obj.value)
-
-
 @final
 @mypyc_attr(allow_interpreted_subclasses=False)
 class CachedQuery:
@@ -1400,3 +1358,45 @@ def resolve_statement_cache_size(driver_features: "Mapping[str, object] | None")
         except ValueError:
             return STMT_CACHE_MAX_SIZE
     return STMT_CACHE_MAX_SIZE
+
+
+def _register_statement_cache_holder(holder: "StatementCacheHolder") -> None:
+    """Register a StatementCacheHolder in the bounded process-wide L1 cache registry."""
+    holder_id = id(holder)
+    with _holders_lock:
+        if holder_id in _statement_cache_holders:
+            _statement_cache_holders.move_to_end(holder_id)
+        else:
+            while len(_statement_cache_holders) >= _MAX_REGISTERED_HOLDERS:
+                _statement_cache_holders.popitem(last=False)
+        _statement_cache_holders[holder_id] = holder
+
+
+def _configure_pipeline_cache(config: "CacheConfig") -> None:
+    compiled_cache_enabled = config.compiled_cache_enabled and config.sql_cache_enabled
+    fragment_cache_enabled = config.compiled_cache_enabled and config.fragment_cache_enabled
+    cache_size = config.sql_cache_size if compiled_cache_enabled else 0
+    parse_cache_size = config.fragment_cache_size if fragment_cache_enabled else 0
+    configure_statement_pipeline_cache(
+        cache_size=cache_size, parse_cache_size=parse_cache_size, cache_enabled=compiled_cache_enabled
+    )
+
+
+def _canonicalize_cache_filters(filters: "list[Filter]") -> "tuple[Filter, ...]":
+    """Create canonical representation of filters for cache keys.
+
+    Args:
+        filters: List of filters to canonicalize
+
+    Returns:
+        Tuple of unique filters sorted by field_name, operation, then value
+    """
+    if not filters:
+        return ()
+
+    unique_filters = set(filters)
+    return tuple(sorted(unique_filters, key=_filter_sort_key))
+
+
+def _filter_sort_key(filter_obj: "Filter") -> "tuple[str, str, str]":
+    return filter_obj.field_name, filter_obj.operation, str(filter_obj.value)

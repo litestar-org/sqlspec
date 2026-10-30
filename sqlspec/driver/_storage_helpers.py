@@ -552,51 +552,6 @@ def build_create_index_sql(
     return sql_text
 
 
-def _extract_metadata_rows(result: Any) -> "list[dict[str, Any]]":
-    if result is None:
-        return []
-    data = getattr(result, "data", result)
-    if isinstance(data, list):
-        return [dict(item) if isinstance(item, Mapping) else {} for item in data]
-    if isinstance(data, Sequence):
-        return [dict(item) if isinstance(item, Mapping) else {} for item in data]
-    return []
-
-
-def _extract_ddl_text(result: Any) -> "str | None":
-    if isinstance(result, str) and result.strip():
-        return result.strip()
-    rows = _extract_metadata_rows(result)
-    for row in rows:
-        for key in ("ddl", "definition", "native_sql", "sql"):
-            val = row.get(key)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
-    return None
-
-
-def _safe_driver_in_transaction(driver: Any) -> bool:
-    checker = getattr(driver, "is_in_transaction", None)
-    if callable(checker):
-        with contextlib.suppress(Exception):
-            return bool(checker())
-    conn_checker = getattr(driver, "_connection_in_transaction", None)
-    if callable(conn_checker):
-        with contextlib.suppress(Exception):
-            return bool(conn_checker())
-    return False
-
-
-def _split_schema_and_table(table: str, explicit_schema: str | None) -> "tuple[str | None, str]":
-    clean = table.strip()
-    if explicit_schema is not None:
-        return explicit_schema, clean.rsplit(".", 1)[-1].strip('"`[]')
-    if "." in clean:
-        schema_part, table_part = clean.split(".", 1)
-        return schema_part.strip('"`[]'), table_part.strip('"`[]')
-    return None, clean.strip('"`[]')
-
-
 class SyncWithoutIndexesContext:
     """Synchronous context manager that drops secondary indexes before a bulk load and rebuilds them on exit."""
 
@@ -901,90 +856,6 @@ async def execute_staged_load_async(
         if drop_stage_table:
             with contextlib.suppress(Exception):
                 await driver.execute(build_drop_stage_table_sql(dialect, resolved_stage))
-
-
-def _record_checkpoint_sync(
-    driver: Any,
-    dialect: str,
-    checkpoint_table: str,
-    phase: str,
-    shard_uri: str,
-    rows_loaded: int,
-    bytes_processed: int,
-    duration_s: float,
-) -> None:
-    sql_text = build_checkpoint_insert_sql(dialect, checkpoint_table)
-    driver.execute(
-        sql_text,
-        {
-            "phase": phase,
-            "shard_uri": shard_uri,
-            "rows_loaded": int(rows_loaded),
-            "bytes_processed": int(bytes_processed),
-            "duration_s": float(duration_s),
-        },
-    )
-
-
-async def _record_checkpoint_async(
-    driver: Any,
-    dialect: str,
-    checkpoint_table: str,
-    phase: str,
-    shard_uri: str,
-    rows_loaded: int,
-    bytes_processed: int,
-    duration_s: float,
-) -> None:
-    sql_text = build_checkpoint_insert_sql(dialect, checkpoint_table)
-    await driver.execute(
-        sql_text,
-        {
-            "phase": phase,
-            "shard_uri": shard_uri,
-            "rows_loaded": int(rows_loaded),
-            "bytes_processed": int(bytes_processed),
-            "duration_s": float(duration_s),
-        },
-    )
-
-
-def _read_shard_bytes_and_decode(
-    shard_uri: str, file_format: "StorageFormat", storage_options: "dict[str, Any] | None", arrow_schema: Any
-) -> "tuple[str, Any, int, float]":
-    t0 = perf_counter()
-    pipeline = SyncStoragePipeline()
-    backend, path, _backend_name = pipeline._backend(shard_uri, storage_options)
-    payload = backend.read_bytes_sync(path)
-    table = decode_arrow_payload(payload, file_format, arrow_schema=arrow_schema)
-    return shard_uri, table, len(payload), perf_counter() - t0
-
-
-def _decode_shard_in_process_worker(
-    args: "tuple[str, StorageFormat, dict[str, Any] | None]",
-) -> "tuple[str, bytes, int, float]":
-    shard_uri, file_format, storage_options = args
-    t0 = perf_counter()
-    pipeline = SyncStoragePipeline()
-    backend, path, _backend_name = pipeline._backend(shard_uri, storage_options)
-    payload = backend.read_bytes_sync(path)
-    table = decode_arrow_payload(payload, file_format)
-    ipc_bytes = encode_arrow_payload(table, "arrow-ipc", compression=None)
-    return shard_uri, ipc_bytes, len(payload), perf_counter() - t0
-
-
-def _is_multi_shard_source(source: "StorageDestination | Sequence[StorageDestination]") -> tuple[bool, str, bool]:
-    """Return ``(is_source_sequence, source_str, has_glob_or_prefix)`` for a storage destination."""
-    if isinstance(source, Sequence) and not isinstance(source, (str, bytes, bytearray)):
-        return True, "", True
-    source_str = source.as_posix() if isinstance(source, Path) else str(source)
-    if any(ch in source_str for ch in ("*", "?", "[")) or source_str.endswith("/"):
-        return False, source_str, True
-    if "://" not in source_str:
-        with contextlib.suppress(Exception):
-            if Path(source_str).expanduser().is_dir():
-                return False, source_str, True
-    return False, source_str, False
 
 
 def execute_load_from_storage_sync(
@@ -1371,3 +1242,132 @@ async def execute_load_from_storage_async(
     telemetry_payload["destination"] = table
     attach_partition_telemetry(telemetry_payload, partitioner)
     return create_storage_job(telemetry_payload)
+
+
+def _extract_metadata_rows(result: Any) -> "list[dict[str, Any]]":
+    if result is None:
+        return []
+    data = getattr(result, "data", result)
+    if isinstance(data, list):
+        return [dict(item) if isinstance(item, Mapping) else {} for item in data]
+    if isinstance(data, Sequence):
+        return [dict(item) if isinstance(item, Mapping) else {} for item in data]
+    return []
+
+
+def _extract_ddl_text(result: Any) -> "str | None":
+    if isinstance(result, str) and result.strip():
+        return result.strip()
+    rows = _extract_metadata_rows(result)
+    for row in rows:
+        for key in ("ddl", "definition", "native_sql", "sql"):
+            val = row.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return None
+
+
+def _safe_driver_in_transaction(driver: Any) -> bool:
+    checker = getattr(driver, "is_in_transaction", None)
+    if callable(checker):
+        with contextlib.suppress(Exception):
+            return bool(checker())
+    conn_checker = getattr(driver, "_connection_in_transaction", None)
+    if callable(conn_checker):
+        with contextlib.suppress(Exception):
+            return bool(conn_checker())
+    return False
+
+
+def _split_schema_and_table(table: str, explicit_schema: str | None) -> "tuple[str | None, str]":
+    clean = table.strip()
+    if explicit_schema is not None:
+        return explicit_schema, clean.rsplit(".", 1)[-1].strip('"`[]')
+    if "." in clean:
+        schema_part, table_part = clean.split(".", 1)
+        return schema_part.strip('"`[]'), table_part.strip('"`[]')
+    return None, clean.strip('"`[]')
+
+
+def _record_checkpoint_sync(
+    driver: Any,
+    dialect: str,
+    checkpoint_table: str,
+    phase: str,
+    shard_uri: str,
+    rows_loaded: int,
+    bytes_processed: int,
+    duration_s: float,
+) -> None:
+    sql_text = build_checkpoint_insert_sql(dialect, checkpoint_table)
+    driver.execute(
+        sql_text,
+        {
+            "phase": phase,
+            "shard_uri": shard_uri,
+            "rows_loaded": int(rows_loaded),
+            "bytes_processed": int(bytes_processed),
+            "duration_s": float(duration_s),
+        },
+    )
+
+
+async def _record_checkpoint_async(
+    driver: Any,
+    dialect: str,
+    checkpoint_table: str,
+    phase: str,
+    shard_uri: str,
+    rows_loaded: int,
+    bytes_processed: int,
+    duration_s: float,
+) -> None:
+    sql_text = build_checkpoint_insert_sql(dialect, checkpoint_table)
+    await driver.execute(
+        sql_text,
+        {
+            "phase": phase,
+            "shard_uri": shard_uri,
+            "rows_loaded": int(rows_loaded),
+            "bytes_processed": int(bytes_processed),
+            "duration_s": float(duration_s),
+        },
+    )
+
+
+def _read_shard_bytes_and_decode(
+    shard_uri: str, file_format: "StorageFormat", storage_options: "dict[str, Any] | None", arrow_schema: Any
+) -> "tuple[str, Any, int, float]":
+    t0 = perf_counter()
+    pipeline = SyncStoragePipeline()
+    backend, path, _backend_name = pipeline._backend(shard_uri, storage_options)
+    payload = backend.read_bytes_sync(path)
+    table = decode_arrow_payload(payload, file_format, arrow_schema=arrow_schema)
+    return shard_uri, table, len(payload), perf_counter() - t0
+
+
+def _decode_shard_in_process_worker(
+    args: "tuple[str, StorageFormat, dict[str, Any] | None]",
+) -> "tuple[str, bytes, int, float]":
+    shard_uri, file_format, storage_options = args
+    t0 = perf_counter()
+    pipeline = SyncStoragePipeline()
+    backend, path, _backend_name = pipeline._backend(shard_uri, storage_options)
+    payload = backend.read_bytes_sync(path)
+    table = decode_arrow_payload(payload, file_format)
+    ipc_bytes = encode_arrow_payload(table, "arrow-ipc", compression=None)
+    return shard_uri, ipc_bytes, len(payload), perf_counter() - t0
+
+
+def _is_multi_shard_source(source: "StorageDestination | Sequence[StorageDestination]") -> tuple[bool, str, bool]:
+    """Return ``(is_source_sequence, source_str, has_glob_or_prefix)`` for a storage destination."""
+    if isinstance(source, Sequence) and not isinstance(source, (str, bytes, bytearray)):
+        return True, "", True
+    source_str = source.as_posix() if isinstance(source, Path) else str(source)
+    if any(ch in source_str for ch in ("*", "?", "[")) or source_str.endswith("/"):
+        return False, source_str, True
+    if "://" not in source_str:
+        with contextlib.suppress(Exception):
+            if Path(source_str).expanduser().is_dir():
+                return False, source_str, True
+    return False, source_str, False
