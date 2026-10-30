@@ -36,6 +36,7 @@ def test_render_cli_reference_renders_all_commands_arguments_and_options_cleanly
     expected_commands = (
         "#### `sqlspec show-config`",
         "#### `sqlspec show-current-revision`",
+        "#### `sqlspec verify`",
         "#### `sqlspec init`",
         "#### `sqlspec create-migration`",
         "#### `sqlspec upgrade`",
@@ -43,11 +44,16 @@ def test_render_cli_reference_renders_all_commands_arguments_and_options_cleanly
         "#### `sqlspec stamp`",
         "#### `sqlspec squash`",
         "#### `sqlspec fix`",
+        "#### `sqlspec dump-schema`",
         "#### `sqlspec adk memory cleanup`",
         "#### `sqlspec adk memory verify`",
     )
     for heading in expected_commands:
         assert heading in markdown
+
+    adk_section_pos = markdown.index("## ADK Extension Commands")
+    assert markdown.index("#### `sqlspec verify`") < adk_section_pos
+    assert markdown.index("#### `sqlspec dump-schema`") < adk_section_pos
 
     assert "| `revision` |" in markdown
     assert "| `directory` |" in markdown

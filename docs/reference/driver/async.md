@@ -37,6 +37,8 @@ Base asynchronous driver adapter class inherited by all asynchronous SQLSpec dat
 
 ## Asynchronous Data Dictionary & Streaming
 
+See [Data Dictionary](../data-dictionary.md) for catalog introspection, DDL extraction, and column profiling method signatures.
+
 ::: sqlspec.driver._async.AsyncDataDictionaryBase
     options:
       heading_level: 3

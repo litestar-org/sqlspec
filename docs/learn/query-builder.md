@@ -1,6 +1,6 @@
 # Query Builder
 
-When queries depend on conditional joins, dynamic column lists, or cross-dialect upsert syntax, SQLSpec's fluent `sql` builder constructs parameterized SQLGlot AST statements that compile cleanly to your active adapter's SQL dialect.
+When queries depend on conditional joins, dynamic column lists, cross-dialect upsert syntax, or portable DDL generation, SQLSpec's fluent `sql` builder constructs SQLGlot AST statements that compile cleanly to your active adapter's SQL dialect.
 
 ## Building `SELECT`, `INSERT`, and `UPDATE` Queries
 
@@ -87,6 +87,42 @@ Use `.on_conflict(...).do_nothing()` or `.on_conflict(...).do_update(...)` for c
 --8<-- "docs/examples/builder/upsert.py:example"
 ```
 
+## DDL Builders and Schema Inference
+
+Construct portable `CREATE TABLE` (including generated/computed columns), covering `CREATE INDEX ... INCLUDE (...)`, and `CREATE SEQUENCE` statements—or synthesize `CreateTable` builders directly from catalog metadata, PyArrow schemas, or Python record sequences:
+
+```python
+from sqlspec import sql
+from sqlspec.builder import CreateTable
+
+users_ddl = (
+    sql
+    .create_table("users", dialect="postgres")
+    .column("id", "BIGINT", primary_key=True, identity="ALWAYS")
+    .column("email", "TEXT", not_null=True)
+    .column("email_lower", "TEXT", generated_expression="LOWER(email)", persisted=True)
+    .to_sql()
+)
+
+covering_idx = (
+    sql
+    .create_index("idx_users_email", dialect="postgres")
+    .on_table("users")
+    .columns("email_lower")
+    .include("id")
+    .unique()
+    .to_sql()
+)
+
+seq_ddl = sql.create_sequence("order_num_seq", dialect="postgres", start_with=1000, increment_by=1).to_sql()
+
+events_ddl = CreateTable.from_records(
+    "events", [{"id": 1, "event_type": "signup", "active": True}], primary_key="id", dialect="postgres"
+).to_sql()
+```
+
+`CreateTable.from_metadata`, `CreateTable.from_arrow_schema`, and `CreateTable.from_records` map types and constraints into dialect-valid SQL across PostgreSQL, SQLite, DuckDB, MySQL, Oracle, SQL Server, Db2, Spanner, and BigQuery.
+
 ## Raw SQL Fragments and `RETURNING`
 
 Embed dialect-specific aggregate or window expressions inside builder projections with `sql.raw(...)`, and chain `.returning(...)` on `INSERT`, `UPDATE`, or `DELETE` builders to fetch mutated columns in a single round-trip:
@@ -106,5 +142,5 @@ Only pass trusted, static SQL expressions to `sql.raw(...)`; bind user-supplied 
 ## Recap
 
 - Reach for `sql.select`, `sql.insert`, `sql.update`, `sql.delete`, and `sql.merge` when predicates, projections, or conflict clauses vary dynamically at runtime.
-- Use `.where_in(...)` and `.where_is_null(...)` for safe collection and null checks without manual placeholder counting.
+- Use `sql.create_table`, `sql.create_index`, `sql.create_sequence`, and `CreateTable.from_*` for dialect-portable schema DDL and data-driven bootstrapping.
 - Combine `sql.raw(...)` with `.returning(...)` when mixing custom SQL expressions into structured DML builders.

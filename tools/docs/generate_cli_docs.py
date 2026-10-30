@@ -17,8 +17,16 @@ _RICH_TAG_PATTERN = re.compile(
     r"\[/?(?:dim|bold|italic|underline|cyan|green|yellow|red|blue|magenta|white)(?:\s+[a-z]+)?\]"
 )
 _ENV_HINT_PATTERN = re.compile(r"\(env:\s*([A-Z0-9_]+)\)")
-_INSPECTION_COMMANDS: tuple[str, ...] = ("show-config", "show-current-revision", "init")
-_MIGRATION_COMMANDS: tuple[str, ...] = ("create-migration", "upgrade", "downgrade", "stamp", "squash", "fix")
+_INSPECTION_COMMANDS: tuple[str, ...] = ("show-config", "show-current-revision", "verify", "init")
+_MIGRATION_COMMANDS: tuple[str, ...] = (
+    "create-migration",
+    "upgrade",
+    "downgrade",
+    "stamp",
+    "squash",
+    "fix",
+    "dump-schema",
+)
 
 
 def render_cli_reference(group: click.Group | None = None) -> str:

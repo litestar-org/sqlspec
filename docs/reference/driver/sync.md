@@ -37,6 +37,8 @@ Base synchronous driver adapter class inherited by all synchronous SQLSpec datab
 
 ## Synchronous Data Dictionary & Streaming
 
+See [Data Dictionary](../data-dictionary.md) for catalog introspection, DDL extraction, and column profiling method signatures.
+
 ::: sqlspec.driver._sync.SyncDataDictionaryBase
     options:
       heading_level: 3

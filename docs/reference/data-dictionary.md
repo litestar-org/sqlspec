@@ -3,6 +3,7 @@
 ```python
 from sqlspec.data_dictionary import (
     ColumnMetadata,
+    ColumnProfileMetadata,
     DataDictionaryLoader,
     DDLResult,
     DependencySortResult,
@@ -13,6 +14,8 @@ from sqlspec.data_dictionary import (
     MetadataResult,
     TableMetadata,
     VersionInfo,
+    dependency_edges_from_foreign_keys,
+    dependency_edges_from_metadata,
     get_data_dictionary_loader,
     get_dialect_config,
     list_registered_dialects,
@@ -21,7 +24,23 @@ from sqlspec.data_dictionary import (
 )
 ```
 
-Cross-database catalog introspection metadata, capability profiles, dialect registry, and foreign-key topological sorting. Access runtime introspection through `driver.data_dictionary` on any [`SyncDriverAdapterBase`](driver/sync.md) or [`AsyncDriverAdapterBase`](driver/async.md) session.
+Cross-database catalog introspection metadata, DDL extraction, column profiling, capability profiles, dialect registry, and foreign-key topological sorting. Access runtime introspection through `driver.data_dictionary` on any [`SyncDriverAdapterBase`](driver/sync.md) or [`AsyncDriverAdapterBase`](driver/async.md) session.
+
+## Runtime Introspection & DDL Synthesis
+
+::: sqlspec.driver._sync.SyncDataDictionaryBase
+    options:
+      heading_level: 3
+      members:
+        - get_ddl
+        - get_schema_ddl
+        - get_table_profile
+        - infer_table_ddl_from_data
+
+::: sqlspec.driver._async.AsyncDataDictionaryBase
+    options:
+      heading_level: 4
+      members: false
 
 ## Loader & Dialect Registry
 
@@ -66,6 +85,11 @@ Cross-database catalog introspection metadata, capability profiles, dialect regi
       members: false
 
 ::: sqlspec.data_dictionary._types.ColumnMetadata
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.data_dictionary._types.ColumnProfileMetadata
     options:
       heading_level: 4
       members: false
@@ -145,6 +169,10 @@ Cross-database catalog introspection metadata, capability profiles, dialect regi
       members: false
 
 ::: sqlspec.data_dictionary._dependencies.dependency_edges_from_foreign_keys
+    options:
+      heading_level: 4
+
+::: sqlspec.data_dictionary._dependencies.dependency_edges_from_metadata
     options:
       heading_level: 4
 
