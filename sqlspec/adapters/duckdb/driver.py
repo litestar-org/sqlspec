@@ -22,6 +22,7 @@ from sqlspec.adapters.duckdb.core import (
     default_statement_config,
     description_has_arrow_divergent_types,
     driver_profile,
+    duckdb_copy_filename_follows_query,
     format_identifier,
     normalize_execute_parameters,
     read_duckdb_profile_json,
@@ -483,9 +484,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 sql, driver_params = self._compiled_sql(prepared, config)
                 copy_sql = _build_storage_copy_sql(sql, format_choice)
                 if copy_sql is not None:
+                    driver_params_seq = cast("Sequence[Any]", driver_params or ())
+                    if duckdb_copy_filename_follows_query():
+                        storage_params = [*driver_params_seq, target.uri]
+                    else:
+                        storage_params = [target.uri, *driver_params_seq]
                     return self._native_storage_job(
                         copy_sql,
-                        [*cast("Sequence[Any]", driver_params or ()), target.uri],
+                        storage_params,
                         destination=str(destination),
                         format_choice=format_choice,
                         operation="write",
@@ -655,6 +661,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             (hint is not None and hint < ARROW_MIN_ROWS)
             or description_has_arrow_divergent_types(description)
             or not hasattr(cursor, "to_arrow_table")
+            or bool(self.driver_features.get("enable_statement_profiling", False))
         ):
             fetched_data = cursor.fetchall()
             data, column_names = collect_rows(fetched_data, description)

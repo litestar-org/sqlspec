@@ -5,7 +5,11 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from sqlspec.adapters.duckdb.core import _build_storage_copy_sql, _build_storage_read_sql
+from sqlspec.adapters.duckdb.core import (
+    _build_storage_copy_sql,
+    _build_storage_read_sql,
+    duckdb_copy_filename_follows_query,
+)
 
 
 @pytest.mark.parametrize("file_format", ["parquet", "csv"])
@@ -13,8 +17,9 @@ def test_copy_filename_binds_query_and_destination_parameters(tmp_path: Path, fi
     path = str(tmp_path / f"quote'and?question.{file_format}")
     sql = _build_storage_copy_sql("SELECT ? AS first, ? AS second, ? AS repeated, '?' AS literal", file_format)
     assert sql is not None
+    params = ["first", 42, "first", path] if duckdb_copy_filename_follows_query() else [path, "first", 42, "first"]
     with duckdb.connect() as connection:
-        assert connection.execute(sql, ["first", 42, "first", path]).fetchone() == (1,)
+        assert connection.execute(sql, params).fetchone() == (1,)
         read_sql = "SELECT * FROM read_parquet(?)" if file_format == "parquet" else "SELECT * FROM read_csv(?)"
         assert connection.execute(read_sql, [path]).fetchall() == [("first", 42, "first", "?")]
 

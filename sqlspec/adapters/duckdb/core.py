@@ -68,6 +68,8 @@ __all__ = (
     "default_statement_config",
     "description_has_arrow_divergent_types",
     "driver_profile",
+    "duckdb_copy_filename_follows_query",
+    "duckdb_version_tuple",
     "format_identifier",
     "normalize_execute_parameters",
     "read_duckdb_profile_json",
@@ -75,6 +77,7 @@ __all__ = (
 )
 
 ARROW_MIN_ROWS: Final[int] = 64
+_VERSION_COMPONENTS: Final[int] = 3
 
 _FIXED_ARRAY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\[\d+\]")
 _ARROW_SAFE_SCALAR_TYPES: Final[frozenset[str]] = frozenset({
@@ -341,11 +344,19 @@ def read_duckdb_profile_json(
     if not isinstance(parsed, dict):
         return None
     query_name = parsed.get("query_name")
+    if query_name is None and isinstance(parsed.get("query"), dict):
+        query_name = parsed["query"].get("sql")
     if isinstance(query_name, str) and executed_sql:
         normalized_query = query_name.strip().rstrip(";").strip()
         normalized_sql = executed_sql.strip().rstrip(";").strip()
         if normalized_sql and normalized_query != normalized_sql:
             return None
+    if "cpu_time" not in parsed and isinstance(parsed.get("query"), dict) and "cpu_time" in parsed["query"]:
+        parsed["cpu_time"] = parsed["query"]["cpu_time"]
+    if "children" not in parsed and isinstance(parsed.get("operator"), list) and parsed["operator"]:
+        root_op = parsed["operator"][0]
+        if isinstance(root_op, dict) and "children" in root_op:
+            parsed["children"] = root_op["children"]
     return cast("dict[str, Any]", parsed)
 
 
@@ -432,6 +443,25 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     return build_statement_config_from_profile(
         profile, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
     )
+
+
+def duckdb_version_tuple() -> "tuple[int, int, int]":
+    """Return the installed DuckDB version as a 3-tuple of integers."""
+    try:
+        import duckdb
+
+        raw = getattr(duckdb, "__version__", "")
+        parts = [int(part) for part in raw.split(".") if part.isdigit()]
+        while len(parts) < _VERSION_COMPONENTS:
+            parts.append(0)
+        return parts[0], parts[1], parts[2]
+    except Exception:
+        return (0, 0, 0)
+
+
+def duckdb_copy_filename_follows_query() -> bool:
+    """Return whether DuckDB COPY TO parameter binding follows query bindings."""
+    return duckdb_version_tuple() >= (2, 0, 0)
 
 
 def _build_storage_copy_sql(sql: str, file_format: str) -> str | None:
