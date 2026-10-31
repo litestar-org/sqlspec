@@ -5,7 +5,15 @@ import sqlite3
 import pytest
 
 from sqlspec.adapters.sqlite.core import create_mapped_exception
-from sqlspec.exceptions import DeadlockError, OperationCancelledError, PermissionDeniedError, UniqueViolationError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DeadlockError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationCancelledError,
+    PermissionDeniedError,
+    UniqueViolationError,
+)
 
 
 class _SqliteError(sqlite3.OperationalError):
@@ -88,3 +96,25 @@ def test_primary_key_identity_takes_precedence_over_message(table: str, code: in
     mapped = create_mapped_exception(error)
     assert isinstance(mapped, UniqueViolationError)
     assert mapped.__cause__ is error
+
+
+def test_not_null_error_code_maps_to_not_null_violation() -> None:
+    err = _SqliteIntegrityError("NOT NULL constraint failed: t.val", 1299, None)
+    result = create_mapped_exception(err)
+    assert isinstance(result, NotNullViolationError)
+    assert result.__cause__ is err
+
+
+def test_check_error_code_maps_to_check_violation() -> None:
+    err = _SqliteIntegrityError("CHECK constraint failed: val > 0", 275, None)
+    result = create_mapped_exception(err)
+    assert isinstance(result, CheckViolationError)
+    assert result.__cause__ is err
+
+
+def test_trigger_abort_does_not_map_to_not_null_violation() -> None:
+    err = _SqliteIntegrityError("trigger aborted", 1811, None)
+    result = create_mapped_exception(err)
+    assert not isinstance(result, NotNullViolationError)
+    assert isinstance(result, IntegrityError)
+    assert result.__cause__ is err
