@@ -34,7 +34,7 @@ class AdditiveSqliteADKMemoryStore(SqliteADKMemoryStore):
         return (
             super()
             ._memory_table_ddl()
-            .replace("inserted_at REAL NOT NULL\n", "inserted_at REAL NOT NULL,\n            schema_tag TEXT\n")
+            .replace("embedding BLOB\n", "embedding BLOB,\n            schema_tag TEXT\n")
         )
 
 
