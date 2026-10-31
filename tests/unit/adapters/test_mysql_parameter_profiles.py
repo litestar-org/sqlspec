@@ -81,3 +81,12 @@ async def test_cached_literal_placeholder_is_escaped(adapter: str, class_name: s
             result = await result
     assert result == "result"
     execute.assert_called_once()
+
+
+def test_escape_literal_percent_fast_path_returns_same_string_reference() -> None:
+    from sqlspec.adapters.aiomysql.core import default_statement_config, escape_literal_percent
+
+    sql = "SELECT id, name FROM users WHERE id = %s AND status = %s"
+    params = (1, "active")
+    escaped = escape_literal_percent(sql, params, default_statement_config.parameter_validator)
+    assert escaped is sql

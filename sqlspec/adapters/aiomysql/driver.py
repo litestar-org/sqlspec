@@ -376,10 +376,8 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             )
             if use_infile:
                 payload = encode_records_for_local_infile(records)
-                fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
+                tmp_name = await asyncio.to_thread(_write_local_infile_tempfile, payload)
                 try:
-                    with os.fdopen(fd, "wb") as tmp:
-                        tmp.write(payload)
                     load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
                     await self._run_with_exception_handler(
@@ -467,6 +465,14 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             True when the server reports an open transaction.
         """
         return bool(self.connection.get_transaction_status())
+
+
+def _write_local_infile_tempfile(payload: bytes) -> str:
+    """Write LOCAL INFILE payload to a temporary file."""
+    fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
+    with os.fdopen(fd, "wb") as tmp:
+        tmp.write(payload)
+    return tmp_name
 
 
 def _resolve_column_types(description: Any) -> "dict[str, str] | None":

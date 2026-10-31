@@ -320,3 +320,10 @@ def test_aiomysql_config_with_dsn_applies_to_connection_kwargs() -> None:
     assert kwargs["password"] == "pass1"
     assert kwargs["host"] == "dbhost"
     assert kwargs["db"] == "production"
+
+
+def test_aiomysql_session_factory_slots() -> None:
+    """_AiomysqlSessionFactory declares __slots__ for connection context tracking."""
+    from sqlspec.adapters.aiomysql.config import _AiomysqlSessionFactory
+
+    assert _AiomysqlSessionFactory.__slots__ == ("_contexts",)

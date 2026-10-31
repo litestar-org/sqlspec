@@ -262,14 +262,14 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars="`", allow_bracket_quotes=False)
-    formatted = ".".join(quote_backtick_identifier(part) for part in parts)
+    formatted = ".".join([quote_backtick_identifier(part) for part in parts])
     return formatted or quote_backtick_identifier(cleaned)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
     """Construct an INSERT statement with positional placeholders."""
-    column_clause = ", ".join(quote_backtick_identifier(column) for column in columns)
-    placeholders = ", ".join("%s" for _ in columns)
+    column_clause = ", ".join([quote_backtick_identifier(column) for column in columns])
+    placeholders = ", ".join(["%s" for _ in columns])
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
@@ -302,7 +302,11 @@ def can_use_local_infile_records(arrow_table: Any, records: "Sequence[Sequence[A
                 all_safe_types = False
         if all_safe_types:
             return True
-    return not any(isinstance(value, (bytes, bytearray, memoryview, timedelta)) for row in records for value in row)
+    for row in records:
+        for value in row:
+            if isinstance(value, (bytes, bytearray, memoryview, timedelta)):
+                return False
+    return True
 
 
 def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
@@ -355,7 +359,7 @@ def resolve_row_plan(
 
     column_names: list[str] = []
     if not json_type_codes:
-        column_names.extend(column[0] for column in description)
+        column_names.extend([column[0] for column in description])
         return column_names, None
 
     json_indexes: list[int] = []
@@ -520,8 +524,12 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     """Escape literal percent characters before driver-side interpolation."""
     if not parameters or "%" not in sql:
         return sql
+    if isinstance(parameters, Sized) and sql.count("%") == len(parameters):
+        return sql
     keep = {info.position for info in validator.extract_parameters(sql)}
-    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
+    if len(keep) == sql.count("%"):
+        return sql
+    return "".join(["%%" if char == "%" and index not in keep else char for index, char in enumerate(sql)])
 
 
 def build_load_data_statement(
@@ -531,10 +539,10 @@ def build_load_data_statement(
     table_sql = format_identifier(table)
     if escape_percent:
         table_sql = table_sql.replace("%", "%%")
-    column_list = ", ".join(
+    column_list = ", ".join([
         quote_backtick_identifier(column).replace("%", "%%") if escape_percent else quote_backtick_identifier(column)
         for column in columns
-    )
+    ])
     return (
         f"LOAD DATA LOCAL INFILE {placeholder} INTO TABLE {table_sql} "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
