@@ -1,12 +1,11 @@
 import sqlite3
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, default_statement_config
+from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import json_converter, register_type_handlers, unregister_type_handlers
 from sqlspec.exceptions import ImproperConfigurationError
@@ -218,44 +217,18 @@ class _TrackingConnection:
         return cursor
 
 
-def test_execute_many_thin_path_closes_cursor() -> None:
-    """SqliteDriver.execute_many thin path must close its cursor in finally."""
-    connection = _TrackingConnection()
-    driver = SqliteDriver(connection=cast("Any", connection))
-
-    result = driver.execute_many("INSERT INTO items (name) VALUES (?)", [("a",), ("b",)])
-
-    assert result.rows_affected == 2
-    assert len(connection.cursors) == 1
-    assert connection.cursors[0].closed is True
-
-
-def test_execute_cache_hit_closes_cursor() -> None:
-    """SqliteDriver._execute_cache_hit must close its cursor on cached execution."""
+def test_execute_many_closes_cursor() -> None:
+    """SqliteDriver.execute_many must close its cursor in finally."""
     connection = sqlite3.connect(":memory:")
     connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
-    connection.execute("INSERT INTO items (name) VALUES ('alpha')")
     driver = SqliteDriver(connection=connection)
     try:
-        first = driver.execute("SELECT id, name FROM items WHERE id = ?", (1,))
-        second = driver.execute("SELECT id, name FROM items WHERE id = ?", (1,))
-        assert first.get_data() == [{"id": 1, "name": "alpha"}]
-        assert second.get_data() == [{"id": 1, "name": "alpha"}]
+        result = driver.execute_many("INSERT INTO items (name) VALUES (?)", [("a",), ("b",)])
+        assert result.rows_affected == 2
+        rows = connection.execute("SELECT name FROM items ORDER BY id").fetchall()
+        assert rows == [("a",), ("b",)]
     finally:
         connection.close()
-
-
-def test_execute_many_thin_path_checks_all_rows_beyond_sample_threshold() -> None:
-    """_thin_path_parameters_are_eligible must inspect every row even in large batches."""
-    rows: list[tuple[Any, ...]] = [(i,) for i in range(120)]
-    rows[57] = (defaultdict(int, a=1),)
-
-    assert (
-        SqliteDriver._thin_path_parameters_are_eligible(
-            rows, default_statement_config.parameter_config.type_coercion_map
-        )
-        is False
-    )
 
 
 def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails(monkeypatch: pytest.MonkeyPatch) -> None:

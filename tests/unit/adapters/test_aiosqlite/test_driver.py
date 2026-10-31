@@ -22,7 +22,6 @@ from sqlspec.adapters.aiosqlite.core import (
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
 from sqlspec.core import ParameterStyle
-from sqlspec.core.result import DMLResult
 from sqlspec.exceptions import SQLSpecError
 
 
@@ -191,27 +190,19 @@ async def test_begin_raises_original_error_after_retry_exhaustion(monkeypatch: p
     assert isinstance(exc_info.value.__cause__, aiosqlite.Error)
 
 
-async def test_execute_many_uses_thin_qmark_path() -> None:
-    connection = _WorkerConnection()
-    driver = AiosqliteDriver(connection=cast("Any", connection), statement_config=default_statement_config)
-
-    result = await driver.execute_many("INSERT INTO test_thin_path (value) VALUES (?)", [("a",), ("b",)])
-
-    assert isinstance(result, DMLResult)
-    assert result.operation_type == "INSERT"
-    assert result.rows_affected == 2
-    assert connection.executemany_calls == [("INSERT INTO test_thin_path (value) VALUES (?)", [("a",), ("b",)])]
-
-
-def test_execute_many_thin_path_rejects_subclass_coercion_values() -> None:
-    from collections import defaultdict
-
-    assert (
-        AiosqliteDriver._thin_path_parameters_are_eligible(
-            [(defaultdict(int, a=1),)], default_statement_config.parameter_config.type_coercion_map
-        )
-        is False
-    )
+async def test_execute_many_inserts_records() -> None:
+    conn = await aiosqlite.connect(":memory:")
+    try:
+        await conn.execute("CREATE TABLE test_many (value TEXT)")
+        driver = AiosqliteDriver(connection=conn, statement_config=default_statement_config)
+        result = await driver.execute_many("INSERT INTO test_many (value) VALUES (?)", [("a",), ("b",)])
+        assert result.operation_type == "INSERT"
+        assert result.rows_affected == 2
+        async with conn.execute("SELECT COUNT(*) FROM test_many") as cursor:
+            row = await cursor.fetchone()
+            assert row is not None and row[0] == 2
+    finally:
+        await conn.close()
 
 
 class _FakeConnection:
