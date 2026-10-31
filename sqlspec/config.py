@@ -349,6 +349,18 @@ class FlaskConfig(TypedDict):
     Set to ``False`` to explicitly disable this behavior.
     """
 
+    enable_correlation_middleware: NotRequired[bool]
+    """Enable request correlation ID middleware. Default: False"""
+
+    correlation_header: NotRequired[str]
+    """HTTP header to read the request correlation ID from when middleware is enabled. Default: ``X-Request-ID``"""
+
+    correlation_headers: NotRequired[tuple[str, ...] | list[str]]
+    """Additional HTTP headers to read as correlation ID fallbacks."""
+
+    auto_trace_headers: NotRequired[bool]
+    """Read standard trace context headers as correlation ID fallbacks. Default: True."""
+
 
 class LitestarConfig(TypedDict):
     """Configuration options for Litestar SQLSpec plugin.
@@ -484,6 +496,18 @@ class StarletteConfig(TypedDict):
     """Framework name for SQLCommenter attributes. Default: 'starlette'.
     Set to 'fastapi' when using FastAPI.
     """
+
+    enable_correlation_middleware: NotRequired[bool]
+    """Enable request correlation ID middleware. Default: False"""
+
+    correlation_header: NotRequired[str]
+    """HTTP header to read the request correlation ID from when middleware is enabled. Default: ``X-Request-ID``"""
+
+    correlation_headers: NotRequired[tuple[str, ...] | list[str]]
+    """Additional HTTP headers to read as correlation ID fallbacks."""
+
+    auto_trace_headers: NotRequired[bool]
+    """Read standard trace context headers as correlation ID fallbacks. Default: True."""
 
 
 class FastAPIConfig(StarletteConfig):
