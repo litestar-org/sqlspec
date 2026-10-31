@@ -849,10 +849,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             target_directory = (
                 str(migration_config_dict.get("script_location", "migrations")) if directory is None else directory
             )
-            migration_commands: SyncMigrationCommands[Any] = cast(
-                "SyncMigrationCommands[Any]",
-                migration_commands_module.create_migration_commands(config=cast("Any", config)),
-            )
+            migration_commands = migration_commands_module.create_migration_commands(config=cast("Any", config))
             migration_commands.init(directory=target_directory, package=package)
 
         if async_configs:

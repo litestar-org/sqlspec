@@ -13,7 +13,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Generic, NamedTuple, NoReturn, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, NamedTuple, NoReturn, ParamSpec, TypeVar, cast, overload
 
 import sqlglot
 from rich.console import Console
@@ -3150,6 +3150,14 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             rich_message=f"[green]✓ Reverted in {execution_time}ms[/]",
         )
         return execution_time
+
+
+@overload
+def create_migration_commands(config: "SyncConfigT") -> "SyncMigrationCommands[SyncConfigT]": ...
+
+
+@overload
+def create_migration_commands(config: "AsyncConfigT") -> "AsyncMigrationCommands[AsyncConfigT]": ...
 
 
 def create_migration_commands(

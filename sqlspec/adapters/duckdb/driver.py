@@ -454,32 +454,47 @@ class DuckDBDriver(SyncDriverAdapterBase):
                         stream_cursor.close()
                 raise
         else:
-            with self.with_cursor(self.connection) as cursor, exc_handler:
-                sql, driver_params = self._compiled_sql(prepared_statement, config)
-                sql_method = getattr(cursor, "sql", None)
-                if callable(sql_method):
-                    relation = sql_method(sql, params=driver_params or None)
-                    arrow_table = (
-                        None
-                        if relation is None
-                        else (
-                            relation.to_arrow_table(batch_size) if batch_size is not None else relation.to_arrow_table()
-                        )
+            stream_cursor, close_cursor = self._acquire_stream_cursor()
+            try:
+                with exc_handler:
+                    sql, driver_params = self._compiled_sql(prepared_statement, config)
+                    sql_method = getattr(stream_cursor, "sql", None)
+                    if callable(sql_method):
+                        relation = sql_method(sql, params=driver_params or None)
+                        try:
+                            arrow_table = (
+                                None
+                                if relation is None
+                                else (
+                                    relation.to_arrow_table(batch_size)
+                                    if batch_size is not None
+                                    else relation.to_arrow_table()
+                                )
+                            )
+                        finally:
+                            if relation is not None:
+                                close_rel = getattr(relation, "close", None)
+                                if callable(close_rel):
+                                    with contextlib.suppress(Exception):
+                                        close_rel()
+                    else:
+                        stream_cursor.execute(sql, driver_params or ())
+                        arrow_table = stream_cursor.to_arrow_table()
+                    if arrow_table is None:
+                        msg = "DuckDB cursor did not produce an Arrow table"
+                        raise SQLSpecError(msg)
+                    arrow_result = build_arrow_result_from_table(
+                        prepared_statement,
+                        arrow_table,
+                        return_format=return_format,
+                        batch_size=batch_size,
+                        arrow_schema=arrow_schema,
                     )
-                else:
-                    cursor.execute(sql, driver_params or ())
-                    arrow_table = cursor.to_arrow_table()
-                if arrow_table is None:
-                    msg = "DuckDB cursor did not produce an Arrow table"
-                    raise SQLSpecError(msg)
-                arrow_result = build_arrow_result_from_table(
-                    prepared_statement,
-                    arrow_table,
-                    return_format=return_format,
-                    batch_size=batch_size,
-                    arrow_schema=arrow_schema,
-                )
-            self._check_pending_exception(exc_handler)
+                self._check_pending_exception(exc_handler)
+            finally:
+                if close_cursor:
+                    with contextlib.suppress(Exception):
+                        stream_cursor.close()
 
         if arrow_result is None:
             msg = "Unreachable"
@@ -735,20 +750,26 @@ class DuckDBDriver(SyncDriverAdapterBase):
             if relation is None:
                 self._cache_holder.set_row_count_hint(cache_key, 0)
                 return [], [], 0, "tuple"
-            description = relation.description
-            if description_has_arrow_divergent_types(description):
-                fetched_data = relation.fetchall()
-                data, column_names = collect_rows(fetched_data, description)
+            try:
+                description = relation.description
+                if description_has_arrow_divergent_types(description):
+                    fetched_data = relation.fetchall()
+                    data, column_names = collect_rows(fetched_data, description)
+                    row_count = len(data)
+                    self._cache_holder.set_row_count_hint(cache_key, row_count)
+                    return data, column_names, row_count, "tuple"
+                arrow_table = relation.to_arrow_table()
+                data = arrow_table.to_pylist()
+                _restore_uuid_columns(data, description)
+                column_names = list(arrow_table.column_names)
                 row_count = len(data)
                 self._cache_holder.set_row_count_hint(cache_key, row_count)
-                return data, column_names, row_count, "tuple"
-            arrow_table = relation.to_arrow_table()
-            data = arrow_table.to_pylist()
-            _restore_uuid_columns(data, description)
-            column_names = list(arrow_table.column_names)
-            row_count = len(data)
-            self._cache_holder.set_row_count_hint(cache_key, row_count)
-            return data, column_names, row_count, "dict"
+                return data, column_names, row_count, "dict"
+            finally:
+                close_method = getattr(relation, "close", None)
+                if callable(close_method):
+                    with contextlib.suppress(Exception):
+                        close_method()
 
         cursor.execute(wire_sql, normalize_execute_parameters(parameters))
         if callable(sql_method) or profiling_enabled or (hint is not None and hint < ARROW_MIN_ROWS):
