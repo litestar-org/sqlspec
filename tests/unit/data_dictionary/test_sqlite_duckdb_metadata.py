@@ -12,6 +12,7 @@ from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.data_dictionary import DataDictionaryLoader, DependencyMetadata, MetadataSupport
+from sqlspec.exceptions import SQLFileNotFoundError
 from tests.conftest import requires_interpreted
 
 pytestmark = requires_interpreted
@@ -396,3 +397,73 @@ def test_sqlite_constraints_include_rowid_alias_primary_key() -> None:
     types = {item["constraint_type"]: item["columns"] for item in constraint_items}
     assert types["PRIMARY KEY"] == ["id"]
     assert types["UNIQUE"] == ["code"]
+
+
+def test_sqlite_get_columns_and_indexes_with_none_schema() -> None:
+    """Introspection with schema=None should coalesce to main."""
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    driver = SqliteDriver(connection)
+    try:
+        driver.execute_script("""
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL
+            );
+            CREATE INDEX idx_users_name ON users(name);
+        """)
+
+        cols = driver.data_dictionary.get_columns(driver, table="users", schema=None)
+        assert len(cols) == 3
+        assert all(c["schema_name"] == "main" for c in cols)
+
+        indexes = driver.data_dictionary.get_indexes(driver, table="users", schema=None)
+        assert len(indexes) == 1
+        assert indexes[0]["schema_name"] == "main"
+        assert indexes[0]["index_name"] == "idx_users_name"
+    finally:
+        connection.close()
+
+
+def test_sqlite_data_dictionary_missing_query_raises_sql_file_not_found() -> None:
+    """Missing query in SQLite data dictionary raises SQLFileNotFoundError."""
+    dd = SqliteDataDictionary()
+    with pytest.raises(SQLFileNotFoundError, match="Missing SQLite data-dictionary query"):
+        dd._get_domain_query_text("nonexistent_domain", "nonexistent_query")
+
+
+def test_sqlite_generated_column_memoization(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify generated column expressions are parsed once per table."""
+    from sqlspec.adapters.sqlite import data_dictionary as dd_module
+
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    driver = SqliteDriver(connection)
+    try:
+        driver.execute_script("""
+            CREATE TABLE gen_test (
+                id INTEGER PRIMARY KEY,
+                a INT,
+                b INT,
+                c INT GENERATED ALWAYS AS (a + b) VIRTUAL,
+                d INT GENERATED ALWAYS AS (a * b) STORED
+            );
+        """)
+
+        call_count = 0
+        original_fn = dd_module.sqlite_generated_expressions
+
+        def counting_parser(sql: str | None) -> dict[str, str]:
+            nonlocal call_count
+            call_count += 1
+            return original_fn(sql)
+
+        monkeypatch.setattr(dd_module, "sqlite_generated_expressions", counting_parser)
+
+        cols = driver.data_dictionary.get_columns(driver, table="gen_test")
+        assert call_count == 1
+        gen_cols = {c["column_name"]: c["generation_expression"] for c in cols if c.get("is_generated")}
+        assert gen_cols == {"c": "a + b", "d": "a * b"}
+    finally:
+        connection.close()

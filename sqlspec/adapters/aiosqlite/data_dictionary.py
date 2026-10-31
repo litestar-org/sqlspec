@@ -27,6 +27,7 @@ from sqlspec.data_dictionary.dialects.sqlite.config import (
     sqlite_schema_ddl_results,
 )
 from sqlspec.driver import AsyncDataDictionaryBase
+from sqlspec.exceptions import SQLFileNotFoundError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
@@ -289,7 +290,7 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
         query_text = get_data_dictionary_loader().get_domain_query_text(type(self).dialect, domain, query_name)
         if query_text is None:
             msg = f"Missing SQLite data-dictionary query: {domain}/{query_name}"
-            raise RuntimeError(msg)
+            raise SQLFileNotFoundError(msg)
         return query_text
 
 

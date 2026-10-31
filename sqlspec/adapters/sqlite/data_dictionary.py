@@ -26,6 +26,7 @@ from sqlspec.data_dictionary.dialects.sqlite.config import (
     sqlite_schema_ddl_results,
 )
 from sqlspec.driver import SyncDataDictionaryBase
+from sqlspec.exceptions import SQLFileNotFoundError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.driver import SqliteDriver
@@ -138,10 +139,13 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
             rows = driver.select(query_text, table_name=table, schema_name=schema_name)
         if any(str(row.get("extra") or "").endswith("generated") for row in rows):
             table_sql = self._get_table_sql(driver, schema_name, table)
+            parsed_expressions: dict[str, dict[str, str]] = {}
             for row in rows:
                 if str(row.get("extra") or "").endswith("generated"):
-                    expressions = sqlite_generated_expressions(table_sql.get(str(row.get("table_name"))))
-                    expression = expressions.get(str(row.get("column_name")))
+                    table_name_str = str(row.get("table_name"))
+                    if table_name_str not in parsed_expressions:
+                        parsed_expressions[table_name_str] = sqlite_generated_expressions(table_sql.get(table_name_str))
+                    expression = parsed_expressions[table_name_str].get(str(row.get("column_name")))
                     if expression is not None:
                         row["generation_expression"] = expression
         return cast("list[ColumnMetadata]", rows)
@@ -270,7 +274,7 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
         query_text = get_data_dictionary_loader().get_domain_query_text(type(self).dialect, domain, query_name)
         if query_text is None:
             msg = f"Missing SQLite data-dictionary query: {domain}/{query_name}"
-            raise RuntimeError(msg)
+            raise SQLFileNotFoundError(msg)
         return query_text
 
 
