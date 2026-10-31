@@ -652,11 +652,13 @@ def _detect_available_memory_bytes(
     if host_memory_bytes is not None and host_memory_bytes > 0:
         return host_memory_bytes
 
-    with contextlib.suppress(ValueError, OSError, AttributeError):
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        phys_pages = os.sysconf("SC_PHYS_PAGES")
-        if isinstance(page_size, int) and isinstance(phys_pages, int) and page_size > 0 and phys_pages > 0:
-            return page_size * phys_pages
+    sysconf = getattr(os, "sysconf", None)
+    if sysconf is not None:
+        with contextlib.suppress(ValueError, OSError, AttributeError):
+            page_size = sysconf("SC_PAGE_SIZE")
+            phys_pages = sysconf("SC_PHYS_PAGES")
+            if isinstance(page_size, int) and isinstance(phys_pages, int) and page_size > 0 and phys_pages > 0:
+                return page_size * phys_pages
     return None
 
 
