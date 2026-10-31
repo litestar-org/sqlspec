@@ -77,7 +77,7 @@ def test_schema_strategy_rejects_unapplied_migrations_in_commands(tmp_path: Path
         connection_config={"database": str(tmp_path / "test.db")},
         migration_config={"script_location": str(migrations_dir)},
     )
-    commands = create_migration_commands(config)
+    commands: SyncMigrationCommands = create_migration_commands(config)
     assert isinstance(commands, SyncMigrationCommands)
 
     with pytest.raises(SquashValidationError, match="database has unapplied migrations"):
@@ -105,7 +105,7 @@ async def test_async_schema_strategy_rejects_unapplied_migrations(tmp_path: Path
         connection_config={"database": str(tmp_path / "async_test.db")},
         migration_config={"script_location": str(migrations_dir)},
     )
-    commands = create_migration_commands(config)
+    commands: AsyncMigrationCommands = create_migration_commands(config)
     assert isinstance(commands, AsyncMigrationCommands)
 
     try:
@@ -193,7 +193,7 @@ def test_squash_dry_run_extracts_and_prints_sql_without_modifying_files(tmp_path
         connection_config={"database": str(tmp_path / "test.db")},
         migration_config={"script_location": str(migrations_dir)},
     )
-    commands = create_migration_commands(config)
+    commands: SyncMigrationCommands = create_migration_commands(config)
     assert isinstance(commands, SyncMigrationCommands)
 
     with patch("sqlspec.migrations.commands.console.print") as mock_print:
@@ -219,7 +219,7 @@ def test_squash_dry_run_surfaces_ddl_validation_errors(tmp_path: Path) -> None:
         connection_config={"database": str(tmp_path / "test.db")},
         migration_config={"script_location": str(migrations_dir)},
     )
-    commands = create_migration_commands(config)
+    commands: SyncMigrationCommands = create_migration_commands(config)
     assert isinstance(commands, SyncMigrationCommands)
 
     with pytest.raises(SquashValidationError, match="not a table created within"):
@@ -244,7 +244,7 @@ def test_squash_prechecks_all_plans_before_writing_files(tmp_path: Path) -> None
         connection_config={"database": str(tmp_path / "test.db")},
         migration_config={"script_location": str(migrations_dir)},
     )
-    commands = create_migration_commands(config)
+    commands: SyncMigrationCommands = create_migration_commands(config)
     assert isinstance(commands, SyncMigrationCommands)
 
     with (

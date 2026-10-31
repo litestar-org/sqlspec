@@ -1,5 +1,6 @@
 """Unit tests for SQLSpec CLI squash, dump-schema, and create-migration options."""
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -70,7 +71,8 @@ def get_config():
             ["--config", "config.get_config", "create-migration", "-m", "seed_users", "--from-data", "staging_users"],
         )
         assert missing_target.exit_code != 0
-        assert "--target-table is required when --from-data specifies a source table name" in missing_target.output
+        cleaned_output = _strip_ansi(missing_target.output)
+        assert "--target-table is required when --from-data specifies a source table name" in cleaned_output
         mock_commands.revision.assert_not_called()
 
         with_target = runner.invoke(
@@ -138,7 +140,8 @@ def get_configs():
             cli_group, ["--config", "multi_config.get_configs", "dump-schema", "-o", str(tmp_path / "schema.sql")]
         )
         assert rejected.exit_code != 0
-        assert "Cannot use a single --output file" in rejected.output
+        cleaned_output = _strip_ansi(rejected.output)
+        assert "Cannot use a single --output file" in cleaned_output
         mock_commands.dump_schema.assert_not_called()
 
         succeeded = runner.invoke(cli_group, ["--config", "multi_config.get_configs", "dump-schema"])
@@ -146,5 +149,21 @@ def get_configs():
         assert succeeded.stdout == (
             "CREATE TABLE items (id INTEGER PRIMARY KEY);\nCREATE TABLE items (id INTEGER PRIMARY KEY);\n"
         )
-        assert "Dumping schema for configuration: primary" in succeeded.stderr
-        assert "Dumping schema for configuration: analytics" in succeeded.stderr
+        cleaned_stderr = _strip_ansi(succeeded.stderr)
+        assert "Dumping schema for configuration: primary" in cleaned_stderr
+        assert "Dumping schema for configuration: analytics" in cleaned_stderr
+
+
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from output text.
+
+    Args:
+        text: Input string with ANSI escape codes.
+
+    Returns:
+        String with ANSI escape codes removed.
+    """
+    return ANSI_ESCAPE_PATTERN.sub("", text)

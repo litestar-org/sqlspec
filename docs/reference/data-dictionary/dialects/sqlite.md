@@ -267,7 +267,10 @@ The `sqlite` dialect pack defines `23` named queries across `15` domain `.sql` f
         fk."from" AS column_name,
         fk."table" AS referenced_table_name,
         fk."to" AS referenced_column_name,
-        NULL AS constraint_name,
+        CASE
+            WHEN COUNT(*) OVER (PARTITION BY tl.name, fk.id) > 1 THEN tl.name || '_fk_' || fk.id
+            ELSE NULL
+        END AS constraint_name,
         fk.id AS id,
         fk.seq AS ordinal_position,
         fk.on_update,
@@ -289,7 +292,10 @@ The `sqlite` dialect pack defines `23` named queries across `15` domain `.sql` f
         fk."from" AS column_name,
         fk."table" AS referenced_table_name,
         fk."to" AS referenced_column_name,
-        NULL AS constraint_name,
+        CASE
+            WHEN COUNT(*) OVER (PARTITION BY fk.id) > 1 THEN :table_name || '_fk_' || fk.id
+            ELSE NULL
+        END AS constraint_name,
         fk.id AS id,
         fk.seq AS ordinal_position,
         fk.on_update,
