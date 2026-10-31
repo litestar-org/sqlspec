@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.asyncmy._typing import AsyncmyCursor, AsyncmyProgrammingError, AsyncmyRawCursor
-from sqlspec.adapters.asyncmy.core import resolve_rowcount
+from sqlspec.adapters.asyncmy.core import resolve_many_rowcount, resolve_rowcount
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -565,46 +565,52 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
 
-        async with self._config.provide_connection() as conn:
-            async with AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor:
-                for entry in entries:
-                    content_json = self._json_serializer(entry["content_json"])
-                    meta = entry.get("metadata_json")
-                    metadata_json = self._json_serializer(meta) if meta is not None else None
-                    params: tuple[Any, ...]
-                    if self._owner_id_column_name:
-                        params = (
-                            entry["id"],
-                            entry["session_id"],
-                            entry["app_name"],
-                            entry["user_id"],
-                            entry.get("scope", "user"),
-                            entry["event_id"],
-                            entry.get("author"),
-                            owner_id,
-                            entry["timestamp"],
-                            content_json,
-                            entry["content_text"],
-                            metadata_json,
-                            entry["inserted_at"],
-                        )
-                    else:
-                        params = (
-                            entry["id"],
-                            entry["session_id"],
-                            entry["app_name"],
-                            entry["user_id"],
-                            entry.get("scope", "user"),
-                            entry["event_id"],
-                            entry.get("author"),
-                            entry["timestamp"],
-                            content_json,
-                            entry["content_text"],
-                            metadata_json,
-                            entry["inserted_at"],
-                        )
-                    await cursor.execute(sql, params)
-                    inserted_count += resolve_rowcount(cursor)
+        params_list: list[tuple[Any, ...]] = []
+        for entry in entries:
+            content_json = self._json_serializer(entry["content_json"])
+            meta = entry.get("metadata_json")
+            metadata_json = self._json_serializer(meta) if meta is not None else None
+            if self._owner_id_column_name:
+                params_list.append((
+                    entry["id"],
+                    entry["session_id"],
+                    entry["app_name"],
+                    entry["user_id"],
+                    entry.get("scope", "user"),
+                    entry["event_id"],
+                    entry.get("author"),
+                    owner_id,
+                    entry["timestamp"],
+                    content_json,
+                    entry["content_text"],
+                    metadata_json,
+                    entry["inserted_at"],
+                ))
+            else:
+                params_list.append((
+                    entry["id"],
+                    entry["session_id"],
+                    entry["app_name"],
+                    entry["user_id"],
+                    entry.get("scope", "user"),
+                    entry["event_id"],
+                    entry.get("author"),
+                    entry["timestamp"],
+                    content_json,
+                    entry["content_text"],
+                    metadata_json,
+                    entry["inserted_at"],
+                ))
+
+        if not params_list:
+            return 0
+
+        async with (
+            self._config.provide_connection() as conn,
+            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+        ):
+            await cursor.executemany(sql, params_list)
+            inserted_count = resolve_many_rowcount(cursor, params_list, fallback_count=len(params_list))
             await conn.commit()
         return inserted_count
 
@@ -637,13 +643,14 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             """
             params = (*scope_params, query, limit_value)
         else:
+            escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             sql = f"""
             SELECT * FROM {self._memory_table}
-            WHERE {where_scope} AND content_text LIKE %s
+            WHERE {where_scope} AND content_text LIKE %s ESCAPE '\\\\'
             ORDER BY timestamp DESC
             LIMIT %s
             """
-            params = (*scope_params, f"%{query}%", limit_value)
+            params = (*scope_params, f"%{escaped_query}%", limit_value)
 
         try:
             async with (
@@ -750,7 +757,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             content_json JSON NOT NULL,
-            content_text TEXT NOT NULL,
+            content_text LONGTEXT NOT NULL,
             metadata_json JSON,
             inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             INDEX idx_{self._memory_table}_app_scope_user_time (app_name, scope, user_id, timestamp),
