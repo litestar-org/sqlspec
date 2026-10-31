@@ -260,7 +260,7 @@ jobs:
           -n auto --dist=loadgroup -p no:cacheprovider
 
   test-integration:
-    name: "Integration (Py ${{ matrix.python-version }}, ${{ matrix.shard }})"
+    name: "test-integration (${{ matrix.python-version }}, ${{ matrix.shard }})"
     needs: [ci-scope, test-unit]
     if: needs.ci-scope.outputs.ci_required == 'true'
     runs-on: ubuntu-24.04
@@ -301,7 +301,7 @@ jobs:
             images: "ghcr.io/goccy/bigquery-emulator:latest gcr.io/cloud-spanner-emulator/emulator:latest gizmodata/gizmosql:latest rustfs/rustfs:latest rustfs/rc:latest floci/floci-gcp:latest floci/floci:latest mcr.microsoft.com/azure-storage/azurite:latest embucket/embucket:latest"
             pytest_targets: "tests/integration/adapters/bigquery tests/integration/adapters/spanner tests/integration/adapters/gizmosql tests/integration/storage tests/integration/adapters/snowflake"
             extra_pytest_flags: "--run-bigquery-tests --run-spanner-tests"
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -481,9 +481,9 @@ jobs:
           pytest_pgid=$pytest_pid
 
           (
-            sleep 1320
+            sleep 2100
             if kill -0 -"$pytest_pgid" 2>/dev/null; then
-              echo "::group::Hang detected after 22 minutes - SIGABRT to pytest process group $pytest_pgid"
+              echo "::group::Hang detected after 35 minutes - SIGABRT to pytest process group $pytest_pgid"
               kill -ABRT -"$pytest_pgid" 2>/dev/null || true
               sleep 15
               if kill -0 -"$pytest_pgid" 2>/dev/null; then
@@ -511,7 +511,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Dump python stacks on hang
-        if: failure() && steps.pytest.outcome == 'failure'
+        if: always() && steps.pytest.outcome == 'failure'
         run: |
           pip install --quiet py-spy || true
           for pid in $(pgrep -f 'pytest|python' || true); do

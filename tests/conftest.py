@@ -1,17 +1,16 @@
 """Root pytest configuration and shared test hooks."""
 
-import functools
 import importlib.machinery
 import logging
 import os
 import warnings
 from collections.abc import Generator
-from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
 
 from sqlspec.core.cache import clear_all_caches
+from tests.fixtures.modules import module_is_available as _module_is_available
 
 warnings.filterwarnings(
     "ignore", message="You are using a Python version.*which Google will stop supporting", category=FutureWarning
@@ -173,15 +172,6 @@ def clear_sql_caches() -> Generator[None, None, None]:
     clear_all_caches()
     yield
     clear_all_caches()
-
-
-@functools.cache
-def _module_is_available(module: str) -> bool:
-    """Return True when a module specification can be resolved without importing it."""
-    try:
-        return find_spec(module) is not None
-    except ModuleNotFoundError:
-        return False
 
 
 def _env_flag_enabled(name: str) -> bool:

@@ -197,7 +197,7 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_ip_type: NotRequired[str]
     """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb_columnar: NotRequired[bool]
-    """Enable ``google_columnar_engine.enabled=on`` at session startup or per transaction."""
+    """Enable ``google_columnar_engine.enable_columnar_scan=on`` at session startup or per transaction."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec event channel pub/sub support (defaults to ``True`` when ``events`` is configured)."""
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]

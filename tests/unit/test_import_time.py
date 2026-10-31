@@ -8,8 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import should_run_optional_cloud_suite
-
 FORBIDDEN = (
     "pandas",
     "polars",
@@ -191,20 +189,9 @@ def test_no_unintended_cross_adapter_imports() -> None:
     assert not violations, "Found cross-adapter imports:\n" + "\n".join(violations)
 
 
-def test_cloud_emulator_opt_in_accepts_cli_flag_or_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Cloud emulator opt-in runs when CI is active or either CLI flag or env var is enabled."""
-    monkeypatch.delenv("CI", raising=False)
-    monkeypatch.delenv("SQLSPEC_ENABLE_BIGQUERY_TESTS", raising=False)
-
-    assert should_run_optional_cloud_suite(False, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is False
-    assert should_run_optional_cloud_suite(True, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is True
-
-    monkeypatch.setenv("SQLSPEC_ENABLE_BIGQUERY_TESTS", "1")
-    assert should_run_optional_cloud_suite(False, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is True
-
-    monkeypatch.setenv("SQLSPEC_ENABLE_BIGQUERY_TESTS", "true")
-    assert should_run_optional_cloud_suite(False, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is True
-
-    monkeypatch.delenv("SQLSPEC_ENABLE_BIGQUERY_TESTS", raising=False)
-    monkeypatch.setenv("CI", "true")
-    assert should_run_optional_cloud_suite(False, "SQLSPEC_ENABLE_BIGQUERY_TESTS") is True
+def test_pytest_collect_only_succeeds_without_plugin_registration_errors() -> None:
+    """Verifies that root pytest collection succeeds without non-top-level plugin errors."""
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "tests"], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, f"pytest --collect-only failed:\n{result.stderr}\n{result.stdout}"

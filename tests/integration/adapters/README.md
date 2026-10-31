@@ -264,6 +264,3 @@ group under their database family.
 BigQuery and Spanner emulator suites run automatically in CI (`CI=true`). Local runs opt in with
 either `--run-bigquery-tests` or `SQLSPEC_ENABLE_BIGQUERY_TESTS=1` for BigQuery, and either
 `--run-spanner-tests` or `SQLSPEC_ENABLE_SPANNER_TESTS=1` for Spanner.
-
-`suite_case_metadata_contract.py` includes a no-orphan guard (`CONTRACT_OWNED_REMOVED_TEST_PATHS`)
-for files removed by consolidation, so shared behavior cannot silently reappear in driver-local files.

@@ -63,7 +63,7 @@ else:
 
 __all__ = (
     "MariadbDriverSession",
-    "MysqlAdkResidualContext",
+    "MysqlAdkStoreHarness",
     "aiomysql_clean_driver",
     "aiomysql_config",
     "aiomysql_driver",
@@ -71,7 +71,7 @@ __all__ = (
     "asyncmy_config",
     "asyncmy_driver",
     "mariadb_driver_session",
-    "mysql_adk_residual_context",
+    "mysql_adk_store_harness",
     "mysqlconnector_async_config",
     "mysqlconnector_async_driver",
     "mysqlconnector_clean_async_driver",
@@ -94,8 +94,8 @@ _MYSQL_ADK_DRIVER_PACKAGES: dict[str, str] = {
 }
 
 
-class MysqlAdkResidualContext(msgspec.Struct, frozen=True, gc=False):
-    """Unified test harness for MySQL ADK residual schema, precision, and FK checks."""
+class MysqlAdkStoreHarness(msgspec.Struct, frozen=True, gc=False):
+    """Unified test harness for MySQL ADK store schema, precision, and FK checks."""
 
     driver_mode: str
     is_async: bool
@@ -410,9 +410,9 @@ def pymysql_clean_driver(pymysql_config: "PyMysqlConfig") -> "Generator[PyMysqlD
 
 
 @pytest.fixture(params=("aiomysql", "asyncmy", "mysqlconnector-async", "mysqlconnector-sync", "pymysql"))
-async def mysql_adk_residual_context(
+async def mysql_adk_store_harness(
     request: pytest.FixtureRequest, mysql_service: "MySQLService"
-) -> "AsyncGenerator[MysqlAdkResidualContext, None]":
+) -> "AsyncGenerator[MysqlAdkStoreHarness, None]":
     """Provide isolated ADK stores across all MySQL driver modes with deterministic pool teardown."""
     pytest.importorskip("google.adk")
     driver_mode = str(request.param)
@@ -488,7 +488,7 @@ async def mysql_adk_residual_context(
             store.create_tables()
             fk_store.create_tables()
 
-        yield MysqlAdkResidualContext(
+        yield MysqlAdkStoreHarness(
             driver_mode=driver_mode,
             is_async=is_async,
             store=store,

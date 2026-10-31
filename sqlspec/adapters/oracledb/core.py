@@ -97,6 +97,7 @@ __all__ = (
     "OracleTopologyConfig",
     "apply_driver_features",
     "apply_oracle_session_trace_attributes",
+    "apply_wallet_ssl_context",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
     "build_dbms_cloud_copy_data_sql",
@@ -2424,6 +2425,19 @@ def build_dbms_cloud_copy_data_sql(
             "END;"
         )
     return plsql, binds
+
+
+def apply_wallet_ssl_context(config: dict[str, Any]) -> None:
+    """Apply an SSLContext for Oracle wallets with non-strict self-signed CAs if needed.
+
+    Args:
+        config: Connection configuration dictionary.
+    """
+    if oracledb_module.is_thin_mode() and "ssl_context" not in config:
+        wallet_loc = config.get("wallet_location") or config.get("config_dir")
+        wallet_ssl_ctx = build_wallet_ssl_context_if_needed(wallet_loc)
+        if wallet_ssl_ctx is not None:
+            config["ssl_context"] = wallet_ssl_ctx
 
 
 def build_wallet_ssl_context_if_needed(wallet_location: Any) -> "ssl.SSLContext | None":

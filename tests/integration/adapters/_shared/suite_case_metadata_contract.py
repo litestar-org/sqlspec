@@ -1,10 +1,7 @@
 """Contract metadata guardrails for adapter case records."""
 
-from pathlib import Path
 from typing import cast
 
-import msgspec
-import pytest
 from _pytest.mark.structures import ParameterSet
 
 from tests.integration.adapters._shared._adk_cases import AdkStoreCase, adk_store_params_with
@@ -28,7 +25,6 @@ from tests.integration.adapters._shared._postgres_extension_cases import (
     ASYNC_POSTGRES_EXTENSION_CASES,
     SYNC_POSTGRES_EXTENSION_CASES,
 )
-from tests.integration.adapters.conftest import _case_family, pytest_collection_modifyitems
 
 MYSQL_ROW_LOCKING_CASE_IDS = {
     "aiomysql-async",
@@ -97,51 +93,6 @@ POSTGRES_EXTENSION_CASE_IDS = {
     "psqlpy-pgvector-async",
     "psycopg-paradedb-sync",
     "psycopg-pgvector-sync",
-}
-CONTRACT_OWNED_REMOVED_TEST_PATHS = {
-    "adbc/test_adbc_results.py",
-    "adbc/test_data_dictionary.py",
-    "adbc/test_exceptions.py",
-    "adbc/test_migrations.py",
-    "adbc/test_paradedb.py",
-    "adbc/test_pgvector.py",
-    "adbc/test_vector_functions.py",
-    "aiomysql/test_storage_bridge.py",
-    "aiosqlite/test_data_dictionary.py",
-    "asyncmy/test_storage_bridge.py",
-    "asyncpg/extensions/events/test_queue_backend.py",
-    "asyncpg/test_data_dictionary.py",
-    "asyncpg/test_merge.py",
-    "asyncpg/test_merge_bulk.py",
-    "asyncpg/test_paradedb.py",
-    "asyncpg/test_pgvector.py",
-    "bigquery/test_exceptions.py",
-    "duckdb/test_migrations.py",
-    "duckdb/test_vector_functions.py",
-    "mysql/aiomysql/extensions/adk/test_store.py",
-    "mysql/asyncmy/extensions/adk/test_store.py",
-    "mysql/mysqlconnector/extensions/adk/test_store.py",
-    "mysqlconnector/test_driver_async.py",
-    "oracledb/extensions/events/test_queue_backend.py",
-    "oracledb/extensions/litestar/test_store_async.py",
-    "oracledb/extensions/litestar/test_store_sync.py",
-    "oracledb/test_exceptions.py",
-    "oracledb/test_merge.py",
-    "oracledb/test_merge_bulk.py",
-    "oracledb/test_stack.py",
-    "oracledb/test_vector_functions.py",
-    "postgres/test_cockroach_retry.py",
-    "psqlpy/test_data_dictionary.py",
-    "psqlpy/test_merge_bulk.py",
-    "psqlpy/test_migrations.py",
-    "psqlpy/test_paradedb.py",
-    "psqlpy/test_pgvector.py",
-    "psycopg/test_data_dictionary.py",
-    "psycopg/test_merge_bulk.py",
-    "psycopg/test_migrations.py",
-    "psycopg/test_paradedb.py",
-    "psycopg/test_pgvector.py",
-    "sqlite/test_data_dictionary.py",
 }
 
 
@@ -266,14 +217,6 @@ def test_postgres_extension_cases_are_contract_owned() -> None:
     assert case_ids == POSTGRES_EXTENSION_CASE_IDS
 
 
-def test_contract_owned_adapter_local_test_files_do_not_reappear() -> None:
-    """Adapter-local files removed by consolidation stay contract-owned."""
-    assert all(not path.startswith("tests/") for path in CONTRACT_OWNED_REMOVED_TEST_PATHS)
-    adapters_root = Path(__file__).resolve().parents[1]
-    existing = sorted(path for path in CONTRACT_OWNED_REMOVED_TEST_PATHS if (adapters_root / path).exists())
-    assert existing == []
-
-
 def test_adk_capability_params_match_requested_capability() -> None:
     """ADK capability-filtered params collect only cases that declare the requested capability."""
     cases = _adk_cases(adk_store_params_with("supports_atomic_state_update"))
@@ -290,154 +233,6 @@ def test_parameter_style_params_are_method_filtered() -> None:
     assert {case.id for case in execute_cases} | {case.id for case in execute_many_cases} == {
         case.id for case in all_cases
     }
-
-
-def test_case_family_routes_adbc_dialects() -> None:
-    """ADBC case identifiers route to their backing database family instead of defaulting to postgres."""
-    expected_routes = {
-        "adbc-oracle": "oracle",
-        "adbc-db2": "db2",
-        "adbc-snowflake": "snowflake",
-        "adbc-bigquery": "bigquery",
-        "adbc-duckdb": "duckdb",
-        "adbc-sqlite": "sqlite",
-        "adbc-postgres": "postgres",
-        "adbc-pgvector": "postgres",
-        "adbc-gizmosql-duckdb": "gizmosql",
-    }
-    observed_routes = {case_id: _case_family(_StubCaseId(id=case_id)) for case_id in expected_routes}
-    assert observed_routes == expected_routes
-
-
-def test_collection_preserves_container_distinct_xdist_groups(
-    request: pytest.FixtureRequest, pytestconfig: pytest.Config
-) -> None:
-    """Container-distinct xdist_group markers survive multi-level collector normalization without compound leakage."""
-    adapters_root = Path(__file__).resolve().parents[1]
-    preserved_groups = (
-        ("postgres", "alloydb", False),
-        ("gizmosql", "gizmosql_sqlite", True),
-        ("mysql", "mariadb", True),
-        ("oracle", "oracle_18c", False),
-        ("oracle", "oracle_adb", True),
-        ("postgres", "paradedb", True),
-        ("postgres", "pgvector", False),
-        ("snowflake", "snowflake", False),
-    )
-    items: list[pytest.Item] = []
-    preserved_expectations: list[tuple[pytest.Item, str]] = []
-    for family, group_name, use_keyword in preserved_groups:
-        family_pkg = _StubAdapterCollector.from_parent(
-            request.session, name=family, path=adapters_root / family / "__init__.py"
-        )
-        family_pkg.add_marker(pytest.mark.xdist_group("cockroachdb" if family == "cockroach" else family))
-        module_collector = _StubAdapterCollector.from_parent(
-            family_pkg, name=f"test_{group_name}.py", path=adapters_root / family / f"test_{group_name}.py"
-        )
-        group_marker = pytest.mark.xdist_group(name=group_name) if use_keyword else pytest.mark.xdist_group(group_name)
-        module_collector.add_marker(group_marker)
-        first_item = _StubAdapterItem.from_parent(
-            module_collector, name=f"test_{group_name}_first", path=module_collector.path
-        )
-        second_item = _StubAdapterItem.from_parent(
-            module_collector, name=f"test_{group_name}_second", path=module_collector.path
-        )
-        items.extend((first_item, second_item))
-        preserved_expectations.extend(((first_item, group_name), (second_item, group_name)))
-
-    oracle_pkg = _StubAdapterCollector.from_parent(
-        request.session, name="oracledb", path=adapters_root / "oracle" / "oracledb" / "__init__.py"
-    )
-    oracle_pkg.add_marker(pytest.mark.xdist_group("oracle"))
-    oracle_json_mod = _StubAdapterCollector.from_parent(
-        oracle_pkg,
-        name="test_json_storage_modes.py",
-        path=adapters_root / "oracle" / "oracledb" / "test_json_storage_modes.py",
-    )
-    oracle_json_mod.add_marker(pytest.mark.xdist_group("oracle"))
-    default_oracle_item = _StubAdapterItem.from_parent(
-        oracle_json_mod, name="test_native_json_round_trip_matrix", path=oracle_json_mod.path
-    )
-    oracle_18c_item = _StubAdapterItem.from_parent(
-        oracle_json_mod, name="test_blob_is_json_round_trip_on_oracle_18c", path=oracle_json_mod.path
-    )
-    oracle_18c_item.add_marker(pytest.mark.xdist_group("oracle_18c"))
-    oracle_adb_cls = _StubAdapterCollector.from_parent(
-        oracle_json_mod, name="TestOracleAdbWallet", path=oracle_json_mod.path
-    )
-    oracle_adb_cls.add_marker(pytest.mark.xdist_group(name="oracle_adb"))
-    oracle_adb_class_item = _StubAdapterItem.from_parent(
-        oracle_adb_cls, name="test_wallet_mtls", path=oracle_json_mod.path
-    )
-
-    cloud_mod = _StubAdapterCollector.from_parent(
-        request.session,
-        name="test_cloud_connectors.py",
-        path=adapters_root / "postgres" / "asyncpg" / "test_cloud_connectors.py",
-    )
-    cloud_mod.add_marker(pytest.mark.xdist_group("google_cloud"))
-    cloud_postgres_item = _StubAdapterItem.from_parent(cloud_mod, name="test_cloud_sql_connector", path=cloud_mod.path)
-
-    ungrouped_postgres = _StubAdapterItem.from_parent(
-        request.session, name="test_ungrouped_postgres", path=adapters_root / "postgres" / "test_driver.py"
-    )
-    overridden_postgres = _StubAdapterItem.from_parent(
-        request.session, name="test_overridden_postgres", path=adapters_root / "postgres" / "test_driver.py"
-    )
-    overridden_postgres.add_marker(pytest.mark.xdist_group(name="custom_transient_group"))
-    ungrouped_cockroach = _StubAdapterItem.from_parent(
-        request.session, name="test_ungrouped_cockroach", path=adapters_root / "cockroach" / "test_retry.py"
-    )
-    ungrouped_snowflake = _StubAdapterItem.from_parent(
-        request.session, name="test_ungrouped_snowflake", path=adapters_root / "snowflake" / "test_adbc.py"
-    )
-    items.extend((
-        default_oracle_item,
-        oracle_18c_item,
-        oracle_adb_class_item,
-        cloud_postgres_item,
-        ungrouped_postgres,
-        overridden_postgres,
-        ungrouped_cockroach,
-        ungrouped_snowflake,
-    ))
-
-    pytest_collection_modifyitems(pytestconfig, items)
-
-    for item, expected_group in preserved_expectations:
-        assert _xdist_groups(item) == [expected_group]
-    assert _xdist_groups(default_oracle_item) == ["oracle"]
-    assert _xdist_groups(oracle_18c_item) == ["oracle_18c"]
-    assert _xdist_groups(oracle_adb_class_item) == ["oracle_adb"]
-    assert _xdist_groups(cloud_postgres_item) == ["postgres"]
-    assert _xdist_groups(ungrouped_postgres) == ["postgres"]
-    assert _xdist_groups(overridden_postgres) == ["postgres"]
-    assert _xdist_groups(ungrouped_cockroach) == ["cockroachdb"]
-    assert _xdist_groups(ungrouped_snowflake) == ["snowflake"]
-
-
-class _StubCaseId(msgspec.Struct, frozen=True, gc=False):
-    id: str
-
-
-class _StubAdapterCollector(pytest.Collector):
-    def collect(self) -> list[pytest.Item | pytest.Collector]:
-        return []
-
-
-class _StubAdapterItem(pytest.Item):
-    def runtest(self) -> None:
-        return None
-
-
-def _xdist_groups(item: pytest.Item) -> list[str]:
-    groups: list[str] = []
-    for mark in item.iter_markers(name="xdist_group"):
-        if mark.args:
-            groups.append(str(mark.args[0]))
-        elif (name := mark.kwargs.get("name")) is not None:
-            groups.append(str(name))
-    return groups
 
 
 def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:

@@ -1915,13 +1915,34 @@ def _sequence_resync_statements(
             if column.sequence_name is None:
                 continue
             quoted_column = _quoted_identifier_sql(column.name)
+            sequence_schema, _, sequence_name = column.sequence_name.rpartition(".")
+            if not sequence_schema:
+                table_schema, _, _ = table.rpartition(".")
+                sequence_schema = table_schema or "main"
+            quoted_seq = f"{sequence_schema}.{sequence_name}" if sequence_schema else sequence_name
             statement = (
-                f"SELECT count(nextval('{column.sequence_name}')) FROM range("
-                f"(SELECT coalesce(last_value, start_value - increment_by) FROM duckdb_sequences() "
-                f"WHERE sequence_name = :sequence_name), "
-                f"(SELECT coalesce(max({quoted_column}), 0) FROM {_quoted_table_name(table)}))"
+                f"WITH seq_info AS ("
+                f"SELECT coalesce(last_value, start_value - increment_by) AS cur_val, increment_by "
+                f"FROM duckdb_sequences() "
+                f"WHERE schema_name = :sequence_schema AND sequence_name = :sequence_name"
+                f"), "
+                f"table_max AS ("
+                f"SELECT coalesce(max({quoted_column}), 0) AS max_val FROM {_quoted_table_name(table)}"
+                f"), "
+                f"calc AS ("
+                f"SELECT CASE "
+                f"WHEN table_max.max_val > seq_info.cur_val AND seq_info.increment_by > 0 "
+                f"THEN cast(ceil((table_max.max_val - seq_info.cur_val) * 1.0 / seq_info.increment_by) AS bigint) "
+                f"ELSE 0 "
+                f"END AS steps "
+                f"FROM seq_info CROSS JOIN table_max"
+                f") "
+                f"SELECT count(nextval(:quoted_seq)) FROM calc, range(calc.steps)"
             )
-            statements.append((statement, {"sequence_name": column.sequence_name}))
+            statements.append((
+                statement,
+                {"sequence_schema": sequence_schema, "sequence_name": sequence_name, "quoted_seq": quoted_seq},
+            ))
         return statements
 
     if family == "oracle":

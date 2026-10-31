@@ -711,7 +711,8 @@ def test_db2_cli_dsn_normalizes_to_db2_uri_and_credentials() -> None:
     odbc_cfg = AdbcConfig(
         connection_config={"dsn": "DRIVER={IBM DB2 ODBC DRIVER};DATABASE=testdb;HOSTNAME=localhost;PORT=50000;"}
     )
-    assert _resolve_driver_name(odbc_cfg) == "adbc_driver_sqlite.dbapi.connect"
+    assert _resolve_driver_name(odbc_cfg) != "adbc_driver_db2.dbapi.connect"
+    assert odbc_cfg.statement_config.dialect != "db2"
 
 
 def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> None:

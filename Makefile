@@ -173,10 +173,7 @@ clean:                                              ## Cleanup temporary build a
 # =============================================================================
 
 .PHONY: test
-test:                                               ## Run the tests
-	@echo "${INFO} Running test cases... 🧪"
-	@uv run pytest -n $(UNIT_WORKERS) --dist=loadgroup tests/unit
-	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup tests/integration
+test: test-unit test-integration                     ## Run the tests
 	@echo "${OK} Tests complete ✨"
 
 .PHONY: test-unit
@@ -186,9 +183,7 @@ test-unit:                                          ## Run unit tests
 	@echo "${OK} Unit tests complete ✨"
 
 .PHONY: test-integration
-test-integration:                                   ## Run integration tests
-	@echo "${INFO} Running integration tests... 🧪"
-	@uv run pytest -n $(INTEGRATION_WORKERS) --dist=loadgroup tests/integration
+test-integration: test-integration-postgres-cockroach test-integration-mysql-mariadb-embedded test-integration-oracle test-integration-mssql-db2 test-integration-cloud-adbc-storage ## Run integration tests shard by shard
 	@echo "${OK} Integration tests complete ✨"
 
 .PHONY: test-integration-postgres-cockroach
@@ -232,7 +227,15 @@ coverage:                                           ## Run tests with coverage r
 	@uv run pytest --cov --cov-report= --cov-fail-under=0 -n $(UNIT_WORKERS) --dist=loadgroup --quiet \
 		tests/unit
 	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n $(INTEGRATION_WORKERS) --dist=loadgroup --quiet \
-		tests/integration
+		$(SHARD_POSTGRES_COCKROACH)
+	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n $(INTEGRATION_WORKERS) --dist=loadgroup --quiet \
+		$(SHARD_MYSQL_MARIADB_EMBEDDED)
+	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n $(INTEGRATION_WORKERS) --dist=loadgroup --quiet \
+		$(SHARD_ORACLE)
+	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n $(INTEGRATION_WORKERS) --dist=loadgroup --quiet \
+		$(SHARD_MSSQL_DB2)
+	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n $(INTEGRATION_WORKERS) --dist=loadgroup --run-bigquery-tests --run-spanner-tests --quiet \
+		$(SHARD_CLOUD_ADBC_STORAGE)
 	@uv run coverage report --fail-under=0
 	@uv run coverage html >/dev/null 2>&1
 	@uv run coverage xml >/dev/null 2>&1

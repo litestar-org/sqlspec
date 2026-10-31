@@ -215,7 +215,7 @@ class PsycopgDriverFeatures(TypedDict):
     alloydb_ip_type: NotRequired[str]
     """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb_columnar: NotRequired[bool]
-    """Enable ``google_columnar_engine.enabled=on`` via startup ``options`` or per-transaction ``SET LOCAL``."""
+    """Enable ``google_columnar_engine.enable_columnar_scan=on`` via startup ``options`` or per-transaction ``SET LOCAL``."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"]]
     """External pooler compatibility mode; sets ``prepare_threshold=None`` in ``transaction`` or ``statement`` mode."""
     pgbouncer: NotRequired[bool]

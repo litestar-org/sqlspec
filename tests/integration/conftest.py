@@ -1,18 +1,18 @@
 """Pytest configuration and fixtures for integration tests."""
 
 import pkgutil
-from importlib.util import find_spec
 from typing import TYPE_CHECKING
 
 import pytest
 
 import tests.integration.fixtures as fixtures_pkg
+from tests.fixtures.modules import module_is_available
 from tests.fixtures.rustfs import ensure_rustfs_bucket
 
 if TYPE_CHECKING:
     from pytest_databases.docker.rustfs import RustfsService
 
-pytest_plugins = [
+_DATABASE_PLUGINS: tuple[str, ...] = (
     "pytest_databases.docker.azure_blob",
     "pytest_databases.docker.bigquery",
     "pytest_databases.docker.cockroachdb",
@@ -27,7 +27,7 @@ pytest_plugins = [
     "pytest_databases.docker.rustfs",
     "pytest_databases.docker.snowflake",
     "pytest_databases.docker.spanner",
-]
+)
 
 _NON_PLUGIN_FIXTURE_MODULES: frozenset[str] = frozenset({"cleanup"})
 
@@ -54,6 +54,9 @@ _FIXTURE_DRIVER_REQUIREMENTS: dict[str, tuple[tuple[str, ...], ...]] = {
 
 def pytest_configure(config: pytest.Config) -> None:
     """Import integration fixture plugins whose backing driver packages are installed."""
+    for plugin in _DATABASE_PLUGINS:
+        if not config.pluginmanager.has_plugin(plugin):
+            config.pluginmanager.import_plugin(plugin)
     ordered_modules = sorted(
         pkgutil.iter_modules(fixtures_pkg.__path__), key=lambda item: (item.name == "adapter_cases", item.name)
     )
@@ -74,14 +77,6 @@ def rustfs_bucket_name(rustfs_service: "RustfsService", rustfs_default_bucket_na
     return ensure_rustfs_bucket(rustfs_service, rustfs_default_bucket_name)
 
 
-def _package_available(package: str) -> bool:
-    """Return True when a top-level or dotted package specification can be resolved."""
-    try:
-        return find_spec(package) is not None
-    except ModuleNotFoundError:
-        return False
-
-
 def _requirements_satisfied(requirements: tuple[tuple[str, ...], ...]) -> bool:
     """Return True when at least one required driver package group is importable."""
-    return any(all(_package_available(package) for package in group) for group in requirements)
+    return any(all(module_is_available(package) for package in group) for group in requirements)

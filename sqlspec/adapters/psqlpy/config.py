@@ -124,8 +124,6 @@ class PsqlpyPoolParams(PsqlpyConnectionParams):
     """Pool connection reset strategy (such as ``fast`` or ``verified``)."""
     max_db_pool_size: NotRequired[int]
     """Maximum number of concurrent connections held by ``psqlpy.ConnectionPool``."""
-    max_cached_statement_lifetime: NotRequired[int]
-    """Maximum lifetime in seconds for cached prepared statements."""
     configure: NotRequired["Callable[..., Any]"]
     """Optional pool connection configuration callback."""
     extra: NotRequired["dict[str, Any]"]
@@ -144,7 +142,7 @@ class PsqlpyDriverFeatures(TypedDict):
     enable_pg_textsearch: NotRequired[bool]
     """Detect ``pg_textsearch`` and promote the dialect for BM25 ``<@>`` ranking (defaults to ``True``)."""
     enable_alloydb_columnar: NotRequired[bool]
-    """Enable ``google_columnar_engine.enabled=on`` at session startup or per transaction."""
+    """Enable ``google_columnar_engine.enable_columnar_scan=on`` at session startup or per transaction."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
     """External pooler compatibility mode; executes queries with ``prepared=False`` when not ``session``."""
     pgbouncer: NotRequired[bool]

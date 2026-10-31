@@ -184,8 +184,10 @@ litestar-queues = false
 litestar-saq = false
 litestar-security = false
 litestar-vite = false
+mypy-extensions = false
 polyfactory = false
 pytest-databases = false
+rich-click = false
 sqlglot = false
 sqlglotc = false
 

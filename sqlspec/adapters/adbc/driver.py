@@ -9,8 +9,6 @@ from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast, final
 
-import sqlglot
-
 from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcNativeError, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
@@ -47,7 +45,6 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.core.compiler import SQLProcessor
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
@@ -59,8 +56,6 @@ from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qua
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from sqlglot import exp
 
     from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcRawCursor
     from sqlspec.builder import QueryBuilder
@@ -955,13 +950,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Return whether a script statement is a non-row-returning Db2 operation."""
         if total_statements == 1:
             return not parent_statement.returns_rows() and parent_statement.operation_type != "COMMAND"
-        expression: exp.Expression | None = sqlglot.maybe_parse(sql, dialect="db2")
-        if expression is None:
-            return False
-        operation_type = SQLProcessor._operation_type(expression)
-        if operation_type == "COMMAND":
-            return False
-        return not SQLProcessor._operation_profile(expression, operation_type).returns_rows
+        statement = SQL(sql, statement_config=self.statement_config)
+        return not statement.returns_rows() and statement.operation_type != "COMMAND"
 
     @staticmethod
     def _execute_db2_non_query(cursor: "AdbcRawCursor", sql: str, execute_parameters: Any) -> None:
