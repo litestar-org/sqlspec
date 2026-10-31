@@ -30,10 +30,10 @@ def main() -> tuple[str, int, str, str]:
             profiles = dd.get_table_profile(session, "raw_events")
             inferred_ddl = dd.infer_table_ddl_from_data(session, "raw_events", target_table="events").ddl or ""
 
-        records_ddl = CreateTable.from_records(
-            "audit_events", [{"id": 1, "actor": "system", "active": True}], primary_key="id", dialect="postgres"
-        ).to_sql()
-        # --8<-- [end:example]
+            records_ddl = CreateTable.from_records(
+                "audit_events", [{"id": 1, "actor": "system", "active": True}], primary_key="id", dialect="postgres"
+            ).to_sql()
+            # --8<-- [end:example]
 
         assert "teams" in teams_ddl
         assert len(schema_items) >= 2

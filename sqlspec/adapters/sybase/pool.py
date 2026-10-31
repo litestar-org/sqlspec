@@ -25,14 +25,6 @@ _ADAPTER_NAME = "sybase"
 pymssql = PYMSSQL_MODULE
 
 
-def _load_pymssql_module() -> Any:
-    """Import ``pymssql`` lazily or raise ``MissingDependencyError``."""
-    try:
-        return import_module("pymssql")
-    except ImportError as exc:
-        raise MissingDependencyError(package="pymssql", install_package="sybase") from exc
-
-
 class SybaseConnectionPool:
     """Thread-local connection manager for Sybase ASE over pymssql (FreeTDS TDS 5.0)."""
 
@@ -273,3 +265,11 @@ class SybaseConnectionPool:
                 del self._thread_local.created_at
             if "last_used" in thread_state:
                 del self._thread_local.last_used
+
+
+def _load_pymssql_module() -> Any:
+    """Import ``pymssql`` lazily or raise ``MissingDependencyError``."""
+    try:
+        return import_module("pymssql")
+    except ImportError as exc:
+        raise MissingDependencyError(package="pymssql", install_package="sybase") from exc

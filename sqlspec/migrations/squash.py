@@ -93,7 +93,7 @@ _SUPPORTED_ALTER_COLUMN_ARGS = frozenset({"this", "dtype", "using", "default", "
 _MAX_TYPE_TOKENS = 12
 _TYPE_PLACEHOLDER = "__sqlspec_column_type__"
 _ALTER_TYPE_KEYWORDS = frozenset({"SET", "DATA", "TYPE"})
-_MYSQL_FAMILY = frozenset({"mysql", "singlestore", "doris", "starrocks", "tidb"})
+_MYSQL_FAMILY = frozenset({"mysql", "mariadb", "singlestore", "doris", "starrocks", "tidb"})
 _SEQUENCE_FUNCTIONS = frozenset({"NEXTVAL", "CURRVAL", "SETVAL", "LASTVAL"})
 
 
@@ -135,8 +135,9 @@ class DDLStateFolder:
     )
 
     def __init__(self, dialect: str | None = None) -> None:
-        self._dialect = dialect
-        self._dialect_impl: Dialect = Dialect.get_or_raise(dialect)
+        normalized_dialect = "mysql" if dialect == "mariadb" else dialect
+        self._dialect = normalized_dialect
+        self._dialect_impl: Dialect = Dialect.get_or_raise(normalized_dialect)
         self._schemas: dict[str, _FoldedStatement] = {}
         self._sequences: dict[str, _FoldedStatement] = {}
         self._tables: dict[str, _FoldedStatement] = {}
@@ -626,6 +627,14 @@ class DDLStateFolder:
             msg = (
                 f"dropping primary key column {column_key} on {table_key} leaves dialect-specific primary key and "
                 "NOT NULL state, which the folded CREATE TABLE cannot reproduce"
+            )
+            raise self._refusal(msg)
+        if (self._dialect or "") in _MYSQL_FAMILY and self._has_multi_column_index_or_unique(
+            table_key, schema, column_key
+        ):
+            msg = (
+                f"dropping column {column_key} on {table_key} narrows a multi-column index or unique constraint "
+                "in MySQL, which the folded CREATE TABLE cannot reproduce"
             )
             raise self._refusal(msg)
         self._assert_views_allow(table_key, {column_key}, "DROP COLUMN")
@@ -1371,6 +1380,21 @@ class DDLStateFolder:
                 columns.update(self._local_column_keys(item, table_key))
         return columns
 
+    def _has_multi_column_index_or_unique(self, table_key: str, schema: exp.Schema, column_key: str) -> bool:
+        for index_entry in self._indexes.values():
+            if index_entry.owner == table_key:
+                index_cols = self._index_column_keys(index_entry)
+                if column_key in index_cols and len(index_cols) > 1:
+                    return True
+        for item in schema.expressions:
+            if isinstance(item, exp.ColumnDef):
+                continue
+            if item.find(exp.UniqueColumnConstraint, exp.IndexColumnConstraint) is not None:
+                local_cols = self._local_column_keys(item, table_key)
+                if column_key in local_cols and len(local_cols) > 1:
+                    return True
+        return False
+
     def _local_column_keys(self, node: exp.Expr, owner_key: str) -> set[str]:
         return {self._ident_key(ident) for ident in self._local_column_refs(node, owner_key)}
 
@@ -1392,10 +1416,17 @@ class DDLStateFolder:
                 if parent.this is ident and parent.find_ancestor(exp.Reference) is None:
                     refs.append(ident)
             elif isinstance(parent, exp.Schema):
-                if parent.this is None or (
-                    isinstance(parent.parent, exp.Reference)
-                    and isinstance(parent.this, exp.Table)
-                    and self._resolve_reference_key(parent.this) == owner_key
+                if (
+                    parent.this is None
+                    or (
+                        isinstance(parent.parent, (exp.UniqueColumnConstraint, exp.IndexColumnConstraint))
+                        and ident.arg_key == "expressions"
+                    )
+                    or (
+                        isinstance(parent.parent, exp.Reference)
+                        and isinstance(parent.this, exp.Table)
+                        and self._resolve_reference_key(parent.this) == owner_key
+                    )
                 ):
                     refs.append(ident)
             elif isinstance(parent, (exp.ForeignKey, exp.PrimaryKey)) and ident.arg_key == "expressions":
@@ -1675,15 +1706,7 @@ class MigrationSquasher:
     Combines multiple sequential or timestamped migrations into a single file.
     """
 
-    __slots__ = (
-        "backup_path",
-        "migrations_path",
-        "runner",
-        "schema_ddl",
-        "strategy",
-        "template_settings",
-        "version_table",
-    )
+    __slots__ = ("backup_path", "migrations_path", "runner", "strategy", "template_settings", "version_table")
 
     def __init__(
         self,
@@ -1692,7 +1715,6 @@ class MigrationSquasher:
         template_settings: "MigrationTemplateSettings | None" = None,
         *,
         strategy: str = "concat",
-        schema_ddl: tuple[list[str], list[str]] | None = None,
         version_table: str = "ddl_migrations",
     ) -> None:
         """Initialize the migration squasher.
@@ -1702,7 +1724,6 @@ class MigrationSquasher:
             runner: SyncMigrationRunner instance for loading migrations.
             template_settings: Optional template settings for generating squashed file.
             strategy: Default squash strategy ("concat", "ddl", or "schema").
-            schema_ddl: Optional pre-fetched (up_ddl, down_ddl) tuple for "schema" strategy.
             version_table: Migration tracking table excluded from live "schema" extraction.
         """
         self.migrations_path = migrations_path
@@ -1710,7 +1731,6 @@ class MigrationSquasher:
         self.template_settings = template_settings
         self.backup_path: Path | None = None
         self.strategy = self._resolve_strategy(strategy)
-        self.schema_ddl = schema_ddl
         self.version_table = version_table
 
     def plan_squash(
@@ -1734,33 +1754,64 @@ class MigrationSquasher:
             allow_gaps: If True, allow gaps in version sequence.
             output_format: Output file format ("sql" or "py").
             strategy: Squash strategy override ("concat", "ddl", or "schema").
-            single_file: When True, emit a single SquashPlan across mixed file types/directives.
+            single_file: When True, require a single SquashPlan (raising if directives or
+                file types conflict); when False or None, split when directives or file types change.
             schema_ddl: Optional pre-fetched (up_ddl, down_ddl) tuple for "schema" strategy.
 
         Returns:
             List of SquashPlan objects with details of planned operations.
         """
         resolved_strategy = self._resolve_strategy(strategy or self.strategy)
-        resolved_schema_ddl = schema_ddl if schema_ddl is not None else self.schema_ddl
         all_migrations = self.runner.get_migration_files()
         source_migrations = validate_squash_range(all_migrations, start_version, end_version, allow_gaps=allow_gaps)
+        parsed_start = parse_version(start_version)
+
+        if resolved_strategy == "schema":
+            stream_migrations = _stream_migrations(all_migrations, parsed_start.extension)
+            if (
+                not stream_migrations
+                or source_migrations[0][0] != stream_migrations[0][0]
+                or source_migrations[-1][0] != stream_migrations[-1][0]
+                or len(source_migrations) != len(stream_migrations)
+            ):
+                first_ver = stream_migrations[0][0] if stream_migrations else start_version
+                last_ver = stream_migrations[-1][0] if stream_migrations else end_version
+                msg = (
+                    "The schema squash strategy reflects the full current database schema and must squash from the "
+                    f"first migration ({first_ver}) through head ({last_ver})."
+                )
+                raise SquashValidationError(msg)
 
         safe_description = slugify(description, separator="_")[:50] or "migration"
 
         if output_format == "py":
-            directive_groups: list[tuple[str, bool | None, str | None, list[tuple[str, Path]]]] = [
-                ("py", None, None, source_migrations)
-            ]
+            tx_dir, schema_dir = _coalesce_sql_directives(source_migrations)
+            if tx_dir is not None or schema_dir is not None:
+                msg = (
+                    "Cannot squash SQL migrations with '-- transactional:' or '-- schema:' directives into a Python "
+                    "migration because Python migrations do not support SQL header directives."
+                )
+                raise SquashValidationError(msg)
+            if single_file is False:
+                directive_groups: list[tuple[str, bool | None, str | None, list[tuple[str, Path]]]] = [
+                    ("py", None, None, grp) for _, _, _, grp in _group_migrations_with_directives(source_migrations)
+                ]
+            else:
+                directive_groups = [("py", None, None, source_migrations)]
         elif single_file is True:
             file_type = "py" if all(p.suffix == ".py" for _, p in source_migrations) else "sql"
             tx_dir, schema_dir = _coalesce_sql_directives(source_migrations) if file_type == "sql" else (None, None)
             directive_groups = [(file_type, tx_dir, schema_dir, source_migrations)]
         else:
-            directive_groups = _group_migrations_with_directives(
-                source_migrations, split_by_directives=single_file is False
-            )
+            directive_groups = _group_migrations_with_directives(source_migrations)
 
-        parsed_start = parse_version(start_version)
+        if resolved_strategy == "schema" and len(directive_groups) > 1:
+            msg = (
+                "The schema squash strategy emits a single full-schema migration and cannot split across multiple "
+                "files with differing file types or directives."
+            )
+            raise SquashValidationError(msg)
+
         if parsed_start.sequence is not None:
             version_counter = parsed_start.sequence
         else:
@@ -1798,8 +1849,8 @@ class MigrationSquasher:
                     transactional=transactional,
                     schema=schema,
                     strategy=resolved_strategy,
-                    schema_ddl_up=list(resolved_schema_ddl[0]) if resolved_schema_ddl is not None else None,
-                    schema_ddl_down=list(resolved_schema_ddl[1]) if resolved_schema_ddl is not None else None,
+                    schema_ddl_up=list(schema_ddl[0]) if schema_ddl is not None else None,
+                    schema_ddl_down=list(schema_ddl[1]) if schema_ddl is not None else None,
                 )
             )
             version_counter += 1
@@ -2052,9 +2103,8 @@ class MigrationSquasher:
         schema_ddl: tuple[list[str], list[str]] | None,
     ) -> tuple[list[str], list[str], list[str]]:
         if strategy == "schema":
-            effective_schema_ddl = schema_ddl if schema_ddl is not None else self.schema_ddl
-            if effective_schema_ddl is not None:
-                return list(effective_schema_ddl[0]), list(effective_schema_ddl[1]), []
+            if schema_ddl is not None:
+                return list(schema_ddl[0]), list(schema_ddl[1]), []
             schema_up, schema_down = self._extract_schema_ddl_from_context()
             return schema_up, schema_down, []
 
@@ -2307,6 +2357,21 @@ def _normalize_range_endpoint(endpoint: str) -> str:
     return _format_sequential_version(endpoint)
 
 
+def _stream_migrations(all_migrations: list[tuple[str, Path]], extension: str | None) -> list[tuple[str, Path]]:
+    """Filter ``all_migrations`` to the core or extension stream matching ``extension``."""
+    stream: list[tuple[str, Path]] = []
+    for ver_str, path in all_migrations:
+        try:
+            parsed = parse_version(ver_str)
+        except ValueError:
+            if extension is None:
+                stream.append((ver_str, path))
+            continue
+        if parsed.extension == extension:
+            stream.append((ver_str, path))
+    return stream
+
+
 def _extract_sql_directives(path: Path) -> tuple[bool | None, str | None]:
     """Extract transactional and schema directives from a SQL migration file if it exists."""
     if path.suffix != ".sql" or not path.exists():
@@ -2323,32 +2388,33 @@ def _extract_sql_directives(path: Path) -> tuple[bool | None, str | None]:
 
 
 def _coalesce_sql_directives(migrations: list[tuple[str, Path]]) -> tuple[bool | None, str | None]:
-    """Coalesce uniform transactional and schema directives across SQL migrations."""
+    """Coalesce uniform transactional and schema directives across SQL migrations.
+
+    Raises:
+        SquashValidationError: If SQL migrations in ``migrations`` have conflicting
+            ``-- transactional:`` or ``-- schema:`` directives.
+    """
     sql_paths = [path for _, path in migrations if path.suffix == ".sql"]
     if not sql_paths:
         return None, None
     extracted = [_extract_sql_directives(path) for path in sql_paths]
     tx_values = {tx for tx, _ in extracted}
     schema_values = {sc for _, sc in extracted}
-    uniform_tx = next(iter(tx_values)) if len(tx_values) == 1 else None
-    uniform_schema = next(iter(schema_values)) if len(schema_values) == 1 else None
-    return uniform_tx, uniform_schema
+    if len(tx_values) > 1 or len(schema_values) > 1:
+        msg = (
+            "Cannot squash into a single file (--single-file) when SQL migrations have conflicting "
+            "'-- transactional:' or '-- schema:' directives; use --split or omit --single-file."
+        )
+        raise SquashValidationError(msg)
+    return next(iter(tx_values)), next(iter(schema_values))
 
 
 def _group_migrations_with_directives(
-    migrations: list[tuple[str, Path]], *, split_by_directives: bool = False
+    migrations: list[tuple[str, Path]],
 ) -> list[tuple[str, bool | None, str | None, list[tuple[str, Path]]]]:
-    """Group consecutive migrations by file type and optionally SQL execution directives."""
+    """Group consecutive migrations by file type and SQL execution directives."""
     if not migrations:
         return []
-
-    if not split_by_directives:
-        type_groups = group_migrations_by_type(migrations)
-        result: list[tuple[str, bool | None, str | None, list[tuple[str, Path]]]] = []
-        for file_type, group_items in type_groups:
-            tx_dir, schema_dir = _coalesce_sql_directives(group_items) if file_type == "sql" else (None, None)
-            result.append((file_type, tx_dir, schema_dir, group_items))
-        return result
 
     groups: list[tuple[str, bool | None, str | None, list[tuple[str, Path]]]] = []
     current_key: tuple[str, bool | None, str | None] | None = None

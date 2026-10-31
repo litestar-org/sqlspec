@@ -4,9 +4,29 @@
 
 ## Installation
 
-```bash
-uv add "sqlspec[starlette]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[starlette]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[starlette]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[starlette]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[starlette]"
+    ```
 
 ## Basic Setup
 

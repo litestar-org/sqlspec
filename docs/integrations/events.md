@@ -2,6 +2,13 @@
 
 `sqlspec.extensions.events` provides synchronous (`SyncEventChannel`) and asynchronous (`AsyncEventChannel`) pub/sub and competing-consumer event channels backed by your existing database configuration, supporting native PostgreSQL `LISTEN`/`NOTIFY`, durable hybrid `notify_queue` wakeups, Oracle Advanced Queuing (`aq` and `txeventq`), and portable table-backed polling (`poll_queue`) across supported database adapters.
 
+```mermaid
+flowchart LR
+    Pub["Publisher (publish / publish_many)"] --> Channel["Sync / AsyncEventChannel"]
+    Channel --> Backend["Backend (notify / notify_queue / poll_queue / aq)"]
+    Backend --> Consumer["Consumer (dequeue / iter_events -> ack / nack)"]
+```
+
 ## Choosing a Transport Backend
 
 Set `extension_config["events"]["backend"]` according to your delivery and durability requirements:

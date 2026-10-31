@@ -11,6 +11,7 @@ SELECT
         WHEN COUNT(*) OVER (PARTITION BY tl.name, fk.id) > 1 THEN tl.name || '_fk_' || fk.id
         ELSE NULL
     END AS constraint_name,
+    fk.id AS id,
     fk.seq AS ordinal_position,
     fk.on_update,
     fk.on_delete,
@@ -35,6 +36,7 @@ SELECT
         WHEN COUNT(*) OVER (PARTITION BY fk.id) > 1 THEN :table_name || '_fk_' || fk.id
         ELSE NULL
     END AS constraint_name,
+    fk.id AS id,
     fk.seq AS ordinal_position,
     fk.on_update,
     fk.on_delete,

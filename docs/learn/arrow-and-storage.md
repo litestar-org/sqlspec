@@ -1,6 +1,13 @@
 # Arrow and Storage
 
-SQLSpec bridges relational and analytical workloads with first-class **Apache Arrow** query results (`select_to_arrow`), pluggable object storage (`StorageRegistry` over local paths, `obstore`, and `fsspec`), Parquet/Arrow storage pipelines, and schema-aware JSONL table fixtures.
+SQLSpec bridges relational and analytical workloads with first-class **Apache Arrow** query results (`select_to_arrow`), streaming `RecordBatch` pipelines (`read_arrow_batches` / `write_arrow_batches`), pluggable object storage (`StorageRegistry` over local paths, `obstore`, and `fsspec`), multi-shard bulk ingestion, and schema-aware JSONL table fixtures.
+
+```mermaid
+flowchart LR
+    DB[("Database Session")] <-->|"select_to_arrow / load_from_arrow"| Arrow["Arrow Table / RecordBatch Stream"]
+    Arrow <-->|"Sync / AsyncStoragePipeline"| Store["StorageRegistry (local / obstore / fsspec)"]
+    Arrow -->|"Zero-Copy"| DF["Polars / Pandas / PyArrow"]
+```
 
 ## Querying Directly to Apache Arrow, Polars, and Pandas
 
@@ -66,6 +73,13 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 ```
 
 You can also write an `ArrowResult` directly to any storage destination via `arrow_result.write_to_storage_sync("alias://exports/metrics.parquet")` (or `await arrow_result.write_to_storage_async(...)`). On Windows environments where `obstore` is installed alongside local filesystem paths, pass `backend="local"` when registering local directory aliases so Windows drive prefixes resolve cleanly.
+
+### Streaming `RecordBatch` Coercion & Schema Validation
+
+For datasets larger than available RAM, `SyncStoragePipeline` and `AsyncStoragePipeline` expose `read_arrow_batches(...)` and `write_arrow_batches(...)` alongside `coerce_arrow_batches(...)` and `validate_arrow_schema(...)` from `sqlspec.utils.arrow_helpers`:
+
+- **Bounded-Memory Streaming**: `read_arrow_batches` yields `pyarrow.RecordBatch` chunks lazily from Parquet, Arrow IPC, or JSONL sources without materializing a full `pyarrow.Table`.
+- **Single-Pass Target Schema Coercion**: When `target_schema` (or target table `ColumnMetadata`) is supplied to `load_from_arrow` or `load_from_storage`, SQLSpec validates and coerces incoming batches (`DECIMAL`, `TIMESTAMP`, `UUID`, binary, and `FIXED_SIZE_LIST` vector columns) one `RecordBatch` at a time before streaming to the database driver.
 
 ## Schema-Aware Table Fixtures (`.jsonl` / `.json.gz`)
 

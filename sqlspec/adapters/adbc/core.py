@@ -47,7 +47,6 @@ from sqlspec.exceptions import (
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
 from sqlspec.utils.module_loader import import_optional, import_string
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 from sqlspec.utils.uuids import uuid4, uuid_from_string
@@ -74,7 +73,6 @@ __all__ = (
     "driver_kind_from_uri",
     "driver_profile",
     "enforce_strict_type_coercion",
-    "format_identifier",
     "get_statement_config",
     "handle_postgres_rollback",
     "is_postgres_dialect",
@@ -1021,25 +1019,6 @@ def create_duckdb_profile_path() -> Path:
     return Path(tempfile.gettempdir()) / f"sqlspec_duckdb_profile_{uuid4().hex}.json"
 
 
-def configure_adbc_duckdb_profiling(connection: Any, profile_path: Path) -> None:
-    """Enable DuckDB JSON statement profiling on an ADBC DuckDB connection.
-
-    Args:
-        connection: Active ADBC DuckDB connection.
-        profile_path: Temporary file path where DuckDB writes statement profiles.
-    """
-    escaped_path = str(profile_path).replace("'", "''")
-    cursor = connection.cursor()
-    try:
-        cursor.execute("PRAGMA enable_profiling='json'")
-        with contextlib.suppress(Exception):
-            cursor.execute("SET profiling_coverage='ALL'")
-        cursor.execute(f"SET profiling_output='{escaped_path}'")
-    finally:
-        with contextlib.suppress(Exception):
-            cursor.close()
-
-
 def cleanup_duckdb_profile_path(profile_path: Path | str | None) -> None:
     """Remove a temporary DuckDB JSON statement profile file if it exists."""
     if not profile_path:
@@ -1084,14 +1063,23 @@ def read_duckdb_profile_json(profile_path: Path | str | None, executed_sql: str 
     return cast("dict[str, Any]", parsed)
 
 
-def format_identifier(identifier: str) -> str:
-    """Format and quote a potentially qualified SQL identifier for ADBC metadata queries."""
-    cleaned = identifier.strip()
-    if not cleaned:
-        msg = "Table name must not be empty"
-        raise SQLSpecError(msg)
-    parts = split_qualified_identifier(cleaned, quote_chars='"')
-    return ".".join(quote_identifier(part) for part in parts)
+def configure_adbc_duckdb_profiling(connection: Any, profile_path: Path) -> None:
+    """Enable DuckDB JSON statement profiling on an ADBC DuckDB connection.
+
+    Args:
+        connection: Active ADBC DuckDB connection.
+        profile_path: Temporary file path where DuckDB writes statement profiles.
+    """
+    escaped_path = str(profile_path).replace("'", "''")
+    cursor = connection.cursor()
+    try:
+        cursor.execute("PRAGMA enable_profiling='json'")
+        with contextlib.suppress(Exception):
+            cursor.execute("SET profiling_coverage='ALL'")
+        cursor.execute(f"SET profiling_output='{escaped_path}'")
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
 
 
 def normalize_column_names(

@@ -65,7 +65,7 @@ jobs:
                   docs/*|zensical.toml|CONTRIBUTING.md|tools/docs/*|.github/workflows/docs.yml)
                     docs_required=true
                     ;;
-                  sqlspec/*|pyproject.toml|uv.lock|.github/workflows/ci.yml)
+                  sqlspec/*|pyproject.toml|uv.lock|Makefile|.github/workflows/ci.yml)
                     ci_required=true
                     docs_required=true
                     ;;
@@ -548,12 +548,13 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --group doc
+        run: uv sync --no-default-groups --group doc
 
       - name: Verify public docstrings and CLI reference
         run: |
           uv run --no-sync python -m tools.docs.scan_public_docstrings --check-leaks --check-overloads --check-typeddicts sqlspec
           uv run --no-sync python -m tools.docs.generate_cli_docs --check
+          uv run --no-sync python -m tools.docs.generate_data_dictionary_docs --check
 
       - name: Build docs
         run: make docs

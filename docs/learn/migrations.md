@@ -2,6 +2,14 @@
 
 SQLSpec includes a built-in schema migration runner supporting sequential `.sql` and `.py` revisions across every sync and async adapter—without requiring SQLAlchemy or Alembic when your project is pure SQL.
 
+```mermaid
+flowchart LR
+    Author["SQL / Python Revisions"] --> Upgrade["upgrade / downgrade"]
+    Upgrade --> Tracker[("ddl_migrations Table")]
+    Tracker --> Verify["verify --strict"]
+    Verify --> Squash["squash & dump-schema"]
+```
+
 ## Configure `migration_config` and `pyproject.toml`
 
 Enable migrations on any adapter configuration by supplying `migration_config`:
@@ -24,7 +32,7 @@ Common `MigrationConfig` keys:
 - `default_schema`: Default target schema for unqualified DDL objects.
 - `version_table_schema`: Dedicated admin schema holding the version-tracking table.
 - `include_extensions`: Optional list of extension schemas to bundle (such as `["litestar", "adk", "events"]`).
-- `schema_dump_path`: Default output path written by `dump_schema()` (`<script_location>/schema.sql` when unset).
+- `schema_dump_path`: Default output path written by `dump_schema()` when `output_path` is omitted (`auto_dump_schema=True` falls back to `<script_location>/schema.sql` when `schema_dump_path` is unset).
 - `auto_dump_schema`: Set to `True` (or a file path) to refresh `schema.sql` automatically after every `upgrade` that applies revisions.
 
 ## Authoring SQL and Python Revisions
@@ -106,8 +114,6 @@ When `upgrade()` runs against downstream environments after a squash has been co
 1. **All replaced versions applied**: SQLSpec replaces the superseded tracker rows with the squashed revision (`replaces` metadata recorded) without re-executing DDL. Under `--dry-run`, reconciliation is reported without mutating `version_table_name`.
 2. **No replaced versions applied**: Fresh databases execute the squashed migration once.
 3. **Partial overlap**: If only a subset of replaced versions was applied, `upgrade()` and `verify --strict` raise an error rather than guessing which statements remain unapplied.
-
-Once every environment has reconciled onto the squashed revision, remove the `-- Squashed from:` / `__replaces__` header line to finalize the baseline.
 
 ## Schema Snapshots, Verification, and Data Bootstrap
 

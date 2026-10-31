@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[sybase]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[sybase]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[sybase]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[sybase]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[sybase]"
+    ```
 
 - Choose **`SybaseConfig`** for transactional OLTP applications communicating with SAP ASE database instances.
 - Prebuilt `pymssql` wheels ship statically linked FreeTDS with native TDS 5.0 wire support across Linux, macOS, and Windows.

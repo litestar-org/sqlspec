@@ -181,10 +181,6 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Sybase and SQL Anywhere render helper functions.",
     },
-    "sqlspec/adapters/mysql_common.py": {
-        "classification": "compile_now",
-        "reason": "Shared MySQL-family adapter helpers compile with the adapter core surface.",
-    },
     "sqlspec/extensions/events/_models.py": {
         "classification": "compile_now",
         "reason": "EventMessage has concrete datetime annotations and slot dataclass layout compatible with mypyc.",

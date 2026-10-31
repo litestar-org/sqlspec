@@ -4,9 +4,29 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[cockroachdb]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[cockroachdb]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[cockroachdb]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[cockroachdb]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[cockroachdb]"
+    ```
 
 - Choose **`CockroachAsyncpgConfig`** for pure-`asyncio` services prioritizing binary-protocol performance.
 - Choose **`CockroachPsycopgSyncConfig`** or **`CockroachPsycopgAsyncConfig`** when sharing sync/async pools or libpq TLS/GSSAPI certificate options.
@@ -72,6 +92,7 @@ uv add "sqlspec[cockroachdb]"
 | `default_staleness` | `str` | Follower-read staleness expression (such as `"follower_read_timestamp()"` or `"-10s"`). |
 | `enable_native_storage` | `bool` | Uses CockroachDB native CSV/nodelocal/cloud storage import/export paths where configured. |
 | `enable_pgvector` | `bool` | Enables CockroachDB `VECTOR` column codecs and similarity search in ADK stores (`cockroach_asyncpg`). |
+| `auth_token_provider` | `Callable` | Dynamic credential callback invoked per connection creation for short-lived cluster OAuth/IAM tokens. |
 
 See [Cockroach AsyncPG Reference](/reference/adapters/cockroach-asyncpg/) and [Cockroach Psycopg Reference](/reference/adapters/cockroach-psycopg/) for full configuration and retry TypedDict tables.
 

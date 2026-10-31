@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[sqlanywhere]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[sqlanywhere]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[sqlanywhere]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[sqlanywhere]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[sqlanywhere]"
+    ```
 
 - Choose **`SqlanywhereConfig`** for embedded, edge, and client-server applications interacting with SAP SQL Anywhere database engines.
 - `sqlanydb` wraps SAP's native client C library (`dbcapi`) via `ctypes`. Ensure `libdbcapi_r.so` (Linux), `libdbcapi_r.dylib` (macOS), or `dbcapi.dll` (Windows) is installed and available in the system library path.

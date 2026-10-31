@@ -101,21 +101,9 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         seq_result = driver.execute(self._next_execution_sequence_query())
         next_sequence = self._extract_next_sequence(seq_result)
 
-        if replaces:
-            statement = self._record_squashed_migration_statement(
-                version,
-                version_type,
-                next_sequence,
-                description,
-                execution_time_ms,
-                checksum,
-                self._applied_by(),
-                ",".join(replaces),
-            )
-        else:
-            statement = self._record_migration_statement(
-                version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by()
-            )
+        statement = self._record_statement(
+            version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by(), replaces
+        )
         driver.execute(statement)
         if commit:
             self._safe_commit(driver)
@@ -198,9 +186,8 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         next_sequence = self._extract_next_sequence(seq_result)
 
         version_type = self._derive_version_type(squashed_version)
-        replaces_str = ",".join(replaced_versions)
         driver.execute(
-            self._record_squashed_migration_statement(
+            self._record_statement(
                 squashed_version,
                 version_type,
                 next_sequence,
@@ -208,7 +195,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 0,
                 checksum,
                 self._applied_by(),
-                replaces_str,
+                replaced_versions,
             )
         )
 
@@ -279,6 +266,30 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 _log_commit_skipped(driver, exc)
             else:
                 raise
+
+    def _record_statement(
+        self,
+        version: str,
+        version_type: str,
+        execution_sequence: int,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
+        replaces: "Sequence[str] | None" = None,
+    ) -> Any:
+        """Build an INSERT statement for a standard or squashed migration record."""
+        return _build_record_statement(
+            self,
+            version,
+            version_type,
+            execution_sequence,
+            description,
+            execution_time_ms,
+            checksum,
+            applied_by,
+            replaces,
+        )
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -352,21 +363,9 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         seq_result = await driver.execute(self._next_execution_sequence_query())
         next_sequence = self._extract_next_sequence(seq_result)
 
-        if replaces:
-            statement = self._record_squashed_migration_statement(
-                version,
-                version_type,
-                next_sequence,
-                description,
-                execution_time_ms,
-                checksum,
-                self._applied_by(),
-                ",".join(replaces),
-            )
-        else:
-            statement = self._record_migration_statement(
-                version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by()
-            )
+        statement = self._record_statement(
+            version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by(), replaces
+        )
         await driver.execute(statement)
         if commit:
             await self._safe_commit(driver)
@@ -449,9 +448,8 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         next_sequence = self._extract_next_sequence(seq_result)
 
         version_type = self._derive_version_type(squashed_version)
-        replaces_str = ",".join(replaced_versions)
         await driver.execute(
-            self._record_squashed_migration_statement(
+            self._record_statement(
                 squashed_version,
                 version_type,
                 next_sequence,
@@ -459,7 +457,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 0,
                 checksum,
                 self._applied_by(),
-                replaces_str,
+                replaced_versions,
             )
         )
 
@@ -532,6 +530,62 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 _log_commit_skipped(driver, exc)
             else:
                 raise
+
+    def _record_statement(
+        self,
+        version: str,
+        version_type: str,
+        execution_sequence: int,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
+        replaces: "Sequence[str] | None" = None,
+    ) -> Any:
+        """Build an INSERT statement for a standard or squashed migration record."""
+        return _build_record_statement(
+            self,
+            version,
+            version_type,
+            execution_sequence,
+            description,
+            execution_time_ms,
+            checksum,
+            applied_by,
+            replaces,
+        )
+
+
+def _build_record_statement(
+    tracker: BaseMigrationTracker[Any],
+    version: str,
+    version_type: str,
+    execution_sequence: int,
+    description: str,
+    execution_time_ms: int,
+    checksum: str,
+    applied_by: str,
+    replaces: "Sequence[str] | None" = None,
+) -> Any:
+    """Return an INSERT builder for either a standard or squashed migration record."""
+    if replaces:
+        return tracker._record_squashed_migration_statement(
+            version,
+            version_type,
+            execution_sequence,
+            description,
+            execution_time_ms,
+            checksum,
+            applied_by,
+            ",".join(replaces),
+        )
+    return tracker._record_migration_statement(
+        version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
+    )
+
+
+with suppress(TypeError):
+    setattr(BaseMigrationTracker, "_record_statement", _build_record_statement)
 
 
 def _validate_squash_applied_state(result: Any, squashed_version: str, replaced_versions: "list[str]") -> bool:

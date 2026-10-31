@@ -67,7 +67,6 @@ _ORACLE_NEXTVAL_PATTERN: Final["re.Pattern[str]"] = re.compile(
 )
 _INSERT_VALUES_CLAUSE_PATTERN: Final["re.Pattern[str]"] = re.compile(r"\)\s+VALUES\s+\(")
 _POSTGRES_DIALECTS: Final["frozenset[str]"] = frozenset({"cockroach", "cockroachdb", "postgres", "postgresql"})
-_PG_SEQUENCE_DIALECTS: Final["frozenset[str]"] = frozenset({"postgres", "postgresql"})
 _SEQUENCE_RESYNC_DIALECTS: Final["frozenset[str]"] = frozenset({
     "cockroach",
     "cockroachdb",
@@ -345,8 +344,11 @@ def load_table_fixtures_sync(
             sequence, identity column, or auto-increment counter behind each loaded
             table to follow the column's maximum value, or back to its initial
             minimum/seed value for an empty table, so subsequent generated values follow
-            the loaded rows. On dialects where monotonic sequence resynchronization does
-            not apply (Cloud Spanner, BigQuery), the option is skipped with a debug log.
+            the loaded rows. On MySQL, MariaDB, and Oracle, sequence and identity
+            resynchronization executes ``ALTER TABLE`` or ``ALTER SEQUENCE`` DDL, which
+            issues an implicit commit of the active transaction. On dialects where
+            monotonic sequence resynchronization does not apply (Cloud Spanner,
+            BigQuery), the option is skipped with a debug log.
         ignore_unknown_columns: When ``True`` and table column metadata is available,
             strip fixture columns not present in the target table before inserting.
         exclude_update_columns: Column names (or per-table mapping of column names) to
@@ -459,8 +461,11 @@ async def load_table_fixtures_async(
             sequence, identity column, or auto-increment counter behind each loaded
             table to follow the column's maximum value, or back to its initial
             minimum/seed value for an empty table, so subsequent generated values follow
-            the loaded rows. On dialects where monotonic sequence resynchronization does
-            not apply (Cloud Spanner, BigQuery), the option is skipped with a debug log.
+            the loaded rows. On MySQL, MariaDB, and Oracle, sequence and identity
+            resynchronization executes ``ALTER TABLE`` or ``ALTER SEQUENCE`` DDL, which
+            issues an implicit commit of the active transaction. On dialects where
+            monotonic sequence resynchronization does not apply (Cloud Spanner,
+            BigQuery), the option is skipped with a debug log.
         ignore_unknown_columns: When ``True`` and table column metadata is available,
             strip fixture columns not present in the target table before inserting.
         exclude_update_columns: Column names (or per-table mapping of column names) to
@@ -537,8 +542,9 @@ def export_table_fixtures_sync(
     columns.
 
     Each file is written to a temporary file in the directory, created with the
-    process umask, and then moved into place; after that, stale table fixture files for the
-    same table in the directory are removed, so the next load reads the exported files.
+    process umask, and stale table fixture files for the same table in the directory
+    are removed before moving the new files into place, so the next load reads the
+    exported files.
     The directory is created when missing. Table names are quoted and must match the database
     spelling exactly.
 
@@ -569,7 +575,9 @@ def export_table_fixtures_sync(
     counts: dict[str, int] = {}
     for table in table_names:
         columns = _table_columns_sync(driver, family, table)
-        rows = _without_generated_values(driver.select(_table_export_query(dialect, family, table, columns)), columns)
+        rows = _without_generated_values(
+            driver.select(_table_export_query(dialect, family, table, columns)), columns, family
+        )
         _write_table_fixture(
             Path(fixtures_path),
             table,
@@ -607,8 +615,9 @@ async def export_table_fixtures_async(
     columns.
 
     Each file is written to a temporary file in the directory, created with the
-    process umask, and then moved into place; after that, stale table fixture files for the
-    same table in the directory are removed, so the next load reads the exported files.
+    process umask, and stale table fixture files for the same table in the directory
+    are removed before moving the new files into place, so the next load reads the
+    exported files.
     The directory is created when missing, and file writes run in a worker thread.
     Table names are quoted and must match the database spelling exactly.
 
@@ -640,7 +649,7 @@ async def export_table_fixtures_async(
     for table in table_names:
         columns = await _table_columns_async(driver, family, table)
         rows = _without_generated_values(
-            await driver.select(_table_export_query(dialect, family, table, columns)), columns
+            await driver.select(_table_export_query(dialect, family, table, columns)), columns, family
         )
         await _async_write_table_fixture(
             Path(fixtures_path), table, rows, compress, jsonl, max_shard_bytes, max_rows_per_shard
@@ -671,6 +680,26 @@ class _TableColumn(NamedTuple):
     sequence_name: "str | None"
     is_generated: bool
     identity_on_null: bool = False
+
+
+class _ResyncStep(NamedTuple):
+    """Planned SQL step for resynchronizing a table sequence, identity column, or auto-increment counter.
+
+    Attributes:
+        statement: SQL statement or DDL template containing ``{next_val}`` when ``max_query`` is set.
+        parameters: Bind parameters for direct statement execution.
+        max_query: Optional ``SELECT`` query returning the next or maximum value to format into ``statement``.
+        default_next: Fallback integer value when ``max_query`` returns ``None`` or ``0``.
+        skip_when_zero: Whether to skip executing ``statement`` when the resolved integer value is ``<= 0``.
+        ignore_missing_sqlite_sequence: Whether to suppress ``no such table: sqlite_sequence`` errors.
+    """
+
+    statement: str
+    parameters: "dict[str, Any]"
+    max_query: "str | None" = None
+    default_next: int = 1
+    skip_when_zero: bool = False
+    ignore_missing_sqlite_sequence: bool = False
 
 
 def _sqlglot_dialect(dialect: "DialectType", family: str) -> "DialectType":
@@ -1335,27 +1364,47 @@ def _decode_exported_json_value(value: Any) -> Any:
         return value
 
 
-def _decode_exported_vector_value(value: Any, data_type: str) -> Any:
-    """Normalize vector representations to a JSON-serializable list of floats."""
-    if value is None:
-        return None
-    if isinstance(value, (list, tuple)):
-        return [float(x) for x in value]
-    if isinstance(value, array.array):
+def _vector_items(value: Any) -> "list[float] | None":
+    """Extract a list of floats from a sequence, array, vector object, or bracketed/sparse string."""
+    if isinstance(value, (list, tuple, array.array)):
         return [float(x) for x in value]
     if hasattr(value, "tolist"):
         return [float(x) for x in value.tolist()]
+    if hasattr(value, "to_list"):
+        return [float(x) for x in value.to_list()]
     if isinstance(value, str):
         v = value.strip()
         if v.startswith("[") and v.endswith("]"):
             inner = v[1:-1].strip()
-            if not inner:
-                return []
-            return [float(x.strip()) for x in inner.split(",") if x.strip()]
-        return value
+            return [float(x.strip()) for x in inner.split(",") if x.strip()] if inner else []
+        if v.startswith("{") and "/" in v:
+            body, _, dim_str = v.rpartition("/")
+            if body.startswith("{") and body.endswith("}") and dim_str.strip().isdigit():
+                dim = int(dim_str.strip())
+                dense = [0.0] * dim
+                inner = body[1:-1].strip()
+                if inner:
+                    for entry in inner.split(","):
+                        idx_str, sep, val_str = entry.partition(":")
+                        if not sep or not idx_str.strip().isdigit():
+                            return None
+                        idx = int(idx_str.strip()) - 1
+                        if 0 <= idx < dim:
+                            dense[idx] = float(val_str.strip())
+                return dense
+    return None
+
+
+def _decode_exported_vector_value(value: Any, data_type: str, family: str = "") -> Any:
+    """Normalize vector representations to a JSON-serializable list of floats."""
+    if value is None:
+        return None
+    items = _vector_items(value)
+    if items is not None:
+        return items
     if isinstance(value, (bytes, bytearray, memoryview)):
         b = bytes(value)
-        if "f32" in data_type or "float32" in data_type:
+        if family == "mysql" or "f32" in data_type or "float32" in data_type:
             n = len(b) // _FLOAT32_BYTES
             return list(struct.unpack(f"<{n}f", b[: n * _FLOAT32_BYTES]))
         if len(b) >= _PG_VECTOR_HEADER_BYTES:
@@ -1365,7 +1414,9 @@ def _decode_exported_vector_value(value: Any, data_type: str) -> Any:
     return value
 
 
-def _without_generated_values(rows: "list[dict[str, Any]]", columns: "list[_TableColumn]") -> "list[dict[str, Any]]":
+def _without_generated_values(
+    rows: "list[dict[str, Any]]", columns: "list[_TableColumn]", family: str = ""
+) -> "list[dict[str, Any]]":
     """Return exported rows without generated columns and with string JSON/vector cells normalized."""
     generated = _generated_column_names(columns)
     json_columns = {column.name for column in columns if column.data_type in _JSON_TYPE_NAMES}
@@ -1381,7 +1432,7 @@ def _without_generated_values(rows: "list[dict[str, Any]]", columns: "list[_Tabl
             if key in json_columns:
                 row_dict[key] = _decode_exported_json_value(value)
             elif key in vector_columns:
-                row_dict[key] = _decode_exported_vector_value(value, vector_columns[key])
+                row_dict[key] = _decode_exported_vector_value(value, vector_columns[key], family)
             else:
                 row_dict[key] = value
         result.append(row_dict)
@@ -1462,49 +1513,70 @@ def _decode_uuid(value: Any) -> Any:
     return convert_uuid(value) if isinstance(value, str) else value
 
 
-def _decode_pg_vector(value: Any) -> Any:
-    """Format vector values as PostgreSQL/pgvector string literal."""
-    if value is None or isinstance(value, str):
+def _format_sparsevec(items: "Sequence[float]", data_type: str = "") -> str:
+    """Format a dense float sequence as a pgvector ``sparsevec`` literal ``{i:v}/dim``."""
+    dim = len(items)
+    if not dim and "(" in data_type and ")" in data_type:
+        dim_text = data_type.partition("(")[2].partition(")")[0].strip()
+        if dim_text.isdigit():
+            dim = int(dim_text)
+    entries = ",".join(f"{index}:{float(val)}" for index, val in enumerate(items, start=1) if float(val) != 0.0)
+    return f"{{{entries}}}/{dim}"
+
+
+def _decode_pg_vector(value: Any, data_type: str = "vector") -> Any:
+    """Format vector values as a PostgreSQL/pgvector string literal."""
+    if value is None:
+        return None
+    is_sparse = _postgres_vector_kind(data_type) == "sparsevec"
+    if isinstance(value, str):
+        v = value.strip()
+        if is_sparse and v.startswith("[") and v.endswith("]"):
+            items = _vector_items(v)
+            if items is not None:
+                return _format_sparsevec(items, data_type)
         return value
-    if isinstance(value, (list, tuple)):
-        return f"[{','.join(str(float(x)) for x in value)}]"
-    if hasattr(value, "tolist"):
-        return f"[{','.join(str(float(x)) for x in value.tolist())}]"
+    if hasattr(value, "to_text"):
+        text = str(value.to_text())
+        if is_sparse and text.startswith("{"):
+            return text
+        if not is_sparse and text.startswith("["):
+            return text
+    items = _vector_items(value)
+    if items is not None:
+        if is_sparse:
+            return _format_sparsevec(items, data_type)
+        return f"[{','.join(str(x) for x in items)}]"
     return str(value)
+
+
+def _pg_vector_decoder(data_type: str) -> "Callable[[Any], Any]":
+    """Return a decoder formatting vector values for a PostgreSQL pgvector column."""
+    if _postgres_vector_kind(data_type) == "sparsevec":
+
+        def _sparse_converter(value: Any) -> Any:
+            return _decode_pg_vector(value, data_type)
+
+        return _sparse_converter
+    return _decode_pg_vector
 
 
 def _decode_mysql_vector(value: Any) -> Any:
     """Format vector values as MySQL string literal."""
-    if value is None or isinstance(value, str):
-        return value
-    if isinstance(value, (list, tuple)):
-        return f"[{','.join(str(float(x)) for x in value)}]"
-    if hasattr(value, "tolist"):
-        return f"[{','.join(str(float(x)) for x in value.tolist())}]"
-    return str(value)
+    return _decode_pg_vector(value)
 
 
 def _decode_oracle_vector(data_type: str) -> "Callable[[Any], Any]":
     """Return decoder converting vector values to array.array for Oracle."""
-    typecode = "d" if "64" in data_type else "f"
+    typecode = "f" if "32" in data_type else "d"
 
     def _oracle_vector_converter(value: Any) -> Any:
-        if value is None:
-            return None
-        if isinstance(value, array.array):
+        if value is None or isinstance(value, array.array):
             return value
         if hasattr(value, "indices") and hasattr(value, "values"):
             return value
-        if isinstance(value, (list, tuple)):
-            return array.array(typecode, [float(x) for x in value])
-        if hasattr(value, "tolist"):
-            return array.array(typecode, [float(x) for x in value.tolist()])
-        if isinstance(value, str):
-            v = value.strip()
-            if v.startswith("[") and v.endswith("]"):
-                items = [float(x.strip()) for x in v[1:-1].split(",") if x.strip()]
-                return array.array(typecode, items)
-        return value
+        items = _vector_items(value)
+        return array.array(typecode, items) if items is not None else value
 
     return _oracle_vector_converter
 
@@ -1516,19 +1588,12 @@ def _decode_spanner_vector(data_type: str) -> "Callable[[Any], Any]":
     def _spanner_vector_converter(value: Any) -> Any:
         if value is None:
             return None
-        items: list[float]
-        if isinstance(value, (list, tuple)):
-            items = [float(x) for x in value]
-        elif hasattr(value, "tolist"):
-            items = [float(x) for x in value.tolist()]
-        elif isinstance(value, str):
-            v = value.strip()
-            if v.startswith("[") and v.endswith("]"):
-                items = [float(x.strip()) for x in v[1:-1].split(",") if x.strip()]
-            else:
+        items = _vector_items(value)
+        if items is None:
+            if isinstance(value, str):
                 items = []
-        else:
-            return value
+            else:
+                return value
         if is_float32:
             return TypedParameter(items, list, semantic_name="ARRAY<FLOAT32>")
         return items
@@ -1543,20 +1608,10 @@ def _decode_sqlite_vector(data_type: str) -> "Callable[[Any], Any]":
     def _sqlite_vector_converter(value: Any) -> Any:
         if value is None:
             return None
-        items: list[float]
-        if isinstance(value, (list, tuple)):
-            items = [float(x) for x in value]
-        elif hasattr(value, "tolist"):
-            items = [float(x) for x in value.tolist()]
-        elif isinstance(value, str):
-            v = value.strip()
-            if v.startswith("[") and v.endswith("]"):
-                items = [float(x.strip()) for x in v[1:-1].split(",") if x.strip()]
-            else:
-                return value
-        elif isinstance(value, (bytes, bytearray, memoryview)):
+        if isinstance(value, (bytes, bytearray, memoryview)):
             return bytes(value)
-        else:
+        items = _vector_items(value)
+        if items is None:
             return value
         if is_blob:
             return struct.pack(f"<{len(items)}f", *items)
@@ -1569,17 +1624,8 @@ def _decode_generic_vector(value: Any) -> Any:
     """Normalize vector values to a list of floats."""
     if value is None:
         return None
-    if isinstance(value, list):
-        return [float(x) for x in value]
-    if isinstance(value, tuple):
-        return [float(x) for x in value]
-    if hasattr(value, "tolist"):
-        return [float(x) for x in value.tolist()]
-    if isinstance(value, str):
-        v = value.strip()
-        if v.startswith("[") and v.endswith("]"):
-            return [float(x.strip()) for x in v[1:-1].split(",") if x.strip()]
-    return value
+    items = _vector_items(value)
+    return items if items is not None else value
 
 
 def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] | None":
@@ -1590,7 +1636,7 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
     normalized_type = data_type.lower()
     if _is_vector_column(normalized_type):
         if family == "postgres":
-            return _decode_pg_vector
+            return _pg_vector_decoder(normalized_type)
         if family == "mysql":
             return _decode_mysql_vector
         if family == "oracle":
@@ -2006,282 +2052,195 @@ def _sequence_resync_statements(
     return statements
 
 
-def _resync_sybase_sequences_sync(driver: "SyncDriverAdapterBase", table: str, columns: "list[_TableColumn]") -> None:
-    """Resynchronize Sybase ASE identity columns for a table synchronously."""
-    for column in columns:
-        if column.is_identity:
-            quoted_col = _quoted_identifier_sql(column.name)
-            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
-            max_val = driver.select_value(query)
-            next_val = int(max_val or 0)
-            if next_val > 0:
-                escaped_table = table.replace("'", "''")
-                driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
+def _plan_sequence_resync_steps(
+    table: str, columns: "list[_TableColumn]", dialect_name: str = "postgres", family: str = "postgres"
+) -> "list[_ResyncStep]":
+    """Plan the ordered SQL execution steps to resynchronize sequences or identity columns for a table."""
+    if family == "sybase":
+        escaped_table = table.replace("'", "''")
+        return [
+            _ResyncStep(
+                statement=f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{{next_val}}'",
+                parameters={},
+                max_query=f"SELECT coalesce(max({_quoted_identifier_sql(column.name)}), 0) FROM {_quoted_table_name(table)}",
+                default_next=0,
+                skip_when_zero=True,
+            )
+            for column in columns
+            if column.is_identity
+        ]
 
+    if family == "sqlanywhere":
+        schema_part, _, table_part = table.rpartition(".")
+        escaped_table = table_part.replace("'", "''")
+        escaped_schema = schema_part.replace("'", "''")
+        schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
+        return [
+            _ResyncStep(
+                statement=f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {{next_val}})",
+                parameters={},
+                max_query=f"SELECT coalesce(max({_quoted_identifier_sql(column.name)}), 0) FROM {_quoted_table_name(table)}",
+                default_next=0,
+            )
+            for column in columns
+            if column.is_identity
+        ]
 
-def _resync_sqlanywhere_sequences_sync(
-    driver: "SyncDriverAdapterBase", table: str, columns: "list[_TableColumn]"
-) -> None:
-    """Resynchronize SAP SQL Anywhere identity columns for a table synchronously."""
-    for column in columns:
-        if column.is_identity:
+    if family == "db2":
+        quoted_table = _quoted_table_name(table)
+        steps: list[_ResyncStep] = []
+        for column in columns:
             quoted_col = _quoted_identifier_sql(column.name)
-            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
-            max_val = driver.select_value(query)
-            next_val = int(max_val or 0)
-            schema_part, _, table_part = table.rpartition(".")
-            escaped_table = table_part.replace("'", "''")
-            escaped_schema = schema_part.replace("'", "''")
-            schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
-            driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+            if column.is_identity:
+                steps.append(
+                    _ResyncStep(
+                        statement=f"ALTER TABLE {quoted_table} ALTER COLUMN {quoted_col} RESTART WITH {{next_val}}",
+                        parameters={},
+                        max_query=f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}",
+                    )
+                )
+            elif column.sequence_name is not None:
+                quoted_seq = _quoted_table_name(_validated_sequence_identifier(column.sequence_name))
+                steps.append(
+                    _ResyncStep(
+                        statement=f"ALTER SEQUENCE {quoted_seq} RESTART WITH {{next_val}}",
+                        parameters={},
+                        max_query=f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}",
+                    )
+                )
+        return steps
+
+    if family == "oracle":
+        steps = [
+            _ResyncStep(statement=stmt, parameters=params)
+            for stmt, params in _sequence_resync_statements(table, columns, dialect_name=dialect_name, family=family)
+        ]
+        quoted_table = _quoted_table_name(table)
+        for column in columns:
+            if not column.is_identity and column.sequence_name is not None:
+                quoted_col = _quoted_identifier_sql(column.name)
+                quoted_seq = _quoted_table_name(_validated_sequence_identifier(column.sequence_name))
+                steps.append(
+                    _ResyncStep(
+                        statement=f"ALTER SEQUENCE {quoted_seq} RESTART START WITH {{next_val}}",
+                        parameters={},
+                        max_query=f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}",
+                    )
+                )
+        return steps
+
+    if family == "tsql":
+        steps = [
+            _ResyncStep(statement=stmt, parameters=params)
+            for stmt, params in _sequence_resync_statements(table, columns, dialect_name=dialect_name, family=family)
+        ]
+        quoted_table = _quoted_table(table).sql(dialect="tsql")
+        for column in columns:
+            if not column.is_identity and column.sequence_name is not None:
+                quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="tsql")
+                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(dialect="tsql")
+                steps.append(
+                    _ResyncStep(
+                        statement=f"ALTER SEQUENCE {quoted_seq} RESTART WITH {{next_val}}",
+                        parameters={},
+                        max_query=f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}",
+                    )
+                )
+        return steps
+
+    if family == "mysql":
+        quoted_table = _quoted_table(table).sql(dialect="mysql")
+        steps = []
+        for column in columns:
+            if not column.is_identity and column.sequence_name is not None:
+                quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="mysql")
+                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(dialect="mysql")
+                steps.append(
+                    _ResyncStep(
+                        statement=f"ALTER SEQUENCE {quoted_seq} RESTART WITH {{next_val}}",
+                        parameters={},
+                        max_query=f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}",
+                    )
+                )
+        auto_columns = [
+            col
+            for col in columns
+            if col.is_identity
+            or (col.is_primary and col.sequence_name is None and ("int" in col.data_type or col.data_type == ""))
+        ]
+        if auto_columns:
+            column = auto_columns[0]
+            quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="mysql")
+            steps.append(
+                _ResyncStep(
+                    statement=f"ALTER TABLE {quoted_table} AUTO_INCREMENT = {{next_val}}",
+                    parameters={},
+                    max_query=f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}",
+                )
+            )
+        return steps
+
+    is_sqlite = family == "sqlite"
+    return [
+        _ResyncStep(statement=stmt, parameters=params, ignore_missing_sqlite_sequence=is_sqlite)
+        for stmt, params in _sequence_resync_statements(table, columns, dialect_name=dialect_name, family=family)
+    ]
 
 
 def _resync_table_sequences_sync(
     driver: "SyncDriverAdapterBase", family: str, dialect_name: str, table: str, columns: "list[_TableColumn]"
 ) -> None:
     """Resynchronize sequences, identity columns, or auto-increment counters for a table synchronously."""
-    if family == "sybase":
-        _resync_sybase_sequences_sync(driver, table, columns)
+    steps = _plan_sequence_resync_steps(table, columns, dialect_name=dialect_name, family=family)
+    if not steps:
+        if family not in {"sybase", "sqlanywhere", "db2", "oracle", "tsql", "mysql", "sqlite"}:
+            logger.debug("Skipping table fixture sequence resync for table %r: no sequence or identity columns", table)
         return
-
-    if family == "sqlanywhere":
-        _resync_sqlanywhere_sequences_sync(driver, table, columns)
-        return
-
-    if family == "db2":
-        quoted_table = _quoted_table_name(table)
-        for column in columns:
-            if column.is_identity:
-                quoted_col = _quoted_identifier_sql(column.name)
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = driver.select_value(query)
-                next_val = int(max_val or 1)
-                driver.execute(f"ALTER TABLE {quoted_table} ALTER COLUMN {quoted_col} RESTART WITH {next_val}")
-            elif column.sequence_name is not None:
-                quoted_col = _quoted_identifier_sql(column.name)
-                quoted_seq = _quoted_table_name(_validated_sequence_identifier(column.sequence_name))
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = driver.select_value(query)
-                next_val = int(max_val or 1)
-                driver.execute(f"ALTER SEQUENCE {quoted_seq} RESTART WITH {next_val}")
-        return
-
-    if family == "oracle":
-        for statement, parameters in _sequence_resync_statements(
-            table, columns, dialect_name=dialect_name, family=family
-        ):
-            driver.execute(statement, parameters)
-        quoted_table = _quoted_table_name(table)
-        for column in columns:
-            if not column.is_identity and column.sequence_name is not None:
-                quoted_col = _quoted_identifier_sql(column.name)
-                quoted_seq = _quoted_table_name(_validated_sequence_identifier(column.sequence_name))
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = driver.select_value(query)
-                next_val = int(max_val or 1)
-                driver.execute(f"ALTER SEQUENCE {quoted_seq} RESTART START WITH {next_val}")
-        return
-
-    if family == "tsql":
-        for statement, parameters in _sequence_resync_statements(
-            table, columns, dialect_name=dialect_name, family=family
-        ):
-            driver.execute(statement, parameters)
-        quoted_table = _quoted_table(table).sql(dialect="tsql")
-        for column in columns:
-            if not column.is_identity and column.sequence_name is not None:
-                quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="tsql")
-                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(dialect="tsql")
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = driver.select_value(query)
-                next_val = int(max_val or 1)
-                driver.execute(f"ALTER SEQUENCE {quoted_seq} RESTART WITH {next_val}")
-        return
-
-    if family == "mysql":
-        quoted_table = _quoted_table(table).sql(dialect="mysql")
-        for column in columns:
-            if not column.is_identity and column.sequence_name is not None:
-                quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="mysql")
-                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(dialect="mysql")
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = driver.select_value(query)
-                next_val = int(max_val or 1)
-                driver.execute(f"ALTER SEQUENCE {quoted_seq} RESTART WITH {next_val}")
-        auto_columns = [
-            col
-            for col in columns
-            if col.is_identity
-            or (col.is_primary and col.sequence_name is None and ("int" in col.data_type or col.data_type == ""))
-        ]
-        if auto_columns:
-            column = auto_columns[0]
-            quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="mysql")
-            query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-            max_val = driver.select_value(query)
-            next_val = int(max_val or 1)
-            driver.execute(f"ALTER TABLE {quoted_table} AUTO_INCREMENT = {next_val}")
-        return
-
-    if family == "sqlite":
-        for statement, parameters in _sequence_resync_statements(
-            table, columns, dialect_name=dialect_name, family=family
-        ):
+    for step in steps:
+        if step.max_query is not None:
+            max_val = driver.select_value(step.max_query)
+            next_val = int(max_val or step.default_next)
+            if step.skip_when_zero and next_val <= 0:
+                continue
+            driver.execute(step.statement.format(next_val=next_val))
+        elif step.ignore_missing_sqlite_sequence:
             try:
-                driver.execute(statement, parameters)
+                driver.execute(step.statement, step.parameters)
             except Exception as exc:
                 if "no such table: sqlite_sequence" in str(exc).lower():
                     logger.debug("Skipping sqlite_sequence update: sqlite_sequence table does not exist")
                 else:
                     raise
-        return
-
-    statements = _sequence_resync_statements(table, columns, dialect_name=dialect_name, family=family)
-    if not statements:
-        logger.debug("Skipping table fixture sequence resync for table %r: no sequence or identity columns", table)
-        return
-    for statement, parameters in statements:
-        driver.execute(statement, parameters)
-
-
-async def _resync_sybase_sequences_async(
-    driver: "AsyncDriverAdapterBase", table: str, columns: "list[_TableColumn]"
-) -> None:
-    """Resynchronize Sybase ASE identity columns for a table asynchronously."""
-    for column in columns:
-        if column.is_identity:
-            quoted_col = _quoted_identifier_sql(column.name)
-            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
-            max_val = await driver.select_value(query)
-            next_val = int(max_val or 0)
-            if next_val > 0:
-                escaped_table = table.replace("'", "''")
-                await driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
-
-
-async def _resync_sqlanywhere_sequences_async(
-    driver: "AsyncDriverAdapterBase", table: str, columns: "list[_TableColumn]"
-) -> None:
-    """Resynchronize SAP SQL Anywhere identity columns for a table asynchronously."""
-    for column in columns:
-        if column.is_identity:
-            quoted_col = _quoted_identifier_sql(column.name)
-            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
-            max_val = await driver.select_value(query)
-            next_val = int(max_val or 0)
-            schema_part, _, table_part = table.rpartition(".")
-            escaped_table = table_part.replace("'", "''")
-            escaped_schema = schema_part.replace("'", "''")
-            schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
-            await driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+        else:
+            driver.execute(step.statement, step.parameters)
 
 
 async def _resync_table_sequences_async(
     driver: "AsyncDriverAdapterBase", family: str, dialect_name: str, table: str, columns: "list[_TableColumn]"
 ) -> None:
     """Resynchronize sequences, identity columns, or auto-increment counters for a table asynchronously."""
-    if family == "sybase":
-        await _resync_sybase_sequences_async(driver, table, columns)
+    steps = _plan_sequence_resync_steps(table, columns, dialect_name=dialect_name, family=family)
+    if not steps:
+        if family not in {"sybase", "sqlanywhere", "db2", "oracle", "tsql", "mysql", "sqlite"}:
+            logger.debug("Skipping table fixture sequence resync for table %r: no sequence or identity columns", table)
         return
-
-    if family == "sqlanywhere":
-        await _resync_sqlanywhere_sequences_async(driver, table, columns)
-        return
-
-    if family == "db2":
-        quoted_table = _quoted_table_name(table)
-        for column in columns:
-            if column.is_identity:
-                quoted_col = _quoted_identifier_sql(column.name)
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = await driver.select_value(query)
-                next_val = int(max_val or 1)
-                await driver.execute(f"ALTER TABLE {quoted_table} ALTER COLUMN {quoted_col} RESTART WITH {next_val}")
-            elif column.sequence_name is not None:
-                quoted_col = _quoted_identifier_sql(column.name)
-                quoted_seq = _quoted_table_name(_validated_sequence_identifier(column.sequence_name))
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = await driver.select_value(query)
-                next_val = int(max_val or 1)
-                await driver.execute(f"ALTER SEQUENCE {quoted_seq} RESTART WITH {next_val}")
-        return
-
-    if family == "oracle":
-        for statement, parameters in _sequence_resync_statements(
-            table, columns, dialect_name=dialect_name, family=family
-        ):
-            await driver.execute(statement, parameters)
-        quoted_table = _quoted_table_name(table)
-        for column in columns:
-            if not column.is_identity and column.sequence_name is not None:
-                quoted_col = _quoted_identifier_sql(column.name)
-                quoted_seq = _quoted_table_name(_validated_sequence_identifier(column.sequence_name))
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = await driver.select_value(query)
-                next_val = int(max_val or 1)
-                await driver.execute(f"ALTER SEQUENCE {quoted_seq} RESTART START WITH {next_val}")
-        return
-
-    if family == "tsql":
-        for statement, parameters in _sequence_resync_statements(
-            table, columns, dialect_name=dialect_name, family=family
-        ):
-            await driver.execute(statement, parameters)
-        quoted_table = _quoted_table(table).sql(dialect="tsql")
-        for column in columns:
-            if not column.is_identity and column.sequence_name is not None:
-                quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="tsql")
-                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(dialect="tsql")
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = await driver.select_value(query)
-                next_val = int(max_val or 1)
-                await driver.execute(f"ALTER SEQUENCE {quoted_seq} RESTART WITH {next_val}")
-        return
-
-    if family == "mysql":
-        quoted_table = _quoted_table(table).sql(dialect="mysql")
-        for column in columns:
-            if not column.is_identity and column.sequence_name is not None:
-                quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="mysql")
-                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(dialect="mysql")
-                query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-                max_val = await driver.select_value(query)
-                next_val = int(max_val or 1)
-                await driver.execute(f"ALTER SEQUENCE {quoted_seq} RESTART WITH {next_val}")
-        auto_columns = [
-            col
-            for col in columns
-            if col.is_identity
-            or (col.is_primary and col.sequence_name is None and ("int" in col.data_type or col.data_type == ""))
-        ]
-        if auto_columns:
-            column = auto_columns[0]
-            quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="mysql")
-            query = f"SELECT coalesce(max({quoted_col}), 0) + 1 FROM {quoted_table}"
-            max_val = await driver.select_value(query)
-            next_val = int(max_val or 1)
-            await driver.execute(f"ALTER TABLE {quoted_table} AUTO_INCREMENT = {next_val}")
-        return
-
-    if family == "sqlite":
-        for statement, parameters in _sequence_resync_statements(
-            table, columns, dialect_name=dialect_name, family=family
-        ):
+    for step in steps:
+        if step.max_query is not None:
+            max_val = await driver.select_value(step.max_query)
+            next_val = int(max_val or step.default_next)
+            if step.skip_when_zero and next_val <= 0:
+                continue
+            await driver.execute(step.statement.format(next_val=next_val))
+        elif step.ignore_missing_sqlite_sequence:
             try:
-                await driver.execute(statement, parameters)
+                await driver.execute(step.statement, step.parameters)
             except Exception as exc:
                 if "no such table: sqlite_sequence" in str(exc).lower():
                     logger.debug("Skipping sqlite_sequence update: sqlite_sequence table does not exist")
                 else:
                     raise
-        return
-
-    statements = _sequence_resync_statements(table, columns, dialect_name=dialect_name, family=family)
-    if not statements:
-        logger.debug("Skipping table fixture sequence resync for table %r: no sequence or identity columns", table)
-        return
-    for statement, parameters in statements:
-        await driver.execute(statement, parameters)
+        else:
+            await driver.execute(step.statement, step.parameters)
 
 
 def _exportable_value(value: Any) -> Any:
@@ -2292,6 +2251,8 @@ def _exportable_value(value: Any) -> Any:
         return [float(x) for x in value]
     if hasattr(value, "tolist"):
         return [float(x) for x in value.tolist()]
+    if hasattr(value, "to_list"):
+        return [float(x) for x in value.to_list()]
     return value
 
 
@@ -2376,25 +2337,32 @@ def _write_table_fixture(
     temp_paths: list[Path] = []
     final_paths: list[Path] = []
     try:
-        if len(shards) == 1:
-            target_path = base_path / f"{table}{extension}"
-            final_paths.append(target_path)
+        target_names = (
+            [f"{table}{extension}"]
+            if len(shards) == 1
+            else [f"{table}.{index:03d}{extension}" for index in range(1, len(shards) + 1)]
+        )
+        for target_name, shard_text in zip(target_names, shards, strict=True):
+            final_paths.append(base_path / target_name)
             temp_path = base_path / f".{table}.{secrets.token_hex(8)}.tmp"
             temp_paths.append(temp_path)
-            payload = _compress_text(shards[0]) if compress else shards[0].encode("utf-8")
+            payload = _compress_text(shard_text) if compress else shard_text.encode("utf-8")
             descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _TEMPORARY_FILE_MODE)
             with os.fdopen(descriptor, "wb") as handle:
                 handle.write(payload)
-        else:
-            for index, shard_text in enumerate(shards, start=1):
-                target_path = base_path / f"{table}.{index:03d}{extension}"
-                final_paths.append(target_path)
-                temp_path = base_path / f".{table}.{secrets.token_hex(8)}.tmp"
-                temp_paths.append(temp_path)
-                payload = _compress_text(shard_text) if compress else shard_text.encode("utf-8")
-                descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _TEMPORARY_FILE_MODE)
-                with os.fdopen(descriptor, "wb") as handle:
-                    handle.write(payload)
+
+        written_paths = set(final_paths)
+        for entry in base_path.iterdir():
+            if not entry.is_file():
+                continue
+            parsed = _parse_table_fixture_filename(entry.name)
+            if (
+                parsed is not None
+                and parsed[0] == table
+                and entry not in written_paths
+                and (parsed[1] is not None or len(shards) > 1)
+            ):
+                entry.unlink(missing_ok=True)
 
         for temp_path, final_path in zip(temp_paths, final_paths, strict=True):
             temp_path.replace(final_path)
@@ -2403,7 +2371,6 @@ def _write_table_fixture(
             temp_path.unlink(missing_ok=True)
         raise
 
-    written_paths = set(final_paths)
     for entry in base_path.iterdir():
         if not entry.is_file():
             continue

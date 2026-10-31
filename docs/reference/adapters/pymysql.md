@@ -11,14 +11,13 @@ from sqlspec.adapters.pymysql import (
 )
 ```
 
-Synchronous MySQL and MariaDB adapter built on `pymysql`. Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md). See the [MySQL & MariaDB Setup Guide](../../databases/mysql.md) for usage examples.
+Synchronous MySQL and MariaDB adapter built on `pymysql`. Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md). See the [MySQL & MariaDB Setup Guide](../../databases/mysql.md) for usage examples and the [MySQL](../data-dictionary/dialects/mysql.md) and [MariaDB](../data-dictionary/dialects/mariadb.md) Data Dictionary SQL Catalogs.
 
 ## Configuration & Parameters
 
 ::: sqlspec.adapters.pymysql.PyMysqlConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.adapters.pymysql.PyMysqlConnectionParams
     options:
@@ -38,7 +37,7 @@ Synchronous MySQL and MariaDB adapter built on `pymysql`. Inherited execution me
       separate_signature: false
       show_signature_annotations: true
 
-## Driver & Pool
+## Driver, Pool & Data Dictionary
 
 ::: sqlspec.adapters.pymysql.PyMysqlDriver
     options:
@@ -50,24 +49,37 @@ Synchronous MySQL and MariaDB adapter built on `pymysql`. Inherited execution me
       heading_level: 3
       members: false
 
-## Extension Stores
+::: sqlspec.adapters.pymysql.data_dictionary.PyMysqlDataDictionary
+    options:
+      heading_level: 3
+      members: false
+
+## Extension Stores & Configs
+
+::: sqlspec.adapters.pymysql.litestar.PyMysqlLitestarConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.pymysql.litestar.PyMysqlStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.pymysql.adk.PyMysqlADKConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.pymysql.adk.PyMysqlADKStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.pymysql.adk.PyMysqlADKMemoryStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.pymysql.events.PyMysqlEventQueueStore
     options:
       heading_level: 4
-      members: false

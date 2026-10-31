@@ -17,13 +17,12 @@ def main() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         base_dir = Path(tmp_dir)
-        # --8<-- [start:example]
-        primary = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "primary.db")}))
-        analytics = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "analytics.db")}))
-
         sql_dir = base_dir / "sql"
         sql_dir.mkdir()
         (sql_dir / "queries.sql").write_text("-- name: list_users\nSELECT id, name FROM users ORDER BY id;\n")
+        # --8<-- [start:example]
+        primary = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "primary.db")}))
+        analytics = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "analytics.db")}))
         spec.load_sql_files(sql_dir)
 
         with spec.provide_session(primary) as session:

@@ -31,7 +31,7 @@ from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.squash import MigrationSquasher, schema_ddl_statements
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file
-from sqlspec.migrations.validation import validate_migration_order
+from sqlspec.migrations.validation import validate_migration_order, validate_squash_range
 from sqlspec.migrations.version import generate_conversion_map, generate_timestamp_version, parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -333,6 +333,15 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
             msg = f"Data file not found: {text}"
             raise MigrationError(msg)
         return path
+
+    def _prepare_revision_source(self, *, from_schema: bool, from_data: "str | Path | None") -> "Path | str | None":
+        """Validate revision source flags and classify ``from_data`` as a file ``Path`` or table name."""
+        if from_schema and from_data is not None:
+            msg = "Cannot specify both from_schema and from_data"
+            raise MigrationError(msg)
+        if from_data is None:
+            return None
+        return self._resolve_data_source(from_data)
 
     def _data_file_revision_sql(
         self, data_path: Path, *, schema: str | None, target_table: str | None
@@ -796,23 +805,62 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
             f"\n[yellow]{total_migrations} migrations will be squashed into {len(plans)} file(s): {target_files}[/]"
         )
 
+    def _print_squash_dry_run(self, squasher: MigrationSquasher, plans: "list[SquashPlan]") -> None:
+        """Extract and print the planned UP and DOWN SQL for each squash plan in dry-run mode."""
+        for plan in plans:
+            up_sql, down_sql = squasher.extract_plan_sql(plan)
+            console.print(f"\n[cyan]-- {plan.target_path.name} (up)[/]")
+            for statement in up_sql:
+                console.print(statement.rstrip())
+            if down_sql:
+                console.print(f"\n[cyan]-- {plan.target_path.name} (down)[/]")
+                for statement in down_sql:
+                    console.print(statement.rstrip())
+        console.print("[yellow][Preview Mode - No changes made][/]")
+
+    def _validate_schema_squash_applied(
+        self,
+        runner: SyncMigrationRunner,
+        all_migrations: "list[tuple[str, Path]]",
+        start_version: str,
+        end_version: str,
+        *,
+        allow_gaps: bool,
+        applied_migrations: "list[AppliedMigrationRecord]",
+    ) -> None:
+        """Ensure every migration in a ``schema`` squash range is already applied in the database."""
+        source_migrations = validate_squash_range(all_migrations, start_version, end_version, allow_gaps=allow_gaps)
+        covered_versions: set[str] = set()
+        for record in applied_migrations:
+            covered_versions.add(record["version_num"])
+            raw_replaces = record.get("replaces")
+            if isinstance(raw_replaces, str) and raw_replaces:
+                covered_versions.update(part.strip() for part in raw_replaces.split(",") if part.strip())
+        unapplied: list[str] = []
+        for version, file_path in source_migrations:
+            if version in covered_versions:
+                continue
+            migration = runner.load_migration(file_path, version)
+            replaces = list(migration.get("replaces") or [])
+            if replaces and all(rep in covered_versions for rep in replaces):
+                continue
+            unapplied.append(version)
+        if unapplied:
+            msg = (
+                "Cannot squash with the schema strategy because the database has unapplied migrations "
+                f"({', '.join(unapplied)}). Run 'upgrade' so all migrations through {end_version} are applied."
+            )
+            raise SquashValidationError(msg)
+
     def _apply_squash_files(self, squasher: MigrationSquasher, plans: "list[SquashPlan]") -> None:
         """Write squashed migration files, keeping the backup until the caller commits or rolls back."""
         squasher.apply_squash(plans, cleanup_backup=False)
         for plan in plans:
             console.print(f"[green]✓ Created squashed migration: {plan.target_path.name}[/]")
 
-    def _squash_record_checksum(self, squasher: MigrationSquasher, plan: "SquashPlan") -> str:
+    def _squash_record_checksum(self, plan: "SquashPlan") -> str:
         """Return the checksum recorded for a squashed migration in the tracking table."""
-        if plan.target_path.exists():
-            content = plan.target_path.read_text(encoding="utf-8")
-        else:
-            up_sql, down_sql = squasher.extract_plan_sql(plan)
-            if plan.target_path.suffix == ".py":
-                content = squasher.generate_python_squash(plan, up_sql, down_sql)
-            else:
-                content = squasher.generate_squashed_content(plan, up_sql, down_sql)
-        return self.runner.calculate_checksum(content)
+        return self.runner.calculate_checksum(plan.target_path.read_text(encoding="utf-8"))
 
     def _finish_squash(self, squasher: MigrationSquasher) -> None:
         """Remove the squash backup, drop stale migration caches, and report completion."""
@@ -941,14 +989,6 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
             "upgrading with the squashed migration."
         )
         raise SquashValidationError(msg)
-
-    @staticmethod
-    def _attach_schema_ddl(plans: "list[SquashPlan]", create_res: Any, drop_res: Any) -> None:
-        """Attach live-schema UP/DOWN DDL to every plan for the ``schema`` squash strategy."""
-        up_ddl, down_ddl = schema_ddl_statements(create_res, drop_res)
-        for plan in plans:
-            plan.schema_ddl_up = up_ddl
-            plan.schema_ddl_down = down_ddl
 
     @staticmethod
     def _driver_dialect(driver: Any) -> str | None:
@@ -1529,10 +1569,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         Raises:
             MigrationError: When both sources are given or DDL cannot be inferred.
         """
-        if from_schema and from_data is not None:
-            msg = "Cannot specify both from_schema and from_data"
-            raise MigrationError(msg)
-
+        source = self._prepare_revision_source(from_schema=from_schema, from_data=from_data)
         up_sql: Sequence[str] | None = None
         down_sql: Sequence[str] | None = None
         if from_schema:
@@ -1546,23 +1583,19 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                         driver, schema=schema, exclude_tables=excluded, direction="drop"
                     ),
                 )
-        elif from_data is not None:
-            source = self._resolve_data_source(from_data)
-            if isinstance(source, Path):
-                up_sql, down_sql = self._data_file_revision_sql(source, schema=schema, target_table=target_table)
-            else:
-                source_table, source_schema = self._split_qualified_table(source, schema)
-                with self.config.provide_session() as driver:
-                    try:
-                        ddl_res = driver.data_dictionary.infer_table_ddl_from_data(
-                            driver, source_table, schema=source_schema, target_table=target_table
-                        )
-                    except (SqlglotError, SQLBuilderError) as exc:
-                        msg = f"Could not infer DDL from table '{source}': {exc}"
-                        raise MigrationError(msg) from exc
-                    up_sql, down_sql = self._staging_table_revision_sql(
-                        ddl_res.ddl, source, self._driver_dialect(driver)
+        elif isinstance(source, Path):
+            up_sql, down_sql = self._data_file_revision_sql(source, schema=schema, target_table=target_table)
+        elif isinstance(source, str):
+            source_table, source_schema = self._split_qualified_table(source, schema)
+            with self.config.provide_session() as driver:
+                try:
+                    ddl_res = driver.data_dictionary.infer_table_ddl_from_data(
+                        driver, source_table, schema=source_schema, target_table=target_table
                     )
+                except (SqlglotError, SQLBuilderError) as exc:
+                    msg = f"Could not infer DDL from table '{source}': {exc}"
+                    raise MigrationError(msg) from exc
+                up_sql, down_sql = self._staging_table_revision_sql(ddl_res.ddl, source, self._driver_dialect(driver))
 
         return self._write_revision(message, file_type, up_sql, down_sql)
 
@@ -1653,7 +1686,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         allow_gaps: bool = False,
         output_format: str = "sql",
         strategy: str = "concat",
-        single_file: bool = True,
+        single_file: bool | None = None,
     ) -> None:
         """Squash a range of migrations into a single file.
 
@@ -1673,17 +1706,44 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             output_format: Output format ("sql" or "py").
             strategy: Squash strategy: "concat" (default) keeps every statement in order, "ddl" folds DDL and
                 refuses ranges it cannot fold faithfully, "schema" reflects the live database schema.
-            single_file: Emit a single squashed file across the range.
+            single_file: Force a single squashed file when True, split by file type/directives when False or None.
         """
         resolved_strategy = strategy.lower()
+        all_migrations = self.runner.get_migration_files()
         squasher = self._create_squasher(self.runner, resolved_strategy)
-        version_range = self._resolve_squash_range(self.runner.get_migration_files(), start_version, end_version)
+        version_range = self._resolve_squash_range(all_migrations, start_version, end_version)
         if version_range is None:
             return
         if description is None:
             description = (
                 "initial_schema" if yes else Prompt.ask("Migration description", default="squashed_migrations")
             )
+
+        schema_ddl: tuple[list[str], list[str]] | None = None
+        if resolved_strategy == "schema":
+            squasher.plan_squash(
+                version_range[0],
+                version_range[1],
+                description,
+                allow_gaps=allow_gaps,
+                output_format=output_format,
+                strategy=resolved_strategy,
+                single_file=single_file,
+            )
+            excluded = self._version_table_exclusion()
+            with self.config.provide_session() as driver:
+                self._validate_schema_squash_applied(
+                    self.runner,
+                    all_migrations,
+                    version_range[0],
+                    version_range[1],
+                    allow_gaps=allow_gaps,
+                    applied_migrations=self._read_applied_migrations(driver),
+                )
+                schema_ddl = schema_ddl_statements(
+                    driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="create"),
+                    driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="drop"),
+                )
 
         plans = squasher.plan_squash(
             version_range[0],
@@ -1693,40 +1753,35 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             output_format=output_format,
             strategy=resolved_strategy,
             single_file=single_file,
+            schema_ddl=schema_ddl,
         )
         self._print_squash_plan(plans)
         if dry_run:
-            console.print("[yellow][Preview Mode - No changes made][/]")
+            self._print_squash_dry_run(squasher, plans)
             return
         if not yes and not Confirm.ask("Proceed with squash?", default=False):
             console.print("[yellow]Squash cancelled[/]")
             return
 
         try:
-            if update_database or resolved_strategy == "schema":
+            if update_database:
                 with self.config.provide_session() as driver:
-                    if resolved_strategy == "schema":
-                        excluded = self._version_table_exclusion()
-                        self._attach_schema_ddl(
-                            plans,
-                            driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="create"),
-                            driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="drop"),
-                        )
+                    self.tracker.ensure_tracking_table(driver)
+                    applied_plans = [
+                        plan
+                        for plan in plans
+                        if self.tracker.is_squash_already_applied(driver, plan.target_version, plan.source_versions)
+                    ]
                     self._apply_squash_files(squasher, plans)
-                    if update_database:
-                        self.tracker.ensure_tracking_table(driver)
-                        for plan in plans:
-                            if self.tracker.is_squash_already_applied(
-                                driver, plan.target_version, plan.source_versions
-                            ):
-                                self.tracker.replace_with_squash(
-                                    driver,
-                                    plan.target_version,
-                                    plan.source_versions,
-                                    description,
-                                    self._squash_record_checksum(squasher, plan),
-                                )
-                        console.print("[green]✓ Updated migration tracking table[/]")
+                    for plan in applied_plans:
+                        self.tracker.replace_with_squash(
+                            driver,
+                            plan.target_version,
+                            plan.source_versions,
+                            description,
+                            self._squash_record_checksum(plan),
+                        )
+                    console.print("[green]✓ Updated migration tracking table[/]")
             else:
                 self._apply_squash_files(squasher, plans)
         except Exception:
@@ -2539,10 +2594,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         Raises:
             MigrationError: When both sources are given or DDL cannot be inferred.
         """
-        if from_schema and from_data is not None:
-            msg = "Cannot specify both from_schema and from_data"
-            raise MigrationError(msg)
-
+        source = self._prepare_revision_source(from_schema=from_schema, from_data=from_data)
         up_sql: Sequence[str] | None = None
         down_sql: Sequence[str] | None = None
         if from_schema:
@@ -2556,23 +2608,19 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                         driver, schema=schema, exclude_tables=excluded, direction="drop"
                     ),
                 )
-        elif from_data is not None:
-            source = self._resolve_data_source(from_data)
-            if isinstance(source, Path):
-                up_sql, down_sql = self._data_file_revision_sql(source, schema=schema, target_table=target_table)
-            else:
-                source_table, source_schema = self._split_qualified_table(source, schema)
-                async with self.config.provide_session() as driver:
-                    try:
-                        ddl_res = await driver.data_dictionary.infer_table_ddl_from_data(
-                            driver, source_table, schema=source_schema, target_table=target_table
-                        )
-                    except (SqlglotError, SQLBuilderError) as exc:
-                        msg = f"Could not infer DDL from table '{source}': {exc}"
-                        raise MigrationError(msg) from exc
-                    up_sql, down_sql = self._staging_table_revision_sql(
-                        ddl_res.ddl, source, self._driver_dialect(driver)
+        elif isinstance(source, Path):
+            up_sql, down_sql = self._data_file_revision_sql(source, schema=schema, target_table=target_table)
+        elif isinstance(source, str):
+            source_table, source_schema = self._split_qualified_table(source, schema)
+            async with self.config.provide_session() as driver:
+                try:
+                    ddl_res = await driver.data_dictionary.infer_table_ddl_from_data(
+                        driver, source_table, schema=source_schema, target_table=target_table
                     )
+                except (SqlglotError, SQLBuilderError) as exc:
+                    msg = f"Could not infer DDL from table '{source}': {exc}"
+                    raise MigrationError(msg) from exc
+                up_sql, down_sql = self._staging_table_revision_sql(ddl_res.ddl, source, self._driver_dialect(driver))
 
         return self._write_revision(message, file_type, up_sql, down_sql)
 
@@ -2663,7 +2711,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         allow_gaps: bool = False,
         output_format: str = "sql",
         strategy: str = "concat",
-        single_file: bool = True,
+        single_file: bool | None = None,
     ) -> None:
         """Squash a range of migrations into a single file.
 
@@ -2683,12 +2731,13 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             output_format: Output format ("sql" or "py").
             strategy: Squash strategy: "concat" (default) keeps every statement in order, "ddl" folds DDL and
                 refuses ranges it cannot fold faithfully, "schema" reflects the live database schema.
-            single_file: Emit a single squashed file across the range.
+            single_file: Force a single squashed file when True, split by file type/directives when False or None.
         """
         resolved_strategy = strategy.lower()
         sync_runner = self._create_squash_runner()
+        all_migrations = sync_runner.get_migration_files()
         squasher = self._create_squasher(sync_runner, resolved_strategy)
-        version_range = self._resolve_squash_range(sync_runner.get_migration_files(), start_version, end_version)
+        version_range = self._resolve_squash_range(all_migrations, start_version, end_version)
         if version_range is None:
             return
         if description is None:
@@ -2698,6 +2747,32 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 else await asyncio.to_thread(Prompt.ask, "Migration description", default="squashed_migrations")
             )
 
+        schema_ddl: tuple[list[str], list[str]] | None = None
+        if resolved_strategy == "schema":
+            squasher.plan_squash(
+                version_range[0],
+                version_range[1],
+                description,
+                allow_gaps=allow_gaps,
+                output_format=output_format,
+                strategy=resolved_strategy,
+                single_file=single_file,
+            )
+            excluded = self._version_table_exclusion()
+            async with self.config.provide_session() as driver:
+                self._validate_schema_squash_applied(
+                    sync_runner,
+                    all_migrations,
+                    version_range[0],
+                    version_range[1],
+                    allow_gaps=allow_gaps,
+                    applied_migrations=await self._read_applied_migrations(driver),
+                )
+                schema_ddl = schema_ddl_statements(
+                    await driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="create"),
+                    await driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="drop"),
+                )
+
         plans = squasher.plan_squash(
             version_range[0],
             version_range[1],
@@ -2706,44 +2781,37 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             output_format=output_format,
             strategy=resolved_strategy,
             single_file=single_file,
+            schema_ddl=schema_ddl,
         )
         self._print_squash_plan(plans)
         if dry_run:
-            console.print("[yellow][Preview Mode - No changes made][/]")
+            self._print_squash_dry_run(squasher, plans)
             return
         if not yes and not await asyncio.to_thread(Confirm.ask, "Proceed with squash?", default=False):
             console.print("[yellow]Squash cancelled[/]")
             return
 
         try:
-            if update_database or resolved_strategy == "schema":
+            if update_database:
                 async with self.config.provide_session() as driver:
-                    if resolved_strategy == "schema":
-                        excluded = self._version_table_exclusion()
-                        self._attach_schema_ddl(
-                            plans,
-                            await driver.data_dictionary.get_schema_ddl(
-                                driver, exclude_tables=excluded, direction="create"
-                            ),
-                            await driver.data_dictionary.get_schema_ddl(
-                                driver, exclude_tables=excluded, direction="drop"
-                            ),
+                    await self.tracker.ensure_tracking_table(driver)
+                    applied_plans = [
+                        plan
+                        for plan in plans
+                        if await self.tracker.is_squash_already_applied(
+                            driver, plan.target_version, plan.source_versions
                         )
+                    ]
                     self._apply_squash_files(squasher, plans)
-                    if update_database:
-                        await self.tracker.ensure_tracking_table(driver)
-                        for plan in plans:
-                            if await self.tracker.is_squash_already_applied(
-                                driver, plan.target_version, plan.source_versions
-                            ):
-                                await self.tracker.replace_with_squash(
-                                    driver,
-                                    plan.target_version,
-                                    plan.source_versions,
-                                    description,
-                                    self._squash_record_checksum(squasher, plan),
-                                )
-                        console.print("[green]✓ Updated migration tracking table[/]")
+                    for plan in applied_plans:
+                        await self.tracker.replace_with_squash(
+                            driver,
+                            plan.target_version,
+                            plan.source_versions,
+                            description,
+                            self._squash_record_checksum(plan),
+                        )
+                    console.print("[green]✓ Updated migration tracking table[/]")
             else:
                 self._apply_squash_files(squasher, plans)
         except Exception:

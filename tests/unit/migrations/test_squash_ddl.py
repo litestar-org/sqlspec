@@ -485,6 +485,34 @@ _REFUSALS: list[tuple[str, str, list[str], str]] = [
         "leaves behind the index MySQL created",
     ),
     (
+        "mysql_drop_column_in_multi_column_index",
+        "mysql",
+        [
+            "CREATE TABLE items (id INT PRIMARY KEY, org_id INT, slug VARCHAR(64));",
+            "CREATE INDEX idx_items_org_slug ON items (org_id, slug);",
+            "ALTER TABLE items DROP COLUMN org_id;",
+        ],
+        "narrows a multi-column index or unique constraint",
+    ),
+    (
+        "mariadb_drop_column_in_multi_column_unique",
+        "mariadb",
+        [
+            "CREATE TABLE items (id INT PRIMARY KEY, org_id INT, slug VARCHAR(64), CONSTRAINT uq_org_slug UNIQUE (org_id, slug));",
+            "ALTER TABLE items DROP COLUMN org_id;",
+        ],
+        "narrows a multi-column index or unique constraint",
+    ),
+    (
+        "mysql_drop_column_in_inline_multi_column_index",
+        "mysql",
+        [
+            "CREATE TABLE items (id INT PRIMARY KEY, org_id INT, slug VARCHAR(64), INDEX idx_org_slug (org_id, slug));",
+            "ALTER TABLE items DROP COLUMN org_id;",
+        ],
+        "narrows a multi-column index or unique constraint",
+    ),
+    (
         "drop_named_primary_key_constraint",
         "postgres",
         ["CREATE TABLE t (id INT, CONSTRAINT t_pk PRIMARY KEY (id));", "ALTER TABLE t DROP CONSTRAINT t_pk;"],
@@ -689,6 +717,23 @@ def test_mysql_modify_column_preserves_inline_primary_key_and_unique() -> None:
         "mysql",
     )
     assert up_sql == ["CREATE TABLE users (id BIGINT NOT NULL PRIMARY KEY, code VARCHAR(32) NOT NULL UNIQUE);"]
+
+
+def test_mysql_drop_column_removes_single_column_index() -> None:
+    """MySQL DROP COLUMN removes single-column indexes on that column while refusing multi-column indexes."""
+    up_sql, _ = _fold(
+        [
+            "CREATE TABLE items (id INT PRIMARY KEY, legacy VARCHAR(32), active TINYINT);",
+            "CREATE INDEX idx_items_legacy ON items (legacy);",
+            "CREATE INDEX idx_items_active ON items (active);",
+            "ALTER TABLE items DROP COLUMN legacy;",
+        ],
+        "mysql",
+    )
+    assert up_sql == [
+        "CREATE TABLE items (id INT PRIMARY KEY, active TINYINT);",
+        "CREATE INDEX idx_items_active ON items (active);",
+    ]
 
 
 def test_cross_schema_index_and_sequence_operations_stay_isolated() -> None:

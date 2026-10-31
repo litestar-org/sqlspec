@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[arrow-odbc]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[arrow-odbc]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[arrow-odbc]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[arrow-odbc]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[arrow-odbc]"
+    ```
 
 Choose `ArrowOdbcConfig` when your environment standardizes on enterprise unixODBC / Windows ODBC drivers (such as `ODBC Driver 18 for SQL Server`, `psqlodbc`, or IBM Db2 `libdb2o.so`) and needs fast, bounded-memory Arrow batch extraction without row-by-row `pyodbc` tuple overhead.
 

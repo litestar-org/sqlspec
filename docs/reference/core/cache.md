@@ -3,11 +3,14 @@
 ```python
 from sqlspec.core import (
     CacheConfig,
+    CachedQuery,
     CachedStatement,
     CacheKey,
     CacheStats,
     LRUCache,
     NamespacedCache,
+    QueryCache,
+    StatementCacheHolder,
     clear_all_caches,
     create_cache_key,
     get_cache,
@@ -21,29 +24,44 @@ from sqlspec.core import (
 )
 ```
 
-Multi-tier LRU caching and deterministic structural hashing for SQL statements, SQLGlot AST expressions, and parameter bindings. See the [Performance Guide](../../learn/performance.md) for tuning guidance.
+Coordinated L1/L2 LRU caching (`StatementCacheHolder`, `QueryCache`, `NamespacedCache`) and deterministic structural hashing for SQL statements, SQLGlot AST expressions, and parameter bindings. See the [Performance Guide](../../learn/performance.md) for tuning guidance.
 
-## Cache Configuration & Statistics
+## Per-Config Fast-Path Cache (`L1`)
+
+::: sqlspec.core.cache.StatementCacheHolder
+    options:
+      heading_level: 3
+
+::: sqlspec.core.cache.QueryCache
+    options:
+      heading_level: 3
+
+::: sqlspec.core.cache.CachedQuery
+    options:
+      heading_level: 3
+
+## Cache Configuration & Statistics (`L2`)
 
 ::: sqlspec.core.cache.CacheConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.core.cache.CacheStats
     options:
       heading_level: 3
-      members: false
+      members:
+        - record_hit
+        - record_miss
+        - record_eviction
+        - reset
 
 ::: sqlspec.core.cache.CachedStatement
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.core.cache.CacheKey
     options:
       heading_level: 3
-      members: false
 
 ## Cache Implementations
 
@@ -61,7 +79,12 @@ Multi-tier LRU caching and deterministic structural hashing for SQL statements, 
 ::: sqlspec.core.cache.NamespacedCache
     options:
       heading_level: 3
-      members: false
+      members:
+        - get_statement
+        - put_statement
+        - get_expression
+        - put_expression
+        - clear_namespace
 
 ## Cache Management & Hashing Functions
 

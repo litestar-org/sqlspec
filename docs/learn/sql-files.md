@@ -14,9 +14,20 @@ For small query registries, register named statements directly on `SQLSpec` with
 
 Group related queries inside `.sql` files using `-- name: <query_name>` comment headers and load individual files or entire directories with `spec.load_sql_files(...)` (or `SQLFileLoader` directly):
 
-```python
---8<-- "docs/examples/sql_files/load_sql_files.py:example"
-```
+=== "SQL (`queries.sql`)"
+
+    ```sql
+    -- name: list_teams
+    SELECT id, name
+    FROM teams
+    ORDER BY id;
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "docs/examples/sql_files/load_sql_files.py:example"
+    ```
 
 Query names inside nested directories can be organized by namespace (or hyphenated identifiers normalized automatically when accessed) and shared across any session opened from `spec`. `SQLFileLoader` also integrates with `StorageRegistry` so SQL bundles can be loaded from local directories or registered object storage aliases.
 
@@ -24,31 +35,62 @@ Query names inside nested directories can be organized by namespace (or hyphenat
 
 A single `.sql` file can group all reads and writes for a domain module under distinct `-- name:` headers, with optional dialect annotations and `-- param:` declarations:
 
-```sql
--- name: create_invoices_table
-CREATE TABLE IF NOT EXISTS invoices (
-    id INTEGER PRIMARY KEY,
-    customer_id INTEGER NOT NULL,
-    status TEXT NOT NULL,
-    total_cents INTEGER NOT NULL
-);
+=== "SQL (`app/sql/billing.sql`)"
 
--- name: insert_invoice
--- param: customer_id int  Account identifier
--- param: status str       Initial invoice state
--- param: total_cents int  Invoice total in minor currency units
-INSERT INTO invoices (customer_id, status, total_cents)
-VALUES (:customer_id, :status, :total_cents);
+    ```sql
+    -- name: create_invoices_table
+    CREATE TABLE IF NOT EXISTS invoices (
+        id INTEGER PRIMARY KEY,
+        customer_id INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        total_cents INTEGER NOT NULL
+    );
 
--- name: list_customer_invoices
--- param: customer_id int  Account identifier
--- param: status str?      Optional status filter
-SELECT id, customer_id, status, total_cents
-FROM invoices
-WHERE customer_id = :customer_id
-  AND (:status IS NULL OR status = :status)
-ORDER BY id DESC;
-```
+    -- name: insert_invoice
+    -- param: customer_id int  Account identifier
+    -- param: status str       Initial invoice state
+    -- param: total_cents int  Invoice total in minor currency units
+    INSERT INTO invoices (customer_id, status, total_cents)
+    VALUES (:customer_id, :status, :total_cents);
+
+    -- name: list_customer_invoices
+    -- param: customer_id int  Account identifier
+    -- param: status str?      Optional status filter
+    SELECT id, customer_id, status, total_cents
+    FROM invoices
+    WHERE customer_id = :customer_id
+      AND (:status IS NULL OR status = :status)
+    ORDER BY id DESC;
+    ```
+
+=== "Python"
+
+    ```python
+    from pathlib import Path
+
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    spec = SQLSpec()
+    config = spec.add_config(
+        SqliteConfig(connection_config={"database": ":memory:"})
+    )
+    spec.load_sql_files(Path("app/sql/billing.sql"))
+
+    with spec.provide_session(config) as session:
+        session.execute(spec.get_sql("create_invoices_table"))
+        session.execute(
+            spec.get_sql("insert_invoice"),
+            customer_id=42,
+            status="paid",
+            total_cents=9500,
+        )
+        invoices = session.select(
+            spec.get_sql("list_customer_invoices"),
+            customer_id=42,
+            status="paid",
+        )
+    ```
 
 ### Organizing Query Directories
 
@@ -62,9 +104,28 @@ When `spec.load_sql_files(Path("app/sql"))` scans a directory tree, you can keep
 
 Add `-- param: <name> <type>[?]  <description>` headers immediately below `-- name:` to document expected arguments and enforce automatic required-parameter validation before a query ever touches the database connection:
 
-```python
---8<-- "docs/examples/sql_files/declared_params.py:example"
-```
+=== "SQL (`teams.sql`)"
+
+    ```sql
+    -- name: get_team_by_name
+    -- param: name str  The team name to look up
+    SELECT id, name
+    FROM teams
+    WHERE name = :name;
+
+    -- name: list_teams
+    -- param: name str?  Optional team name filter
+    SELECT id, name
+    FROM teams
+    WHERE (:name IS NULL OR name = :name)
+    ORDER BY id;
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "docs/examples/sql_files/declared_params.py:example"
+    ```
 
 Suffixing the type with `?` (such as `str?` or `int?`) marks the parameter optional and defaults omitted keyword arguments to `None` (`NULL`), enabling clean `(:name IS NULL OR name = :name)` filter patterns in pure SQL. Omitting a required parameter raises `SQLSpecError` immediately with the missing parameter name.
 
@@ -72,9 +133,19 @@ Suffixing the type with `?` (such as `str?` or `int?`) marks the parameter optio
 
 Static `.sql` files often need optional runtime predicates for search, tenant scoping, or pagination. Because `spec.get_sql(...)` returns an immutable `SQL` statement object, calling `.where(...)`, `.where_eq(...)`, `.where_like(...)`, or `.paginate(...)` returns a new derived `SQL` instance without mutating the cached base template:
 
-```python
---8<-- "docs/examples/sql_files/dynamic_where.py:example"
-```
+=== "SQL (`users.sql`)"
+
+    ```sql
+    -- name: list_users
+    SELECT id, name, status
+    FROM users
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "docs/examples/sql_files/dynamic_where.py:example"
+    ```
 
 You can also pass `StatementFilter` objects (`LimitOffsetFilter`, `SearchFilter`, `OrderByFilter`) alongside `spec.get_sql("...")` inside `session.select(...)`—remembering to keep all bound parameters named when filters are attached.
 
@@ -82,54 +153,59 @@ You can also pass `StatementFilter` objects (`LimitOffsetFilter`, `SearchFilter`
 
 In production services, organize queries using `kebab-case` identifiers (`-- name: list-products`, `-- name: get-product`) matching domain entity routes. Combine loaded statements with `.where(...)` and decode rows directly into immutable `msgspec.Struct` models:
 
-```sql
--- name: list-products
--- param: sku str?  Optional SKU match
-SELECT id, sku, name, price_cents
-FROM products
-WHERE (:sku IS NULL OR sku = :sku)
-ORDER BY id;
+=== "SQL (`products.sql`)"
 
--- name: get-product
--- param: id int  Product identifier
-SELECT id, sku, name, price_cents
-FROM products
-WHERE id = :id;
-```
+    ```sql
+    -- name: list-products
+    -- param: sku str?  Optional SKU match
+    SELECT id, sku, name, price_cents
+    FROM products
+    WHERE (:sku IS NULL OR sku = :sku)
+    ORDER BY id;
 
-```python
-from pathlib import Path
-import msgspec
+    -- name: get-product
+    -- param: id int  Product identifier
+    SELECT id, sku, name, price_cents
+    FROM products
+    WHERE id = :id;
+    ```
 
-from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
+=== "Python"
 
+    ```python
+    from pathlib import Path
+    import msgspec
 
-class Product(msgspec.Struct, frozen=True, gc=False):
-    """Typed product projection."""
-
-    id: int
-    sku: str
-    name: str
-    price_cents: int
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite import SqliteConfig
 
 
-spec = SQLSpec()
-config = spec.add_config(
-    SqliteConfig(connection_config={"database": ":memory:"})
-)
+    class Product(msgspec.Struct, frozen=True, gc=False):
+        """Typed product projection."""
 
-with spec.provide_session(config) as session:
-    query = spec.get_sql("get-product")
-    product = session.select_one(query, id=1, schema_type=Product)
+        id: int
+        sku: str
+        name: str
+        price_cents: int
 
-    active_query = spec.get_sql("list-products").where(
-        "price_cents >= :min_price"
+
+    spec = SQLSpec()
+    config = spec.add_config(
+        SqliteConfig(connection_config={"database": ":memory:"})
     )
-    catalog = session.select(
-        active_query, min_price=1000, sku=None, schema_type=Product
-    )
-```
+    spec.load_sql_files(Path("products.sql"))
+
+    with spec.provide_session(config) as session:
+        query = spec.get_sql("get-product")
+        product = session.select_one(query, id=1, schema_type=Product)
+
+        active_query = spec.get_sql("list-products").where(
+            "price_cents >= :min_price"
+        )
+        catalog = session.select(
+            active_query, min_price=1000, sku=None, schema_type=Product
+        )
+    ```
 
 ## Recap
 

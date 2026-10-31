@@ -269,37 +269,89 @@ def test_create_index_from_metadata_skips_primary_and_builds_secondary_indexes()
 
 
 @pytest.mark.parametrize(
-    ("dialect", "expected_table_fragment", "expected_index_fragment"),
+    (
+        "dialect",
+        "expected_table_fragment",
+        "expected_index_fragment",
+        "expected_fidelity",
+        "expects_comment_on",
+        "expects_inline_comment",
+    ),
     [
         (
             "postgres",
             'CREATE TABLE "app"."invoices"',
             'CREATE UNIQUE INDEX "idx_invoices_code" ON "app"."invoices"("code") INCLUDE ("total")',
+            MetadataFidelity.GENERATED,
+            True,
+            False,
         ),
         (
             "tsql",
             "CREATE TABLE [app].[invoices]",
             "CREATE UNIQUE INDEX [idx_invoices_code] ON [app].[invoices]([code]) INCLUDE ([total])",
+            MetadataFidelity.LOSSY,
+            False,
+            False,
         ),
         (
             "duckdb",
             'CREATE TABLE "app"."invoices"',
-            'CREATE UNIQUE INDEX "idx_invoices_code" ON "app"."invoices"("code") INCLUDE ("total")',
+            'CREATE UNIQUE INDEX "idx_invoices_code" ON "app"."invoices"("code")',
+            MetadataFidelity.LOSSY,
+            True,
+            False,
         ),
         (
             "sqlite",
             'CREATE TABLE "app"."invoices"',
-            'CREATE UNIQUE INDEX "idx_invoices_code" ON "app"."invoices"("code") INCLUDE ("total")',
+            'CREATE UNIQUE INDEX "idx_invoices_code" ON "app"."invoices"("code")',
+            MetadataFidelity.LOSSY,
+            False,
+            False,
         ),
         (
             "db2",
             "CREATE TABLE app.invoices",
             "CREATE UNIQUE INDEX idx_invoices_code ON app.invoices(code) INCLUDE (total)",
+            MetadataFidelity.GENERATED,
+            True,
+            False,
         ),
+        (
+            "mysql",
+            "CREATE TABLE `app`.`invoices`",
+            "CREATE UNIQUE INDEX `idx_invoices_code` ON `app`.`invoices`(`code`)",
+            MetadataFidelity.LOSSY,
+            False,
+            True,
+        ),
+        (
+            "mariadb",
+            "CREATE TABLE `app`.`invoices`",
+            "CREATE UNIQUE INDEX `idx_invoices_code` ON `app`.`invoices`(`code`)",
+            MetadataFidelity.LOSSY,
+            False,
+            True,
+        ),
+        (
+            "spanner",
+            "CREATE TABLE `app`.`invoices`",
+            "CREATE UNIQUE INDEX `idx_invoices_code` ON `app`.`invoices`(`code`) STORING (`total`)",
+            MetadataFidelity.LOSSY,
+            False,
+            False,
+        ),
+        ("bigquery", "CREATE TABLE `app`.`invoices`", None, MetadataFidelity.LOSSY, False, False),
     ],
 )
 def test_compile_table_ddl_results_cross_dialect(
-    dialect: str, expected_table_fragment: str, expected_index_fragment: str
+    dialect: str,
+    expected_table_fragment: str,
+    expected_index_fragment: str | None,
+    expected_fidelity: MetadataFidelity,
+    expects_comment_on: bool,
+    expects_inline_comment: bool,
 ) -> None:
     """Test compile_table_ddl_results renders table, index, and comment DDL across dialects from one payload."""
     columns = [
@@ -353,19 +405,57 @@ def test_compile_table_ddl_results_cross_dialect(
 
     assert isinstance(result, DDLResult)
     assert result.status == MetadataSupport.SUPPORTED
-    assert result.fidelity == MetadataFidelity.GENERATED
+    assert result.fidelity == expected_fidelity
     assert result.source == MetadataSource.GENERATED
     assert result.identity.name == "invoices"
     assert result.identity.schema == "app"
     assert result.ddl is not None
     assert expected_table_fragment in result.ddl
-    assert expected_index_fragment in result.ddl
+    if expected_index_fragment is not None:
+        assert expected_index_fragment in result.ddl
+    else:
+        assert "idx_invoices_code" not in result.ddl
     assert "pk_invoices" not in result.ddl
-    assert "COMMENT ON TABLE" in result.ddl
-    assert "Customer invoices" in result.ddl
-    assert "Primary invoice identifier" in result.ddl
-    assert "External invoice code" in result.ddl
+    if expects_comment_on:
+        assert "COMMENT ON TABLE" in result.ddl
+        assert "COMMENT ON COLUMN" in result.ddl
+        assert "Customer invoices" in result.ddl
+        assert "Primary invoice identifier" in result.ddl
+        assert "External invoice code" in result.ddl
+    elif expects_inline_comment:
+        assert "COMMENT ON TABLE" not in result.ddl
+        assert "COMMENT 'Primary invoice identifier'" in result.ddl
+        assert "COMMENT 'External invoice code'" in result.ddl
+        assert "COMMENT='Customer invoices'" in result.ddl
+    else:
+        assert "COMMENT ON TABLE" not in result.ddl
+        assert "Customer invoices" not in result.ddl
+        assert "Primary invoice identifier" not in result.ddl
+        assert "External invoice code" not in result.ddl
+        assert any("Table comment is not supported" in warning for warning in result.warnings)
     assert result.ddl.endswith(";")
+
+    if dialect == "duckdb":
+        duck_conn = duckdb.connect(":memory:")
+        duck_conn.execute('CREATE SCHEMA "app"')
+        _execute_script(duck_conn, result.ddl)
+        duck_conn.execute('INSERT INTO "app"."invoices" ("id", "code") VALUES (1, \'INV-1\')')
+        assert duck_conn.execute('SELECT "id", "code", "total" FROM "app"."invoices"').fetchall() == [(1, "INV-1", 0)]
+    elif dialect == "sqlite":
+        unqualified = compile_table_ddl_results(
+            "invoices",
+            columns,
+            indexes=indexes,
+            table_comment="Customer invoices",
+            column_comments={"code": "External invoice code"},
+            dialect="sqlite",
+            source_dialect="postgres",
+        )
+        assert unqualified.ddl is not None
+        sqlite_conn = sqlite3.connect(":memory:")
+        _execute_script(sqlite_conn, unqualified.ddl)
+        sqlite_conn.execute('INSERT INTO "invoices" ("id", "code") VALUES (1, \'INV-1\')')
+        assert sqlite_conn.execute('SELECT "id", "code", "total" FROM "invoices"').fetchall() == [(1, "INV-1", 0)]
 
 
 def test_compile_table_ddl_results_empty_columns_returns_unsupported() -> None:
@@ -1165,3 +1255,240 @@ def test_compile_table_ddl_results_deduplicates_backing_indexes_and_preserves_co
     assert 'CONSTRAINT "uq_accounts_email" UNIQUE ("email")' in result.ddl
     assert "CREATE UNIQUE INDEX" not in result.ddl
     assert "idx_accounts_email_dup_unique" not in result.ddl
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "oracle", "db2", "duckdb", "snowflake"])
+def test_compile_table_ddl_results_emits_comment_on_only_for_supported_dialects(dialect: str) -> None:
+    """COMMENT ON TABLE/COLUMN statements are emitted only for dialects that support COMMENT ON."""
+    columns = [{"column_name": "id", "data_type": "BIGINT", "is_nullable": "NO", "comment": "Row id"}]
+    result = compile_table_ddl_results("items", columns, table_comment="All items", dialect=dialect)
+    assert result.ddl is not None
+    assert "COMMENT ON TABLE" in result.ddl
+    assert "COMMENT ON COLUMN" in result.ddl
+    assert result.fidelity == MetadataFidelity.GENERATED
+    assert result.warnings == ()
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "mariadb"])
+def test_compile_table_ddl_results_inlines_comments_on_mysql_and_mariadb(dialect: str) -> None:
+    """MySQL and MariaDB receive inline column and table COMMENT clauses instead of COMMENT ON."""
+    columns = [
+        {"column_name": "id", "data_type": "BIGINT", "is_nullable": "NO", "comment": "Row's id"},
+        {"column_name": "code", "data_type": "VARCHAR", "max_length": 40, "is_nullable": "NO"},
+    ]
+    result = compile_table_ddl_results(
+        "items", columns, column_comments={"code": "External code"}, table_comment="Item catalog", dialect=dialect
+    )
+    assert result.ddl == (
+        "CREATE TABLE `items` (\n"
+        "  `id` BIGINT NOT NULL COMMENT 'Row''s id',\n"
+        "  `code` VARCHAR(40) NOT NULL COMMENT 'External code'\n"
+        ")\n"
+        "COMMENT='Item catalog';"
+    )
+    assert "COMMENT ON" not in result.ddl
+    assert result.fidelity == MetadataFidelity.GENERATED
+    assert result.warnings == ()
+
+
+@pytest.mark.parametrize("dialect", ["tsql", "sqlite", "spanner", "bigquery"])
+def test_compile_table_ddl_results_omits_comments_with_lossy_warning_on_unsupported_dialects(dialect: str) -> None:
+    """Dialects without COMMENT ON or inline COMMENT omit comments and record lossy warnings."""
+    columns = [{"column_name": "id", "data_type": "BIGINT", "is_nullable": "NO", "comment": "Row id"}]
+    result = compile_table_ddl_results("items", columns, table_comment="Item catalog", dialect=dialect)
+    assert result.ddl is not None
+    assert "COMMENT" not in result.ddl
+    assert result.fidelity == MetadataFidelity.LOSSY
+    assert result.warnings == (
+        f"Table comment is not supported by {dialect}; comment omitted",
+        f"Column comment on 'id' is not supported by {dialect}; comment omitted",
+    )
+
+
+def test_create_index_storing_on_spanner_and_include_validation() -> None:
+    """Spanner renders STORING (...), Postgres/TSQL/DB2 keep INCLUDE (...), and other dialects reject or warn."""
+    spanner_idx = (
+        CreateIndex("idx_orders_code", dialect="spanner")
+        .on("orders", "code")
+        .include("total", "created_at")
+        .build()
+        .sql
+    )
+    assert spanner_idx == "CREATE INDEX `idx_orders_code` ON `orders`(`code`) STORING (`total`, `created_at`)"
+
+    spangres_meta = CreateIndex.from_metadata(
+        {"index_name": "idx_orders_code", "table_name": "orders", "columns": ["code"], "included_columns": ["total"]},
+        dialect="spangres",
+    )
+    assert spangres_meta is not None
+    assert spangres_meta.build().sql == 'CREATE INDEX "idx_orders_code" ON "orders"("code") STORING ("total")'
+
+    warnings: list[str] = []
+    duck_idx = CreateIndex.from_metadata(
+        {"index_name": "idx_orders_code", "table_name": "orders", "columns": ["code"], "included_columns": ["total"]},
+        dialect="duckdb",
+        warnings=warnings,
+    )
+    assert duck_idx is not None
+    assert duck_idx.build().sql == 'CREATE INDEX "idx_orders_code" ON "orders"("code")'
+    assert warnings == ["Index idx_orders_code: covering INCLUDE columns are not supported on duckdb and were omitted"]
+
+
+def test_catalog_name_folds_unquoted_source_identifier_before_target_reserved_quoting() -> None:
+    """Unquoted source identifiers that are reserved only in the target dialect fold to target case before quoting."""
+    oracle_cols = [
+        {"column_name": "ID", "data_type": "NUMBER", "numeric_precision": 10, "numeric_scale": 0, "is_nullable": "N"},
+        {
+            "column_name": "START",
+            "data_type": "NUMBER",
+            "numeric_precision": 10,
+            "numeric_scale": 0,
+            "is_nullable": "Y",
+        },
+    ]
+    pg_from_oracle = compile_table_ddl_results("EVENTS", oracle_cols, dialect="postgres", source_dialect="oracle")
+    assert (
+        pg_from_oracle.ddl == 'CREATE TABLE "events" (\n  "id" DECIMAL(10, 0) NOT NULL,\n  "start" DECIMAL(10, 0)\n);'
+    )
+
+    pg_cols = [
+        {"column_name": "id", "data_type": "integer", "is_nullable": "NO"},
+        {"column_name": "rownum", "data_type": "integer", "is_nullable": "YES"},
+    ]
+    oracle_from_pg = compile_table_ddl_results("events", pg_cols, dialect="oracle", source_dialect="postgres")
+    assert oracle_from_pg.ddl == 'CREATE TABLE events (\n  id INT NOT NULL,\n  "ROWNUM" INT\n);'
+
+
+def test_compile_table_ddl_results_mariadb_quoted_defaults_not_double_quoted() -> None:
+    """MariaDB information_schema string defaults remain single-quoted when source_dialect is mariadb."""
+    result = compile_table_ddl_results(
+        "accounts",
+        [
+            {
+                "column_name": "status",
+                "data_type": "varchar",
+                "max_length": 20,
+                "is_nullable": "NO",
+                "column_default": "'active'",
+                "extra": "",
+            }
+        ],
+        dialect="mariadb",
+        source_dialect="mariadb",
+    )
+    assert result.ddl == "CREATE TABLE `accounts` (\n  `status` VARCHAR(20) NOT NULL DEFAULT 'active'\n);"
+
+
+def test_compile_table_ddl_results_bigquery_branch_records_lossy_warnings() -> None:
+    """BigQuery table compilation omits identity generation, FK actions, secondary indexes, and comments."""
+    columns = [
+        {
+            "column_name": "id",
+            "data_type": "BIGINT",
+            "is_nullable": "NO",
+            "is_primary": True,
+            "is_identity": True,
+            "comment": "Primary key",
+        },
+        {"column_name": "parent_id", "data_type": "BIGINT", "is_nullable": "YES"},
+    ]
+    foreign_keys = [
+        {
+            "constraint_name": "fk_parent",
+            "column_name": "parent_id",
+            "referenced_table": "parents",
+            "referenced_column": "id",
+            "on_delete": "CASCADE",
+        }
+    ]
+    indexes = [
+        {
+            "index_name": "idx_parent_id",
+            "table_name": "children",
+            "columns": ["parent_id"],
+            "is_primary": False,
+            "is_unique": False,
+        }
+    ]
+    result = compile_table_ddl_results(
+        "children",
+        columns,
+        foreign_keys=foreign_keys,
+        indexes=indexes,
+        table_comment="Child rows",
+        dialect="bigquery",
+        source_dialect="postgres",
+    )
+    assert result.ddl is not None
+    assert "CREATE TABLE `children`" in result.ddl
+    assert "CREATE INDEX" not in result.ddl
+    assert "ON DELETE" not in result.ddl
+    assert result.fidelity == MetadataFidelity.LOSSY
+    assert (
+        "Column 'id' is an identity/auto-increment column; bigquery cannot express it on this column, "
+        "so it is emitted without automatic value generation"
+    ) in result.warnings
+    assert "Foreign key fk_parent: BigQuery does not support ON DELETE CASCADE; action omitted" in result.warnings
+    assert (
+        "BigQuery does not support secondary CREATE INDEX statements; index 'idx_parent_id' omitted" in result.warnings
+    )
+    assert "Table comment is not supported by bigquery; comment omitted" in result.warnings
+    assert "Column comment on 'id' is not supported by bigquery; comment omitted" in result.warnings
+
+
+def test_translate_catalog_type_preserves_sqlite_type_affinity_and_executes() -> None:
+    """Cross-dialect compilation into SQLite preserves NUMERIC affinity instead of rendering REAL."""
+    columns = [
+        {"column_name": "id", "data_type": "INTEGER", "is_nullable": "NO", "is_primary": True},
+        {
+            "column_name": "amount",
+            "data_type": "NUMERIC",
+            "numeric_precision": 12,
+            "numeric_scale": 2,
+            "is_nullable": "NO",
+        },
+    ]
+    result = compile_table_ddl_results("ledger", columns, dialect="sqlite", source_dialect="postgres")
+    assert (
+        result.ddl
+        == 'CREATE TABLE "ledger" (\n  "id" INTEGER NOT NULL PRIMARY KEY,\n  "amount" NUMERIC(12,2) NOT NULL\n);'
+    )
+    connection = sqlite3.connect(":memory:")
+    _execute_script(connection, result.ddl)
+    col_types = dict(connection.execute("SELECT name, type FROM pragma_table_info('ledger')").fetchall())
+    assert col_types["amount"] == "NUMERIC(12,2)"
+
+
+def test_sqlite_composite_foreign_keys_group_without_synthetic_constraint_names() -> None:
+    """SQLite composite foreign keys group into a single FOREIGN KEY and execute on in-memory SQLite."""
+    with SqliteConfig(connection_config={"database": ":memory:"}).provide_session() as source:
+        source.execute_script(
+            "CREATE TABLE parent (tenant_id INTEGER, item_id INTEGER, PRIMARY KEY (tenant_id, item_id)); "
+            "CREATE TABLE child ("
+            "  id INTEGER PRIMARY KEY, "
+            "  tenant_id INTEGER, "
+            "  item_id INTEGER, "
+            "  FOREIGN KEY (tenant_id, item_id) REFERENCES parent(tenant_id, item_id) ON DELETE CASCADE"
+            ")"
+        )
+        fks = source.data_dictionary.get_foreign_keys(source, table="child")
+        assert all(fk.constraint_name == "child_fk_0" for fk in fks)
+        ddl_result = source.data_dictionary.get_schema_ddl(source, prefer_native=False)
+
+    child_ddl = next(item for item in _ddl_items(ddl_result) if item.identity.name == "child")
+    assert child_ddl.ddl is not None
+    assert "child_fk_0" in child_ddl.ddl
+    assert (
+        'FOREIGN KEY ("tenant_id", "item_id") REFERENCES "parent"("tenant_id", "item_id") ON DELETE CASCADE'
+        in child_ddl.ddl
+    )
+
+    replay = sqlite3.connect(":memory:")
+    for item in _ddl_items(ddl_result):
+        assert item.ddl is not None
+        _execute_script(replay, item.ddl)
+    replay.execute("PRAGMA foreign_keys = ON")
+    replay.execute("INSERT INTO parent VALUES (1, 10)")
+    replay.execute("INSERT INTO child VALUES (100, 1, 10)")
+    with pytest.raises(sqlite3.IntegrityError):
+        replay.execute("INSERT INTO child VALUES (101, 1, 99)")

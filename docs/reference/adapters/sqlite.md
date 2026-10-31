@@ -11,14 +11,13 @@ from sqlspec.adapters.sqlite import (
 )
 ```
 
-Synchronous SQLite adapter built on Python's standard library `sqlite3` with thread-local connection pooling and WAL pragma helpers. Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md). See the [SQLite Setup Guide](../../databases/sqlite.md) for in-memory URI and WAL configuration.
+Synchronous SQLite adapter built on Python's standard library `sqlite3` with thread-local connection pooling and WAL pragma helpers. Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md). See the [SQLite Setup Guide](../../databases/sqlite.md) for in-memory URI and WAL configuration, and the [SQLite Data Dictionary & SQL Catalog](../data-dictionary/dialects/sqlite.md).
 
 ## Configuration & Parameters
 
 ::: sqlspec.adapters.sqlite.SqliteConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.adapters.sqlite.SqliteConnectionParams
     options:
@@ -32,7 +31,7 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
       separate_signature: false
       show_signature_annotations: true
 
-## Driver & Pool
+## Driver, Pool & Data Dictionary
 
 ::: sqlspec.adapters.sqlite.SqliteDriver
     options:
@@ -47,30 +46,44 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.SqliteConnectionPool
     options:
       heading_level: 3
-      members:
-        - acquire
-        - release
-        - close_all
-        - size
 
-## Extension Stores
+::: sqlspec.adapters.sqlite.data_dictionary.SqliteDataDictionary
+    options:
+      heading_level: 3
+      members: false
+
+## Extension Stores & Configs
+
+::: sqlspec.adapters.sqlite.litestar.SqliteLitestarConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.sqlite.litestar.SQLiteStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.sqlite.adk.SqliteADKConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.sqlite.adk.SqliteADKStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.sqlite.events.SqliteEventsConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.sqlite.events.SqliteEventQueueStore
     options:
       heading_level: 4
-      members: false

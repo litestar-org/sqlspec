@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[oracledb]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[oracledb]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[oracledb]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[oracledb]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[oracledb]"
+    ```
 
 `python-oracledb` runs in pure-Python/Cython **Thin mode** by default with zero Oracle Instant Client dependencies. Enable **Thick mode** only when connecting to legacy encryption suites, Kerberos/Radius OS authentication, or Continuous Query Notification features requiring Oracle Client libraries.
 

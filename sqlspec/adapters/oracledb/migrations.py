@@ -278,21 +278,9 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, SyncMigrationTrack
         seq_data = next_seq_result.get_data()
         execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
 
-        if replaces:
-            record_sql = self._record_squashed_migration_statement(
-                version,
-                version_type,
-                execution_sequence,
-                description,
-                execution_time_ms,
-                checksum,
-                applied_by,
-                ",".join(replaces),
-            )
-        else:
-            record_sql = self._record_migration_statement(
-                version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
-            )
+        record_sql = self._record_statement(
+            version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by, replaces
+        )
         driver.execute(record_sql)
         if commit:
             driver.commit()
@@ -516,21 +504,9 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, AsyncMigrationTra
         seq_data = next_seq_result.get_data()
         execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
 
-        if replaces:
-            record_sql = self._record_squashed_migration_statement(
-                version,
-                version_type,
-                execution_sequence,
-                description,
-                execution_time_ms,
-                checksum,
-                applied_by,
-                ",".join(replaces),
-            )
-        else:
-            record_sql = self._record_migration_statement(
-                version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
-            )
+        record_sql = self._record_statement(
+            version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by, replaces
+        )
         await driver.execute(record_sql)
         if commit:
             await driver.commit()

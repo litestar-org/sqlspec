@@ -10,6 +10,10 @@ SELECT
     ti.cid + 1 AS ordinal_position,
     ti.pk AS is_primary,
     CASE
+        WHEN ti.pk = 1 AND UPPER(ti.type) = 'INTEGER' AND UPPER(sm.sql) LIKE '%AUTOINCREMENT%' THEN 1
+        ELSE 0
+    END AS is_identity,
+    CASE
         WHEN ti.hidden = 1 THEN 'hidden'
         WHEN ti.hidden = 2 THEN 'virtual generated'
         WHEN ti.hidden = 3 THEN 'stored generated'
@@ -37,6 +41,10 @@ SELECT
     ti.dflt_value AS column_default,
     ti.cid + 1 AS ordinal_position,
     ti.pk AS is_primary,
+    CASE
+        WHEN ti.pk = 1 AND UPPER(ti.type) = 'INTEGER' AND UPPER(sm.sql) LIKE '%AUTOINCREMENT%' THEN 1
+        ELSE 0
+    END AS is_identity,
     CASE
         WHEN ti.hidden = 1 THEN 'hidden'
         WHEN ti.hidden = 2 THEN 'virtual generated'

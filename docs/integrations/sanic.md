@@ -4,9 +4,29 @@
 
 ## Installation
 
-```bash
-uv add "sqlspec[sanic]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[sanic]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[sanic]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[sanic]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[sanic]"
+    ```
 
 ## Basic Setup
 

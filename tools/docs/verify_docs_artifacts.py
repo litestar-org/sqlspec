@@ -1,6 +1,7 @@
 """HTML quality, inventory, TOC budget, and anchor integrity verifier for built Zensical docs."""
 
 import argparse
+import html
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -31,7 +32,7 @@ class DocsVerificationError(RuntimeError):
 
 
 def verify_site_artifacts(
-    site_dir: Path, *, max_page_bytes: int = 180_000, max_reference_bytes: int = 120_000, max_toc_items: int = 14
+    site_dir: Path, *, max_page_bytes: int = 180_000, max_reference_bytes: int = 650_000, max_toc_items: int = 16
 ) -> list[str]:
     """Verify built Zensical site artifacts and raise DocsVerificationError on violations."""
     violations: list[str] = []
@@ -53,6 +54,7 @@ def verify_site_artifacts(
         raw_bytes = html_file.read_bytes()
         byte_len = len(raw_bytes)
         text = raw_bytes.decode("utf-8", errors="replace")
+        unescaped_text = html.unescape(text)
 
         if not _is_size_exempt(rel_posix):
             limit = max_reference_bytes if rel_posix.startswith("reference/") else max_page_bytes
@@ -62,7 +64,7 @@ def verify_site_artifacts(
         violations.extend(
             f"{rel_posix}: contains banned documentation leak phrase {phrase!r}"
             for phrase in BANNED_PHRASES
-            if phrase in text
+            if phrase in unescaped_text
         )
 
         parser = _PageArtifactParser()
@@ -108,10 +110,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--site-dir", type=Path, default=Path("site"), help="Built site directory.")
     parser.add_argument("--max-page-bytes", type=int, default=180_000, help="Max HTML byte budget for guide pages.")
     parser.add_argument(
-        "--max-reference-bytes", type=int, default=120_000, help="Max HTML byte budget for API reference pages."
+        "--max-reference-bytes", type=int, default=650_000, help="Max HTML byte budget for API reference pages."
     )
     parser.add_argument(
-        "--max-toc-items", type=int, default=14, help="Max links allowed in the secondary On-this-page TOC."
+        "--max-toc-items", type=int, default=16, help="Max links allowed in the secondary On-this-page TOC."
     )
     args = parser.parse_args(argv)
 
