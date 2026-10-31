@@ -428,3 +428,23 @@ async def test_aiosqlite_pool_tracks_in_flight_creations_and_connection_registry
     finally:
         await pool.close()
         assert pool.size() == 0
+
+
+async def test_aiosqlite_cache_hit_preserves_ambient_exception_and_formats_wire_sql() -> None:
+    import sys
+
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(connection=connection)
+        await driver.execute("SELECT 1 AS value")
+
+        ambient_preserved = False
+        try:
+            raise RuntimeError("ambient error")
+        except RuntimeError as exc:
+            result = await driver.execute("SELECT 1 AS value")
+            ambient_preserved = sys.exc_info()[1] is exc
+            assert result.data == [(1,)]
+        assert ambient_preserved
+    finally:
+        await connection.close()

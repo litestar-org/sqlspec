@@ -7,9 +7,11 @@ import pytest
 from sqlspec.adapters.aiosqlite.core import create_mapped_exception
 from sqlspec.exceptions import (
     CheckViolationError,
+    DataError,
     DeadlockError,
     IntegrityError,
     NotNullViolationError,
+    OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
     UniqueViolationError,
@@ -157,4 +159,26 @@ def test_trigger_abort_does_not_map_to_not_null_violation() -> None:
     result = create_mapped_exception(err)
     assert not isinstance(result, NotNullViolationError)
     assert isinstance(result, IntegrityError)
+    assert result.__cause__ is err
+
+
+def test_no_such_column_with_locked_name_maps_to_operational_error() -> None:
+    err = sqlite3.OperationalError("no such column: is_locked")
+    result = create_mapped_exception(err)
+    assert isinstance(result, OperationalError)
+    assert not isinstance(result, DeadlockError)
+    assert result.__cause__ is err
+
+
+def test_programming_error_maps_to_data_error() -> None:
+    err = sqlite3.ProgrammingError("cannot operate on a closed database")
+    result = create_mapped_exception(err)
+    assert isinstance(result, DataError)
+    assert result.__cause__ is err
+
+
+def test_interface_error_maps_to_operational_error() -> None:
+    err = sqlite3.InterfaceError("error binding parameter")
+    result = create_mapped_exception(err)
+    assert isinstance(result, OperationalError)
     assert result.__cause__ is err

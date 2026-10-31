@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
-    from sqlspec.core import SQL, SQLResult, StatementConfig
+    from sqlspec.core import SQL, CachedQuery, SQLResult, StatementConfig
     from sqlspec.core.compiler import OperationType
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
@@ -360,53 +360,47 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Resolve rowcount from aiosqlite cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
-    async def _execute_cache_hit(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
+    async def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Execute cached queries through the async cursor fast path."""
+        """Execute cached queries through the aiosqlite worker thread fast path."""
+        wire_sql = self._format_wire_sql(cached.compiled_sql)
         normalized_parameters = normalize_execute_parameters(params)
-        exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
         self._invalidate_rowid_target_cache(cached.operation_type)
-        async with exc_handler:
-            if cached.operation_profile.returns_rows:
-                fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
-                    self.connection,
-                    _execute_fetchall_with_metadata,
-                    self.connection,
-                    cached.compiled_sql,
-                    normalized_parameters,
-                    cached.operation_type,
-                    cached.processed_state.parsed_expression,
-                    self._rowid_target_cache,
-                )
-                data, column_names, row_count = collect_rows(fetched_data, description)
-                result = self.build_cached_select_result(
-                    sql,
-                    params,
-                    cached,
-                    selected_data=data,
-                    column_names=column_names,
-                    data_row_count=row_count,
-                    row_format=resolve_row_format(data),
-                    last_inserted_id=last_inserted_id,
-                )
-            else:
-                affected_rows, last_inserted_id = await run_on_worker_thread(
-                    self.connection,
-                    _execute_and_resolve_metadata,
-                    self.connection,
-                    cached.compiled_sql,
-                    normalized_parameters,
-                    cached.operation_type,
-                    cached.processed_state.parsed_expression,
-                    self._rowid_target_cache,
-                )
-                result = DMLResult(cached.operation_type, affected_rows, last_inserted_id)
-
-        self._check_pending_exception(exc_handler)
-        assert result is not None
-        return result
+        if cached.operation_profile.returns_rows:
+            fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
+                self.connection,
+                _execute_fetchall_with_metadata,
+                self.connection,
+                wire_sql,
+                normalized_parameters,
+                cached.operation_type,
+                cached.processed_state.parsed_expression,
+                self._rowid_target_cache,
+            )
+            data, column_names, row_count = collect_rows(fetched_data, description)
+            return self.build_cached_select_result(
+                sql,
+                params,
+                cached,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=row_count,
+                row_format=resolve_row_format(data),
+                last_inserted_id=last_inserted_id,
+                compiled_sql=wire_sql,
+            )
+        affected_rows, last_inserted_id = await run_on_worker_thread(
+            self.connection,
+            _execute_and_resolve_metadata,
+            self.connection,
+            wire_sql,
+            normalized_parameters,
+            cached.operation_type,
+            cached.processed_state.parsed_expression,
+            self._rowid_target_cache,
+        )
+        return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
         if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:

@@ -477,13 +477,19 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         return _create_aiosqlite_error(error, error_code, DeadlockError, "database busy")
     if primary_code == SQLITE_LOCKED_CODE or (isinstance(error_name, str) and error_name.startswith("SQLITE_LOCKED")):
         return _create_aiosqlite_error(error, error_code, DeadlockError, "database locked")
-    if "locked" in error_msg or "busy" in error_msg:
-        return _create_aiosqlite_error(error, error_code or 0, DeadlockError, "database locked")
+    if error_code is None and (
+        "database is locked" in error_msg
+        or "database table is locked" in error_msg
+        or "database locked" in error_msg
+        or "database is busy" in error_msg
+        or "database busy" in error_msg
+    ):
+        return _create_aiosqlite_error(error, 0, DeadlockError, "database locked")
 
     if primary_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
         return _create_aiosqlite_error(error, error_code, OperationCancelledError, "query interrupted")
-    if "interrupt" in error_msg:
-        return _create_aiosqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
+    if error_code is None and ("query was interrupted" in error_msg or "interrupted" in error_msg):
+        return _create_aiosqlite_error(error, 0, OperationCancelledError, "query interrupted")
 
     if primary_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
         return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "permission denied")
@@ -491,8 +497,13 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         isinstance(error_name, str) and error_name.startswith("SQLITE_READONLY")
     ):
         return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "database is read-only")
-    if "permission denied" in error_msg or "readonly" in error_msg:
-        return _create_aiosqlite_error(error, error_code or 0, PermissionDeniedError, "permission denied")
+    if error_code is None and (
+        "attempt to write a readonly database" in error_msg
+        or "readonly database" in error_msg
+        or "permission denied" in error_msg
+        or "access permission denied" in error_msg
+    ):
+        return _create_aiosqlite_error(error, 0, PermissionDeniedError, "permission denied")
 
     if primary_code == SQLITE_CANTOPEN_CODE or (
         isinstance(error_name, str) and error_name.startswith("SQLITE_CANTOPEN")
@@ -506,6 +517,10 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         return _create_aiosqlite_error(error, error_code, DataError, "data error")
     if "syntax" in error_msg:
         return _create_aiosqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
+    if isinstance(error, sqlite3.ProgrammingError):
+        return _create_aiosqlite_error(error, error_code, DataError, "programming error")
+    if isinstance(error, sqlite3.InterfaceError):
+        return _create_aiosqlite_error(error, error_code, OperationalError, "interface error")
     if primary_code == 1 or isinstance(error, sqlite3.OperationalError):
         return _create_aiosqlite_error(error, error_code, OperationalError, "operational error")
     if isinstance(error, sqlite3.DataError):
