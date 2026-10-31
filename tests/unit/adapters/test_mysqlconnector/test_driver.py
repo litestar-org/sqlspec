@@ -82,3 +82,14 @@ def test_mysqlconnector_sync_stream_source_in_active_except_block() -> None:
         chunk = source.fetch_chunk()
         assert len(chunk) == 1
         source.close()
+
+
+def test_mysqlconnector_data_dictionary_cached_property() -> None:
+    """MysqlConnectorSyncDriver and MysqlConnectorAsyncDriver cache the data dictionary instance."""
+    from unittest.mock import MagicMock
+
+    sync_driver = MysqlConnectorSyncDriver(connection=MagicMock())
+    assert sync_driver.data_dictionary is sync_driver.data_dictionary
+
+    async_driver = MysqlConnectorAsyncDriver(connection=MagicMock())
+    assert async_driver.data_dictionary is async_driver.data_dictionary
