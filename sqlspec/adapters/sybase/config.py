@@ -34,30 +34,55 @@ class SybaseConnectionParams(TypedDict):
     """Sybase ASE connection parameters."""
 
     server: NotRequired[str]
+    """Database server host, IP, or FreeTDS server definition name."""
     host: NotRequired[str]
+    """Alias for ``server``."""
     freetds_server: NotRequired[str]
+    """FreeTDS server configuration section name."""
     server_alias: NotRequired[str]
+    """Alias for ``server``."""
     user: NotRequired[str]
+    """Login user name."""
     username: NotRequired[str]
+    """Alias for ``user``."""
     password: NotRequired[str]
+    """Authentication password."""
     database: NotRequired[str]
+    """Initial database name to connect to."""
     db: NotRequired[str]
+    """Alias for ``database``."""
     port: NotRequired[int | str]
+    """TCP port number of the Sybase ASE server."""
     timeout: NotRequired[SybaseTimeout]
+    """Query execution timeout in seconds."""
     login_timeout: NotRequired[SybaseTimeout]
+    """Login and connection timeout in seconds."""
     charset: NotRequired[str]
+    """Client character set encoding."""
     as_dict: NotRequired[bool]
+    """Return query result rows as dictionaries."""
     appname: NotRequired[str]
+    """Application name sent to the server for connection identification."""
     conn_properties: NotRequired[str]
+    """Additional connection properties string."""
     autocommit: NotRequired[bool]
+    """Enable autocommit mode for transactions."""
     tds_version: NotRequired[str]
+    """TDS protocol version (such as ``'5.0'`` or ``'7.4'``)."""
     encryption: NotRequired[Literal["off", "request", "require"]]
+    """TDS connection encryption level."""
     arraysize: NotRequired[int]
+    """Default cursor fetch array size."""
     conv: NotRequired[Mapping[int | type[Any], Callable[..., Any]]]
+    """Custom datatype conversion dictionary mapping TDS types to python types."""
     read_only: NotRequired[bool]
+    """Enforce read-only transactions on connections."""
     pool_recycle_seconds: NotRequired[int]
+    """Maximum age in seconds before a pooled connection is recycled."""
     health_check_interval: NotRequired[float]
+    """Interval in seconds between background health checks."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional driver connection arguments."""
 
 
 class SybasePoolParams(SybaseConnectionParams):
@@ -68,10 +93,15 @@ class SybaseDriverFeatures(TypedDict):
     """Sybase ASE driver feature flags."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom callable for serializing objects to JSON strings."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom callable for deserializing JSON strings."""
     on_connection_create: "NotRequired[Callable[[SybaseConnection], None]]"
+    """Callback invoked immediately when a new connection is established."""
     enable_events: NotRequired[bool]
+    """Enable database event listening."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Backend mechanism used for dispatching events."""
 
 
 class SybaseConnectionContext(SyncPoolConnectionContext):

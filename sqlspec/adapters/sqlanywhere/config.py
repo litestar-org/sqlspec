@@ -37,45 +37,75 @@ class SqlanywhereConnectionParams(TypedDict):
     """SAP SQL Anywhere connection parameters."""
 
     uid: NotRequired[str]
+    """User ID / login name for authentication."""
     user: NotRequired[str]
+    """Alias for ``uid``."""
     username: NotRequired[str]
+    """Alias for ``uid``."""
     pwd: NotRequired[str]
+    """Password for authentication."""
     password: NotRequired[str]
+    """Alias for ``pwd``."""
     dbn: NotRequired[str]
+    """Database name on the SQL Anywhere server."""
     database: NotRequired[str]
+    """Alias for ``dbn``."""
     db: NotRequired[str]
+    """Alias for ``dbn``."""
     eng: NotRequired[str]
+    """SQL Anywhere database engine name."""
     server: NotRequired[str]
+    """Alias for ``eng``."""
     engine: NotRequired[str]
+    """Alias for ``eng``."""
     server_name: NotRequired[str]
+    """Alias for ``eng``."""
     dbf: NotRequired[str]
+    """Database file path for local or embedded engines."""
     database_file: NotRequired[str]
+    """Alias for ``dbf``."""
     host: NotRequired[str]
+    """TCP hostname or IP address of the server."""
     port: NotRequired[int | str]
+    """TCP port number of the server."""
     dsn: NotRequired[str]
+    """ODBC data source name."""
     links: NotRequired[str]
+    """Network communications links protocol configuration."""
     cset: NotRequired[str]
+    """Character set used for character data conversion."""
     extra: NotRequired["dict[str, Any]"]
+    """Additional connection parameters passed to the driver."""
 
 
 class SqlanywherePoolParams(SqlanywhereConnectionParams):
     """SAP SQL Anywhere pool parameters."""
 
     pool_min_size: NotRequired[int]
+    """Minimum number of connections maintained in the pool."""
     pool_max_size: NotRequired[int]
+    """Maximum number of connections allowed in the pool."""
     pool_timeout: NotRequired[float]
+    """Seconds to wait for a connection before timing out."""
     pool_recycle_seconds: NotRequired[int]
+    """Maximum age in seconds before a connection is recycled."""
     health_check_interval: NotRequired[float]
+    """Interval in seconds between background health checks."""
 
 
 class SqlanywhereDriverFeatures(TypedDict):
     """SAP SQL Anywhere driver feature flags."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
+    """Custom callable for serializing objects to JSON strings."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Custom callable for deserializing JSON strings."""
     on_connection_create: "NotRequired[Callable[[SqlanywhereConnection], None]]"
+    """Callback invoked immediately when a new connection is established."""
     enable_events: NotRequired[bool]
+    """Enable database event listening."""
     events_backend: NotRequired[Literal["poll_queue"]]
+    """Backend mechanism used for dispatching events."""
 
 
 class SqlanywhereConnectionContext(SyncPoolConnectionContext):
