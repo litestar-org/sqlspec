@@ -90,3 +90,14 @@ def test_escape_literal_percent_fast_path_returns_same_string_reference() -> Non
     params = (1, "active")
     escaped = escape_literal_percent(sql, params, default_statement_config.parameter_validator)
     assert escaped is sql
+
+
+@pytest.mark.parametrize("adapter", ["aiomysql", "asyncmy", "pymysql"])
+def test_escape_literal_percent_escapes_literals_with_named_parameters(adapter: str) -> None:
+    """A mapping with extra keys must not let a literal percent skip escaping."""
+    core = import_module(f"sqlspec.adapters.{adapter}.core")
+    validator = core.default_statement_config.parameter_validator
+
+    result = core.escape_literal_percent("select %(a)s, 'x%'", {"a": 1, "b": 2}, validator)
+
+    assert result == "select %(a)s, 'x%%'"
