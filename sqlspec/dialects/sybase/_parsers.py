@@ -69,7 +69,7 @@ def normalize_sqlanywhere_tokens(tokens: "list[Token]") -> "list[Token]":
     result: list[Token] = []
     statement: list[Token] = []
     for token in rewritten:
-        if token.token_type == TokenType.SEMICOLON:
+        if token.token_type in {TokenType.SEMICOLON, TokenType.UNION, TokenType.INTERSECT, TokenType.EXCEPT}:
             result.extend(_rewrite_top_start_at_statement(statement))
             result.append(token)
             statement = []
@@ -172,19 +172,35 @@ def _rewrite_top_start_at_statement(statement: "list[Token]") -> "list[Token]":
         return statement
     if start_val_tok.token_type == TokenType.NUMBER and start_val_tok.text.isdigit():
         offset_str = str(max(int(start_val_tok.text) - 1, 0))
-        offset_tok = Token(
-            TokenType.NUMBER, offset_str, start_val_tok.line, start_val_tok.col, start_val_tok.start, start_val_tok.end
-        )
+        offset_tokens = [
+            Token(
+                TokenType.NUMBER, offset_str, start_val_tok.line, start_val_tok.col, start_val_tok.start, start_val_tok.end
+            )
+        ]
     else:
-        offset_tok = start_val_tok
+        offset_tokens = [
+            Token(TokenType.L_PAREN, "(", start_val_tok.line, start_val_tok.col, start_val_tok.start, start_val_tok.start),
+            start_val_tok,
+            Token(TokenType.DASH, "-", start_val_tok.line, start_val_tok.col, start_val_tok.start, start_val_tok.end),
+            Token(TokenType.NUMBER, "1", start_val_tok.line, start_val_tok.col, start_val_tok.end, start_val_tok.end),
+            Token(TokenType.R_PAREN, ")", start_val_tok.line, start_val_tok.col, start_val_tok.end, start_val_tok.end),
+        ]
+    body = statement[header_index + _TOP_START_AT_SPAN :]
     last = statement[-1]
     tail = [
         Token(TokenType.LIMIT, "LIMIT", last.line, last.col, last.end, last.end),
         limit_tok,
         Token(TokenType.OFFSET, "OFFSET", last.line, last.col, last.end, last.end),
-        offset_tok,
+        *offset_tokens,
     ]
-    return [*statement[:header_index], *statement[header_index + _TOP_START_AT_SPAN :], *tail]
+    insert_idx = len(body)
+    for idx in range(len(body) - 1, -1, -1):
+        if body[idx].token_type == TokenType.FOR and idx + 1 < len(body):
+            next_text = body[idx + 1].text.upper()
+            if next_text in {"UPDATE", "READ"}:
+                insert_idx = idx
+                break
+    return [*statement[:header_index], *body[:insert_idx], *tail, *body[insert_idx:]]
 
 
 def _canonical_sybase_node(node: exp.Expr) -> exp.Expr:
@@ -197,4 +213,6 @@ def _canonical_sybase_node(node: exp.Expr) -> exp.Expr:
             this = node.expressions[1]
             position = node.expressions[2] if len(node.expressions) == _CHARINDEX_MAX_ARGS else None
             return exp.StrPosition(this=this, substr=substr, position=position)
+        if func_name in {"GETUTCDATE", "CURRENT UTC TIMESTAMP"}:
+            return exp.UtcTimestamp()
     return node

@@ -10,7 +10,7 @@ mutated or subclassed.
 from typing import TYPE_CHECKING, Any
 
 from sqlglot import TokenType, exp, generator
-from sqlglot.dialects.dialect import Dialect, NormalizationStrategy
+from sqlglot.dialects.dialect import NormalizationStrategy
 from sqlglot.dialects.tsql import TSQL
 
 from sqlspec.dialects.sybase._generators import sqlanywhere_dispatch, sybase_dispatch
@@ -73,7 +73,16 @@ class Sybase(TSQL):
 class SQLAnywhereTokenizer(TSQL.Tokenizer):
     """Tokenizer for SAP SQL Anywhere SQL syntax."""
 
-    KEYWORDS = {**TSQL.Tokenizer.KEYWORDS, "BLOB": TokenType.BLOB, "UNIQUEIDENTIFIER": TokenType.UUID}
+    KEYWORDS = {
+        **TSQL.Tokenizer.KEYWORDS,
+        "BLOB": TokenType.BLOB,
+        "CURRENT DATE": TokenType.CURRENT_DATE,
+        "CURRENT TIME": TokenType.CURRENT_TIME,
+        "CURRENT TIMESTAMP": TokenType.CURRENT_TIMESTAMP,
+        "CURRENT USER": TokenType.CURRENT_USER,
+        "TIMESTAMP": TokenType.TIMESTAMP,
+        "UNIQUEIDENTIFIER": TokenType.UUID,
+    }
 
     def tokenize(self, sql: str) -> "list[Token]":
         """Tokenize SAP SQL Anywhere SQL and normalize SQL Anywhere token sequences."""
@@ -104,7 +113,3 @@ class SQLAnywhere(TSQL):
         """Parse SAP SQL Anywhere SQL into a target expression type."""
         parsed = self.parser(**opts).parse_into(expression_type, self.tokenize(sql), sql)
         return [normalize_sqlanywhere_expression(expr) if expr is not None else None for expr in parsed]
-
-
-Dialect.classes["sybase"] = Sybase
-Dialect.classes["sqlanywhere"] = SQLAnywhere

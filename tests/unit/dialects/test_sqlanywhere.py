@@ -89,3 +89,30 @@ def test_sqlanywhere_long_types_and_utc_timestamp_parsing() -> None:
     assert "LONG VARCHAR" in rendered
     assert "LONG BINARY" in rendered
     assert "UNIQUEIDENTIFIER" in rendered
+
+
+def test_sqlanywhere_parse_top_start_at_non_literal() -> None:
+    """Verify Watcom-SQL SELECT TOP n START AT ? parses with offset decrement."""
+    parsed = parse_one("SELECT TOP 10 START AT ? id, name FROM users ORDER BY id", dialect="sqlanywhere")
+    assert parsed.sql(dialect="sqlanywhere") == "SELECT id, name FROM users ORDER BY id LIMIT 10 OFFSET (? - 1)"
+
+
+def test_sqlanywhere_current_timestamp_local_and_utc() -> None:
+    """Verify CURRENT_TIMESTAMP renders local and GETUTCDATE renders UTC."""
+    assert (
+        transpile("SELECT CURRENT_TIMESTAMP", read="postgres", write="sqlanywhere")[0] == "SELECT CURRENT TIMESTAMP"
+    )
+    assert transpile("SELECT GETUTCDATE()", read="tsql", write="sqlanywhere")[0] == "SELECT CURRENT UTC TIMESTAMP"
+
+
+def test_sqlanywhere_identity_column_rendering() -> None:
+    """Verify generated identity and autoincrement constraints render DEFAULT AUTOINCREMENT."""
+    create_sql = parse_one("CREATE TABLE t (id INT GENERATED ALWAYS AS IDENTITY, name VARCHAR(50))").sql("sqlanywhere")
+    assert "DEFAULT AUTOINCREMENT" in create_sql
+
+
+def test_sqlanywhere_fetch_pagination_preservation() -> None:
+    """Verify FETCH FIRST n ROWS ONLY and OFFSET m ROWS FETCH NEXT n are preserved and not dropped."""
+    fetch_expr = parse_one("SELECT id FROM users ORDER BY id OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY", read="tsql")
+    rendered = fetch_expr.sql("sqlanywhere")
+    assert rendered == "SELECT id FROM users ORDER BY id LIMIT 10 OFFSET 5"

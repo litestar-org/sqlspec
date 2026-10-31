@@ -116,7 +116,8 @@ def test_sybase_functions_and_operators() -> None:
     assert transpile("SELECT STRPOS(name, 'abc') FROM users", read="postgres", write="sybase")[0] == (
         "SELECT CHARINDEX('abc', name) FROM users"
     )
-    assert transpile("SELECT CURRENT_TIMESTAMP", read="postgres", write="sybase")[0] == "SELECT GETUTCDATE()"
+    assert transpile("SELECT CURRENT_TIMESTAMP", read="postgres", write="sybase")[0] == "SELECT GETDATE()"
+    assert transpile("SELECT GETUTCDATE()", read="tsql", write="sybase")[0] == "SELECT GETUTCDATE()"
     assert transpile("SELECT * FROM users WHERE name ILIKE '%alice%'", read="postgres", write="sybase")[0] == (
         "SELECT * FROM users WHERE LOWER(name) LIKE LOWER('%alice%')"
     )
@@ -127,3 +128,10 @@ def test_sybase_functions_and_operators() -> None:
     pos_node = parsed_pos.find(exp.StrPosition)
     assert pos_node is not None
     assert pos_node.sql(dialect="sybase") == "CHARINDEX('abc', name)"
+
+
+def test_sybase_fetch_pagination_preservation() -> None:
+    """Verify FETCH FIRST n ROWS ONLY and OFFSET m ROWS FETCH NEXT n are preserved and not dropped."""
+    fetch_expr = parse_one("SELECT id FROM users ORDER BY id OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY", read="tsql")
+    rendered = fetch_expr.sql("sybase")
+    assert rendered == "SELECT id FROM users ORDER BY id ROWS LIMIT 10 OFFSET 5"

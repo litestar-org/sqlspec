@@ -20,14 +20,14 @@ __all__ = (
     "SYBASE_DEFAULT_TYPE_LENGTHS",
     "SYBASE_TRANSFORMS",
     "SYBASE_TYPE_MAPPING",
-    "char_length_sql",
-    "charindex_sql",
-    "ilike_sql",
+    "sqlanywhere_anonymous_sql",
+    "sqlanywhere_autoincrement_sql",
     "sqlanywhere_create_sql",
     "sqlanywhere_current_timestamp_sql",
     "sqlanywhere_datatype_sql",
     "sqlanywhere_dispatch",
     "sqlanywhere_drop_sql",
+    "sqlanywhere_generated_identity_sql",
     "sqlanywhere_select_sql",
     "sqlanywhere_set_operation_sql",
     "sybase_autoincrement_sql",
@@ -61,8 +61,9 @@ SYBASE_TYPE_MAPPING: Final[dict[exp.DType, str]] = {
     exp.DType.TIMESTAMPTZ: "BIGDATETIME",
     exp.DType.TIMESTAMPLTZ: "BIGDATETIME",
     exp.DType.TIMESTAMPNTZ: "BIGDATETIME",
-    exp.DType.DATETIME: "BIGDATETIME",
+    exp.DType.DATETIME: "DATETIME",
     exp.DType.DATETIME2: "BIGDATETIME",
+    exp.DType.ROWVERSION: "TIMESTAMP",
     exp.DType.DATE: "DATE",
     exp.DType.TIME: "BIGTIME",
     exp.DType.TIMETZ: "BIGTIME",
@@ -184,9 +185,12 @@ def sybase_autoincrement_sql(gen: "generator.Generator", expression: exp.AutoInc
 
 
 def sybase_current_timestamp_sql(gen: "generator.Generator", expression: exp.CurrentTimestamp) -> str:
-    """Render CurrentTimestamp as GETUTCDATE()."""
-    _ = (gen, expression)
-    return "GETUTCDATE()"
+    """Render CurrentTimestamp as GETDATE() or GETUTCDATE() when UTC is specified."""
+    _ = gen
+    zone = expression.args.get("zone")
+    if isinstance(expression, exp.UtcTimestamp) or (zone is not None and "utc" in str(zone).lower()):
+        return "GETUTCDATE()"
+    return "GETDATE()"
 
 
 def sybase_returning_sql(gen: "generator.Generator", expression: exp.Returning) -> str:
@@ -240,24 +244,35 @@ def sqlanywhere_drop_sql(gen: "generator.Generator", expression: exp.Drop) -> st
 
 
 def sqlanywhere_current_timestamp_sql(gen: "generator.Generator", expression: exp.CurrentTimestamp) -> str:
-    """Render CurrentTimestamp as CURRENT UTC TIMESTAMP."""
+    """Render CurrentTimestamp as CURRENT TIMESTAMP or CURRENT UTC TIMESTAMP when UTC is specified."""
+    _ = gen
+    zone = expression.args.get("zone")
+    if isinstance(expression, exp.UtcTimestamp) or (zone is not None and "utc" in str(zone).lower()):
+        return "CURRENT UTC TIMESTAMP"
+    return "CURRENT TIMESTAMP"
+
+
+def sqlanywhere_anonymous_sql(gen: "generator.Generator", expression: exp.Anonymous) -> str:
+    """Render Anonymous functions, mapping GETUTCDATE to CURRENT UTC TIMESTAMP."""
+    if str(expression.this).upper() == "GETUTCDATE":
+        return "CURRENT UTC TIMESTAMP"
+    return generator.Generator.anonymous_sql(gen, expression)
+
+
+def sqlanywhere_generated_identity_sql(
+    gen: "generator.Generator", expression: exp.GeneratedAsIdentityColumnConstraint
+) -> str:
+    """Render GeneratedAsIdentityColumnConstraint as DEFAULT AUTOINCREMENT."""
     _ = (gen, expression)
-    return "CURRENT UTC TIMESTAMP"
+    return "DEFAULT AUTOINCREMENT"
 
 
-def char_length_sql(gen: "generator.Generator", expression: exp.Length) -> str:
-    """Render exp.Length as CHAR_LENGTH(this)."""
-    return render_char_length(gen, expression)
-
-
-def charindex_sql(gen: "generator.Generator", expression: exp.StrPosition) -> str:
-    """Render exp.StrPosition as CHARINDEX(substr, this[, position])."""
-    return render_charindex(gen, expression)
-
-
-def ilike_sql(gen: "generator.Generator", expression: exp.ILike) -> str:
-    """Render exp.ILike as LOWER(this) LIKE LOWER(expression)."""
-    return render_ilike(gen, expression)
+def sqlanywhere_autoincrement_sql(
+    gen: "generator.Generator", expression: exp.AutoIncrementColumnConstraint
+) -> str:
+    """Render AutoIncrementColumnConstraint as DEFAULT AUTOINCREMENT."""
+    _ = (gen, expression)
+    return "DEFAULT AUTOINCREMENT"
 
 
 SYBASE_TRANSFORMS: Final[dict[type[exp.Expr], Callable[[Any, Any], str]]] = {
@@ -271,12 +286,13 @@ SYBASE_TRANSFORMS: Final[dict[type[exp.Expr], Callable[[Any, Any], str]]] = {
     exp.AutoIncrementColumnConstraint: sybase_autoincrement_sql,
     exp.CurrentTimestamp: sybase_current_timestamp_sql,
     exp.Returning: sybase_returning_sql,
-    exp.Length: char_length_sql,
-    exp.StrPosition: charindex_sql,
-    exp.ILike: ilike_sql,
+    exp.Length: render_char_length,
+    exp.StrPosition: render_charindex,
+    exp.ILike: render_ilike,
 }
 
 SQLANYWHERE_TRANSFORMS: Final[dict[type[exp.Expr], Callable[[Any, Any], str]]] = {
+    exp.Anonymous: sqlanywhere_anonymous_sql,
     exp.Select: sqlanywhere_select_sql,
     exp.Union: sqlanywhere_set_operation_sql,
     exp.Intersect: sqlanywhere_set_operation_sql,
@@ -284,10 +300,12 @@ SQLANYWHERE_TRANSFORMS: Final[dict[type[exp.Expr], Callable[[Any, Any], str]]] =
     exp.DataType: sqlanywhere_datatype_sql,
     exp.Create: sqlanywhere_create_sql,
     exp.Drop: sqlanywhere_drop_sql,
+    exp.GeneratedAsIdentityColumnConstraint: sqlanywhere_generated_identity_sql,
+    exp.AutoIncrementColumnConstraint: sqlanywhere_autoincrement_sql,
     exp.CurrentTimestamp: sqlanywhere_current_timestamp_sql,
-    exp.Length: char_length_sql,
-    exp.StrPosition: charindex_sql,
-    exp.ILike: ilike_sql,
+    exp.Length: render_char_length,
+    exp.StrPosition: render_charindex,
+    exp.ILike: render_ilike,
 }
 
 _sybase_overlay_cache: "tuple[dict[type[exp.Expr], Callable[..., str]], dict[type[exp.Expr], Callable[..., str]]] | None" = None

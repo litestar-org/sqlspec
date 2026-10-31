@@ -14,7 +14,10 @@ __all__ = (
 
 
 def is_literal_integer_limit(limit_expr: Any) -> bool:
-    """Return True when limit_expr is a literal integer exp.Limit without parameters."""
+    """Return True when limit_expr is a literal integer exp.Limit or exp.Fetch without parameters."""
+    if isinstance(limit_expr, exp.Fetch):
+        count_expr = limit_expr.args.get("count")
+        return isinstance(count_expr, exp.Literal) and not count_expr.is_string
     if not isinstance(limit_expr, exp.Limit):
         return False
     count_expr = limit_expr.expression
@@ -22,15 +25,25 @@ def is_literal_integer_limit(limit_expr: Any) -> bool:
 
 
 def clone_with_detached_pagination(expression: exp.Expr) -> "tuple[exp.Expr, exp.Limit | None, exp.Offset | None]":
-    """Return a shallow copy of expression with limit and offset removed if present."""
+    """Return a shallow copy of expression with limit, offset, and fetch removed if present."""
     limit_arg = expression.args.get("limit")
     offset_arg = expression.args.get("offset")
-    if limit_arg is None and offset_arg is None:
+    fetch_arg = expression.args.get("fetch")
+    if limit_arg is None and offset_arg is None and fetch_arg is None:
         return expression, None, None
     cloned = expression.copy()
     cloned.set("limit", None)
     cloned.set("offset", None)
-    limit_node = limit_arg if isinstance(limit_arg, exp.Limit) else None
+    cloned.set("fetch", None)
+    limit_node: exp.Limit | None = None
+    if isinstance(limit_arg, exp.Limit):
+        limit_node = limit_arg
+    elif isinstance(limit_arg, exp.Fetch):
+        count_expr = limit_arg.args.get("count")
+        limit_node = exp.Limit(expression=count_expr.copy() if count_expr is not None else None)
+    elif isinstance(fetch_arg, exp.Fetch):
+        count_expr = fetch_arg.args.get("count")
+        limit_node = exp.Limit(expression=count_expr.copy() if count_expr is not None else None)
     offset_node = offset_arg if isinstance(offset_arg, exp.Offset) else None
     return cloned, limit_node, offset_node
 
