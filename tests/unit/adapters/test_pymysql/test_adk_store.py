@@ -302,3 +302,24 @@ def test_pymysql_stream_source_closes_cursor_when_execute_raises() -> None:
 
     cursor.close.assert_called_once()
     assert source._cursor is None
+
+
+def test_pymysql_adk_memory_store_missing_table_returns_empty_or_zero() -> None:
+    """_search_entries and deletes return empty/0 when table is missing (errno 1146)."""
+    from pymysql.err import MySQLError
+
+    missing_err = MySQLError(1146, "Table 'test.mem' doesn't exist")
+
+    cursor = MagicMock()
+    cursor.execute.side_effect = missing_err
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.__exit__.return_value = None
+    conn.cursor.return_value = cursor
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+
+    store = PyMysqlADKMemoryStore(config)
+    assert store.search_entries("test", "app", "u1") == []
+    assert store.delete_entries_by_session("sess-1") == 0
+    assert store.delete_entries_older_than(30) == 0

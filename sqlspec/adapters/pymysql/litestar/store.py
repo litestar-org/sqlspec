@@ -87,10 +87,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         """
 
     def _drop_table_sql(self) -> "list[str]":
-        return [
-            f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
-            f"DROP TABLE IF EXISTS {self._table_name}",
-        ]
+        return [f"DROP TABLE IF EXISTS {self._table_name}"]
 
     def _create_table(self) -> None:
         sql = self._table_ddl()
@@ -142,10 +139,10 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
 
         sql = f"""
         INSERT INTO {self._table_name} (session_id, data, expires_at)
-        VALUES (%s, %s, %s) AS new
+        VALUES (%s, %s, %s)
         ON DUPLICATE KEY UPDATE
-            data = new.data,
-            expires_at = new.expires_at,
+            data = VALUES(data),
+            expires_at = VALUES(expires_at),
             updated_at = UTC_TIMESTAMP(6)
         """
 
