@@ -350,7 +350,7 @@ class FlaskConfig(TypedDict):
     """
 
     enable_correlation_middleware: NotRequired[bool]
-    """Enable request correlation ID middleware. Default: False"""
+    """Enable request correlation ID middleware. Default: True"""
 
     correlation_header: NotRequired[str]
     """HTTP header to read the request correlation ID from when middleware is enabled. Default: ``X-Request-ID``"""
@@ -498,7 +498,7 @@ class StarletteConfig(TypedDict):
     """
 
     enable_correlation_middleware: NotRequired[bool]
-    """Enable request correlation ID middleware. Default: False"""
+    """Enable request correlation ID middleware. Default: True"""
 
     correlation_header: NotRequired[str]
     """HTTP header to read the request correlation ID from when middleware is enabled. Default: ``X-Request-ID``"""

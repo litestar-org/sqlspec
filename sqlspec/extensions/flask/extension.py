@@ -218,7 +218,7 @@ class SQLSpecPlugin:
         extra_rollback_statuses = flask_config.get("extra_rollback_statuses")
         disable_di = flask_config.get("disable_di", False)
 
-        enable_correlation = flask_config.get("enable_correlation_middleware", False)
+        enable_correlation = flask_config.get("enable_correlation_middleware", True)
         correlation_header = flask_config.get("correlation_header", "x-request-id")
         correlation_headers = flask_config.get("correlation_headers")
         if correlation_headers is not None:

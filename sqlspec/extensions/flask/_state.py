@@ -28,7 +28,7 @@ class FlaskConfigState:
     extra_rollback_statuses: "set[int] | None"
     is_async: bool
     disable_di: bool
-    enable_correlation_middleware: bool = False
+    enable_correlation_middleware: bool = True
     correlation_header: str = "x-request-id"
     correlation_headers: "tuple[str, ...] | None" = None
     auto_trace_headers: bool = True
