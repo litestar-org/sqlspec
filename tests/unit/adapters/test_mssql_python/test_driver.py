@@ -4,7 +4,7 @@ from typing import Any, cast
 
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
-from sqlspec.core import StatementStack
+from sqlspec.core import SQL, StatementStack
 
 
 class DummyCursor:
@@ -142,3 +142,17 @@ def test_execute_cache_hit_collects_rows_and_driver_profile_is_registered() -> N
     assert result.get_data() == [{"id": 1, "name": "Ada"}]
     assert connection.cursor_obj.executed == [("SELECT id, name FROM dbo.users WHERE id = ?", (1,))]
     assert get_driver_profile("mssql_python") is not None
+
+
+def test_dispatch_execute_fetches_rows_whenever_the_cursor_has_a_result_set() -> None:
+    """EXEC returns rows the statement profile cannot predict, so the cursor description decides."""
+    driver = MssqlPythonDriver(cast("Any", object()))
+    cursor = DummyCursor()
+    cursor.description = [("id",)]
+    cursor.rows = [(1,), (2,)]
+    statement = SQL("EXEC dbo.list_ids", statement_config=driver.statement_config)
+
+    result = driver.dispatch_execute(cast("Any", cursor), statement)
+
+    assert result.selected_data is not None
+    assert len(result.selected_data) == 2

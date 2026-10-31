@@ -173,7 +173,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         _execute_cursor(cursor, sql, prepared_parameters)
 
-        if statement.returns_rows():
+        if cursor.description is not None:
             fetched, column_names, row_format = collect_rows(
                 cursor.fetchall(), cursor.description, self._column_name_cache
             )

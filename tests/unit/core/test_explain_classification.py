@@ -95,3 +95,25 @@ def test_sql_explain_oracle_stays_non_row_returning() -> None:
 
     assert statement.sql == "EXPLAIN PLAN FOR SELECT 1"
     assert statement.returns_rows() is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT INTO t (a) OUTPUT inserted.id INTO @ids VALUES (1)",
+        "UPDATE t SET a = 1 OUTPUT inserted.id INTO @ids WHERE id = 1",
+        "DELETE t OUTPUT deleted.id INTO @ids WHERE id = 1",
+    ],
+)
+def test_tsql_output_into_does_not_return_client_rows(sql: str) -> None:
+    """OUTPUT ... INTO writes into a table variable, so no rows reach the client."""
+    expression = sqlglot.parse_one(sql, dialect="tsql")
+
+    assert SQLProcessor._operation_profile(expression, SQLProcessor._operation_type(expression)).returns_rows is False
+
+
+def test_tsql_output_without_into_returns_client_rows() -> None:
+    """A bare OUTPUT clause streams the affected rows to the client."""
+    expression = sqlglot.parse_one("INSERT INTO t (a) OUTPUT inserted.id VALUES (1)", dialect="tsql")
+
+    assert SQLProcessor._operation_profile(expression, SQLProcessor._operation_type(expression)).returns_rows is True
