@@ -35,12 +35,12 @@ from sqlspec.core import (
     clear_all_caches,
     get_cache,
 )
+from sqlspec.core.cache import CachedQuery, QueryCache
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.parameters._declared import ParameterDeclaration
 from sqlspec.core.parameters._processor import ParameterProcessor, type_coercion_fallbacks
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import _check_declared_parameters
-from sqlspec.driver._query_cache import CachedQuery, QueryCache
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.observability import LoggingConfig, StatementEvent

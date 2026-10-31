@@ -161,10 +161,9 @@ class DuckDBConnectionPool:
             else:
                 config_dict[key] = value
 
-        if config_dict:
-            connect_parameters["config"] = config_dict
-
-        connection = duckdb.connect(**connect_parameters)
+        connection, deferred_parquet_metadata_cache = _open_duckdb_connection(
+            connect_parameters, config_dict, has_extensions=bool(self._extensions)
+        )
 
         for ext_config in self._extensions:
             ext_name = ext_config.get("name")
@@ -227,11 +226,21 @@ class DuckDBConnectionPool:
                         error=install_error,
                     )
 
-        created_secrets: list[dict[str, Any]] = [
-            {**secret_config, "value": dict(secret_config.get("value") or {})}
-            for secret_config in self._secrets
-            if _create_secret(connection, secret_config)
-        ]
+        if deferred_parquet_metadata_cache is not None:
+            with suppress(Exception):
+                connection.execute(
+                    f"SET parquet_metadata_cache = {'true' if deferred_parquet_metadata_cache else 'false'}"
+                )
+
+        created_secrets: list[dict[str, Any]] = []
+        secret_refresh_times: dict[str, float] = {}
+        now_monotonic = time.monotonic()
+        for secret_config in self._secrets:
+            resolved_secret = _resolve_secret_config(secret_config)
+            if _create_secret(connection, resolved_secret):
+                created_secrets.append({**resolved_secret, "value": dict(resolved_secret.get("value") or {})})
+                if callable(secret_config.get("value_provider")) and resolved_secret.get("name"):
+                    secret_refresh_times[str(resolved_secret["name"])] = now_monotonic
 
         if self._on_connection_create:
             modified = self._on_connection_create(connection)
@@ -247,6 +256,7 @@ class DuckDBConnectionPool:
         if record_thread_state:
             self._thread_local.storage_extensions = frozenset(loaded_extensions)
             self._thread_local.storage_secrets = tuple(created_secrets)
+            self._thread_local.secret_refresh_times = secret_refresh_times
             self._thread_local.storage_protocols = frozenset(storage_protocols)
             self._thread_local.profile_path = profile_path
         return connection
@@ -437,7 +447,42 @@ class DuckDBConnectionPool:
             self._thread_local.created_at = time.time()
 
         self._thread_local.last_used = time.time()
+        self._refresh_dynamic_secrets(cast("DuckDBConnection", self._thread_local.connection))
         return cast("DuckDBConnection", self._thread_local.connection)
+
+    def _refresh_dynamic_secrets(self, connection: DuckDBConnection) -> None:
+        """Refresh secrets configured with ``value_provider`` when ``refresh_interval_seconds`` has elapsed."""
+        if not any(callable(secret.get("value_provider")) for secret in self._secrets):
+            return
+        thread_state = self._thread_local.__dict__
+        refresh_times = cast("dict[str, float]", thread_state.setdefault("secret_refresh_times", {}))
+        current_secrets = list(cast("tuple[dict[str, Any], ...]", thread_state.get("storage_secrets", ())))
+        now_monotonic = time.monotonic()
+        updated = False
+        for secret_config in self._secrets:
+            provider = secret_config.get("value_provider")
+            secret_name = secret_config.get("name")
+            if not callable(provider) or not secret_name:
+                continue
+            interval = float(secret_config.get("refresh_interval_seconds", 1800.0))
+            last_refreshed = refresh_times.get(str(secret_name), 0.0)
+            if now_monotonic - last_refreshed < interval:
+                continue
+            resolved_secret = _resolve_secret_config(secret_config)
+            if _create_secret(connection, resolved_secret):
+                refresh_times[str(secret_name)] = now_monotonic
+                updated_entry = {**resolved_secret, "value": dict(resolved_secret.get("value") or {})}
+                replaced = False
+                for idx, existing in enumerate(current_secrets):
+                    if str(existing.get("name", "")).lower() == str(secret_name).lower():
+                        current_secrets[idx] = updated_entry
+                        replaced = True
+                        break
+                if not replaced:
+                    current_secrets.append(updated_entry)
+                updated = True
+        if updated:
+            self._thread_local.storage_secrets = tuple(current_secrets)
 
     def _retire_connection(self, connection: DuckDBConnection) -> None:
         """Close a pool-owned connection and drop it from the shutdown registry."""
@@ -480,6 +525,34 @@ class DuckDBConnectionPool:
         return True
 
 
+def _open_duckdb_connection(
+    connect_parameters: dict[str, Any], config_dict: dict[str, Any], *, has_extensions: bool
+) -> tuple[DuckDBConnection, bool | None]:
+    """Open a DuckDB connection, deferring ``parquet_metadata_cache`` when extensions are configured."""
+    deferred_parquet_metadata_cache: bool | None = None
+    if has_extensions and "parquet_metadata_cache" in config_dict:
+        deferred_parquet_metadata_cache = bool(config_dict.pop("parquet_metadata_cache"))
+
+    if config_dict:
+        connect_parameters["config"] = config_dict
+    else:
+        connect_parameters.pop("config", None)
+
+    try:
+        connection = duckdb.connect(**connect_parameters)
+    except Exception as exc:
+        if "parquet_metadata_cache" in config_dict and "parquet_metadata_cache" in str(exc):
+            deferred_parquet_metadata_cache = bool(config_dict.pop("parquet_metadata_cache"))
+            if config_dict:
+                connect_parameters["config"] = config_dict
+            else:
+                connect_parameters.pop("config", None)
+            connection = duckdb.connect(**connect_parameters)
+        else:
+            raise
+    return connection, deferred_parquet_metadata_cache
+
+
 def _validate_sql_identifier(value: str, field_name: str) -> None:
     """Raise ValueError if value is not safe to interpolate as a SQL identifier."""
     if not _SQL_IDENTIFIER_RE.fullmatch(value):
@@ -490,7 +563,23 @@ def _validate_sql_identifier(value: str, field_name: str) -> None:
         raise ValueError(msg)
 
 
+def _resolve_secret_config(secret_config: dict[str, Any]) -> dict[str, Any]:
+    """Evaluate ``value_provider`` if present and return a normalized secret configuration dict."""
+    resolved = dict(secret_config)
+    value_dict = dict(resolved.get("value") or {})
+    provider_fn = resolved.pop("value_provider", None)
+    if callable(provider_fn):
+        dynamic_values = provider_fn()
+        if isinstance(dynamic_values, dict):
+            value_dict.update(dynamic_values)
+        resolved.setdefault("replace", True)
+    if value_dict:
+        resolved["value"] = value_dict
+    return resolved
+
+
 def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) -> bool:
+    secret_config = _resolve_secret_config(secret_config)
     secret_name = secret_config.get("name")
     secret_type = secret_config.get("secret_type")
     if not (secret_name and secret_type):

@@ -59,18 +59,18 @@ with spec.provide_session(config) as session:
 
 ## Core Introspection and DDL Methods
 
-| Method | Returned Metadata | Description |
-| --- | --- | --- |
-| `get_tables(driver, schema=None)` | `list[TableMetadata]` | Lists user tables in topological/catalog order (including self-referential root tables). |
-| `get_columns(driver, table=None, schema=None)` | `list[ColumnMetadata]` | Returns column names, types, nullability, defaults, and identity/generated expressions. |
-| `get_indexes(driver, table=None, schema=None)` | `list[IndexMetadata]` | Returns index names, indexed column lists, and uniqueness flags. |
-| `get_foreign_keys(driver, table=None, schema=None)` | `list[ForeignKeyMetadata]` | Returns referencing/referenced schemas, tables, columns, and `on_delete` / `on_update` actions. |
-| `get_ddl(driver, object_name, ...)` | `DDLResult` | Extracts native engine DDL when available or synthesizes dialect-aware AST DDL (`target_dialect` optional). |
-| `get_schema_ddl(driver, schema=None, ...)` | `MetadataResult` | Emits topologically ordered `CREATE` or reverse-topological `DROP` `DDLResult` items across a schema. |
-| `get_table_profile(driver, table, ...)` | `list[ColumnProfileMetadata]` | Samples live rows to compute null counts, cardinality, max string lengths, and narrower SQL types. |
-| `infer_table_ddl_from_data(driver, table, ...)` | `DDLResult` | Generates a typed `CREATE TABLE` statement from profiled column values (`target_table` / `target_dialect`). |
-| `get_version(driver)` | `VersionInfo \| None` | Parses and caches the connected database server's `major`, `minor`, and `patch` version. |
-| `get_optimal_type(driver, type_category)` | `str` | Resolves the best DDL type for categories such as `"json"`, `"uuid"`, `"binary"`, `"text"`, or `"timestamp"`. |
+| Method | Returns | Description |
+| :--- | :--- | :--- |
+| `get_tables()` | `list[TableMetadata]` | Lists user tables in topological or catalog order. |
+| `get_columns()` | `list[ColumnMetadata]` | Returns column names, types, nullability, defaults, and identity. |
+| `get_indexes()` | `list[IndexMetadata]` | Returns index names, indexed column lists, and uniqueness flags. |
+| `get_foreign_keys()` | `list[ForeignKeyMetadata]` | Returns referencing/referenced columns and on-delete/update actions. |
+| `get_ddl()` | `DDLResult` | Extracts native engine DDL or synthesizes dialect-aware AST DDL. |
+| `get_schema_ddl()` | `MetadataResult` | Emits ordered `CREATE` or reverse-ordered `DROP` statements across a schema. |
+| `get_table_profile()` | `list[ColumnProfileMetadata]` | Samples live rows to compute nulls, cardinality, and narrower types. |
+| `infer_table_ddl_from_data()` | `DDLResult` | Generates a typed `CREATE TABLE` statement from profiled column values. |
+| `get_version()` | `VersionInfo &#124; None` | Returns database server major, minor, and patch version. |
+| `get_optimal_type()` | `str` | Resolves optimal DDL types for abstract categories like `json` or `uuid`. |
 
 ### Metadata Record Fields
 
@@ -93,6 +93,9 @@ with spec.provide_session(config) as session:
 
 When migrating loosely typed staging tables (`TEXT` / `VARCHAR` landing zones) or raw JSON/Arrow datasets, `get_table_profile` and `infer_table_ddl_from_data` inspect live sample values to recommend tighter types (`BIGINT`, `NUMERIC(p, s)`, `BOOLEAN`, `DATE`, `TIMESTAMP`, `UUID`) and `NOT NULL` constraints.
 
+!!! note "Cross-Dialect Transpilation"
+    Pass `target_dialect` to `get_ddl` or `get_schema_ddl` to transpile catalog DDL from one database engine to another using SQLGlot AST compilation.
+
 ## Dependency Ordering and Portable DDL Helpers
 
 When exporting schemas, seeding fixtures, or truncating tables in foreign-key order, combine `get_foreign_keys` with `dependency_edges_from_foreign_keys`, `sort_dependencies`, and `sort_ddl_results` from `sqlspec.data_dictionary`:
@@ -111,7 +114,10 @@ sorted_plan = sort_dependencies(edges)
 
 ## Identifier Quoting vs Catalog Lookups
 
-Catalog views store unquoted identifier names (`schema_versions`, not `"schema_versions"`). Pass bare table and schema names (`table="members"`, `schema="public"`) to `data_dictionary` methods; synthesized DDL quotes reserved words and mixed-case catalog names automatically for the target dialect.
+Catalog views store unquoted identifier names (`schema_versions`, not `"schema_versions"`). Pass bare table and schema names (`table="members"`, `schema="public"`) to `data_dictionary` methods. Synthesized DDL quotes reserved words and mixed-case catalog names automatically for the target dialect.
+
+!!! tip "Bare Catalog Identifiers"
+    Always pass bare unquoted identifier names (`table="members"`, `schema="public"`) to `data_dictionary` methods. SQLSpec normalizes catalog queries and quotes reserved words or mixed-case identifiers automatically in generated DDL.
 
 ## Recap
 

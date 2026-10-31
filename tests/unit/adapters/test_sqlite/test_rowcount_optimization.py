@@ -3,23 +3,16 @@ from unittest.mock import Mock
 
 from sqlspec.adapters.sqlite.core import resolve_rowcount
 from sqlspec.adapters.sqlite.driver import SqliteDriver
-from sqlspec.core.result import DMLResult
 
 
 def test_resolve_rowcount_fast_path() -> None:
-    # Cursor with rowcount
     cursor = Mock()
     cursor.rowcount = 10
-
-    # Should get 10
     assert resolve_rowcount(cursor) == 10
 
 
 def test_resolve_rowcount_missing_attr() -> None:
-    # Cursor without rowcount
-    cursor = Mock(spec=[])  # No attributes
-
-    # Should not crash, return 0
+    cursor = Mock(spec=[])
     assert resolve_rowcount(cursor) == 0
 
 
@@ -35,53 +28,50 @@ def test_resolve_rowcount_negative() -> None:
     assert resolve_rowcount(cursor) == 0
 
 
-def test_sqlite_execute_many_thin_path_skips_dispatch() -> None:
+def test_sqlite_execute_many_inserts_records() -> None:
     connection = sqlite3.connect(":memory:")
     try:
         driver = SqliteDriver(connection=connection)
-        driver.execute("CREATE TABLE test_thin_path (value TEXT)")
+        driver.execute("CREATE TABLE test_many (value TEXT)")
 
-        result = driver.execute_many("INSERT INTO test_thin_path (value) VALUES (?)", [("a",), ("b",)])
+        result = driver.execute_many("INSERT INTO test_many (value) VALUES (?)", [("a",), ("b",)])
 
-        assert isinstance(result, DMLResult)
         assert result.operation_type == "INSERT"
         assert result.rows_affected >= 0
-        assert connection.execute("SELECT COUNT(*) FROM test_thin_path").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM test_many").fetchone()[0] == 2
     finally:
         connection.close()
 
 
-def test_sqlite_execute_many_falls_back_when_coercion_required() -> None:
+def test_sqlite_execute_many_with_coercion() -> None:
     connection = sqlite3.connect(":memory:")
     try:
         driver = SqliteDriver(connection=connection)
-        driver.execute("CREATE TABLE test_fallback_path (flag INTEGER)")
+        driver.execute("CREATE TABLE test_coercion (flag INTEGER)")
 
-        result = driver.execute_many("INSERT INTO test_fallback_path (flag) VALUES (?)", [(True,), (False,)])
+        result = driver.execute_many("INSERT INTO test_coercion (flag) VALUES (?)", [(True,), (False,)])
 
-        assert not isinstance(result, DMLResult)
         assert result.operation_type == "INSERT"
-        assert connection.execute("SELECT COUNT(*) FROM test_fallback_path").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM test_coercion").fetchone()[0] == 2
     finally:
         connection.close()
 
 
-def test_sqlite_execute_many_falls_back_when_subclass_coercion_required() -> None:
+def test_sqlite_execute_many_with_subclass_coercion() -> None:
     import json
     from collections import defaultdict
 
     connection = sqlite3.connect(":memory:")
     try:
         driver = SqliteDriver(connection=connection)
-        driver.execute("CREATE TABLE test_fallback_path (data TEXT)")
+        driver.execute("CREATE TABLE test_subclass_coercion (data TEXT)")
 
         result = driver.execute_many(
-            "INSERT INTO test_fallback_path (data) VALUES (?)", [(defaultdict(int, a=1),), (defaultdict(int, b=2),)]
+            "INSERT INTO test_subclass_coercion (data) VALUES (?)", [(defaultdict(int, a=1),), (defaultdict(int, b=2),)]
         )
 
-        assert not isinstance(result, DMLResult)
         assert result.operation_type == "INSERT"
-        rows = connection.execute("SELECT data FROM test_fallback_path ORDER BY data").fetchall()
+        rows = connection.execute("SELECT data FROM test_subclass_coercion ORDER BY data").fetchall()
         assert [json.loads(row[0]) for row in rows] == [{"a": 1}, {"b": 2}]
     finally:
         connection.close()

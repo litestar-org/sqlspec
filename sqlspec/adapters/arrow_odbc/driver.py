@@ -2,10 +2,10 @@
 
 import contextlib
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from sqlglot import exp
 
@@ -477,9 +477,34 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into a table via arrow-odbc bulk insert."""
         self._require_capability("arrow_import_enabled")
+        if stage_table or conflict_keys or drop_indexes:
+            return self._execute_staged_load_sync(
+                table,
+                source,
+                raw_loader=self.load_from_arrow,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         ensure_pyarrow()
         raw_source = source.get_data() if hasattr(source, "get_data") and callable(source.get_data) else source
         if overwrite:
@@ -509,10 +534,12 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into a table via arrow-odbc bulk insert."""
-        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
-        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+        return super().load_from_storage(
+            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+        )
 
     def _connection_in_transaction(self) -> bool:
         """Return whether SQLSpec holds an explicit transaction on the connection.

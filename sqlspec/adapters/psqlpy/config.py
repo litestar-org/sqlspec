@@ -1,5 +1,6 @@
 """Psqlpy database configuration."""
 
+import inspect
 import sys
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
@@ -43,6 +44,8 @@ class PsqlpyConnectionParams(TypedDict):
     """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
     """Password for ``username``."""
+    auth_token_provider: NotRequired["Callable[[], str] | Callable[[], Awaitable[str]]"]
+    """Callable or async callable returning a fresh password or IAM token when creating connections."""
     db_name: NotRequired[str]
     """Target PostgreSQL database name."""
     host: NotRequired[str]
@@ -466,7 +469,15 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        return ConnectionPool(**build_connection_config(self.connection_config))
+        raw_cfg = dict(self.connection_config)
+        auth_token_provider = raw_cfg.pop("auth_token_provider", None)
+        pool_cfg = build_connection_config(raw_cfg)
+        if callable(auth_token_provider):
+            token_result = auth_token_provider()
+            if inspect.isawaitable(token_result):
+                token_result = await token_result
+            pool_cfg["password"] = str(token_result)
+        return ConnectionPool(**pool_cfg)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

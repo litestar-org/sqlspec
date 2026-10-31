@@ -48,10 +48,14 @@ class DuckDBConnectionParams(TypedDict):
     """Raw DuckDB engine configuration dictionary merged with modeled settings."""
     memory_limit: NotRequired[str]
     """Maximum buffer-manager memory ceiling (for example ``'4GB'``)."""
+    memory_ceiling_fraction: NotRequired[float]
+    """Fraction of container or host memory used as an upper ceiling when ``memory_limit`` is unset or exceeds available memory (defaults to ``0.8``)."""
     threads: NotRequired[int]
     """Number of DuckDB execution worker threads."""
     temp_directory: NotRequired[str]
     """Directory path used when spilling out-of-core intermediates to disk."""
+    reject_tmpfs_temp_directory: NotRequired[bool]
+    """Raise ``ImproperConfigurationError`` when ``temp_directory`` resides on an in-memory ``tmpfs`` or ``ramfs`` mount (defaults to ``False``)."""
     max_temp_directory_size: NotRequired[str]
     """Maximum disk space cap for ``temp_directory`` spill files (for example ``'20GB'``)."""
     autoload_known_extensions: NotRequired[bool]
@@ -167,6 +171,12 @@ class DuckDBSecretConfig(TypedDict):
 
     value: NotRequired["dict[str, Any]"]
     """Secret configuration values, applied only when the secret is created or ``replace`` is set."""
+
+    value_provider: NotRequired["Callable[[], dict[str, Any]]"]
+    """Callable returning dynamic secret configuration values (such as short-lived OAuth or STS tokens)."""
+
+    refresh_interval_seconds: NotRequired[float]
+    """Interval in seconds after which a secret backed by ``value_provider`` is refreshed via ``CREATE OR REPLACE SECRET`` (defaults to ``1800.0`` when ``value_provider`` is set)."""
 
     provider: NotRequired[str]
     """Secret provider, such as config or credential_chain."""

@@ -8,7 +8,8 @@ import io
 from collections.abc import Mapping
 from contextlib import suppress
 from itertools import chain
-from typing import TYPE_CHECKING, Any, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlglot import exp
 
@@ -680,8 +681,47 @@ class BigQueryDriver(SyncDriverAdapterBase):
         *,
         columns: "list[str] | None" = None,
         overwrite: bool = False,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load in-memory records through BigQuery's newline-delimited JSON load API."""
+        if drop_indexes:
+            with self.without_indexes(table, concurrent=concurrent_indexes):
+                return self.load_from_records(
+                    table,
+                    records,
+                    columns=columns,
+                    overwrite=overwrite,
+                    stage_table=stage_table,
+                    conflict_keys=conflict_keys,
+                    on_conflict=on_conflict,
+                    exclude_update_columns=exclude_update_columns,
+                    drop_stage_table=drop_stage_table,
+                    drop_indexes=False,
+                    concurrent_indexes=concurrent_indexes,
+                    type_casts=type_casts,
+                )
+        if stage_table or conflict_keys:
+            return self._execute_staged_load_sync(
+                table,
+                records,
+                raw_loader=lambda tbl, src, **kwargs: self.load_from_records(tbl, src, columns=columns, **kwargs),
+                overwrite=overwrite,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=False,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         rows = _records_to_json_rows(records, columns)
         job_config = build_load_job_config("jsonl", overwrite)
         qualified_table = self._qualify_table_name(table)
@@ -705,10 +745,52 @@ class BigQueryDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = False,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = True,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into BigQuery (Parquet load job, or opt-in Storage Write API)."""
 
         self._require_capability("parquet_import_enabled")
+        if drop_indexes:
+            with self.without_indexes(table, concurrent=concurrent_indexes):
+                return self.load_from_arrow(
+                    table,
+                    source,
+                    partitioner=partitioner,
+                    overwrite=overwrite,
+                    telemetry=telemetry,
+                    stage_table=stage_table,
+                    conflict_keys=conflict_keys,
+                    on_conflict=on_conflict,
+                    exclude_update_columns=exclude_update_columns,
+                    drop_stage_table=drop_stage_table,
+                    drop_indexes=False,
+                    concurrent_indexes=concurrent_indexes,
+                    type_casts=type_casts,
+                )
+        if stage_table or conflict_keys:
+            return self._execute_staged_load_sync(
+                table,
+                source,
+                raw_loader=self.load_from_arrow,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=False,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         arrow_table = self._coerce_arrow_table(source)
         ensure_pyarrow()
         qualified_table = self._qualify_table_name(table)
@@ -753,8 +835,18 @@ class BigQueryDriver(SyncDriverAdapterBase):
         file_format: "BigQueryLoadFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into BigQuery."""
+        if kwargs or not isinstance(source, (str, Path)):
+            return super().load_from_storage(
+                table,
+                source,
+                file_format=cast("StorageFormat", file_format),
+                partitioner=partitioner,
+                overwrite=overwrite,
+                **kwargs,
+            )
 
         job_config = build_load_job_config(file_format, overwrite)
         qualified_table = self._qualify_table_name(table)

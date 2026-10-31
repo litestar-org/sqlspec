@@ -1,7 +1,7 @@
 """Spanner driver implementation."""
 
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, overload
 
 from sqlglot import exp as _sqlglot_exp
 
@@ -58,7 +58,7 @@ from sqlspec.exceptions import SQLConversionError
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -525,9 +525,53 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = False,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = True,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into Spanner table via batch mutations."""
         self._require_capability("arrow_import_enabled")
+        if drop_indexes:
+            with self.without_indexes(table, concurrent=concurrent_indexes):
+                return self.load_from_arrow(
+                    table,
+                    source,
+                    partitioner=partitioner,
+                    overwrite=overwrite,
+                    telemetry=telemetry,
+                    stage_table=stage_table,
+                    conflict_keys=conflict_keys,
+                    on_conflict=on_conflict,
+                    exclude_update_columns=exclude_update_columns,
+                    drop_stage_table=drop_stage_table,
+                    drop_indexes=False,
+                    concurrent_indexes=concurrent_indexes,
+                    type_casts=type_casts,
+                )
+        if stage_table or (
+            conflict_keys and on_conflict == "nothing" and not hasattr(self.connection, "insert_or_ignore")
+        ):
+            return self._execute_staged_load_sync(
+                table,
+                source,
+                raw_loader=self.load_from_arrow,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=False,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         arrow_table = self._coerce_arrow_table(source)
 
         exc_handler = self.handle_database_exceptions()
@@ -555,7 +599,10 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                         raise SQLConversionError(msg)
                     writer = cast("_SpannerWriteProtocol", conn)
                     for chunk in chunks:
-                        writer.insert_or_update(table, columns, chunk)
+                        if conflict_keys and on_conflict == "nothing" and hasattr(writer, "insert_or_ignore"):
+                            writer.insert_or_ignore(table, columns, chunk)
+                        else:
+                            writer.insert_or_update(table, columns, chunk)
         self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -571,8 +618,13 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load artifacts from storage into Spanner table."""
+        if kwargs:
+            return super().load_from_storage(
+                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+            )
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
@@ -1137,9 +1189,53 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = False,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = True,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into Spanner table via batch mutations."""
         self._require_capability("arrow_import_enabled")
+        if drop_indexes:
+            async with self.without_indexes(table, concurrent=concurrent_indexes):
+                return await self.load_from_arrow(
+                    table,
+                    source,
+                    partitioner=partitioner,
+                    overwrite=overwrite,
+                    telemetry=telemetry,
+                    stage_table=stage_table,
+                    conflict_keys=conflict_keys,
+                    on_conflict=on_conflict,
+                    exclude_update_columns=exclude_update_columns,
+                    drop_stage_table=drop_stage_table,
+                    drop_indexes=False,
+                    concurrent_indexes=concurrent_indexes,
+                    type_casts=type_casts,
+                )
+        if stage_table or (
+            conflict_keys and on_conflict == "nothing" and not hasattr(self.connection, "insert_or_ignore")
+        ):
+            return await self._execute_staged_load_async(
+                table,
+                source,
+                raw_loader=self.load_from_arrow,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=False,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         arrow_table = self._coerce_arrow_table(source)
 
         exc_handler = self.handle_database_exceptions()
@@ -1167,7 +1263,10 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                         raise SQLConversionError(msg)
                     writer = cast("_SpannerAsyncWriteProtocol", conn)
                     for chunk in chunks:
-                        writer.insert_or_update(table, columns, chunk)
+                        if conflict_keys and on_conflict == "nothing" and hasattr(writer, "insert_or_ignore"):
+                            writer.insert_or_ignore(table, columns, chunk)
+                        else:
+                            writer.insert_or_update(table, columns, chunk)
         self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -1183,8 +1282,13 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load artifacts from storage into Spanner table asynchronously."""
+        if kwargs:
+            return await super().load_from_storage(
+                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+            )
         arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
@@ -1384,6 +1488,8 @@ class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
 
     def insert(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
 
+    def insert_or_ignore(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
+
     def insert_or_update(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
 
     def update(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
@@ -1427,6 +1533,8 @@ class _SpannerAsyncWriteProtocol(_SpannerAsyncReadProtocol, Protocol):
     ) -> "tuple[Any, list[int]]": ...
 
     def insert(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
+
+    def insert_or_ignore(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
 
     def insert_or_update(self, table: str, columns: "list[str]", values: "list[list[Any]]") -> None: ...
 

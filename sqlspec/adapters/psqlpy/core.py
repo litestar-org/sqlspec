@@ -3,6 +3,7 @@
 import contextlib
 import datetime as dt
 import decimal
+import inspect
 import re
 import uuid
 from functools import lru_cache
@@ -168,6 +169,14 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     username = config.pop("username", None) or config.pop("user", None)
     if username is not None:
         config["username"] = username
+    auth_token_provider = config.get("auth_token_provider")
+    if callable(auth_token_provider) and not inspect.iscoroutinefunction(auth_token_provider):
+        config.pop("auth_token_provider", None)
+        token_result = auth_token_provider()
+        if not inspect.isawaitable(token_result):
+            config["password"] = str(token_result)
+    elif auth_token_provider is None:
+        config.pop("auth_token_provider", None)
     return config
 
 

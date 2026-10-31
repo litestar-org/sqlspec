@@ -39,6 +39,7 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
+from sqlspec.core.cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import (
@@ -74,15 +75,24 @@ from sqlspec.data_dictionary import (
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import get_dialect_config
-from sqlspec.driver._query_cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
 from sqlspec.driver._storage_helpers import (
     CAPABILITY_HINTS,
+    arrow_batch_to_rows,
     arrow_table_needs_parameter_preparation,
     arrow_table_to_rows,
     attach_partition_telemetry,
     build_ingest_telemetry,
+    coerce_arrow_batches,
     coerce_arrow_table,
     create_storage_job,
+    encode_arrow_batch_pg_binary,
+    execute_load_from_storage_async,
+    execute_load_from_storage_sync,
+    execute_staged_load_async,
+    execute_staged_load_sync,
+    ingest_telemetry_from_batches,
+    iter_pgcopy_binary_chunks,
+    iter_pgcopy_binary_chunks_async,
     records_to_arrow_table,
 )
 from sqlspec.exceptions import (
@@ -124,7 +134,7 @@ if TYPE_CHECKING:
         StorageTelemetry,
         SyncStoragePipeline,
     )
-    from sqlspec.typing import ArrowTable, SchemaT, StatementParameters
+    from sqlspec.typing import ArrowRecordBatch, ArrowTable, SchemaT, StatementParameters
 
 
 __all__ = (
@@ -3134,6 +3144,82 @@ class CommonDriverAttributesMixin:
         return coerce_arrow_table(source)
 
     @staticmethod
+    def _coerce_arrow_batches(
+        source: "ArrowResult | Any", *, batch_size: int = 65_536
+    ) -> "tuple[list[str], abc.Iterator[ArrowRecordBatch]]":
+        """Coerce an Arrow source into column names and a lazy RecordBatch iterator."""
+        return coerce_arrow_batches(source, batch_size=batch_size)
+
+    @staticmethod
+    def _arrow_batch_to_rows(batch: "ArrowRecordBatch", columns: "list[str] | None" = None) -> "list[tuple[Any, ...]]":
+        """Convert a single Arrow RecordBatch into row tuples."""
+        return arrow_batch_to_rows(batch, columns)
+
+    @staticmethod
+    def _encode_arrow_batch_pg_binary(
+        batch: "ArrowRecordBatch",
+        *,
+        columns: "abc.Sequence[str] | None" = None,
+        vector_columns: frozenset[str] = frozenset(),
+        jsonb_columns: frozenset[str] = frozenset(),
+        include_header: bool = False,
+        include_trailer: bool = False,
+    ) -> bytes:
+        """Encode an Arrow RecordBatch into PostgreSQL COPY BINARY format."""
+        return encode_arrow_batch_pg_binary(
+            batch,
+            columns=columns,
+            vector_columns=vector_columns,
+            jsonb_columns=jsonb_columns,
+            include_header=include_header,
+            include_trailer=include_trailer,
+        )
+
+    @staticmethod
+    def _iter_pgcopy_binary_chunks(
+        source: "ArrowResult | Any",
+        *,
+        columns: "abc.Sequence[str] | None" = None,
+        batch_size: int = 65_536,
+        chunk_bytes: int = 8_388_608,
+        vector_columns: frozenset[str] = frozenset(),
+        jsonb_columns: frozenset[str] = frozenset(),
+        metrics: "dict[str, int] | None" = None,
+    ) -> "abc.Iterator[bytes]":
+        """Yield PostgreSQL COPY BINARY chunks from an Arrow source in bounded memory."""
+        return iter_pgcopy_binary_chunks(
+            source,
+            columns=columns,
+            batch_size=batch_size,
+            chunk_bytes=chunk_bytes,
+            vector_columns=vector_columns,
+            jsonb_columns=jsonb_columns,
+            metrics=metrics,
+        )
+
+    @staticmethod
+    def _iter_pgcopy_binary_chunks_async(
+        source: "ArrowResult | Any",
+        *,
+        columns: "abc.Sequence[str] | None" = None,
+        batch_size: int = 65_536,
+        chunk_bytes: int = 8_388_608,
+        vector_columns: frozenset[str] = frozenset(),
+        jsonb_columns: frozenset[str] = frozenset(),
+        metrics: "dict[str, int] | None" = None,
+    ) -> Any:
+        """Return an async iterator of PostgreSQL COPY BINARY chunks from an Arrow source."""
+        return iter_pgcopy_binary_chunks_async(
+            source,
+            columns=columns,
+            batch_size=batch_size,
+            chunk_bytes=chunk_bytes,
+            vector_columns=vector_columns,
+            jsonb_columns=jsonb_columns,
+            metrics=metrics,
+        )
+
+    @staticmethod
     def _arrow_table_to_rows(
         table: "ArrowTable", columns: "list[str] | None" = None
     ) -> "tuple[list[str], list[tuple[Any, ...]]]":
@@ -3141,7 +3227,7 @@ class CommonDriverAttributesMixin:
         return arrow_table_to_rows(table, columns)
 
     @staticmethod
-    def _arrow_rows_need_preparation(table: "ArrowTable") -> bool:
+    def _arrow_rows_need_preparation(table: "ArrowTable | ArrowRecordBatch") -> bool:
         """Return whether Arrow rows may contain nested values needing preparation."""
         return arrow_table_needs_parameter_preparation(table)
 
@@ -3155,6 +3241,36 @@ class CommonDriverAttributesMixin:
     def _ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") -> "StorageTelemetry":
         """Build telemetry dict from Arrow table statistics."""
         return build_ingest_telemetry(table, format_label=format_label)
+
+    @staticmethod
+    def _ingest_telemetry_from_batches(
+        rows_processed: int,
+        bytes_processed: int,
+        *,
+        duration_s: float | None = None,
+        format_label: str = "arrow",
+        read_duration_s: float | None = None,
+        encode_duration_s: float | None = None,
+        write_duration_s: float | None = None,
+        commit_duration_s: float | None = None,
+        shards_processed: int | None = None,
+        shards_skipped: int | None = None,
+        wal_bytes: int | None = None,
+    ) -> "StorageTelemetry":
+        """Build telemetry dict from accumulated batch metrics."""
+        return ingest_telemetry_from_batches(
+            rows_processed,
+            bytes_processed,
+            duration_s=duration_s,
+            format_label=format_label,
+            read_duration_s=read_duration_s,
+            encode_duration_s=encode_duration_s,
+            write_duration_s=write_duration_s,
+            commit_duration_s=commit_duration_s,
+            shards_processed=shards_processed,
+            shards_skipped=shards_skipped,
+            wal_bytes=wal_bytes,
+        )
 
     @staticmethod
     def _records_to_arrow_table(
@@ -3174,6 +3290,83 @@ class CommonDriverAttributesMixin:
     ) -> "StorageBridgeJob":
         """Create a StorageBridgeJob from telemetry data."""
         return create_storage_job(produced, provided, status=status)
+
+    def _execute_staged_load_sync(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        raw_loader: "abc.Callable[..., StorageBridgeJob]",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "abc.Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "abc.Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "abc.Mapping[str, str] | None" = None,
+    ) -> "StorageBridgeJob":
+        """Execute a staged or index-free bulk load synchronously."""
+        return execute_staged_load_sync(
+            self,
+            table,
+            source,
+            raw_loader=raw_loader,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=telemetry,
+            stage_table=stage_table,
+            conflict_keys=conflict_keys,
+            on_conflict=on_conflict,
+            exclude_update_columns=exclude_update_columns,
+            drop_stage_table=drop_stage_table,
+            drop_indexes=drop_indexes,
+            concurrent_indexes=concurrent_indexes,
+            type_casts=type_casts,
+        )
+
+    async def _execute_staged_load_async(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        raw_loader: "abc.Callable[..., Any]",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "abc.Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "abc.Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "abc.Mapping[str, str] | None" = None,
+    ) -> "StorageBridgeJob":
+        """Execute a staged or index-free bulk load asynchronously."""
+        return await execute_staged_load_async(
+            self,
+            table,
+            source,
+            raw_loader=raw_loader,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=telemetry,
+            stage_table=stage_table,
+            conflict_keys=conflict_keys,
+            on_conflict=on_conflict,
+            exclude_update_columns=exclude_update_columns,
+            drop_stage_table=drop_stage_table,
+            drop_indexes=drop_indexes,
+            concurrent_indexes=concurrent_indexes,
+            type_casts=type_casts,
+        )
+
+    _execute_load_from_storage_sync = staticmethod(execute_load_from_storage_sync)
+    _execute_load_from_storage_async = staticmethod(execute_load_from_storage_async)
 
 
 def parameter_values_need_processing(

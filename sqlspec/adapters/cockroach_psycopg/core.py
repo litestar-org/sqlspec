@@ -9,7 +9,7 @@ from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.psycopg.core import apply_driver_features as psycopg_apply_driver_features
-from sqlspec.adapters.psycopg.core import build_statement_config, driver_profile
+from sqlspec.adapters.psycopg.core import build_copy_from_command, build_statement_config, driver_profile
 from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, SQLSpecError
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -26,6 +26,7 @@ __all__ = (
     "CockroachPsycopgRetryConfig",
     "apply_driver_features",
     "build_connection_config",
+    "build_copy_from_command",
     "build_native_export",
     "build_native_import",
     "build_statement_config",

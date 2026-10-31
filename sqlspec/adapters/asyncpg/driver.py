@@ -4,7 +4,8 @@ import re
 from collections.abc import Mapping
 from contextlib import suppress
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, cast
+from itertools import chain
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError
@@ -352,10 +353,34 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into a PostgreSQL table via COPY."""
         self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
+        if stage_table or conflict_keys or drop_indexes:
+            return await self._execute_staged_load_async(
+                table,
+                source,
+                raw_loader=self.load_from_arrow,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         table_name, schema_name, quoted_target = self._copy_target(table)
         if overwrite:
             try:
@@ -363,12 +388,27 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             except AsyncpgPostgresError as exc:
                 msg = f"Failed to truncate table '{table}': {exc}"
                 raise SQLSpecError(msg) from exc
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            await self.connection.copy_records_to_table(
-                table_name, records=records, columns=columns, schema_name=schema_name
-            )
-        telemetry_payload = self._ingest_telemetry(arrow_table)
+        columns, batch_iter = self._coerce_arrow_batches(source)
+        first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
+        metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
+        if first_batch is not None:
+            all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
+            use_binary = bool(self.driver_features.get("enable_pgcopy_binary", False))
+            if use_binary:
+                async_chunks = self._iter_pgcopy_binary_chunks_async(all_batches, columns=columns, metrics=metrics)
+                await self.connection.copy_to_table(
+                    table_name, source=async_chunks, columns=columns, schema_name=schema_name, format="binary"
+                )
+            else:
+                for batch in all_batches:
+                    metrics["rows_processed"] += int(batch.num_rows)
+                    metrics["bytes_processed"] += int(batch.nbytes)
+                    records = self._arrow_batch_to_rows(batch, columns)
+                    if records:
+                        await self.connection.copy_records_to_table(
+                            table_name, records=records, columns=columns, schema_name=schema_name
+                        )
+        telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
@@ -380,8 +420,31 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         *,
         columns: "list[str] | None" = None,
         overwrite: bool = False,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load mapping or positional records directly with binary COPY."""
+        if stage_table or conflict_keys or drop_indexes:
+            return await super().load_from_records(
+                table,
+                records,
+                columns=columns,
+                overwrite=overwrite,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         self._require_capability("arrow_import_enabled")
         materialized = list(records)
         if not materialized:
@@ -443,12 +506,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Read an artifact from storage and ingest it via COPY."""
 
-        arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
-        return await self.load_from_arrow(
-            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        return await super().load_from_storage(
+            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
     def _timeout_arguments(self, config: "StatementConfig") -> "dict[str, Any]":

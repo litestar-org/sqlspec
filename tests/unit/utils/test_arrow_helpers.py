@@ -363,3 +363,59 @@ def test_sql_type_for_category_decimal_limits() -> None:
         sql_type_for_category("decimal", "spanner", precision=50, scale=4)
     with pytest.raises(SQLBuilderError, match="Unknown SQL type category"):
         sql_type_for_category("geometry", "postgres")
+
+
+def test_coerce_arrow_batches_streams_record_batch_reader_lazily() -> None:
+    """coerce_arrow_batches yields RecordBatches lazily from a RecordBatchReader without calling read_all()."""
+    import pyarrow as pa
+
+    from sqlspec.utils.arrow_helpers import coerce_arrow_batches
+
+    yielded_indices: list[int] = []
+
+    def _batch_gen() -> Any:
+        for idx in range(3):
+            yielded_indices.append(idx)
+            yield pa.record_batch({"id": pa.array([idx * 2, idx * 2 + 1], type=pa.int64())})
+
+    schema = pa.schema([pa.field("id", pa.int64())])
+    reader = pa.RecordBatchReader.from_batches(schema, _batch_gen())
+
+    columns, batch_iter = coerce_arrow_batches(reader)
+    assert columns == ["id"]
+    assert yielded_indices == []
+
+    first_batch = next(batch_iter)
+    assert first_batch.num_rows == 2
+    assert yielded_indices == [0]
+
+    remaining = list(batch_iter)
+    assert len(remaining) == 2
+    assert yielded_indices == [0, 1, 2]
+
+
+def test_coerce_arrow_batches_accepts_table_record_batch_and_arrow_result() -> None:
+    """coerce_arrow_batches handles Table, RecordBatch, ArrowResult, and Arrow C stream sources."""
+    import pyarrow as pa
+
+    from sqlspec.core.result import ArrowResult
+    from sqlspec.core.statement import SQL
+    from sqlspec.utils.arrow_helpers import arrow_batch_to_rows, coerce_arrow_batches
+
+    table = pa.table({"id": [1, 2, 3, 4, 5], "name": ["a", "b", "c", "d", "e"]})
+    cols, batches = coerce_arrow_batches(table, batch_size=2)
+    batch_list = list(batches)
+    assert cols == ["id", "name"]
+    assert [b.num_rows for b in batch_list] == [2, 2, 1]
+    assert arrow_batch_to_rows(batch_list[0]) == [(1, "a"), (2, "b")]
+    assert arrow_batch_to_rows(batch_list[0], ["name"]) == [("a",), ("b",)]
+
+    single_batch = batch_list[0]
+    cols_single, iter_single = coerce_arrow_batches(single_batch)
+    assert cols_single == ["id", "name"]
+    assert len(list(iter_single)) == 1
+
+    arrow_result = ArrowResult(statement=SQL("SELECT 1"), data=table.to_reader(max_chunksize=2))
+    cols_res, iter_res = coerce_arrow_batches(arrow_result)
+    assert cols_res == ["id", "name"]
+    assert [b.num_rows for b in iter_res] == [2, 2, 1]

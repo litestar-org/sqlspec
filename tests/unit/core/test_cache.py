@@ -33,6 +33,10 @@ from sqlspec.core import (
     CacheStats,
     LRUCache,
     NamespacedCache,
+    OperationProfile,
+    ParameterProfile,
+    ProcessedState,
+    StatementConfig,
     clear_all_caches,
     get_cache,
     get_cache_config,
@@ -956,3 +960,68 @@ def test_lru_cache_size_method_removed() -> None:
     """LRUCache should use __len__ instead of a duplicate size() method."""
 
     assert "size" not in LRUCache.__dict__
+
+
+def test_l1_statement_cache_holder_lifecycle_and_statistics_coordination() -> None:
+    """L1 StatementCacheHolder and QueryCache coordinate with global cache lifecycle functions."""
+    holder = cache_module.StatementCacheHolder(StatementConfig(), max_size=2)
+    op_profile = OperationProfile(returns_rows=True, modifies_rows=False)
+    param_profile = ParameterProfile()
+    entry1 = cache_module.CachedQuery(
+        compiled_sql="SELECT $1",
+        parameter_profile=param_profile,
+        input_named_parameters=(),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=op_profile,
+        param_count=1,
+        processed_state=ProcessedState(compiled_sql="SELECT $1", execution_parameters=[], operation_type="SELECT"),
+    )
+    entry2 = cache_module.CachedQuery(
+        compiled_sql="SELECT $1, $2",
+        parameter_profile=param_profile,
+        input_named_parameters=(),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=op_profile,
+        param_count=2,
+        processed_state=ProcessedState(compiled_sql="SELECT $1, $2", execution_parameters=[], operation_type="SELECT"),
+    )
+    entry3 = cache_module.CachedQuery(
+        compiled_sql="SELECT $1, $2, $3",
+        parameter_profile=param_profile,
+        input_named_parameters=(),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=op_profile,
+        param_count=3,
+        processed_state=ProcessedState(
+            compiled_sql="SELECT $1, $2, $3", execution_parameters=[], operation_type="SELECT"
+        ),
+    )
+
+    reset_stats_only()
+    assert holder.query_cache.get("SELECT :a") is None
+    holder.query_cache.set("SELECT :a", entry1)
+    assert holder.query_cache.get("SELECT :a") is entry1
+    holder.query_cache.set("SELECT :a, :b", entry2)
+    holder.query_cache.set("SELECT :a, :b, :c", entry3)
+
+    stats = get_cache_statistics()
+    assert "query" in stats
+    assert stats["query"].hits >= 1
+    assert stats["query"].misses >= 1
+    assert stats["query"].evictions >= 1
+
+    reset_stats_only()
+    stats_after_reset = get_cache_statistics()
+    assert stats_after_reset["query"].hits == 0
+    assert stats_after_reset["query"].misses == 0
+    assert stats_after_reset["query"].evictions == 0
+    assert holder.query_cache.get("SELECT :a, :b, :c") is entry3
+
+    clear_all_caches()
+    assert len(holder.query_cache) == 0

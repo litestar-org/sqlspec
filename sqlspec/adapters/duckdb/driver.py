@@ -49,16 +49,15 @@ from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     import pyarrow as pa
 
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, CachedQuery, SQLResult, Statement, StatementFilter
     from sqlspec.core.result._base import RowFormat
     from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._query_cache import CachedQuery
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 else:
@@ -513,10 +512,35 @@ class DuckDBDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into DuckDB using temporary table registration."""
 
         self._require_capability("arrow_import_enabled")
+        if stage_table or conflict_keys or drop_indexes:
+            return self._execute_staged_load_sync(
+                table,
+                source,
+                raw_loader=self.load_from_arrow,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         ensure_pyarrow()
 
         source_data = source.get_data() if hasattr(source, "get_data") else source
@@ -577,11 +601,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Read an artifact from storage and load it into DuckDB."""
 
         self._require_capability("arrow_import_enabled")
-        if not overwrite and file_format == "parquet" and self.storage_pipeline_factory is None:
+        if not kwargs and not overwrite and file_format == "parquet" and self.storage_pipeline_factory is None:
             pipeline = self._storage_pipeline()
             target = _resolve_native_storage_target(pipeline, source, self.driver_features, write=False)
             if target is not None:
@@ -595,8 +620,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
                         operation="read",
                         partitioner=partitioner,
                     )
-        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
-        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+        return super().load_from_storage(
+            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+        )
 
     def collect_rows(self, cursor: "DuckDBConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect DuckDB rows for the direct execution path."""

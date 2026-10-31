@@ -729,6 +729,18 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if not uses_driver_manager:
         config.pop("entrypoint", None)
 
+    auth_token_provider = config.pop("auth_token_provider", None)
+    if callable(auth_token_provider):
+        fresh_token = str(auth_token_provider())
+        if driver_kind == "quack" and "username" not in config and "user" not in config:
+            config["token"] = fresh_token
+        elif driver_kind in {"gizmosql", "flightsql"} and "username" not in config and "user" not in config:
+            config["authorization_header"] = (
+                fresh_token if fresh_token.lower().startswith("bearer ") else f"Bearer {fresh_token}"
+            )
+        else:
+            config["password"] = fresh_token
+
     _lift_driver_specific_db_kwargs(config, driver_kind, resolved_connect_path)
 
     config.pop("driver_name", None)

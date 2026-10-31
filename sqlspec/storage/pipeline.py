@@ -1,6 +1,7 @@
 """Storage pipeline scaffolding for driver-aware storage bridge."""
 
 from collections import deque
+from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
 from time import perf_counter
@@ -11,8 +12,15 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError, StorageCapabilityError
-from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload, encode_arrow_payload
+from sqlspec.storage._arrow_payload import (
+    StorageFormat,
+    batches_to_arrow_table,
+    decode_arrow_payload,
+    encode_arrow_payload,
+)
+from sqlspec.storage._arrow_stream import iter_streamed_arrow_batches
 from sqlspec.storage._paths import FILE_PROTOCOL, FILE_SCHEME_PREFIX, parse_file_uri_path
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
@@ -24,7 +32,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
     from sqlspec.protocols import ObjectStoreProtocol
-    from sqlspec.typing import ArrowTable
+    from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 
 __all__ = (
@@ -38,6 +46,7 @@ __all__ = (
     "StorageFormat",
     "StorageTelemetry",
     "SyncStoragePipeline",
+    "aggregate_storage_telemetry",
     "create_storage_bridge_job",
     "get_recent_storage_events",
     "get_storage_bridge_diagnostics",
@@ -47,7 +56,7 @@ __all__ = (
     "reset_storage_bridge_metrics",
 )
 
-StorageDestination: TypeAlias = str | Path
+StorageDestination: TypeAlias = str | Path | Sequence[str | Path]
 StorageDiagnostics: TypeAlias = dict[str, float]
 
 
@@ -94,6 +103,20 @@ class StorageTelemetry(TypedDict, total=False):
     """Number of partitioned output objects written during export."""
     duration_s: float
     """Elapsed wall-clock transfer time in seconds."""
+    read_duration_s: float
+    """Elapsed time spent reading source storage or Arrow batches in seconds."""
+    encode_duration_s: float
+    """Elapsed time spent encoding batches into wire payloads in seconds."""
+    write_duration_s: float
+    """Elapsed time spent writing payloads to the database or storage sink in seconds."""
+    commit_duration_s: float
+    """Elapsed time spent committing the transaction or finalizing the sink in seconds."""
+    shards_processed: int
+    """Number of storage shards loaded during a multi-shard operation."""
+    shards_skipped: int
+    """Number of already-checkpointed storage shards skipped during resume."""
+    wal_bytes: int
+    """Estimated or observed Write-Ahead Log bytes generated during ingestion."""
     format: str
     """Serialized wire/file format (such as ``parquet``, ``arrow``, ``csv``, or ``jsonl``)."""
     extra: "dict[str, object]"
@@ -106,6 +129,36 @@ class StorageTelemetry(TypedDict, total=False):
     """Adapter configuration class name executing the storage transfer."""
     bind_key: str
     """Registered SQLSpec configuration bind key, when configured."""
+
+
+def aggregate_storage_telemetry(telemetries: "Sequence[StorageTelemetry]") -> "StorageTelemetry":
+    """Aggregate a sequence of StorageTelemetry payloads into a unified summary."""
+    if not telemetries:
+        return {}
+    summary: StorageTelemetry = {
+        "rows_processed": sum(t.get("rows_processed", 0) for t in telemetries),
+        "bytes_processed": sum(t.get("bytes_processed", 0) for t in telemetries),
+        "partitions_created": sum(t.get("partitions_created", 0) for t in telemetries),
+        "shards_processed": sum(t.get("shards_processed", 0) for t in telemetries),
+        "shards_skipped": sum(t.get("shards_skipped", 0) for t in telemetries),
+    }
+    durations = [t["duration_s"] for t in telemetries if "duration_s" in t]
+    if durations:
+        summary["duration_s"] = sum(durations)
+    for dur_key in ("read_duration_s", "encode_duration_s", "write_duration_s", "commit_duration_s"):
+        vals = [t[dur_key] for t in telemetries if dur_key in t]
+        if vals:
+            summary[dur_key] = sum(vals)
+    first_dest = next((t["destination"] for t in telemetries if "destination" in t), None)
+    if first_dest is not None:
+        summary["destination"] = first_dest
+    first_fmt = next((t["format"] for t in telemetries if "format" in t), None)
+    if first_fmt is not None:
+        summary["format"] = first_fmt
+    first_backend = next((t["backend"] for t in telemetries if "backend" in t), None)
+    if first_backend is not None:
+        summary["backend"] = first_backend
+    return summary
 
 
 class ResolvedStorageTarget(NamedTuple):
@@ -339,6 +392,57 @@ class SyncStoragePipeline(_StoragePipelineBase):
         backend, path, _backend_name = self._backend(source, storage_options)
         return backend.stream_read_sync(path, chunk_size=chunk_size)
 
+    def read_arrow_batches(
+        self,
+        source: StorageDestination,
+        *,
+        file_format: str = "parquet",
+        batch_size: int = 65_536,
+        arrow_schema: Any = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "Iterator[ArrowRecordBatch]":
+        """Stream Arrow record batches from storage synchronously."""
+        return _read_arrow_batches_sync(
+            self,
+            source,
+            file_format=file_format,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+            storage_options=storage_options,
+        )
+
+    def write_arrow_batches(
+        self,
+        destination: StorageDestination,
+        batches: Any,
+        *,
+        file_format: StorageFormat = "parquet",
+        compression: str | None = None,
+        write_options: "dict[str, Any] | None" = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> StorageTelemetry:
+        """Write Arrow record batches to storage synchronously."""
+        _validate_arrow_write_format(file_format)
+        resolved_options = _storage_options(self._storage_options, storage_options)
+        format_write_options = write_options or _csv_write_options(
+            file_format, resolved_options, self._storage_options, self._csv_write_options
+        )
+        table = batches_to_arrow_table(batches)
+        payload = _encode_arrow_payload(table, file_format, compression=compression, write_options=format_write_options)
+        return self._write_bytes(
+            payload, destination, rows=int(table.num_rows), format_label=file_format, storage_options=resolved_options
+        )
+
+    def list_sources(
+        self,
+        source: StorageDestination,
+        *,
+        file_format: str | None = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "list[str]":
+        """Expand a single URI, directory prefix, or glob pattern into sorted source URIs."""
+        return _resolve_storage_sources_sync(self, source, file_format=file_format, storage_options=storage_options)
+
     def _write_bytes(
         self,
         payload: bytes,
@@ -441,6 +545,63 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         """Stream bytes from an artifact asynchronously."""
         backend, path, _backend_name = self._backend(source, storage_options)
         return await backend.stream_read_async(path, chunk_size=chunk_size)
+
+    def read_arrow_batches_async(
+        self,
+        source: StorageDestination,
+        *,
+        file_format: str = "parquet",
+        batch_size: int = 65_536,
+        arrow_schema: Any = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "AsyncIterator[ArrowRecordBatch]":
+        """Stream Arrow record batches from storage asynchronously."""
+        return AsyncArrowBatchIterator(
+            _read_arrow_batches_sync(
+                self,
+                source,
+                file_format=file_format,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
+                storage_options=storage_options,
+            )
+        )
+
+    async def write_arrow_batches_async(
+        self,
+        destination: StorageDestination,
+        batches: Any,
+        *,
+        file_format: StorageFormat = "parquet",
+        compression: str | None = None,
+        write_options: "dict[str, Any] | None" = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> StorageTelemetry:
+        """Write Arrow record batches to storage asynchronously."""
+        _validate_arrow_write_format(file_format)
+        resolved_options = _storage_options(self._storage_options, storage_options)
+        format_write_options = write_options or _csv_write_options(
+            file_format, resolved_options, self._storage_options, self._csv_write_options
+        )
+        table = await async_(batches_to_arrow_table)(batches)
+        payload = await async_(_encode_arrow_payload)(
+            table, file_format, compression=compression, write_options=format_write_options
+        )
+        return await self._write_bytes_async(
+            payload, destination, rows=int(table.num_rows), format_label=file_format, storage_options=resolved_options
+        )
+
+    async def list_sources_async(
+        self,
+        source: StorageDestination,
+        *,
+        file_format: str | None = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "list[str]":
+        """Expand a single URI, directory prefix, or glob pattern into sorted source URIs asynchronously."""
+        return await async_(_resolve_storage_sources_sync)(
+            self, source, file_format=file_format, storage_options=storage_options
+        )
 
     async def _write_bytes_async(
         self,
@@ -622,3 +783,47 @@ def _backend_cache_key(destination: StorageDestination, backend_options: "dict[s
     if backend_options:
         return None
     return destination.as_posix() if isinstance(destination, Path) else str(destination)
+
+
+def _read_arrow_batches_sync(
+    pipeline: _StoragePipelineBase,
+    source: StorageDestination,
+    *,
+    file_format: str = "parquet",
+    batch_size: int = 65_536,
+    arrow_schema: Any = None,
+    storage_options: "dict[str, Any] | None" = None,
+) -> "Iterator[ArrowRecordBatch]":
+    normalized_format = file_format.lower().strip()
+    backend, path, _backend_name = pipeline._backend(source, storage_options)
+    if normalized_format == "parquet":
+        return backend.stream_arrow_sync(path, file_format="parquet", batch_size=batch_size, arrow_schema=arrow_schema)
+    return iter_streamed_arrow_batches(
+        backend.stream_read_sync(path), file_format=normalized_format, batch_size=batch_size, arrow_schema=arrow_schema
+    )
+
+
+def _resolve_storage_sources_sync(
+    pipeline: _StoragePipelineBase,
+    source: StorageDestination,
+    *,
+    file_format: str | None = None,
+    storage_options: "dict[str, Any] | None" = None,
+) -> "list[str]":
+    source_str = source.as_posix() if isinstance(source, Path) else str(source)
+    backend, path, _backend_name = pipeline._backend(source, storage_options)
+    has_glob = any(ch in path for ch in ("*", "?", "["))
+    if has_glob:
+        matched = backend.glob_sync(path)
+    elif source_str.endswith("/") or backend.is_path_sync(path):
+        matched = backend.list_objects_sync(prefix=path, recursive=True)
+        if file_format:
+            suffix = f".{file_format.lower().lstrip('.')}"
+            matched = [item for item in matched if item.lower().endswith(suffix)]
+    else:
+        return [source_str]
+    sorted_matches = sorted(matched)
+    if source_str.startswith("alias://"):
+        alias_name = source_str.removeprefix("alias://").partition("/")[0]
+        return [f"alias://{alias_name}/{item.lstrip('/')}" for item in sorted_matches]
+    return [backend.resolve_uri(item) for item in sorted_matches]

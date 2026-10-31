@@ -28,28 +28,20 @@ from sqlspec.adapters.aiosqlite.core import (
     run_on_worker_thread,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
-from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_config, register_driver_profile
+from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.core.result import DMLResult
-from sqlspec.driver import (
-    AsyncDriverAdapterBase,
-    AsyncRowStream,
-    BaseAsyncExceptionHandler,
-    parameter_value_needs_processing,
-    type_coercion_fallbacks,
-)
+from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import DeadlockError
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQL, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.core import SQL, SQLResult, StatementConfig
     from sqlspec.core.compiler import OperationType
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import StatementParameters
 
 __all__ = (
     "AiosqliteCursor",
@@ -186,43 +178,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    async def execute_many(
-        self,
-        statement: "SQL | Statement | QueryBuilder",
-        /,
-        parameters: "Sequence[StatementParameters]",
-        *filters: "StatementParameters | StatementFilter",
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "SQLResult":
-        """Execute many with an AIOSQLite thin path for simple qmark batches."""
-        config = statement_config or self.statement_config
-        if (
-            isinstance(statement, str)
-            and not filters
-            and not kwargs
-            and config is self.statement_config
-            and self.observability.is_idle
-            and self._can_use_execute_many_thin_path(statement, parameters, config)
-        ):
-            cursor = None
-            try:
-                cursor = await self.connection.executemany(statement, parameters)
-                rowcount = cursor.rowcount
-                affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
-                operation = self._resolve_dml_operation_type(statement)
-                self._invalidate_rowid_target_cache(operation)
-                return DMLResult(operation, affected_rows)
-            except (aiosqlite.Error, sqlite3.Error) as exc:
-                raise create_mapped_exception(exc) from exc
-            finally:
-                if cursor is not None:
-                    with contextlib.suppress(Exception):
-                        close_result = cursor.close()
-                        if inspect.isawaitable(close_result):
-                            await close_result
-        return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
-
     async def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
         """Begin a database transaction.
 
@@ -312,12 +267,37 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into SQLite using batched inserts."""
         if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
             msg = "batch_size must be a positive integer"
             raise ValueError(msg)
         self._require_capability("arrow_import_enabled")
+        if stage_table or conflict_keys or drop_indexes:
+            return await self._execute_staged_load_async(
+                table,
+                source,
+                raw_loader=self.load_from_arrow,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         arrow_table = self._coerce_arrow_table(source)
         columns = arrow_table.column_names
         insert_sql = build_insert_statement(table, columns)
@@ -364,12 +344,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         file_format: "StorageFormat",
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
+        **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into SQLite."""
 
-        arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
-        return await self.load_from_arrow(
-            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        return await super().load_from_storage(
+            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
@@ -431,115 +411,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
         if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
             self._rowid_target_cache.clear()
-
-    def _can_use_execute_many_thin_path(
-        self, statement: str, parameters: "Sequence[StatementParameters]", config: "StatementConfig"
-    ) -> bool:
-        if type(parameters) is not list:
-            return False
-        if not parameters:
-            return False
-        if "?" not in statement:
-            return False
-        if self._resolve_dml_operation_type(statement) not in {"INSERT", "UPDATE", "DELETE"}:
-            return False
-        if "RETURNING" in statement.upper():
-            return False
-
-        parameter_config = config.parameter_config
-        if parameter_config.default_parameter_style is not ParameterStyle.QMARK:
-            return False
-        if (
-            parameter_config.default_execution_parameter_style is not None
-            and parameter_config.default_execution_parameter_style is not ParameterStyle.QMARK
-        ):
-            return False
-        if parameter_config.ast_transformer is not None or parameter_config.output_transformer is not None:
-            return False
-        if parameter_config.needs_static_script_compilation:
-            return False
-        if config.output_transformer is not None or config.statement_transformers:
-            return False
-
-        return self._thin_path_parameters_are_eligible(parameters, parameter_config.type_coercion_map)
-
-    @staticmethod
-    def _thin_path_parameters_are_eligible(
-        parameters: "list[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
-    ) -> bool:
-        first_sequence = AiosqliteDriver._as_sequence_parameter_set(parameters[0])
-        if first_sequence is None:
-            return False
-
-        first_type = type(first_sequence)
-        row_len = len(first_sequence)
-        coercion_map = type_coercion_map
-        has_type_coercion = bool(coercion_map)
-        fallback_items = type_coercion_fallbacks(coercion_map) if coercion_map else ()
-
-        if row_len == 1:
-            if has_type_coercion and coercion_map is not None:
-                for param_set in parameters:
-                    sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
-                    if sequence is None or type(sequence) is not first_type:
-                        return False
-                    if len(sequence) != 1:
-                        return False
-                    if parameter_value_needs_processing(sequence[0], coercion_map, fallback_items):
-                        return False
-                return True
-
-            for param_set in parameters:
-                sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
-                if sequence is None or type(sequence) is not first_type:
-                    return False
-                if len(sequence) != 1:
-                    return False
-                if type(sequence[0]) is TypedParameter:
-                    return False
-            return True
-
-        if has_type_coercion and coercion_map is not None:
-            for param_set in parameters:
-                sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
-                if sequence is None or type(sequence) is not first_type:
-                    return False
-                if len(sequence) != row_len:
-                    return False
-                for value in sequence:
-                    if parameter_value_needs_processing(value, coercion_map, fallback_items):
-                        return False
-            return True
-
-        for param_set in parameters:
-            sequence = AiosqliteDriver._as_sequence_parameter_set(param_set)
-            if sequence is None or type(sequence) is not first_type:
-                return False
-            if len(sequence) != row_len:
-                return False
-            for value in sequence:
-                if type(value) is TypedParameter:
-                    return False
-        return True
-
-    @staticmethod
-    def _as_sequence_parameter_set(param_set: "StatementParameters") -> "list[Any] | tuple[Any, ...] | None":
-        if isinstance(param_set, list):
-            return param_set
-        if isinstance(param_set, tuple):
-            return param_set
-        return None
-
-    @staticmethod
-    def _resolve_dml_operation_type(statement: str) -> "OperationType":
-        command_keyword = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "COMMAND"
-        if command_keyword == "INSERT":
-            return "INSERT"
-        if command_keyword == "UPDATE":
-            return "UPDATE"
-        if command_keyword == "DELETE":
-            return "DELETE"
-        return "COMMAND"
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
