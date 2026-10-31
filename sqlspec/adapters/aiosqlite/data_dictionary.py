@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -41,6 +42,7 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
     """SQLite-specific async data dictionary."""
 
     dialect: ClassVar[str] = "sqlite"
+    _shared_version_info: ClassVar["VersionInfo | None"] = None
 
     def __init__(self) -> None:
         super().__init__()
@@ -68,11 +70,16 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
         Returns:
             SQLite version information or None if detection fails.
         """
+        if AiosqliteDataDictionary._shared_version_info is not None:
+            return AiosqliteDataDictionary._shared_version_info
+
         driver_id = id(driver)
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
-        version_value = await driver.select_value_or_none(self.get_query("version", "current"))
+        version_value = getattr(sqlite3, "sqlite_version", None)
+        if not version_value:
+            version_value = await driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(driver_id, None)
@@ -86,6 +93,7 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
 
         self._log_version_detected(type(self).dialect, version_info)
         self.cache_version(driver_id, version_info)
+        AiosqliteDataDictionary._shared_version_info = version_info
         return version_info
 
     async def get_feature_flag(self, driver: "AiosqliteDriver", feature: str) -> bool:
@@ -142,10 +150,13 @@ class AiosqliteDataDictionary(AsyncDataDictionaryBase):
             rows = await driver.select(query_text, table_name=table, schema_name=schema_name)
         if any(str(row.get("extra") or "").endswith("generated") for row in rows):
             table_sql = await self._get_table_sql(driver, schema_name, table)
+            parsed_expressions: dict[str, dict[str, str]] = {}
             for row in rows:
                 if str(row.get("extra") or "").endswith("generated"):
-                    expressions = sqlite_generated_expressions(table_sql.get(str(row.get("table_name"))))
-                    expression = expressions.get(str(row.get("column_name")))
+                    table_name_str = str(row.get("table_name"))
+                    if table_name_str not in parsed_expressions:
+                        parsed_expressions[table_name_str] = sqlite_generated_expressions(table_sql.get(table_name_str))
+                    expression = parsed_expressions[table_name_str].get(str(row.get("column_name")))
                     if expression is not None:
                         row["generation_expression"] = expression
         return cast("list[ColumnMetadata]", rows)

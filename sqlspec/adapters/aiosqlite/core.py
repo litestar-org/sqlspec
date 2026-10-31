@@ -6,7 +6,7 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
 
 from sqlglot import exp
 
@@ -47,6 +47,7 @@ __all__ = (
     "SECONDS_PER_DAY",
     "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "AiosqliteStreamSource",
+    "_filter_connection_params",
     "apply_driver_features",
     "apply_extension_pragmas",
     "build_connection_config",
@@ -154,8 +155,8 @@ async def end_transaction(
     raw_conn = getattr(connection, "_conn", None)
     if isinstance(raw_conn, sqlite3.Connection) and callable(getattr(connection, "_execute", None)):
         conn_dict = getattr(connection, "__dict__", None)
-        has_method_override = isinstance(conn_dict, dict) and any(
-            key in conn_dict for key in ("commit", "rollback", "execute")
+        has_method_override = isinstance(conn_dict, dict) and (
+            "commit" in conn_dict or "rollback" in conn_dict or "execute" in conn_dict
         )
         if not has_method_override:
             await run_on_worker_thread(
@@ -392,6 +393,37 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
+_EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
+    "enable_foreign_keys",
+    "enable_optimizations",
+    "pool_size",
+    "min_size",
+    "connect_timeout",
+    "idle_timeout",
+    "operation_timeout",
+    "health_check_interval",
+    "extra",
+    "pool_min_size",
+    "pool_max_size",
+    "pool_timeout",
+    "pool_recycle_seconds",
+    "db",
+    "path",
+    "file",
+})
+
+
+def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Filter connection parameters to only those accepted by SQLite/aiosqlite."""
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in _EXCLUDED_CONNECTION_KEYS
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build connection configuration for pool creation.
 
@@ -401,35 +433,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     Returns:
         Dictionary with connection parameters.
     """
-    excluded_keys = {
-        "enable_foreign_keys",
-        "enable_optimizations",
-        "pool_size",
-        "min_size",
-        "connect_timeout",
-        "idle_timeout",
-        "operation_timeout",
-        "health_check_interval",
-        "extra",
-        "pool_min_size",
-        "pool_max_size",
-        "pool_timeout",
-        "pool_recycle_seconds",
-        "db",
-        "path",
-        "file",
-    }
-
-    def _filter_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in mapping.items()
-            if key not in excluded_keys
-            and (value is not None or key == "isolation_level")
-            and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-        }
-
-    connection_parameters = _filter_params(connection_config)
+    connection_parameters = _filter_connection_params(connection_config)
     if "database" not in connection_parameters:
         database = (
             connection_config.get("database")
@@ -441,7 +445,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
             connection_parameters["database"] = database
     extra = connection_config.get("extra")
     if isinstance(extra, Mapping):
-        connection_parameters.update(_filter_params(extra))
+        connection_parameters.update(_filter_connection_params(extra))
     return connection_parameters
 
 

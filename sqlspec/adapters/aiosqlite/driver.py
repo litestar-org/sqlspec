@@ -307,20 +307,19 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         try:
             if owns_transaction:
                 await self.begin()
-            if overwrite:
-                statement = f"DELETE FROM {format_identifier(table)}"
-                async with self.with_cursor(self.connection) as cursor:
+            async with self.with_cursor(self.connection) as cursor:
+                if overwrite:
+                    statement = f"DELETE FROM {format_identifier(table)}"
                     await cursor.execute(statement)
-            for batch in arrow_table.to_batches(max_chunksize=batch_size):
-                pydict = batch.to_pydict()
-                records = list(zip(*(pydict[col] for col in columns), strict=False))
-                if records:
-                    prepared_records = (
-                        self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                        if needs_prep
-                        else records
-                    )
-                    async with self.with_cursor(self.connection) as cursor:
+                for batch in arrow_table.to_batches(max_chunksize=batch_size):
+                    pydict = batch.to_pydict()
+                    records = list(zip(*(pydict[col] for col in columns), strict=False))
+                    if records:
+                        prepared_records = (
+                            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                            if needs_prep
+                            else records
+                        )
                         await cursor.executemany(insert_sql, cast("Any", prepared_records))
             if owns_transaction:
                 await self.commit()
