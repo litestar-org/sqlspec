@@ -27,7 +27,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate, has_type_code
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code
 
 if TYPE_CHECKING:
     from sqlspec.core.parameters import ParameterValidator
@@ -45,8 +45,6 @@ __all__ = (
     "collect_stream_rows",
     "create_mapped_exception",
     "default_statement_config",
-    "detect_json_columns",
-    "detect_json_columns_from_description",
     "driver_profile",
     "encode_records_for_local_infile",
     "escape_literal_percent",
@@ -54,7 +52,6 @@ __all__ = (
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
-    "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_row_plan",
     "resolve_rowcount",
@@ -303,7 +300,7 @@ class MysqlConnectorAsyncStreamSource:
 
 def build_profile() -> "DriverParameterProfile":
     """Create the mysql-connector driver parameter profile."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: bool_to_int, **build_uuid_coercions()}
+    coercions: dict[type, Callable[[Any], Any]] = {bool: int, **build_uuid_coercions()}
     return DriverParameterProfile(
         name="mysql-connector",
         default_style=ParameterStyle.QMARK,
@@ -441,13 +438,6 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
-def resolve_column_names(description: "Sequence[Any] | None") -> "list[str]":
-    """Extract column names from cursor description."""
-    if not description:
-        return []
-    return [col[0] for col in description]
-
-
 def resolve_row_plan(
     description: "Sequence[Any] | None", json_type_codes: "set[int]"
 ) -> "tuple[list[str], list[int] | None]":
@@ -471,24 +461,6 @@ def resolve_row_plan(
         if type_code in json_type_codes:
             append_json(index)
     return column_names, json_indexes or None
-
-
-def detect_json_columns_from_description(
-    description: "Sequence[Any] | None", json_type_codes: "set[int]"
-) -> "list[int]":
-    """Identify JSON column indexes from pre-fetched cursor description metadata."""
-    return resolve_row_plan(description, json_type_codes)[1] or []
-
-
-def detect_json_columns(
-    cursor: Any, json_type_codes: "set[int]", description: "Sequence[Any] | None" = None
-) -> "list[int]":
-    """Identify JSON column indexes from cursor metadata."""
-    if description is None:
-        if not has_cursor_metadata(cursor):
-            return []
-        description = cursor.description
-    return detect_json_columns_from_description(description, json_type_codes)
 
 
 def collect_stream_rows(
@@ -570,11 +542,6 @@ def normalize_lastrowid(cursor: Any) -> int | None:
         return None
     last_id = cursor.lastrowid
     return last_id if isinstance(last_id, int) else None
-
-
-def bool_to_int(value: bool) -> int:
-    """Coerce boolean values to integer for MySQL parameter compatibility."""
-    return int(value)
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpecError | bool":

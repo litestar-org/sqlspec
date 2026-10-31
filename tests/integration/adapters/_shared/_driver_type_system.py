@@ -469,42 +469,6 @@ SOURCE_EQUIVALENCE_CASES: tuple[SourceEquivalenceCase, ...] = (
         allowlist_key="mysql_four_way:normalize_execute_many_parameters",
     ),
     SourceEquivalenceCase(
-        case_id="mysql_four_way_resolve_column_names",
-        group="mysql_four_way",
-        symbol="resolve_column_names",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:resolve_column_names",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_detect_json_columns_from_description",
-        group="mysql_four_way",
-        symbol="detect_json_columns_from_description",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:detect_json_columns_from_description",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_detect_json_columns",
-        group="mysql_four_way",
-        symbol="detect_json_columns",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:detect_json_columns",
-    ),
-    SourceEquivalenceCase(
         case_id="mysql_four_way_resolve_row_plan",
         group="mysql_four_way",
         symbol="resolve_row_plan",
@@ -592,10 +556,6 @@ SOURCE_EQUIVALENCE_CASES: tuple[SourceEquivalenceCase, ...] = (
 SOURCE_EQUIVALENCE_ALLOWLIST: dict[str, frozenset[str]] = {
     case.allowlist_key: frozenset() for case in SOURCE_EQUIVALENCE_CASES
 }
-
-SOURCE_EQUIVALENCE_ALLOWLIST["mysql_four_way:create_mapped_exception"] = frozenset({
-    "sqlspec.adapters.mysqlconnector.core"
-})
 
 
 def get_driver_feature_keys(adapter: str) -> tuple[str, ...]:
