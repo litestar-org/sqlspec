@@ -105,10 +105,7 @@ class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
         if exc_type is None:
             return False
         if issubclass(exc_type, MysqlConnectorError):
-            result = create_mapped_exception(exc_val, logger=logger)
-            if result is True:
-                return True
-            self.pending_exception = cast("Exception", result)
+            self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
 
@@ -200,28 +197,19 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             with MysqlConnectorSyncCursor(self.connection) as cursor:
                 cursor.execute("BEGIN")
         except MysqlConnectorError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, bool):
-                return
-            raise mapped from e
+            raise create_mapped_exception(e) from e
 
     def commit(self) -> None:
         try:
             self.connection.commit()
         except MysqlConnectorError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, bool):
-                return
-            raise mapped from e
+            raise create_mapped_exception(e) from e
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
         except MysqlConnectorError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, bool):
-                return
-            raise mapped from e
+            raise create_mapped_exception(e) from e
 
     def with_cursor(self, connection: "MysqlConnectorSyncConnection") -> "MysqlConnectorSyncCursor":
         cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
@@ -387,10 +375,7 @@ class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
         if exc_type is None:
             return False
         if issubclass(exc_type, MysqlConnectorError):
-            result = create_mapped_exception(exc_val, logger=logger)
-            if result is True:
-                return True
-            self.pending_exception = cast("Exception", result)
+            self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
 
@@ -482,28 +467,19 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             async with MysqlConnectorAsyncCursor(self.connection) as cursor:
                 await cursor.execute("BEGIN")
         except MysqlConnectorError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, bool):
-                return
-            raise mapped from e
+            raise create_mapped_exception(e) from e
 
     async def commit(self) -> None:
         try:
             await self.connection.commit()
         except MysqlConnectorError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, bool):
-                return
-            raise mapped from e
+            raise create_mapped_exception(e) from e
 
     async def rollback(self) -> None:
         try:
             await self.connection.rollback()
         except MysqlConnectorError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, bool):
-                return
-            raise mapped from e
+            raise create_mapped_exception(e) from e
 
     def with_cursor(self, connection: "MysqlConnectorAsyncConnection") -> "MysqlConnectorAsyncCursor":
         cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})

@@ -16,6 +16,7 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
+    OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
@@ -77,7 +78,10 @@ MYSQL_CR_SSL_CONNECTION_ERROR: Final[int] = 2026
 MYSQL_SYNTAX_ERROR_MIN: Final[int] = 1064
 MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE: Final[int] = 1100
 
-_MYSQL_MIGRATION_ERROR_CODES: Final[frozenset[int]] = frozenset((1061, 1091))
+_MYSQL_DDL_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
+    1061: (OperationalError, "duplicate key name"),
+    1091: (OperationalError, "cannot drop column or key"),
+}
 _MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23505": (UniqueViolationError, "unique constraint violation"),
     "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
@@ -544,8 +548,9 @@ def normalize_lastrowid(cursor: Any) -> int | None:
     return last_id if isinstance(last_id, int) else None
 
 
-def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpecError | bool":
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map MySQL driver exceptions to SQLSpec errors."""
+    _ = logger
     error_code = getattr(error, "errno", None)
     if error_code is None and isinstance(error, Exception) and error.args:
         value = error.args[0]
@@ -554,10 +559,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     sqlstate = error.sqlstate if has_sqlstate(error) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
-    if error_code in _MYSQL_MIGRATION_ERROR_CODES:
-        if logger is not None:
-            logger.warning("MySQL expected migration error (ignoring): %s", error)
-        return True
+    dispatch = _MYSQL_DDL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     dispatch = _MYSQL_SQLSTATE_EXACT_DISPATCH.get(sqlstate) if sqlstate is not None else None
     if dispatch is not None:

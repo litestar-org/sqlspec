@@ -83,10 +83,7 @@ class PyMysqlExceptionHandler(BaseSyncExceptionHandler):
         if exc_type is None:
             return False
         if issubclass(exc_type, PyMysqlMySQLError):
-            result = create_mapped_exception(exc_val, logger=logger)
-            if result is True:
-                return True
-            self.pending_exception = cast("Exception", result)
+            self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
 
@@ -187,28 +184,19 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         try:
             self.connection.begin()
         except PyMysqlMySQLError as exc:
-            mapped = create_mapped_exception(exc, logger=logger)
-            if isinstance(mapped, bool):
-                return
-            raise mapped from exc
+            raise create_mapped_exception(exc) from exc
 
     def commit(self) -> None:
         try:
             self.connection.commit()
         except PyMysqlMySQLError as exc:
-            mapped = create_mapped_exception(exc, logger=logger)
-            if isinstance(mapped, bool):
-                return
-            raise mapped from exc
+            raise create_mapped_exception(exc) from exc
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
         except PyMysqlMySQLError as exc:
-            mapped = create_mapped_exception(exc, logger=logger)
-            if isinstance(mapped, bool):
-                return
-            raise mapped from exc
+            raise create_mapped_exception(exc) from exc
 
     def with_cursor(self, connection: "PyMysqlConnection") -> "PyMysqlCursor":
         return PyMysqlCursor(connection)

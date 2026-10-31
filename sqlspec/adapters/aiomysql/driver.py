@@ -44,7 +44,6 @@ from sqlspec.adapters.aiomysql.core import (
 from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
-from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
@@ -98,10 +97,7 @@ class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
         if exc_type is None:
             return False
         if issubclass(exc_type, AiomysqlPymysqlError):
-            result = create_mapped_exception(exc_val, logger=logger)
-            if result is True:
-                return True
-            self.pending_exception = cast("Exception", result)
+            self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
 
@@ -250,11 +246,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.begin()
         except AiomysqlPymysqlMySQLError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, Exception):
-                raise mapped from e
-            msg = f"Failed to begin MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
 
     async def commit(self) -> None:
         """Commit the current transaction.
@@ -265,11 +257,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.commit()
         except AiomysqlPymysqlMySQLError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, Exception):
-                raise mapped from e
-            msg = f"Failed to commit MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction.
@@ -280,11 +268,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.rollback()
         except AiomysqlPymysqlMySQLError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, Exception):
-                raise mapped from e
-            msg = f"Failed to rollback MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
 
     def with_cursor(self, connection: "AiomysqlConnection") -> "AiomysqlCursor":
         """Create cursor context manager for the connection.

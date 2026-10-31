@@ -13,6 +13,7 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
+    OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
@@ -92,7 +93,37 @@ def test_mysql_create_mapped_exception_preserves_legacy_dispatch_priority(module
 
 
 @pytest.mark.parametrize("module_path", MODULE_PATHS)
-def test_mysql_create_mapped_exception_suppresses_expected_migration_codes(module_path: str) -> None:
+@pytest.mark.parametrize("code", [1061, 1091])
+def test_mysql_create_mapped_exception_maps_ddl_codes_to_operational_error(module_path: str, code: int) -> None:
     core = importlib.import_module(module_path)
 
-    assert core.create_mapped_exception(_make_error(1091)) is True
+    result = core.create_mapped_exception(_make_error(code, sqlstate="42000"))
+
+    assert isinstance(result, OperationalError)
+
+
+HANDLER_CASES = (
+    ("sqlspec.adapters.aiomysql.driver", "AiomysqlExceptionHandler", "AiomysqlPymysqlError"),
+    ("sqlspec.adapters.asyncmy.driver", "AsyncmyExceptionHandler", "AsyncmyError"),
+    ("sqlspec.adapters.mysqlconnector.driver", "MysqlConnectorSyncExceptionHandler", "MysqlConnectorError"),
+    ("sqlspec.adapters.pymysql.driver", "PyMysqlExceptionHandler", "PyMysqlMySQLError"),
+)
+
+
+@pytest.mark.parametrize(("module_path", "handler_name", "error_name"), HANDLER_CASES)
+def test_mysql_handler_records_mapped_ddl_error(module_path: str, handler_name: str, error_name: str) -> None:
+    module = importlib.import_module(module_path)
+    native_error_cls = getattr(module, error_name)
+    if not isinstance(native_error_cls, type):
+        pytest.skip(f"{error_name} driver is not installed")
+    error = (
+        native_error_cls(msg="Duplicate key name 'idx'", errno=1061)
+        if error_name == "MysqlConnectorError"
+        else native_error_cls(1061, "Duplicate key name 'idx'")
+    )
+    handler = getattr(module, handler_name)()
+
+    suppressed = handler._handle_exception(type(error), error)
+
+    assert suppressed is True
+    assert isinstance(handler.pending_exception, OperationalError)
