@@ -327,3 +327,24 @@ def test_aiomysql_session_factory_slots() -> None:
     from sqlspec.adapters.aiomysql.config import _AiomysqlSessionFactory
 
     assert _AiomysqlSessionFactory.__slots__ == ("_contexts",)
+
+
+async def test_aiomysql_create_connection_closes_socket_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """create_connection closes the standalone connection if _ensure_connection raises."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import aiomysql
+
+    mock_conn = MagicMock()
+    mock_conn.close = MagicMock()
+    monkeypatch.setattr(aiomysql, "connect", AsyncMock(return_value=mock_conn))
+
+    config = AiomysqlConfig(
+        connection_config={"host": "localhost", "db": "test"},
+        driver_features={"on_connection_create": AsyncMock(side_effect=RuntimeError("hook error"))},
+    )
+
+    with pytest.raises(RuntimeError, match="hook error"):
+        await config.create_connection()
+
+    assert mock_conn.close.called

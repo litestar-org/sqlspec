@@ -335,7 +335,11 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             An aiomysql connection instance.
         """
         connection = await aiomysql.connect(**self._connection_kwargs())
-        await self._ensure_connection(connection)
+        try:
+            await self._ensure_connection(connection)
+        except BaseException:
+            connection.close()
+            raise
         return connection
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AiomysqlPool":

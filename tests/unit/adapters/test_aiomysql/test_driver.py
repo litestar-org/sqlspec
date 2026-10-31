@@ -139,3 +139,79 @@ async def test_aiomysql_execute_cache_hit_invokes_collect_rows_on_clean_query(mo
     result = await driver._execute_cache_hit("SELECT 1", (), cached)
     assert bool(collect_called) is True
     assert result.data == [(1,)]
+
+
+async def test_aiomysql_dispatch_execute_uses_statement_statement_config() -> None:
+    """dispatch_execute compiles using statement.statement_config."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlspec import SQL
+    from sqlspec.core import StatementConfig
+
+    custom_config = StatementConfig(enable_caching=False)
+    statement = SQL("SELECT 1", statement_config=custom_config)
+    cursor = MagicMock()
+    cursor.description = [("1", 3, None, None, None, None, None)]
+    cursor.execute = AsyncMock()
+    cursor.fetchall = AsyncMock(return_value=[(1,)])
+    cursor.rowcount = 1
+    cursor.lastrowid = None
+
+    driver = AiomysqlDriver(connection=MagicMock())
+    result = await driver.dispatch_execute(cursor, statement)
+    assert cursor.execute.called
+    assert result.data_row_count == 1
+
+
+async def test_aiomysql_dispatch_select_stream_uses_statement_config() -> None:
+    """dispatch_select_stream compiles using statement.statement_config."""
+    from unittest.mock import MagicMock
+
+    from sqlspec import SQL
+    from sqlspec.core import StatementConfig
+
+    custom_config = StatementConfig(enable_caching=False)
+    statement = SQL("SELECT 1", statement_config=custom_config)
+    driver = AiomysqlDriver(connection=MagicMock())
+    stream = driver.dispatch_select_stream(statement, chunk_size=10)
+    assert stream is not None
+
+
+async def test_aiomysql_dispatch_execute_script_delegates_to_super() -> None:
+    """dispatch_execute_script emits script statement events via super()."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlspec import SQL
+
+    cursor = MagicMock()
+    cursor.execute = AsyncMock()
+    cursor.description = None
+    cursor.rowcount = 0
+    cursor.lastrowid = None
+
+    driver = AiomysqlDriver(connection=MagicMock())
+    statement = SQL("SELECT 1; SELECT 2").as_script()
+    result = await driver.dispatch_execute_script(cursor, statement)
+    assert result.statement_count == 2
+    assert result.successful_statements == 2
+
+
+async def test_aiomysql_transaction_methods_catch_pymysql_error() -> None:
+    """begin, commit, and rollback catch AiomysqlPymysqlError and raise mapped exception."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlspec.adapters.aiomysql._typing import AiomysqlPymysqlError
+    from sqlspec.exceptions import SQLSpecError
+
+    conn = MagicMock()
+    conn.begin = AsyncMock(side_effect=AiomysqlPymysqlError(1045, "Access denied"))
+    conn.commit = AsyncMock(side_effect=AiomysqlPymysqlError(1045, "Access denied"))
+    conn.rollback = AsyncMock(side_effect=AiomysqlPymysqlError(1045, "Access denied"))
+
+    driver = AiomysqlDriver(connection=conn)
+    with pytest.raises(SQLSpecError):
+        await driver.begin()
+    with pytest.raises(SQLSpecError):
+        await driver.commit()
+    with pytest.raises(SQLSpecError):
+        await driver.rollback()
