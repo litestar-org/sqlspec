@@ -31,6 +31,13 @@ class _SyncDDLDriver:
 
     def select_one(self, statement: str, *args: Any, **kwargs: Any) -> dict[str, str]:
         self.statements.append(str(statement))
+        query = str(statement)
+        if "SELECT VERSION()" in query:
+            return {
+                "raw_version": "8.4.0",
+                "sql_mode": "STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION",
+                "sql_quote_show_create": "1",
+            }
         return {"Table": "orders", "Create Table": "CREATE TABLE `orders` (`id` int)"}
 
     def select_value_or_none(self, statement: object, *args: Any, **kwargs: Any) -> str | None:
@@ -259,3 +266,31 @@ def test_mysql_object_ddl_routes_through_native_hook() -> None:
     synthesized = dictionary.get_object_ddl(cast(Any, synth_driver), "orders", schema="shop", prefer_native=False)
     assert synthesized.status == MetadataSupport.UNSUPPORTED
     assert not any(statement.startswith("SHOW CREATE") for statement in synth_driver.statements)
+
+
+def test_mysql_native_ddl_single_roundtrip_setup_and_cache() -> None:
+    """_get_native_object_ddl combines scalar queries into one round-trip and caches per session."""
+    driver = _SyncDDLDriver()
+    dictionary = PyMysqlDataDictionary()
+
+    result1 = dictionary.get_ddl(cast(Any, driver), "orders", schema="shop")
+    assert isinstance(result1, DDLResult)
+    setup_queries_count = sum(1 for s in driver.statements if "SELECT VERSION()" in s)
+    assert setup_queries_count == 1
+
+    result2 = dictionary.get_ddl(cast(Any, driver), "orders", schema="shop")
+    assert isinstance(result2, DDLResult)
+    setup_queries_count_after = sum(1 for s in driver.statements if "SELECT VERSION()" in s)
+    assert setup_queries_count_after == 1
+
+
+def test_mysql_get_privileges_filters_by_object_name() -> None:
+    """get_privileges passes object_name to domain query."""
+    driver = _SyncDDLDriver()
+    dictionary = PyMysqlDataDictionary()
+
+    dictionary.get_privileges(cast(Any, driver), object_name="orders", schema="shop")
+    privilege_queries = [
+        s for s in driver.statements if "information_schema.table_privileges" in s or "table_schema" in s
+    ]
+    assert len(privilege_queries) > 0
