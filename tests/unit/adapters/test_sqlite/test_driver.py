@@ -353,3 +353,28 @@ def test_sqlite_dispatch_execute_script_emits_events() -> None:
         assert result.successful_statements == 2
     finally:
         connection.close()
+
+
+def test_sqlite_savepoint_does_not_clear_rowid_target_cache() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        driver = SqliteDriver(connection=connection)
+        driver._rowid_target_cache[(None, "test_target")] = True
+        driver.create_savepoint("sp1")
+        assert (None, "test_target") in driver._rowid_target_cache
+        driver.release_savepoint("sp1")
+        assert (None, "test_target") in driver._rowid_target_cache
+    finally:
+        connection.close()
+
+
+def test_sqlite_cached_query_normalizes_parameters() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        driver = SqliteDriver(connection=connection)
+        driver.execute("CREATE TABLE norm_test (val INT)")
+        driver.execute("SELECT * FROM norm_test WHERE val = ?", [1])
+        res = driver.execute("SELECT * FROM norm_test WHERE val = ?", [1])
+        assert res.data == []
+    finally:
+        connection.close()

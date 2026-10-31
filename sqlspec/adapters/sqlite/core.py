@@ -6,7 +6,7 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlglot import exp
 
@@ -45,6 +45,7 @@ __all__ = (
     "SECONDS_PER_DAY",
     "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "SqliteStreamSource",
+    "_filter_connection_params",
     "apply_driver_features",
     "apply_extension_pragmas",
     "build_connection_config",
@@ -102,6 +103,8 @@ _EXTENSION_PRAGMA_PROFILE = (
     "PRAGMA mmap_size = 30000000",
     "PRAGMA journal_size_limit = 67108864",
 )
+_UNIX_EPOCH: Final[datetime] = datetime(1970, 1, 1, tzinfo=UTC)
+_DEFAULT_SCHEMAS: Final[frozenset[str]] = frozenset({"temp", "main"})
 
 
 def datetime_to_julian(dt: "datetime | None") -> "float | None":
@@ -110,8 +113,7 @@ def datetime_to_julian(dt: "datetime | None") -> "float | None":
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
-    epoch = datetime(1970, 1, 1, tzinfo=UTC)
-    delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
+    delta_days = (dt - _UNIX_EPOCH).total_seconds() / SECONDS_PER_DAY
     return JULIAN_EPOCH + delta_days
 
 
@@ -121,7 +123,7 @@ def julian_to_datetime(julian: "float | None") -> "datetime | None":
         return None
     delta_days = julian - JULIAN_EPOCH
     timestamp = delta_days * SECONDS_PER_DAY
-    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=timestamp)
+    return _UNIX_EPOCH + timedelta(seconds=timestamp)
 
 
 def end_transaction(
@@ -405,6 +407,32 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
+_EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
+    "enable_foreign_keys",
+    "enable_optimizations",
+    "health_check_interval",
+    "pool_min_size",
+    "pool_max_size",
+    "pool_timeout",
+    "pool_recycle_seconds",
+    "extra",
+    "db",
+    "path",
+    "file",
+})
+
+
+def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Filter connection parameters for SQLite."""
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in _EXCLUDED_CONNECTION_KEYS
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build connection configuration for pool creation.
 
@@ -414,30 +442,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     Returns:
         Dictionary with connection parameters.
     """
-    excluded_keys = {
-        "enable_foreign_keys",
-        "enable_optimizations",
-        "health_check_interval",
-        "pool_min_size",
-        "pool_max_size",
-        "pool_timeout",
-        "pool_recycle_seconds",
-        "extra",
-        "db",
-        "path",
-        "file",
-    }
-
-    def _filter_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in mapping.items()
-            if key not in excluded_keys
-            and (value is not None or key == "isolation_level")
-            and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-        }
-
-    connection_parameters = _filter_params(connection_config)
+    connection_parameters = _filter_connection_params(connection_config)
 
     if "database" not in connection_parameters:
         database = (
@@ -451,7 +456,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
 
     extra = connection_config.get("extra")
     if isinstance(extra, Mapping):
-        connection_parameters.update(_filter_params(extra))
+        connection_parameters.update(_filter_connection_params(extra))
 
     return connection_parameters
 
@@ -663,7 +668,7 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
         return _target_supports_rowid_legacy(connection, target)
 
     schema_order = ["temp", "main"]
-    if not any(row[0].casefold() in {"temp", "main"} for row in candidates):
+    if not any(row[0].casefold() in _DEFAULT_SCHEMAS for row in candidates):
         try:
             database_cursor = connection.execute("PRAGMA database_list")
             try:

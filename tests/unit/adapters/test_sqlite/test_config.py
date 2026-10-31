@@ -301,3 +301,11 @@ def test_default_memory_database_uses_shared_cache() -> None:
         assert results == [0]
     finally:
         pool.close()
+
+
+def test_filter_connection_params_with_hoisted_helper() -> None:
+    from sqlspec.adapters.sqlite.core import _filter_connection_params
+
+    raw = {"database": ":memory:", "extra": {}, "pool_min_size": 10, "timeout": 30.0, "isolation_level": None}
+    filtered = _filter_connection_params(raw)
+    assert filtered == {"database": ":memory:", "timeout": 30.0, "isolation_level": None}

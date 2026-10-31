@@ -53,3 +53,18 @@ def test_sqlite_config_does_not_register_type_handlers_by_default() -> None:
         config._create_pool()  # pyright: ignore[reportPrivateUsage]
 
     mock_register.assert_not_called()
+
+
+def test_julian_conversions_match_hoisted_epoch() -> None:
+    """Verify datetime_to_julian and julian_to_datetime use hoisted epoch."""
+    from datetime import UTC, datetime
+
+    from sqlspec.adapters.sqlite.core import _UNIX_EPOCH, datetime_to_julian, julian_to_datetime
+
+    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    julian = datetime_to_julian(now)
+    assert julian is not None
+    recovered = julian_to_datetime(julian)
+    assert recovered is not None
+    assert recovered == now
+    assert datetime_to_julian(_UNIX_EPOCH) == 2440587.5
