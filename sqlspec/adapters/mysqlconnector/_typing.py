@@ -122,10 +122,13 @@ class MysqlConnectorSyncCursor:
     ) -> None:
         self.connection = connection
         self.cursor: MysqlConnectorSyncRawCursor | None = None
-        self.cursor_options = cursor_options or {}
+        self.cursor_options = cursor_options
 
     def __enter__(self) -> "MysqlConnectorSyncRawCursor":
-        self.cursor = self.connection.cursor(**self.cursor_options)
+        if self.cursor_options is None:
+            self.cursor = self.connection.cursor()
+        else:
+            self.cursor = self.connection.cursor(**self.cursor_options)
         return self.cursor
 
     def __exit__(self, *_: object) -> None:
@@ -148,10 +151,13 @@ class MysqlConnectorAsyncCursor:
     ) -> None:
         self.connection = connection
         self.cursor: MysqlConnectorAsyncRawCursor | None = None
-        self.cursor_options = cursor_options or {}
+        self.cursor_options = cursor_options
 
     async def __aenter__(self) -> "MysqlConnectorAsyncRawCursor":
-        self.cursor = await self.connection.cursor(**self.cursor_options)
+        if self.cursor_options is None:
+            self.cursor = await self.connection.cursor()
+        else:
+            self.cursor = await self.connection.cursor(**self.cursor_options)
         return self.cursor
 
     async def __aexit__(self, *_: object) -> None:

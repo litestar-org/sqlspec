@@ -22,6 +22,7 @@ from sqlspec.adapters.mysqlconnector._typing import (
 from sqlspec.adapters.mysqlconnector.core import (
     MysqlConnectorAsyncStreamSource,
     MysqlConnectorSyncStreamSource,
+    _resolve_column_types,
     build_insert_statement,
     build_load_data_statement,
     can_use_local_infile_records,
@@ -77,24 +78,6 @@ logger = get_logger("sqlspec.adapters.mysqlconnector")
 json_type_value = MysqlConnectorFieldType.JSON if supports_json_type(MysqlConnectorFieldType) else None
 MYSQLCONNECTOR_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
-_MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
-    0: "decimal",
-    1: "int32",
-    2: "int32",
-    3: "int64",
-    4: "float32",
-    5: "float64",
-    7: "timestamp",
-    8: "int64",
-    10: "date",
-    11: "time",
-    12: "timestamp",
-    246: "decimal",
-    252: "binary",
-    253: "string",
-    254: "string",
-}
-
 
 class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling mysql-connector sync exceptions."""
@@ -113,7 +96,7 @@ class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
 class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     """MySQL/MariaDB database driver using mysql-connector sync library."""
 
-    __slots__ = ("_data_dictionary", "_json_deserializer")
+    __slots__ = ("_cursor_options", "_data_dictionary", "_json_deserializer")
     dialect = "mysql"
 
     def __init__(
@@ -132,6 +115,8 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         self._json_deserializer: Callable[[Any], Any] = cast(
             "Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json)
         )
+        cursor_options = cast("dict[str, Any] | None", self.driver_features.get("cursor_options"))
+        self._cursor_options: dict[str, Any] | None = dict(cursor_options) if cursor_options else None
 
     @property
     def data_dictionary(self) -> "MysqlConnectorSyncDataDictionary":
@@ -212,18 +197,16 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             raise create_mapped_exception(e) from e
 
     def with_cursor(self, connection: "MysqlConnectorSyncConnection") -> "MysqlConnectorSyncCursor":
-        cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
-        return MysqlConnectorSyncCursor(connection, dict(cursor_options))
+        return MysqlConnectorSyncCursor(connection, self._cursor_options)
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
         """Return a native mysql-connector row stream backed by an unbuffered cursor."""
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
         return SyncRowStream(
             MysqlConnectorSyncStreamSource(
-                self, sql, prepared_parameters, chunk_size, MYSQLCONNECTOR_JSON_TYPE_CODES, cursor_options
+                self, sql, prepared_parameters, chunk_size, MYSQLCONNECTOR_JSON_TYPE_CODES, self._cursor_options
             )
         )
 
@@ -390,7 +373,7 @@ class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
 class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     """MySQL/MariaDB database driver using mysql-connector async library."""
 
-    __slots__ = ("_data_dictionary", "_json_deserializer")
+    __slots__ = ("_cursor_options", "_data_dictionary", "_json_deserializer")
     dialect = "mysql"
 
     def __init__(
@@ -409,6 +392,8 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         self._json_deserializer: Callable[[Any], Any] = cast(
             "Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json)
         )
+        cursor_options = cast("dict[str, Any] | None", self.driver_features.get("cursor_options"))
+        self._cursor_options: dict[str, Any] | None = dict(cursor_options) if cursor_options else None
 
     @property
     def data_dictionary(self) -> "MysqlConnectorAsyncDataDictionary":
@@ -489,18 +474,16 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             raise create_mapped_exception(e) from e
 
     def with_cursor(self, connection: "MysqlConnectorAsyncConnection") -> "MysqlConnectorAsyncCursor":
-        cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
-        return MysqlConnectorAsyncCursor(connection, dict(cursor_options))
+        return MysqlConnectorAsyncCursor(connection, self._cursor_options)
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
         """Return a native mysql-connector row stream backed by an unbuffered cursor."""
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
         return AsyncRowStream(
             MysqlConnectorAsyncStreamSource(
-                self, sql, prepared_parameters, chunk_size, MYSQLCONNECTOR_JSON_TYPE_CODES, cursor_options
+                self, sql, prepared_parameters, chunk_size, MYSQLCONNECTOR_JSON_TYPE_CODES, self._cursor_options
             )
         )
 
@@ -650,22 +633,6 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Report whether the connector has an open transaction."""
         return bool(self.connection.in_transaction)
-
-
-def _resolve_column_types(description: Any) -> "dict[str, str] | None":
-    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
-
-    Returns ``None`` when the cursor has no description or reports no
-    recognizable type codes.
-    """
-    if not description:
-        return None
-    column_types: dict[str, str] = {}
-    for col in description:
-        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
-        if token is not None:
-            column_types[col[0]] = token
-    return column_types or None
 
 
 register_driver_profile("mysql-connector", driver_profile)

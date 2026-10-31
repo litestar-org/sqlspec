@@ -93,3 +93,13 @@ def test_mysqlconnector_data_dictionary_cached_property() -> None:
 
     async_driver = MysqlConnectorAsyncDriver(connection=MagicMock())
     assert async_driver.data_dictionary is async_driver.data_dictionary
+
+
+def test_with_cursor_avoids_dictionary_allocation() -> None:
+    """with_cursor passes None options when cursor_options is not configured."""
+    from unittest.mock import MagicMock
+
+    conn = MagicMock()
+    driver = MysqlConnectorSyncDriver(connection=conn)
+    cursor_cm = driver.with_cursor(conn)
+    assert cursor_cm.cursor_options is None

@@ -3,7 +3,7 @@
 import contextlib
 from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 __all__ = (
     "MysqlConnectorAsyncStreamSource",
     "MysqlConnectorSyncStreamSource",
+    "_resolve_column_types",
     "apply_driver_features",
     "build_insert_statement",
     "build_load_data_statement",
@@ -153,6 +154,7 @@ class MysqlConnectorSyncStreamSource:
         "_chunk_size",
         "_cursor",
         "_cursor_options",
+        "_deserializer",
         "_driver",
         "_json_type_codes",
         "_parameters",
@@ -178,6 +180,10 @@ class MysqlConnectorSyncStreamSource:
         self._cursor_options = dict(cursor_options or {})
         self._cursor_options["buffered"] = False
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        deserializer = getattr(driver, "_json_deserializer", None)
+        if deserializer is None and hasattr(driver, "driver_features") and isinstance(driver.driver_features, dict):
+            deserializer = driver.driver_features.get("json_deserializer")
+        self._deserializer: Callable[[Any], Any] = deserializer or from_json
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -202,12 +208,7 @@ class MysqlConnectorSyncStreamSource:
             return []
         if self._row_plan is None:
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-        deserializer = cast(
-            "Callable[[Any], Any]",
-            getattr(self._driver, "_json_deserializer", None)
-            or self._driver.driver_features.get("json_deserializer", from_json),
-        )
-        return collect_stream_rows(rows, self._row_plan, deserializer)
+        return collect_stream_rows(rows, self._row_plan, self._deserializer)
 
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -231,6 +232,7 @@ class MysqlConnectorAsyncStreamSource:
         "_chunk_size",
         "_cursor",
         "_cursor_options",
+        "_deserializer",
         "_driver",
         "_json_type_codes",
         "_parameters",
@@ -256,6 +258,10 @@ class MysqlConnectorAsyncStreamSource:
         self._cursor_options = dict(cursor_options or {})
         self._cursor_options["buffered"] = False
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        deserializer = getattr(driver, "_json_deserializer", None)
+        if deserializer is None and hasattr(driver, "driver_features") and isinstance(driver.driver_features, dict):
+            deserializer = driver.driver_features.get("json_deserializer")
+        self._deserializer: Callable[[Any], Any] = deserializer or from_json
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -270,12 +276,7 @@ class MysqlConnectorAsyncStreamSource:
             return []
         if self._row_plan is None:
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-        deserializer = cast(
-            "Callable[[Any], Any]",
-            getattr(self._driver, "_json_deserializer", None)
-            or self._driver.driver_features.get("json_deserializer", from_json),
-        )
-        return collect_stream_rows(rows, self._row_plan, deserializer)
+        return collect_stream_rows(rows, self._row_plan, self._deserializer)
 
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -728,5 +729,40 @@ def _create_mysql_error(
 
 
 driver_profile = build_profile()
+
+_MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
+    0: "decimal",
+    1: "int32",
+    2: "int32",
+    3: "int64",
+    4: "float32",
+    5: "float64",
+    7: "timestamp",
+    8: "int64",
+    10: "date",
+    11: "time",
+    12: "timestamp",
+    246: "decimal",
+    252: "binary",
+    253: "string",
+    254: "string",
+}
+
+
+def _resolve_column_types(description: Any) -> "dict[str, str] | None":
+    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
+
+    Returns ``None`` when the cursor has no description or reports no
+    recognizable type codes.
+    """
+    if not description:
+        return None
+    column_types: dict[str, str] = {}
+    for col in description:
+        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
+        if token is not None:
+            column_types[col[0]] = token
+    return column_types or None
+
 
 default_statement_config = build_statement_config()

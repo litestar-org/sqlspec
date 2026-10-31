@@ -1,5 +1,6 @@
 """mysql-connector compiled core helpers."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -61,3 +62,31 @@ async def test_async_stream_source_closes_cursor_when_execute_raises() -> None:
 
     cursor.close.assert_awaited_once()
     assert source._cursor is None
+
+
+def test_resolve_column_types_in_core() -> None:
+    """_resolve_column_types lives in compiled core and maps FIELD_TYPE codes to Arrow tokens."""
+    from sqlspec.adapters.mysqlconnector.core import _resolve_column_types
+
+    description = [("id", 3), ("amount", 0), ("created", 7), ("unknown", 999)]
+    types = _resolve_column_types(description)
+    assert types == {"id": "int64", "amount": "decimal", "created": "timestamp"}
+    assert _resolve_column_types(None) is None
+
+
+def test_stream_source_caches_deserializer() -> None:
+    """Stream sources cache the deserializer on initialization without per-chunk getattr."""
+    from sqlspec.adapters.mysqlconnector.core import MysqlConnectorAsyncStreamSource, MysqlConnectorSyncStreamSource
+
+    def custom_deserializer(v: Any) -> Any:
+        return v
+
+    driver = MagicMock(
+        _json_deserializer=custom_deserializer, driver_features={"json_deserializer": custom_deserializer}
+    )
+
+    sync_source = MysqlConnectorSyncStreamSource(driver, "SELECT 1", (), 10, set())
+    assert sync_source._deserializer is custom_deserializer
+
+    async_source = MysqlConnectorAsyncStreamSource(driver, "SELECT 1", (), 10, set())
+    assert async_source._deserializer is custom_deserializer
