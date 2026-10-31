@@ -3,7 +3,7 @@
 import contextlib
 from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import Any, Final, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
@@ -30,9 +30,6 @@ from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identi
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code
 
-if TYPE_CHECKING:
-    from sqlspec.core.parameters import ParameterValidator
-
 __all__ = (
     "MysqlConnectorAsyncStreamSource",
     "MysqlConnectorSyncStreamSource",
@@ -49,7 +46,6 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "encode_records_for_local_infile",
-    "escape_literal_percent",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -84,10 +80,12 @@ _MYSQL_DDL_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
     1091: (OperationalError, "cannot drop column or key"),
 }
 _MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
-    "23505": (UniqueViolationError, "unique constraint violation"),
-    "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
-    "23502": (NotNullViolationError, "not-null constraint violation"),
-    "23514": (CheckViolationError, "check constraint violation"),
+    "42S02": (OperationalError, "table does not exist"),
+    "42S22": (OperationalError, "column does not exist"),
+}
+_MYSQL_OPERATIONAL_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1146: (OperationalError, "table does not exist"),
+    1054: (OperationalError, "column does not exist"),
 }
 _MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23": (IntegrityError, "integrity constraint violation"),
@@ -596,6 +594,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["40"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
+    dispatch = _MYSQL_OPERATIONAL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+
     if sqlstate_prefix == "42":
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["42"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
@@ -617,14 +619,6 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
-
-
-def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
-    """Escape literal percent characters before driver-side interpolation."""
-    if not parameters or "%" not in sql:
-        return sql
-    keep = {info.position for info in validator.extract_parameters(sql)}
-    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
 
 
 def build_load_data_statement(

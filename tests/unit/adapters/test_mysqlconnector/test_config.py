@@ -520,3 +520,26 @@ def test_sync_connection_context_rolls_back_when_pool_reset_session_disabled() -
 
     pooled_conn.rollback.assert_called_once()
     pooled_conn.close.assert_called_once()
+
+
+def test_mysqlconnector_async_config_initialization_order() -> None:
+    """MysqlConnectorAsyncConfig normalizes connection_config before super().__init__."""
+    config = MysqlConnectorAsyncConfig(connection_config={"allow_local_infile": True, "database": "db1"})
+    assert config.connection_config["allow_local_infile"] is True
+    assert config.connection_config["database"] == "db1"
+
+
+def test_mysqlconnector_async_config_inherited_methods() -> None:
+    """MysqlConnectorAsyncConfig provides connection and session via AsyncDatabaseConfig inheritance."""
+    config = MysqlConnectorAsyncConfig(connection_config={"allow_local_infile": True, "database": "db1"})
+    conn_ctx = config.provide_connection()
+    assert conn_ctx is not None
+    session_ctx = config.provide_session()
+    assert session_ctx is not None
+
+
+def test_mysqlconnector_sync_connection_context_slots() -> None:
+    """MysqlConnectorSyncConnectionContext defines empty __slots__ to eliminate dead parent slots."""
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorSyncConnectionContext
+
+    assert MysqlConnectorSyncConnectionContext.__slots__ == ()

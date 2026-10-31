@@ -125,7 +125,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return self._data_dictionary
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows() or getattr(cursor, "with_rows", False):
@@ -151,7 +151,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -161,21 +161,16 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        """Execute SQL script with statement splitting and parameter handling.
 
-        successful_count = 0
-        last_cursor = cursor
+        Args:
+            cursor: mysql-connector cursor object
+            statement: SQL script to execute
 
-        for stmt in statements:
-            cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
-            if getattr(cursor, "with_rows", False):
-                cursor.fetchall()
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+        Returns:
+            ExecutionResult: Script execution results with statement count
+        """
+        return super().dispatch_execute_script(cursor, statement)
 
     def begin(self) -> None:
         try:
@@ -273,7 +268,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         if overwrite:
             statement = f"TRUNCATE TABLE {format_identifier(table)}"
             exc_handler = self.handle_database_exceptions()
-            self._run_with_exception_handler(exc_handler, self._execute_cursor_statement, statement)
+            self._run_with_exception_handler(exc_handler, self._execute_cursor_statement_unprepared, statement)
             self._check_pending_exception(exc_handler)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
@@ -292,7 +287,9 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
                         tmp.write(payload)
                     load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
-                    self._run_with_exception_handler(exc_handler, self._execute_cursor_statement, load_sql, (tmp_name,))
+                    self._run_with_exception_handler(
+                        exc_handler, self._execute_cursor_statement_unprepared, load_sql, (tmp_name,)
+                    )
                     self._check_pending_exception(exc_handler)
                 finally:
                     Path(tmp_name).unlink(missing_ok=True)
@@ -314,20 +311,6 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector sync rows for the direct execution path."""
         description = cursor.description or None
@@ -342,6 +325,16 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
 
     def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
         with self.with_cursor(self.connection) as cursor:
+            if parameters is None:
+                cursor.execute(statement)
+            else:
+                cursor.execute(statement, parameters)
+
+    def _execute_cursor_statement_unprepared(self, statement: str, parameters: Any = None) -> None:
+        options = self._cursor_options
+        if options and options.get("prepared"):
+            options = {k: v for k, v in options.items() if k != "prepared"}
+        with MysqlConnectorSyncCursor(self.connection, options or None) as cursor:
             if parameters is None:
                 cursor.execute(statement)
             else:
@@ -402,7 +395,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return self._data_dictionary
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows() or getattr(cursor, "with_rows", False):
@@ -428,7 +421,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -438,21 +431,16 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        """Execute SQL script with statement splitting and parameter handling.
 
-        successful_count = 0
-        last_cursor = cursor
+        Args:
+            cursor: mysql-connector async cursor object
+            statement: SQL script to execute
 
-        for stmt in statements:
-            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
-            if getattr(cursor, "with_rows", False):
-                await cursor.fetchall()
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+        Returns:
+            ExecutionResult: Script execution results with statement count
+        """
+        return await super().dispatch_execute_script(cursor, statement)
 
     async def begin(self) -> None:
         try:
@@ -550,7 +538,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         if overwrite:
             statement = f"TRUNCATE TABLE {format_identifier(table)}"
             exc_handler = self.handle_database_exceptions()
-            await self._run_with_exception_handler(exc_handler, self._execute_cursor_statement, statement)
+            await self._run_with_exception_handler(exc_handler, self._execute_cursor_statement_unprepared, statement)
             self._check_pending_exception(exc_handler)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
@@ -570,7 +558,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
                     load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
                     await self._run_with_exception_handler(
-                        exc_handler, self._execute_cursor_statement, load_sql, (tmp_name,)
+                        exc_handler, self._execute_cursor_statement_unprepared, load_sql, (tmp_name,)
                     )
                     self._check_pending_exception(exc_handler)
                 finally:
@@ -593,20 +581,6 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    async def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        return await super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector async rows for the direct execution path."""
         description = cursor.description or None
@@ -621,6 +595,16 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
 
     async def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
         async with self.with_cursor(self.connection) as cursor:
+            if parameters is None:
+                await cursor.execute(statement)
+            else:
+                await cursor.execute(statement, parameters)
+
+    async def _execute_cursor_statement_unprepared(self, statement: str, parameters: Any = None) -> None:
+        options = self._cursor_options
+        if options and options.get("prepared"):
+            options = {k: v for k, v in options.items() if k != "prepared"}
+        async with MysqlConnectorAsyncCursor(self.connection, options or None) as cursor:
             if parameters is None:
                 await cursor.execute(statement)
             else:
