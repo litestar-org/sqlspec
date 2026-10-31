@@ -174,12 +174,19 @@ def _rewrite_top_start_at_statement(statement: "list[Token]") -> "list[Token]":
         offset_str = str(max(int(start_val_tok.text) - 1, 0))
         offset_tokens = [
             Token(
-                TokenType.NUMBER, offset_str, start_val_tok.line, start_val_tok.col, start_val_tok.start, start_val_tok.end
+                TokenType.NUMBER,
+                offset_str,
+                start_val_tok.line,
+                start_val_tok.col,
+                start_val_tok.start,
+                start_val_tok.end,
             )
         ]
     else:
         offset_tokens = [
-            Token(TokenType.L_PAREN, "(", start_val_tok.line, start_val_tok.col, start_val_tok.start, start_val_tok.start),
+            Token(
+                TokenType.L_PAREN, "(", start_val_tok.line, start_val_tok.col, start_val_tok.start, start_val_tok.start
+            ),
             start_val_tok,
             Token(TokenType.DASH, "-", start_val_tok.line, start_val_tok.col, start_val_tok.start, start_val_tok.end),
             Token(TokenType.NUMBER, "1", start_val_tok.line, start_val_tok.col, start_val_tok.end, start_val_tok.end),

@@ -267,9 +267,7 @@ def sqlanywhere_generated_identity_sql(
     return "DEFAULT AUTOINCREMENT"
 
 
-def sqlanywhere_autoincrement_sql(
-    gen: "generator.Generator", expression: exp.AutoIncrementColumnConstraint
-) -> str:
+def sqlanywhere_autoincrement_sql(gen: "generator.Generator", expression: exp.AutoIncrementColumnConstraint) -> str:
     """Render AutoIncrementColumnConstraint as DEFAULT AUTOINCREMENT."""
     _ = (gen, expression)
     return "DEFAULT AUTOINCREMENT"

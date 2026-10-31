@@ -67,11 +67,7 @@ class SybaseConnectionPool:
             on_connection_create: Callback executed when a connection is created.
         """
         params = dict(connection_parameters)
-        freetds_alias = (
-            params.get("freetds_server")
-            or params.get("server_alias")
-            or params.get("is_server_alias")
-        )
+        freetds_alias = params.get("freetds_server") or params.get("server_alias") or params.get("is_server_alias")
         if freetds_alias and isinstance(freetds_alias, str):
             params["server"] = freetds_alias
         tdsver = os.environ.get("TDSVER")

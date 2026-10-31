@@ -82,7 +82,9 @@ def build_column_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ColumnMetad
             if r.get("identity_generation")
             else ("ALWAYS" if r.get("is_identity") else None),
             is_generated=bool(r.get("is_generated")),
-            generation_expression=str(r["generation_expression"]) if r.get("generation_expression") is not None else None,
+            generation_expression=str(r["generation_expression"])
+            if r.get("generation_expression") is not None
+            else None,
             is_hidden=bool(r.get("is_hidden")),
         )
         for r in rows

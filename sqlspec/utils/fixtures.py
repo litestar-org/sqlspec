@@ -2006,34 +2006,46 @@ def _sequence_resync_statements(
     return statements
 
 
+def _resync_sybase_sequences_sync(driver: "SyncDriverAdapterBase", table: str, columns: "list[_TableColumn]") -> None:
+    """Resynchronize Sybase ASE identity columns for a table synchronously."""
+    for column in columns:
+        if column.is_identity:
+            quoted_col = _quoted_identifier_sql(column.name)
+            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+            max_val = driver.select_value(query)
+            next_val = int(max_val or 0)
+            if next_val > 0:
+                escaped_table = table.replace("'", "''")
+                driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
+
+
+def _resync_sqlanywhere_sequences_sync(
+    driver: "SyncDriverAdapterBase", table: str, columns: "list[_TableColumn]"
+) -> None:
+    """Resynchronize SAP SQL Anywhere identity columns for a table synchronously."""
+    for column in columns:
+        if column.is_identity:
+            quoted_col = _quoted_identifier_sql(column.name)
+            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+            max_val = driver.select_value(query)
+            next_val = int(max_val or 0)
+            schema_part, _, table_part = table.rpartition(".")
+            escaped_table = table_part.replace("'", "''")
+            escaped_schema = schema_part.replace("'", "''")
+            schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
+            driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+
+
 def _resync_table_sequences_sync(
     driver: "SyncDriverAdapterBase", family: str, dialect_name: str, table: str, columns: "list[_TableColumn]"
 ) -> None:
     """Resynchronize sequences, identity columns, or auto-increment counters for a table synchronously."""
     if family == "sybase":
-        for column in columns:
-            if column.is_identity:
-                quoted_col = _quoted_identifier_sql(column.name)
-                query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
-                max_val = driver.select_value(query)
-                next_val = int(max_val or 0)
-                if next_val > 0:
-                    escaped_table = table.replace("'", "''")
-                    driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
+        _resync_sybase_sequences_sync(driver, table, columns)
         return
 
     if family == "sqlanywhere":
-        for column in columns:
-            if column.is_identity:
-                quoted_col = _quoted_identifier_sql(column.name)
-                query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
-                max_val = driver.select_value(query)
-                next_val = int(max_val or 0)
-                schema_part, _, table_part = table.rpartition(".")
-                escaped_table = table_part.replace("'", "''")
-                escaped_schema = schema_part.replace("'", "''")
-                schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
-                driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+        _resync_sqlanywhere_sequences_sync(driver, table, columns)
         return
 
     if family == "db2":
@@ -2132,34 +2144,48 @@ def _resync_table_sequences_sync(
         driver.execute(statement, parameters)
 
 
+async def _resync_sybase_sequences_async(
+    driver: "AsyncDriverAdapterBase", table: str, columns: "list[_TableColumn]"
+) -> None:
+    """Resynchronize Sybase ASE identity columns for a table asynchronously."""
+    for column in columns:
+        if column.is_identity:
+            quoted_col = _quoted_identifier_sql(column.name)
+            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+            max_val = await driver.select_value(query)
+            next_val = int(max_val or 0)
+            if next_val > 0:
+                escaped_table = table.replace("'", "''")
+                await driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
+
+
+async def _resync_sqlanywhere_sequences_async(
+    driver: "AsyncDriverAdapterBase", table: str, columns: "list[_TableColumn]"
+) -> None:
+    """Resynchronize SAP SQL Anywhere identity columns for a table asynchronously."""
+    for column in columns:
+        if column.is_identity:
+            quoted_col = _quoted_identifier_sql(column.name)
+            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+            max_val = await driver.select_value(query)
+            next_val = int(max_val or 0)
+            schema_part, _, table_part = table.rpartition(".")
+            escaped_table = table_part.replace("'", "''")
+            escaped_schema = schema_part.replace("'", "''")
+            schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
+            await driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+
+
 async def _resync_table_sequences_async(
     driver: "AsyncDriverAdapterBase", family: str, dialect_name: str, table: str, columns: "list[_TableColumn]"
 ) -> None:
     """Resynchronize sequences, identity columns, or auto-increment counters for a table asynchronously."""
     if family == "sybase":
-        for column in columns:
-            if column.is_identity:
-                quoted_col = _quoted_identifier_sql(column.name)
-                query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
-                max_val = await driver.select_value(query)
-                next_val = int(max_val or 0)
-                if next_val > 0:
-                    escaped_table = table.replace("'", "''")
-                    await driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
+        await _resync_sybase_sequences_async(driver, table, columns)
         return
 
     if family == "sqlanywhere":
-        for column in columns:
-            if column.is_identity:
-                quoted_col = _quoted_identifier_sql(column.name)
-                query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
-                max_val = await driver.select_value(query)
-                next_val = int(max_val or 0)
-                schema_part, _, table_part = table.rpartition(".")
-                escaped_table = table_part.replace("'", "''")
-                escaped_schema = schema_part.replace("'", "''")
-                schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
-                await driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+        await _resync_sqlanywhere_sequences_async(driver, table, columns)
         return
 
     if family == "db2":

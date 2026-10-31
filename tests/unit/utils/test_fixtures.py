@@ -2757,8 +2757,20 @@ def test_sybase_identity_resync_executes_sp_chgattribute_sync(tmp_path: Path) ->
     driver = MagicMock()
     driver.statement_config.dialect = "sybase"
     driver.data_dictionary.get_columns.return_value = [
-        {"column_name": "id", "data_type": "int", "is_primary": True, "identity_generation": "ALWAYS", "is_generated": 0},
-        {"column_name": "name", "data_type": "varchar", "is_primary": False, "identity_generation": None, "is_generated": 0},
+        {
+            "column_name": "id",
+            "data_type": "int",
+            "is_primary": True,
+            "identity_generation": "ALWAYS",
+            "is_generated": 0,
+        },
+        {
+            "column_name": "name",
+            "data_type": "varchar",
+            "is_primary": False,
+            "identity_generation": None,
+            "is_generated": 0,
+        },
     ]
     driver.select_value.return_value = 42
 
@@ -2776,8 +2788,20 @@ def test_sybase_identity_resync_skips_when_max_is_zero(tmp_path: Path) -> None:
     driver = MagicMock()
     driver.statement_config.dialect = "sybase"
     driver.data_dictionary.get_columns.return_value = [
-        {"column_name": "id", "data_type": "int", "is_primary": True, "identity_generation": "ALWAYS", "is_generated": 0},
-        {"column_name": "name", "data_type": "varchar", "is_primary": False, "identity_generation": None, "is_generated": 0},
+        {
+            "column_name": "id",
+            "data_type": "int",
+            "is_primary": True,
+            "identity_generation": "ALWAYS",
+            "is_generated": 0,
+        },
+        {
+            "column_name": "name",
+            "data_type": "varchar",
+            "is_primary": False,
+            "identity_generation": None,
+            "is_generated": 0,
+        },
     ]
     driver.select_value.return_value = 0
 
@@ -2796,8 +2820,20 @@ async def test_sqlanywhere_identity_resync_executes_sa_reset_identity_async(tmp_
     driver.statement_config.dialect = "sqlanywhere"
     driver.data_dictionary.get_columns = AsyncMock(
         return_value=[
-            {"column_name": "id", "data_type": "integer", "is_primary": True, "identity_generation": "ALWAYS", "is_generated": 0},
-            {"column_name": "name", "data_type": "varchar", "is_primary": False, "identity_generation": None, "is_generated": 0},
+            {
+                "column_name": "id",
+                "data_type": "integer",
+                "is_primary": True,
+                "identity_generation": "ALWAYS",
+                "is_generated": 0,
+            },
+            {
+                "column_name": "name",
+                "data_type": "varchar",
+                "is_primary": False,
+                "identity_generation": None,
+                "is_generated": 0,
+            },
         ]
     )
     driver.execute_many = AsyncMock()

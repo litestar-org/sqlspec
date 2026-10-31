@@ -99,9 +99,7 @@ def test_sqlanywhere_parse_top_start_at_non_literal() -> None:
 
 def test_sqlanywhere_current_timestamp_local_and_utc() -> None:
     """Verify CURRENT_TIMESTAMP renders local and GETUTCDATE renders UTC."""
-    assert (
-        transpile("SELECT CURRENT_TIMESTAMP", read="postgres", write="sqlanywhere")[0] == "SELECT CURRENT TIMESTAMP"
-    )
+    assert transpile("SELECT CURRENT_TIMESTAMP", read="postgres", write="sqlanywhere")[0] == "SELECT CURRENT TIMESTAMP"
     assert transpile("SELECT GETUTCDATE()", read="tsql", write="sqlanywhere")[0] == "SELECT CURRENT UTC TIMESTAMP"
 
 

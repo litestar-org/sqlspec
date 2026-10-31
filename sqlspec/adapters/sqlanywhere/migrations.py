@@ -133,13 +133,7 @@ class SqlanywhereSyncMigrationTracker(SqlanywhereMigrationTrackerMixin, SyncMigr
             )
         else:
             statement = self._record_migration_statement(
-                version,
-                version_type,
-                next_sequence,
-                description,
-                execution_time_ms,
-                checksum,
-                applied_by,
+                version, version_type, next_sequence, description, execution_time_ms, checksum, applied_by
             )
         driver.execute(statement)
         if commit:

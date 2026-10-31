@@ -20,6 +20,8 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 | [`oracledb`](oracledb.md) | `sqlspec[oracledb]` | Sync + Async | `:1` / `:name` | `ConnectionPool` / `AsyncConnectionPool` + DRCP | PyCapsule Batches | Oracle AQ (`DBMS_AQ`) + Table Queue | Sessions + Memory (Oracle 26ai `VECTOR` HNSW, Oracle Text, RRF) |
 | [`mssql_python`](mssql.md) | `sqlspec[mssql-python]` | Sync | `?` (`qmark`) | `MssqlPythonConnectionPool` | Native `BulkCopy` | Table Queue | Sessions + Memory (`LIKE`) |
 | [`pymssql`](mssql.md) | `sqlspec[pymssql]` | Sync | `%(name)s` / `%s` | `PymssqlConnectionPool` | Row | Table Queue | Sessions + Memory (`LIKE`) |
+| [`sybase`](sybase.md) | `sqlspec[sybase]` | Sync | `?` (`qmark`) / `%(name)s` | `SybaseConnectionPool` | Row / Stream | Table Queue | Sessions + Memory (`LIKE`) |
+| [`sqlanywhere`](sqlanywhere.md) | `sqlspec[sqlanywhere]` | Sync | `?` (`qmark`) | `SqlanywhereConnectionPool` | Row / Stream | Table Queue | Sessions + Memory (`LIKE`) |
 | [`db2`](db2.md) | `sqlspec[db2]` | Sync + Async | `?` (`qmark`) | `Db2SyncConnectionPool` / `Db2AsyncConnectionPool` | Schema-Guided Row | Table Queue (`SKIP LOCKED DATA`) | Sessions + Memory (`POSSTR`) |
 | [`duckdb`](duckdb.md) | `sqlspec[duckdb]` | Sync | `?` (`qmark`) | `DuckDBConnectionPool` | Native Zero-Copy | Table Queue | Sessions + Memory (`FTS`, `ARRAY` Cosine) |
 | [`bigquery`](bigquery.md) | `sqlspec[bigquery]` | Sync | `@name` (`named`) | Stateless HTTP/gRPC Client | Storage Read / Write API | Table Queue | Sessions + Memory (`SEARCH` / `LIKE`) |
@@ -35,6 +37,8 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 - **[MySQL and MariaDB](mysql.md)**: Side-by-side setup for `asyncmy`, `pymysql`, `aiomysql`, and `mysql-connector-python`, TLS verification, and `LOAD DATA LOCAL INFILE` bulk loading.
 - **[Oracle Database](oracledb.md)**: Thin and Thick modes, mTLS/PKCS#12 wallets, TNS topologies, Oracle 26ai `VECTOR` + Hybrid RRF search, PyCapsule Arrow streaming, and `DBMS_CLOUD.COPY_DATA`.
 - **[Microsoft SQL Server](mssql.md)**: Microsoft's official `mssql-python` driver with streaming Arrow `BulkCopy` alongside FreeTDS `pymssql`.
+- **[SAP Adaptive Server Enterprise](sybase.md)**: Sybase ASE 16.0+ via FreeTDS TDS 5.0 (`pymssql`), transactional DDL behavior, and catalog introspection.
+- **[SAP SQL Anywhere](sqlanywhere.md)**: Embedded and client-server SQL Anywhere 12+ via `sqlanydb`, recursive dependency analysis, and automatic rollback on context exit.
 - **[IBM Db2](db2.md)**: Sync and async DRDA pooling (`Db2SyncConfig` / `Db2AsyncConfig`), savepoint cursor retention, and lowercase column normalization.
 - **[DuckDB](duckdb.md)**: In-process OLAP queries over Parquet/S3, hybrid native/Arrow materialization, and JSON statement profiling.
 - **[Google Cloud BigQuery](bigquery.md)**: Interactive `query_and_wait` execution, Storage Read/Write APIs, reservation governance, and multi-statement script jobs.
