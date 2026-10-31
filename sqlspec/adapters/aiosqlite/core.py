@@ -109,6 +109,10 @@ SQLITE_LOCKED_CODE = 6
 SQLITE_INTERRUPT_CODE = 9
 SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
+SQLITE_TOOBIG_CODE = 18
+SQLITE_AUTH_CODE = 23
+SQLITE_RANGE_CODE = 25
+SQLITE_NOTADB_CODE = 26
 SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT = sys.version_info >= (3, 12)
 SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
@@ -463,7 +467,7 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     if has_sqlite_error(error):
         error_code = error.sqlite_errorcode
         error_name = error.sqlite_errorname
@@ -509,8 +513,12 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_aiosqlite_error(error, 0, PermissionDeniedError, "permission denied")
 
-    if primary_code == SQLITE_CANTOPEN_CODE or (
-        isinstance(error_name, str) and error_name.startswith("SQLITE_CANTOPEN")
+    if primary_code == SQLITE_AUTH_CODE or error_name == "SQLITE_AUTH":
+        return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "authorization denied")
+    if primary_code in (SQLITE_RANGE_CODE, SQLITE_TOOBIG_CODE) or error_name in ("SQLITE_RANGE", "SQLITE_TOOBIG"):
+        return _create_aiosqlite_error(error, error_code, DataError, "data range or size exceeded")
+    if primary_code in (SQLITE_CANTOPEN_CODE, SQLITE_NOTADB_CODE) or (
+        isinstance(error_name, str) and error_name.startswith(("SQLITE_CANTOPEN", "SQLITE_NOTADB"))
     ):
         return _create_aiosqlite_error(error, error_code, DatabaseConnectionError, "connection error")
     if primary_code in (SQLITE_IOERR_CODE, SQLITE_CORRUPT_CODE) or (

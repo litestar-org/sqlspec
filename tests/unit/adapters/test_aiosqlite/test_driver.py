@@ -473,3 +473,14 @@ async def test_aiosqlite_data_dictionary_version_cached_across_drivers() -> None
     finally:
         await conn1.close()
         await conn2.close()
+
+
+async def test_aiosqlite_dispatch_execute_script_emits_events() -> None:
+    conn = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(connection=conn)
+        result = await driver.execute_script("CREATE TABLE scr_t (x INT); INSERT INTO scr_t VALUES (1);")
+        assert result.total_statements == 2
+        assert result.successful_statements == 2
+    finally:
+        await conn.close()

@@ -7,6 +7,7 @@ import pytest
 from sqlspec.adapters.aiosqlite.core import create_mapped_exception
 from sqlspec.exceptions import (
     CheckViolationError,
+    DatabaseConnectionError,
     DataError,
     DeadlockError,
     IntegrityError,
@@ -182,3 +183,35 @@ def test_interface_error_maps_to_operational_error() -> None:
     result = create_mapped_exception(err)
     assert isinstance(result, OperationalError)
     assert result.__cause__ is err
+
+
+def test_auth_error_maps_to_permission_denied() -> None:
+    err = _SqliteError("not authorized", 23, "SQLITE_AUTH")
+    result = create_mapped_exception(err)
+    assert isinstance(result, PermissionDeniedError)
+    assert result.__cause__ is err
+
+
+def test_range_and_toobig_errors_map_to_data_error() -> None:
+    err_range = _SqliteError("column index out of range", 25, "SQLITE_RANGE")
+    res_range = create_mapped_exception(err_range)
+    assert isinstance(res_range, DataError)
+    assert res_range.__cause__ is err_range
+
+    err_toobig = _SqliteError("string or blob too big", 18, "SQLITE_TOOBIG")
+    res_toobig = create_mapped_exception(err_toobig)
+    assert isinstance(res_toobig, DataError)
+    assert res_toobig.__cause__ is err_toobig
+
+
+def test_notadb_error_maps_to_database_connection_error() -> None:
+    err = _SqliteError("file is not a database", 26, "SQLITE_NOTADB")
+    result = create_mapped_exception(err)
+    assert isinstance(result, DatabaseConnectionError)
+    assert result.__cause__ is err
+
+
+def test_create_mapped_exception_accepts_logger_parameter() -> None:
+    err = sqlite3.OperationalError("generic")
+    result = create_mapped_exception(err, logger=None)
+    assert isinstance(result, OperationalError)

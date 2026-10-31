@@ -17,7 +17,6 @@ from sqlspec.adapters.aiosqlite.core import (
     build_connection_config,
     default_statement_config,
     render_pragmas,
-    require_python_version,
 )
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
 from sqlspec.adapters.aiosqlite.pool import (
@@ -101,7 +100,7 @@ class AiosqlitePoolParams(AiosqliteConnectionParams):
     enable_optimizations: NotRequired[bool]
     """Apply WAL journal mode, ``synchronous=NORMAL``, and busy-timeout PRAGMAs on connect."""
     enable_foreign_keys: NotRequired[bool]
-    """Execute ``PRAGMA foreign_keys = ON`` on every pooled connection (defaults to ``True``)."""
+    """Execute ``PRAGMA foreign_keys = ON`` on every pooled connection (defaults to ``False``)."""
     extra: NotRequired["dict[str, Any]"]
     """Additional keyword arguments forwarded directly to ``aiosqlite.connect``."""
 
@@ -408,13 +407,21 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         Returns:
             AiosqliteConnectionPool: The connection pool instance.
         """
-        pool_size = self.connection_config.get("pool_size") or 5
+        pool_size = self.connection_config.get("pool_size")
+        if pool_size is None:
+            pool_size = 5
         min_size = self.connection_config.get("min_size")
         if min_size is None:
             min_size = 0
-        connect_timeout = self.connection_config.get("connect_timeout") or 30.0
-        idle_timeout = self.connection_config.get("idle_timeout") or 24 * 60 * 60
-        operation_timeout = self.connection_config.get("operation_timeout") or 10.0
+        connect_timeout = self.connection_config.get("connect_timeout")
+        if connect_timeout is None:
+            connect_timeout = 30.0
+        idle_timeout = self.connection_config.get("idle_timeout")
+        if idle_timeout is None:
+            idle_timeout = 24 * 60 * 60
+        operation_timeout = self.connection_config.get("operation_timeout")
+        if operation_timeout is None:
+            operation_timeout = 10.0
         health_check_interval = self.connection_config.get("health_check_interval")
         if health_check_interval is None:
             health_check_interval = 30.0
@@ -518,8 +525,6 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
     )
     window_functions = runtime_setup.get("custom_window_functions", ())
     _validate_entries(window_functions, ("name", "narg", "window_class"), "custom_window_functions")
-    if window_functions:
-        require_python_version("Custom SQLite window functions", (3, 11))
 
     interval = runtime_setup.get("progress_handler_interval")
     if interval is not None and (not isinstance(interval, int) or isinstance(interval, bool) or interval < 1):
