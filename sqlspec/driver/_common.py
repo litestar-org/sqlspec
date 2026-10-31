@@ -3227,7 +3227,7 @@ class CommonDriverAttributesMixin:
         return arrow_table_to_rows(table, columns)
 
     @staticmethod
-    def _arrow_rows_need_preparation(table: "ArrowTable") -> bool:
+    def _arrow_rows_need_preparation(table: "ArrowTable | ArrowRecordBatch") -> bool:
         """Return whether Arrow rows may contain nested values needing preparation."""
         return arrow_table_needs_parameter_preparation(table)
 

@@ -565,7 +565,7 @@ def arrow_table_to_rows(
     return resolved_columns, records
 
 
-def arrow_table_needs_parameter_preparation(table: "ArrowTable") -> bool:
+def arrow_table_needs_parameter_preparation(table: "ArrowTable | ArrowRecordBatch") -> bool:
     """Return whether Arrow rows may emit nested values needing driver preparation."""
     return _arrow_schema_needs_preparation(table.schema)
 

@@ -996,9 +996,9 @@ class ArrowResult(StatementResult):
         if hasattr(self.data, "to_batches") or hasattr(self.data, "iter_batches") or hasattr(self.data, "__iter__"):
             _cols, batch_iter = coerce_arrow_batches(self.data)
             return active_pipeline.write_arrow_batches(
-                batch_iter,
                 destination,
-                format_hint=format_hint,
+                batch_iter,
+                file_format=format_hint or "parquet",
                 storage_options=storage_options,
                 compression=compression,
             )
@@ -1023,9 +1023,9 @@ class ArrowResult(StatementResult):
         if hasattr(self.data, "to_batches") or hasattr(self.data, "iter_batches") or hasattr(self.data, "__iter__"):
             _cols, batch_iter = coerce_arrow_batches(self.data)
             return await active_pipeline.write_arrow_batches_async(
-                batch_iter,
                 destination,
-                format_hint=format_hint,
+                batch_iter,
+                file_format=format_hint or "parquet",
                 storage_options=storage_options,
                 compression=compression,
             )
