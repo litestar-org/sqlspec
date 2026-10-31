@@ -59,7 +59,7 @@ _POSTGRES_METADATA_DOMAINS: tuple[str, ...] = (
     "ddl",
     "system",
 )
-_POSTGRES_SUPPORTED_DOMAINS = frozenset(_POSTGRES_METADATA_DOMAINS) - {"system"}
+_POSTGRES_SUPPORTED_DOMAINS = frozenset(d for d in _POSTGRES_METADATA_DOMAINS if d != "system")
 _POSTGRES_SYSTEM_METADATA_QUERIES = {
     "settings": "settings",
     "statement_history": "pg_stat_statements",

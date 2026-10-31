@@ -54,7 +54,7 @@ _COCKROACH_METADATA_DOMAINS: tuple[str, ...] = (
     "crdb_internal",
     "system",
 )
-_COCKROACH_SUPPORTED_DOMAINS = frozenset(_COCKROACH_METADATA_DOMAINS) - {"crdb_internal", "system"}
+_COCKROACH_SUPPORTED_DOMAINS = frozenset(d for d in _COCKROACH_METADATA_DOMAINS if d not in {"crdb_internal", "system"})
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)

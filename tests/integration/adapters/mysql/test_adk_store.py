@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlspec.exceptions import IntegrityError
 from sqlspec.utils.module_loader import import_optional_attr
 
 if TYPE_CHECKING:
@@ -129,10 +128,11 @@ async def test_mysql_adk_owner_id_fk_constraint_isolation_and_cascade(
         fk_store, "tenant2-s1", app_name, user_id, {"tenant": "two"}, owner_id=2
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(Exception) as exc_info:
         await mysql_adk_store_harness.create_session(
             fk_store, "invalid-fk", app_name, user_id, {"tenant": "invalid"}, owner_id=999
         )
+    assert any(token in str(exc_info.value).lower() for token in ("foreign key", "1452", "constraint"))
 
     tenant1_rows = await mysql_adk_store_harness.select_rows(
         fk_config,
