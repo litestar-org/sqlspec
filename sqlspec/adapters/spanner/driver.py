@@ -553,10 +553,13 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                     concurrent_indexes=concurrent_indexes,
                     type_casts=type_casts,
                 )
-        if stage_table:
-            return super().load_from_arrow(
+        if stage_table or (
+            conflict_keys and on_conflict == "nothing" and not hasattr(self.connection, "insert_or_ignore")
+        ):
+            return self._execute_staged_load_sync(
                 table,
                 source,
+                raw_loader=self.load_from_arrow,
                 partitioner=partitioner,
                 overwrite=overwrite,
                 telemetry=telemetry,
@@ -1214,10 +1217,13 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                     concurrent_indexes=concurrent_indexes,
                     type_casts=type_casts,
                 )
-        if stage_table:
-            return await super().load_from_arrow(
+        if stage_table or (
+            conflict_keys and on_conflict == "nothing" and not hasattr(self.connection, "insert_or_ignore")
+        ):
+            return await self._execute_staged_load_async(
                 table,
                 source,
+                raw_loader=self.load_from_arrow,
                 partitioner=partitioner,
                 overwrite=overwrite,
                 telemetry=telemetry,

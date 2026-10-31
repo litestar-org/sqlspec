@@ -488,9 +488,10 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                     column_mappings=column_mappings,
                 )
         if stage_table or conflict_keys:
-            return super().load_from_arrow(
+            return self._execute_staged_load_sync(
                 table,
                 source,
+                raw_loader=self.load_from_arrow,
                 partitioner=partitioner,
                 overwrite=overwrite,
                 telemetry=telemetry,

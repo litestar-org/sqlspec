@@ -863,9 +863,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                     type_casts=type_casts,
                 )
         if stage_table or conflict_keys:
-            return super().load_from_arrow(
+            return self._execute_staged_load_sync(
                 table,
                 source,
+                raw_loader=self.load_from_arrow,
                 partitioner=partitioner,
                 overwrite=overwrite,
                 telemetry=telemetry,
@@ -1690,9 +1691,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                     type_casts=type_casts,
                 )
         if stage_table or conflict_keys:
-            return await super().load_from_arrow(
+            return await self._execute_staged_load_async(
                 table,
                 source,
+                raw_loader=self.load_from_arrow,
                 partitioner=partitioner,
                 overwrite=overwrite,
                 telemetry=telemetry,

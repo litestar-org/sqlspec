@@ -34,6 +34,7 @@ from sqlspec.utils.arrow_helpers import (
     arrow_table_to_pylist,
     arrow_table_to_return_format,
     cast_arrow_table_schema,
+    coerce_arrow_batches,
     coerce_arrow_table,
     convert_dict_to_arrow,
     ensure_arrow_table,
@@ -991,8 +992,17 @@ class ArrowResult(StatementResult):
         if self.data is None:
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
-        table = coerce_arrow_table(self.data)
         active_pipeline = pipeline or SyncStoragePipeline()
+        if hasattr(self.data, "to_batches") or hasattr(self.data, "iter_batches") or hasattr(self.data, "__iter__"):
+            _cols, batch_iter = coerce_arrow_batches(self.data)
+            return active_pipeline.write_arrow_batches(
+                batch_iter,
+                destination,
+                format_hint=format_hint,
+                storage_options=storage_options,
+                compression=compression,
+            )
+        table = coerce_arrow_table(self.data)
         return active_pipeline.write_arrow(
             table, destination, format_hint=format_hint, storage_options=storage_options, compression=compression
         )
@@ -1009,8 +1019,17 @@ class ArrowResult(StatementResult):
         if self.data is None:
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
-        table = coerce_arrow_table(self.data)
         active_pipeline = pipeline or AsyncStoragePipeline()
+        if hasattr(self.data, "to_batches") or hasattr(self.data, "iter_batches") or hasattr(self.data, "__iter__"):
+            _cols, batch_iter = coerce_arrow_batches(self.data)
+            return await active_pipeline.write_arrow_batches_async(
+                batch_iter,
+                destination,
+                format_hint=format_hint,
+                storage_options=storage_options,
+                compression=compression,
+            )
+        table = coerce_arrow_table(self.data)
         return await active_pipeline.write_arrow(
             table, destination, format_hint=format_hint, storage_options=storage_options, compression=compression
         )

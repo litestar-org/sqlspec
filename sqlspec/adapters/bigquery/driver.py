@@ -691,6 +691,37 @@ class BigQueryDriver(SyncDriverAdapterBase):
         type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
         """Load in-memory records through BigQuery's newline-delimited JSON load API."""
+        if drop_indexes:
+            with self.without_indexes(table, concurrent=concurrent_indexes):
+                return self.load_from_records(
+                    table,
+                    records,
+                    columns=columns,
+                    overwrite=overwrite,
+                    stage_table=stage_table,
+                    conflict_keys=conflict_keys,
+                    on_conflict=on_conflict,
+                    exclude_update_columns=exclude_update_columns,
+                    drop_stage_table=drop_stage_table,
+                    drop_indexes=False,
+                    concurrent_indexes=concurrent_indexes,
+                    type_casts=type_casts,
+                )
+        if stage_table or conflict_keys:
+            return self._execute_staged_load_sync(
+                table,
+                records,
+                raw_loader=lambda tbl, src, **kwargs: self.load_from_records(tbl, src, columns=columns, **kwargs),
+                overwrite=overwrite,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=False,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
         rows = _records_to_json_rows(records, columns)
         job_config = build_load_job_config("jsonl", overwrite)
         qualified_table = self._qualify_table_name(table)
@@ -744,9 +775,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     type_casts=type_casts,
                 )
         if stage_table or conflict_keys:
-            return super().load_from_arrow(
+            return self._execute_staged_load_sync(
                 table,
                 source,
+                raw_loader=self.load_from_arrow,
                 partitioner=partitioner,
                 overwrite=overwrite,
                 telemetry=telemetry,

@@ -575,6 +575,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                         metrics["rows_processed"] += int(batch.num_rows)
                         metrics["bytes_processed"] += int(batch.nbytes)
                         records = self._arrow_batch_to_rows(batch, columns)
+                        if self._arrow_rows_need_preparation(batch):
+                            records = cast(
+                                "list[Any]",
+                                self.prepare_driver_parameters(records, self.statement_config, is_many=True),
+                            )
                         for record in records:
                             copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:
@@ -1141,6 +1146,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                         metrics["rows_processed"] += int(batch.num_rows)
                         metrics["bytes_processed"] += int(batch.nbytes)
                         records = self._arrow_batch_to_rows(batch, columns)
+                        if self._arrow_rows_need_preparation(batch):
+                            records = cast(
+                                "list[Any]",
+                                self.prepare_driver_parameters(records, self.statement_config, is_many=True),
+                            )
                         for record in records:
                             await copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:

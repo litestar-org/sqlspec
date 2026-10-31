@@ -46,6 +46,7 @@ __all__ = (
     "StorageFormat",
     "StorageTelemetry",
     "SyncStoragePipeline",
+    "aggregate_storage_telemetry",
     "create_storage_bridge_job",
     "get_recent_storage_events",
     "get_storage_bridge_diagnostics",
@@ -128,6 +129,36 @@ class StorageTelemetry(TypedDict, total=False):
     """Adapter configuration class name executing the storage transfer."""
     bind_key: str
     """Registered SQLSpec configuration bind key, when configured."""
+
+
+def aggregate_storage_telemetry(telemetries: "Sequence[StorageTelemetry]") -> "StorageTelemetry":
+    """Aggregate a sequence of StorageTelemetry payloads into a unified summary."""
+    if not telemetries:
+        return {}
+    summary: StorageTelemetry = {
+        "rows_processed": sum(t.get("rows_processed", 0) for t in telemetries),
+        "bytes_processed": sum(t.get("bytes_processed", 0) for t in telemetries),
+        "partitions_created": sum(t.get("partitions_created", 0) for t in telemetries),
+        "shards_processed": sum(t.get("shards_processed", 0) for t in telemetries),
+        "shards_skipped": sum(t.get("shards_skipped", 0) for t in telemetries),
+    }
+    durations = [t["duration_s"] for t in telemetries if "duration_s" in t]
+    if durations:
+        summary["duration_s"] = sum(durations)
+    for dur_key in ("read_duration_s", "encode_duration_s", "write_duration_s", "commit_duration_s"):
+        vals = [t[dur_key] for t in telemetries if dur_key in t]
+        if vals:
+            summary[dur_key] = sum(vals)
+    first_dest = next((t["destination"] for t in telemetries if "destination" in t), None)
+    if first_dest is not None:
+        summary["destination"] = first_dest
+    first_fmt = next((t["format"] for t in telemetries if "format" in t), None)
+    if first_fmt is not None:
+        summary["format"] = first_fmt
+    first_backend = next((t["backend"] for t in telemetries if "backend" in t), None)
+    if first_backend is not None:
+        summary["backend"] = first_backend
+    return summary
 
 
 class ResolvedStorageTarget(NamedTuple):

@@ -224,17 +224,21 @@ _CREATE_UNIQUE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+UNIQUE\s+INDEX\s+(?!C
 _CREATE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+INDEX\s+(?!CONCURRENTLY\b)", re.IGNORECASE)
 
 
-def compute_worker_thread_budget(max_workers: int, cpu_count: int | None = None) -> "dict[str, str]":
+def compute_worker_thread_budget(
+    max_workers: int, cpu_count: int | None = None, *, reserve_cpus: int = 0
+) -> "dict[str, str]":
     """Compute per-worker native thread pool environment variables to prevent oversubscription.
 
     Args:
         max_workers: Number of concurrent ingestion workers.
         cpu_count: Optional logical CPU count override.
+        reserve_cpus: Number of CPU cores reserved for the host OS and main event loop.
 
     Returns:
         Dictionary of thread-budget environment variables and string values.
     """
-    resolved_cpus = cpu_count if cpu_count is not None and cpu_count > 0 else (os.cpu_count() or 1)
+    total_cpus = cpu_count if cpu_count is not None and cpu_count > 0 else (os.cpu_count() or 1)
+    resolved_cpus = max(1, total_cpus - max(0, reserve_cpus))
     workers = max(1, int(max_workers))
     threads = str(max(1, resolved_cpus // workers))
     return {
@@ -247,9 +251,9 @@ def compute_worker_thread_budget(max_workers: int, cpu_count: int | None = None)
     }
 
 
-def init_spawn_worker_thread_budget(max_workers: int, cpu_count: int | None = None) -> None:
+def init_spawn_worker_thread_budget(max_workers: int, cpu_count: int | None = None, *, reserve_cpus: int = 0) -> None:
     """Initialize thread-budget environment variables inside a spawned worker process."""
-    for key, val in compute_worker_thread_budget(max_workers, cpu_count=cpu_count).items():
+    for key, val in compute_worker_thread_budget(max_workers, cpu_count=cpu_count, reserve_cpus=reserve_cpus).items():
         os.environ[key] = val
 
 
@@ -407,30 +411,30 @@ def build_stage_merge_sql(
     if norm in _MYSQL_FAMILY_DIALECTS:
         if on_conflict == "nothing" or not update_columns:
             return f"INSERT IGNORE INTO {target_table} ({col_list}) SELECT {select_list} FROM {stage_table}"
-        set_clause = ", ".join(f"{col} = _sqlspec_stage.{col}" for col in update_columns)
+        set_clause = ", ".join(f"{col} = stg.{col}" for col in update_columns)
         return (
             f"INSERT INTO {target_table} ({col_list}) "
-            f"SELECT {select_list} FROM {stage_table} AS _sqlspec_stage "
+            f"SELECT {select_list} FROM {stage_table} AS stg "
             f"ON DUPLICATE KEY UPDATE {set_clause}"
         )
 
-    on_clause = " AND ".join(f"_target.{key} = _stage.{key}" for key in conflict_keys)
+    on_clause = " AND ".join(f"tgt.{key} = stg.{key}" for key in conflict_keys)
     matched_clause = ""
     if on_conflict == "update" and update_columns:
         set_pairs = ", ".join(
-            f"_target.{col} = CAST(_stage.{col} AS {type_casts[col]})"
+            f"tgt.{col} = CAST(stg.{col} AS {type_casts[col]})"
             if (type_casts and col in type_casts)
-            else f"_target.{col} = _stage.{col}"
+            else f"tgt.{col} = stg.{col}"
             for col in update_columns
         )
         matched_clause = f" WHEN MATCHED THEN UPDATE SET {set_pairs}"
     stage_vals = ", ".join(
-        f"CAST(_stage.{col} AS {type_casts[col]})" if (type_casts and col in type_casts) else f"_stage.{col}"
+        f"CAST(stg.{col} AS {type_casts[col]})" if (type_casts and col in type_casts) else f"stg.{col}"
         for col in columns
     )
     not_matched_clause = f" WHEN NOT MATCHED THEN INSERT ({col_list}) VALUES ({stage_vals})"
     terminator = ";" if norm in _MSSQL_FAMILY_DIALECTS else ""
-    return f"MERGE INTO {target_table} _target USING {stage_table} _stage ON ({on_clause}){matched_clause}{not_matched_clause}{terminator}"
+    return f"MERGE INTO {target_table} tgt USING {stage_table} stg ON ({on_clause}){matched_clause}{not_matched_clause}{terminator}"
 
 
 def build_drop_stage_table_sql(dialect: str, stage_table: str) -> str:

@@ -16,8 +16,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.exceptions import ImproperConfigurationError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
-from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow, import_optional_attr
 from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
 from sqlspec.utils.uuids import uuid_from_bytes
 
@@ -830,7 +829,7 @@ def _extract_pg_fixed_column_array(col: Any, dtype: Any, num_rows: int) -> "tupl
             ">i2",
             np.frombuffer(col.buffers()[1], dtype=np.uint8, count=col.offset + num_rows)[col.offset :].astype(">i2"),
         )
-    if pa.types.is_int16(dtype) or pa.types.is_uint16(dtype):
+    if pa.types.is_int16(dtype):
         return (
             2,
             ">i2",
@@ -838,13 +837,25 @@ def _extract_pg_fixed_column_array(col: Any, dtype: Any, num_rows: int) -> "tupl
                 ">i2", copy=False
             ),
         )
-    if pa.types.is_int32(dtype) or pa.types.is_uint32(dtype):
+    if pa.types.is_uint16(dtype):
+        return (
+            4,
+            ">i4",
+            np.frombuffer(col.buffers()[1], dtype=np.uint16, count=col.offset + num_rows)[col.offset :].astype(">i4"),
+        )
+    if pa.types.is_int32(dtype):
         return (
             4,
             ">i4",
             np.frombuffer(col.buffers()[1], dtype=np.int32, count=col.offset + num_rows)[col.offset :].astype(
                 ">i4", copy=False
             ),
+        )
+    if pa.types.is_uint32(dtype):
+        return (
+            8,
+            ">i8",
+            np.frombuffer(col.buffers()[1], dtype=np.uint32, count=col.offset + num_rows)[col.offset :].astype(">i8"),
         )
     if pa.types.is_int64(dtype) or pa.types.is_uint64(dtype):
         return (
@@ -1000,7 +1011,11 @@ def _create_pg_fixed_column_encoder(
 
     if pa.types.is_fixed_size_list(field_type) and pa.types.is_floating(field_type.value_type):
         dim = int(field_type.list_size)
-        flat_values = col.flatten()
+        if null_mask is not None and np.any(null_mask):
+            col_filled = col.fill_null([0.0] * dim)
+            flat_values = col_filled.flatten()
+        else:
+            flat_values = col.flatten()
         is_f16 = pa.types.is_float16(field_type.value_type)
         elem_dtype = ">f2" if is_f16 else ">f4"
         elem_size = 2 if is_f16 else 4
@@ -1142,7 +1157,7 @@ def _create_pg_column_encoder(
         elif isinstance(val, str):
             raw = val.encode("utf-8")
         elif isinstance(val, (dict, list, tuple)):
-            raw = to_json(val).encode("utf-8")
+            raw = _encode_json_bytes(val)
         else:
             raw = str(val).encode("utf-8")
         if _is_jsonb:
@@ -1152,6 +1167,16 @@ def _create_pg_column_encoder(
         out_buf.extend(raw)
 
     return _emit_fallback
+
+
+def _encode_json_bytes(val: Any) -> bytes:
+    """Encode value to JSON bytes using msgspec or stdlib json without circular imports."""
+    encoder = import_optional_attr("sqlspec.utils.serializers._json", "encode_json")
+    if encoder is not None:
+        return cast("bytes", encoder(val, as_bytes=True))
+    import json
+
+    return json.dumps(val).encode("utf-8")
 
 
 def _encode_pg_binary_fast_path_2(
