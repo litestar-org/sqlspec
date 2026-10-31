@@ -1470,6 +1470,8 @@ class FeatureFlags(TypedDict, total=False):
     """Whether native JSON or JSONB column types and operators are supported."""
     supports_maps: bool
     """Whether native key-value ``MAP`` column types are supported."""
+    supports_merge: bool
+    """Whether SQL MERGE statements are supported."""
     supports_on_conflict: bool
     """Whether ``INSERT ... ON CONFLICT`` conflict resolution syntax is supported."""
     supports_partitioning: bool
@@ -1492,6 +1494,8 @@ class FeatureFlags(TypedDict, total=False):
     """Whether ``FOR UPDATE SKIP LOCKED`` non-blocking queue scans are supported."""
     supports_structs: bool
     """Whether composite ``STRUCT`` / ``ROW`` column types are supported."""
+    supports_transactional_ddl: bool
+    """Whether schema DDL statements can be executed within a transaction."""
     supports_transactions: bool
     """Whether multi-statement ACID transactions are supported."""
     supports_update_from: bool
@@ -1525,6 +1529,8 @@ class FeatureVersions(TypedDict, total=False):
     """Minimum engine version supporting native JSON types and functions."""
     supports_jsonb: "VersionInfo"
     """Minimum engine version supporting binary JSONB storage."""
+    supports_merge: "VersionInfo"
+    """Minimum engine version supporting SQL MERGE statements."""
     supports_partitioning: "VersionInfo"
     """Minimum engine version supporting declarative table partitioning."""
     supports_resource_groups: "VersionInfo"

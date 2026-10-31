@@ -8,6 +8,7 @@ fixture files against a database driver. Supports both sync and async operations
 import array
 import base64
 import gzip
+import importlib
 import os
 import re
 import secrets
@@ -19,7 +20,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
-from sqlglot import exp
+from sqlglot import Dialect, exp
 
 from sqlspec import dialects as _dialects
 from sqlspec.core.parameters import TypedParameter
@@ -78,7 +79,9 @@ _SEQUENCE_RESYNC_DIALECTS: Final["frozenset[str]"] = frozenset({
     "oracle",
     "postgres",
     "postgresql",
+    "sqlanywhere",
     "sqlite",
+    "sybase",
     "tsql",
 })
 _MYSQL_DIALECTS: Final["frozenset[str]"] = frozenset({"mariadb", "mysql"})
@@ -90,6 +93,7 @@ _BINARY_TYPES: Final["frozenset[str]"] = frozenset({
     "blob",
     "bytea",
     "image",
+    "long binary",
     "long raw",
     "longblob",
     "mediumblob",
@@ -117,6 +121,8 @@ _UNORDERABLE_FAMILY_TYPES: Final["Mapping[str, frozenset[str]]"] = {
     "mysql": frozenset({"blob", "geometry", "json", "longblob", "mediumblob", "point", "tinyblob", "vector"}),
     "oracle": frozenset({"bfile", "blob", "clob", "long", "long raw", "nclob", "vector", "xmltype"}),
     "spanner": frozenset({"json", "tokenlist"}),
+    "sqlanywhere": frozenset({"long binary", "long nvarchar", "long varchar", "xml"}),
+    "sybase": frozenset({"image", "long binary", "long nvarchar", "long varchar", "text", "unitext"}),
     "tsql": frozenset({"geography", "geometry", "image", "ntext", "text", "xml"}),
 }
 _IDENTITY_GENERATION_VALUES: Final["frozenset[str]"] = frozenset({"always", "by default", "by default on null"})
@@ -676,6 +682,8 @@ def _sqlglot_dialect(dialect: "DialectType", family: str) -> "DialectType":
     """
     if family in {"postgres", "mysql", "tsql"}:
         return family
+    if family in {"sybase", "sqlanywhere"} and family not in Dialect.classes:
+        importlib.import_module("sqlspec.dialects.sybase")
     return dialect
 
 
@@ -883,11 +891,15 @@ def _dialect_name(dialect: "DialectType") -> str:
 
 
 def _dialect_family(dialect_name: str) -> str:
-    """Return ``postgres`` or ``mysql`` for those dialect families, otherwise the dialect name."""
+    """Return canonical dialect family for a dialect name."""
     if dialect_name in _POSTGRES_DIALECTS:
         return "postgres"
     if dialect_name in _MYSQL_DIALECTS:
         return "mysql"
+    if dialect_name == "ase":
+        return "sybase"
+    if dialect_name == "sa":
+        return "sqlanywhere"
     return dialect_name
 
 
@@ -1598,17 +1610,17 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
         return encode_json if family in _JSON_VALUE_FAMILIES else None
     if family == "sqlite":
         return None
-    if data_type.startswith(("timestamp", "datetime")):
+    if data_type.startswith(("timestamp", "datetime", "bigdatetime", "smalldatetime", "datetimetz")):
         return _decode_datetime
     if data_type == "date":
         return _decode_datetime if family == "oracle" else _decode_date
-    if data_type.startswith("time") and family != "mysql":
+    if data_type.startswith(("time", "bigtime")) and family != "mysql":
         return _decode_time
     if data_type.startswith("interval"):
         return _decode_duckdb_interval if family == "duckdb" else _decode_interval
-    if data_type.startswith(("numeric", "decimal")):
+    if data_type.startswith(("numeric", "decimal", "money", "smallmoney")):
         return _decode_decimal
-    if data_type == "uuid":
+    if data_type in {"uuid", "uniqueidentifier"}:
         return _decode_uuid
     return None
 
@@ -1716,14 +1728,16 @@ def _table_insert_statement(
 def _identity_insert_statements(
     dialect: "DialectType", family: str, table: str, columns: "list[str]", table_columns: "list[_TableColumn]"
 ) -> "tuple[str, str] | None":
-    """Return the SQL Server statements that allow and then disallow explicit identity values.
+    """Return the SQL Server and Sybase ASE statements that allow and then disallow explicit identity values.
 
-    SQL Server rejects values for identity columns unless ``IDENTITY_INSERT`` is on for
+    SQL Server and Sybase ASE reject values for identity columns unless ``IDENTITY_INSERT`` is on for
     the table, so inserts that include an identity column run between these statements.
     Other dialects return ``None``.
     """
     inserted = set(columns)
-    if family != "tsql" or not any(column.is_identity and column.name in inserted for column in table_columns):
+    if family not in {"tsql", "sybase"} or not any(
+        column.is_identity and column.name in inserted for column in table_columns
+    ):
         return None
     table_sql = _quoted_table(table).sql(dialect=_sqlglot_dialect(dialect, family))
     return f"SET IDENTITY_INSERT {table_sql} ON", f"SET IDENTITY_INSERT {table_sql} OFF"
@@ -1992,10 +2006,48 @@ def _sequence_resync_statements(
     return statements
 
 
+def _resync_sybase_sequences_sync(driver: "SyncDriverAdapterBase", table: str, columns: "list[_TableColumn]") -> None:
+    """Resynchronize Sybase ASE identity columns for a table synchronously."""
+    for column in columns:
+        if column.is_identity:
+            quoted_col = _quoted_identifier_sql(column.name)
+            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+            max_val = driver.select_value(query)
+            next_val = int(max_val or 0)
+            if next_val > 0:
+                escaped_table = table.replace("'", "''")
+                driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
+
+
+def _resync_sqlanywhere_sequences_sync(
+    driver: "SyncDriverAdapterBase", table: str, columns: "list[_TableColumn]"
+) -> None:
+    """Resynchronize SAP SQL Anywhere identity columns for a table synchronously."""
+    for column in columns:
+        if column.is_identity:
+            quoted_col = _quoted_identifier_sql(column.name)
+            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+            max_val = driver.select_value(query)
+            next_val = int(max_val or 0)
+            schema_part, _, table_part = table.rpartition(".")
+            escaped_table = table_part.replace("'", "''")
+            escaped_schema = schema_part.replace("'", "''")
+            schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
+            driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+
+
 def _resync_table_sequences_sync(
     driver: "SyncDriverAdapterBase", family: str, dialect_name: str, table: str, columns: "list[_TableColumn]"
 ) -> None:
     """Resynchronize sequences, identity columns, or auto-increment counters for a table synchronously."""
+    if family == "sybase":
+        _resync_sybase_sequences_sync(driver, table, columns)
+        return
+
+    if family == "sqlanywhere":
+        _resync_sqlanywhere_sequences_sync(driver, table, columns)
+        return
+
     if family == "db2":
         quoted_table = _quoted_table_name(table)
         for column in columns:
@@ -2092,10 +2144,50 @@ def _resync_table_sequences_sync(
         driver.execute(statement, parameters)
 
 
+async def _resync_sybase_sequences_async(
+    driver: "AsyncDriverAdapterBase", table: str, columns: "list[_TableColumn]"
+) -> None:
+    """Resynchronize Sybase ASE identity columns for a table asynchronously."""
+    for column in columns:
+        if column.is_identity:
+            quoted_col = _quoted_identifier_sql(column.name)
+            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+            max_val = await driver.select_value(query)
+            next_val = int(max_val or 0)
+            if next_val > 0:
+                escaped_table = table.replace("'", "''")
+                await driver.execute(f"EXEC sp_chgattribute '{escaped_table}', 'identity_burn_max', 0, '{next_val}'")
+
+
+async def _resync_sqlanywhere_sequences_async(
+    driver: "AsyncDriverAdapterBase", table: str, columns: "list[_TableColumn]"
+) -> None:
+    """Resynchronize SAP SQL Anywhere identity columns for a table asynchronously."""
+    for column in columns:
+        if column.is_identity:
+            quoted_col = _quoted_identifier_sql(column.name)
+            query = f"SELECT coalesce(max({quoted_col}), 0) FROM {_quoted_table_name(table)}"
+            max_val = await driver.select_value(query)
+            next_val = int(max_val or 0)
+            schema_part, _, table_part = table.rpartition(".")
+            escaped_table = table_part.replace("'", "''")
+            escaped_schema = schema_part.replace("'", "''")
+            schema_sql = f"'{escaped_schema}'" if schema_part else "NULL"
+            await driver.execute(f"CALL sa_reset_identity('{escaped_table}', {schema_sql}, {next_val})")
+
+
 async def _resync_table_sequences_async(
     driver: "AsyncDriverAdapterBase", family: str, dialect_name: str, table: str, columns: "list[_TableColumn]"
 ) -> None:
     """Resynchronize sequences, identity columns, or auto-increment counters for a table asynchronously."""
+    if family == "sybase":
+        await _resync_sybase_sequences_async(driver, table, columns)
+        return
+
+    if family == "sqlanywhere":
+        await _resync_sqlanywhere_sequences_async(driver, table, columns)
+        return
+
     if family == "db2":
         quoted_table = _quoted_table_name(table)
         for column in columns:

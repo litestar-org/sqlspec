@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 __all__ = ("Merge",)
 
 
-MERGE_UNSUPPORTED_DIALECTS = frozenset({"mysql", "sqlite", "duckdb"})
+MERGE_UNSUPPORTED_DIALECTS = frozenset({"mysql", "sqlite", "duckdb", "sybase"})
 _MERGE_SQL_KEYWORD_LITERALS = frozenset({"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"})
 _MERGE_ARITHMETIC_NODES = (exp.Add, exp.Sub, exp.Mul, exp.Div, exp.Mod, exp.Paren)
 _POSTGRES_TYPE_DISPATCHER = TypeDispatcher[str]()
