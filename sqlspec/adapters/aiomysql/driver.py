@@ -380,7 +380,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
                 try:
                     with os.fdopen(fd, "wb") as tmp:
                         tmp.write(payload)
-                    load_sql = build_load_data_statement(table, columns)
+                    load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
                     await self._run_with_exception_handler(
                         exc_handler, self._execute_cursor_statement, load_sql, (tmp_name,)
@@ -436,10 +436,18 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        statement = self._cached_statement(
-            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-        )
-        return await self._execute_cached_statement(statement)
+        if (
+            "%" in cached.compiled_sql
+            and escape_literal_percent(
+                cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
+            )
+            != cached.compiled_sql
+        ):
+            statement = self._cached_statement(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return await self._execute_cached_statement(statement)
+        return await super()._execute_cache_hit(sql, params, cached)
 
     async def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
         async with self.with_cursor(self.connection) as cursor:

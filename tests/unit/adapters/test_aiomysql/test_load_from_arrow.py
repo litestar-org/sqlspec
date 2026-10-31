@@ -122,3 +122,14 @@ async def test_load_from_arrow_binds_the_infile_path_as_a_parameter() -> None:
     assert "LOAD DATA LOCAL INFILE %s INTO TABLE" in statement
     assert parameters[0].endswith(".tsv")
     assert parameters[0] not in statement
+
+
+async def test_load_from_arrow_percent_in_column_escapes_pyformat() -> None:
+    """Percent signs in table or column identifiers must be escaped for pyformat."""
+    conn = _FakeConnection()
+    driver = _make_driver(conn, enable_local_infile=True)
+
+    job = await driver.load_from_arrow("orders", pa.table({"discount%rate": [1, 2]}))
+
+    assert job.telemetry["rows_processed"] == 2
+    assert "(`discount%%rate`)" in conn._cursor.execute_calls[0]

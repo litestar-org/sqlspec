@@ -97,3 +97,45 @@ def test_aiomysql_signature_namespace_includes_cursors() -> None:
     ns = config.get_signature_namespace()
     assert "AiomysqlDictCursor" in ns
     assert "AiomysqlRawCursor" in ns
+
+
+async def test_aiomysql_execute_cache_hit_invokes_collect_rows_on_clean_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cached query without unescaped literal percent delegates to fast path and invokes collect_rows."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlspec.core import OperationProfile, ParameterProfile, ProcessedState
+    from sqlspec.core.cache import CachedQuery
+
+    cursor = MagicMock()
+    cursor.description = [("id", 3, None, None, None, None, None)]
+    cursor.fetchall = AsyncMock(return_value=[(1,)])
+    cursor.execute = AsyncMock(return_value=None)
+
+    conn = MagicMock()
+    conn.cursor = AsyncMock(return_value=cursor)
+
+    driver = AiomysqlDriver(connection=cast("Any", conn))
+    collect_called: list[bool] = []
+    original_collect_rows = AiomysqlDriver.collect_rows
+
+    def _spy_collect_rows(*args: Any, **kwargs: Any) -> Any:
+        collect_called.append(True)
+        return original_collect_rows(*args, **kwargs)
+
+    monkeypatch.setattr(AiomysqlDriver, "collect_rows", _spy_collect_rows)
+
+    cached = CachedQuery(
+        compiled_sql="SELECT 1",
+        parameter_profile=ParameterProfile(),
+        input_named_parameters=(),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
+        param_count=0,
+        processed_state=ProcessedState(compiled_sql="SELECT 1", execution_parameters=[], operation_type="SELECT"),
+    )
+
+    result = await driver._execute_cache_hit("SELECT 1", (), cached)
+    assert bool(collect_called) is True
+    assert result.data == [(1,)]
