@@ -8,6 +8,7 @@ fixture files against a database driver. Supports both sync and async operations
 import array
 import base64
 import gzip
+import importlib
 import os
 import re
 import secrets
@@ -19,7 +20,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
-from sqlglot import exp
+from sqlglot import Dialect, exp
 
 from sqlspec import dialects as _dialects
 from sqlspec.core.parameters import TypedParameter
@@ -78,7 +79,9 @@ _SEQUENCE_RESYNC_DIALECTS: Final["frozenset[str]"] = frozenset({
     "oracle",
     "postgres",
     "postgresql",
+    "sqlanywhere",
     "sqlite",
+    "sybase",
     "tsql",
 })
 _MYSQL_DIALECTS: Final["frozenset[str]"] = frozenset({"mariadb", "mysql"})
@@ -679,6 +682,8 @@ def _sqlglot_dialect(dialect: "DialectType", family: str) -> "DialectType":
     """
     if family in {"postgres", "mysql", "tsql"}:
         return family
+    if family in {"sybase", "sqlanywhere"} and family not in Dialect.classes:
+        importlib.import_module("sqlspec.dialects.sybase")
     return dialect
 
 
@@ -1834,7 +1839,6 @@ def _table_export_query(dialect: "DialectType", family: str, table: str, table_c
     """
     order_columns = [column.name for column in table_columns if column.is_primary] or [
         column.name for column in table_columns if _is_orderable_type(family, column.data_type)
-    ]
     ]
     order_by: list[exp.Expr] = [exp.Column(this=_quoted_identifier(name)) for name in order_columns]
     if not order_by and not table_columns:

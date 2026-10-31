@@ -107,23 +107,36 @@ class SybaseSyncMigrationTracker(SybaseMigrationTrackerMixin, SyncMigrationTrack
         checksum: str,
         *,
         commit: bool = True,
+        replaces: "Sequence[str] | None" = None,
     ) -> None:
         """Record a successfully applied migration with Sybase ASE-compatible metadata."""
         parsed_version = parse_version(version)
         version_type = parsed_version.type.value
         result = driver.execute(self._next_execution_sequence_query())
         next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
-        driver.execute(
-            self._record_migration_statement(
+        applied_by = os.environ.get("USER", "unknown")
+        if replaces:
+            statement = self._record_squashed_migration_statement(
                 version,
                 version_type,
                 next_sequence,
                 description,
                 execution_time_ms,
                 checksum,
-                os.environ.get("USER", "unknown"),
+                applied_by,
+                ",".join(replaces),
             )
-        )
+        else:
+            statement = self._record_migration_statement(
+                version,
+                version_type,
+                next_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                applied_by,
+            )
+        driver.execute(statement)
         if commit:
             self._commit_if_needed(driver)
 
