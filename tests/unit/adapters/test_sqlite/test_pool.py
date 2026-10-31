@@ -427,3 +427,25 @@ def test_nested_get_connection_reentrancy_depth() -> None:
             assert rows == [(1,), (2,)]
     finally:
         pool.close()
+
+
+def test_sqlite_pool_checked_out_reflects_active_sessions_and_prunes_dead_threads() -> None:
+    pool = SqliteConnectionPool({"database": ":memory:"})
+    try:
+        assert pool.checked_out() == 0
+        with pool.get_connection():
+            assert pool.checked_out() == 1
+        assert pool.checked_out() == 0
+
+        def worker() -> None:
+            with pool.get_connection() as conn:
+                conn.execute("SELECT 1")
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+        assert not t.is_alive()
+        assert pool.size() == 1
+    finally:
+        pool.close()

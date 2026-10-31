@@ -13,14 +13,11 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 __all__ = ("json_adapter", "json_converter", "register_type_handlers", "unregister_type_handlers")
-
-logger = get_logger(__name__)
 
 DEFAULT_JSON_TYPE = "JSON"
 

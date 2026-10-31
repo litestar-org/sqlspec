@@ -15,6 +15,7 @@ from sqlspec.adapters.sqlite.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    end_transaction,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -29,6 +30,7 @@ from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
@@ -195,16 +197,21 @@ class SqliteDriver(SyncDriverAdapterBase):
         Raises:
             SQLSpecError: If transaction cannot be started
         """
-        transaction_mode = mode if mode is not None else self.driver_features.get("default_transaction_mode")
+        transaction_mode = (
+            mode if mode is not None else self.driver_features.get("default_transaction_mode", "IMMEDIATE")
+        )
         if transaction_mode is not None and transaction_mode not in {"DEFERRED", "IMMEDIATE", "EXCLUSIVE"}:
             msg = "Transaction mode must be DEFERRED, IMMEDIATE, or EXCLUSIVE"
-            raise ValueError(msg)
+            raise ImproperConfigurationError(msg)
         try:
             if not self.connection.in_transaction:
                 stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
                 cursor = self.connection.execute(stmt)
-                with contextlib.suppress(Exception):
-                    cursor.close()
+                with contextlib.suppress(AttributeError, TypeError):
+                    self.connection.in_transaction = True
+                if cursor is not None:
+                    with contextlib.suppress(Exception):
+                        cursor.close()
         except sqlite3.Error as e:
             raise create_mapped_exception(e) from e
 
@@ -215,13 +222,9 @@ class SqliteDriver(SyncDriverAdapterBase):
             SQLSpecError: If transaction cannot be committed
         """
         try:
-            if self._in_autocommit_mode():
-                if self.connection.in_transaction:
-                    cursor = self.connection.execute("COMMIT")
-                    with contextlib.suppress(Exception):
-                        cursor.close()
-                return
-            self.connection.commit()
+            end_transaction(self.connection, commit=True, supports_autocommit=self._in_autocommit_mode())
+            with contextlib.suppress(AttributeError, TypeError):
+                self.connection.in_transaction = False
         except sqlite3.Error as e:
             raise create_mapped_exception(e) from e
 
@@ -232,14 +235,9 @@ class SqliteDriver(SyncDriverAdapterBase):
             SQLSpecError: If transaction cannot be rolled back
         """
         try:
-            if self._in_autocommit_mode():
-                if self.connection.in_transaction:
-                    cursor = self.connection.execute("ROLLBACK")
-                    with contextlib.suppress(Exception):
-                        cursor.close()
-                self._rowid_target_cache.clear()
-                return
-            self.connection.rollback()
+            end_transaction(self.connection, commit=False, supports_autocommit=self._in_autocommit_mode())
+            with contextlib.suppress(AttributeError, TypeError):
+                self.connection.in_transaction = False
             self._rowid_target_cache.clear()
         except sqlite3.Error as e:
             self._rowid_target_cache.clear()
@@ -395,22 +393,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
-
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts from storage into SQLite."""
-
-        return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect SQLite rows for the direct execution path."""

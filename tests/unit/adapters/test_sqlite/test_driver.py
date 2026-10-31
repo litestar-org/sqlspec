@@ -5,7 +5,7 @@ from typing import Any, cast
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT
+from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, default_statement_config
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import json_converter, register_type_handlers, unregister_type_handlers
 from sqlspec.exceptions import ImproperConfigurationError
@@ -271,7 +271,7 @@ def test_sqlite_begin_mode_and_arrow_batch_validation() -> None:
         driver.rollback()
         driver.begin(mode="DEFERRED")
         driver.rollback()
-        with pytest.raises(ValueError, match="Transaction mode"):
+        with pytest.raises((ValueError, ImproperConfigurationError), match="Transaction mode"):
             driver.begin(mode=cast("Any", "INVALID"))
         with pytest.raises(ValueError, match="batch_size"):
             driver.load_from_arrow("sample", cast("Any", None), batch_size=0)
@@ -378,3 +378,51 @@ def test_sqlite_cached_query_normalizes_parameters() -> None:
         assert res.data == []
     finally:
         connection.close()
+
+
+def test_sqlite_begin_defaults_to_immediate_and_rejects_invalid_mode() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        driver = SqliteDriver(connection=connection)
+        with pytest.raises(ImproperConfigurationError, match="Transaction mode"):
+            driver.begin(mode=cast("Any", "INVALID"))
+        driver.begin()
+        assert connection.in_transaction
+        driver.rollback()
+    finally:
+        connection.close()
+
+
+def test_sqlite_commit_and_rollback_delegate_to_end_transaction() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        driver = SqliteDriver(connection=connection)
+        driver.execute("CREATE TABLE cr_test (x INT)")
+        driver.begin()
+        driver.execute("INSERT INTO cr_test VALUES (1)")
+        driver.commit()
+        assert not connection.in_transaction
+
+        driver.begin()
+        driver.execute("INSERT INTO cr_test VALUES (2)")
+        driver.rollback()
+        assert not connection.in_transaction
+
+        res = driver.execute("SELECT count(*) FROM cr_test")
+        assert res.data == [(1,)]
+    finally:
+        connection.close()
+
+
+def test_sqlite_session_context_initializes_with_driver_class() -> None:
+    from sqlspec.adapters.sqlite._typing import SqliteSessionContext
+
+    ctx = SqliteSessionContext(
+        acquire_connection=lambda: None,
+        release_connection=lambda *_: None,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+        driver_class=SqliteDriver,
+    )
+    assert ctx._driver_class is SqliteDriver

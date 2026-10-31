@@ -76,7 +76,7 @@ class SqliteConnectionParams(TypedDict):
     enable_optimizations: NotRequired[bool]
     """Apply recommended SQLite ``PRAGMA`` settings (WAL journal mode, synchronous=NORMAL, busy_timeout) on connect."""
     enable_foreign_keys: NotRequired[bool]
-    """Execute ``PRAGMA foreign_keys = ON`` when initializing each connection (defaults to ``True``)."""
+    """Execute ``PRAGMA foreign_keys = ON`` when initializing each connection (defaults to ``False``)."""
     extra: NotRequired[dict[str, Any]]
     """Additional keyword arguments forwarded to ``sqlite3.connect``."""
 
