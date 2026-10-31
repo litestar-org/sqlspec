@@ -131,7 +131,7 @@ events_ddl = CreateTable.from_records(
 ).to_sql()
 ```
 
-`CreateTable.from_metadata`, `CreateTable.from_arrow_schema`, and `CreateTable.from_records` map types and constraints into dialect-valid SQL across PostgreSQL, SQLite, DuckDB, MySQL, Oracle, SQL Server, Db2, Spanner, and BigQuery.
+`CreateTable.from_metadata`, `CreateTable.from_arrow_schema`, and `CreateTable.from_records` map types and constraints into dialect-valid SQL across PostgreSQL, CockroachDB, SQLite, DuckDB, MySQL, MariaDB, Oracle, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, Spanner, and BigQuery.
 
 ## Raw SQL Fragments and `RETURNING`
 
@@ -145,7 +145,7 @@ Only pass trusted, static SQL expressions to `sql.raw(...)`; bind user-supplied 
 
 ## Dialect Transpilation and Optimization Notes
 
-- **Automatic Dialect Targeting**: When executed through `session.execute(query)`, the builder compiles against the session's configured dialect (`postgres`, `sqlite`, `oracle`, `bigquery`, `spanner`, `spangres`, `duckdb`, `db2`, `tsql`, `mysql`) automatically.
+- **Automatic Dialect Targeting**: When executed through `session.execute(query)`, the builder compiles against the session's configured dialect (`postgres`, `cockroachdb`, `sqlite`, `oracle`, `bigquery`, `spanner`, `spangres`, `duckdb`, `db2`, `tsql`, `sybase`, `sqlanywhere`, `mysql`, `mariadb`) automatically.
 - **Preserving Verbatim Identifier Casing**: By default, `StatementConfig(enable_optimization=True)` runs lightweight SQLGlot qualification and simplification rules. On engines like BigQuery where optimizer qualification lowercases column aliases, pass `StatementConfig(dialect="bigquery", enable_optimization=False)` if exact input casing must be preserved verbatim.
 - **`sqlglot[c]` Subclassing Compatibility**: When `sqlspec[mypyc]` (`sqlglot[c]`) is installed, SQLGlot's core AST classes are compiled C extensions; compose queries with `sql.*` and `sql.raw(...)` rather than subclassing `sqlglot.exp` nodes at runtime.
 

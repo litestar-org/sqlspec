@@ -1,8 +1,16 @@
 # ETL and Bulk Ingest
 
-Moving data between operational databases, analytical engines, and cloud object storage requires bounded memory usage and batched or columnar execution. SQLSpec provides three graduated tiers depending on dataset volume: batched DB-API writes (`execute_many` + `select_stream`), zero-copy **Apache Arrow** transfers (`select_to_arrow` + `load_from_arrow`), and direct **Storage Bridge** jobs (`select_to_storage` + `load_from_storage`).
+Moving data between operational databases, analytical engines, and cloud object storage requires bounded memory usage and batched or columnar execution. SQLSpec provides graduated execution paths depending on dataset volume: batched DB-API writes (`execute_many` + `select_stream`), zero-copy **Apache Arrow** transfers (`select_to_arrow` + `load_from_arrow`), and direct **Storage Bridge** jobs (`select_to_storage` + `load_from_storage`).
 
-## Two-Database Extract, Transform, and Load
+```mermaid
+flowchart LR
+    Source["Source DB / Parquet Shards"] --> Stream["RecordBatch / Row Stream"]
+    Stream --> Coerce["Target Schema Coercion"]
+    Coerce --> Bulk["Native Bulk Load (PGCOPY / BCP / Arrow / Stage)"]
+    Bulk --> Target[("Target Table / Upsert")]
+```
+
+## Cross-Database Extract, Transform, and Load
 
 Register source and target configurations on a single `SQLSpec` instance to extract filtered rows from an upstream store and batch-load transformed records into a downstream target:
 
@@ -116,10 +124,19 @@ with (
 
 Several adapters accelerate `load_from_arrow` and `load_from_storage` using native wire or server-side bulk paths automatically:
 
-- **PostgreSQL (`psycopg` / `asyncpg` / `adbc`)**: Uses binary `COPY` / Arrow C-stream ingestion for high-throughput table loads.
+- **PostgreSQL (`psycopg` / `asyncpg` / `psqlpy` / `adbc`)**: Uses binary `PGCOPY` streaming (`sqlspec.core.pgcopy`, including binary `pgvector` framing for `FIXED_SIZE_LIST<float32/float64>` columns) and Arrow C-stream ingestion for high-throughput table loads.
+- **SQL Server (`mssql_python`) & Arrow ODBC (`arrow_odbc`)**: Streams Arrow batches directly into native `BulkCopy` (`BCP`) or Rust ODBC batch writers (`bulk_insert_arrow`).
 - **DuckDB & ADBC**: Zero-copy Arrow C Data Interface (`__arrow_c_stream__`) registration and native Parquet reads/writes.
 - **Oracle Autonomous Database (`oracledb`)**: Supports `DBMS_CLOUD.COPY_DATA` server-side object-store ingestion when `driver_features={"dbms_cloud_credential": "..."}` is configured.
-- **BigQuery**: Streams columnar reads via the BigQuery Storage Read API and loads Parquet/Arrow via Storage Write / load jobs.
+- **BigQuery & Cloud Spanner**: Streams columnar reads via the BigQuery Storage Read API, loads Parquet/Arrow via Storage Write / load jobs, and splits Spanner batch mutations automatically under Spanner's per-commit mutation budget (`estimate_batch_mutations`).
+
+## Multi-Shard Fan-Out, Staged Bulk Upserts & Index Drop/Restore
+
+When ingesting partitioned Parquetprefixes (`s3://bucket/events/*.parquet`), resuming interrupted jobs, or bulk-loading into indexed tables, combine the advanced orchestration parameters on `load_from_storage`, `load_from_arrow`, and `session.data_dictionary.without_indexes`:
+
+- **Multi-Shard Parallel Fan-Out & Checkpointing**: Pass a glob URI alongside `max_workers=4` and `checkpoint_table="etl_ingest_checkpoints"` to `load_from_storage(...)`. SQLSpec resolves all matching shards via `StorageRegistry`, skips already-recorded shard URIs in `checkpoint_table`, ingests unapplied shards concurrently across worker sessions, and records each shard upon completion.
+- **Cross-Dialect Staged Bulk Upsert (`stage_table` + `conflict_keys`)**: Pass `stage_table="events_staging"` and `conflict_keys=["id"]` (plus optional `update_columns=[...]` or `exclude_update_columns=[...]`) to bulk-load batches into a staging table at wire speed (`PGCOPY`, `BCP`, or Arrow ingest) and atomically merge into the target table via dialect-native upsert SQL (`INSERT ... ON CONFLICT DO UPDATE` on PostgreSQL/CockroachDB/SQLite/DuckDB, `ON DUPLICATE KEY UPDATE` on MySQL/MariaDB, `MERGE INTO` on Oracle/SQL Server/Db2/BigQuery/Sybase/SQL Anywhere, and `INSERT OR UPDATE` mutations on Cloud Spanner).
+- **Index Drop and Recreate Context Manager (`without_indexes`)**: Wrap massive initial table loads in `with session.data_dictionary.without_indexes(session, "events"):` (or `async with session.data_dictionary.without_indexes(session, "events"):`) to capture secondary index DDL, drop non-constraint indexes before bulk ingestion, and recreate them in a single pass afterward.
 
 ## Recap
 

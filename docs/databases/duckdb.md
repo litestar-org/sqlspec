@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[duckdb]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[duckdb]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[duckdb]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[duckdb]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[duckdb]"
+    ```
 
 Choose `DuckDBConfig` for embedded OLAP analytics, local lakehouse queries over Parquet/CSV/JSON on S3 or GCS, fast feature engineering pipelines, and columnar ETL jobs running inside a single Python worker.
 
@@ -40,9 +60,9 @@ For persistent analytical databases, set `"database": "var/analytics.duckdb"` (a
 | --- | --- | --- |
 | `database` / `read_only` | `connection_config` | File path or `":memory:"` (shared across pooled cursors derived from the primary connection) and read-only open flag. |
 | `pool_min_size` / `pool_max_size` | `connection_config` | Bounds for `DuckDBConnectionPool`. |
-| `threads` / `memory_limit` | `connection_config` | DuckDB engine worker threads and memory cap (such as `"4GB"`). |
+| `threads` / `memory_limit` | `connection_config` | DuckDB engine worker threads and memory cap (such as `"4GB"`). In Linux containers, `DuckDBConfig` automatically clamps default memory limits to cgroup v1/v2 container quotas (`resolve_cgroup_memory_limit`). |
 | `extensions` | `driver_features` | Sequence of `DuckDBExtensionConfig` dicts (`name`, `repository`, `force_install`) installed/loaded on startup. |
-| `secrets` | `driver_features` | Sequence of `DuckDBSecretConfig` dicts configuring S3, GCS, Azure, R2, or HuggingFace credentials via `CREATE SECRET`. |
+| `secrets` | `driver_features` | Sequence of `DuckDBSecretConfig` dicts configuring S3, GCS, Azure, R2, or HuggingFace credentials via `CREATE SECRET`, supporting dynamic credential rotation via `value_provider` callables. |
 | `enable_statement_profiling` | `driver_features` | Captures DuckDB JSON execution plans (`EXPLAIN (ANALYZE, FORMAT JSON)`) onto `StatementEvent.profile`. |
 | `enable_uuid_conversion` | `driver_features` | Normalizes UUID columns consistently across native and Arrow execution paths. |
 

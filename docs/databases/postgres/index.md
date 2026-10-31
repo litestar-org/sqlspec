@@ -4,11 +4,43 @@ SQLSpec provides three dedicated PostgreSQL adapters—[`asyncpg`](asyncpg.md), 
 
 ## Install and When to Choose
 
-| Adapter | Install Command | Best Fit |
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[asyncpg]"
+    # or: uv add "sqlspec[psycopg]"
+    # or: uv add "sqlspec[psqlpy]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[asyncpg]"
+    # or: pip install "sqlspec[psycopg]"
+    # or: pip install "sqlspec[psqlpy]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[asyncpg]"
+    # or: pdm add "sqlspec[psycopg]"
+    # or: pdm add "sqlspec[psqlpy]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[asyncpg]"
+    # or: poetry add "sqlspec[psycopg]"
+    # or: poetry add "sqlspec[psqlpy]"
+    ```
+
+| Adapter | Extra | Best Fit |
 | --- | --- | --- |
-| [`asyncpg`](asyncpg.md) | `uv add "sqlspec[asyncpg]"` | Lowest-latency pure `asyncio` OLTP services using PostgreSQL's binary wire protocol. |
-| [`psycopg`](psycopg.md) | `uv add "sqlspec[psycopg]"` | Applications needing both synchronous and `asyncio` pools, libpq parity, `NullConnectionPool`, or streaming `COPY`. |
-| [`psqlpy`](psqlpy.md) | `uv add "sqlspec[psqlpy]"` | High-concurrency `asyncio` services using a Rust/Tokio connection pool, native `PgVector` binding, and wire pipelining. |
+| [`asyncpg`](asyncpg.md) | `sqlspec[asyncpg]` | Lowest-latency pure `asyncio` OLTP services using PostgreSQL's binary wire protocol. |
+| [`psycopg`](psycopg.md) | `sqlspec[psycopg]` | Applications needing both synchronous and `asyncio` pools, libpq parity, `NullConnectionPool`, or streaming `COPY`. |
+| [`psqlpy`](psqlpy.md) | `sqlspec[psqlpy]` | High-concurrency `asyncio` services using a Rust/Tokio connection pool, native `PgVector` binding, and wire pipelining. |
 
 For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-connector`) or `sqlspec[alloydb]` (`google-cloud-alloydb-connector`).
 
@@ -79,6 +111,7 @@ For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-
 | `enable_pgvector` | `bool` | Registers `pgvector` distance operators (`<->`, `<=>`, `<#>`) and vector codecs when available. |
 | `enable_paradedb` | `bool` | Enables ParadeDB `pg_search` BM25 (`@@@`) operators and hybrid search SQL generation. |
 | `enable_pg_textsearch` | `bool` | Enables PostgreSQL `pg_textsearch` full-text search extensions in ADK memory stores. |
+| `auth_token_provider` | `Callable` | Sync or async callable invoked on connection creation to mint short-lived IAM authentication tokens (Google Cloud SQL IAM, AlloyDB IAM, AWS RDS IAM, Azure AD) without restarting pools. |
 | `json_serializer` / `json_deserializer` | `Callable` | Customizes `json` and `jsonb` wire encoding (defaults to SQLSpec's centralized `msgspec` serializers). |
 
 ### Running Behind PgBouncer (`pooler_mode` + `direct_dsn`)

@@ -80,6 +80,15 @@ _BARE_KEYWORDS: Final[frozenset[str]] = frozenset({
     "where",
 })
 _PARAMETER_VALIDATOR = ParameterValidator()
+_DIALECT_ALIASES: Final[dict[str, str]] = {
+    "ase": "sybase",
+    "cockroach": "postgres",
+    "cockroachdb": "postgres",
+    "mariadb": "mysql",
+    "mssql": "tsql",
+    "postgresql": "postgres",
+    "sa": "sqlanywhere",
+}
 
 
 def extract_column_name(column: str | exp.Column) -> str:
@@ -442,17 +451,28 @@ def _normalize_dialect(dialect: "DialectType | None") -> str | None:
         name = dialect.__name__.lower()
     else:
         name = type(dialect).__name__.lower()
-    resolved = {
-        "mssql": "tsql",
-        "mariadb": "mysql",
-        "cockroachdb": "postgres",
-        "postgresql": "postgres",
-        "ase": "sybase",
-        "sa": "sqlanywhere",
-    }.get(name, name)
+    resolved = _DIALECT_ALIASES.get(name, name)
     if resolved in {"sybase", "sqlanywhere"} and resolved not in Dialect.classes:
         importlib.import_module("sqlspec.dialects.sybase")
     return resolved
+
+
+def _truthy_metadata_flag(value: Any) -> bool:
+    """Interpret a catalog flag value (bool, number, or ``yes``/``true``/``1`` text) as a boolean.
+
+    Args:
+        value: Raw catalog flag value.
+
+    Returns:
+        Whether the flag is set.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
 
 
 def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:

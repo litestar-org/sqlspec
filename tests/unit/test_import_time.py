@@ -153,14 +153,7 @@ def test_no_unintended_cross_adapter_imports() -> None:
     adapters_root = Path("sqlspec/adapters")
     assert adapters_root.is_dir()
 
-    allowed_cross_imports: dict[str, set[str]] = {
-        "aiomysql": {"mysql_common"},
-        "asyncmy": {"mysql_common"},
-        "cockroach_asyncpg": {"asyncpg"},
-        "cockroach_psycopg": {"psycopg"},
-        "mysqlconnector": {"mysql_common"},
-        "pymysql": {"mysql_common"},
-    }
+    allowed_cross_imports: dict[str, set[str]] = {"cockroach_asyncpg": {"asyncpg"}, "cockroach_psycopg": {"psycopg"}}
 
     violations: list[str] = []
     for adapter_dir in sorted(adapters_root.iterdir()):
@@ -171,20 +164,32 @@ def test_no_unintended_cross_adapter_imports() -> None:
 
         for py_file in sorted(adapter_dir.rglob("*.py")):
             tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            pkg_parts = list(py_file.parent.parts)
             for node in ast.walk(tree):
-                imported_module: str | None = None
-                if isinstance(node, ast.ImportFrom) and node.module:
-                    if node.module.startswith("sqlspec.adapters."):
-                        imported_module = node.module.split(".")[2]
+                imported_modules: list[str] = []
+                if isinstance(node, ast.ImportFrom):
+                    if node.level > 0:
+                        base_parts = pkg_parts[: -(node.level - 1)] if node.level > 1 else pkg_parts
+                        target_parts = [*base_parts, *node.module.split(".")] if node.module else base_parts
+                        if target_parts[:2] == ["sqlspec", "adapters"]:
+                            if len(target_parts) >= 3:
+                                imported_modules.append(target_parts[2])
+                            else:
+                                imported_modules.extend(alias.name.split(".")[0] for alias in node.names)
+                    elif node.module == "sqlspec.adapters":
+                        imported_modules.extend(alias.name.split(".")[0] for alias in node.names)
+                    elif node.module and node.module.startswith("sqlspec.adapters."):
+                        imported_modules.append(node.module.split(".")[2])
                 elif isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.name.startswith("sqlspec.adapters."):
-                            imported_module = alias.name.split(".")[2]
-
-                if imported_module and imported_module != adapter_name and imported_module not in allowed:
-                    violations.append(
-                        f"{py_file}:{getattr(node, 'lineno', '?')}: {adapter_name} imports sqlspec.adapters.{imported_module}"
+                    imported_modules.extend(
+                        alias.name.split(".")[2] for alias in node.names if alias.name.startswith("sqlspec.adapters.")
                     )
+
+                violations.extend(
+                    f"{py_file}:{getattr(node, 'lineno', '?')}: {adapter_name} imports sqlspec.adapters.{imported_module}"
+                    for imported_module in imported_modules
+                    if imported_module != adapter_name and imported_module not in allowed
+                )
 
     assert not violations, "Found cross-adapter imports:\n" + "\n".join(violations)
 

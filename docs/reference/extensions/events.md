@@ -18,7 +18,7 @@ from sqlspec.extensions.events import (
 )
 ```
 
-Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable table-backed event queues across all supported adapters. See the [Event Channels Guide](../../integrations/events.md) for usage examples.
+Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable table-backed event queues across all supported adapters. Adapter-specific `EventQueueStore` and native `EventsBackend` classes are documented on each [Database Adapter](../adapters/index.md) page. See the [Event Channels Guide](../../integrations/events.md) for usage examples.
 
 ## Event Channels & Listeners
 
@@ -61,19 +61,32 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
 ::: sqlspec.extensions.events._models.EventMessage
     options:
       heading_level: 3
-      members: false
 
 ## Durable Table Queues & Stores
 
 ::: sqlspec.extensions.events._queue.SyncTableEventQueue
     options:
       heading_level: 3
-      members: false
+      members:
+        - publish
+        - publish_many
+        - dequeue
+        - dequeue_by_event_id
+        - ack
+        - nack
+        - shutdown
 
 ::: sqlspec.extensions.events._queue.AsyncTableEventQueue
     options:
       heading_level: 3
-      members: false
+      members:
+        - publish
+        - publish_many
+        - dequeue
+        - dequeue_by_event_id
+        - ack
+        - nack
+        - shutdown
 
 ::: sqlspec.extensions.events._store.BaseEventQueueStore
     options:
@@ -81,6 +94,10 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
       members:
         - create_statements
         - drop_statements
+        - prepare_schema_sync
+        - prepare_schema_async
+        - reconcile_schema_sync
+        - reconcile_schema_async
 
 ::: sqlspec.extensions.events._queue.build_queue_backend
     options:
@@ -91,7 +108,6 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
 ::: sqlspec.extensions.events._hints.EventRuntimeHints
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.extensions.events._hints.get_runtime_hints
     options:
@@ -100,12 +116,10 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
 ::: sqlspec.extensions.events._protocols.SyncEventBackendProtocol
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.extensions.events._protocols.AsyncEventBackendProtocol
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.extensions.events._payload.encode_notify_payload
     options:

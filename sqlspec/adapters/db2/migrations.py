@@ -7,6 +7,8 @@ from sqlspec.builder import sql
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.builder import CreateTable, Insert
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
@@ -55,6 +57,43 @@ class Db2MigrationTrackerMixin:
         """
         return TABLE_EXISTS_SQL, split_db2_table_name(self.version_table)
 
+    def _record_statement(
+        self,
+        version: str,
+        version_type: str,
+        execution_sequence: int,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
+        replaces: "Sequence[str] | str | None" = None,
+    ) -> "Insert":
+        """Build an INSERT statement for a standard or squashed Db2 migration record."""
+        columns = [
+            "version_num",
+            "version_type",
+            "execution_sequence",
+            "description",
+            "applied_at",
+            "execution_time_ms",
+            "checksum",
+            "applied_by",
+        ]
+        values: list[object] = [
+            version,
+            version_type,
+            execution_sequence,
+            description,
+            utc_now(),
+            execution_time_ms,
+            checksum,
+            applied_by,
+        ]
+        if replaces:
+            columns.append("replaces")
+            values.append(replaces if isinstance(replaces, str) else ",".join(replaces))
+        return sql.insert(self.version_table).columns(*columns).values(*values)
+
     def _record_migration_statement(
         self,
         version: str,
@@ -65,43 +104,15 @@ class Db2MigrationTrackerMixin:
         checksum: str,
         applied_by: str,
     ) -> "Insert":
-        """Return an INSERT for a migration record with a naive-UTC ``applied_at``.
-
-        Args:
-            version: Version number of the migration.
-            version_type: Version format type.
-            execution_sequence: Application order.
-            description: Description of the migration.
-            execution_time_ms: Execution time in milliseconds.
-            checksum: Checksum of the migration content.
-            applied_by: User who applied the migration.
-
-        Returns:
-            INSERT builder.
-        """
-        return (
-            sql
-            .insert(self.version_table)
-            .columns(
-                "version_num",
-                "version_type",
-                "execution_sequence",
-                "description",
-                "applied_at",
-                "execution_time_ms",
-                "checksum",
-                "applied_by",
-            )
-            .values(
-                version,
-                version_type,
-                execution_sequence,
-                description,
-                utc_now(),
-                execution_time_ms,
-                checksum,
-                applied_by,
-            )
+        """Return an INSERT for a migration record with a naive-UTC applied_at."""
+        return self._record_statement(
+            version=version,
+            version_type=version_type,
+            execution_sequence=execution_sequence,
+            description=description,
+            execution_time_ms=execution_time_ms,
+            checksum=checksum,
+            applied_by=applied_by,
         )
 
     def _record_squashed_migration_statement(
@@ -113,48 +124,18 @@ class Db2MigrationTrackerMixin:
         execution_time_ms: int,
         checksum: str,
         applied_by: str,
-        replaces: str,
+        replaces: "Sequence[str] | str",
     ) -> "Insert":
-        """Return an INSERT for a squashed migration record with a naive-UTC ``applied_at``.
-
-        Args:
-            version: Version number of the squashed migration.
-            version_type: Version format type.
-            execution_sequence: Application order.
-            description: Description of the migration.
-            execution_time_ms: Execution time in milliseconds.
-            checksum: Checksum of the migration content.
-            applied_by: User who applied the migration.
-            replaces: Comma-separated list of replaced versions.
-
-        Returns:
-            INSERT builder.
-        """
-        return (
-            sql
-            .insert(self.version_table)
-            .columns(
-                "version_num",
-                "version_type",
-                "execution_sequence",
-                "description",
-                "applied_at",
-                "execution_time_ms",
-                "checksum",
-                "applied_by",
-                "replaces",
-            )
-            .values(
-                version,
-                version_type,
-                execution_sequence,
-                description,
-                utc_now(),
-                execution_time_ms,
-                checksum,
-                applied_by,
-                replaces,
-            )
+        """Return an INSERT for a squashed migration record with a naive-UTC applied_at."""
+        return self._record_statement(
+            version=version,
+            version_type=version_type,
+            execution_sequence=execution_sequence,
+            description=description,
+            execution_time_ms=execution_time_ms,
+            checksum=checksum,
+            applied_by=applied_by,
+            replaces=replaces,
         )
 
 

@@ -4,11 +4,38 @@
 
 ## Installation
 
-```bash
-uv add "sqlspec[adk]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[adk]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[adk]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[adk]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[adk]"
+    ```
 
 ## Architecture and Store Services
+
+```mermaid
+flowchart LR
+    Runner["Google ADK Runner"] --> Services["Session / Memory / Artifact Services"]
+    Services --> Stores["Adapter ADK Stores (*ADKStore / *ADKMemoryStore)"]
+    Stores --> DB[("Database Tables + Vector / FTS Indexes")]
+```
 
 | ADK Service | SQLSpec Class | Adapter Store Base | Responsibility |
 | --- | --- | --- | --- |
@@ -72,12 +99,11 @@ from pathlib import Path
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.asyncpg.adk import (
-    AsyncpgADKArtifactStore,
+    AsyncpgADKConfig,
     AsyncpgADKMemoryStore,
     AsyncpgADKStore,
 )
 from sqlspec.extensions.adk import (
-    SQLSpecArtifactService,
     SQLSpecMemoryService,
     SQLSpecSessionService,
 )
@@ -87,8 +113,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 
 def create_adk_services(
     spec: SQLSpec,
-) -> tuple[SQLSpecSessionService, SQLSpecMemoryService, SQLSpecArtifactService]:
-    """Wire ADK stores and service adapters on an AsyncpgConfig instance."""
+) -> tuple[SQLSpecSessionService, SQLSpecMemoryService]:
+    """Wire ADK session and memory services on an AsyncpgConfig instance."""
     config = spec.add_config(
         AsyncpgConfig(
             bind_key="ai",
@@ -98,33 +124,30 @@ def create_adk_services(
                 "include_extensions": ["adk"],
             },
             extension_config={
-                "adk": {
-                    "session_table": "adk_sessions",
-                    "events_table": "adk_events",
-                    "memory_table": "adk_memory_entries",
-                    "artifact_table": "adk_artifacts",
-                    "memory_use_fts": True,
-                    "memory_use_vector": True,
-                    "memory_vector_dimensions": 768,
-                }
+                "adk": AsyncpgADKConfig(
+                    session_table="adk_sessions",
+                    events_table="adk_events",
+                    memory_table="adk_memory_entries",
+                    memory_use_fts=True,
+                    memory_use_vector=True,
+                    memory_max_results=20,
+                )
             },
         )
     )
 
     session_store = AsyncpgADKStore(config)
     memory_store = AsyncpgADKMemoryStore(config)
-    artifact_store = AsyncpgADKArtifactStore(config)
 
     return (
         SQLSpecSessionService(session_store),
         SQLSpecMemoryService(memory_store),
-        SQLSpecArtifactService(artifact_store),
     )
 ```
 
 ## Schema Migrations and CLI Maintenance
 
-Instead of calling `ensure_tables()` at runtime in production, enable `"adk"` in `migration_config={"enable_extensions": ["adk"]}` so `sqlspec upgrade` tracks ADK schema revisions alongside your application migrations.
+Instead of calling `ensure_tables()` at runtime in production, enable `"adk"` in `migration_config={"include_extensions": ["adk"]}` so `sqlspec upgrade` tracks ADK schema revisions alongside your application migrations.
 
 Use the built-in `sqlspec adk memory` CLI commands to inspect, clean up, or verify memory stores:
 

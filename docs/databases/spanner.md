@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[spanner]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[spanner]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[spanner]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[spanner]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[spanner]"
+    ```
 
 Choose `SpannerAsyncConfig` or `SpannerSyncConfig` for globally distributed, externally consistent OLTP databases, multi-region scale-out workloads, property-graph and `ARRAY<FLOAT32>` vector search, and agentic Google ADK session/memory/artifact persistence.
 
@@ -71,6 +91,7 @@ See [Spanner API Reference](/reference/adapters/spanner/) for full `SpannerConne
 
 - **Snapshot Reads vs Read-Write Retries (`run_in_transaction`)**: Use `provide_session(transaction=False)` for lock-free single-use or multi-use `Snapshot` reads (zero `Commit` RPC cost). For contended read-write transactions, call `config.run_in_transaction(...)` or `session.run_in_transaction(...)`, which automatically unwraps `DeadlockError` (`Aborted`) and re-executes the closure with Spanner's native backoff hint.
 - **`THEN RETURN` DML Support**: Both sync and async drivers return projected rows and `rows_affected` on `INSERT ... THEN RETURN`, `UPDATE ... THEN RETURN`, and `DELETE ... THEN RETURN` statements.
+- **Automatic Mutation Budget Splitting**: During `load_from_arrow`, `load_from_storage`, and batched writes, Spanner drivers estimate per-row column and secondary-index mutations (`estimate_batch_mutations`) and split large batches automatically to stay safely below Spanner's per-commit mutation limit.
 - **GoogleSQL (`spanner`) vs PostgreSQL (`spangres`) Dialects**: SQLSpec includes dedicated custom SQLGlot dialects for both `spanner` (`INTERLEAVE IN PARENT`, `ROW DELETION POLICY`, `GRAPH_TABLE`) and `spangres` (`TTL INTERVAL`, `$1` placeholders).
 - **ADK Vector, Hybrid RRF, and Artifact Stores**: `Spanner*ADKMemoryStore` supports `ARRAY<FLOAT32>` embeddings with `APPROX_COSINE_DISTANCE`, FTS `SCORE`, and single-round-trip Hybrid RRF (`k=60`), plus `SpannerSyncADKArtifactStore` / `SpannerAsyncADKArtifactStore` in `sqlspec.adapters.spanner.adk`.
 - **Spanner Emulator**: Set `SPANNER_EMULATOR_HOST="localhost:9010"` (or use `pytest-databases` `spanner_service`) to run full sync and async tests locally without GCP credentials.

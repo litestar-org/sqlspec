@@ -13,7 +13,7 @@ SQLSpec ships first-party framework plugins and ecosystem extensions under `sqls
 | **[Starlette](starlette.md)** | `sqlspec.extensions.starlette` | `sqlspec[starlette]` | `db_plugin.get_session(request)` | `manual`, `autocommit`, `autocommit_include_redirect` | — | — | `sqlspec` CLI |
 | **[Flask](flask.md)** | `sqlspec.extensions.flask` | `sqlspec[flask]` | `plugin.get_session()` (`g`-scoped) | `manual`, `autocommit`, `autocommit_include_redirect` | — | — | `sqlspec` CLI |
 | **[Sanic](sanic.md)** | `sqlspec.extensions.sanic` | `sqlspec[sanic]` | `db_plugin.get_session(request)` / `ext.dependency` | `manual`, `autocommit`, `autocommit_include_redirect` | — | — | `sqlspec` CLI |
-| **[Dishka](dishka.md)** | `dishka` | `uv add dishka` | `FromDishka[DriverT]` (`Scope.REQUEST`) | Explicit session or service scope | Combines with any adapter store | Combines with `SQLSpecAsyncService` / `SQLSpecSyncService` | Shared `Scope.APP` container across web, CLI, and workers |
+| **[Dishka](dishka.md)** | `dishka` | `dishka` | `FromDishka[DriverT]` (`Scope.REQUEST`) | Explicit session or service scope | Combines with any adapter store | Combines with `SQLSpecAsyncService` / `SQLSpecSyncService` | Shared `Scope.APP` container across web, CLI, and workers |
 
 ## Shared `extension_config` Pattern
 

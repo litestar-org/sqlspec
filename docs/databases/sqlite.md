@@ -4,16 +4,44 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
 
 ## Install and When to Choose
 
-=== "Sync (`sqlite` — Built-In)"
+=== "uv"
 
     ```bash
+    # Sync (sqlite3 — built-in)
     uv add sqlspec
+
+    # Async (aiosqlite)
+    uv add "sqlspec[aiosqlite]"
     ```
 
-=== "Async (`aiosqlite`)"
+=== "pip"
 
     ```bash
-    uv add "sqlspec[aiosqlite]"
+    # Sync (sqlite3 — built-in)
+    pip install sqlspec
+
+    # Async (aiosqlite)
+    pip install "sqlspec[aiosqlite]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    # Sync (sqlite3 — built-in)
+    pdm add sqlspec
+
+    # Async (aiosqlite)
+    pdm add "sqlspec[aiosqlite]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    # Sync (sqlite3 — built-in)
+    poetry add sqlspec
+
+    # Async (aiosqlite)
+    poetry add "sqlspec[aiosqlite]"
     ```
 
 Choose **`SqliteConfig`** for CLI tools, synchronous web apps, embedded local storage, and sub-millisecond unit tests. Choose **`AiosqliteConfig`** for `asyncio` frameworks (Litestar, FastAPI, Starlette, Google ADK) where SQLite I/O runs on a dedicated worker thread without blocking the event loop.

@@ -7,6 +7,7 @@ compiled mypyc callers re-raise outside the context-manager ABI boundary.
 
 import contextlib
 import hashlib
+import inspect
 import logging
 import re
 from collections.abc import Mapping
@@ -23,6 +24,7 @@ from sqlglot.errors import SqlglotError
 
 from sqlspec.builder import QueryBuilder
 from sqlspec.builder._ddl import compile_table_ddl_results
+from sqlspec.builder._parsing_utils import _normalize_dialect
 from sqlspec.core import (
     SQL,
     CachedStatement,
@@ -630,7 +632,22 @@ class DataDictionaryMixin:
         Returns:
             SQLGlot dialect name, or None for generic SQL.
         """
-        _ = driver
+        engine_family = getattr(driver, "engine_family", None)
+        if not isinstance(engine_family, str) or not engine_family.strip():
+            engine_cache = getattr(self, "_engine_version_cache", None)
+            if isinstance(engine_cache, Mapping) and id(driver) in engine_cache:
+                engine_family = getattr(engine_cache[id(driver)], "engine_family", None)
+            else:
+                get_engine_version = getattr(self, "_get_engine_version", None)
+                if (
+                    callable(get_engine_version)
+                    and not getattr(driver, "is_async", False)
+                    and not inspect.iscoroutinefunction(get_engine_version)
+                ):
+                    with contextlib.suppress(Exception):
+                        engine_family = getattr(get_engine_version(driver), "engine_family", None)
+        if isinstance(engine_family, str) and engine_family.strip():
+            return _ddl_dialect_or_none(engine_family.strip().lower())
         return _ddl_dialect_or_none(type(self).dialect)
 
     def _transpile_ddl_result(self, result: "DDLResult", target_dialect: str | None = None) -> "DDLResult":
@@ -3759,13 +3776,6 @@ def _check_declared_parameters(sql_statement: "SQL") -> None:
 
 
 _GENERIC_DDL_DIALECTS: Final = frozenset({"", "generic", "unknown"})
-_SQLGLOT_DIALECT_ALIASES: Final[dict[str, str]] = {
-    "cockroach": "postgres",
-    "cockroachdb": "postgres",
-    "mariadb": "mysql",
-    "mssql": "tsql",
-    "postgresql": "postgres",
-}
 _TABLE_OBJECT_TYPES: Final = frozenset({"table", "temporary_table", "base table"})
 _TABLE_DEPENDENT_OBJECT_TYPES: Final = frozenset({"index", "trigger"})
 _SCHEMA_DDL_OBJECT_DOMAINS: Final[dict[str, str]] = {
@@ -3820,10 +3830,7 @@ def _ddl_dialect_or_none(dialect: str | None) -> str | None:
 
 def _sqlglot_dialect(dialect: str | None) -> str | None:
     """Map a data dictionary dialect name to the SQLGlot dialect used to parse and render it."""
-    resolved = _ddl_dialect_or_none(dialect)
-    if resolved is None:
-        return None
-    return _SQLGLOT_DIALECT_ALIASES.get(resolved, resolved)
+    return _normalize_dialect(_ddl_dialect_or_none(dialect))
 
 
 _LOOSE_PROFILE_TYPES: Final = frozenset({

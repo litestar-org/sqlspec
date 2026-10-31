@@ -26,6 +26,7 @@ import pytest
 
 import sqlspec.utils.fixtures as fixture_module
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.db2.data_dictionary import build_column_metadata as build_db2_column_metadata
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core.parameters import TypedParameter
@@ -2917,3 +2918,256 @@ def test_sybase_and_sqlanywhere_value_decoders(tmp_path: Path) -> None:
     assert loaded_row["ext_id"] == UUID("7f3c1d2e-9a4b-4c5d-8e6f-0a1b2c3d4e5f")
     assert loaded_row["raw_image"] == b"\x00\xff"
     assert loaded_row["raw_long_bin"] == b"\x00\xff"
+
+
+def test_mysql_vector_export_unpacks_float32_bytes(tmp_path: Path) -> None:
+    """MySQL binary VECTOR column bytes unpack into float lists during fixture export."""
+    packed = struct.pack("<3f", 1.5, -2.0, 3.25)
+    cols = [
+        fixture_module._TableColumn(
+            name="id",
+            data_type="int",
+            is_primary=True,
+            is_identity=False,
+            identity_always=False,
+            sequence_name=None,
+            is_generated=False,
+        ),
+        fixture_module._TableColumn(
+            name="embedding",
+            data_type="vector(3)",
+            is_primary=False,
+            is_identity=False,
+            identity_always=False,
+            sequence_name=None,
+            is_generated=False,
+        ),
+    ]
+    rows = fixture_module._without_generated_values([{"id": 1, "embedding": packed}], cols, family="mysql")
+    assert rows == [{"id": 1, "embedding": [1.5, -2.0, 3.25]}]
+
+    driver = MagicMock()
+    driver.statement_config.dialect = "mysql"
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": "id", "data_type": "int", "is_primary": True},
+        {"column_name": "embedding", "data_type": "vector(3)", "is_primary": False},
+    ]
+    driver.select.return_value = [{"id": 1, "embedding": packed}]
+
+    export_table_fixtures_sync(driver, tmp_path, ["items"], compress=False)
+    exported = json.loads((tmp_path / "items.json").read_text(encoding="utf-8"))
+    assert exported == [{"id": 1, "embedding": [1.5, -2.0, 3.25]}]
+
+
+def test_pgvector_halfvec_and_sparsevec_export_and_decode() -> None:
+    """pgvector HalfVector and SparseVector round-trip through export and sparsevec formatting."""
+    half = _FakeHalfVector([0.5, 1.5, 2.5])
+    sparse = _FakeSparseVector([0.0, 1.25, 0.0, -3.5])
+    cols = [
+        fixture_module._TableColumn(
+            name="id",
+            data_type="integer",
+            is_primary=True,
+            is_identity=False,
+            identity_always=False,
+            sequence_name=None,
+            is_generated=False,
+        ),
+        fixture_module._TableColumn(
+            name="half_col",
+            data_type="halfvec(3)",
+            is_primary=False,
+            is_identity=False,
+            identity_always=False,
+            sequence_name=None,
+            is_generated=False,
+        ),
+        fixture_module._TableColumn(
+            name="sparse_col",
+            data_type="sparsevec(4)",
+            is_primary=False,
+            is_identity=False,
+            identity_always=False,
+            sequence_name=None,
+            is_generated=False,
+        ),
+    ]
+    exported_rows = fixture_module._without_generated_values(
+        [{"id": 1, "half_col": half, "sparse_col": sparse}], cols, family="postgres"
+    )
+    assert exported_rows == [{"id": 1, "half_col": [0.5, 1.5, 2.5], "sparse_col": [0.0, 1.25, 0.0, -3.5]}]
+    assert fixture_module._exportable_value(half) == [0.5, 1.5, 2.5]
+    assert fixture_module._exportable_value(sparse) == [0.0, 1.25, 0.0, -3.5]
+
+    half_decoder = fixture_module._column_value_decoder("postgres", "halfvec(3)")
+    sparse_decoder = fixture_module._column_value_decoder("postgres", "sparsevec(4)")
+    assert half_decoder is not None
+    assert sparse_decoder is not None
+    assert half_decoder(half) == "[0.5,1.5,2.5]"
+    assert half_decoder([0.5, 1.5, 2.5]) == "[0.5,1.5,2.5]"
+    assert sparse_decoder(sparse) == "{2:1.25,4:-3.5}/4"
+    assert sparse_decoder([0.0, 1.25, 0.0, -3.5]) == "{2:1.25,4:-3.5}/4"
+    assert sparse_decoder("{2:1.25,4:-3.5}/4") == "{2:1.25,4:-3.5}/4"
+    assert fixture_module._vector_items("{2:1.25,4:-3.5}/4") == [0.0, 1.25, 0.0, -3.5]
+
+
+def test_oracle_vector_decoder_uses_double_for_float64_and_unannotated() -> None:
+    """Oracle vector decoder returns array('d') for FLOAT64 or unannotated VECTOR and array('f') for FLOAT32."""
+    dec_f32 = fixture_module._column_value_decoder("oracle", "vector(3, float32)")
+    dec_f64 = fixture_module._column_value_decoder("oracle", "vector(3, float64)")
+    dec_unannotated = fixture_module._column_value_decoder("oracle", "vector(3)")
+    dec_bare = fixture_module._column_value_decoder("oracle", "vector")
+
+    assert dec_f32 is not None
+    assert dec_f64 is not None
+    assert dec_unannotated is not None
+    assert dec_bare is not None
+
+    arr_f32 = dec_f32([1.0, 2.0, 3.0])
+    arr_f64 = dec_f64([1.0, 2.0, 3.0])
+    arr_unannotated = dec_unannotated([1.0, 2.0, 3.0])
+    arr_bare = dec_bare([1.0, 2.0, 3.0])
+
+    assert isinstance(arr_f32, array.array) and arr_f32.typecode == "f"
+    assert isinstance(arr_f64, array.array) and arr_f64.typecode == "d"
+    assert isinstance(arr_unannotated, array.array) and arr_unannotated.typecode == "d"
+    assert isinstance(arr_bare, array.array) and arr_bare.typecode == "d"
+
+
+def test_catalog_columns_sql_and_db2_metadata_completeness() -> None:
+    """Dialect columns.sql queries and Db2 build_column_metadata preserve identity and generated metadata."""
+    repo_root = Path(fixture_module.__file__).resolve().parents[2]
+    mssql_sql = (repo_root / "sqlspec/data_dictionary/dialects/mssql/sql/columns.sql").read_text(encoding="utf-8")
+    assert "CASE WHEN cc.object_id IS NOT NULL OR c.generated_always_type <> 0 THEN 1 ELSE 0 END" in mssql_sql
+    assert "generated_always_type_desc" not in mssql_sql
+
+    spanner_sql = (repo_root / "sqlspec/data_dictionary/dialects/spanner/sql/columns.sql").read_text(encoding="utf-8")
+    assert "WITH pk_cols AS" in spanner_sql
+    assert "LEFT JOIN pk_cols" in spanner_sql
+    assert "AS is_primary" in spanner_sql
+    assert "AS is_identity" in spanner_sql
+    assert "AS is_generated" in spanner_sql
+    assert "c.generation_expression" in spanner_sql
+
+    sqlite_config = SqliteConfig(connection_config={"database": ":memory:"})
+    with sqlite_config.provide_session() as driver:
+        driver.execute("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, code INTEGER, label TEXT)")
+        columns = driver.data_dictionary.get_columns(driver, "items")
+        col_map = {col["column_name"]: col for col in columns}
+        assert bool(col_map["id"].get("is_identity")) is True
+        assert bool(col_map["code"].get("is_identity")) is False
+
+        table_cols = fixture_module._table_columns_sync(driver, "sqlite", "items")
+        id_col = next(col for col in table_cols if col.name == "id")
+        assert id_col.is_identity is True
+
+    db2_rows = build_db2_column_metadata([
+        {
+            "column_name": "ID",
+            "data_type": "INTEGER",
+            "is_nullable": "NO",
+            "is_primary": 1,
+            "is_identity": 1,
+            "identity_generation": "ALWAYS",
+            "is_generated": 0,
+            "generation_expression": None,
+            "column_comment": "Primary identifier",
+        },
+        {
+            "column_name": "TOTAL",
+            "data_type": "INTEGER",
+            "is_nullable": "YES",
+            "is_primary": 0,
+            "is_identity": 0,
+            "identity_generation": None,
+            "is_generated": 1,
+            "generation_expression": "GENERATED ALWAYS AS (A + B)",
+            "column_comment": "Computed sum",
+        },
+    ])
+    assert db2_rows[0].get("is_identity") is True
+    assert db2_rows[0].get("column_comment") == "Primary identifier"
+    assert db2_rows[1].get("is_identity") is False
+    assert db2_rows[1].get("generation_expression") == "GENERATED ALWAYS AS (A + B)"
+    assert db2_rows[1].get("column_comment") == "Computed sum"
+
+    parsed_id_col = fixture_module._table_column(dict(db2_rows[0]))
+    parsed_gen_col = fixture_module._table_column(dict(db2_rows[1]))
+    assert parsed_id_col.is_identity is True
+    assert parsed_id_col.is_generated is False
+    assert parsed_gen_col.is_identity is False
+    assert parsed_gen_col.is_generated is True
+
+
+def test_write_table_fixture_unlinks_stale_shards_before_renaming_tmp(tmp_path: Path) -> None:
+    """Stale shards are unlinked before renaming temporary shard files into place."""
+    stale_shard = tmp_path / "events.002.jsonl"
+    stale_shard.write_text('{"id": 99}\n', encoding="utf-8")
+
+    observed_stale_during_replace: list[bool] = []
+    original_replace = Path.replace
+
+    def tracking_replace(self: Path, target: Path) -> Path:
+        observed_stale_during_replace.append(stale_shard.exists())
+        return original_replace(self, target)
+
+    with patch.object(Path, "replace", tracking_replace):
+        fixture_module._write_table_fixture(
+            tmp_path, "events", [{"id": 1}, {"id": 2}], compress=False, jsonl=True, max_rows_per_shard=10
+        )
+
+    assert observed_stale_during_replace == [False]
+    assert (tmp_path / "events.jsonl").exists()
+    assert not stale_shard.exists()
+
+
+def test_sequence_resync_step_planner_is_shared_and_debloated() -> None:
+    """Sync and async sequence resync share _plan_sequence_resync_steps without dead _PG_SEQUENCE_DIALECTS."""
+    assert not hasattr(fixture_module, "_PG_SEQUENCE_DIALECTS")
+    col = fixture_module._TableColumn(
+        name="id",
+        data_type="integer",
+        is_primary=True,
+        is_identity=True,
+        identity_always=True,
+        sequence_name=None,
+        is_generated=False,
+    )
+    sybase_steps = fixture_module._plan_sequence_resync_steps("users", [col], dialect_name="sybase", family="sybase")
+    assert len(sybase_steps) == 1
+    assert sybase_steps[0].skip_when_zero is True
+    assert sybase_steps[0].statement.format(next_val=42) == "EXEC sp_chgattribute 'users', 'identity_burn_max', 0, '42'"
+
+    sa_steps = fixture_module._plan_sequence_resync_steps(
+        "DBA.users", [col], dialect_name="sqlanywhere", family="sqlanywhere"
+    )
+    assert len(sa_steps) == 1
+    assert sa_steps[0].skip_when_zero is False
+    assert sa_steps[0].statement.format(next_val=15) == "CALL sa_reset_identity('users', 'DBA', 15)"
+
+
+class _FakeHalfVector:
+    """Stub representing pgvector.HalfVector without a numpy tolist() method."""
+
+    def __init__(self, values: list[float]) -> None:
+        self._values = values
+
+    def to_list(self) -> list[float]:
+        return list(self._values)
+
+    def to_text(self) -> str:
+        return "[" + ",".join(str(v) for v in self._values) + "]"
+
+
+class _FakeSparseVector:
+    """Stub representing pgvector.SparseVector with to_list() and to_text()."""
+
+    def __init__(self, values: list[float]) -> None:
+        self._values = values
+
+    def to_list(self) -> list[float]:
+        return list(self._values)
+
+    def to_text(self) -> str:
+        nonzero = [f"{idx}:{val}" for idx, val in enumerate(self._values, start=1) if val != 0.0]
+        return f"{{{','.join(nonzero)}}}/{len(self._values)}"

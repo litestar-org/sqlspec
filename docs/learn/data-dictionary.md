@@ -1,6 +1,16 @@
 # Data Dictionary
 
-Every SQLSpec driver exposes `session.data_dictionary`—a dialect-aware catalog introspection and DDL synthesis interface returning normalized typed metadata (`TableMetadata`, `ColumnMetadata`, `IndexMetadata`, `ForeignKeyMetadata`, `ColumnProfileMetadata`, `DDLResult`, `VersionInfo`) across SQLite, PostgreSQL, CockroachDB, MySQL, MariaDB, Oracle, SQL Server, Db2, DuckDB, BigQuery, and Spanner.
+Every SQLSpec driver exposes `session.data_dictionary`—a dialect-aware catalog introspection and DDL synthesis interface returning normalized typed metadata (`TableMetadata`, `ColumnMetadata`, `IndexMetadata`, `ForeignKeyMetadata`, `ColumnProfileMetadata`, `DDLResult`, `VersionInfo`) across SQLite, PostgreSQL, CockroachDB, MySQL, MariaDB, Oracle, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, DuckDB, BigQuery, and Cloud Spanner.
+
+```mermaid
+flowchart LR
+    Session["session.data_dictionary"] --> Cache["L1 / L2 Metadata Cache"]
+    Cache --> Loader["Dialect SQL Catalog (.sql)"]
+    Loader --> Normalize["Normalized Metadata Structs"]
+    Normalize --> DDL["Native / AST DDL & Transpilation"]
+```
+
+For the complete catalog of SQL introspection queries and `DialectConfig` profiles executed per engine, see the [Dialect SQL Catalogs Reference](/reference/data-dictionary/dialects/).
 
 ## Introspecting Tables, Columns, Indexes, and Foreign Keys
 
@@ -78,7 +88,7 @@ with spec.provide_session(config) as session:
 | --- | --- |
 | `TableMetadata` | `table_name`, `schema_name`, `table_type`, `dependency_level` |
 | `ColumnMetadata` | `column_name`, `data_type`, `is_nullable`, `column_default`, `identity_generation`, `is_generated`, `generation_expression` |
-| `IndexMetadata` | `index_name`, `table_name`, `column_names`, `is_unique`, `is_primary` |
+| `IndexMetadata` | `index_name`, `table_name`, `columns`, `is_unique`, `is_primary` |
 | `ForeignKeyMetadata` | `constraint_name`, `table_name`, `column_name`, `referenced_table`, `referenced_column`, `on_delete`, `on_update` |
 | `ColumnProfileMetadata` | `column_name`, `declared_type`, `inferred_type`, `row_count`, `null_count`, `distinct_count`, `nullable`, `max_char_length`, `is_unique_candidate` |
 | `DDLResult` | `identity`, `status`, `fidelity`, `source`, `ddl`, `dependencies`, `warnings` |

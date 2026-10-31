@@ -87,7 +87,7 @@ def test_mssql_column_and_index_query_shapes_cover_sql_server_specific_metadata(
         "is_sparse",
         "is_masked",
         "encryption_type_desc",
-        "generated_always_type_desc",
+        "generated_always_type",
         "COALESCE(:schema_name, SCHEMA_NAME())",
     ):
         assert required_fragment in columns_text

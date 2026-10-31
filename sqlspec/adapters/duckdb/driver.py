@@ -144,12 +144,25 @@ class DuckDBDriver(SyncDriverAdapterBase):
         profiling_enabled = bool(self.driver_features.get("enable_statement_profiling", False))
         if profiling_enabled:
             self._ensure_statement_profiling(cursor)
+
+        if statement.returns_rows():
+            data, column_names, row_count, row_format = self._execute_and_materialize_select(
+                cursor, sql, prepared_parameters, sql, profiling_enabled=profiling_enabled
+            )
+            if profiling_enabled:
+                self._capture_statement_profile(sql)
+            return self.create_execution_result(
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=row_count,
+                is_select_result=True,
+                row_format=row_format,
+            )
+
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
-
-        is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
-
-        if is_select_like:
-            data, column_names, row_count, row_format = self._materialize_select_rows(cursor, sql)
+        if self._should_force_select(statement, cursor):
+            data, column_names, row_count, row_format = self._materialize_fetched_rows(cursor, sql)
             if profiling_enabled:
                 self._capture_statement_profile(sql)
             return self.create_execution_result(
@@ -405,12 +418,26 @@ class DuckDBDriver(SyncDriverAdapterBase):
             try:
                 with exc_handler:
                     sql, driver_params = self._compiled_sql(prepared_statement, config)
-                    stream_cursor.execute(sql, driver_params or ())
-                    arrow_reader = (
-                        stream_cursor.to_arrow_reader(batch_size)
-                        if batch_size is not None
-                        else stream_cursor.to_arrow_reader()
-                    )
+                    sql_method = getattr(stream_cursor, "sql", None)
+                    if callable(sql_method):
+                        relation: Any = sql_method(sql, params=driver_params or None)
+                        arrow_reader = (
+                            None
+                            if relation is None
+                            else (
+                                relation.to_arrow_reader(batch_size)
+                                if batch_size is not None
+                                else relation.to_arrow_reader()
+                            )
+                        )
+                    else:
+                        stream_cursor.execute(sql, driver_params or ())
+                        arrow_reader = (
+                            stream_cursor.to_arrow_reader(batch_size)
+                            if batch_size is not None
+                            else stream_cursor.to_arrow_reader()
+                        )
+                    arrow_reader = _ensure_arrow_reader(arrow_reader)
                     if close_cursor:
                         arrow_reader = arrow_reader_with_deferred_close(arrow_reader, stream_cursor.close)
                     arrow_result = build_arrow_result_from_reader(
@@ -427,21 +454,47 @@ class DuckDBDriver(SyncDriverAdapterBase):
                         stream_cursor.close()
                 raise
         else:
-            with self.with_cursor(self.connection) as cursor, exc_handler:
-                sql, driver_params = self._compiled_sql(prepared_statement, config)
-                cursor.execute(sql, driver_params or ())
-                arrow_table = cursor.to_arrow_table()
-                if arrow_table is None:
-                    msg = "DuckDB cursor did not produce an Arrow table"
-                    raise SQLSpecError(msg)
-                arrow_result = build_arrow_result_from_table(
-                    prepared_statement,
-                    arrow_table,
-                    return_format=return_format,
-                    batch_size=batch_size,
-                    arrow_schema=arrow_schema,
-                )
-            self._check_pending_exception(exc_handler)
+            stream_cursor, close_cursor = self._acquire_stream_cursor()
+            try:
+                with exc_handler:
+                    sql, driver_params = self._compiled_sql(prepared_statement, config)
+                    sql_method = getattr(stream_cursor, "sql", None)
+                    if callable(sql_method):
+                        relation = sql_method(sql, params=driver_params or None)
+                        try:
+                            arrow_table = (
+                                None
+                                if relation is None
+                                else (
+                                    relation.to_arrow_table(batch_size)
+                                    if batch_size is not None
+                                    else relation.to_arrow_table()
+                                )
+                            )
+                        finally:
+                            if relation is not None:
+                                close_rel = getattr(relation, "close", None)
+                                if callable(close_rel):
+                                    with contextlib.suppress(Exception):
+                                        close_rel()
+                    else:
+                        stream_cursor.execute(sql, driver_params or ())
+                        arrow_table = stream_cursor.to_arrow_table()
+                    if arrow_table is None:
+                        msg = "DuckDB cursor did not produce an Arrow table"
+                        raise SQLSpecError(msg)
+                    arrow_result = build_arrow_result_from_table(
+                        prepared_statement,
+                        arrow_table,
+                        return_format=return_format,
+                        batch_size=batch_size,
+                        arrow_schema=arrow_schema,
+                    )
+                self._check_pending_exception(exc_handler)
+            finally:
+                if close_cursor:
+                    with contextlib.suppress(Exception):
+                        stream_cursor.close()
 
         if arrow_result is None:
             msg = "Unreachable"
@@ -642,9 +695,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
             if profiling_enabled:
                 self._ensure_statement_profiling(cursor)
             wire_sql = self._format_wire_sql(cached.compiled_sql)
-            cursor.execute(wire_sql, normalize_execute_parameters(params))
             if cached.operation_profile.returns_rows:
-                data, column_names, row_count, row_format = self._materialize_select_rows(cursor, cached.compiled_sql)
+                data, column_names, row_count, row_format = self._execute_and_materialize_select(
+                    cursor, wire_sql, params, cached.compiled_sql, profiling_enabled=profiling_enabled
+                )
                 if profiling_enabled:
                     self._capture_statement_profile(wire_sql)
                 return self.build_cached_select_result(
@@ -657,6 +711,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     row_format=row_format,
                     compiled_sql=wire_sql,
                 )
+            cursor.execute(wire_sql, normalize_execute_parameters(params))
             affected_rows = resolve_rowcount(cursor)
             if profiling_enabled:
                 with contextlib.suppress(Exception):
@@ -679,21 +734,69 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self._pending_statement_profile = profile
         return profile
 
+    def _execute_and_materialize_select(
+        self, cursor: Any, wire_sql: str, parameters: Any, cache_key: str, *, profiling_enabled: bool = False
+    ) -> "tuple[list[Any], list[str], int, RowFormat]":
+        """Execute a row-returning statement and materialize rows via Arrow or fetchall."""
+        hint = self._cache_holder.get_row_count_hint(cache_key)
+        sql_method = getattr(cursor, "sql", None)
+        if (
+            pa is not None
+            and (hint is None or hint >= ARROW_MIN_ROWS)
+            and not profiling_enabled
+            and callable(sql_method)
+        ):
+            relation: Any = sql_method(wire_sql, params=parameters or None)
+            if relation is None:
+                self._cache_holder.set_row_count_hint(cache_key, 0)
+                return [], [], 0, "tuple"
+            try:
+                description = relation.description
+                if description_has_arrow_divergent_types(description):
+                    fetched_data = relation.fetchall()
+                    data, column_names = collect_rows(fetched_data, description)
+                    row_count = len(data)
+                    self._cache_holder.set_row_count_hint(cache_key, row_count)
+                    return data, column_names, row_count, "tuple"
+                arrow_table = relation.to_arrow_table()
+                data = arrow_table.to_pylist()
+                _restore_uuid_columns(data, description)
+                column_names = list(arrow_table.column_names)
+                row_count = len(data)
+                self._cache_holder.set_row_count_hint(cache_key, row_count)
+                return data, column_names, row_count, "dict"
+            finally:
+                close_method = getattr(relation, "close", None)
+                if callable(close_method):
+                    with contextlib.suppress(Exception):
+                        close_method()
+
+        cursor.execute(wire_sql, normalize_execute_parameters(parameters))
+        if callable(sql_method) or profiling_enabled or (hint is not None and hint < ARROW_MIN_ROWS):
+            return self._materialize_fetched_rows(cursor, cache_key)
+        return self._materialize_select_rows(cursor, cache_key)
+
+    def _materialize_fetched_rows(self, cursor: Any, cache_key: str) -> "tuple[list[Any], list[str], int, RowFormat]":
+        """Materialize already-executed cursor rows via fetchall."""
+        description = cursor.description
+        fetched_data = cursor.fetchall()
+        data, column_names = collect_rows(fetched_data, description)
+        row_count = len(data)
+        self._cache_holder.set_row_count_hint(cache_key, row_count)
+        return data, column_names, row_count, "tuple"
+
     def _materialize_select_rows(self, cursor: Any, compiled_sql: str) -> "tuple[list[Any], list[str], int, RowFormat]":
         """Materialize SELECT rows using DuckDB's native Python type contract."""
         description = cursor.description
         hint = self._cache_holder.get_row_count_hint(compiled_sql)
         if (
-            (hint is not None and hint < ARROW_MIN_ROWS)
+            pa is None
+            or (hint is not None and hint < ARROW_MIN_ROWS)
             or description_has_arrow_divergent_types(description)
             or not hasattr(cursor, "to_arrow_table")
             or bool(self.driver_features.get("enable_statement_profiling", False))
         ):
-            fetched_data = cursor.fetchall()
-            data, column_names = collect_rows(fetched_data, description)
-            row_count = len(data)
-            self._cache_holder.set_row_count_hint(compiled_sql, row_count)
-            return data, column_names, row_count, "tuple"
+            return self._materialize_fetched_rows(cursor, compiled_sql)
 
         arrow_table = cursor.to_arrow_table()
         data = arrow_table.to_pylist()
@@ -850,9 +953,15 @@ class DuckDBDriver(SyncDriverAdapterBase):
         stream_cursor, close_cursor = self._acquire_stream_cursor()
         try:
             with handler:
-                result = stream_cursor.execute(sql, normalize_execute_parameters(parameters))
-                description = result.description
-                reader = result.to_arrow_reader(chunk_size)
+                sql_method = getattr(stream_cursor, "sql", None)
+                if callable(sql_method):
+                    relation: Any = sql_method(sql, params=parameters or None)
+                    description = relation.description if relation is not None else None
+                    reader = relation.to_arrow_reader(chunk_size) if relation is not None else None
+                else:
+                    result = stream_cursor.execute(sql, normalize_execute_parameters(parameters))
+                    description = result.description
+                    reader = result.to_arrow_reader(chunk_size)
             self._check_pending_exception(handler)
             reader = _ensure_arrow_reader(reader)
             if close_cursor:

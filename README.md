@@ -82,7 +82,7 @@ with spec.provide_session(config) as session:
 | Area | Overview |
 | --- | --- |
 | **Unified Execution** | Consistent `execute`, `select`, `select_one`, `select_one_or_none`, `select_value`, `execute_many`, `select_stream`, and transaction APIs across sync and `asyncio` drivers. |
-| **Database Adapters** | PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`), CockroachDB, SQLite (`sqlite3`, `aiosqlite`), DuckDB, MySQL & MariaDB, Oracle, SQL Server, Db2, BigQuery, Cloud Spanner, ADBC, and Arrow ODBC. |
+| **Database Adapters** | PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`), CockroachDB (`asyncpg`, `psycopg`), SQLite (`sqlite3`, `aiosqlite`), MySQL & MariaDB (`asyncmy`, `aiomysql`, `pymysql`, `mysql-connector-python`), Oracle (`oracledb`), SQL Server (`mssql-python`, `pymssql`), Sybase ASE (`pymssql`), SAP SQL Anywhere (`sqlanydb`), IBM Db2 (`ibm_db`), DuckDB (`duckdb`), BigQuery (`google-cloud-bigquery`), Cloud Spanner (`google-cloud-spanner`), ADBC (`adbc-driver-manager`), and Arrow ODBC (`arrow-odbc`). |
 | **SQL Files & Builder** | Load named queries from `.sql` files via `SQLFileLoader` or build statements with `sql.select`, `sql.insert`, `sql.update`, `sql.delete`, and `sql.merge` with cached AST compilation. |
 | **Typed Rows & Arrow** | Project rows into `msgspec.Struct`, `Pydantic`, `dataclass`, `TypedDict`, or `attrs` models, or stream `pyarrow`, `polars`, and `pandas` datasets across local, `fsspec`, and `obstore` backends. |
 | **Integrations & Ops** | First-party plugins and stores for Litestar, Google ADK, FastAPI, Starlette, Flask, Sanic, Dishka, and Events, plus OpenTelemetry spans, Prometheus metrics, and CLI migrations. |

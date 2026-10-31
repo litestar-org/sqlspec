@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import rich_click as click
 from rich import get_console
+from rich.console import Console
 from rich.markup import escape
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
@@ -436,6 +437,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         progress_message: "Callable[[str], str] | None",
         success_message: "Callable[[str], str] | None",
         failure_message: "Callable[[str, Exception], str]",
+        output_console: "Console | None" = None,
     ) -> None:
         """Dispatch a migration operation across multiple configs.
 
@@ -450,21 +452,23 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             progress_message: Builds the per-config progress line, or None to skip.
             success_message: Builds the per-config success line, or None to skip.
             failure_message: Builds the per-config failure line.
+            output_console: Optional Console override for progress and error output.
         """
+        active_console = output_console if output_console is not None else console
         sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
         errors: list[tuple[str, Exception]] = []
 
         for config_name, config in sync_configs:
             if progress_message is not None and should_echo(config):
-                console.print(progress_message(config_name))
+                active_console.print(progress_message(config_name))
             try:
                 sync_apply(config)
                 if success_message is not None and should_echo(config):
-                    console.print(success_message(config_name))
+                    active_console.print(success_message(config_name))
             except Exception as e:
                 errors.append((config_name, e))
                 if should_echo(config):
-                    console.print(failure_message(config_name, e))
+                    active_console.print(failure_message(config_name, e))
 
         if async_configs:
 
@@ -472,15 +476,15 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 for config_name, config in async_configs:
                     had_pool = getattr(config, "connection_instance", None) is not None
                     if progress_message is not None and should_echo(config):
-                        console.print(progress_message(config_name))
+                        active_console.print(progress_message(config_name))
                     try:
                         await async_apply(config)
                         if success_message is not None and should_echo(config):
-                            console.print(success_message(config_name))
+                            active_console.print(success_message(config_name))
                     except Exception as e:
                         errors.append((config_name, e))
                         if should_echo(config):
-                            console.print(failure_message(config_name, e))
+                            active_console.print(failure_message(config_name, e))
                     finally:
                         await _close_cli_created_pool(config, had_pool=had_pool)
 
@@ -499,6 +503,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         dry_run: bool,
         operation_name: str,
         echo: bool = True,
+        output_console: "Console | None" = None,
     ) -> "list[tuple[str, Any]] | None":
         """Process configuration selection for multi-config operations.
 
@@ -513,10 +518,12 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             dry_run: Whether this is a dry run.
             operation_name: Name of the operation for display.
             echo: Whether to echo output to the console.
+            output_console: Optional Console override for status messages.
 
         Returns:
             List of (config_name, config) tuples to process, or None for single config mode.
         """
+        active_console = output_console if output_console is not None else console
         if bind_key and not include and not exclude:
             return None
 
@@ -530,14 +537,16 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
         if not configs_to_process:
             if echo:
-                console.print("[yellow]No configurations match the specified criteria.[/]")
+                active_console.print("[yellow]No configurations match the specified criteria.[/]")
             return []
 
         if dry_run:
             if echo:
-                console.print(f"[blue]Dry run: Would {operation_name} {len(configs_to_process)} configuration(s)[/]")
+                active_console.print(
+                    f"[blue]Dry run: Would {operation_name} {len(configs_to_process)} configuration(s)[/]"
+                )
                 for config_name, _ in configs_to_process:
-                    console.print(f"  • {config_name}")
+                    active_console.print(f"  • {config_name}")
             return []
 
         return configs_to_process
@@ -840,10 +849,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             target_directory = (
                 str(migration_config_dict.get("script_location", "migrations")) if directory is None else directory
             )
-            migration_commands: SyncMigrationCommands[Any] = cast(
-                "SyncMigrationCommands[Any]",
-                migration_commands_module.create_migration_commands(config=cast("Any", config)),
-            )
+            migration_commands = migration_commands_module.create_migration_commands(config=cast("Any", config))
             migration_commands.init(directory=target_directory, package=package)
 
         if async_configs:
@@ -904,6 +910,14 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     ) -> None:
         """Create a new database revision."""
         ctx = _ensure_click_context()
+
+        if (
+            from_data is not None
+            and not target_table
+            and not migration_commands_module.MigrationCommandsCore._looks_like_data_path(from_data)
+        ):
+            msg = "--target-table is required when --from-data specifies a source table name."
+            raise click.ClickException(msg)
 
         console.rule("[yellow]Creating new migration revision[/]", align="left")
         message_text = message
@@ -1011,6 +1025,15 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             "ranges that cannot be folded faithfully (ddl), or reflect the live database schema (schema)."
         ),
     )
+    @click.option(
+        "--single-file/--split",
+        "single_file",
+        default=None,
+        help=(
+            "Force a single squashed file (--single-file) or split when file types or "
+            "execution directives change (--split)."
+        ),
+    )
     def squash_migrations(
         bind_key: str | None,
         version_range: str | None,
@@ -1026,6 +1049,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         allow_gaps: bool,
         output_format: str,
         strategy: str,
+        single_file: bool | None,
     ) -> None:
         """Squash multiple sequential migrations into a single file.
 
@@ -1055,6 +1079,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             "output_format": output_format.lower(),
             "strategy": strategy.lower(),
         }
+        if single_file is not None:
+            squash_kwargs["single_file"] = single_file
 
         def _squash_for_config(config: Any) -> None:
             _dispatch_migration_call(config, "squash", **squash_kwargs)
@@ -1159,12 +1185,26 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 )
             )
 
+        stderr_console = Console(stderr=True)
         configs_to_process = process_multiple_configs(
-            ctx, bind_key, include, exclude, dry_run=False, operation_name="dump schema", echo=echo_value
+            ctx,
+            bind_key,
+            include,
+            exclude,
+            dry_run=False,
+            operation_name="dump schema",
+            echo=echo_value,
+            output_console=stderr_console,
         )
         if configs_to_process is not None:
             if not configs_to_process:
                 return
+            if output is not None:
+                msg = (
+                    "Cannot use a single --output file when dumping schema across multiple configurations; "
+                    "specify --bind-key or omit --output."
+                )
+                raise click.ClickException(msg)
             _run_multi_config_operation(
                 configs_to_process,
                 sync_apply=_dump_for_config,
@@ -1173,6 +1213,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 progress_message=lambda name: f"[blue]Dumping schema for configuration: {name}[/]",
                 success_message=None,
                 failure_message=lambda name, e: f"[red]✗ Failed to dump schema for {name}: {e}[/]",
+                output_console=stderr_console,
             )
             return
 

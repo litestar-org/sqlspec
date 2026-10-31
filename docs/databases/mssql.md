@@ -4,11 +4,43 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
 
 ## Install and When to Choose
 
-| Adapter | Install Command | Best Fit |
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[mssql-python]"
+    # or: uv add "sqlspec[pymssql]"
+    # or: uv add "sqlspec[arrow-odbc]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[mssql-python]"
+    # or: pip install "sqlspec[pymssql]"
+    # or: pip install "sqlspec[arrow-odbc]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[mssql-python]"
+    # or: pdm add "sqlspec[pymssql]"
+    # or: pdm add "sqlspec[arrow-odbc]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[mssql-python]"
+    # or: poetry add "sqlspec[pymssql]"
+    # or: poetry add "sqlspec[arrow-odbc]"
+    ```
+
+| Adapter | Extra | Best Fit |
 | --- | --- | --- |
-| `mssql_python` | `uv add "sqlspec[mssql-python]"` | Microsoft's official modern Python driver with Entra ID (`ActiveDirectoryDefault`) auth and native Arrow `BulkCopy` ingestion. |
-| `pymssql` | `uv add "sqlspec[pymssql]"` | Lightweight FreeTDS-based synchronous driver for classic SQL authentication and portable Linux containers. |
-| [`arrow_odbc`](arrow-odbc.md) | `uv add "sqlspec[arrow-odbc]"` | High-throughput analytical reads streaming ODBC batches directly into Apache Arrow tables. |
+| `mssql_python` | `sqlspec[mssql-python]` | Microsoft's official modern Python driver with Entra ID (`ActiveDirectoryDefault`) auth and native Arrow `BulkCopy` ingestion. |
+| `pymssql` | `sqlspec[pymssql]` | Lightweight FreeTDS-based synchronous driver for classic SQL authentication and portable Linux containers. |
+| [`arrow_odbc`](arrow-odbc.md) | `sqlspec[arrow-odbc]` | High-throughput analytical reads streaming ODBC batches directly into Apache Arrow tables. |
 
 ## Minimal Connection and Pool Setup
 

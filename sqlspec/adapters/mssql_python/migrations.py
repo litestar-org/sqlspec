@@ -1,7 +1,6 @@
 """mssql-python-specific migration tracker."""
 
 import logging
-import os
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
@@ -13,7 +12,6 @@ from sqlspec.adapters.mssql_python.core import (
 )
 from sqlspec.builder import CreateTable, sql
 from sqlspec.migrations.tracker import SyncMigrationTracker
-from sqlspec.migrations.version import parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -115,26 +113,12 @@ class MssqlPythonSyncMigrationTracker(MssqlPythonMigrationTrackerMixin, SyncMigr
         Squashed migrations persist their replaced versions in the ``replaces`` column so
         multi-environment reconciliation can recognize fully applied pre-squash histories.
         """
-        parsed_version = parse_version(version)
-        version_type = parsed_version.type.value
+        version_type = self._derive_version_type(version)
         result = driver.execute(self._next_execution_sequence_query())
-        next_sequence = result.get_data()[0]["next_seq"] if result.data else 1
-        applied_by = os.environ.get("USER", "unknown")
-        if replaces:
-            statement = self._record_squashed_migration_statement(
-                version,
-                version_type,
-                next_sequence,
-                description,
-                execution_time_ms,
-                checksum,
-                applied_by,
-                ",".join(replaces),
-            )
-        else:
-            statement = self._record_migration_statement(
-                version, version_type, next_sequence, description, execution_time_ms, checksum, applied_by
-            )
+        next_sequence = self._extract_next_sequence(result)
+        statement = self._record_statement(
+            version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by(), replaces
+        )
         driver.execute(statement)
         if commit:
             self._commit_if_needed(driver)

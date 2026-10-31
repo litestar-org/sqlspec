@@ -16,6 +16,18 @@ SQLSpec targets **Python 3.11 and newer** (`3.11` through `3.15`). Installing th
     pip install sqlspec
     ```
 
+=== "pdm"
+
+    ```bash
+    pdm add sqlspec
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add sqlspec
+    ```
+
 Combine multiple optional extras in a single install command when adding drivers, serializers, or framework plugins:
 
 === "uv"
@@ -28,6 +40,18 @@ Combine multiple optional extras in a single install command when adding drivers
 
     ```bash
     pip install "sqlspec[asyncpg,msgspec,litestar,opentelemetry]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[asyncpg,msgspec,litestar,opentelemetry]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[asyncpg,msgspec,litestar,opentelemetry]"
     ```
 
 ## Database Driver Extras
@@ -43,6 +67,8 @@ Install only the driver extras needed by your deployment target. See [Databases]
 | **MySQL / MariaDB** | `asyncmy`, `aiomysql`, `pymysql`, `mysql-connector` | `asyncmy>=0.2.13`, `aiomysql`, `pymysql`, or `mysql-connector-python` |
 | **Oracle** | `oracledb` | `oracledb>=3.4` (Thin mode built-in; optional Instant Client for Thick mode) |
 | **SQL Server** | `mssql-python`, `pymssql` | `mssql-python>=1.13` or `pymssql` |
+| **Sybase ASE** | `sybase` | `pymssql>=2.4.4` (FreeTDS TDS 5.0 wire protocol) |
+| **SAP SQL Anywhere** | `sqlanywhere` | `sqlanydb>=1.0.14` (`dbcapi` native client wrapper) |
 | **IBM Db2** | `db2` | `ibm_db>=3.3.0` |
 | **DuckDB** | `duckdb` | `duckdb`, `pyarrow`, `pytz` |
 | **Google Cloud** | `bigquery`, `spanner` | `google-cloud-bigquery` (+ Storage/GCS) or `google-cloud-spanner>=3.64.0` |

@@ -2,6 +2,14 @@
 
 Every SQLSpec driver exposes a uniform set of query methods on `session` (sync) and `await session` (async) so you can express row cardinality intent directly at the call site without unpacking raw DB-API cursors.
 
+```mermaid
+flowchart LR
+    Input["SQL String / Named SQL / Builder"] --> Compile["Compile & Statement Cache"]
+    Compile --> Execute["Adapter Wire Execution"]
+    Execute --> Result["SQLResult / ArrowResult"]
+    Result --> Output["dict / msgspec / Pydantic / Arrow"]
+```
+
 ## Choosing the Right Execution Method
 
 | Method | Return Value | Behavior on Empty Result |

@@ -23,13 +23,15 @@ Curated API reference for all SQLSpec database adapters (`sqlspec.adapters.*`). 
 | `sqlspec.adapters.pymysql` | [pymysql](pymysql.md) | `PyMysqlConfig` | `PyMysqlDriver` | [MySQL & MariaDB](../../databases/mysql.md) |
 | `sqlspec.adapters.mysqlconnector` | [mysqlconnector](mysqlconnector.md) | `MysqlConnectorSyncConfig`, `MysqlConnectorAsyncConfig` | `MysqlConnectorSyncDriver`, `MysqlConnectorAsyncDriver` | [MySQL & MariaDB](../../databases/mysql.md) |
 
-## Oracle, SQL Server & IBM Db2
+## Enterprise & Relational Databases
 
 | Adapter Module | Reference Page | Config Classes | Driver Classes | Setup Guide |
 | --- | --- | --- | --- | --- |
 | `sqlspec.adapters.oracledb` | [oracledb](oracledb.md) | `OracleSyncConfig`, `OracleAsyncConfig` | `OracleSyncDriver`, `OracleAsyncDriver` | [Oracle Database](../../databases/oracledb.md) |
 | `sqlspec.adapters.mssql_python` | [mssql-python](mssql-python.md) | `MssqlPythonConfig` | `MssqlPythonDriver` | [SQL Server](../../databases/mssql.md) |
 | `sqlspec.adapters.pymssql` | [pymssql](pymssql.md) | `PymssqlConfig` | `PymssqlDriver` | [SQL Server](../../databases/mssql.md) |
+| `sqlspec.adapters.sybase` | [sybase](sybase.md) | `SybaseConfig` | `SybaseDriver` | [Sybase ASE](../../databases/sybase.md) |
+| `sqlspec.adapters.sqlanywhere` | [sqlanywhere](sqlanywhere.md) | `SqlanywhereConfig` | `SqlanywhereDriver` | [SAP SQL Anywhere](../../databases/sqlanywhere.md) |
 | `sqlspec.adapters.db2` | [db2](db2.md) | `Db2SyncConfig`, `Db2AsyncConfig` | `Db2SyncDriver`, `Db2AsyncDriver` | [IBM Db2](../../databases/db2.md) |
 
 ## Cloud, Analytics & Arrow Connectors

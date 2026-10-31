@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[asyncpg]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[asyncpg]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[asyncpg]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[asyncpg]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[asyncpg]"
+    ```
 
 Choose `asyncpg` for pure-`asyncio` APIs and background workers that prioritize binary-protocol throughput, per-statement query timeouts, and automatic custom type codecs. If the same codebase also requires synchronous DB-API connections, see [`psycopg`](psycopg.md).
 

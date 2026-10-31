@@ -20,7 +20,7 @@
       {{ prefix }}
       {%- if not signature and (backlink_type or path.startswith("sqlspec.")) -%}
         <autoref identifier="{{ path }}"{% if backlink_type %} backlink-type="{{ backlink_type }}" backlink-anchor="{{ html_id }}"{% endif %} optional{% if title != path %} hover{% endif %}>{{ title }}</autoref>
-      {%- elif signature and config.signature_crossrefs -%}
+      {%- elif signature and config.signature_crossrefs and path.startswith("sqlspec.") -%}
         {%- filter stash_crossref(length=title|length) -%}
           <autoref identifier="{{ path }}"{% if backlink_type %} backlink-type="{{ backlink_type }}" backlink-anchor="{{ html_id }}"{% endif %} optional{% if title != path %} hover{% endif %}>{{ title }}</autoref>
         {%- endfilter -%}

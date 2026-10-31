@@ -1,4 +1,4 @@
-{#- Template for auto-summaries, automatically rendering Attributes tables on TypedDict schemas. -#}
+{#- Template for auto-summaries, rendering compact Attributes and Methods tables on classes. -#}
 {% with members_list = config.members if root_members else None %}
   {% if config.summary.modules %}
     {% include "summary/modules.html.jinja" with context %}
@@ -12,12 +12,11 @@
     {% include "summary/classes.html.jinja" with context %}
   {% endif %}
 
-  {% if config.summary.functions %}
+  {% if config.summary.functions or (obj.is_class and (obj.functions | length) >= 3) %}
     {% include "summary/functions.html.jinja" with context %}
   {% endif %}
 
-  {% set is_typed_dict = obj.is_class and ('TypedDict' in (obj.bases | map('string') | join(' ')) or 'Params' in obj.name or 'Features' in obj.name or (obj.name.endswith('Config') and not obj.functions)) %}
-  {% if config.summary.attributes or is_typed_dict %}
+  {% if config.summary.attributes or obj.is_class %}
     {% include "summary/attributes.html.jinja" with context %}
   {% endif %}
 {% endwith %}

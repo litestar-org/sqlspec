@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.adbc._typing import AdbcNotSupportedError, AdbcOperationalError
-from sqlspec.adapters.adbc.core import format_identifier
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     ConstraintMetadata,
@@ -44,10 +43,10 @@ from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_compone
 from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
 from sqlspec.data_dictionary.dialects.sqlite import format_sqlite_schema_prefix, resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
-from sqlspec.exceptions import OperationalError, SQLFileNotFoundError
+from sqlspec.exceptions import OperationalError, SQLFileNotFoundError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
-from sqlspec.utils.text import normalize_identifier, quote_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -273,7 +272,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 return driver.select(query_text, schema_name=schema_name, schema_type=ColumnMetadata)
             query_text = self._get_query_text(dialect, "columns", "by_table").format(
                 schema_prefix=schema_prefix,
-                table_name=format_identifier(f"{schema_name}.{table}" if schema_name else table),
+                table_name=_format_sqlite_identifier(f"{schema_name}.{table}" if schema_name else table),
             )
             return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
 
@@ -315,7 +314,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             schema_prefix = format_sqlite_schema_prefix(schema_name)
             table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
             index_list_sql = self._get_query_text(dialect, "indexes", "by_table").format(
-                schema_prefix=schema_prefix, table_name=format_identifier(table_identifier)
+                schema_prefix=schema_prefix, table_name=_format_sqlite_identifier(table_identifier)
             )
             index_list_rows = driver.select(index_list_sql, table_name=table_name, schema_name=schema_name)
             index_metadata_list: list[IndexMetadata] = []
@@ -325,7 +324,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                     continue
                 index_identifier = f"{schema_name}.{index_name}" if schema_name else index_name
                 columns_sql = self._get_query_text(dialect, "indexes", "columns_by_index").format(
-                    index_name=format_identifier(index_identifier)
+                    index_name=_format_sqlite_identifier(index_identifier)
                 )
                 columns_rows = driver.select(columns_sql, index_name=index_name, schema_name=schema_name)
                 columns: list[str] = []
@@ -402,7 +401,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             table_label = table.replace("'", "''")
             table_identifier = f"{schema_name}.{table}" if schema_name else table
             query_text = self._get_query_text(dialect, "foreign_keys", "by_table").format(
-                table_name=format_identifier(table_identifier), table_label=table_label
+                table_name=_format_sqlite_identifier(table_identifier), table_label=table_label
             )
             return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ForeignKeyMetadata)
 
@@ -1065,3 +1064,17 @@ def _normalize_native_statistics(
                     record["schema_name"] = str(schema_name)
                 statistics.append(record)
     return statistics
+
+
+def _format_sqlite_identifier(identifier: str) -> str:
+    """Format and validate a SQLite identifier for PRAGMA table-valued function queries."""
+    cleaned = identifier.strip()
+    if not cleaned or "\x00" in cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+
+    parts = split_qualified_identifier(cleaned, quote_chars='"')
+    if not parts:
+        msg = f"Invalid SQLite identifier: {identifier!r}"
+        raise SQLSpecError(msg)
+    return ".".join(quote_identifier(part) for part in parts)

@@ -6,11 +6,14 @@ import click
 import pytest
 from tools.docs.generate_cli_docs import main as cli_docs_main
 from tools.docs.generate_cli_docs import render_cli_reference
+from tools.docs.generate_data_dictionary_docs import DIALECT_SPECS, render_all_dialect_docs
+from tools.docs.generate_data_dictionary_docs import main as dialect_docs_main
 
 import sqlspec.cli as cli_module
 
 __all__ = (
     "test_cli_docs_main_writes_and_checks_staleness",
+    "test_dialect_docs_generator_renders_all_dialects_and_checks_staleness",
     "test_lazy_cli_attribute_resolves_click_group",
     "test_render_cli_reference_renders_all_commands_arguments_and_options_cleanly",
 )
@@ -88,5 +91,35 @@ def test_cli_docs_main_writes_and_checks_staleness(tmp_path: Path, capsys: pytes
 
     output_file.write_text("# stale\n", encoding="utf-8")
     stale_rc = cli_docs_main(["--check", "--output", str(output_file)])
+    assert stale_rc == 1
+    assert "out of date" in capsys.readouterr().err.lower()
+
+
+def test_dialect_docs_generator_renders_all_dialects_and_checks_staleness(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rendered = render_all_dialect_docs()
+    assert "index.md" in rendered
+    assert len(rendered) == len(DIALECT_SPECS) + 1
+    assert "spanner" in rendered["index.md"]
+    assert "columns.sql" in rendered["postgres.md"]
+    assert "SYS.SYSTABCOL" in rendered["sqlanywhere.md"]
+    assert "sysobjects" in rendered["sybase.md"]
+
+    out_dir = tmp_path / "dialects"
+    missing_rc = dialect_docs_main(["--check", "--output-dir", str(out_dir)])
+    assert missing_rc == 1
+    assert "missing" in capsys.readouterr().err.lower()
+
+    write_rc = dialect_docs_main(["--output-dir", str(out_dir)])
+    assert write_rc == 0
+    assert (out_dir / "index.md").is_file()
+    assert (out_dir / "postgres.md").is_file()
+
+    clean_rc = dialect_docs_main(["--check", "--output-dir", str(out_dir)])
+    assert clean_rc == 0
+
+    (out_dir / "postgres.md").write_text("# stale\n", encoding="utf-8")
+    stale_rc = dialect_docs_main(["--check", "--output-dir", str(out_dir)])
     assert stale_rc == 1
     assert "out of date" in capsys.readouterr().err.lower()

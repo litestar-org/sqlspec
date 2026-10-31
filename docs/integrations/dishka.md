@@ -4,9 +4,29 @@
 
 ## Installation
 
-```bash
-uv add sqlspec dishka
-```
+=== "uv"
+
+    ```bash
+    uv add sqlspec dishka
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install sqlspec dishka
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add sqlspec dishka
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add sqlspec dishka
+    ```
 
 ## Provider Pattern (`Scope.APP` + `Scope.REQUEST`)
 

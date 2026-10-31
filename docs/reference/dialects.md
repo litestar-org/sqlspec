@@ -8,6 +8,8 @@ from sqlspec.dialects import (
     PGVector,
     Spangres,
     Spanner,
+    SQLAnywhere,
+    Sybase,
 )
 ```
 
@@ -20,6 +22,16 @@ Custom SQLGlot dialect implementations registered automatically via Python entry
       heading_level: 3
 
 ::: sqlspec.dialects.spanner.Spangres
+    options:
+      heading_level: 3
+
+## Sybase ASE & SAP SQL Anywhere Dialects
+
+::: sqlspec.dialects.sybase.Sybase
+    options:
+      heading_level: 3
+
+::: sqlspec.dialects.sybase.SQLAnywhere
     options:
       heading_level: 3
 

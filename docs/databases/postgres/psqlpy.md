@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[psqlpy]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[psqlpy]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[psqlpy]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[psqlpy]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[psqlpy]"
+    ```
 
 Choose `psqlpy` for latency-sensitive `asyncio` workloads that benefit from Tokio's multi-threaded Rust socket pool, single-round-trip wire pipelining on `execute_stack`, and `pgvector` bindings without requiring an extra Python `pgvector` client dependency.
 

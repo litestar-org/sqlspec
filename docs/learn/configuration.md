@@ -17,9 +17,20 @@ You can open sessions either through the `SQLSpec` registry (`spec.provide_sessi
 
 A single `SQLSpec` instance can coordinate multiple databases—such as an OLTP primary database alongside an analytical or audit store—and share loaded `.sql` files across them:
 
-```python
---8<-- "docs/examples/configuration/multi_database.py:example"
-```
+=== "SQL (`sql/queries.sql`)"
+
+    ```sql
+    -- name: list_users
+    SELECT id, name
+    FROM users
+    ORDER BY id;
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "docs/examples/configuration/multi_database.py:example"
+    ```
 
 When integrating with the CLI or web frameworks, assign `bind_key="primary"` and `bind_key="analytics"` on each config so migrations (`sqlspec --bind-key analytics upgrade`) and framework dependency keys (`db_session`, `analytics_session`) address each database unambiguously.
 
@@ -27,92 +38,110 @@ When integrating with the CLI or web frameworks, assign `bind_key="primary"` and
 
 In production web applications and background worker services, isolate connection settings and registry assembly into a dedicated composition root module (`app/config.py`). This pattern keeps configuration evaluation lazy (using PEP 562 `__getattr__`), separates short-lived web requests from long-running background tasks, and registers CLI migrations directly in `pyproject.toml`.
 
-```python
-"""Application database configuration and composition root."""
+=== "Python (`app/config.py`)"
 
-from pathlib import Path
-from typing import Any
+    ```python
+    """Application database configuration and composition root."""
 
-from pydantic_settings import BaseSettings
+    from pathlib import Path
+    from typing import Any
 
-from sqlspec import SQLSpec
-from sqlspec.adapters.asyncpg import AsyncpgConfig
+    from pydantic_settings import BaseSettings
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
-
-class DatabaseSettings(BaseSettings):
-    """Database connection and pool settings."""
-
-    url: str = "postgresql://user:pass@localhost:5432/app"
-    pool_min_size: int = 5
-    pool_max_size: int = 20
-    pool_timeout: float = 30.0
-
-    def get_web_config(self) -> AsyncpgConfig:
-        """Configure request-scoped database pool with framework hooks."""
-        return AsyncpgConfig(
-            bind_key="app-web",
-            connection_config={
-                "dsn": self.url,
-                "min_size": self.pool_min_size,
-                "max_size": self.pool_max_size,
-                "command_timeout": 30.0,
-            },
-            migration_config={
-                "script_location": str(BASE_DIR / "db" / "migrations"),
-                "include_extensions": ["litestar", "adk"],
-            },
-            extension_config={
-                "litestar": {
-                    "disable_di": True,
-                    "manage_lifespan": True,
-                    "session_table": "app_session",
-                }
-            },
-        )
-
-    def get_worker_config(self) -> AsyncpgConfig:
-        """Configure worker database pool without request timeout bounds."""
-        return AsyncpgConfig(
-            bind_key="app-worker",
-            connection_config={
-                "dsn": self.url,
-                "min_size": 2,
-                "max_size": 10,
-                "command_timeout": None,
-            },
-            extension_config={"litestar": {"session_key": "worker_session"}},
-        )
+    BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-def _init_db_manager() -> tuple[SQLSpec, AsyncpgConfig]:
-    settings = DatabaseSettings()
-    db_manager = SQLSpec()
-    db = db_manager.add_config(settings.get_web_config())
-    db_manager.add_config(settings.get_worker_config())
+    class DatabaseSettings(BaseSettings):
+        """Database connection and pool settings."""
 
-    sql_dir = BASE_DIR / "db" / "sql"
-    if sql_dir.exists():
-        db_manager.load_sql_files(sql_dir)
+        url: str = "postgresql://user:pass@localhost:5432/app"
+        pool_min_size: int = 5
+        pool_max_size: int = 20
+        pool_timeout: float = 30.0
 
-    return db_manager, db
+        def get_web_config(self) -> AsyncpgConfig:
+            """Configure request-scoped database pool with framework hooks."""
+            return AsyncpgConfig(
+                bind_key="app-web",
+                connection_config={
+                    "dsn": self.url,
+                    "min_size": self.pool_min_size,
+                    "max_size": self.pool_max_size,
+                    "command_timeout": 30.0,
+                },
+                migration_config={
+                    "script_location": str(BASE_DIR / "db" / "migrations"),
+                    "include_extensions": ["litestar", "adk"],
+                },
+                extension_config={
+                    "litestar": {
+                        "disable_di": True,
+                        "manage_lifespan": True,
+                        "session_table": "app_session",
+                    }
+                },
+            )
+
+        def get_worker_config(self) -> AsyncpgConfig:
+            """Configure worker database pool without request timeout bounds."""
+            return AsyncpgConfig(
+                bind_key="app-worker",
+                connection_config={
+                    "dsn": self.url,
+                    "min_size": 2,
+                    "max_size": 10,
+                    "command_timeout": None,
+                },
+                extension_config={"litestar": {"session_key": "worker_session"}},
+            )
 
 
-_db_manager: SQLSpec | None = None
-_db: AsyncpgConfig | None = None
+    def _init_db_manager() -> tuple[SQLSpec, AsyncpgConfig]:
+        settings = DatabaseSettings()
+        db_manager = SQLSpec()
+        db = db_manager.add_config(settings.get_web_config())
+        db_manager.add_config(settings.get_worker_config())
+
+        sql_dir = BASE_DIR / "db" / "sql"
+        if sql_dir.exists():
+            db_manager.load_sql_files(sql_dir)
+
+        return db_manager, db
 
 
-def __getattr__(name: str) -> Any:
-    """Lazily initialize db_manager and primary db handle on first access."""
-    global _db, _db_manager
-    if name in {"db_manager", "db"}:
-        if _db_manager is None:
-            _db_manager, _db = _init_db_manager()
-        return _db_manager if name == "db_manager" else _db
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
-```
+    _db_manager: SQLSpec | None = None
+    _db: AsyncpgConfig | None = None
+
+
+    def __getattr__(name: str) -> Any:
+        """Lazily initialize db_manager and primary db handle on first access."""
+        global _db, _db_manager
+        if name in {"db_manager", "db"}:
+            if _db_manager is None:
+                _db_manager, _db = _init_db_manager()
+            return _db_manager if name == "db_manager" else _db
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+    ```
+
+=== "SQL (`app/db/sql/queries.sql`)"
+
+    ```sql
+    -- name: get-user-by-id
+    -- param: id int  Account identifier
+    SELECT id, email, created_at
+    FROM users
+    WHERE id = :id;
+
+    -- name: list-active-users
+    SELECT id, email, created_at
+    FROM users
+    WHERE is_active = TRUE
+    ORDER BY created_at DESC;
+    ```
 
 Point the CLI migration runner directly to `app.config.db` in `pyproject.toml`:
 

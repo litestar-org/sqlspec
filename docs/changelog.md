@@ -7,6 +7,44 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.70.0 - Sybase ASE and SAP SQL Anywhere adapters, streaming Arrow ingestion, canonical DDL synthesis, sharded fixtures, and documentation overhaul
+
+**Added:**
+
+* Added Sybase Adaptive Server Enterprise (`sqlspec.adapters.sybase` with `SybaseSyncConfig` and `SybaseSyncDriver`) and SAP SQL Anywhere (`sqlspec.adapters.sqlanywhere` with `SqlAnywhereSyncConfig` and `SqlAnywhereSyncDriver`) database adapters, custom SQLGlot dialects (`Sybase` and `SQLAnywhere` in `sqlspec.dialects.sybase`), data dictionaries (`SybaseSyncDataDictionary` and `SqlAnywhereSyncDataDictionary` with `SYBASE_CONFIG` and `SQLANYWHERE_CONFIG`), type converters (`SybaseOutputConverter` and `SqlAnywhereOutputConverter`), and extension stores for Litestar sessions (`SybaseStore`, `SqlAnywhereStore`), Event queues (`SybaseEventQueueStore`, `SqlAnywhereEventQueueStore`), and Google ADK sessions and memory (`SybaseADKStore`, `SybaseADKMemoryStore`, `SqlAnywhereADKStore`, `SqlAnywhereADKMemoryStore`).
+  ([#870](https://github.com/litestar-org/sqlspec/pull/870))
+* Added `arrow_odbc` dialect auto-detection and `information_schema` / system catalog introspection for Sybase ASE (`Adaptive Server Enterprise` / `ASE`) and SAP SQL Anywhere (`SQL Anywhere` / `Sybase IQ`), routing detected connections to the `sybase` and `sqlanywhere` data dictionaries.
+  ([#870](https://github.com/litestar-org/sqlspec/pull/870))
+* Added streaming Apache Arrow batch ingestion (`iter_arrow_batches`), PostgreSQL binary `COPY` framing (`encode_arrow_batch_pg_binary`, `iter_pgcopy_binary_chunks`, `iter_pgcopy_binary_chunks_async`), staged `MERGE` / `ON CONFLICT` upserts (`execute_staged_load_sync`, `execute_staged_load_async`) across `asyncpg`, `psycopg`, `psqlpy`, `oracledb`, `duckdb`, `sqlite`, `aiosqlite`, `bigquery`, `spanner`, `mssql_python`, `pymssql`, `db2`, and MySQL adapters, and bulk-load secondary index drop/recreate lifecycle helpers (`disable_secondary_indexes`, `rebuild_secondary_indexes`) on `SyncDriverAdapterBase` and `AsyncDriverAdapterBase`.
+  ([#868](https://github.com/litestar-org/sqlspec/pull/868))
+* Added canonical DDL squashing (`MigrationSquasher.fold_canonical_ddl`, `sqlspec squash --canonical`), live database schema dumping (`MigrationCommands.dump_schema`, `sqlspec dump-schema` with `--dialect`, `--schema`, `--include-domains`, `--exclude-domains`, `--exclude-tables`, and `--create-migration`), and data-driven DDL synthesis (`CreateTable.from_metadata`, `CreateTable.from_arrow_schema`, `CreateTable.from_records`, `CreateIndex.from_metadata`, `compile_table_ddl_results`, `get_schema_ddl`, and `profile_table`).
+  ([#862](https://github.com/litestar-org/sqlspec/pull/862))
+* Added sharded fixture loading (`find_fixture_files`, `load_fixture`, `iter_fixture_records`, `write_fixture_shards`), vector embedding column serialization across PostgreSQL (`pgvector`), Oracle (`VECTOR`), DuckDB, BigQuery, Spanner, and SQLite, and cross-adapter primary key sequence resynchronization (`sync_table_sequences`, `sync_table_sequences_async`) after explicit-ID fixture loads.
+  ([#863](https://github.com/litestar-org/sqlspec/pull/863))
+* Added generated Data Dictionary dialect and SQL query reference documentation (`docs/reference/data-dictionary/dialects/` via `tools.docs.generate_data_dictionary_docs`) covering all 13 dialect packs (`bigquery`, `cockroach`, `db2`, `duckdb`, `mssql`, `mysql` / `mariadb`, `oracle`, `postgres`, `spanner`, `sqlanywhere`, `sqlite`, and `sybase`), 214 SQL query files, and 336 named catalog queries.
+
+**Changed:**
+
+* Replaced correlated per-column scalar subqueries in data dictionary `columns.sql` and `indexes.sql` catalog queries across `postgres`, `cockroach`, `mssql`, `mysql`, `oracle`, `db2`, and `duckdb` with pre-aggregated CTEs and joins, and reduced `ColumnMetadata` to its 18 core catalog fields.
+  ([#866](https://github.com/litestar-org/sqlspec/pull/866))
+* Redesigned the documentation site architecture around Zensical and `mkdocstrings-python` with Diataxis-aligned navigation (`Getting Started`, `Learn`, `Adapters`, `Extensions`, `Examples`, `Reference`), interactive WebAssembly SQL playground, runnable `docs/examples/` snippets, conceptual Mermaid diagrams, and tabbed package manager and `SQLFileLoader` examples.
+  ([#864](https://github.com/litestar-org/sqlspec/pull/864),
+  [#867](https://github.com/litestar-org/sqlspec/pull/867),
+  [#869](https://github.com/litestar-org/sqlspec/pull/869))
+* Migrated integration test infrastructure to clientless `pytest-databases` fixtures (`#859`).
+  ([#859](https://github.com/litestar-org/sqlspec/pull/859))
+* Upgraded CI GitHub Actions `astral-sh/setup-uv` from `10.3.1` to `10.3.3` and pinned `actions/checkout` (`6.0.2`), `actions/setup-python` (`7.1.0`), `actions/cache` (`6.0.0`), and `actions/upload-pages-artifact` / `actions/deploy-pages` in `.github/workflows/ci.yml` and `.github/workflows/docs.yml`.
+  ([#872](https://github.com/litestar-org/sqlspec/pull/872))
+
+**Fixed:**
+
+* Removed runtime `duckdb` imports from `sqlspec.adapters.adbc` (`AdbcDataDictionary` and `sqlspec/adapters/adbc/core.py`) and enforced strict adapter import isolation across all 20 database adapters in `tests/unit/test_import_time.py`.
+  ([#865](https://github.com/litestar-org/sqlspec/pull/865))
+* Eliminated extra row copies and `UserWarning` in `DuckDBDriver.select_to_arrow` on DuckDB 2.0+ by routing parameterless `SELECT` queries through `connection.sql(query).to_arrow_table()` and `to_arrow_reader(batch_size=...)` when no open DB-API transaction is active on the connection.
+* Fixed `compile_table_ddl_results` and `CreateIndex` cross-dialect DDL synthesis to emit `COMMENT ON` only on dialects that support it (`postgres`, `oracle`, `db2`, `duckdb`, `snowflake`), inline `COMMENT` clauses on `mysql` and `mariadb`, render `STORING (...)` on `spanner` and `spangres`, fold unquoted source identifiers to target case before quoting target-only reserved keywords, and preserve SQLite `NUMERIC` type affinity.
+* Fixed `MigrationSquasher.fold_canonical_ddl` to fall back cleanly to raw statement concatenation when a migration contains interleaved DML or procedural blocks (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY`, `DO`, `CALL`), preserve table-level constraints across `ALTER TABLE ... RENAME COLUMN` and `DROP COLUMN`, and update `sqlspec_migrations` tracker history atomically inside a single transaction when applying squashed migrations.
+* Fixed `write_fixture_shards` to unlink stale shard and legacy single-file artifacts (`<table>.json`, `<table>.json.gz`, and higher-numbered shards) before writing new shards so subsequent `load_fixture` calls do not read orphaned records.
+
 ### v0.69.0 - Oracle PKCS#12 wallet conversion, TNS alias resolution, proximity RRF, and server-side DBMS_CLOUD ingestion
 
 **Added:**

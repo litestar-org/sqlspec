@@ -1,5 +1,12 @@
 -- name: by_object
 -- dialect: postgres
+WITH extension_deps AS (
+    SELECT DISTINCT
+        classid,
+        objid
+    FROM pg_catalog.pg_depend
+    WHERE deptype = 'e'
+)
 SELECT
     n.nspname::text AS schema_name,
     c.relname::text AS object_name,
@@ -15,10 +22,12 @@ SELECT
         WHEN 'S' THEN 'generated'
         ELSE 'unsupported'
     END AS fidelity,
-    dep.refobjid IS NOT NULL AS is_extension_owned
+    dep.objid IS NOT NULL AS is_extension_owned
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-LEFT JOIN pg_catalog.pg_depend dep ON dep.objid = c.oid AND dep.deptype = 'e'
+LEFT JOIN extension_deps dep
+    ON dep.classid = 'pg_catalog.pg_class'::regclass
+   AND dep.objid = c.oid
 WHERE n.nspname = :schema_name
   AND c.relname = :object_name
   AND (:object_type::text IS NULL OR c.relkind = CASE :object_type
@@ -34,10 +43,12 @@ SELECT
     p.proname::text AS object_name,
     pg_catalog.pg_get_functiondef(p.oid)::text AS ddl,
     'native'::text AS fidelity,
-    dep.refobjid IS NOT NULL AS is_extension_owned
+    dep.objid IS NOT NULL AS is_extension_owned
 FROM pg_catalog.pg_proc p
 JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-LEFT JOIN pg_catalog.pg_depend dep ON dep.objid = p.oid AND dep.deptype = 'e'
+LEFT JOIN extension_deps dep
+    ON dep.classid = 'pg_catalog.pg_proc'::regclass
+   AND dep.objid = p.oid
 WHERE n.nspname = :schema_name
   AND p.proname = :object_name
   AND (:object_type::text IS NULL OR :object_type IN ('routine', 'function', 'procedure'))

@@ -2,7 +2,7 @@
 
 This curriculum walks through SQLSpec from your first in-memory SQLite query to production connection management, Arrow analytics, observability, and multi-database recipes.
 
-Every core guide runs out of the box against Python's built-in `sqlite3` module (or `aiosqlite` for `asyncio`) so you can copy and run examples locally without starting external database containers. When you are ready to connect to PostgreSQL, Oracle, DuckDB, Spanner, BigQuery, MySQL, SQL Server, or Db2, pair these guides with the adapter setup pages under [Databases](/databases/).
+Every core guide runs out of the box against Python's built-in `sqlite3` module (or `aiosqlite` for `asyncio`) so you can copy and run examples locally without starting external database containers. When you are ready to connect to PostgreSQL, CockroachDB, Oracle, DuckDB, Spanner, BigQuery, MySQL, MariaDB, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, ADBC, or Arrow ODBC, pair these guides with the adapter setup pages under [Databases](/databases/).
 
 ## Execution Architecture
 

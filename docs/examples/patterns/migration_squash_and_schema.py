@@ -46,16 +46,16 @@ def main() -> tuple[str, bool, str]:
 
             commands.upgrade(echo=False)
             report = commands.verify(strict=True, echo=False)
-            assert report["valid"] is True
 
             commands.squash("0001", "0002", "initial_baseline", strategy="ddl", yes=True)
             squashed_file = next(migration_dir.glob("0001_*.sql"))
             squashed_sql = squashed_file.read_text(encoding="utf-8")
-            assert "-- Squashed from: 0001, 0002" in squashed_sql
-            assert "display_name" in squashed_sql
 
             schema_sql = commands.dump_schema(migration_dir / "schema.sql", echo=False)
             # --8<-- [end:example]
+            assert report["valid"] is True
+            assert "-- Squashed from: 0001, 0002" in squashed_sql
+            assert "display_name" in squashed_sql
             assert "CREATE TABLE" in schema_sql
             return squashed_file.name, bool(report["valid"]), schema_sql
         finally:

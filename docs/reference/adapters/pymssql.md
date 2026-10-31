@@ -12,14 +12,13 @@ from sqlspec.adapters.pymssql import (
 )
 ```
 
-Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md). See the [SQL Server Setup Guide](../../databases/mssql.md) for usage examples.
+Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md). See the [SQL Server Setup Guide](../../databases/mssql.md) for usage examples and the [SQL Server Data Dictionary & SQL Catalog](../data-dictionary/dialects/mssql.md).
 
 ## Configuration & Parameters
 
 ::: sqlspec.adapters.pymssql.PymssqlConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.adapters.pymssql.PymssqlConnectionParams
     options:
@@ -39,7 +38,7 @@ Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited
       separate_signature: false
       show_signature_annotations: true
 
-## Driver & Pool
+## Driver, Pool & Data Dictionary
 
 ::: sqlspec.adapters.pymssql.PymssqlDriver
     options:
@@ -54,26 +53,32 @@ Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited
 ::: sqlspec.adapters.pymssql.PymssqlConnectionPool
     options:
       heading_level: 3
+
+::: sqlspec.adapters.pymssql.data_dictionary.PymssqlSyncDataDictionary
+    options:
+      heading_level: 3
       members: false
 
-## Extension Stores
+## Extension Stores & Configs
 
 ::: sqlspec.adapters.pymssql.litestar.PymssqlStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.pymssql.adk.PymssqlADKConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.pymssql.adk.PymssqlADKStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.pymssql.adk.PymssqlADKMemoryStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.pymssql.events.PymssqlEventQueueStore
     options:
       heading_level: 4
-      members: false

@@ -17,7 +17,6 @@ Apache Arrow over ODBC adapter built on `arrow-odbc` for zero-copy Arrow batch s
 ::: sqlspec.adapters.arrow_odbc.ArrowOdbcConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.adapters.arrow_odbc.ArrowOdbcConnectionParams
     options:
@@ -31,36 +30,44 @@ Apache Arrow over ODBC adapter built on `arrow-odbc` for zero-copy Arrow batch s
       separate_signature: false
       show_signature_annotations: true
 
-## Driver & Pool
+## Driver, Pool & Data Dictionary
 
 ::: sqlspec.adapters.arrow_odbc.ArrowOdbcDriver
     options:
       heading_level: 3
-      members: false
+      members:
+        - bulk_insert_arrow
 
 ::: sqlspec.adapters.arrow_odbc.ArrowOdbcExceptionHandler
     options:
       heading_level: 3
       members: false
 
-## Extension Stores
+::: sqlspec.adapters.arrow_odbc.data_dictionary.ArrowOdbcDataDictionary
+    options:
+      heading_level: 3
+      members: false
+
+## Extension Stores & Configs
 
 ::: sqlspec.adapters.arrow_odbc.litestar.ArrowOdbcStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKMemoryStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.arrow_odbc.events.ArrowOdbcEventQueueStore
     options:
       heading_level: 4
-      members: false

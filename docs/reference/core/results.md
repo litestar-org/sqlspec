@@ -22,7 +22,11 @@ Result containers for row dictionaries, hydrated schema models, scalar values, A
 ::: sqlspec.core.result.StatementResult
     options:
       heading_level: 3
-      members: false
+      members:
+        - is_success
+        - get_data
+        - get_metadata
+        - set_metadata
 
 ::: sqlspec.core.result.SQLResult
     options:
@@ -36,11 +40,18 @@ Result containers for row dictionaries, hydrated schema models, scalar values, A
         - to_arrow
         - to_pandas
         - to_polars
+        - write_to_storage_sync
+        - write_to_storage_async
 
 ::: sqlspec.core.result.ArrowResult
     options:
       heading_level: 3
-      members: false
+      members:
+        - to_pandas
+        - to_polars
+        - to_dict
+        - write_to_storage_sync
+        - write_to_storage_async
 
 ::: sqlspec.core.result.DMLResult
     options:
@@ -50,21 +61,22 @@ Result containers for row dictionaries, hydrated schema models, scalar values, A
 ::: sqlspec.core.result.StackResult
     options:
       heading_level: 3
-      members: false
+      members:
+        - get_result
+        - is_sql_result
+        - is_arrow_result
+        - is_error
 
 ## Pagination Envelopes
 
 ::: sqlspec.core._pagination.Pagination
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.core._pagination.OffsetPagination
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.core._pagination.CursorPagination
     options:
       heading_level: 3
-      members: false

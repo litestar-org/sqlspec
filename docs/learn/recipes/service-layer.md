@@ -24,127 +24,157 @@ When constructed with `config=`, a service checks out a short-lived pooled sessi
 
 ## Production Service Architecture Patterns
 
-In real-world architectures, services fall into two lifetime patterns:
+In real-world architectures, services follow either a bounded-session or request-scoped lifetime pattern:
 
-### Pattern 1: Bounded-Session Domain Services (`config=` + `provide_session()`)
+### Bounded-Session Domain Services (`config=` + `provide_session()`)
 
 When a service coordinates external asynchronous I/O (such as password hashing, third-party REST APIs, or LLM embeddings), do not keep a database connection checked out during the entire operation. Instead, initialize the service with `config=` and check out short-lived sessions only when executing database commands:
 
-```python
-"""Bounded-session customer domain service using AsyncpgConfig and SQLFileLoader."""
+=== "SQL (`app/sql/customers.sql`)"
 
-from collections.abc import Sequence
-import msgspec
+    ```sql
+    -- name: get-customer-by-email
+    SELECT id, email, tier
+    FROM customers;
 
-from sqlspec import SQLFileLoader, StatementStack
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
-from sqlspec.core import LimitOffsetFilter, OffsetPagination
-from sqlspec.service import SQLSpecAsyncService
+    -- name: list-customers
+    SELECT id, email, tier
+    FROM customers
+    ORDER BY id;
+    ```
+
+=== "Python (`app/services/customers.py`)"
+
+    ```python
+    """Bounded-session customer service using AsyncpgConfig and SQLFileLoader."""
+
+    from collections.abc import Sequence
+    import msgspec
+
+    from sqlspec import SQLFileLoader, StatementStack
+    from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+    from sqlspec.core import LimitOffsetFilter, OffsetPagination
+    from sqlspec.service import SQLSpecAsyncService
 
 
-class Customer(msgspec.Struct, frozen=True, gc=False):
-    """Customer entity representation."""
+    class Customer(msgspec.Struct, frozen=True, gc=False):
+        """Customer entity representation."""
 
-    id: int
-    email: str
-    tier: str
+        id: int
+        email: str
+        tier: str
 
 
-class CustomerService(SQLSpecAsyncService[AsyncpgDriver]):
-    """Domain service managing customer accounts and tier lifecycle."""
+    class CustomerService(SQLSpecAsyncService[AsyncpgDriver]):
+        """Domain service managing customer accounts and tier lifecycle."""
 
-    def __init__(self, config: AsyncpgConfig, loader: SQLFileLoader) -> None:
-        super().__init__(config=config, loader=loader)
+        def __init__(self, config: AsyncpgConfig, loader: SQLFileLoader) -> None:
+            super().__init__(config=config, loader=loader)
 
-    async def get_by_email(self, email: str) -> Customer:
-        """Fetch customer by email, checking out a short-lived connection."""
-        query = self.get_sql("get-customer-by-email").where("email = :email")
-        return await self.get_one(query, email=email, schema_type=Customer)
+        async def get_by_email(self, email: str) -> Customer:
+            """Fetch customer by email, checking out a short-lived connection."""
+            query = self.get_sql("get-customer-by-email").where("email = :email")
+            return await self.get_one(query, email=email, schema_type=Customer)
 
-    async def list_customers(
-        self, *, limit: int = 25, offset: int = 0
-    ) -> OffsetPagination[Customer]:
-        """Paginate customers without holding a connection between pages."""
-        query = self.get_sql("list-customers")
-        return await self.paginate_limit_offset(
-            query,
-            LimitOffsetFilter(limit=limit, offset=offset),
-            schema_type=Customer,
-        )
-
-    async def upgrade_tier_with_audit(
-        self, customer_id: int, new_tier: str, audit_events: Sequence[str]
-    ) -> None:
-        """Execute atomic multi-table updates inside an explicit transaction."""
-        stack = (
-            StatementStack()
-            .push_execute(
-                """
-                UPDATE customers
-                SET tier = :tier
-                WHERE id = :id
-                """,
-                tier=new_tier,
-                id=customer_id,
+        async def list_customers(
+            self, *, limit: int = 25, offset: int = 0
+        ) -> OffsetPagination[Customer]:
+            """Paginate customers without holding a connection between pages."""
+            query = self.get_sql("list-customers")
+            return await self.paginate_limit_offset(
+                query,
+                LimitOffsetFilter(limit=limit, offset=offset),
+                schema_type=Customer,
             )
-            .push_execute_many(
-                """
-                INSERT INTO tier_audit (customer_id, new_tier, event_type)
-                VALUES (:id, :tier, :event)
-                """,
-                [
-                    {"id": customer_id, "tier": new_tier, "event": evt}
-                    for evt in audit_events
-                ],
-            )
-        )
-        async with self.begin_transaction() as session:
-            await session.execute_stack(stack)
-```
 
-### Pattern 2: Request-Scoped Driver Services (`session=driver`)
+        async def upgrade_tier_with_audit(
+            self, customer_id: int, new_tier: str, audit_events: Sequence[str]
+        ) -> None:
+            """Execute atomic multi-table updates inside an explicit transaction."""
+            stack = (
+                StatementStack()
+                .push_execute(
+                    """
+                    UPDATE customers
+                    SET tier = :tier
+                    WHERE id = :id
+                    """,
+                    tier=new_tier,
+                    id=customer_id,
+                )
+                .push_execute_many(
+                    """
+                    INSERT INTO tier_audit (customer_id, new_tier, event_type)
+                    VALUES (:id, :tier, :event)
+                    """,
+                    [
+                        {"id": customer_id, "tier": new_tier, "event": evt}
+                        for evt in audit_events
+                    ],
+                )
+            )
+            async with self.begin_transaction() as session:
+                await session.execute_stack(stack)
+    ```
+
+### Request-Scoped Driver Services (`session=driver`)
 
 When using dependency injection frameworks like Dishka or Litestar where a driver connection is already checked out for the lifetime of an HTTP request, inject the `driver` directly into `SQLSpecAsyncService(session)`:
 
-```python
-"""Request-scoped product service receiving an injected driver instance."""
+=== "SQL (`app/sql/products.sql`)"
 
-import msgspec
+    ```sql
+    -- name: get-product
+    SELECT id, sku, name, price_cents
+    FROM products;
 
-from sqlspec import SQLSpec
-from sqlspec.adapters.asyncpg import AsyncpgDriver
-from sqlspec.core import FilterTypes, OffsetPagination
-from sqlspec.service import SQLSpecAsyncService
+    -- name: list-products
+    SELECT id, sku, name, price_cents
+    FROM products
+    ORDER BY id;
+    ```
+
+=== "Python (`app/services/products.py`)"
+
+    ```python
+    """Request-scoped product service receiving an injected driver instance."""
+
+    import msgspec
+
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.asyncpg import AsyncpgDriver
+    from sqlspec.core import FilterTypes, OffsetPagination
+    from sqlspec.service import SQLSpecAsyncService
 
 
-class Product(msgspec.Struct, frozen=True, gc=False):
-    """Product domain entity."""
+    class Product(msgspec.Struct, frozen=True, gc=False):
+        """Product domain entity."""
 
-    id: int
-    sku: str
-    name: str
-    price_cents: int
+        id: int
+        sku: str
+        name: str
+        price_cents: int
 
 
-class ProductService(SQLSpecAsyncService[AsyncpgDriver]):
-    """Request-scoped service operating on a checked-out driver session."""
+    class ProductService(SQLSpecAsyncService[AsyncpgDriver]):
+        """Request-scoped service operating on a checked-out driver session."""
 
-    def __init__(self, driver: AsyncpgDriver, spec: SQLSpec) -> None:
-        super().__init__(driver)
-        self.spec = spec
+        def __init__(self, driver: AsyncpgDriver, spec: SQLSpec) -> None:
+            super().__init__(driver)
+            self.spec = spec
 
-    async def get_by_id(self, product_id: int) -> Product:
-        """Retrieve a product by ID or raise NotFoundError."""
-        query = self.spec.get_sql("get-product").where("id = :id")
-        return await self.get_one(query, id=product_id, schema_type=Product)
+        async def get_by_id(self, product_id: int) -> Product:
+            """Retrieve a product by ID or raise NotFoundError."""
+            query = self.spec.get_sql("get-product").where("id = :id")
+            return await self.get_one(query, id=product_id, schema_type=Product)
 
-    async def list_products(
-        self, *filters: FilterTypes
-    ) -> OffsetPagination[Product]:
-        """Filter and paginate products using precompiled SQL templates."""
-        query = self.spec.get_sql("list-products")
-        return await self.paginate(query, *filters, schema_type=Product)
-```
+        async def list_products(
+            self, *filters: FilterTypes
+        ) -> OffsetPagination[Product]:
+            """Filter and paginate products using precompiled SQL templates."""
+            query = self.spec.get_sql("list-products")
+            return await self.paginate(query, *filters, schema_type=Product)
+    ```
 
 ## Sharing an Existing Session Across Multiple Services
 

@@ -456,16 +456,7 @@ def create_duckdb_profile_path() -> Path:
     return Path(tempfile.gettempdir()) / f"sqlspec_duckdb_profile_{uuid4().hex}.json"
 
 
-def configure_duckdb_statement_profiling(connection: Any, profile_path: Path) -> None:
-    """Enable DuckDB JSON statement profiling on a connection without observer emission."""
-    escaped_path = str(profile_path).replace("'", "''")
-    connection.execute("PRAGMA enable_profiling='json'")
-    with contextlib.suppress(Exception):
-        connection.execute("SET profiling_coverage='ALL'")
-    connection.execute(f"SET profiling_output='{escaped_path}'")
-
-
-def cleanup_duckdb_profile_path(profile_path: "Path | str | None") -> None:
+def cleanup_duckdb_profile_path(profile_path: Path | str | None) -> None:
     """Remove a temporary DuckDB JSON statement profile file if it exists."""
     if not profile_path:
         return
@@ -473,9 +464,7 @@ def cleanup_duckdb_profile_path(profile_path: "Path | str | None") -> None:
         Path(profile_path).unlink(missing_ok=True)
 
 
-def read_duckdb_profile_json(
-    profile_path: "Path | str | None", executed_sql: str | None = None
-) -> "dict[str, Any] | None":
+def read_duckdb_profile_json(profile_path: Path | str | None, executed_sql: str | None = None) -> dict[str, Any] | None:
     """Read and validate the DuckDB JSON profile file written for executed_sql."""
     if not profile_path:
         return None
@@ -509,6 +498,15 @@ def read_duckdb_profile_json(
         if isinstance(root_op, dict) and "children" in root_op:
             parsed["children"] = root_op["children"]
     return cast("dict[str, Any]", parsed)
+
+
+def configure_duckdb_statement_profiling(connection: Any, profile_path: Path) -> None:
+    """Enable DuckDB JSON statement profiling on a connection without observer emission."""
+    escaped_path = str(profile_path).replace("'", "''")
+    connection.execute("PRAGMA enable_profiling='json'")
+    with contextlib.suppress(Exception):
+        connection.execute("SET profiling_coverage='ALL'")
+    connection.execute(f"SET profiling_output='{escaped_path}'")
 
 
 _EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {
@@ -608,9 +606,12 @@ def duckdb_version_tuple() -> "tuple[int, int, int]":
         return (0, 0, 0)
 
 
+_DUCKDB_COPY_FILENAME_FOLLOWS_QUERY: Final[bool] = duckdb_version_tuple() >= (2, 0, 0)
+
+
 def duckdb_copy_filename_follows_query() -> bool:
     """Return whether DuckDB COPY TO parameter binding follows query bindings."""
-    return duckdb_version_tuple() >= (2, 0, 0)
+    return _DUCKDB_COPY_FILENAME_FOLLOWS_QUERY
 
 
 def _parse_memory_size_bytes(memory_limit: str) -> "int | None":

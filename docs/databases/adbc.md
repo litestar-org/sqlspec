@@ -6,9 +6,29 @@
 
 Install the core `adbc` extra alongside one or more PyPI-installable ADBC wire drivers:
 
-```bash
-uv add "sqlspec[adbc]" adbc-driver-postgresql
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[adbc]" adbc-driver-postgresql
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[adbc]" adbc-driver-postgresql
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[adbc]" adbc-driver-postgresql
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[adbc]" adbc-driver-postgresql
+    ```
 
 | Target Engine | PyPI Package | Supported URI Schemes | Short `driver` Aliases |
 | --- | --- | --- | --- |
@@ -104,6 +124,7 @@ with spec.provide_session(config) as session:
 | --- | --- | --- |
 | `driver` / `driver_name` / `uri` | `connection_config` | Short driver alias (`driver="duckdb"`, `driver="snowflake"`, `driver="bigquery"`), explicit module name (`driver_name="adbc_driver_duckdb"`), or connection URI with auto-detected scheme (`duckdb://`, `snowflake://`, `bigquery://`, `postgresql://`, `oracle://`, `db2://`, `quack://`, `grpc+tls://`). |
 | `username` / `password` / `token` | `connection_config` | Credentials lifted automatically into each driver's expected `db_kwargs` (`adbc.quack.token`, Oracle `db_kwargs`, etc.). |
+| `auth_token_provider` | `driver_features` | Callable invoked when opening ADBC connections to supply fresh IAM, OAuth, or Bearer tokens dynamically. |
 | `auth_type` / `tls_root_certs` / `headers` | `connection_config` | FlightSQL and GizmoSQL OAuth/SSO (`auth_type="external"`), mTLS, and gRPC options (`grpc_max_message_size`, `query_timeout`). |
 | `db_kwargs` / `conn_kwargs` | `connection_config` | Low-level ADBC database and connection option dictionaries. |
 | `enable_lowercase_column_names` | `driver_features` | Lowercases uppercase unquoted identifiers (`True` by default when `dialect` is `"oracle"` or `"db2"`). |

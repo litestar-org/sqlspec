@@ -4,9 +4,29 @@
 
 ## Installation
 
-```bash
-uv add "sqlspec[flask]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[flask]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[flask]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[flask]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[flask]"
+    ```
 
 ## Application Factory Setup
 
