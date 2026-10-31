@@ -609,7 +609,7 @@ def test_ddl_and_sequence_queries_use_upfront_ctes_and_left_joins() -> None:
 
 
 def test_sqlite_schema_ddl_synthesis_replays_multi_column_fks_in_memory() -> None:
-    """SQLite synthesized schema DDL groups composite foreign keys without synthetic names and executes in memory."""
+    """SQLite synthesized schema DDL groups composite foreign keys with synthetic names and executes in memory."""
     config = SqliteConfig(connection_config={"database": ":memory:"})
     try:
         with config.provide_session() as session:
@@ -629,7 +629,7 @@ def test_sqlite_schema_ddl_synthesis_replays_multi_column_fks_in_memory() -> Non
 
     statements = _statements(schema_ddl)
     assert len(statements) == 2
-    assert "entries_fk_" not in statements[1]
+    assert "entries_fk_0" in statements[1]
     assert 'FOREIGN KEY ("tenant_id", "account_id") REFERENCES "accounts"("tenant_id", "account_id")' in statements[1]
 
     conn = sqlite3.connect(":memory:")

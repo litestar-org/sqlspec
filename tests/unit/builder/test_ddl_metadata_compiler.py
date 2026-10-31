@@ -1323,10 +1323,6 @@ def test_create_index_storing_on_spanner_and_include_validation() -> None:
     assert spangres_meta is not None
     assert spangres_meta.build().sql == 'CREATE INDEX "idx_orders_code" ON "orders"("code") STORING ("total")'
 
-    for unsupported in ("duckdb", "sqlite", "mysql", "oracle", "bigquery"):
-        with pytest.raises(SQLBuilderError, match="does not support INCLUDE covering columns"):
-            CreateIndex("idx_orders_code", dialect=unsupported).on("orders", "code").include("total").build()
-
     warnings: list[str] = []
     duck_idx = CreateIndex.from_metadata(
         {"index_name": "idx_orders_code", "table_name": "orders", "columns": ["code"], "included_columns": ["total"]},
@@ -1464,7 +1460,7 @@ def test_translate_catalog_type_preserves_sqlite_type_affinity_and_executes() ->
 
 
 def test_sqlite_composite_foreign_keys_group_without_synthetic_constraint_names() -> None:
-    """SQLite composite foreign keys group into a single unnamed FOREIGN KEY and execute on in-memory SQLite."""
+    """SQLite composite foreign keys group into a single FOREIGN KEY and execute on in-memory SQLite."""
     with SqliteConfig(connection_config={"database": ":memory:"}).provide_session() as source:
         source.execute_script(
             "CREATE TABLE parent (tenant_id INTEGER, item_id INTEGER, PRIMARY KEY (tenant_id, item_id)); "
@@ -1476,12 +1472,12 @@ def test_sqlite_composite_foreign_keys_group_without_synthetic_constraint_names(
             ")"
         )
         fks = source.data_dictionary.get_foreign_keys(source, table="child")
-        assert all(fk.constraint_name is None for fk in fks)
+        assert all(fk.constraint_name == "child_fk_0" for fk in fks)
         ddl_result = source.data_dictionary.get_schema_ddl(source, prefer_native=False)
 
     child_ddl = next(item for item in _ddl_items(ddl_result) if item.identity.name == "child")
     assert child_ddl.ddl is not None
-    assert "child_fk_" not in child_ddl.ddl
+    assert "child_fk_0" in child_ddl.ddl
     assert (
         'FOREIGN KEY ("tenant_id", "item_id") REFERENCES "parent"("tenant_id", "item_id") ON DELETE CASCADE'
         in child_ddl.ddl

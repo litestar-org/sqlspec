@@ -66,7 +66,7 @@ class Db2MigrationTrackerMixin:
         execution_time_ms: int,
         checksum: str,
         applied_by: str,
-        replaces: "Sequence[str] | None" = None,
+        replaces: "Sequence[str] | str | None" = None,
     ) -> "Insert":
         """Build an INSERT statement for a standard or squashed Db2 migration record."""
         columns = [
@@ -93,6 +93,50 @@ class Db2MigrationTrackerMixin:
             columns.append("replaces")
             values.append(replaces if isinstance(replaces, str) else ",".join(replaces))
         return sql.insert(self.version_table).columns(*columns).values(*values)
+
+    def _record_migration_statement(
+        self,
+        version: str,
+        version_type: str,
+        execution_sequence: int,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
+    ) -> "Insert":
+        """Return an INSERT for a migration record with a naive-UTC applied_at."""
+        return self._record_statement(
+            version=version,
+            version_type=version_type,
+            execution_sequence=execution_sequence,
+            description=description,
+            execution_time_ms=execution_time_ms,
+            checksum=checksum,
+            applied_by=applied_by,
+        )
+
+    def _record_squashed_migration_statement(
+        self,
+        version: str,
+        version_type: str,
+        execution_sequence: int,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
+        replaces: "Sequence[str] | str",
+    ) -> "Insert":
+        """Return an INSERT for a squashed migration record with a naive-UTC applied_at."""
+        return self._record_statement(
+            version=version,
+            version_type=version_type,
+            execution_sequence=execution_sequence,
+            description=description,
+            execution_time_ms=execution_time_ms,
+            checksum=checksum,
+            applied_by=applied_by,
+            replaces=replaces,
+        )
 
 
 class Db2SyncMigrationTracker(Db2MigrationTrackerMixin, SyncMigrationTracker):

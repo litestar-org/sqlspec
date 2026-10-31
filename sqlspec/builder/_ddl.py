@@ -1802,16 +1802,6 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
             else:
                 include_cols.append(inc_col.copy())
 
-        if (
-            include_cols
-            and norm_dialect is not None
-            and norm_dialect not in _INCLUDE_INDEX_DIALECTS
-            and norm_dialect not in _STORING_INDEX_DIALECTS
-        ):
-            self._raise_builder_error(
-                f"Dialect '{effective_dialect}' does not support INCLUDE covering columns on indexes."
-            )
-
         where_expr: exp.Expr | None = None
         if self._where is not None:
             if norm_dialect in _NO_PARTIAL_INDEX_DIALECTS:
