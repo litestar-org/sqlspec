@@ -8,29 +8,60 @@ import contextlib
 import os
 from typing import TYPE_CHECKING, Any
 
-import asyncmy as _asyncmy
-from asyncmy import Connection
-from asyncmy import errors as _asyncmy_errors
-from asyncmy.connection import LoadLocalFile
-from asyncmy.connection import MySQLResult as _AsyncmyResult
-from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE
-from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
-from asyncmy.cursors import Cursor as _AsyncmyCursor
-from asyncmy.cursors import DictCursor as _AsyncmyDictCursor
-from asyncmy.cursors import SSCursor as AsyncmySSCursor
-from asyncmy.errors import ProgrammingError as _AsyncmyProgrammingError
-from asyncmy.pool import Pool as _AsyncmyPool
-from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper
+if TYPE_CHECKING:
+    import asyncmy as _asyncmy
+    from asyncmy import Connection
+    from asyncmy import errors as _asyncmy_errors
+    from asyncmy.connection import LoadLocalFile
+    from asyncmy.connection import MySQLResult as _AsyncmyResult
+    from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE
+    from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
+    from asyncmy.cursors import Cursor as _AsyncmyCursor
+    from asyncmy.cursors import DictCursor as _AsyncmyDictCursor
+    from asyncmy.cursors import SSCursor as AsyncmySSCursor
+    from asyncmy.errors import ProgrammingError as _AsyncmyProgrammingError
+    from asyncmy.pool import Pool as _AsyncmyPool
+    from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper
+else:
+    try:
+        import asyncmy as _asyncmy
+        from asyncmy import Connection
+        from asyncmy import errors as _asyncmy_errors
+        from asyncmy.connection import LoadLocalFile
+        from asyncmy.connection import MySQLResult as _AsyncmyResult
+        from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE
+        from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
+        from asyncmy.cursors import Cursor as _AsyncmyCursor
+        from asyncmy.cursors import DictCursor as _AsyncmyDictCursor
+        from asyncmy.cursors import SSCursor as AsyncmySSCursor
+        from asyncmy.errors import ProgrammingError as _AsyncmyProgrammingError
+        from asyncmy.pool import Pool as _AsyncmyPool
+        from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper
+    except ImportError:
+        import re
+
+        _asyncmy = None
+        Connection = None
+        _asyncmy_errors = None
+        LoadLocalFile = None
+        _AsyncmyResult = object
+        _ASYNCMY_FIELD_TYPE = None
+        ASYNCMY_INSERT_VALUES_PATTERN = re.compile(
+            r"(VALUES\s*\()((?:(?!\bVALUES\b).)*?)(\)(?:\s*(?:ON\s+DUPLICATE\s+KEY\s+UPDATE|RETURNING)\b.*)?\Z",
+            re.IGNORECASE | re.DOTALL,
+        )
+        _AsyncmyCursor = None
+        _AsyncmyDictCursor = None
+        AsyncmySSCursor = None
+        _AsyncmyProgrammingError = Exception
+        _AsyncmyPool = None
+        _LoadLocalPacketWrapper = None
 
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterator
-    from types import TracebackType
+    from collections.abc import Iterator
     from typing import Protocol, TypeAlias
-
-    from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
-    from sqlspec.core import StatementConfig
 
     class AsyncmyMySQLError(Exception):
         errno: int
@@ -93,11 +124,8 @@ __all__ = (
     "AsyncmyProgrammingError",
     "AsyncmyRawCursor",
     "AsyncmySSCursor",
-    "AsyncmySessionContext",
     "asyncmy_local_infile",
 )
-
-_resolved_driver_type: "type[AsyncmyDriver] | None" = None
 
 
 class AsyncmyCursor:
@@ -131,60 +159,6 @@ class AsyncmyCursor:
                     await raw_cursor.close()
                 elif hasattr(raw_cursor, "__aexit__"):
                     await raw_cursor.__aexit__(None, None, None)
-
-
-class AsyncmySessionContext:
-    """Async context manager for AsyncMy sessions.
-
-    This class is intentionally excluded from mypyc compilation to avoid ABI
-    boundary issues. It receives callables from uncompiled config classes and
-    instantiates compiled Driver objects, acting as a bridge between compiled
-    and uncompiled code.
-
-    Uses callable-based connection management to decouple from config implementation.
-    """
-
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
-
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], Awaitable[AsyncmyConnection]]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[AsyncmyDriver], AsyncmyDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: AsyncmyConnection | None = None
-        self._driver: AsyncmyDriver | None = None
-
-    async def __aenter__(self) -> "AsyncmyDriver":
-        driver_cls = _get_asyncmy_driver_type()
-        self._connection = await self._acquire_connection()
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        if self._connection is not None:
-            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
-        return None
 
 
 @contextlib.contextmanager
@@ -256,12 +230,3 @@ class _AsyncmyLocalInfileResult(_AsyncmyResult):
             raise SQLSpecError(msg)
         raw_self: Any = self
         raw_self._read_ok_packet(packet)
-
-
-def _get_asyncmy_driver_type() -> "type[AsyncmyDriver]":
-    global _resolved_driver_type
-    if _resolved_driver_type is None:
-        from sqlspec.adapters.asyncmy.driver import AsyncmyDriver as _Driver
-
-        _resolved_driver_type = _Driver
-    return _resolved_driver_type

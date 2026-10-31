@@ -16,7 +16,6 @@ from sqlspec.adapters.asyncmy._typing import (
     AsyncmyError,
     AsyncmyFieldType,
     AsyncmyMySQLError,
-    AsyncmySessionContext,
     asyncmy_local_infile,
 )
 from sqlspec.adapters.asyncmy.core import (
@@ -53,7 +52,7 @@ if TYPE_CHECKING:
     from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
-__all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "AsyncmySessionContext")
+__all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler")
 
 logger = get_logger("sqlspec.adapters.asyncmy")
 
@@ -152,8 +151,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Statement execution results with data or row counts
         """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         description = getattr(cursor, "description", None) or None
@@ -192,15 +191,17 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Batch execution results
         """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
         match = ASYNCMY_INSERT_VALUES_PATTERN.match(sql)
         if match:
             sql = (
-                escape_literal_percent(match.group(1), prepared_parameters, self.statement_config.parameter_validator)
+                escape_literal_percent(
+                    match.group(1), prepared_parameters, statement.statement_config.parameter_validator
+                )
                 + sql[match.end(1) :]
             )
         else:
-            sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+            sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -213,9 +214,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
 
-        Splits multi-statement scripts and executes each statement sequentially.
-        Parameters are embedded as static values for script execution compatibility.
-
         Args:
             cursor: AsyncMy cursor object
             statement: SQL script to execute
@@ -223,25 +221,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Script execution results with statement count
         """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_cursor = cursor
-        normalized_params = normalize_execute_parameters(prepared_parameters)
-
-        for stmt in statements:
-            stmt_sql = (
-                escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
-                if normalized_params is not None
-                else stmt
-            )
-            await cursor.execute(stmt_sql, normalized_params)
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+        return await super().dispatch_execute_script(cursor, statement)
 
     async def begin(self) -> None:
         """Begin a database transaction.
@@ -293,8 +273,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """Return a native asyncmy row stream backed by an unbuffered ``SSCursor``."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
         return AsyncRowStream(AsyncmyStreamSource(self, sql, prepared_parameters, chunk_size, ASYNCMY_JSON_TYPE_CODES))
 
     def handle_database_exceptions(self) -> "AsyncmyExceptionHandler":
@@ -400,22 +380,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    async def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts from storage into MySQL."""
-
-        return await super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect asyncmy rows for the direct execution path."""
         description = cursor.description or None
@@ -477,7 +441,10 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             True when the server reports an open transaction.
         """
-        return bool(getattr(self.connection, "server_status", 0) & 1)
+        try:
+            return bool(self.connection.server_status & 1)
+        except AttributeError:
+            return False
 
 
 def _write_asyncmy_local_infile_payload(records: "list[tuple[Any, ...]]") -> tuple[str, str]:

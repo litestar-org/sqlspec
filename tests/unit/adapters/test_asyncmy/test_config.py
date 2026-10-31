@@ -336,3 +336,55 @@ def test_asyncmy_config_driver_features_initialization() -> None:
     config = AsyncmyConfig(connection_config={"local_infile": True}, driver_features={"json_serializer": str})
     assert config.driver_features["json_serializer"] is str
     assert config.driver_features["enable_local_infile_bulk_load"] is True
+
+
+async def test_asyncmy_create_connection_closes_socket_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """create_connection closes the standalone connection if _ensure_connection raises."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import sqlspec.adapters.asyncmy.config as config_mod
+
+    mock_conn = MagicMock()
+    mock_conn.close = MagicMock()
+    monkeypatch.setattr(config_mod.asyncmy, "connect", AsyncMock(return_value=mock_conn))
+
+    config = AsyncmyConfig(
+        connection_config={"host": "localhost", "database": "test"},
+        driver_features={"on_connection_create": AsyncMock(side_effect=RuntimeError("hook error"))},
+    )
+
+    with pytest.raises(RuntimeError, match="hook error"):
+        await config.create_connection()
+
+    assert mock_conn.close.called
+
+
+def test_asyncmy_config_capability_flags() -> None:
+    """AsyncmyConfig declares accurate native Arrow/Parquet capabilities as False."""
+    assert AsyncmyConfig.supports_native_arrow_export is False
+    assert AsyncmyConfig.supports_native_parquet_export is False
+    assert AsyncmyConfig.supports_native_arrow_import is False
+    assert AsyncmyConfig.supports_native_parquet_import is False
+
+
+async def test_asyncmy_session_context_initialization() -> None:
+    """AsyncmySessionContext enters and exits using AsyncmyDriver without circular imports."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlspec.adapters.asyncmy.config import AsyncmySessionContext
+    from sqlspec.adapters.asyncmy.core import default_statement_config
+
+    mock_conn = MagicMock()
+    acquire = AsyncMock(return_value=mock_conn)
+    release = AsyncMock()
+
+    ctx = AsyncmySessionContext(
+        acquire_connection=acquire,
+        release_connection=release,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    async with ctx as driver:
+        assert driver.connection is mock_conn
+    assert release.called

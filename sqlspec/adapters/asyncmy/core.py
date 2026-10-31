@@ -82,12 +82,7 @@ _MYSQL_DDL_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
     1061: (OperationalError, "duplicate key name"),
     1091: (OperationalError, "cannot drop column or key"),
 }
-_MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
-    "23505": (UniqueViolationError, "unique constraint violation"),
-    "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
-    "23502": (NotNullViolationError, "not-null constraint violation"),
-    "23514": (CheckViolationError, "check constraint violation"),
-}
+_MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {}
 _MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23": (IntegrityError, "integrity constraint violation"),
     "28": (PermissionDeniedError, "authorization error"),
@@ -95,6 +90,10 @@ _MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]
     "42": (SQLParsingError, "SQL syntax error"),
     "08": (DatabaseConnectionError, "connection error"),
     "22": (DataError, "data error"),
+}
+_MYSQL_SYNTAX_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1054: (SQLParsingError, "unknown column"),
+    1146: (SQLParsingError, "table does not exist"),
 }
 _MYSQL_CONSTRAINT_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_DUP_ENTRY: (UniqueViolationError, "unique constraint violation"),
@@ -113,6 +112,8 @@ _MYSQL_ACCESS_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] =
     MYSQL_ER_DBACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_ACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_TABLEACCESS_DENIED: (PermissionDeniedError, "access denied"),
+    1290: (PermissionDeniedError, "read-only server"),
+    1836: (PermissionDeniedError, "read-only mode"),
 }
 _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_LOCK_DEADLOCK: (DeadlockError, "deadlock detected"),
@@ -122,6 +123,7 @@ _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str
     3024: (QueryTimeoutError, "query execution timeout"),
 }
 _MYSQL_CONNECTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1040: (DatabaseConnectionError, "too many connections"),
     MYSQL_CR_SERVER_LOST: (ConnectionTimeoutError, "connection lost"),
     MYSQL_CR_CONNECTION_ERROR: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_CONN_HOST_ERROR: (DatabaseConnectionError, "connection error"),
@@ -192,8 +194,11 @@ class AsyncmyStreamSource:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:
-            with contextlib.suppress(Exception):
+            try:
                 await cursor.close()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    self._driver.connection.close()
 
     async def _start(self) -> None:
         try:
@@ -491,6 +496,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
     if sqlstate_prefix == "40":
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["40"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+
+    dispatch = _MYSQL_SYNTAX_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     if sqlstate_prefix == "42":
