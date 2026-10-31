@@ -325,3 +325,14 @@ def test_pool_get_connection_keeps_connection_on_exception() -> None:
         assert pool.size() == 1
     finally:
         pool.close()
+
+
+def test_pool_health_check_bypassed_when_interval_zero() -> None:
+    """health check is bypassed when health_check_interval is 0."""
+    raw_conn = MagicMock(server_status=0)
+    pool = PyMysqlConnectionPool({}, health_check_interval=0, connection_factory=lambda: raw_conn)
+    try:
+        pool.acquire()
+        assert not raw_conn.ping.called
+    finally:
+        pool.close()

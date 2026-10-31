@@ -3,7 +3,7 @@
 import contextlib
 from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.adapters.pymysql._typing import PyMysqlSSCursor
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -149,7 +149,16 @@ _MYSQL_DATA_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 class PymysqlStreamSource:
     """Compiled chunk source streaming dict rows from a PyMySQL unbuffered ``SSCursor``."""
 
-    __slots__ = ("_chunk_size", "_cursor", "_driver", "_json_type_codes", "_parameters", "_row_plan", "_sql")
+    __slots__ = (
+        "_chunk_size",
+        "_cursor",
+        "_deserializer",
+        "_driver",
+        "_json_type_codes",
+        "_parameters",
+        "_row_plan",
+        "_sql",
+    )
 
     def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, json_type_codes: "set[int]") -> None:
         self._driver = driver
@@ -159,6 +168,10 @@ class PymysqlStreamSource:
         self._cursor: Any = None
         self._json_type_codes = json_type_codes
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        deserializer = getattr(driver, "_json_deserializer", None)
+        if deserializer is None and hasattr(driver, "driver_features") and isinstance(driver.driver_features, dict):
+            deserializer = driver.driver_features.get("json_deserializer")
+        self._deserializer: Callable[[Any], Any] = deserializer or from_json
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -183,12 +196,7 @@ class PymysqlStreamSource:
             return []
         if self._row_plan is None:
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-        deserializer = cast(
-            "Callable[[Any], Any]",
-            getattr(self._driver, "_json_deserializer", None)
-            or self._driver.driver_features.get("json_deserializer", from_json),
-        )
-        return collect_stream_rows(rows, self._row_plan, deserializer)
+        return collect_stream_rows(rows, self._row_plan, self._deserializer)
 
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -255,14 +263,14 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars="`", allow_bracket_quotes=False)
-    formatted = ".".join(quote_backtick_identifier(part) for part in parts)
+    formatted = ".".join([quote_backtick_identifier(part) for part in parts])
     return formatted or quote_backtick_identifier(cleaned)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
     """Construct an INSERT statement with positional placeholders."""
-    column_clause = ", ".join(quote_backtick_identifier(column) for column in columns)
-    placeholders = ", ".join("%s" for _ in columns)
+    column_clause = ", ".join([quote_backtick_identifier(column) for column in columns])
+    placeholders = ", ".join(["%s" for _ in columns])
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
@@ -295,7 +303,11 @@ def can_use_local_infile_records(arrow_table: Any, records: "Sequence[Sequence[A
                 all_safe_types = False
         if all_safe_types:
             return True
-    return not any(isinstance(value, (bytes, bytearray, memoryview, timedelta)) for row in records for value in row)
+    for row in records:
+        for value in row:
+            if isinstance(value, (bytes, bytearray, memoryview, timedelta)):
+                return False
+    return True
 
 
 def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
@@ -348,7 +360,7 @@ def resolve_row_plan(
 
     column_names: list[str] = []
     if not json_type_codes:
-        column_names.extend(column[0] for column in description)
+        column_names.extend([column[0] for column in description])
         return column_names, None
 
     json_indexes: list[int] = []
@@ -513,8 +525,12 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     """Escape literal percent characters before driver-side interpolation."""
     if not parameters or "%" not in sql:
         return sql
+    if isinstance(parameters, Sized) and sql.count("%") == len(parameters):
+        return sql
     keep = {info.position for info in validator.extract_parameters(sql)}
-    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
+    if len(keep) == sql.count("%"):
+        return sql
+    return "".join(["%%" if char == "%" and index not in keep else char for index, char in enumerate(sql)])
 
 
 def build_load_data_statement(
@@ -524,10 +540,10 @@ def build_load_data_statement(
     table_sql = format_identifier(table)
     if escape_percent:
         table_sql = table_sql.replace("%", "%%")
-    column_list = ", ".join(
+    column_list = ", ".join([
         quote_backtick_identifier(column).replace("%", "%%") if escape_percent else quote_backtick_identifier(column)
         for column in columns
-    )
+    ])
     return (
         f"LOAD DATA LOCAL INFILE {placeholder} INTO TABLE {table_sql} "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "

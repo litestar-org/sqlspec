@@ -128,3 +128,20 @@ def test_commit_maps_pymysql_deadlock_error() -> None:
     driver = _driver(connection)
     with pytest.raises(DeadlockError):
         driver.commit()
+
+
+def test_pymysql_stream_source_caches_deserializer() -> None:
+    """PymysqlStreamSource caches deserializer in __init__."""
+    from unittest.mock import MagicMock
+
+    from sqlspec.adapters.pymysql.core import PymysqlStreamSource
+
+    def custom_deserializer(v: Any) -> Any:
+        return v
+
+    driver = MagicMock(
+        _json_deserializer=custom_deserializer, driver_features={"json_deserializer": custom_deserializer}
+    )
+
+    source = PymysqlStreamSource(driver, "SELECT 1", (), 10, set())
+    assert source._deserializer is custom_deserializer
