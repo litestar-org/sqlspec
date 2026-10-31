@@ -294,3 +294,34 @@ def test_pool_new_connection_closes_connection_when_hook_raises() -> None:
         raw_conn.close.assert_called_once()
     finally:
         pool.close()
+
+
+def test_pool_prunes_dead_thread_connections() -> None:
+    """PyMysqlConnectionPool closes and prunes connections when worker threads die."""
+    import threading
+
+    pool = PyMysqlConnectionPool({}, connection_factory=lambda: MagicMock(server_status=0))
+
+    def _worker() -> None:
+        pool.acquire()
+
+    t = threading.Thread(target=_worker)
+    t.start()
+    t.join()
+
+    assert pool.size() == 0
+
+
+def test_pool_get_connection_keeps_connection_on_exception() -> None:
+    """get_connection keeps healthy connection in pool when caller exception occurs."""
+    raw_conn = MagicMock(server_status=0)
+    pool = PyMysqlConnectionPool({}, connection_factory=lambda: raw_conn)
+    try:
+        with pytest.raises(ValueError, match="caller error"):
+            with pool.get_connection() as conn:
+                assert conn is raw_conn
+                raise ValueError("caller error")
+        assert not raw_conn.close.called
+        assert pool.size() == 1
+    finally:
+        pool.close()

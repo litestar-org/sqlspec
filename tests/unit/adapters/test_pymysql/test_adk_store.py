@@ -294,6 +294,7 @@ def test_pymysql_stream_source_closes_cursor_when_execute_raises() -> None:
     connection = MagicMock()
     connection.cursor.return_value = cursor
     driver = MagicMock(connection=connection)
+    driver._run_with_exception_handler = lambda _handler, fn: fn()
     source = PymysqlStreamSource(driver, "SELECT 1", (), 100, set())
 
     with pytest.raises(RuntimeError, match="execute boom"):

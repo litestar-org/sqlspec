@@ -345,6 +345,11 @@ class PyMysqlDriver(SyncDriverAdapterBase):
     ) -> "SQLResult":
         if (
             "%" in cached.compiled_sql
+            and (
+                cached.compiled_sql.count("%") != cached.compiled_sql.count("%s")
+                if isinstance(params, (tuple, list))
+                else True
+            )
             and escape_literal_percent(
                 cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
             )

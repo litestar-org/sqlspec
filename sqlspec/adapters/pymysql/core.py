@@ -162,22 +162,22 @@ class PymysqlStreamSource:
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            try:
-                cursor = self._driver.connection.cursor(PyMysqlSSCursor)
-                self._cursor = cursor
-                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-                self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-            except BaseException:
-                self.close(error=True)
-                raise
+        self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor(PyMysqlSSCursor)
+            self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        except BaseException:
+            self.close(error=True)
+            raise
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        with handler:
-            rows = self._cursor.fetchmany(self._chunk_size)
+        rows = self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []

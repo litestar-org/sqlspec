@@ -73,6 +73,29 @@ def test_execute_stack_commits_when_autocommit_disabled_without_server_transacti
 
     assert connection.begins == 1
     assert all(statement != "BEGIN" for statement, _ in connection.executed)
+
+
+def test_pymysql_sync_stream_source_in_active_except_block() -> None:
+    """PymysqlStreamSource safely handles execution inside an active except block."""
+    from unittest.mock import MagicMock
+
+    from sqlspec.adapters.pymysql.core import PymysqlStreamSource
+
+    cursor = MagicMock()
+    cursor.fetchmany.return_value = [{"id": 1}]
+    cursor.description = [("id", 3, None, None, None, None, None)]
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = PyMysqlDriver(connection)
+
+    try:
+        raise ValueError("simulated active exception")
+    except ValueError:
+        source = PymysqlStreamSource(driver, "SELECT 1", (), 10, set())
+        source.start()
+        chunk = source.fetch_chunk()
+        assert len(chunk) == 1
+        source.close()
     assert connection.commits == 1
     assert connection.rollbacks == 0
 
