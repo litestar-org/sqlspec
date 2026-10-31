@@ -286,8 +286,8 @@ def test_pymysql_adk_memory_store_insert_and_search_json_handling() -> None:
 
 
 def test_pymysql_stream_source_closes_cursor_when_execute_raises() -> None:
-    """PymysqlStreamSource.start() closes the cursor if execute() fails."""
-    from sqlspec.adapters.pymysql.core import PymysqlStreamSource
+    """PyMysqlStreamSource.start() closes the cursor if execute() fails."""
+    from sqlspec.adapters.pymysql.core import PyMysqlStreamSource
 
     cursor = MagicMock()
     cursor.execute.side_effect = RuntimeError("execute boom")
@@ -295,7 +295,7 @@ def test_pymysql_stream_source_closes_cursor_when_execute_raises() -> None:
     connection.cursor.return_value = cursor
     driver = MagicMock(connection=connection)
     driver._run_with_exception_handler = lambda _handler, fn: fn()
-    source = PymysqlStreamSource(driver, "SELECT 1", (), 100, set())
+    source = PyMysqlStreamSource(driver, "SELECT 1", (), 100, set())
 
     with pytest.raises(RuntimeError, match="execute boom"):
         source.start()

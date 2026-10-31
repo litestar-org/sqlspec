@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from sqlspec.core.parameters import ParameterValidator
 
 __all__ = (
-    "PymysqlStreamSource",
+    "PyMysqlStreamSource",
     "apply_driver_features",
     "build_insert_statement",
     "build_load_data_statement",
@@ -146,7 +146,7 @@ _MYSQL_DATA_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 }
 
 
-class PymysqlStreamSource:
+class PyMysqlStreamSource:
     """Compiled chunk source streaming dict rows from a PyMySQL unbuffered ``SSCursor``."""
 
     __slots__ = (

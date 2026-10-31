@@ -5,7 +5,7 @@ from typing import Any, cast
 import pytest
 from pymysql.constants import SERVER_STATUS
 
-from sqlspec import StatementStack
+from sqlspec import SQL, StatementStack
 from sqlspec.adapters.pymysql import PyMysqlDriver
 from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.exceptions import DeadlockError
@@ -76,10 +76,10 @@ def test_execute_stack_commits_when_autocommit_disabled_without_server_transacti
 
 
 def test_pymysql_sync_stream_source_in_active_except_block() -> None:
-    """PymysqlStreamSource safely handles execution inside an active except block."""
+    """PyMysqlStreamSource safely handles execution inside an active except block."""
     from unittest.mock import MagicMock
 
-    from sqlspec.adapters.pymysql.core import PymysqlStreamSource
+    from sqlspec.adapters.pymysql.core import PyMysqlStreamSource
 
     cursor = MagicMock()
     cursor.fetchmany.return_value = [{"id": 1}]
@@ -91,7 +91,7 @@ def test_pymysql_sync_stream_source_in_active_except_block() -> None:
     try:
         raise ValueError("simulated active exception")
     except ValueError:
-        source = PymysqlStreamSource(driver, "SELECT 1", (), 10, set())
+        source = PyMysqlStreamSource(driver, "SELECT 1", (), 10, set())
         source.start()
         chunk = source.fetch_chunk()
         assert len(chunk) == 1
@@ -131,10 +131,10 @@ def test_commit_maps_pymysql_deadlock_error() -> None:
 
 
 def test_pymysql_stream_source_caches_deserializer() -> None:
-    """PymysqlStreamSource caches deserializer in __init__."""
+    """PyMysqlStreamSource caches deserializer in __init__."""
     from unittest.mock import MagicMock
 
-    from sqlspec.adapters.pymysql.core import PymysqlStreamSource
+    from sqlspec.adapters.pymysql.core import PyMysqlStreamSource
 
     def custom_deserializer(v: Any) -> Any:
         return v
@@ -143,5 +143,44 @@ def test_pymysql_stream_source_caches_deserializer() -> None:
         _json_deserializer=custom_deserializer, driver_features={"json_deserializer": custom_deserializer}
     )
 
-    source = PymysqlStreamSource(driver, "SELECT 1", (), 10, set())
+    source = PyMysqlStreamSource(driver, "SELECT 1", (), 10, set())
     assert source._deserializer is custom_deserializer
+
+
+def test_pymysql_dispatch_execute_many_escapes_entire_sql() -> None:
+    """dispatch_execute_many escapes % across the entire SQL statement."""
+    cursor = _FakeCursor()
+    conn = _FakeConnection()
+    driver = PyMysqlDriver(cast("Any", conn))
+    statement = SQL(
+        "INSERT INTO demo (val) VALUES (%s) ON DUPLICATE KEY UPDATE val = val % 2",
+        [(1,)],
+        statement_config=driver.statement_config,
+        is_many=True,
+    )
+    driver.dispatch_execute_many(cursor, statement)
+    assert len(cursor.executed) == 1
+
+
+def test_pymysql_dispatch_execute_uses_statement_config() -> None:
+    """dispatch_execute respects statement.statement_config."""
+    from sqlspec.core import StatementConfig
+
+    cursor = _FakeCursor()
+    conn = _FakeConnection()
+    driver = PyMysqlDriver(cast("Any", conn))
+    custom_config = StatementConfig(enable_caching=False)
+    statement = SQL("SELECT 1", statement_config=custom_config)
+    result = driver.dispatch_execute(cursor, statement)
+    assert result is not None
+
+
+def test_pymysql_dispatch_execute_script_delegates_to_super() -> None:
+    """dispatch_execute_script emits script statement events via super()."""
+    cursor = _FakeCursor()
+    conn = _FakeConnection()
+    driver = PyMysqlDriver(cast("Any", conn))
+    statement = SQL("SELECT 1; SELECT 2").as_script()
+    result = driver.dispatch_execute_script(cursor, statement)
+    assert result.statement_count == 2
+    assert result.successful_statements == 2

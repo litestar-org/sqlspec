@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from sqlspec.adapters.pymysql._typing import (
-    PYMYSQL_INSERT_VALUES_PATTERN,
     PyMysqlCursor,
     PyMysqlFieldType,
     PyMysqlMySQLError,
@@ -15,7 +14,7 @@ from sqlspec.adapters.pymysql._typing import (
     PyMysqlSessionContext,
 )
 from sqlspec.adapters.pymysql.core import (
-    PymysqlStreamSource,
+    PyMysqlStreamSource,
     build_insert_statement,
     build_load_data_statement,
     can_use_local_infile_records,
@@ -119,8 +118,8 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         return self._data_dictionary
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows() or cursor.description is not None:
@@ -147,15 +146,8 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        match = PYMYSQL_INSERT_VALUES_PATTERN.match(sql)
-        if match:
-            sql = (
-                escape_literal_percent(match.group(1), prepared_parameters, self.statement_config.parameter_validator)
-                + sql[match.end(1) :]
-            )
-        else:
-            sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -165,20 +157,16 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        """Execute SQL script with statement splitting and parameter handling.
 
-        successful_count = 0
-        last_cursor = cursor
+        Args:
+            cursor: PyMySQL cursor object
+            statement: SQL script to execute
 
-        for stmt in statements:
-            stmt_sql = escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
-            cursor.execute(stmt_sql, normalize_execute_parameters(prepared_parameters))
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+        Returns:
+            ExecutionResult: Script execution results with statement count
+        """
+        return super().dispatch_execute_script(cursor, statement)
 
     def begin(self) -> None:
         try:
@@ -205,9 +193,9 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         """Return a native PyMySQL row stream backed by an unbuffered ``SSCursor``."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
-        return SyncRowStream(PymysqlStreamSource(self, sql, prepared_parameters, chunk_size, PYMYSQL_JSON_TYPE_CODES))
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
+        return SyncRowStream(PyMysqlStreamSource(self, sql, prepared_parameters, chunk_size, PYMYSQL_JSON_TYPE_CODES))
 
     def handle_database_exceptions(self) -> "PyMysqlExceptionHandler":
         return PyMysqlExceptionHandler()
@@ -272,17 +260,17 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         if overwrite:
             statement = f"TRUNCATE TABLE {format_identifier(table)}"
             exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.execute(statement)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            self._run_with_exception_handler(exc_handler, self._execute_cursor_statement, statement)
+            self._check_pending_exception(exc_handler)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             needs_preparation = self._arrow_rows_need_preparation(arrow_table)
-            use_infile = bool(
-                self.driver_features.get("enable_local_infile_bulk_load")
-            ) and can_use_local_infile_records(arrow_table, records)
+            use_infile = (
+                bool(self.driver_features.get("enable_local_infile_bulk_load"))
+                and not needs_preparation
+                and can_use_local_infile_records(arrow_table, records)
+            )
             if use_infile:
                 payload = encode_records_for_local_infile(records)
                 fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
@@ -291,10 +279,8 @@ class PyMysqlDriver(SyncDriverAdapterBase):
                         tmp.write(payload)
                     load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
-                    with exc_handler, self.with_cursor(self.connection) as cursor:
-                        cursor.execute(load_sql, (tmp_name,))
-                    if exc_handler.pending_exception is not None:
-                        raise exc_handler.pending_exception from None
+                    self._run_with_exception_handler(exc_handler, self._execute_cursor_statement, load_sql, (tmp_name,))
+                    self._check_pending_exception(exc_handler)
                 finally:
                     Path(tmp_name).unlink(missing_ok=True)
             else:
@@ -305,29 +291,26 @@ class PyMysqlDriver(SyncDriverAdapterBase):
                     else records
                 )
                 exc_handler = self.handle_database_exceptions()
-                with exc_handler, self.with_cursor(self.connection) as cursor:
-                    cursor.executemany(insert_sql, cast("Any", prepared_records))
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+                self._run_with_exception_handler(
+                    exc_handler, self._executemany_cursor_statement, insert_sql, prepared_records
+                )
+                self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
+    def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
+        with self.with_cursor(self.connection) as cursor:
+            if parameters is None:
+                cursor.execute(statement)
+            else:
+                cursor.execute(statement, parameters)
+
+    def _executemany_cursor_statement(self, statement: str, parameters: Any) -> None:
+        with self.with_cursor(self.connection) as cursor:
+            cursor.executemany(statement, parameters)
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect PyMySQL rows for the direct execution path."""
