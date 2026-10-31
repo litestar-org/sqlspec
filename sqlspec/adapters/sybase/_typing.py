@@ -15,8 +15,8 @@ PYMSSQL_MODULE: Any = None
 _DRIVER_CLS: Any = None
 
 
-class _SybaseUnavailableError(Exception):
-    """Fallback Sybase ASE exception base when pymssql is not installed."""
+class SybaseError(Exception):
+    """Sybase ASE driver exception base."""
 
 
 if TYPE_CHECKING:
@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 
     from pymssql import Connection as _SybaseConnection
     from pymssql import Cursor as _SybaseRawCursor
-    from pymssql import Error as _SybaseError
     from pymssql._pymssql import QueryParams as SybaseQueryParams
 
     from sqlspec.adapters.sybase.driver import SybaseDriver
@@ -34,13 +33,11 @@ if TYPE_CHECKING:
 
     SybaseConnection: TypeAlias = _SybaseConnection
     SybaseRawCursor: TypeAlias = _SybaseRawCursor
-    SybaseError: TypeAlias = _SybaseError
 
 if not TYPE_CHECKING:
     SybaseQueryParams = Any
     SybaseConnection = Any
     SybaseRawCursor = Any
-    SybaseError = import_optional_attr("pymssql", "Error") or _SybaseUnavailableError
 
 __all__ = (
     "PYMSSQL_MODULE",

@@ -15,8 +15,8 @@ SQLANYDB_MODULE: Any = None
 _DRIVER_CLS: Any = None
 
 
-class _SqlanywhereUnavailableError(Exception):
-    """Fallback SQL Anywhere exception base when sqlanydb is not installed."""
+class SqlanywhereError(Exception):
+    """SAP SQL Anywhere driver exception base."""
 
 
 if TYPE_CHECKING:
@@ -30,13 +30,11 @@ if TYPE_CHECKING:
     SqlanywhereConnection: TypeAlias = Any
     SqlanywhereRawCursor: TypeAlias = Any
     SqlanywhereQueryParams: TypeAlias = Any
-    SqlanywhereError: TypeAlias = Exception
 
 if not TYPE_CHECKING:
     SqlanywhereConnection = Any
     SqlanywhereRawCursor = Any
     SqlanywhereQueryParams = Any
-    SqlanywhereError = import_optional_attr("sqlanydb", "Error") or _SqlanywhereUnavailableError
 
 __all__ = (
     "SQLANYDB_MODULE",
