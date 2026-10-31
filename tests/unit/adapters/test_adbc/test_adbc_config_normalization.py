@@ -3,6 +3,7 @@
 from typing import Any, get_type_hints
 from unittest.mock import MagicMock
 
+import adbc_driver_manager.dbapi
 import pytest
 from adbc_driver_bigquery import DatabaseOptions
 
@@ -13,18 +14,8 @@ from sqlspec.adapters.adbc.core import (
     resolve_driver_connect_func,
     resolve_driver_name_from_config,
 )
-from sqlspec.core import ParameterStyle
+from sqlspec.core import SQL, ParameterStyle
 from sqlspec.exceptions import SQLSpecError
-
-
-def _resolve_driver_name(config: AdbcConfig) -> str:
-    """Resolve driver name from configuration."""
-    return resolve_driver_name_from_config(config.connection_config)
-
-
-def _get_connection_config_dict(config: AdbcConfig) -> dict[str, Any]:
-    """Build the normalized connection configuration."""
-    return build_connection_config(config.connection_config)
 
 
 def test_adbc_config_runs_connection_create_callback(monkeypatch: Any) -> None:
@@ -82,14 +73,16 @@ def test_resolve_driver_name_from_uri() -> None:
     assert _resolve_driver_name(config) == "adbc_driver_postgresql.dbapi.connect"
 
 
-def test_resolve_driver_name_gizmosql_alias() -> None:
-    """Resolve GizmoSQL aliases to the FlightSQL driver."""
+def test_resolve_driver_name_gizmosql_alias(monkeypatch: Any) -> None:
+    """Resolve GizmoSQL aliases to the FlightSQL driver when native gizmosql driver is absent."""
+    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
     assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
 
 
-def test_resolve_driver_name_from_gizmosql_uri() -> None:
-    """Detect FlightSQL driver from GizmoSQL URI schemes."""
+def test_resolve_driver_name_from_gizmosql_uri(monkeypatch: Any) -> None:
+    """Detect FlightSQL driver from GizmoSQL URI schemes when native gizmosql driver is absent."""
+    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
     config = AdbcConfig(connection_config={"uri": "gizmosql://localhost:31337"})
     assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
     config = AdbcConfig(connection_config={"uri": "gizmo://localhost:31337"})
@@ -160,8 +153,9 @@ def test_connection_config_dict_preserves_db_kwargs_for_non_bigquery() -> None:
     assert "foo" not in resolved
 
 
-def test_flightsql_lifts_username_password_into_db_kwargs() -> None:
-    """Top-level username/password move into db_kwargs for GizmoSQL."""
+def test_flightsql_lifts_username_password_into_db_kwargs(monkeypatch: Any) -> None:
+    """Top-level username/password move into db_kwargs on the FlightSQL fallback route."""
+    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql", "username": "alice", "password": "secret"})
     resolved = _get_connection_config_dict(config)
 
@@ -170,32 +164,36 @@ def test_flightsql_lifts_username_password_into_db_kwargs() -> None:
     assert "password" not in resolved
 
 
-def test_flightsql_lifts_tls_skip_verify_true() -> None:
-    """tls_skip_verify=True maps to the FlightSQL ADBC option key."""
+def test_flightsql_lifts_tls_skip_verify_true(monkeypatch: Any) -> None:
+    """tls_skip_verify=True maps to the FlightSQL ADBC option key on the FlightSQL fallback route."""
+    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql", "tls_skip_verify": True})
     resolved = _get_connection_config_dict(config)
 
     assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"
 
 
-def test_flightsql_lifts_tls_skip_verify_false() -> None:
-    """tls_skip_verify=False maps to the FlightSQL ADBC option key."""
+def test_flightsql_lifts_tls_skip_verify_false(monkeypatch: Any) -> None:
+    """tls_skip_verify=False maps to the FlightSQL ADBC option key on the FlightSQL fallback route."""
+    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql", "tls_skip_verify": False})
     resolved = _get_connection_config_dict(config)
 
     assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "false"
 
 
-def test_flightsql_lifts_authorization_header() -> None:
+def test_flightsql_lifts_authorization_header(monkeypatch: Any) -> None:
     """authorization_header maps to the FlightSQL ADBC option key."""
+    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql", "authorization_header": "Bearer token"})
     resolved = _get_connection_config_dict(config)
 
     assert resolved["db_kwargs"]["adbc.flight.sql.authorization_header"] == "Bearer token"
 
 
-def test_flightsql_explicit_db_kwargs_wins_over_top_level_shortcuts() -> None:
+def test_flightsql_explicit_db_kwargs_wins_over_top_level_shortcuts(monkeypatch: Any) -> None:
     """User-supplied db_kwargs entries take precedence over top-level shortcuts."""
+    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
     config = AdbcConfig(
         connection_config={
             "driver_name": "gizmosql",
@@ -284,14 +282,13 @@ def test_grpc_tls_uri_defaults_to_duckdb() -> None:
 
 def test_gizmosql_parameter_style_is_qmark() -> None:
     """GizmoSQL connections should use qmark parameter style like DuckDB."""
-    from sqlspec.core import ParameterStyle
-
     config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
     assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
 
 
-def test_gizmo_alias_resolves_to_flightsql() -> None:
-    """The short 'gizmo' alias should also resolve to FlightSQL driver."""
+def test_gizmo_alias_resolves_to_flightsql(monkeypatch: Any) -> None:
+    """The short 'gizmo' alias resolves to FlightSQL driver when native gizmosql driver is absent."""
+    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
     config = AdbcConfig(connection_config={"driver_name": "gizmo"})
     assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
     assert config.statement_config.dialect == "duckdb"
@@ -316,7 +313,6 @@ def test_gizmosql_tls_skip_verify_in_config() -> None:
     config = AdbcConfig(
         connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "tls_skip_verify": True}
     )
-    # Verify the config accepts tls_skip_verify without error
     assert config.connection_config.get("tls_skip_verify") is True
 
 
@@ -342,10 +338,7 @@ def test_gizmosql_backend_duckdb_explicit() -> None:
 
 def test_gizmosql_supported_parameter_styles() -> None:
     """GizmoSQL should support qmark and numeric parameter styles."""
-    from sqlspec.core import ParameterStyle
-
     config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
-    # GizmoSQL (DuckDB backend) should support multiple styles
     supported = config.statement_config.parameter_config.supported_parameter_styles
     assert ParameterStyle.QMARK in supported
 
@@ -375,8 +368,6 @@ def test_shared_object_driver_routes_through_the_driver_manager() -> None:
 
 def test_shared_object_driver_connect_func_is_the_driver_manager() -> None:
     """Resolving the connect function must not try to import the path as a module."""
-    import adbc_driver_manager.dbapi
-
     connect_func = resolve_driver_connect_func("/opt/lib/libadbc_driver_postgresql.dylib", None)
 
     assert connect_func is adbc_driver_manager.dbapi.connect
@@ -636,6 +627,12 @@ def test_gizmosql_prefers_native_driver_when_installed(monkeypatch: Any) -> None
     resolved = _get_connection_config_dict(config)
     assert resolved["auth_type"] == "external"
     assert resolved["tls_skip_verify"] is True
+    assert resolved["autocommit"] is False
+
+    explicit_autocommit = AdbcConfig(
+        connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "autocommit": True}
+    )
+    assert _get_connection_config_dict(explicit_autocommit)["autocommit"] is True
 
 
 def test_gizmosql_flightsql_fallback_lifts_auth_type_into_db_kwargs(monkeypatch: Any) -> None:
@@ -663,3 +660,141 @@ def test_quack_driver_aliases_uri_and_token_normalization() -> None:
         resolved = _get_connection_config_dict(config)
         assert "token" not in resolved
         assert resolved["db_kwargs"]["adbc.quack.token"] == "secret-jwt"
+
+
+def test_db2_cli_dsn_normalizes_to_db2_uri_and_credentials() -> None:
+    """IBM Db2 CLI keyword DSNs normalize to db2:// URIs, top-level credentials, and ADBC db_kwargs."""
+    explicit_driver_cfg = AdbcConfig(
+        connection_config={
+            "driver_name": "db2",
+            "uri": "DATABASE=testdb;HOSTNAME=localhost;PORT=50000;PROTOCOL=TCPIP;UID=db2inst1;PWD=secret;",
+        }
+    )
+    resolved_explicit = _get_connection_config_dict(explicit_driver_cfg)
+    assert resolved_explicit == {"uri": "db2://localhost:50000/testdb", "username": "db2inst1", "password": "secret"}
+
+    inferred_dsn_cfg = AdbcConfig(
+        connection_config={
+            "dsn": (
+                "DATABASE=testdb;HOSTNAME=127.0.0.1;PORT=50000;UID=db2inst1;PWD=secret;"
+                "SECURITY=SSL;SSLSERVERCERTIFICATE=/etc/ssl/ca.pem;CURRENTSCHEMA=APP;CONNECTTIMEOUT=10;"
+            )
+        }
+    )
+    assert _resolve_driver_name(inferred_dsn_cfg) == "adbc_driver_db2.dbapi.connect"
+    assert inferred_dsn_cfg.statement_config.dialect == "db2"
+    assert inferred_dsn_cfg.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
+    resolved_inferred = _get_connection_config_dict(inferred_dsn_cfg)
+    assert resolved_inferred["uri"] == "db2://127.0.0.1:50000/testdb"
+    assert resolved_inferred["username"] == "db2inst1"
+    assert resolved_inferred["password"] == "secret"
+    assert resolved_inferred["db_kwargs"] == {
+        "adbc.db2.tls": "true",
+        "adbc.db2.tls.ca_cert": "/etc/ssl/ca.pem",
+        "adbc.db2.current_schema": "APP",
+        "adbc.db2.connect_timeout": "10",
+    }
+
+    override_resolved = build_connection_config({
+        "dsn": "DATABASE=testdb;HOSTNAME=db2.internal;UID=dsn_user;PWD=dsn_pwd;CURRENTSCHEMA=DSN_SCHEMA;",
+        "username": "explicit_user",
+        "db_kwargs": {"adbc.db2.current_schema": "EXPLICIT_SCHEMA"},
+    })
+    assert override_resolved["uri"] == "db2://db2.internal/testdb"
+    assert override_resolved["username"] == "explicit_user"
+    assert override_resolved["password"] == "dsn_pwd"
+    assert override_resolved["db_kwargs"] == {"adbc.db2.current_schema": "EXPLICIT_SCHEMA"}
+
+    ipv6_resolved = build_connection_config({"dsn": "DATABASE=testdb;HOSTNAME=::1;PORT=50000;UID=db2inst1;"})
+    assert ipv6_resolved["uri"] == "db2://[::1]:50000/testdb"
+
+    odbc_cfg = AdbcConfig(
+        connection_config={"dsn": "DRIVER={IBM DB2 ODBC DRIVER};DATABASE=testdb;HOSTNAME=localhost;PORT=50000;"}
+    )
+    assert _resolve_driver_name(odbc_cfg) != "adbc_driver_db2.dbapi.connect"
+    assert odbc_cfg.statement_config.dialect != "db2"
+
+
+def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> None:
+    """Db2 ADBC routes parameterized non-queries through cursor.executemany across initial, cached, and script paths."""
+    cursor = MagicMock()
+    cursor.description = None
+    cursor.rowcount = 1
+    cursor.fetch_arrow_table.return_value = MagicMock(
+        column_names=["ID"],
+        to_pylist=lambda: [{"ID": 1}],
+        rename_columns=lambda cols: MagicMock(column_names=cols, to_pylist=lambda: [{cols[0]: 1}]),
+    )
+    conn = MagicMock()
+    conn.adbc_get_info.return_value = {"vendor_name": "IBM Db2", "driver_name": "adbc_driver_db2"}
+    conn.cursor.return_value = cursor
+
+    driver = AdbcDriver(conn, dialect="db2")
+
+    driver.execute("CREATE TABLE items (id INT NOT NULL PRIMARY KEY, name VARCHAR(64))")
+    assert cursor.execute.call_count == 1
+    assert cursor.executemany.call_count == 0
+
+    first_insert = driver.execute("INSERT INTO items (id, name) VALUES (?, ?)", (1, "alpha"))
+    assert first_insert.rows_affected == 1
+    assert cursor.executemany.call_count == 1
+    assert cursor.executemany.call_args_list[0].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[1, "alpha"]])
+
+    cached_insert = driver.execute("INSERT INTO items (id, name) VALUES (?, ?)", (2, "beta"))
+    assert cached_insert.rows_affected == 1
+    assert cursor.executemany.call_count == 2
+    assert cursor.executemany.call_args_list[1].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[2, "beta"]])
+
+    script_update = driver.execute_script("UPDATE items SET name = ? WHERE id = ?", ("gamma", 1))
+    assert script_update.rows_affected == 1
+    assert cursor.execute.call_count == 2
+    assert cursor.execute.call_args_list[1].args == ("UPDATE items SET name = 'gamma' WHERE id = 1",)
+    assert cursor.executemany.call_count == 2
+
+    direct_single_script = driver.dispatch_execute_script(
+        cursor, SQL("UPDATE items SET name = ? WHERE id = ?", ("gamma", 1), statement_config=driver.statement_config)
+    )
+    assert direct_single_script.rowcount_override == 1
+    assert cursor.executemany.call_count == 3
+    assert cursor.executemany.call_args_list[2].args == ("UPDATE items SET name = ? WHERE id = ?", [["gamma", 1]])
+
+    direct_multi_script = driver.dispatch_execute_script(
+        cursor,
+        SQL(
+            "CREATE TABLE extra (id INT); INSERT INTO items (id, name) VALUES (?, ?)",
+            (3, "delta"),
+            statement_config=driver.statement_config,
+        ),
+    )
+    assert direct_multi_script.rowcount_override == 1
+    assert cursor.execute.call_count == 3
+    assert cursor.executemany.call_count == 4
+    assert cursor.executemany.call_args_list[3].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[3, "delta"]])
+
+    named_delete = driver.execute("DELETE FROM items WHERE id = :item_id", {"item_id": 2})
+    assert named_delete.rows_affected == 1
+    assert cursor.executemany.call_count == 5
+    assert cursor.executemany.call_args_list[4].args == ("DELETE FROM items WHERE id = ?", [[2]])
+
+    driver.execute("SELECT id FROM items WHERE id = ?", (1,))
+    assert cursor.execute.call_count == 4
+    assert cursor.executemany.call_count == 5
+
+    class _ArrowStreamStub:
+        def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+            return requested_schema
+
+    arrow_stream = _ArrowStreamStub()
+    AdbcDriver._execute_db2_non_query(cursor, "INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
+    assert cursor.executemany.call_count == 6
+    assert cursor.executemany.call_args_list[5].args == ("INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
+
+
+def _resolve_driver_name(config: AdbcConfig) -> str:
+    """Resolve driver name from configuration."""
+    return resolve_driver_name_from_config(config.connection_config)
+
+
+def _get_connection_config_dict(config: AdbcConfig) -> dict[str, Any]:
+    """Build the normalized connection configuration."""
+    return build_connection_config(config.connection_config)

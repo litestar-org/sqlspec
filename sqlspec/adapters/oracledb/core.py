@@ -7,6 +7,7 @@ import io
 import os
 import re
 import shutil
+import ssl
 import stat
 import tempfile
 import threading
@@ -96,6 +97,7 @@ __all__ = (
     "OracleTopologyConfig",
     "apply_driver_features",
     "apply_oracle_session_trace_attributes",
+    "apply_wallet_ssl_context",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
     "build_dbms_cloud_copy_data_sql",
@@ -112,6 +114,7 @@ __all__ = (
     "build_statement_config",
     "build_tns_description",
     "build_truncate_statement",
+    "build_wallet_ssl_context_if_needed",
     "coerce_large_parameters_async",
     "coerce_large_parameters_sync",
     "coerce_many_parameters_async",
@@ -2424,6 +2427,56 @@ def build_dbms_cloud_copy_data_sql(
     return plsql, binds
 
 
+def apply_wallet_ssl_context(config: dict[str, Any]) -> None:
+    """Apply an SSLContext for Oracle wallets with non-strict self-signed CAs if needed.
+
+    Args:
+        config: Connection configuration dictionary.
+    """
+    if oracledb_module.is_thin_mode() and "ssl_context" not in config:
+        wallet_loc = config.get("wallet_location") or config.get("config_dir")
+        wallet_ssl_ctx = build_wallet_ssl_context_if_needed(wallet_loc)
+        if wallet_ssl_ctx is not None:
+            config["ssl_context"] = wallet_ssl_ctx
+
+
+def build_wallet_ssl_context_if_needed(wallet_location: Any) -> "ssl.SSLContext | None":
+    """Build a Thin-mode ``ssl.SSLContext`` for Oracle wallets with non-strict self-signed CAs.
+
+    Oracle ``orapki -self_signed`` wallets (including Autonomous Database Free container
+    wallets) emit X.509 v1 or extension-less self-signed trust-anchor certificates that
+    OpenSSL rejects when Python 3.13+ enables ``ssl.VERIFY_X509_STRICT`` by default.
+    RFC 5280 X.509 v3 CA wallets with ``BasicConstraints(ca=True)`` return ``None`` so
+    the runtime's default strict verification remains intact.
+
+    Args:
+        wallet_location: Configured Oracle wallet directory path, if any.
+
+    Returns:
+        An ``ssl.SSLContext`` with ``VERIFY_X509_STRICT`` cleared while preserving
+        ``ssl.CERT_REQUIRED``, or ``None`` when the default ``ssl.SSLContext`` is compatible.
+    """
+    if not wallet_location:
+        return None
+    location_str = str(wallet_location).strip()
+    if not location_str or location_str.upper() == "SYSTEM":
+        return None
+    pem_path = Path(location_str) / "ewallet.pem"
+    try:
+        if pem_path.is_symlink() or not pem_path.is_file():
+            return None
+    except OSError:
+        return None
+    if not _wallet_pem_has_non_strict_ca(pem_path):
+        return None
+    strict_flag = ssl.VERIFY_X509_STRICT
+    ctx = ssl.create_default_context()
+    if not (ctx.verify_flags & strict_flag):
+        return None
+    ctx.verify_flags &= ~strict_flag
+    return ctx
+
+
 def _build_session_checkout_plan(
     config: "OracleSessionContextConfig | Mapping[str, Any]",
 ) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
@@ -2575,6 +2628,33 @@ def _build_session_release_plan(
     if not plsql_statements:
         return None, bind_params, piggyback_attrs
     return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
+
+
+def _wallet_pem_has_non_strict_ca(pem_path: Path) -> bool:
+    """Return True when ``ewallet.pem`` contains an X.509 v1 or non-CA self-signed certificate."""
+    x509_mod: Any = import_optional("cryptography.x509")
+    if x509_mod is None:
+        return False
+    try:
+        pem_bytes = pem_path.read_bytes()
+        certificates = x509_mod.load_pem_x509_certificates(pem_bytes)
+    except (OSError, ValueError, TypeError):
+        return False
+    v1_version: Any = getattr(x509_mod.Version, "v1", None)
+    basic_constraints_cls: Any = x509_mod.BasicConstraints
+    for cert in certificates:
+        if v1_version is not None and cert.version == v1_version:
+            return True
+        if cert.subject == cert.issuer:
+            is_ca = False
+            try:
+                ext = cert.extensions.get_extension_for_class(basic_constraints_cls)
+                is_ca = bool(ext.value.ca)
+            except Exception:
+                is_ca = False
+            if not is_ca:
+                return True
+    return False
 
 
 def _cleanup_atexit_wallet_dirs() -> None:

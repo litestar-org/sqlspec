@@ -1,18 +1,28 @@
 """Shared SQL Server integration fixtures."""
 
 import contextlib
-from collections.abc import AsyncGenerator, Callable, Generator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from pytest_databases.docker.mssql import MSSQLService
+from pytest_databases.docker.mssql import MSSQLService, exec_sqlcmd
 
-from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
-from sqlspec.adapters.mssql_python import MssqlPythonConfig
-from sqlspec.adapters.mssql_python.litestar import MssqlPythonStore
-from sqlspec.adapters.pymssql import PymssqlConfig
-from sqlspec.adapters.pymssql.litestar import PymssqlStore
+from sqlspec.utils.module_loader import import_optional_attr
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable, Generator
+
+    from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
+    from sqlspec.adapters.mssql_python import MssqlPythonConfig
+    from sqlspec.adapters.mssql_python.litestar import MssqlPythonStore
+    from sqlspec.adapters.pymssql import PymssqlConfig
+    from sqlspec.adapters.pymssql.litestar import PymssqlStore
+else:
+    ArrowOdbcConfig = import_optional_attr("sqlspec.adapters.arrow_odbc", "ArrowOdbcConfig")
+    MssqlPythonConfig = import_optional_attr("sqlspec.adapters.mssql_python", "MssqlPythonConfig")
+    MssqlPythonStore = import_optional_attr("sqlspec.adapters.mssql_python.litestar", "MssqlPythonStore")
+    PymssqlConfig = import_optional_attr("sqlspec.adapters.pymssql", "PymssqlConfig")
+    PymssqlStore = import_optional_attr("sqlspec.adapters.pymssql.litestar", "PymssqlStore")
 
 __all__ = (
     "MSSQL_MIGRATION_LOGIN",
@@ -35,84 +45,45 @@ MSSQL_MIGRATION_LOGIN = "sqlspec_migrator"
 MSSQL_MIGRATION_PASSWORD = "Password123!"
 
 _STORE_TABLE = "litestar_contract_sessions"
-_STORE_EXTENSION_CONFIG: "dict[str, Any]" = {"litestar": {"session_table": _STORE_TABLE}}
+_STORE_EXTENSION_CONFIG: dict[str, Any] = {"litestar": {"session_table": _STORE_TABLE}}
 
 
-def _mssql_events_migration_config(tmp_path: Path, suffix: str) -> "dict[str, Any]":
-    migrations = tmp_path / f"migrations_{suffix}"
-    migrations.mkdir()
-    return {
-        "script_location": str(migrations),
-        "include_extensions": ["events"],
-        "version_table_name": f"ddl_migrations_{suffix}",
-    }
-
-
-def ensure_mssql_migration_login(mssql_service: "MSSQLService") -> None:
+def ensure_mssql_migration_login(mssql_service: MSSQLService) -> None:
     """Ensure SQL Server migration login and database user exist with db_owner membership."""
-    import pymssql
-
-    conn = pymssql.connect(
-        server=mssql_service.host,
-        port=str(mssql_service.port),
+    sql = f"""
+    IF NOT EXISTS (SELECT * FROM sys.server_principals WHERE name = '{MSSQL_MIGRATION_LOGIN}')
+    BEGIN
+        CREATE LOGIN [{MSSQL_MIGRATION_LOGIN}] WITH PASSWORD = '{MSSQL_MIGRATION_PASSWORD}', CHECK_POLICY = OFF;
+    END
+    IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '{MSSQL_MIGRATION_LOGIN}')
+    BEGIN
+        CREATE USER [{MSSQL_MIGRATION_LOGIN}] FOR LOGIN [{MSSQL_MIGRATION_LOGIN}];
+        ALTER ROLE [db_owner] ADD MEMBER [{MSSQL_MIGRATION_LOGIN}];
+    END
+    """
+    exit_code, output = exec_sqlcmd(
+        mssql_service.container,
+        sql,
+        database=mssql_service.database,
         user=mssql_service.user,
         password=mssql_service.password,
-        database=mssql_service.database,
-        autocommit=True,
     )
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                f"""
-                IF NOT EXISTS (SELECT * FROM sys.server_principals WHERE name = '{MSSQL_MIGRATION_LOGIN}')
-                BEGIN
-                    CREATE LOGIN [{MSSQL_MIGRATION_LOGIN}] WITH PASSWORD = '{MSSQL_MIGRATION_PASSWORD}', CHECK_POLICY = OFF;
-                END
-                IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '{MSSQL_MIGRATION_LOGIN}')
-                BEGIN
-                    CREATE USER [{MSSQL_MIGRATION_LOGIN}] FOR LOGIN [{MSSQL_MIGRATION_LOGIN}];
-                    ALTER ROLE [db_owner] ADD MEMBER [{MSSQL_MIGRATION_LOGIN}];
-                END
-                """
-            )
-    finally:
-        conn.close()
-
-
-def _mssql_connection_config(mssql_service: "MSSQLService") -> "dict[str, Any]":
-    return {
-        "server": mssql_service.host,
-        "port": mssql_service.port,
-        "database": mssql_service.database,
-        "user": mssql_service.user,
-        "password": mssql_service.password,
-    }
-
-
-def _mssql_python_connection_config(mssql_service: "MSSQLService", *, autocommit: bool = True) -> "dict[str, Any]":
-    connection_config = _mssql_connection_config(mssql_service)
-    connection_config.update({
-        "encrypt": False,
-        "trust_server_certificate": True,
-        "autocommit": autocommit,
-        "pool_enabled": False,
-    })
-    return connection_config
-
-
-def _arrow_odbc_connection_config(mssql_service: "MSSQLService") -> "dict[str, str]":
-    return {"connection_string": mssql_service.connection_string}
+    if exit_code != 0:
+        decoded_output = output.decode("utf-8", errors="replace")
+        msg = f"Failed to provision SQL Server migration login {MSSQL_MIGRATION_LOGIN!r}: {decoded_output}"
+        raise RuntimeError(msg)
 
 
 @pytest.fixture(scope="session")
-def mssql_python_connection_config(mssql_service: "MSSQLService") -> "dict[str, Any]":
+def mssql_python_connection_config(mssql_service: MSSQLService) -> dict[str, Any]:
     """Provide shared mssql-python connection parameters."""
     return _mssql_python_connection_config(mssql_service, autocommit=False)
 
 
 @pytest.fixture(scope="session")
-def mssql_python_config(mssql_python_connection_config: "dict[str, Any]") -> "Generator[MssqlPythonConfig, None, None]":
+def mssql_python_config(mssql_python_connection_config: dict[str, Any]) -> "Generator[MssqlPythonConfig, None, None]":
     """Provide a session-scoped mssql-python configuration."""
+    pytest.importorskip("mssql_python")
     config = MssqlPythonConfig(connection_config=dict(mssql_python_connection_config))
     try:
         yield config
@@ -121,14 +92,15 @@ def mssql_python_config(mssql_python_connection_config: "dict[str, Any]") -> "Ge
 
 
 @pytest.fixture(scope="session")
-def pymssql_connection_config(mssql_service: "MSSQLService") -> "dict[str, Any]":
+def pymssql_connection_config(mssql_service: MSSQLService) -> dict[str, Any]:
     """Provide shared pymssql connection parameters."""
     return _mssql_connection_config(mssql_service)
 
 
 @pytest.fixture(scope="session")
-def pymssql_config(pymssql_connection_config: "dict[str, Any]") -> "Generator[PymssqlConfig, None, None]":
+def pymssql_config(pymssql_connection_config: dict[str, Any]) -> "Generator[PymssqlConfig, None, None]":
     """Provide a session-scoped pymssql configuration."""
+    pytest.importorskip("pymssql")
     config = PymssqlConfig(connection_config=dict(pymssql_connection_config))
     try:
         yield config
@@ -137,8 +109,10 @@ def pymssql_config(pymssql_connection_config: "dict[str, Any]") -> "Generator[Py
 
 
 @pytest.fixture(scope="session")
-def arrow_odbc_mssql_config(mssql_service: "MSSQLService") -> "Generator[ArrowOdbcConfig, None, None]":
+def arrow_odbc_mssql_config(mssql_service: MSSQLService) -> "Generator[ArrowOdbcConfig, None, None]":
     """Provide a session-scoped arrow-odbc SQL Server configuration."""
+    pytest.importorskip("arrow_odbc")
+    pytest.importorskip("pyarrow")
     config = ArrowOdbcConfig(
         connection_config=_arrow_odbc_connection_config(mssql_service),
         driver_features={"dbms_name": "Microsoft SQL Server"},
@@ -150,10 +124,11 @@ def arrow_odbc_mssql_config(mssql_service: "MSSQLService") -> "Generator[ArrowOd
 
 
 @pytest.fixture
-def events_config_mssql_python(mssql_service: "MSSQLService", tmp_path: Path) -> "Callable[..., Any]":
+def events_config_mssql_python(mssql_service: MSSQLService, tmp_path: Path) -> "Callable[..., Any]":
     """Build mssql-python event-channel configs for contract tests."""
+    pytest.importorskip("mssql_python")
 
-    def make(*, extension_config: "dict[str, Any]", suffix: str) -> MssqlPythonConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "MssqlPythonConfig":
         return MssqlPythonConfig(
             connection_config=_mssql_python_connection_config(mssql_service),
             migration_config=_mssql_events_migration_config(tmp_path, suffix),
@@ -164,10 +139,11 @@ def events_config_mssql_python(mssql_service: "MSSQLService", tmp_path: Path) ->
 
 
 @pytest.fixture
-def events_config_pymssql(mssql_service: "MSSQLService", tmp_path: Path) -> "Callable[..., Any]":
+def events_config_pymssql(mssql_service: MSSQLService, tmp_path: Path) -> "Callable[..., Any]":
     """Build pymssql event-channel configs for contract tests."""
+    pytest.importorskip("pymssql")
 
-    def make(*, extension_config: "dict[str, Any]", suffix: str) -> PymssqlConfig:
+    def make(*, extension_config: dict[str, Any], suffix: str) -> "PymssqlConfig":
         return PymssqlConfig(
             connection_config=_mssql_connection_config(mssql_service),
             migration_config=_mssql_events_migration_config(tmp_path, suffix),
@@ -178,8 +154,10 @@ def events_config_pymssql(mssql_service: "MSSQLService", tmp_path: Path) -> "Cal
 
 
 @pytest.fixture
-async def contract_mssql_python_store(mssql_service: "MSSQLService") -> "AsyncGenerator[MssqlPythonStore, None]":
+async def contract_mssql_python_store(mssql_service: MSSQLService) -> "AsyncGenerator[MssqlPythonStore, None]":
     """Provide a ready mssql-python Litestar store for contract tests."""
+    pytest.importorskip("mssql_python")
+    pytest.importorskip("litestar")
     config = MssqlPythonConfig(
         connection_config=_mssql_python_connection_config(mssql_service), extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -202,8 +180,10 @@ async def contract_mssql_python_store(mssql_service: "MSSQLService") -> "AsyncGe
 
 
 @pytest.fixture
-async def contract_pymssql_store(mssql_service: "MSSQLService") -> "AsyncGenerator[PymssqlStore, None]":
+async def contract_pymssql_store(mssql_service: MSSQLService) -> "AsyncGenerator[PymssqlStore, None]":
     """Provide a ready pymssql Litestar store for contract tests."""
+    pytest.importorskip("pymssql")
+    pytest.importorskip("litestar")
     config = PymssqlConfig(
         connection_config=_mssql_connection_config(mssql_service), extension_config=_STORE_EXTENSION_CONFIG
     )
@@ -226,7 +206,7 @@ async def contract_pymssql_store(mssql_service: "MSSQLService") -> "AsyncGenerat
 
 
 @pytest.fixture(scope="session")
-def mssql_migration_connection_config(mssql_service: "MSSQLService") -> "dict[str, Any]":
+def mssql_migration_connection_config(mssql_service: MSSQLService) -> dict[str, Any]:
     """Provide SQL Server connection parameters using the dedicated migration login."""
     ensure_mssql_migration_login(mssql_service)
     config = _mssql_connection_config(mssql_service)
@@ -236,10 +216,45 @@ def mssql_migration_connection_config(mssql_service: "MSSQLService") -> "dict[st
 
 
 @pytest.fixture(scope="session")
-def mssql_python_migration_connection_config(mssql_service: "MSSQLService") -> "dict[str, Any]":
+def mssql_python_migration_connection_config(mssql_service: MSSQLService) -> dict[str, Any]:
     """Provide mssql-python connection parameters using the dedicated migration login."""
     ensure_mssql_migration_login(mssql_service)
     config = _mssql_python_connection_config(mssql_service, autocommit=False)
     config["user"] = MSSQL_MIGRATION_LOGIN
     config["password"] = MSSQL_MIGRATION_PASSWORD
     return config
+
+
+def _mssql_events_migration_config(tmp_path: Path, suffix: str) -> dict[str, Any]:
+    migrations = tmp_path / f"migrations_{suffix}"
+    migrations.mkdir()
+    return {
+        "script_location": str(migrations),
+        "include_extensions": ["events"],
+        "version_table_name": f"ddl_migrations_{suffix}",
+    }
+
+
+def _mssql_connection_config(mssql_service: MSSQLService) -> dict[str, Any]:
+    return {
+        "server": mssql_service.host,
+        "port": mssql_service.port,
+        "database": mssql_service.database,
+        "user": mssql_service.user,
+        "password": mssql_service.password,
+    }
+
+
+def _mssql_python_connection_config(mssql_service: MSSQLService, *, autocommit: bool = True) -> dict[str, Any]:
+    connection_config = _mssql_connection_config(mssql_service)
+    connection_config.update({
+        "encrypt": False,
+        "trust_server_certificate": True,
+        "autocommit": autocommit,
+        "pool_enabled": False,
+    })
+    return connection_config
+
+
+def _arrow_odbc_connection_config(mssql_service: MSSQLService) -> dict[str, str]:
+    return {"connection_string": mssql_service.connection_string}

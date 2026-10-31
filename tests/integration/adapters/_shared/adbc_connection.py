@@ -5,11 +5,17 @@ behavior. This module keeps raw DB-API `create_connection()` smoke, driver info,
 BigQuery ADBC gating, and explicit PostgreSQL transaction plumbing.
 """
 
+from typing import TYPE_CHECKING
+
 import pytest
-from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from tests.integration.fixtures.adbc import xfail_if_driver_missing
+
+if TYPE_CHECKING:
+    from pytest_databases.docker.bigquery import BigQueryService
+    from pytest_databases.docker.postgres import PostgresService
 
 
 @pytest.mark.xdist_group("postgres")
@@ -58,28 +64,27 @@ def test_sqlite_connection() -> None:
             assert cur.fetchone() == (1,)
 
 
-@pytest.mark.skipif(
-    "not config.getoption('--run-bigquery-tests', default=False)",
-    reason="BigQuery ADBC tests require --run-bigquery-tests flag and valid GCP credentials",
-)
+@pytest.mark.bigquery
 @pytest.mark.xdist_group("bigquery")
 @pytest.mark.adbc
-@xfail_if_driver_missing
-def test_bigquery_connection() -> None:
-    """Test raw ADBC connection creation to BigQuery when explicitly enabled."""
+def test_bigquery_connection(bigquery_service: "BigQueryService") -> None:
+    """Verify BigQuery ADBC option normalization and Go driver endpoint handling against bigquery_service."""
+    pytest.importorskip("adbc_driver_bigquery")
+    assert bigquery_service.endpoint.startswith("http://")
+    assert bigquery_service.project
+    assert bigquery_service.dataset
+
     config = AdbcConfig(
         connection_config={
-            "driver_name": "adbc_driver_bigquery.dbapi.connect",
-            "project_id": "test-project",
-            "dataset_id": "test_dataset",
+            "driver_name": "bigquery",
+            "project_id": bigquery_service.project,
+            "dataset_id": bigquery_service.dataset,
+            "db_kwargs": {"adbc.bigquery.sql.endpoint": bigquery_service.endpoint},
         }
     )
 
-    with config.create_connection() as conn:
-        assert conn is not None
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 as test_value")
-            assert cur.fetchone() == (1,)
+    with pytest.raises(ImproperConfigurationError, match=r"adbc\.bigquery\.sql\.endpoint"), config.create_connection():
+        pass
 
 
 @pytest.mark.xdist_group("postgres")

@@ -260,6 +260,7 @@ jobs:
           -n auto --dist=loadgroup -p no:cacheprovider
 
   test-integration:
+    name: "test-integration (${{ matrix.python-version }}, ${{ matrix.shard }})"
     needs: [ci-scope, test-unit]
     if: needs.ci-scope.outputs.ci_required == 'true'
     runs-on: ubuntu-24.04
@@ -268,7 +269,39 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
-    timeout-minutes: 60
+        shard:
+          - postgres-cockroach
+          - mysql-mariadb-embedded
+          - oracle
+          - mssql-db2
+          - cloud-adbc-storage
+        include:
+          - shard: postgres-cockroach
+            install_odbc: false
+            images: "postgres:18 pgvector/pgvector:pg18 paradedb/paradedb:latest-pg18 cockroachdb/cockroach:latest rustfs/rustfs:latest rustfs/rc:latest gcr.io/alloydb-omni/alloydbomni:18"
+            pytest_targets: "tests/integration/adapters/postgres tests/integration/adapters/cockroach tests/integration/extensions tests/integration/observability"
+            extra_pytest_flags: ""
+          - shard: mysql-mariadb-embedded
+            install_odbc: false
+            images: "mysql:8.4 rustfs/rustfs:latest rustfs/rc:latest mariadb:11.8"
+            pytest_targets: "tests/integration/adapters/mysql tests/integration/adapters/sqlite tests/integration/adapters/duckdb tests/integration/cli tests/integration/migrations"
+            extra_pytest_flags: ""
+          - shard: oracle
+            install_odbc: false
+            images: "gvenzl/oracle-xe:18-slim-faststart gvenzl/oracle-free:23-slim-faststart container-registry.oracle.com/database/adb-free:latest-23ai"
+            pytest_targets: "tests/integration/adapters/oracle"
+            extra_pytest_flags: ""
+          - shard: mssql-db2
+            install_odbc: true
+            images: "mcr.microsoft.com/mssql/server:2022-latest icr.io/db2_community/db2:11.5.9.0"
+            pytest_targets: "tests/integration/adapters/mssql tests/integration/adapters/db2"
+            extra_pytest_flags: ""
+          - shard: cloud-adbc-storage
+            install_odbc: false
+            images: "ghcr.io/goccy/bigquery-emulator:latest gcr.io/cloud-spanner-emulator/emulator:latest gizmodata/gizmosql:latest rustfs/rustfs:latest rustfs/rc:latest floci/floci-gcp:latest floci/floci:latest mcr.microsoft.com/azure-storage/azurite:latest embucket/embucket:latest"
+            pytest_targets: "tests/integration/adapters/bigquery tests/integration/adapters/spanner tests/integration/adapters/gizmosql tests/integration/storage tests/integration/adapters/snowflake"
+            extra_pytest_flags: "--run-bigquery-tests --run-spanner-tests"
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -327,7 +360,7 @@ jobs:
           df -h /
 
       - name: Install SQL Server ODBC driver
-        if: steps.install-deps.outcome == 'success'
+        if: steps.install-deps.outcome == 'success' && matrix.install_odbc
         run: |
           set -eu
           key_url="https://packages.microsoft.com/keys/microsoft.asc"
@@ -366,7 +399,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/docker-images
-          key: docker-images-v2-${{ hashFiles('.github/workflows/ci.yml') }}
+          key: docker-images-${{ matrix.shard }}-v2-${{ hashFiles('.github/workflows/ci.yml') }}
 
       - name: Load cached docker images
         if: steps.install-deps.outcome == 'success' && steps.docker-image-cache.outputs.cache-hit == 'true'
@@ -376,24 +409,11 @@ jobs:
 
       - name: Pre-pull docker images
         if: steps.install-deps.outcome == 'success' && steps.docker-image-cache.outputs.cache-hit != 'true'
+        env:
+          SHARD_IMAGES: ${{ matrix.images }}
         run: |
           set -eu
-          images=(
-            postgres:18
-            gizmodata/gizmosql:latest
-            pgvector/pgvector:pg15
-            paradedb/paradedb:latest-pg18
-            cockroachdb/cockroach:latest
-            mysql:8.4
-            mcr.microsoft.com/mssql/server:2022-latest
-            gvenzl/oracle-xe:18-slim-faststart
-            gvenzl/oracle-free:23-slim-faststart
-            icr.io/db2_community/db2:11.5.9.0
-            ghcr.io/goccy/bigquery-emulator:latest
-            gcr.io/cloud-spanner-emulator/emulator:latest
-            rustfs/rustfs:latest
-            rustfs/rc:latest
-          )
+          read -r -a images <<< "$SHARD_IMAGES"
           printf '%s\n' "${images[@]}" | xargs -P 4 -I{} bash -c '
             for attempt in 1 2 3; do
               if docker pull "$1"; then
@@ -415,7 +435,10 @@ jobs:
         env:
           PYTHONFAULTHANDLER: "1"
           PYTEST_ADDOPTS: "--max-worker-restart=0"
-        # At 35min, signal the pytest process group with SIGABRT so faulthandler
+          SHARD_NAME: ${{ matrix.shard }}
+          PYTEST_TARGETS: ${{ matrix.pytest_targets }}
+          EXTRA_PYTEST_FLAGS: ${{ matrix.extra_pytest_flags }}
+        # At 22min, signal the pytest process group with SIGABRT so faulthandler
         # dumps thread stacks to stderr, with bounded escalation to SIGTERM and SIGKILL.
         # Background watchdog is trapped and reaped reliably on any exit.
         run: |
@@ -441,11 +464,17 @@ jobs:
           trap 'exit 130' INT
           trap 'exit 143' TERM
 
+          read -r -a targets <<< "$PYTEST_TARGETS"
+          extra_flags=()
+          if [ -n "$EXTRA_PYTEST_FLAGS" ]; then
+            read -r -a extra_flags <<< "$EXTRA_PYTEST_FLAGS"
+          fi
+
           # covdefaults sets fail_under=100 globally; per-tier coverage
           # only covers a slice, so override to 0. Codecov merges the
           # tiers server-side.
-          uv run pytest tests/integration -n 2 --dist=loadgroup \
-            --cov=sqlspec --cov-report=xml:coverage-integration.xml --cov-report=term-missing \
+          uv run pytest "${targets[@]}" "${extra_flags[@]}" -n 2 --dist=loadgroup \
+            --cov=sqlspec --cov-report="xml:coverage-integration-${SHARD_NAME}.xml" --cov-report=term-missing \
             --cov-fail-under=0 &
           pytest_pid=$!
           # Job control makes the background job leader its process-group leader.
@@ -475,14 +504,14 @@ jobs:
         if: always() && steps.pytest.outcome == 'success'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
-          files: coverage-integration.xml
-          flags: integration,py${{ matrix.python-version }}
-          name: test-integration-${{ matrix.python-version }}
+          files: coverage-integration-${{ matrix.shard }}.xml
+          flags: integration,py${{ matrix.python-version }},${{ matrix.shard }}
+          name: test-integration-${{ matrix.python-version }}-${{ matrix.shard }}
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Dump python stacks on hang
-        if: failure() && steps.pytest.outcome == 'failure'
+        if: always() && steps.pytest.outcome == 'failure'
         run: |
           pip install --quiet py-spy || true
           for pid in $(pgrep -f 'pytest|python' || true); do

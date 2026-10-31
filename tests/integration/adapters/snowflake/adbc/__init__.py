@@ -1,0 +1,1 @@
+"""Snowflake ADBC integration tests."""

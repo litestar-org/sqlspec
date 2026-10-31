@@ -388,7 +388,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             if restore_autocommit:
                 self.connection.autocommit = False
             if self._should_set_local_columnar():
-                self.connection.execute("SET LOCAL google_columnar_engine.enabled = 'on'")
+                self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
@@ -915,7 +915,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             if restore_autocommit:
                 await self.connection.set_autocommit(False)
             if self._should_set_local_columnar():
-                await self.connection.execute("SET LOCAL google_columnar_engine.enabled = 'on'")
+                await self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:

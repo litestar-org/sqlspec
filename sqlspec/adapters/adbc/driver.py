@@ -45,6 +45,7 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
+from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
@@ -58,8 +59,9 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcRawCursor
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._query_cache import CachedQuery
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
@@ -242,16 +244,28 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         self._ensure_statement_profiling()
+        use_db2_update = False
 
         try:
             execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
-            cursor.execute(sql, parameters=execute_parameters)
+            use_db2_update = (
+                self._dialect_name == "db2"
+                and not statement.returns_rows()
+                and statement.operation_type != "COMMAND"
+                and bool(execute_parameters)
+            )
+            if use_db2_update:
+                self._execute_db2_non_query(cursor, sql, execute_parameters)
+            else:
+                cursor.execute(sql, parameters=execute_parameters)
 
         except Exception:
             handle_postgres_rollback(self._dialect_name, cursor, logger)
             raise
 
-        is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
+        is_select_like = (
+            False if use_db2_update else (statement.returns_rows() or self._should_force_select(statement, cursor))
+        )
 
         if is_select_like:
             arrow_table = cursor.fetch_arrow_table()
@@ -359,7 +373,16 @@ class AdbcDriver(SyncDriverAdapterBase):
                     total_statements == 1 or any(marker in stmt for marker in ("?", "$", "%", "@", ":"))
                 ):
                     stmt_params = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
-                    cursor.execute(stmt, parameters=stmt_params)
+                    if (
+                        self._dialect_name == "db2"
+                        and stmt_params
+                        and self._is_db2_non_query_statement(
+                            stmt, parent_statement=statement, total_statements=total_statements
+                        )
+                    ):
+                        self._execute_db2_non_query(cursor, stmt, stmt_params)
+                    else:
+                        cursor.execute(stmt, parameters=stmt_params)
                 else:
                     cursor.execute(stmt)
                 successful_count += 1
@@ -910,6 +933,33 @@ class AdbcDriver(SyncDriverAdapterBase):
         if isinstance(first_value, int):
             return first_value
         return fallback
+
+    def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute a cached query, routing parameterized Db2 non-queries through execute_update."""
+        if self._dialect_name == "db2" and not cached.operation_profile.returns_rows and params:
+            with self.with_cursor(self.connection) as cursor:
+                wire_sql = self._format_wire_sql(cached.compiled_sql)
+                self._execute_db2_non_query(cursor, wire_sql, params)
+                affected_rows = self._resolve_count_result_rowcount(cursor, fallback=resolve_rowcount(cursor))
+                return DMLResult(cached.operation_type, affected_rows)
+        return super()._execute_cache_hit_with_cursor(sql, params, cached)
+
+    def _is_db2_non_query_statement(self, sql: str, *, parent_statement: "SQL", total_statements: int) -> bool:
+        """Return whether a script statement is a non-row-returning Db2 operation."""
+        if total_statements == 1:
+            return not parent_statement.returns_rows() and parent_statement.operation_type != "COMMAND"
+        statement = SQL(sql, statement_config=self.statement_config)
+        return not statement.returns_rows() and statement.operation_type != "COMMAND"
+
+    @staticmethod
+    def _execute_db2_non_query(cursor: "AdbcRawCursor", sql: str, execute_parameters: Any) -> None:
+        """Execute a parameterized Db2 non-query statement via ADBC execute_update."""
+        if hasattr(execute_parameters, "__arrow_c_array__") or hasattr(execute_parameters, "__arrow_c_stream__"):
+            cursor.executemany(sql, execute_parameters)
+            return
+        cursor.executemany(sql, [execute_parameters])
 
 
 def _parse_adbc_ingest_target(

@@ -30,6 +30,7 @@ from sqlspec.adapters.oracledb.core import (
     OracleSessionContextConfig,
     OracleTopologyConfig,
     apply_driver_features,
+    apply_wallet_ssl_context,
     build_connection_config,
     default_statement_config,
     execute_session_checkout_async,
@@ -586,6 +587,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
                 client_config["config_dir"] = config["config_dir"]
             oracledb.init_oracle_client(**client_config)
 
+        apply_wallet_ssl_context(config)
+
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection
 
@@ -903,6 +906,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if thick_mode or lib_dir is not None:
             msg = "OracleAsyncConfig only supports Thin mode; use OracleSyncConfig for Thick mode."
             raise ImproperConfigurationError(msg)
+
+        apply_wallet_ssl_context(config)
 
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection

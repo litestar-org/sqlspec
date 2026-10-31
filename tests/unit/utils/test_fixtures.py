@@ -1824,8 +1824,12 @@ def test_sequence_resync_statements_cross_dialect() -> None:
         "users", [col_seq], dialect_name="duckdb", family="duckdb"
     )
     assert len(stmts_duckdb) == 1
-    assert 'setval(:sequence_name, coalesce(max("id"), 1)' in stmts_duckdb[0][0]
-    assert stmts_duckdb[0][1] == {"sequence_name": "users_id_seq"}
+    assert "count(nextval(" in stmts_duckdb[0][0]
+    assert stmts_duckdb[0][1] == {
+        "sequence_schema": "main",
+        "sequence_name": "users_id_seq",
+        "quoted_seq": "main.users_id_seq",
+    }
 
     stmts_tsql = fixture_module._sequence_resync_statements("users", [col_ident], dialect_name="tsql", family="tsql")
     assert len(stmts_tsql) == 1
@@ -2714,5 +2718,33 @@ def test_duckdb_sequence_resync_round_trip(tmp_path: Path) -> None:
             driver.execute("INSERT INTO events (name) VALUES ('next-after-fixture')")
             next_id = driver.select_value("SELECT id FROM events WHERE name = 'next-after-fixture'")
             assert next_id == 26
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_sequence_resync_increment_and_schema(tmp_path: Path) -> None:
+    """DuckDB sequence resync handles non-unit increment, schema qualification, and empty tables."""
+    (tmp_path / "custom.items.json").write_text(json.dumps([{"id": 11, "name": "first"}]), encoding="utf-8")
+    (tmp_path / "custom.empty_items.json").write_text(json.dumps([]), encoding="utf-8")
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as driver:
+            driver.execute("CREATE SCHEMA custom")
+            driver.execute("CREATE SEQUENCE custom.items_id_seq INCREMENT BY 2 START 1")
+            driver.execute("CREATE SEQUENCE custom.empty_id_seq START 1")
+            driver.execute(
+                "CREATE TABLE custom.items (id INTEGER DEFAULT nextval('custom.items_id_seq') PRIMARY KEY, name VARCHAR)"
+            )
+            driver.execute(
+                "CREATE TABLE custom.empty_items (id INTEGER DEFAULT nextval('custom.empty_id_seq') PRIMARY KEY, name VARCHAR)"
+            )
+            counts = load_table_fixtures_sync(driver, tmp_path, resync_sequences=True)
+            assert counts == {"custom.items": 1, "custom.empty_items": 0}
+            driver.execute("INSERT INTO custom.items (name) VALUES ('next-after-fixture')")
+            next_id = driver.select_value("SELECT id FROM custom.items WHERE name = 'next-after-fixture'")
+            assert next_id == 13
+            driver.execute("INSERT INTO custom.empty_items (name) VALUES ('first-after-empty')")
+            empty_next_id = driver.select_value("SELECT id FROM custom.empty_items WHERE name = 'first-after-empty'")
+            assert empty_next_id == 1
     finally:
         config.close_pool()

@@ -2,17 +2,19 @@
 
 import importlib
 import uuid
-from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import asyncpg
 import pytest
-from pytest_databases.docker.postgres import PostgresService
+from pytest_databases.docker.postgres import PostgresService, exec_psql
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.migrations.commands import AsyncMigrationCommands
 from sqlspec.migrations.context import MigrationContext
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 pytestmark = [pytest.mark.xdist_group("pgvector"), pytest.mark.asyncpg, pytest.mark.integration]
 
@@ -22,62 +24,31 @@ VECTOR_EXTENSION_COUNT_SQL = "SELECT count(*) FROM pg_extension WHERE extname = 
 EMBEDDING_TYPE_SQL = (
     "SELECT udt_name FROM information_schema.columns WHERE table_name = 'adk_memory' AND column_name = 'embedding'"
 )
-TERMINATE_SESSIONS_SQL = (
-    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()"
-)
-
-
-async def _connect(service: "PostgresService", database: str) -> "asyncpg.Connection[Any]":
-    return await asyncpg.connect(
-        host=service.host, port=service.port, user=service.user, password=service.password, database=database
-    )
-
-
-def _make_config(service: "PostgresService", database: str, migrations_path: "Path | None" = None) -> AsyncpgConfig:
-    migration_config: dict[str, Any] = {}
-    if migrations_path is not None:
-        migration_config = {
-            "script_location": str(migrations_path),
-            "include_extensions": ["adk"],
-            "version_table_name": "sqlspec_migrations_adk_pgvector",
-        }
-    return AsyncpgConfig(
-        connection_config={
-            "host": service.host,
-            "port": service.port,
-            "user": service.user,
-            "password": service.password,
-            "database": database,
-            "min_size": 1,
-            "max_size": 2,
-        },
-        migration_config=migration_config,
-        extension_config={"adk": {"enable_memory": True}},
-    )
 
 
 @pytest.fixture
-async def fresh_database(pgvector_service: "PostgresService") -> "AsyncGenerator[str, None]":
+async def fresh_database(pgvector_service: PostgresService) -> "AsyncGenerator[str, None]":
     """Create and drop a uniquely named database without the vector extension."""
     database = f"adk_pgvector_{uuid.uuid4().hex}"
-    admin = await _connect(pgvector_service, pgvector_service.database)
-    try:
-        await admin.execute(f'CREATE DATABASE "{database}"')
-    finally:
-        await admin.close()
+    exit_code, output = exec_psql(
+        pgvector_service.container,
+        user=pgvector_service.user,
+        password=pgvector_service.password,
+        database="postgres",
+        sql=f'CREATE DATABASE "{database}"',
+    )
+    if exit_code != 0:
+        decoded_output = output.decode("utf-8", errors="replace")
+        msg = f"Failed to create database {database!r}: {decoded_output}"
+        raise RuntimeError(msg)
     try:
         yield database
     finally:
-        admin = await _connect(pgvector_service, pgvector_service.database)
-        try:
-            await admin.execute(TERMINATE_SESSIONS_SQL, database)
-            await admin.execute(f'DROP DATABASE IF EXISTS "{database}"')
-        finally:
-            await admin.close()
+        pgvector_service.drop_database_force(database)
 
 
 async def test_memory_ddl_without_prerequisite_is_rejected(
-    pgvector_service: "PostgresService", fresh_database: str
+    pgvector_service: PostgresService, fresh_database: str
 ) -> None:
     """Dropping the leading extension statement makes the first vector column fail."""
     context = MigrationContext(config=_make_config(pgvector_service, fresh_database), dialect="postgres")
@@ -97,7 +68,7 @@ async def test_memory_ddl_without_prerequisite_is_rejected(
 
 
 async def test_packaged_migration_installs_vector_on_fresh_database(
-    pgvector_service: "PostgresService", fresh_database: str, tmp_path: Path
+    pgvector_service: PostgresService, fresh_database: str, tmp_path: Path
 ) -> None:
     """Packaged migration 0001 provisions vector and creates a usable embedding column."""
     connection = await _connect(pgvector_service, fresh_database)
@@ -123,7 +94,7 @@ async def test_packaged_migration_installs_vector_on_fresh_database(
 
 
 async def test_packaged_migration_reruns_when_vector_already_exists(
-    pgvector_service: "PostgresService", fresh_database: str, tmp_path: Path
+    pgvector_service: PostgresService, fresh_database: str, tmp_path: Path
 ) -> None:
     """Re-running migration 0001 against an existing vector installation succeeds."""
     migrations_path = tmp_path / "migrations"
@@ -143,3 +114,32 @@ async def test_packaged_migration_reruns_when_vector_already_exists(
         assert await connection.fetchval(EMBEDDING_TYPE_SQL) == "vector"
     finally:
         await connection.close()
+
+
+async def _connect(service: PostgresService, database: str) -> "asyncpg.Connection[Any]":
+    return await asyncpg.connect(
+        host=service.host, port=service.port, user=service.user, password=service.password, database=database
+    )
+
+
+def _make_config(service: PostgresService, database: str, migrations_path: Path | None = None) -> AsyncpgConfig:
+    migration_config: dict[str, Any] = {}
+    if migrations_path is not None:
+        migration_config = {
+            "script_location": str(migrations_path),
+            "include_extensions": ["adk"],
+            "version_table_name": "sqlspec_migrations_adk_pgvector",
+        }
+    return AsyncpgConfig(
+        connection_config={
+            "host": service.host,
+            "port": service.port,
+            "user": service.user,
+            "password": service.password,
+            "database": database,
+            "min_size": 1,
+            "max_size": 2,
+        },
+        migration_config=migration_config,
+        extension_config={"adk": {"enable_memory": True}},
+    )

@@ -3,38 +3,32 @@
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore, SqliteADKStore
-from sqlspec.adapters.sqlite.adk.store import _datetime_to_julian
-from sqlspec.extensions.adk import StoredEvent, StoredMemory
-from sqlspec.extensions.adk.maintenance import prune_events_sync, prune_memory_sync, prune_sessions_sync
+from sqlspec.utils.module_loader import import_optional_attr
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore, SqliteADKStore
+    from sqlspec.adapters.sqlite.adk.store import _datetime_to_julian
+    from sqlspec.extensions.adk import StoredEvent, StoredMemory
+    from sqlspec.extensions.adk.maintenance import prune_events_sync, prune_memory_sync, prune_sessions_sync
+else:
+    SqliteADKMemoryStore = import_optional_attr("sqlspec.adapters.sqlite.adk", "SqliteADKMemoryStore")
+    SqliteADKStore = import_optional_attr("sqlspec.adapters.sqlite.adk", "SqliteADKStore")
+    _datetime_to_julian = import_optional_attr("sqlspec.adapters.sqlite.adk.store", "_datetime_to_julian")
+    StoredEvent = import_optional_attr("sqlspec.extensions.adk._types", "StoredEvent")
+    StoredMemory = import_optional_attr("sqlspec.extensions.adk.memory._types", "StoredMemory")
+    prune_events_sync = import_optional_attr("sqlspec.extensions.adk.maintenance", "prune_events_sync")
+    prune_memory_sync = import_optional_attr("sqlspec.extensions.adk.maintenance", "prune_memory_sync")
+    prune_sessions_sync = import_optional_attr("sqlspec.extensions.adk.maintenance", "prune_sessions_sync")
+
+pytest.importorskip("google.adk")
 
 pytestmark = pytest.mark.xdist_group("sqlite")
-
-
-def _build_memory_record(
-    *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
-) -> StoredMemory:
-    now = datetime.now(UTC)
-    return StoredMemory(
-        id=str(uuid4()),
-        session_id=session_id,
-        app_name="agent_app",
-        user_id="user_1",
-        scope=scope,
-        event_id=event_id,
-        author="user",
-        timestamp=now,
-        content_json={"text": content_text},
-        content_text=content_text,
-        metadata_json=None,
-        inserted_at=inserted_at,
-        embedding=None,
-    )
 
 
 def test_sqlite_prune_sessions_and_scoped_memory() -> None:
@@ -149,3 +143,24 @@ def test_sqlite_prune_events_scopes_to_app_name() -> None:
     finally:
         config.close_pool()
         Path(db_path).unlink(missing_ok=True)
+
+
+def _build_memory_record(
+    *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
+) -> "StoredMemory":
+    now = datetime.now(UTC)
+    return StoredMemory(
+        id=str(uuid4()),
+        session_id=session_id,
+        app_name="agent_app",
+        user_id="user_1",
+        scope=scope,
+        event_id=event_id,
+        author="user",
+        timestamp=now,
+        content_json={"text": content_text},
+        content_text=content_text,
+        metadata_json=None,
+        inserted_at=inserted_at,
+        embedding=None,
+    )

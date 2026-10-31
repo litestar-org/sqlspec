@@ -5,10 +5,11 @@ import inspect
 import io
 import os
 import shutil
+import ssl
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from cryptography import x509
@@ -25,6 +26,7 @@ from sqlspec.adapters.oracledb.core import (
     OracleEndpoint,
     OracleTopologyConfig,
     apply_driver_features,
+    apply_wallet_ssl_context,
     build_duality_etag_update_sql,
     build_tns_description,
     extract_duality_etag,
@@ -477,3 +479,30 @@ def _build_test_p12_bytes(password: bytes | None = b"WalletSecret123") -> bytes:
     return pkcs12.serialize_key_and_certificates(
         name=b"oracle-wallet", key=private_key, cert=cert, cas=[cert], encryption_algorithm=encryption
     )
+
+
+def test_apply_wallet_ssl_context_with_config_dir_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """apply_wallet_ssl_context resolves ewallet.pem via config_dir when wallet_location is missing."""
+    p12_bytes = _build_test_p12_bytes(None)
+    wallet_dir = tmp_path / "wallet_via_config_dir"
+    wallet_dir.mkdir()
+    (wallet_dir / "ewallet.p12").write_bytes(p12_bytes)
+    extract_oracle_wallet_zip(wallet_dir, target_dir=wallet_dir)
+    assert (wallet_dir / "ewallet.pem").is_file()
+
+    fake_ctx = ssl.create_default_context()
+    fake_ctx.verify_flags |= ssl.VERIFY_X509_STRICT
+    monkeypatch.setattr(ssl, "create_default_context", lambda: fake_ctx)
+
+    conn_config: dict[str, Any] = {"config_dir": str(wallet_dir)}
+    apply_wallet_ssl_context(conn_config)
+    assert "ssl_context" in conn_config
+    assert conn_config["ssl_context"] is not None
+    assert not (conn_config["ssl_context"].verify_flags & ssl.VERIFY_X509_STRICT)
+
+
+def test_apply_wallet_ssl_context_noop_when_no_wallet() -> None:
+    """apply_wallet_ssl_context does nothing when neither wallet_location nor config_dir is set."""
+    conn_config: dict[str, Any] = {"user": "app", "password": "secret"}
+    apply_wallet_ssl_context(conn_config)
+    assert "ssl_context" not in conn_config

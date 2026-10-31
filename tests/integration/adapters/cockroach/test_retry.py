@@ -7,12 +7,13 @@ import pytest
 from sqlspec import StatementStack
 from sqlspec.exceptions import SerializationConflictError
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
-class _SqlstateConflict(Exception):
-    """A raw driver error that carries the conflict only as a SQLSTATE."""
+    from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgDriver
+    from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
 
-    sqlstate = "40001"
-
+pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("cockroachdb")]
 
 _CONFLICTS = pytest.mark.parametrize(
     "conflict",
@@ -22,19 +23,12 @@ _CONFLICTS = pytest.mark.parametrize(
     ],
 )
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgDriver
-    from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
-
-pytestmark = pytest.mark.xdist_group("postgres")
-
 
 @_CONFLICTS
 def test_cockroach_psycopg_sync_retries_whole_transaction(
     contract_cockroach_psycopg_sync_driver: "CockroachPsycopgSyncDriver", conflict: "Callable[[], Exception]"
 ) -> None:
+    """Verify sync psycopg CockroachDB retries restart and commit the whole transaction."""
     calls = 0
 
     def operation() -> str:
@@ -44,7 +38,7 @@ def test_cockroach_psycopg_sync_retries_whole_transaction(
             StatementStack().push_execute("SELECT 1 AS transaction_probe")
         )
         assert len(results) == 1
-        assert contract_cockroach_psycopg_sync_driver._transaction_active is True  # pyright: ignore[reportPrivateUsage]
+        assert contract_cockroach_psycopg_sync_driver._transaction_active is True
         assert contract_cockroach_psycopg_sync_driver.connection.autocommit is False
         if calls == 1:
             raise conflict()
@@ -58,6 +52,7 @@ def test_cockroach_psycopg_sync_retries_whole_transaction(
 async def test_cockroach_asyncpg_retries_whole_transaction(
     contract_cockroach_asyncpg_driver: "CockroachAsyncpgDriver", conflict: "Callable[[], Exception]"
 ) -> None:
+    """Verify asyncpg CockroachDB retries restart and commit the whole transaction."""
     calls = 0
 
     async def operation() -> str:
@@ -75,6 +70,7 @@ async def test_cockroach_asyncpg_retries_whole_transaction(
 async def test_cockroach_psycopg_async_retries_whole_transaction(
     contract_cockroach_psycopg_async_driver: "CockroachPsycopgAsyncDriver", conflict: "Callable[[], Exception]"
 ) -> None:
+    """Verify async psycopg CockroachDB retries restart and commit the whole transaction."""
     calls = 0
 
     async def operation() -> str:
@@ -84,7 +80,7 @@ async def test_cockroach_psycopg_async_retries_whole_transaction(
             StatementStack().push_execute("SELECT 1 AS transaction_probe")
         )
         assert len(results) == 1
-        assert contract_cockroach_psycopg_async_driver._transaction_active is True  # pyright: ignore[reportPrivateUsage]
+        assert contract_cockroach_psycopg_async_driver._transaction_active is True
         assert contract_cockroach_psycopg_async_driver.connection.autocommit is False
         if calls == 1:
             raise conflict()
@@ -92,3 +88,9 @@ async def test_cockroach_psycopg_async_retries_whole_transaction(
 
     assert await contract_cockroach_psycopg_async_driver.run_transaction_with_retry(operation) == "ok"
     assert calls == 2
+
+
+class _SqlstateConflict(Exception):
+    """Raw driver error carrying the serialization conflict only as SQLSTATE 40001."""
+
+    sqlstate = "40001"

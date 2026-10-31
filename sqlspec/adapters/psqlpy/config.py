@@ -124,8 +124,6 @@ class PsqlpyPoolParams(PsqlpyConnectionParams):
     """Pool connection reset strategy (such as ``fast`` or ``verified``)."""
     max_db_pool_size: NotRequired[int]
     """Maximum number of concurrent connections held by ``psqlpy.ConnectionPool``."""
-    max_cached_statement_lifetime: NotRequired[int]
-    """Maximum lifetime in seconds for cached prepared statements."""
     configure: NotRequired["Callable[..., Any]"]
     """Optional pool connection configuration callback."""
     extra: NotRequired["dict[str, Any]"]
@@ -144,7 +142,7 @@ class PsqlpyDriverFeatures(TypedDict):
     enable_pg_textsearch: NotRequired[bool]
     """Detect ``pg_textsearch`` and promote the dialect for BM25 ``<@>`` ranking (defaults to ``True``)."""
     enable_alloydb_columnar: NotRequired[bool]
-    """Enable ``google_columnar_engine.enabled=on`` at session startup or per transaction."""
+    """Enable ``google_columnar_engine.enable_columnar_scan=on`` at session startup or per transaction."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
     """External pooler compatibility mode; executes queries with ``prepared=False`` when not ``session``."""
     pgbouncer: NotRequired[bool]
@@ -277,7 +275,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             **kwargs: Additional keyword arguments.
         """
         raw_conn_cfg = normalize_connection_config(connection_config)
-        self._explicit_max_cached_statement_lifetime = "max_cached_statement_lifetime" in raw_conn_cfg
         raw_options = raw_conn_cfg.get("options")
         self._explicit_options: str | None = raw_options if isinstance(raw_options, str) else None
         connection_config = build_connection_config(raw_conn_cfg)
@@ -286,15 +283,14 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        if features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
+        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
             features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
-        ):
-            connection_config.setdefault("max_cached_statement_lifetime", 0)
-        if bool(features_dict.get("enable_alloydb_columnar", False)) and features_dict.get("pooler_mode") == "session":
-            columnar_opt = "-c google_columnar_engine.enabled=on"
+        )
+        if bool(features_dict.get("enable_alloydb_columnar", False)) and not is_transaction_pooler:
+            columnar_opt = "-c google_columnar_engine.enable_columnar_scan=on"
             existing_options = connection_config.get("options")
             if isinstance(existing_options, str) and existing_options.strip():
-                if "google_columnar_engine.enabled" not in existing_options:
+                if "google_columnar_engine.enable_columnar_scan" not in existing_options:
                     connection_config["options"] = f"{existing_options} {columnar_opt}"
             else:
                 connection_config["options"] = columnar_opt
@@ -402,8 +398,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         if not direct_dsn:
             return self
         conn_cfg: dict[str, Any] = dict(self.connection_config)
-        if not self._explicit_max_cached_statement_lifetime and conn_cfg.get("max_cached_statement_lifetime") == 0:
-            conn_cfg.pop("max_cached_statement_lifetime", None)
         if self._explicit_options is not None:
             conn_cfg["options"] = self._explicit_options
         else:

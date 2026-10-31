@@ -215,7 +215,7 @@ class PsycopgDriverFeatures(TypedDict):
     alloydb_ip_type: NotRequired[str]
     """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb_columnar: NotRequired[bool]
-    """Enable ``google_columnar_engine.enabled=on`` via startup ``options`` or per-transaction ``SET LOCAL``."""
+    """Enable ``google_columnar_engine.enable_columnar_scan=on`` via startup ``options`` or per-transaction ``SET LOCAL``."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"]]
     """External pooler compatibility mode; sets ``prepare_threshold=None`` in ``transaction`` or ``statement`` mode."""
     pgbouncer: NotRequired[bool]
@@ -358,7 +358,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
             existing_options = connection_config.get("options")
-            columnar_opt = "-c google_columnar_engine.enabled=on"
+            columnar_opt = "-c google_columnar_engine.enable_columnar_scan=on"
             if not existing_options:
                 connection_config["options"] = columnar_opt
             elif columnar_opt not in str(existing_options):
@@ -806,7 +806,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
             existing_options = connection_config.get("options")
-            columnar_opt = "-c google_columnar_engine.enabled=on"
+            columnar_opt = "-c google_columnar_engine.enable_columnar_scan=on"
             if not existing_options:
                 connection_config["options"] = columnar_opt
             elif columnar_opt not in str(existing_options):

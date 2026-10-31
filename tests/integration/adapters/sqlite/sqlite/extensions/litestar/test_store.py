@@ -7,20 +7,32 @@ SQLite sync_to_thread concurrency behavior, which exercises SQLite's write-seria
 """
 
 import asyncio
-from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING
 
 import pytest
-from litestar.stores.base import Store
-from litestar.stores.registry import StoreRegistry
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
+from sqlspec.utils.module_loader import import_optional_attr
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from litestar.stores.base import Store
+    from litestar.stores.registry import StoreRegistry
+
+    from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
+else:
+    Store = import_optional_attr("litestar.stores.base", "Store")
+    StoreRegistry = import_optional_attr("litestar.stores.registry", "StoreRegistry")
+    SQLiteStore = import_optional_attr("sqlspec.adapters.sqlite.litestar.store", "SQLiteStore")
+
+pytest.importorskip("litestar")
 
 pytestmark = [pytest.mark.sqlite, pytest.mark.integration, pytest.mark.xdist_group("sqlite")]
 
 
 @pytest.fixture
-async def sqlite_store() -> AsyncGenerator[SQLiteStore, None]:
+async def sqlite_store() -> "AsyncGenerator[SQLiteStore, None]":
     """Create SQLite store with shared in-memory database."""
     config = SqliteConfig(
         connection_config={"database": "file:test_sessions_mem?mode=memory&cache=shared", "uri": True},
@@ -32,7 +44,7 @@ async def sqlite_store() -> AsyncGenerator[SQLiteStore, None]:
     await store.delete_all()
 
 
-async def test_sync_to_thread_concurrency(sqlite_store: SQLiteStore) -> None:
+async def test_sync_to_thread_concurrency(sqlite_store: "SQLiteStore") -> None:
     """Test concurrent access via sync_to_thread wrapper.
 
     SQLite has write serialization, so we test sequential writes
@@ -41,7 +53,7 @@ async def test_sync_to_thread_concurrency(sqlite_store: SQLiteStore) -> None:
     for i in range(10):
         await sqlite_store.set(f"session_{i}", f"data_{i}".encode())
 
-    async def read_session(session_id: int) -> "bytes | None":
+    async def read_session(session_id: int) -> bytes | None:
         return await sqlite_store.get(f"session_{session_id}")
 
     results = await asyncio.gather(*[read_session(i) for i in range(10)])
@@ -50,7 +62,7 @@ async def test_sync_to_thread_concurrency(sqlite_store: SQLiteStore) -> None:
         assert result == f"data_{i}".encode()
 
 
-async def test_store_implements_litestar_store_contract(sqlite_store: SQLiteStore) -> None:
+async def test_store_implements_litestar_store_contract(sqlite_store: "SQLiteStore") -> None:
     """SQLite stores satisfy Litestar's nominal store and registry contract."""
     registry = StoreRegistry()
 

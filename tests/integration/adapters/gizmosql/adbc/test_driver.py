@@ -34,7 +34,9 @@ def gizmosql_session_case(request: pytest.FixtureRequest) -> GizmoSQLSessionCase
 @pytest.fixture(
     params=[
         pytest.param(("adbc_gizmosql_config", "duckdb"), id="duckdb"),
-        pytest.param(("adbc_gizmosql_sqlite_config", "sqlite"), id="sqlite"),
+        pytest.param(
+            ("adbc_gizmosql_sqlite_config", "sqlite"), id="sqlite", marks=pytest.mark.xdist_group("gizmosql_sqlite")
+        ),
     ]
 )
 def gizmosql_config_case(request: pytest.FixtureRequest) -> GizmoSQLConfigCase:
@@ -42,12 +44,6 @@ def gizmosql_config_case(request: pytest.FixtureRequest) -> GizmoSQLConfigCase:
 
     fixture_name, expected_dialect = request.param
     return request.getfixturevalue(fixture_name), expected_dialect
-
-
-def _count_rows(session: AdbcDriver, name: str) -> int:
-    result = session.execute("SELECT COUNT(*) AS count FROM test_table_adbc WHERE name = ?", (name,))
-    assert result.data is not None
-    return int(result.get_data()[0]["count"])
 
 
 @xfail_if_driver_missing
@@ -65,6 +61,7 @@ def test_gizmosql_provides_connection_and_session(gizmosql_config_case: GizmoSQL
 
 
 @xfail_if_driver_missing
+@pytest.mark.xdist_group("gizmosql_sqlite")
 @pytest.mark.xfail(reason=SQLITE_FLIGHTSQL_RESULT_XFAIL, strict=False)
 def test_gizmosql_sqlite_result_streams_fetch(adbc_gizmosql_sqlite_config: AdbcConfig) -> None:
     """GizmoSQL SQLite should return stable FlightSQL result schemas."""
@@ -211,3 +208,9 @@ def test_gizmosql_explain_select(gizmosql_session_case: GizmoSQLSessionCase) -> 
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) >= 1
+
+
+def _count_rows(session: AdbcDriver, name: str) -> int:
+    result = session.execute("SELECT COUNT(*) AS count FROM test_table_adbc WHERE name = ?", (name,))
+    assert result.data is not None
+    return int(result.get_data()[0]["count"])

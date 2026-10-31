@@ -745,8 +745,36 @@ async def test_psycopg_enable_alloydb_columnar_and_derive_direct_config() -> Non
         driver_features={"enable_alloydb_columnar": True, "pooler_mode": "session"},
     )
     assert "-c statement_timeout=5000" in session_sync.connection_config["options"]
-    assert "-c google_columnar_engine.enabled=on" in session_sync.connection_config["options"]
+    assert "-c google_columnar_engine.enable_columnar_scan=on" in session_sync.connection_config["options"]
     assert session_sync.derive_direct_config() is session_sync
+
+    auto_sync = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://localhost/db"},
+        driver_features={"enable_alloydb_columnar": True, "pooler_mode": "auto"},
+    )
+    assert "-c google_columnar_engine.enable_columnar_scan=on" in auto_sync.connection_config["options"]
+
+    auto_pgbouncer_sync = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://pooler:6432/db"},
+        driver_features={"enable_alloydb_columnar": True, "pooler_mode": "auto", "pgbouncer": True},
+    )
+    assert auto_pgbouncer_sync.driver_features["pooler_mode"] == "transaction"
+    assert auto_pgbouncer_sync.driver_features["pgbouncer"] is True
+    assert auto_pgbouncer_sync.driver_features["pgbouncer_mode"] is True
+    assert "options" not in auto_pgbouncer_sync.connection_config
+    assert auto_pgbouncer_sync.connection_config["prepare_threshold"] is None
+
+    with pytest.raises(ImproperConfigurationError, match="Invalid pooler_mode"):
+        PsycopgSyncConfig(
+            connection_config={"conninfo": "postgresql://localhost/db"},
+            driver_features=cast("Any", {"pooler_mode": "invalid"}),
+        )
+
+    with pytest.raises(ImproperConfigurationError, match="Invalid pooler_mode"):
+        PsycopgAsyncConfig(
+            connection_config={"conninfo": "postgresql://localhost/db"},
+            driver_features=cast("Any", {"pooler_mode": "invalid"}),
+        )
 
     txn_sync = PsycopgSyncConfig(
         connection_config={"conninfo": "postgresql://pooler:6432/db"},
@@ -765,7 +793,7 @@ async def test_psycopg_enable_alloydb_columnar_and_derive_direct_config() -> Non
     assert derived_sync.driver_features["pooler_mode"] == "session"
     assert derived_sync.driver_features["direct_dsn"] is None
     assert "prepare_threshold" not in derived_sync.connection_config
-    assert "-c google_columnar_engine.enabled=on" in derived_sync.connection_config["options"]
+    assert "-c google_columnar_engine.enable_columnar_scan=on" in derived_sync.connection_config["options"]
 
     txn_async = PsycopgAsyncConfig(
         connection_config={"conninfo": "postgresql://pooler:6432/db"},
@@ -781,7 +809,7 @@ async def test_psycopg_enable_alloydb_columnar_and_derive_direct_config() -> Non
     assert derived_async.driver_features["pooler_mode"] == "session"
     assert derived_async.driver_features["direct_dsn"] is None
     assert "prepare_threshold" not in derived_async.connection_config
-    assert "-c google_columnar_engine.enabled=on" in derived_async.connection_config["options"]
+    assert "-c google_columnar_engine.enable_columnar_scan=on" in derived_async.connection_config["options"]
 
     sync_conn = MagicMock()
     sync_conn.autocommit = True
@@ -790,7 +818,7 @@ async def test_psycopg_enable_alloydb_columnar_and_derive_direct_config() -> Non
         connection=sync_conn, statement_config=txn_sync.statement_config, driver_features=txn_sync.driver_features
     )
     sync_driver.begin()
-    sync_conn.execute.assert_called_once_with("SET LOCAL google_columnar_engine.enabled = 'on'")
+    sync_conn.execute.assert_called_once_with("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
 
     async_conn = AsyncMock()
     async_conn.autocommit = True
@@ -799,4 +827,4 @@ async def test_psycopg_enable_alloydb_columnar_and_derive_direct_config() -> Non
         connection=async_conn, statement_config=txn_async.statement_config, driver_features=txn_async.driver_features
     )
     await async_driver.begin()
-    async_conn.execute.assert_awaited_once_with("SET LOCAL google_columnar_engine.enabled = 'on'")
+    async_conn.execute.assert_awaited_once_with("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")

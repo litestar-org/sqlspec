@@ -1,10 +1,19 @@
 """SQLite load_from_arrow transactional atomicity."""
 
-import pyarrow as pa
+from typing import TYPE_CHECKING
+
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.module_loader import import_optional
+
+if TYPE_CHECKING:
+    import pyarrow as pa
+else:
+    pa = import_optional("pyarrow")
+
+pytest.importorskip("pyarrow")
 
 
 def test_load_from_arrow_rolls_back_on_failure() -> None:

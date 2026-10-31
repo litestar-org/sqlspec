@@ -2,6 +2,7 @@
 
 import io
 import os
+import ssl
 import zipfile
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -745,12 +746,123 @@ async def test_oracle_shared_wallet_zip_refcounted_across_pools_and_derive_pool(
     assert not shared_dir.exists()
 
 
-def _make_p12_wallet_bytes(password: bytes = b"WalletSecret123") -> bytes:
+async def test_oracle_wallet_ssl_context_relaxes_x509_strict_only_for_non_ca_self_signed_wallets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thin pools clear VERIFY_X509_STRICT for orapki self-signed wallets while keeping RFC 5280 CA wallets strict."""
+    orig_create_default_context = ssl.create_default_context
+
+    def _strict_default_context(*args: Any, **kwargs: Any) -> ssl.SSLContext:
+        ctx = orig_create_default_context(*args, **kwargs)
+        ctx.verify_flags |= ssl.VERIFY_X509_STRICT
+        return ctx
+
+    monkeypatch.setattr(ssl, "create_default_context", _strict_default_context)
+
+    tns_text = (
+        "mydb_tp = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb.oraclecloud.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=mydb_tp.adb.oraclecloud.com)))\n"
+    )
+    self_signed_archive = _build_wallet_zip_bytes(_make_p12_wallet_bytes(b"WalletSecret123", is_ca=False), tns_text)
+    ca_v3_archive = _build_wallet_zip_bytes(_make_p12_wallet_bytes(b"WalletSecret123", is_ca=True), tns_text)
+
+    created_sync_kwargs: list[dict[str, Any]] = []
+    created_async_kwargs: list[dict[str, Any]] = []
+
+    def _fake_create_pool(**kwargs: Any) -> MagicMock:
+        created_sync_kwargs.append(kwargs)
+        return MagicMock()
+
+    def _fake_create_pool_async(**kwargs: Any) -> MagicMock:
+        created_async_kwargs.append(kwargs)
+        return MagicMock(close=AsyncMock())
+
+    monkeypatch.setattr(oracle_config_module.oracledb, "is_thin_mode", lambda: True)
+    monkeypatch.setattr(oracle_config_module.oracledb, "create_pool", _fake_create_pool)
+    monkeypatch.setattr(oracle_config_module.oracledb, "create_pool_async", _fake_create_pool_async)
+
+    sync_self_signed = OracleSyncConfig(
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": self_signed_archive,
+            "wallet_password": "WalletSecret123",
+            "tns_alias": "mydb_tp",
+        }
+    )
+    async_self_signed = OracleAsyncConfig(
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": self_signed_archive,
+            "wallet_password": "WalletSecret123",
+            "tns_alias": "mydb_tp",
+        }
+    )
+    sync_ca_v3 = OracleSyncConfig(
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": ca_v3_archive,
+            "wallet_password": "WalletSecret123",
+            "tns_alias": "mydb_tp",
+        }
+    )
+    custom_ctx = orig_create_default_context()
+    sync_explicit_ctx = OracleSyncConfig(
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": self_signed_archive,
+            "wallet_password": "WalletSecret123",
+            "tns_alias": "mydb_tp",
+            "ssl_context": custom_ctx,
+        }
+    )
+    try:
+        sync_self_signed._create_pool()
+        await async_self_signed._create_pool()
+        sync_ca_v3._create_pool()
+        sync_explicit_ctx._create_pool()
+
+        monkeypatch.setattr(oracle_config_module.oracledb, "is_thin_mode", lambda: False)
+        sync_self_signed._create_pool()
+    finally:
+        sync_self_signed._close_pool()
+        await async_self_signed._close_pool()
+        sync_ca_v3._close_pool()
+        sync_explicit_ctx._close_pool()
+
+    sync_injected_ctx = created_sync_kwargs[0]["ssl_context"]
+    assert isinstance(sync_injected_ctx, ssl.SSLContext)
+    assert not (sync_injected_ctx.verify_flags & ssl.VERIFY_X509_STRICT)
+    assert sync_injected_ctx.verify_mode == ssl.CERT_REQUIRED
+
+    async_injected_ctx = created_async_kwargs[0]["ssl_context"]
+    assert isinstance(async_injected_ctx, ssl.SSLContext)
+    assert not (async_injected_ctx.verify_flags & ssl.VERIFY_X509_STRICT)
+    assert async_injected_ctx.verify_mode == ssl.CERT_REQUIRED
+
+    assert "ssl_context" not in created_sync_kwargs[1]
+    assert created_sync_kwargs[2]["ssl_context"] is custom_ctx
+    assert "ssl_context" not in created_sync_kwargs[3]
+
+
+def _build_wallet_zip_bytes(p12_bytes: bytes, tns_text: str) -> bytes:
+    """Package PKCS#12 bytes and tnsnames.ora content into an in-memory wallet archive."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_bytes)
+        zf.writestr("tnsnames.ora", tns_text)
+    return buf.getvalue()
+
+
+def _make_p12_wallet_bytes(password: bytes = b"WalletSecret123", *, is_ca: bool = False) -> bytes:
     """Create a test PKCS#12 payload for Oracle config wallet tests."""
     private_key = ec.generate_private_key(ec.SECP256R1())
     subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "adb.oraclecloud.com")])
     now = datetime.now(UTC)
-    cert = (
+    builder = (
         x509
         .CertificateBuilder()
         .subject_name(subject)
@@ -759,8 +871,10 @@ def _make_p12_wallet_bytes(password: bytes = b"WalletSecret123") -> bytes:
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(minutes=5))
         .not_valid_after(now + timedelta(days=1))
-        .sign(private_key, hashes.SHA256())
     )
+    if is_ca:
+        builder = builder.add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+    cert = builder.sign(private_key, hashes.SHA256())
     return pkcs12.serialize_key_and_certificates(
         name=b"adb",
         key=private_key,

@@ -1,6 +1,6 @@
 """Local server contracts required by CockroachDB native object storage."""
 
-from collections.abc import Iterator
+from importlib.util import find_spec
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from uuid import uuid4
@@ -13,14 +13,15 @@ from psycopg import sql
 from tests.fixtures.rustfs import rustfs_filesystem
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
+    from pytest_databases import ContainerService
     from pytest_databases.docker.cockroachdb import CockroachDBService
     from pytest_databases.docker.rustfs import RustfsService
 
 
 @pytest.fixture
-def native_connection(cockroachdb_service: "CockroachDBService") -> Iterator[psycopg.Connection]:
+def native_connection(cockroachdb_service: "CockroachDBService") -> "Iterator[psycopg.Connection]":
     with psycopg.connect(
         host=cockroachdb_service.host,
         port=cockroachdb_service.port,
@@ -33,10 +34,10 @@ def native_connection(cockroachdb_service: "CockroachDBService") -> Iterator[psy
 
 
 @pytest.fixture
-def native_storage_uri(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> Iterator[str]:
-    rustfs_service.container.reload()
-    networks = rustfs_service.container.attrs["NetworkSettings"]["Networks"]
-    address = next(iter(networks.values()))["IPAddress"]
+def native_storage_uri(
+    rustfs_service: "RustfsService", rustfs_bucket_name: str, docker_service: "ContainerService"
+) -> "Iterator[str]":
+    address = docker_service.get_internal_network_ip(rustfs_service.container)
     prefix = f"native-{uuid4().hex}"
     query = urlencode({
         "AWS_ACCESS_KEY_ID": rustfs_service.access_key,
@@ -48,14 +49,10 @@ def native_storage_uri(rustfs_service: "RustfsService", rustfs_bucket_name: str)
     try:
         yield f"s3://{rustfs_bucket_name}/{prefix}?{query}"
     finally:
-        filesystem = rustfs_filesystem(rustfs_service)
-        if filesystem.exists(f"{rustfs_bucket_name}/{prefix}"):
-            filesystem.rm(f"{rustfs_bucket_name}/{prefix}", recursive=True)
-
-
-def _file_uri(destination: str, filename: str) -> str:
-    parts = urlsplit(destination)
-    return urlunsplit(parts._replace(path=f"{parts.path}/{filename}"))
+        if find_spec("s3fs") is not None and find_spec("fsspec") is not None:
+            filesystem = rustfs_filesystem(rustfs_service)
+            if filesystem.exists(f"{rustfs_bucket_name}/{prefix}"):
+                filesystem.rm(f"{rustfs_bucket_name}/{prefix}", recursive=True)
 
 
 def test_native_storage_connection_baseline(
@@ -113,6 +110,7 @@ def test_native_csv_requires_explicit_null_encoding(
 def test_native_csv_marker_collides_with_literal_data(
     native_connection: psycopg.Connection, native_storage_uri: str, marker: str
 ) -> None:
+    """Verify an automatic CSV NULL marker collides with literal string data on roundtrip."""
     files = native_connection.execute(
         "EXPORT INTO CSV %s WITH nullas = %s FROM "
         "(SELECT 1::INT8 AS id, NULL::STRING AS label UNION ALL SELECT 2, %s::STRING)",
@@ -125,7 +123,6 @@ def test_native_csv_marker_collides_with_literal_data(
             sql.SQL("IMPORT INTO {} CSV DATA (%s) WITH nullif = %s").format(target),
             (_file_uri(native_storage_uri, files[0][0]), marker),
         )
-        # An automatic marker would silently corrupt the second row.
         assert native_connection.execute(sql.SQL("SELECT * FROM {} ORDER BY id").format(target)).fetchall() == [
             (1, None),
             (2, None),
@@ -283,3 +280,8 @@ async def test_native_export_async_clients_bind_uri_and_query_values(
             rows = await cursor.fetchall()
             assert len(rows) == 1
             assert rows[0][1] == 1
+
+
+def _file_uri(destination: str, filename: str) -> str:
+    parts = urlsplit(destination)
+    return urlunsplit(parts._replace(path=f"{parts.path}/{filename}"))

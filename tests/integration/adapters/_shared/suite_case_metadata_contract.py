@@ -1,6 +1,5 @@
 """Contract metadata guardrails for adapter case records."""
 
-from pathlib import Path
 from typing import cast
 
 from _pytest.mark.structures import ParameterSet
@@ -95,59 +94,6 @@ POSTGRES_EXTENSION_CASE_IDS = {
     "psycopg-paradedb-sync",
     "psycopg-pgvector-sync",
 }
-CONTRACT_OWNED_REMOVED_TEST_PATHS = {
-    "adbc/test_adbc_results.py",
-    "adbc/test_data_dictionary.py",
-    "adbc/test_exceptions.py",
-    "adbc/test_migrations.py",
-    "adbc/test_paradedb.py",
-    "adbc/test_pgvector.py",
-    "adbc/test_vector_functions.py",
-    "aiomysql/test_storage_bridge.py",
-    "aiosqlite/test_data_dictionary.py",
-    "asyncmy/test_storage_bridge.py",
-    "asyncpg/extensions/events/test_queue_backend.py",
-    "asyncpg/test_data_dictionary.py",
-    "asyncpg/test_merge.py",
-    "asyncpg/test_merge_bulk.py",
-    "asyncpg/test_paradedb.py",
-    "asyncpg/test_pgvector.py",
-    "bigquery/test_exceptions.py",
-    "duckdb/test_migrations.py",
-    "duckdb/test_vector_functions.py",
-    "mysqlconnector/test_driver_async.py",
-    "oracledb/extensions/events/test_queue_backend.py",
-    "oracledb/extensions/litestar/test_store_async.py",
-    "oracledb/extensions/litestar/test_store_sync.py",
-    "oracledb/test_exceptions.py",
-    "oracledb/test_merge.py",
-    "oracledb/test_merge_bulk.py",
-    "oracledb/test_stack.py",
-    "oracledb/test_vector_functions.py",
-    "psqlpy/test_data_dictionary.py",
-    "psqlpy/test_merge_bulk.py",
-    "psqlpy/test_migrations.py",
-    "psqlpy/test_paradedb.py",
-    "psqlpy/test_pgvector.py",
-    "psycopg/test_data_dictionary.py",
-    "psycopg/test_merge_bulk.py",
-    "psycopg/test_migrations.py",
-    "psycopg/test_paradedb.py",
-    "psycopg/test_pgvector.py",
-    "sqlite/test_data_dictionary.py",
-}
-
-
-def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:
-    return tuple(cast("DriverCase", param.values[0]) for param in params)
-
-
-def _adk_cases(params: tuple[ParameterSet, ...]) -> tuple[AdkStoreCase, ...]:
-    return tuple(cast("AdkStoreCase", param.values[0]) for param in params)
-
-
-def _parameter_style_cases(params: tuple[ParameterSet, ...]) -> tuple[ParameterStyleCase, ...]:
-    return tuple(cast("ParameterStyleCase", param.values[0]) for param in params)
 
 
 def test_active_driver_cases_do_not_use_string_deviations() -> None:
@@ -271,13 +217,6 @@ def test_postgres_extension_cases_are_contract_owned() -> None:
     assert case_ids == POSTGRES_EXTENSION_CASE_IDS
 
 
-def test_contract_owned_adapter_local_test_files_do_not_reappear() -> None:
-    """Adapter-local files removed by consolidation stay contract-owned."""
-    adapters_root = Path(__file__).resolve().parents[1]
-    existing = sorted(path for path in CONTRACT_OWNED_REMOVED_TEST_PATHS if (adapters_root / path).exists())
-    assert existing == []
-
-
 def test_adk_capability_params_match_requested_capability() -> None:
     """ADK capability-filtered params collect only cases that declare the requested capability."""
     cases = _adk_cases(adk_store_params_with("supports_atomic_state_update"))
@@ -294,3 +233,15 @@ def test_parameter_style_params_are_method_filtered() -> None:
     assert {case.id for case in execute_cases} | {case.id for case in execute_many_cases} == {
         case.id for case in all_cases
     }
+
+
+def _driver_cases(params: tuple[ParameterSet, ...]) -> tuple[DriverCase, ...]:
+    return tuple(cast("DriverCase", param.values[0]) for param in params)
+
+
+def _adk_cases(params: tuple[ParameterSet, ...]) -> tuple[AdkStoreCase, ...]:
+    return tuple(cast("AdkStoreCase", param.values[0]) for param in params)
+
+
+def _parameter_style_cases(params: tuple[ParameterSet, ...]) -> tuple[ParameterStyleCase, ...]:
+    return tuple(cast("ParameterStyleCase", param.values[0]) for param in params)

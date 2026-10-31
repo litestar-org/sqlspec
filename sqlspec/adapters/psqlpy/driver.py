@@ -228,7 +228,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.execute("BEGIN")
             if self._should_set_local_columnar():
-                await self.connection.execute("SET LOCAL google_columnar_engine.enabled = 'on'")
+                await self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
         except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as e:
             msg = f"Failed to begin psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e

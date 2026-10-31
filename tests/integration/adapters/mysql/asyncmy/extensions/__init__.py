@@ -1,1 +1,0 @@
-"""AsyncMy extensions integration tests."""

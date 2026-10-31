@@ -5,6 +5,8 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
+pytest.importorskip("pyarrow")
+
 
 def test_load_from_records_dict_and_positional() -> None:
     config = SqliteConfig(connection_config={"database": ":memory:"})

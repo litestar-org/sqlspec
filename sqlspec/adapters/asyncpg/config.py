@@ -197,7 +197,7 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_ip_type: NotRequired[str]
     """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb_columnar: NotRequired[bool]
-    """Enable ``google_columnar_engine.enabled=on`` at session startup or per transaction."""
+    """Enable ``google_columnar_engine.enable_columnar_scan=on`` at session startup or per transaction."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec event channel pub/sub support (defaults to ``True`` when ``events`` is configured)."""
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
@@ -351,13 +351,14 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             features_dict["pgbouncer_mode"] = True
             if features_dict.get("pooler_mode") in {None, "session", "auto"}:
                 features_dict["pooler_mode"] = "transaction"
-        if features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
+        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
             features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
-        ):
+        )
+        if is_transaction_pooler:
             normalized_conn_cfg.setdefault("statement_cache_size", 0)
-        if bool(features_dict.get("enable_alloydb_columnar", False)) and features_dict.get("pooler_mode") == "session":
+        if bool(features_dict.get("enable_alloydb_columnar", False)) and not is_transaction_pooler:
             merged_settings = dict(self._explicit_server_settings) if self._explicit_server_settings is not None else {}
-            merged_settings.setdefault("google_columnar_engine.enabled", "on")
+            merged_settings.setdefault("google_columnar_engine.enable_columnar_scan", "on")
             normalized_conn_cfg["server_settings"] = merged_settings
         self._custom_type_codecs: list[dict[str, Any]] = list(features_dict.get("type_codecs") or [])
 

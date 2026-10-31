@@ -5,11 +5,13 @@ behavior, so it stays adapter-local outside the shared driver contract.
 """
 
 from collections.abc import Generator
+from typing import Any, cast
 from uuid import uuid4
 
 import pyarrow as pa
 import pytest
 from google.api_core import exceptions as gcore_exceptions
+from google.auth.credentials import AnonymousCredentials, Credentials
 from pytest_databases.docker.spanner import SpannerService
 
 from sqlspec.adapters.spanner import SpannerSyncConfig
@@ -20,12 +22,13 @@ pytestmark = pytest.mark.spanner
 @pytest.fixture
 def spanner_batch_write_config(spanner_service: "SpannerService") -> "Generator[SpannerSyncConfig, None, None]":
     api_endpoint = f"{spanner_service.host}:{spanner_service.port}"
+    credentials = cast("Credentials", cast("Any", AnonymousCredentials)())
     config = SpannerSyncConfig(
         connection_config={
             "project": spanner_service.project,
             "instance_id": spanner_service.instance_name,
             "database_id": spanner_service.database_name,
-            "credentials": spanner_service.credentials,
+            "credentials": credentials,
             "client_options": {"api_endpoint": api_endpoint},
             "size": 5,
         },
