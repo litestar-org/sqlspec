@@ -223,6 +223,7 @@ async def test_aiomysql_adk_memory_store_insert_and_search_json_handling() -> No
     cursor = MagicMock()
     cursor.rowcount = 1
     cursor.execute = AsyncMock()
+    cursor.executemany = AsyncMock()
     cursor.description = [
         ("id",),
         ("session_id",),
@@ -284,12 +285,57 @@ async def test_aiomysql_adk_memory_store_insert_and_search_json_handling() -> No
     records = await store.search_entries("hello", "app", "user-1")
 
     assert inserted == 1
-    insert_params = cursor.execute.call_args_list[0].args[1]
+    insert_params = cursor.executemany.call_args_list[0].args[1][0]
     assert insert_params[6] is None
     assert insert_params[11] is None
     assert len(records) == 1
     assert records[0]["content_json"] == {"text": "hello"}
     assert records[0]["metadata_json"] == {"source": "unit"}
+
+
+async def test_aiomysql_insert_memory_entries_batches_with_executemany() -> None:
+    """insert_memory_entries batches multiple entries in a single cursor.executemany call."""
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
+
+    now = datetime.now(tz=UTC)
+    cursor = MagicMock()
+    cursor.rowcount = 2
+    cursor.executemany = AsyncMock()
+    conn = MagicMock()
+    conn.cursor = AsyncMock(return_value=cursor)
+    conn.commit = AsyncMock()
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AiomysqlADKMemoryStore(config)
+
+    entries = [
+        cast(
+            "Any",
+            {
+                "id": f"mem-{i}",
+                "session_id": "sess-1",
+                "app_name": "app",
+                "user_id": "user-1",
+                "event_id": f"evt-{i}",
+                "timestamp": now,
+                "content_json": {"idx": i},
+                "content_text": f"text {i}",
+                "metadata_json": None,
+                "inserted_at": now,
+            },
+        )
+        for i in range(2)
+    ]
+
+    inserted = await store.insert_memory_entries(entries)
+
+    assert inserted == 2
+    assert cursor.executemany.call_count == 1
+    batch_params = cursor.executemany.call_args_list[0].args[1]
+    assert len(batch_params) == 2
 
 
 async def test_aiomysql_stream_source_closes_cursor_when_execute_raises() -> None:
