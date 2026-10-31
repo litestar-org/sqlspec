@@ -4,6 +4,8 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
+import asyncio
+import shutil
 import tempfile
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
@@ -460,14 +462,14 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     async def _load_from_arrow_via_local_infile(
         self, table: str, columns: "list[str]", records: "list[tuple[Any, ...]]"
     ) -> None:
-        with tempfile.TemporaryDirectory(prefix="sqlspec-asyncmy-") as directory:
-            with tempfile.NamedTemporaryFile(dir=directory, suffix=".tsv", delete=False) as payload:
-                payload.write(encode_records_for_local_infile(records))
-                filename = payload.name
+        directory, filename = await asyncio.to_thread(_write_asyncmy_local_infile_payload, records)
+        try:
             statement = build_load_data_statement(table, columns)
             exc_handler = self.handle_database_exceptions()
             await self._run_with_exception_handler(exc_handler, self._execute_local_infile_cursor, statement, filename)
             self._check_pending_exception(exc_handler)
+        finally:
+            await asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
@@ -476,6 +478,20 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             True when the server reports an open transaction.
         """
         return bool(getattr(self.connection, "server_status", 0) & 1)
+
+
+def _write_asyncmy_local_infile_payload(records: "list[tuple[Any, ...]]") -> tuple[str, str]:
+    """Write LOCAL INFILE payload to a temporary file in a dedicated directory."""
+    directory = tempfile.mkdtemp(prefix="sqlspec-asyncmy-")
+    try:
+        with tempfile.NamedTemporaryFile(dir=directory, suffix=".tsv", delete=False) as payload:
+            payload.write(encode_records_for_local_infile(records))
+            filename = payload.name
+    except BaseException:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    else:
+        return directory, filename
 
 
 def _resolve_column_types(description: Any) -> "dict[str, str] | None":

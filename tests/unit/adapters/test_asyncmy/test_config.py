@@ -329,3 +329,10 @@ def test_asyncmy_config_with_dsn_applies_to_connection_kwargs() -> None:
     assert conn_kwargs["password"] == "pass1"
     assert conn_kwargs["host"] == "dbhost"
     assert conn_kwargs["database"] == "production"
+
+
+def test_asyncmy_config_driver_features_initialization() -> None:
+    """AsyncmyConfig initializes driver_features without redundant copying."""
+    config = AsyncmyConfig(connection_config={"local_infile": True}, driver_features={"json_serializer": str})
+    assert config.driver_features["json_serializer"] is str
+    assert config.driver_features["enable_local_infile_bulk_load"] is True
