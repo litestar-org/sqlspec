@@ -181,22 +181,22 @@ class MysqlConnectorSyncStreamSource:
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            try:
-                cursor = self._driver.connection.cursor(**self._cursor_options)
-                self._cursor = cursor
-                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-                self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-            except BaseException:
-                self.close(error=True)
-                raise
+        self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor(**self._cursor_options)
+            self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        except BaseException:
+            self.close(error=True)
+            raise
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        with handler:
-            rows = self._cursor.fetchmany(self._chunk_size)
+        rows = self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
@@ -551,6 +551,12 @@ def normalize_lastrowid(cursor: Any) -> int | None:
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map MySQL driver exceptions to SQLSpec errors."""
     _ = logger
+    type_name = type(error).__name__
+    if type_name == "PoolError" or "PoolError" in str(type(error)):
+        return ConnectionTimeoutError(str(error))
+    if type_name == "InterfaceError" or getattr(error, "errno", None) == -1:
+        return DatabaseConnectionError(str(error))
+
     error_code = getattr(error, "errno", None)
     if error_code is None and isinstance(error, Exception) and error.args:
         value = error.args[0]

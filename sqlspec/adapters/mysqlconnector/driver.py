@@ -290,10 +290,8 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         if overwrite:
             statement = f"TRUNCATE TABLE {format_identifier(table)}"
             exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.execute(statement)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            self._run_with_exception_handler(exc_handler, self._execute_cursor_statement, statement)
+            self._check_pending_exception(exc_handler)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
@@ -309,12 +307,10 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
                 try:
                     with os.fdopen(fd, "wb") as tmp:
                         tmp.write(payload)
-                    load_sql = build_load_data_statement(table, columns)
+                    load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
-                    with exc_handler, self.with_cursor(self.connection) as cursor:
-                        cursor.execute(load_sql, (tmp_name,))
-                    if exc_handler.pending_exception is not None:
-                        raise exc_handler.pending_exception from None
+                    self._run_with_exception_handler(exc_handler, self._execute_cursor_statement, load_sql, (tmp_name,))
+                    self._check_pending_exception(exc_handler)
                 finally:
                     Path(tmp_name).unlink(missing_ok=True)
             else:
@@ -325,10 +321,10 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
                     else records
                 )
                 exc_handler = self.handle_database_exceptions()
-                with exc_handler, self.with_cursor(self.connection) as cursor:
-                    cursor.executemany(insert_sql, cast("Any", prepared_records))
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+                self._run_with_exception_handler(
+                    exc_handler, self._executemany_cursor_statement, insert_sql, prepared_records
+                )
+                self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -360,6 +356,17 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from mysql-connector cursor for the direct execution path."""
         return resolve_rowcount(cursor)
+
+    def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
+        with self.with_cursor(self.connection) as cursor:
+            if parameters is None:
+                cursor.execute(statement)
+            else:
+                cursor.execute(statement, parameters)
+
+    def _executemany_cursor_statement(self, statement: str, parameters: Any) -> None:
+        with self.with_cursor(self.connection) as cursor:
+            cursor.executemany(statement, parameters)
 
     def _connection_in_transaction(self) -> bool:
         """Report whether the connector has an open transaction."""
@@ -560,10 +567,8 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         if overwrite:
             statement = f"TRUNCATE TABLE {format_identifier(table)}"
             exc_handler = self.handle_database_exceptions()
-            async with exc_handler, self.with_cursor(self.connection) as cursor:
-                await cursor.execute(statement)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            await self._run_with_exception_handler(exc_handler, self._execute_cursor_statement, statement)
+            self._check_pending_exception(exc_handler)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
@@ -579,12 +584,12 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
                 try:
                     with os.fdopen(fd, "wb") as tmp:
                         tmp.write(payload)
-                    load_sql = build_load_data_statement(table, columns)
+                    load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
-                    async with exc_handler, self.with_cursor(self.connection) as cursor:
-                        await cursor.execute(load_sql, (tmp_name,))
-                    if exc_handler.pending_exception is not None:
-                        raise exc_handler.pending_exception from None
+                    await self._run_with_exception_handler(
+                        exc_handler, self._execute_cursor_statement, load_sql, (tmp_name,)
+                    )
+                    self._check_pending_exception(exc_handler)
                 finally:
                     await asyncio.to_thread(Path(tmp_name).unlink, True)
             else:
@@ -595,10 +600,10 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
                     else records
                 )
                 exc_handler = self.handle_database_exceptions()
-                async with exc_handler, self.with_cursor(self.connection) as cursor:
-                    await cursor.executemany(insert_sql, cast("Any", prepared_records))
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+                await self._run_with_exception_handler(
+                    exc_handler, self._executemany_cursor_statement, insert_sql, prepared_records
+                )
+                self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -630,6 +635,17 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from mysql-connector cursor for the direct execution path."""
         return resolve_rowcount(cursor)
+
+    async def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
+        async with self.with_cursor(self.connection) as cursor:
+            if parameters is None:
+                await cursor.execute(statement)
+            else:
+                await cursor.execute(statement, parameters)
+
+    async def _executemany_cursor_statement(self, statement: str, parameters: Any) -> None:
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.executemany(statement, parameters)
 
     def _connection_in_transaction(self) -> bool:
         """Report whether the connector has an open transaction."""

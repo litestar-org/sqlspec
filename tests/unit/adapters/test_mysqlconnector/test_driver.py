@@ -41,3 +41,44 @@ def test_sync_commit_maps_mysqlconnector_deadlock_error() -> None:
     driver = MysqlConnectorSyncDriver(cast(Any, connection))
     with pytest.raises(DeadlockError):
         driver.commit()
+
+
+def test_mysqlconnector_pool_error_and_connection_error_mapping() -> None:
+    """PoolError maps to ConnectionTimeoutError and 2055 maps to DatabaseConnectionError."""
+    from sqlspec.adapters.mysqlconnector.core import create_mapped_exception
+    from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError
+
+    class PoolError(Exception):
+        pass
+
+    class InterfaceError(Exception):
+        errno = -1
+
+    assert isinstance(create_mapped_exception(PoolError("connection pool exhausted")), ConnectionTimeoutError)
+    assert isinstance(create_mapped_exception(InterfaceError("Connection disconnected")), DatabaseConnectionError)
+    assert isinstance(
+        create_mapped_exception(MysqlConnectorError(errno=2055, msg="Lost connection")), DatabaseConnectionError
+    )
+
+
+def test_mysqlconnector_sync_stream_source_in_active_except_block() -> None:
+    """MysqlConnectorSyncStreamSource safely handles execution inside an active except block."""
+    from unittest.mock import MagicMock
+
+    from sqlspec.adapters.mysqlconnector.core import MysqlConnectorSyncStreamSource
+
+    cursor = MagicMock()
+    cursor.fetchmany.return_value = [{"id": 1}]
+    cursor.description = [("id", 3, None, None, None, None, None)]
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = MysqlConnectorSyncDriver(connection)
+
+    try:
+        raise ValueError("simulated active exception")
+    except ValueError:
+        source = MysqlConnectorSyncStreamSource(driver, "SELECT 1", (), 10, set())
+        source.start()
+        chunk = source.fetch_chunk()
+        assert len(chunk) == 1
+        source.close()

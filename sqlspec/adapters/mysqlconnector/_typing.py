@@ -7,22 +7,18 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import mysql as _mysql
-import mysql.connector as _mysql_connector
-from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
-from mysql.connector import aio as _mysql_connector_aio
-from mysql.connector import pooling as _mysql_connector_pooling
-from mysql.connector.constants import FieldType as _MysqlConnectorFieldType
-from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
-
-from sqlspec.typing import import_optional_attr
+from sqlspec.typing import import_optional, import_optional_attr
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import ClassVar, Protocol, TypeAlias
 
+    import mysql.connector as _mysql_connector
+    from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
+    from mysql.connector import pooling as _mysql_connector_pooling
     from mysql.connector.aio.pooling import MySQLConnectionPool as MysqlConnectorAsyncPool
+    from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
 
     from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
     from sqlspec.core import StatementConfig
@@ -85,14 +81,14 @@ if TYPE_CHECKING:
 
 if not TYPE_CHECKING:
     MysqlConnectorAsyncPool = import_optional_attr("mysql.connector.aio.pooling", "MySQLConnectionPool")
-    MysqlConnectorAio = _mysql_connector_aio
-    MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
+    MysqlConnectorAio = import_optional_attr("mysql.connector", "aio")
+    MysqlConnectorSyncConnection = import_optional_attr("mysql.connector", "MySQLConnection")
     MysqlConnectorAsyncConnection = import_optional_attr("mysql.connector.aio", "MySQLConnection")
-    MysqlConnectorConnectionPool = _mysql_connector_pooling.MySQLConnectionPool
-    MysqlConnectorError = _mysql_connector.Error
-    MysqlConnectorFieldType = _MysqlConnectorFieldType
-    MysqlConnectorMysqlModule = _mysql
-    MysqlConnectorSyncRawCursor = _MysqlConnectorSyncRawCursor
+    MysqlConnectorConnectionPool = import_optional_attr("mysql.connector.pooling", "MySQLConnectionPool")
+    MysqlConnectorError = import_optional_attr("mysql.connector", "Error")
+    MysqlConnectorFieldType = import_optional_attr("mysql.connector.constants", "FieldType")
+    MysqlConnectorMysqlModule = import_optional("mysql")
+    MysqlConnectorSyncRawCursor = import_optional_attr("mysql.connector.cursor", "MySQLCursor")
     MysqlConnectorAsyncRawCursor = import_optional_attr("mysql.connector.aio.cursor", "MySQLCursor")
 
 __all__ = (
