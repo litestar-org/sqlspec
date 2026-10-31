@@ -506,7 +506,7 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
         FROM {_table_ref(self._memory_table)}
         WHERE {where_scope} AND content_text LIKE ? ESCAPE '\\'
         ORDER BY timestamp DESC
-        ROWS LIMIT ?
+        LIMIT ?
         """
         rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%", limit_value))
         return [_memory_record_from_row(row) for row in rows]
@@ -717,7 +717,7 @@ def _events_query(
         params.append(after_timestamp)
     limit_clause = ""
     if limit is not None:
-        limit_clause = "\n    ROWS LIMIT ?"
+        limit_clause = "\n    LIMIT ?"
         params.append(limit)
     sql = f"""
     SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -864,7 +864,7 @@ def _session_list_query(
     page_clause = ""
     if limit is not None:
         params.extend((limit, offset))
-        page_clause = "\n    ROWS LIMIT ? OFFSET ?"
+        page_clause = "\n    LIMIT ? OFFSET ?"
 
     sql = f"""
     SELECT id, app_name, user_id, state, create_time, update_time

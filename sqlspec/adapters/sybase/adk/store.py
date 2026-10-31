@@ -480,7 +480,7 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
         with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 for entry in entries:
-                    params: tuple[Any, ...] = (
+                    params: list[Any] = [
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
@@ -492,10 +492,11 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
                         to_json(entry["content_json"]),
                         entry["content_text"],
                         to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
-                    )
+                    ]
                     if self._owner_id_column_name:
-                        params = (*params, owner_id)
-                    cursor.execute(sql, (*params, entry["event_id"]))
+                        params.append(owner_id)
+                    params.append(entry["event_id"])
+                    cursor.execute(sql, tuple(params))
                     inserted += resolve_rowcount(cursor)
             except Exception:
                 conn.rollback()

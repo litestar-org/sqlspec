@@ -227,6 +227,11 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
         finally:
             self._transaction_active = False
 
+    def _release_open_work(self) -> None:
+        """Roll back work left open before connection is returned to the pool."""
+        with contextlib.suppress(SQLSpecError):
+            self.rollback()
+
     def with_cursor(self, connection: "SqlanywhereConnection") -> "SqlanywhereCursor":
         return SqlanywhereCursor(connection)
 

@@ -14,6 +14,11 @@ from sqlspec.utils.module_loader import import_optional_attr
 PYMSSQL_MODULE: Any = None
 _DRIVER_CLS: Any = None
 
+
+class _SybaseUnavailableError(Exception):
+    """Fallback Sybase ASE exception base when pymssql is not installed."""
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
@@ -35,7 +40,7 @@ if not TYPE_CHECKING:
     SybaseQueryParams = Any
     SybaseConnection = Any
     SybaseRawCursor = Any
-    SybaseError = Exception
+    SybaseError = import_optional_attr("pymssql", "Error") or _SybaseUnavailableError
 
 __all__ = (
     "PYMSSQL_MODULE",

@@ -334,7 +334,8 @@ def extract_sqlstate_and_sqlcode(error: BaseException) -> tuple[str | None, int 
     sqlstate: str | None = getattr(error, "sqlstate", None)
     sqlcode: int | None = getattr(error, "errorcode", getattr(error, "sqlcode", None))
 
-    args: tuple[Any, ...] = error.args if isinstance(getattr(error, "args", None), tuple) else ()
+    raw_args = getattr(error, "args", None)
+    args: list[Any] = list(raw_args) if isinstance(raw_args, tuple) else []
     if len(args) >= _SQLANYDB_FULL_ARGS_LEN:
         if sqlstate is None and isinstance(args[0], str):
             sqlstate = args[0]

@@ -38,6 +38,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     NotFoundError,
     NotNullViolationError,
     OperationalError,
@@ -147,39 +148,42 @@ def test_build_connection_config_defaults_and_normalization() -> None:
     assert "extra" not in cfg
 
 
-def test_sybase_pool_sets_and_restores_tdsver_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SybaseConnectionPool sets TDSVER='5.0' during connect and restores the prior environment value."""
+def test_sybase_pool_requires_tdsver_or_server_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SybaseConnectionPool requires either TDSVER='5.0' or a server_alias at process start."""
     import sqlspec.adapters.sybase.pool as pool_module
 
-    captured_tdsver: list[str | None] = []
-    captured_kwargs: list[dict[str, Any]] = []
     fake_conn = FakeConnection()
 
     class FakeModule:
         def connect(self, **kwargs: Any) -> FakeConnection:
-            captured_tdsver.append(os.environ.get("TDSVER"))
-            captured_kwargs.append(kwargs)
             return fake_conn
 
     monkeypatch.setattr(pool_module, "pymssql", FakeModule())
-    monkeypatch.setenv("TDSVER", "7.3")
 
-    cfg = build_connection_config({"server": "ase.example.test", "user": "sa", "database": "master"})
-    pool = SybaseConnectionPool(cfg)
-    conn = pool.acquire()
-    pool.release(conn)
+    monkeypatch.delenv("TDSVER", raising=False)
+    cfg_invalid = build_connection_config({"server": "ase.example.test", "user": "sa", "database": "master"})
+    with pytest.raises(ImproperConfigurationError):
+        SybaseConnectionPool(cfg_invalid)
 
+    monkeypatch.setenv("TDSVER", "5.0")
+    cfg_env = build_connection_config({"server": "ase.example.test", "user": "sa", "database": "master"})
+    pool_env = SybaseConnectionPool(cfg_env)
+    conn = pool_env.acquire()
+    pool_env.release(conn)
     assert cast("object", conn) is fake_conn
-    assert captured_tdsver == ["5.0"]
-    assert os.environ.get("TDSVER") == "7.3"
-    assert "tds_version" not in captured_kwargs[0]
-    assert "_sybase_tds_version" not in captured_kwargs[0]
-    assert captured_kwargs[0]["conn_properties"] == DEFAULT_SYBASE_CONN_PROPERTIES
-    assert captured_kwargs[0]["autocommit"] is True
+    assert os.environ.get("TDSVER") == "5.0"
+
+    monkeypatch.delenv("TDSVER", raising=False)
+    cfg_alias = build_connection_config({"server_alias": "SYBASE_ASE", "user": "sa", "database": "master"})
+    pool_alias = SybaseConnectionPool(cfg_alias)
+    conn_alias = pool_alias.acquire()
+    pool_alias.release(conn_alias)
+    assert cast("object", conn_alias) is fake_conn
 
 
-def test_sybase_pool_transmits_native_tds_50_login_packet_over_loopback() -> None:
+def test_sybase_pool_transmits_native_tds_50_login_packet_over_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
     """SybaseConnectionPool.new_connection transmits a native 619-byte TDS 5.0 login packet via FreeTDS."""
+    monkeypatch.setenv("TDSVER", "5.0")
     received_packets: list[bytes] = []
     ready = threading.Event()
 

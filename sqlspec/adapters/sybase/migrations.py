@@ -5,6 +5,9 @@ import os
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 from sqlspec.adapters.sybase.core import (
     escape_sql_literal,
     format_identifier,

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sybase._typing import PYMSSQL_MODULE, SybaseConnection
 from sqlspec.adapters.sybase.core import DEFAULT_SYBASE_CONN_PROPERTIES, DEFAULT_SYBASE_TDS_VERSION
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -22,7 +22,6 @@ __all__ = ("SybaseConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sybase"
-_TDSVER_LOCK = threading.RLock()
 pymssql = PYMSSQL_MODULE
 
 
@@ -68,6 +67,21 @@ class SybaseConnectionPool:
             on_connection_create: Callback executed when a connection is created.
         """
         params = dict(connection_parameters)
+        freetds_alias = (
+            params.get("freetds_server")
+            or params.get("server_alias")
+            or params.get("is_server_alias")
+        )
+        if freetds_alias and isinstance(freetds_alias, str):
+            params["server"] = freetds_alias
+        tdsver = os.environ.get("TDSVER")
+        if not freetds_alias and tdsver != "5.0":
+            msg = (
+                "Sybase ASE requires FreeTDS TDS 5.0 protocol negotiation. "
+                "Either configure a FreeTDS server section alias via 'server_alias' (or 'freetds_server'), "
+                "or set the environment variable TDSVER=5.0 before process startup."
+            )
+            raise ImproperConfigurationError(msg)
         self._tds_version = str(
             params.pop("_sybase_tds_version", params.pop("tds_version", DEFAULT_SYBASE_TDS_VERSION))
         )
@@ -93,26 +107,13 @@ class SybaseConnectionPool:
     def new_connection(self) -> SybaseConnection:
         """Open a standalone Sybase ASE connection using FreeTDS TDS 5.0 negotiation.
 
-        Temporarily sets ``os.environ['TDSVER']`` inside a module-level re-entrant
-        lock so FreeTDS ``libsybdb`` sends a native TDS 5.0 login packet without
-        passing ``tds_version='5.0'`` through ``pymssql._mssql``'s Cython validator.
-
         Returns:
             SybaseConnection: A newly opened, fully configured connection.
         """
         module = pymssql
         if module is None:
             module = _load_pymssql_module()
-        with _TDSVER_LOCK:
-            prior_tdsver = os.environ.get("TDSVER")
-            os.environ["TDSVER"] = self._tds_version
-            try:
-                connection = module.connect(**self._connection_parameters)
-            finally:
-                if prior_tdsver is None:
-                    os.environ.pop("TDSVER", None)
-                else:
-                    os.environ["TDSVER"] = prior_tdsver
+        connection = module.connect(**self._connection_parameters)
 
         if self._on_connection_create is not None:
             self._on_connection_create(connection)

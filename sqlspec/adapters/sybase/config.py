@@ -35,6 +35,8 @@ class SybaseConnectionParams(TypedDict):
 
     server: NotRequired[str]
     host: NotRequired[str]
+    freetds_server: NotRequired[str]
+    server_alias: NotRequired[str]
     user: NotRequired[str]
     username: NotRequired[str]
     password: NotRequired[str]

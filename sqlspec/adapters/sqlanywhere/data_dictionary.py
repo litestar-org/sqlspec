@@ -73,13 +73,17 @@ def build_column_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ColumnMetad
             column_default=str(r["column_default"]) if r.get("column_default") is not None else None,
             ordinal_position=int(r.get("ordinal_position", 1)),
             max_length=int(r.get("max_length", 0)) if r.get("max_length") is not None else 0,
+            numeric_precision=int(r.get("numeric_precision", 0)) if r.get("numeric_precision") is not None else 0,
             numeric_scale=int(r.get("numeric_scale", 0)) if r.get("numeric_scale") is not None else 0,
             is_primary=bool(r.get("is_primary")),
             is_unique=bool(r.get("is_unique")),
+            is_identity=bool(r.get("is_identity")),
             identity_generation=str(r["identity_generation"])
             if r.get("identity_generation")
-            else ("BY DEFAULT" if r.get("is_identity") else None),
+            else ("ALWAYS" if r.get("is_identity") else None),
             is_generated=bool(r.get("is_generated")),
+            generation_expression=str(r["generation_expression"]) if r.get("generation_expression") is not None else None,
+            is_hidden=bool(r.get("is_hidden")),
         )
         for r in rows
     ]

@@ -467,7 +467,7 @@ async def test_sqlanywhere_litestar_and_adk_stores_roundtrip_with_mocked_connect
     adk_store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
     sql, params = captured[0]
     normalized_sql = " ".join(sql.split())
-    assert "ORDER BY create_time ASC, id ASC ROWS LIMIT ? OFFSET ?" in normalized_sql
+    assert "ORDER BY create_time ASC, id ASC LIMIT ? OFFSET ?" in normalized_sql
     assert params == ("app", "u1", 10, 20)
 
     monkeypatch.setattr(SqlanywhereADKMemoryStore, "insert_memory_entries", MagicMock(return_value=1))
