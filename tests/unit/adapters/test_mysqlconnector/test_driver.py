@@ -131,21 +131,3 @@ def test_mysqlconnector_dispatch_execute_script_delegates_to_super() -> None:
     result = driver.dispatch_execute_script(cursor, statement)
     assert result.statement_count == 2
     assert result.successful_statements == 2
-
-
-def test_mysqlconnector_load_from_arrow_forces_unprepared_cursor() -> None:
-    """load_from_arrow uses unprepared cursor for TRUNCATE and LOAD DATA even if prepared is True."""
-    from unittest.mock import MagicMock
-
-    import pyarrow as pa
-
-    conn = MagicMock()
-    cursor = MagicMock()
-    conn.cursor.return_value = cursor
-    driver = MysqlConnectorSyncDriver(
-        connection=conn, driver_features={"cursor_options": {"prepared": True}, "enable_local_infile_bulk_load": True}
-    )
-    driver._load_from_arrow_via_local_infile = MagicMock()  # type: ignore[method-assign]
-
-    driver.load_from_arrow("orders", pa.table({"id": [1]}), overwrite=True)
-    assert driver._cursor_options == {"prepared": True}

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from sqlspec.adapters.pymysql._typing import (
+    PYMYSQL_INSERT_VALUES_PATTERN,
     PyMysqlCursor,
     PyMysqlFieldType,
     PyMysqlMySQLError,
@@ -147,7 +148,12 @@ class PyMysqlDriver(SyncDriverAdapterBase):
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
+        validator = statement.statement_config.parameter_validator
+        match = PYMYSQL_INSERT_VALUES_PATTERN.match(sql)
+        if match:
+            sql = escape_literal_percent(match.group(1), prepared_parameters, validator) + sql[match.end(1) :]
+        else:
+            sql = escape_literal_percent(sql, prepared_parameters, validator)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -328,11 +334,6 @@ class PyMysqlDriver(SyncDriverAdapterBase):
     ) -> "SQLResult":
         if (
             "%" in cached.compiled_sql
-            and (
-                cached.compiled_sql.count("%") != cached.compiled_sql.count("%s")
-                if isinstance(params, (tuple, list))
-                else True
-            )
             and escape_literal_percent(
                 cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
             )

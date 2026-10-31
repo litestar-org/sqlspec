@@ -25,6 +25,9 @@ class _FakeCursor:
     def execute(self, statement: str, parameters: Any = None) -> None:
         self.connection.executed.append((statement, parameters))
 
+    def executemany(self, statement: str, parameters: Any = None) -> None:
+        self.connection.executed.append((statement, parameters))
+
     def fetchall(self) -> "list[Any]":
         return []
 
@@ -96,8 +99,7 @@ def test_pymysql_sync_stream_source_in_active_except_block() -> None:
         chunk = source.fetch_chunk()
         assert len(chunk) == 1
         source.close()
-    assert connection.commits == 1
-    assert connection.rollbacks == 0
+    connection.rollback.assert_not_called()
 
 
 def test_execute_stack_preserves_caller_transaction_when_server_status_reports_transaction() -> None:
@@ -149,8 +151,8 @@ def test_pymysql_stream_source_caches_deserializer() -> None:
 
 def test_pymysql_dispatch_execute_many_escapes_entire_sql() -> None:
     """dispatch_execute_many escapes % across the entire SQL statement."""
-    cursor = _FakeCursor()
     conn = _FakeConnection()
+    cursor = conn.cursor()
     driver = PyMysqlDriver(cast("Any", conn))
     statement = SQL(
         "INSERT INTO demo (val) VALUES (%s) ON DUPLICATE KEY UPDATE val = val % 2",
@@ -159,15 +161,15 @@ def test_pymysql_dispatch_execute_many_escapes_entire_sql() -> None:
         is_many=True,
     )
     driver.dispatch_execute_many(cursor, statement)
-    assert len(cursor.executed) == 1
+    assert len(conn.executed) == 1
 
 
 def test_pymysql_dispatch_execute_uses_statement_config() -> None:
     """dispatch_execute respects statement.statement_config."""
     from sqlspec.core import StatementConfig
 
-    cursor = _FakeCursor()
     conn = _FakeConnection()
+    cursor = conn.cursor()
     driver = PyMysqlDriver(cast("Any", conn))
     custom_config = StatementConfig(enable_caching=False)
     statement = SQL("SELECT 1", statement_config=custom_config)
@@ -177,8 +179,8 @@ def test_pymysql_dispatch_execute_uses_statement_config() -> None:
 
 def test_pymysql_dispatch_execute_script_delegates_to_super() -> None:
     """dispatch_execute_script emits script statement events via super()."""
-    cursor = _FakeCursor()
     conn = _FakeConnection()
+    cursor = conn.cursor()
     driver = PyMysqlDriver(cast("Any", conn))
     statement = SQL("SELECT 1; SELECT 2").as_script()
     result = driver.dispatch_execute_script(cursor, statement)

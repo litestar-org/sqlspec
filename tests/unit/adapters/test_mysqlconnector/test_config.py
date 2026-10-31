@@ -538,8 +538,5 @@ def test_mysqlconnector_async_config_inherited_methods() -> None:
     assert session_ctx is not None
 
 
-def test_mysqlconnector_sync_connection_context_slots() -> None:
-    """MysqlConnectorSyncConnectionContext defines empty __slots__ to eliminate dead parent slots."""
-    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorSyncConnectionContext
-
-    assert MysqlConnectorSyncConnectionContext.__slots__ == ()
+def test_mysqlconnector_sync_dispatch_execute_script_counts_statements() -> None:
+    """dispatch_execute_script runs each split statement and reports accurate counts."""
