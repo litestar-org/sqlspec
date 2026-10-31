@@ -4,11 +4,39 @@
 
 ## Installation
 
-```bash
-uv add "sqlspec[litestar]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[litestar]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[litestar]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[litestar]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[litestar]"
+    ```
 
 ## Plugin Setup and Session Injection
+
+```mermaid
+flowchart LR
+    Lifespan["Litestar Lifespan (Pool Init & Close)"] --> Request["HTTP Request Middleware"]
+    Request --> DI["Inject db_session + Filter Dependencies"]
+    DI --> Handler["Route Handler / Domain Service"]
+    Handler --> Commit["Commit Mode (manual / autocommit)"]
+```
 
 Register one or more database configurations on a `SQLSpec` instance, configure `extension_config["litestar"]`, and pass `SQLSpecPlugin(sqlspec=spec)` to `Litestar(plugins=[...])`:
 
@@ -92,13 +120,13 @@ For bidirectional keyset pagination (`CursorPagination`), set `cursor_key="id"` 
 
 ## Server-Side Session Stores
 
-Supported database adapters expose a Litestar `Store` implementation under `sqlspec.adapters.<adapter>.litestar` (`AsyncpgStore`, `PsycopgAsyncStore`, `PsqlpyStore`, `AiosqliteStore`, `SqliteStore`, `AsyncmyStore`, `AiomysqlStore`, `PymysqlStore`, `MysqlConnectorAsyncStore`, `OracleAsyncStore`, `SpannerSyncStore`, `SpannerAsyncStore`, `DuckDBStore`, `AdbcStore`, `ArrowOdbcStore`, and `Db2SyncStore`):
+Supported database adapters expose a Litestar `Store` implementation under `sqlspec.adapters.<adapter>.litestar` (`AsyncpgStore`, `PsycopgSyncStore`, `PsycopgAsyncStore`, `PsqlpyStore`, `CockroachAsyncpgStore`, `CockroachPsycopgSyncStore`, `CockroachPsycopgAsyncStore`, `AiosqliteStore`, `SQLiteStore`, `AsyncmyStore`, `AiomysqlStore`, `PyMysqlStore`, `MysqlConnectorSyncStore`, `MysqlConnectorAsyncStore`, `OracleSyncStore`, `OracleAsyncStore`, `MssqlPythonStore`, `PymssqlStore`, `SybaseStore`, `SqlanywhereStore`, `Db2SyncStore`, `Db2AsyncStore`, `DuckdbStore`, `BigQueryStore`, `SpannerSyncStore`, `SpannerAsyncStore`, `ADBCStore`, and `ArrowOdbcStore`):
 
 ```python
 --8<-- "docs/examples/frameworks/litestar/session_stores.py:example"
 ```
 
-Call `await store.create_table()` during application startup (or include the extension migration via `enable_extensions=["litestar"]` in `migration_config`) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
+Call `await store.create_table()` during application startup (or include the extension migration via `include_extensions=["litestar"]` in `migration_config`) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
 
 ## Production Litestar + Dishka Architecture
 

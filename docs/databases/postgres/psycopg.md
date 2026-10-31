@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[psycopg]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[psycopg]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[psycopg]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[psycopg]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[psycopg]"
+    ```
 
 Choose `psycopg` when your service mixes synchronous CLI/worker processes with `asyncio` HTTP servers, relies on standard `libpq` environment variables and `.pgpass` / GSSAPI / Kerberos authentication, or runs on scale-to-zero serverless platforms where `null_pool=True` avoids idle connections.
 

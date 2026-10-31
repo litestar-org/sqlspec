@@ -11,14 +11,13 @@ from sqlspec.adapters.psqlpy import (
 )
 ```
 
-Rust-backed asynchronous PostgreSQL adapter built on `psqlpy`. Inherited execution methods are documented on [`AsyncDriverAdapterBase`](../driver/async.md). See the [PostgreSQL (psqlpy) Setup Guide](../../databases/postgres/psqlpy.md) for usage examples.
+Rust-backed asynchronous PostgreSQL adapter built on `psqlpy`. Inherited execution methods are documented on [`AsyncDriverAdapterBase`](../driver/async.md). See the [PostgreSQL (psqlpy) Setup Guide](../../databases/postgres/psqlpy.md) for usage examples and the [PostgreSQL Data Dictionary & SQL Catalog](../data-dictionary/dialects/postgres.md).
 
 ## Configuration & Parameters
 
 ::: sqlspec.adapters.psqlpy.PsqlpyConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.adapters.psqlpy.PsqlpyConnectionParams
     options:
@@ -38,7 +37,7 @@ Rust-backed asynchronous PostgreSQL adapter built on `psqlpy`. Inherited executi
       separate_signature: false
       show_signature_annotations: true
 
-## Driver & Pool
+## Driver, Pool & Data Dictionary
 
 ::: sqlspec.adapters.psqlpy.PsqlpyDriver
     options:
@@ -50,29 +49,51 @@ Rust-backed asynchronous PostgreSQL adapter built on `psqlpy`. Inherited executi
       heading_level: 3
       members: false
 
-## Extension Stores
+::: sqlspec.adapters.psqlpy.data_dictionary.PsqlpyDataDictionary
+    options:
+      heading_level: 3
+      members: false
+
+## Extension Stores & Configs
+
+::: sqlspec.adapters.psqlpy.litestar.PsqlpyLitestarConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.psqlpy.litestar.PsqlpyStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.psqlpy.adk.PsqlpyADKConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.psqlpy.adk.PsqlpyADKStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.psqlpy.adk.PsqlpyADKMemoryStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.psqlpy.events.PsqlpyEventsConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.psqlpy.events.PsqlpyEventQueueStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.psqlpy.events.PsqlpyEventsBackend
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.psqlpy.events.PsqlpyHybridEventsBackend
+    options:
+      heading_level: 4

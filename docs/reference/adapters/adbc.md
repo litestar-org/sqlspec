@@ -17,7 +17,6 @@ Apache Arrow Database Connectivity (ADBC) adapter supporting zero-copy Arrow ing
 ::: sqlspec.adapters.adbc.AdbcConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.adapters.adbc.AdbcConnectionParams
     options:
@@ -31,7 +30,7 @@ Apache Arrow Database Connectivity (ADBC) adapter supporting zero-copy Arrow ing
       separate_signature: false
       show_signature_annotations: true
 
-## Driver & Pool
+## Driver, Pool & Data Dictionary
 
 ::: sqlspec.adapters.adbc.AdbcDriver
     options:
@@ -43,24 +42,31 @@ Apache Arrow Database Connectivity (ADBC) adapter supporting zero-copy Arrow ing
       heading_level: 3
       members: false
 
-## Extension Stores
+::: sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary
+    options:
+      heading_level: 3
+      members: false
+
+## Extension Stores & Configs
 
 ::: sqlspec.adapters.adbc.litestar.ADBCStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.adbc.adk.AdbcADKConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.adbc.adk.AdbcADKStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.adbc.adk.AdbcADKMemoryStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.adbc.events.AdbcEventQueueStore
     options:
       heading_level: 4
-      members: false

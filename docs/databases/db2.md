@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[db2]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[db2]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[db2]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[db2]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[db2]"
+    ```
 
 - Choose **`Db2SyncConfig`** or **`Db2AsyncConfig`** for transactional OLTP workloads over IBM's native `clidriver` (`ibm_db` / `ibm_db_dbi`).
 - Note on Linux `aarch64`: IBM publishes prebuilt `clidriver` wheels for Linux `x86_64`, macOS `arm64`, and Windows. On Linux ARM64 hosts, connect to Db2 via [`adbc`](adbc.md) (`adbc-driver-db2` pure-Go DRDA wheel) or guard `ibm-db` with environment markers.

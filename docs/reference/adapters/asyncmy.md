@@ -11,14 +11,13 @@ from sqlspec.adapters.asyncmy import (
 )
 ```
 
-Asynchronous MySQL and MariaDB adapter built on `asyncmy`. Inherited execution methods are documented on [`AsyncDriverAdapterBase`](../driver/async.md). See the [MySQL & MariaDB Setup Guide](../../databases/mysql.md) for usage examples.
+Asynchronous MySQL and MariaDB adapter built on `asyncmy`. Inherited execution methods are documented on [`AsyncDriverAdapterBase`](../driver/async.md). See the [MySQL & MariaDB Setup Guide](../../databases/mysql.md) for usage examples and the [MySQL](../data-dictionary/dialects/mysql.md) and [MariaDB](../data-dictionary/dialects/mariadb.md) Data Dictionary SQL Catalogs.
 
 ## Configuration & Parameters
 
 ::: sqlspec.adapters.asyncmy.AsyncmyConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.adapters.asyncmy.AsyncmyConnectionParams
     options:
@@ -38,7 +37,7 @@ Asynchronous MySQL and MariaDB adapter built on `asyncmy`. Inherited execution m
       separate_signature: false
       show_signature_annotations: true
 
-## Driver & Pool
+## Driver, Pool & Data Dictionary
 
 ::: sqlspec.adapters.asyncmy.AsyncmyDriver
     options:
@@ -50,24 +49,37 @@ Asynchronous MySQL and MariaDB adapter built on `asyncmy`. Inherited execution m
       heading_level: 3
       members: false
 
-## Extension Stores
+::: sqlspec.adapters.asyncmy.data_dictionary.AsyncmyDataDictionary
+    options:
+      heading_level: 3
+      members: false
+
+## Extension Stores & Configs
+
+::: sqlspec.adapters.asyncmy.litestar.AsyncmyLitestarConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.asyncmy.litestar.AsyncmyStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.asyncmy.adk.AsyncmyADKConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.asyncmy.adk.AsyncmyADKStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.asyncmy.adk.AsyncmyADKMemoryStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.asyncmy.events.AsyncmyEventQueueStore
     options:
       heading_level: 4
-      members: false

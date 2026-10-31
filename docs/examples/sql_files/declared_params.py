@@ -38,7 +38,6 @@ def main() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     # --8<-- [start:example]
     declarations = spec.get_query_parameters("get_team_by_name")
     query = spec.get_sql("get_team_by_name")
-    assert query.declared_parameters == declarations
 
     with spec.provide_session(config) as session:
         session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
@@ -46,8 +45,10 @@ def main() -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
         row = session.execute(query, name="SQLSpec").one()
         optional_rows = session.execute(spec.get_sql("list_teams")).all()
-        # --8<-- [end:example]
+    # --8<-- [end:example]
+    assert query.declared_parameters == declarations
 
+    with spec.provide_session(config) as session:
         missing_error = ""
         try:
             session.execute(spec.get_sql("get_team_by_name"))

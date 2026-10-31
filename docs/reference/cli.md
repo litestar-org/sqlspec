@@ -200,6 +200,7 @@ sqlspec squash [OPTIONS] [VERSION_RANGE]
 | `--allow-gaps` | `flag` | `False` | Allow gaps in version sequence |
 | `--output-format` | `choice(sql | py)` | `"sql"` | Output format for squashed migration (default: sql) |
 | `--strategy` | `choice(ddl | schema | concat)` | `"concat"` | Squash strategy: keep every statement in order (concat), fold DDL into its final shape and refuse ranges that cannot be folded faithfully (ddl), or reflect the live database schema (schema). |
+| `--single-file`, `--split` | `flag` | `False` | Force a single squashed file (--single-file) or split when file types or execution directives change (--split). |
 
 #### `sqlspec fix`
 

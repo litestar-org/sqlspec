@@ -67,8 +67,9 @@ def build_column_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ColumnMetad
     Returns:
         Column metadata in row order.
     """
-    return [
-        ColumnMetadata(
+    result: list[ColumnMetadata] = []
+    for r in rows:
+        meta = ColumnMetadata(
             schema_name=str(r.get("schema_name", "")),
             table_name=str(r.get("table_name", "")),
             column_name=str(r.get("column_name", "")),
@@ -87,8 +88,18 @@ def build_column_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ColumnMetad
             ),
             is_generated=bool(r.get("is_generated")),
         )
-        for r in rows
-    ]
+        if (raw_is_identity := r.get("is_identity")) is not None:
+            meta["is_identity"] = (
+                raw_is_identity.strip().upper() in {"1", "TRUE", "T", "YES", "Y", "ALWAYS"}
+                if isinstance(raw_is_identity, str)
+                else bool(raw_is_identity)
+            )
+        if r.get("generation_expression") is not None:
+            meta["generation_expression"] = str(r["generation_expression"])
+        if r.get("column_comment") is not None:
+            meta["column_comment"] = str(r["column_comment"])
+        result.append(meta)
+    return result
 
 
 def build_index_metadata(rows: "Iterable[dict[str, Any]]") -> "list[IndexMetadata]":

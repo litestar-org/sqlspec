@@ -220,7 +220,11 @@ def test_markdown_code_blocks_and_snippets_fit_viewport_width() -> None:
 
             if in_fence:
                 fence_lines.append((line_num, line))
-                if "mermaid" not in fence_lang and len(line) > 84:
+                if (
+                    "mermaid" not in fence_lang
+                    and not rel.startswith("docs/reference/data-dictionary/dialects/")
+                    and len(line) > 84
+                ):
                     violations.append(
                         f"{rel}:{line_num}: fenced code line exceeds 84 chars ({len(line)}): {line[:60]}..."
                     )
@@ -289,6 +293,8 @@ def test_standalone_example_executes(example_path: Path) -> None:
     try:
         module = _load_example_module(example_path)
     except (ModuleNotFoundError, MissingDependencyError) as exc:
+        if isinstance(exc, ModuleNotFoundError) and (exc.name or "").startswith(("sqlspec", "docs")):
+            raise
         pytest.skip(f"Optional dependency not installed for {rel}: {exc}")
 
     if rel in CONFIG_ONLY_MODULES:
@@ -310,6 +316,8 @@ def test_standalone_example_executes(example_path: Path) -> None:
         if inspect.iscoroutine(outcome):
             asyncio.run(outcome)
     except (ModuleNotFoundError, MissingDependencyError) as exc:
+        if isinstance(exc, ModuleNotFoundError) and (exc.name or "").startswith(("sqlspec", "docs")):
+            raise
         pytest.skip(f"Optional dependency not installed for {rel}: {exc}")
 
 

@@ -326,22 +326,17 @@ docs: docs-clean                                   ## Build documentation
 	@echo "${INFO} Building documentation... 📝"
 	@uv run --no-sync python -m tools.docs.scan_public_docstrings --check-leaks --check-overloads --check-typeddicts sqlspec
 	@uv run --no-sync python -m tools.docs.generate_cli_docs --check
+	@uv run --no-sync python -m tools.docs.generate_data_dictionary_docs --check
 	@uv run --no-sync zensical build --clean
 	@uv run --no-sync python -m tools.docs.postbuild --config zensical.toml --docs-dir docs --site-dir site
 	@uv run --no-sync python -m tools.docs.verify_docs_artifacts --site-dir site
 	@echo "${OK} Documentation built successfully"
-
-.PHONY: docs-check
-docs-check: docs                                   ## Build and verify documentation artifacts
 
 .PHONY: docs-linkcheck
 docs-linkcheck:                                    ## Check documentation links and anchors
 	@echo "${INFO} Checking documentation links... 🔗"
 	@uv run --no-sync python -m tools.docs.verify_docs_artifacts --site-dir site
 	@echo "${OK} Link check complete"
-
-.PHONY: docs-linkcheck-full
-docs-linkcheck-full: docs-linkcheck                ## Run full documentation link check
 
 .PHONY: docs-demos
 docs-demos:                                        ## Generate CLI demo GIFs from VHS tapes

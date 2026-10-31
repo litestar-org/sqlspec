@@ -4,9 +4,29 @@
 
 ## Install and When to Choose
 
-```bash
-uv add "sqlspec[bigquery]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[bigquery]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[bigquery]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[bigquery]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[bigquery]"
+    ```
 
 Choose `BigQueryConfig` for serverless warehouse queries, multi-statement GoogleSQL procedural scripts, cost-governed analytical APIs (`maximum_bytes_billed`, `reservation`), and streaming Arrow/Parquet lakehouse pipelines.
 

@@ -183,7 +183,7 @@ def test_verify_site_artifacts_rejects_oversized_pages(tmp_path: Path) -> None:
     site_dir = tmp_path / "site"
     _write_clean_site(site_dir)
     bloated_ref = site_dir / "reference" / "bloated.html"
-    bloated_ref.write_text("<!doctype html><html><body>" + ("a" * 125_000) + "</body></html>", encoding="utf-8")
+    bloated_ref.write_text("<!doctype html><html><body>" + ("a" * 660_000) + "</body></html>", encoding="utf-8")
 
     with pytest.raises(DocsVerificationError, match=r"bloated\.html"):
         verify_site_artifacts(site_dir)
@@ -192,8 +192,8 @@ def test_verify_site_artifacts_rejects_oversized_pages(tmp_path: Path) -> None:
 def test_verify_site_artifacts_rejects_bloated_secondary_toc(tmp_path: Path) -> None:
     site_dir = tmp_path / "site"
     _write_clean_site(site_dir)
-    toc_links = "".join(f'<li><a class="md-nav__link" href="#m-{idx}">m_{idx}</a></li>' for idx in range(15))
-    headings = "".join(f'<h3 id="m-{idx}">m_{idx}</h3>' for idx in range(15))
+    toc_links = "".join(f'<li><a class="md-nav__link" href="#m-{idx}">m_{idx}</a></li>' for idx in range(17))
+    headings = "".join(f'<h3 id="m-{idx}">m_{idx}</h3>' for idx in range(17))
     bloated_toc = site_dir / "reference" / "methods.html"
     bloated_toc.write_text(
         f'<!doctype html><html><body><nav class="md-nav md-nav--secondary"><ul>{toc_links}</ul></nav>{headings}</body></html>',

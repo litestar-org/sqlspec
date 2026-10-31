@@ -36,7 +36,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --group doc
+        run: uv sync --no-default-groups --group doc
 
       - name: Build documentation
         run: make docs

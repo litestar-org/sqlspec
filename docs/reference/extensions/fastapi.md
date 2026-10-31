@@ -33,12 +33,10 @@ FastAPI lifespan plugin, request-scoped `Depends()` session/connection providers
 ::: sqlspec.extensions.starlette.middleware.SQLSpecAutocommitMiddleware
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.extensions.starlette.middleware.SQLSpecManualMiddleware
     options:
       heading_level: 3
-      members: false
 
 ## Filter Dependency Providers
 
@@ -49,9 +47,7 @@ FastAPI lifespan plugin, request-scoped `Depends()` session/connection providers
 ::: sqlspec.extensions.fastapi.providers.FilterConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.extensions.fastapi.providers.DependencyDefaults
     options:
       heading_level: 3
-      members: false

@@ -1,5 +1,7 @@
 """Builder-backed table DDL synthesis, schema DDL ordering, exact catalog names, and profiling SQL."""
 
+import sqlite3
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -7,8 +9,10 @@ import pytest
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.adapters.db2.data_dictionary import Db2AsyncDataDictionary, Db2SyncDataDictionary
+from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
+from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.data_dictionary import (
     DDLResult,
@@ -545,3 +549,94 @@ def test_table_profile_propagates_query_errors() -> None:
 
     with pytest.raises(PermissionError, match="permission denied"):
         PsycopgSyncDataDictionary().get_table_profile(cast("Any", DeniedDriver()), "orders", schema="public")
+
+
+class _StubMariaDBDriver:
+    """Stub driver exposing engine_family for MariaDB/MySQL resolution checks."""
+
+    def __init__(self, engine_family: str) -> None:
+        self.engine_family = engine_family
+        self.dialect = "mysql"
+
+
+def test_mysql_data_dictionary_resolve_ddl_dialect_returns_mariadb_when_engine_family_is_mariadb() -> None:
+    """MySQL data dictionaries return 'mariadb' from resolve_ddl_dialect when engine_family is mariadb."""
+    dictionary = PyMysqlDataDictionary()
+    assert dictionary.resolve_ddl_dialect(_StubMariaDBDriver("mariadb")) == "mariadb"
+    assert dictionary.resolve_ddl_dialect(_StubMariaDBDriver("mysql")) == "mysql"
+
+
+def test_duckdb_native_ddl_restricts_create_type_to_enum_and_executes(tmp_path: Path) -> None:
+    """DuckDB native DDL queries emit CREATE TYPE only for ENUM types with non-null SQL and replay cleanly."""
+    with DuckDBConfig(connection_config={"database": str(tmp_path / "source.duckdb")}).provide_session() as source:
+        source.execute_script(
+            "CREATE TYPE status_enum AS ENUM ('pending', 'paid'); "
+            "CREATE TYPE custom_int AS INTEGER; "
+            "CREATE TABLE invoices (id INTEGER PRIMARY KEY, status status_enum);"
+        )
+        schema_ddl = source.data_dictionary.get_schema_ddl(source, prefer_native=True)
+        alias_ddl = source.data_dictionary.get_ddl(source, "custom_int", object_type="type")
+
+    assert alias_ddl.status == MetadataSupport.UNSUPPORTED
+    type_items = [
+        item for item in schema_ddl.items if isinstance(item, DDLResult) and item.identity.object_type == "type"
+    ]
+    assert [item.identity.name for item in type_items] == ["status_enum"]
+    assert type_items[0].ddl == "CREATE TYPE \"status_enum\" AS ENUM ('pending', 'paid');"
+
+    with DuckDBConfig(connection_config={"database": str(tmp_path / "replay.duckdb")}).provide_session() as replay:
+        for item in schema_ddl.items:
+            if isinstance(item, DDLResult) and item.ddl:
+                replay.execute_script(item.ddl)
+        replay.execute_script("INSERT INTO invoices VALUES (1, 'paid')")
+        assert replay.select_value("SELECT status FROM invoices WHERE id = 1") == "paid"
+
+
+def test_ddl_and_sequence_queries_use_upfront_ctes_and_left_joins() -> None:
+    """DuckDB, Postgres, and MSSQL DDL/sequence catalog queries use upfront CTEs with LEFT JOINs."""
+    loader = get_data_dictionary_loader()
+    duck_by_object = loader.get_domain_query_text("duckdb", "ddl", "by_object") or ""
+    duck_by_schema = loader.get_domain_query_text("duckdb", "ddl", "by_schema") or ""
+    pg_ddl = loader.get_domain_query_text("postgres", "ddl", "by_object") or ""
+    pg_sequences = loader.get_domain_query_text("postgres", "sequences", "by_schema") or ""
+    mssql_indexes = loader.get_domain_query_text("mssql", "ddl", "index_inputs_by_table") or ""
+    mssql_tables = loader.get_domain_query_text("mssql", "ddl", "table_inputs_by_table") or ""
+
+    for query_text in (duck_by_object, duck_by_schema, pg_ddl, pg_sequences, mssql_indexes, mssql_tables):
+        assert "WITH " in query_text
+        assert "LEFT JOIN " in query_text
+        assert "EXISTS (" not in query_text
+
+
+def test_sqlite_schema_ddl_synthesis_replays_multi_column_fks_in_memory() -> None:
+    """SQLite synthesized schema DDL groups composite foreign keys without synthetic names and executes in memory."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.execute_script(
+                "CREATE TABLE accounts (tenant_id INTEGER, account_id INTEGER, PRIMARY KEY (tenant_id, account_id));"
+                "CREATE TABLE entries ("
+                "  id INTEGER PRIMARY KEY,"
+                "  tenant_id INTEGER NOT NULL,"
+                "  account_id INTEGER NOT NULL,"
+                "  amount NUMERIC(12, 2) NOT NULL,"
+                "  FOREIGN KEY (tenant_id, account_id) REFERENCES accounts(tenant_id, account_id) ON DELETE CASCADE"
+                ");"
+            )
+            schema_ddl = session.data_dictionary.get_schema_ddl(session, prefer_native=False)
+    finally:
+        config.close_pool()
+
+    statements = _statements(schema_ddl)
+    assert len(statements) == 2
+    assert "entries_fk_" not in statements[1]
+    assert 'FOREIGN KEY ("tenant_id", "account_id") REFERENCES "accounts"("tenant_id", "account_id")' in statements[1]
+
+    conn = sqlite3.connect(":memory:")
+    for stmt in statements:
+        conn.executescript(stmt)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("INSERT INTO accounts VALUES (1, 42)")
+    conn.execute("INSERT INTO entries VALUES (1, 1, 42, 99.95)")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO entries VALUES (2, 1, 404, 10.00)")

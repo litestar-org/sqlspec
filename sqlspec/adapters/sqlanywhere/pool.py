@@ -22,14 +22,6 @@ logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sqlanywhere"
 
 
-def _load_sqlanydb_module() -> Any:
-    """Import ``sqlanydb`` lazily or raise ``MissingDependencyError``."""
-    try:
-        return import_module("sqlanydb")
-    except ImportError as exc:
-        raise MissingDependencyError(package="sqlanydb", install_package="sqlanywhere") from exc
-
-
 class SqlanywhereConnectionPool:
     """Thread-local connection manager for SAP SQL Anywhere over sqlanydb."""
 
@@ -235,3 +227,11 @@ class SqlanywhereConnectionPool:
             self._thread_local.created_at = 0.0
             self._thread_local.last_used = 0.0
             self._thread_local.generation = -1
+
+
+def _load_sqlanydb_module() -> Any:
+    """Import ``sqlanydb`` lazily or raise ``MissingDependencyError``."""
+    try:
+        return import_module("sqlanydb")
+    except ImportError as exc:
+        raise MissingDependencyError(package="sqlanydb", install_package="sqlanywhere") from exc

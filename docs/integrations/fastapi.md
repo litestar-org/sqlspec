@@ -4,9 +4,29 @@
 
 ## Installation
 
-```bash
-uv add "sqlspec[fastapi]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[fastapi]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[fastapi]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[fastapi]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[fastapi]"
+    ```
 
 ## Basic Setup and Session Injection
 

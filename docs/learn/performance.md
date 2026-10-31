@@ -65,9 +65,29 @@ SQLSpec compiles `162` hot-path modules—covering `core`, `driver`, `builder`, 
 
 Install the `mypyc` and `performance` extras in production deployments so SQLGlot also uses its compiled C tokenizer/parser (`sqlglot[c]`) alongside `msgspec`:
 
-```bash
-uv add "sqlspec[mypyc,performance]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[mypyc,performance]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[mypyc,performance]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[mypyc,performance]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[mypyc,performance]"
+    ```
 
 ## Fast Typed Hydration with `msgspec.Struct`
 
@@ -88,8 +108,9 @@ For serialization on hot HTTP or queue paths, pair `msgspec.Struct` with SQLSpec
 ## Batched Writes and Arrow Thresholds
 
 - **Prefer `execute_many` or `select_to_arrow` over row loops**: Single-pass parameter preparation in `execute_many` avoids repeated per-row compilation.
-- **DuckDB Hybrid Materialization**: Small DuckDB point lookups (`< 64` rows) and Arrow-divergent types (`HUGEINT`, `MAP`, `INTERVAL`, `TIMETZ`) materialize directly via `fetchall()` to avoid ~110 µs Arrow conversion overhead on 1-row reads, while larger analytical scans stream natively through Arrow.
-- **Large Analytical Exports**: Use `session.select_to_arrow(..., return_format="batches")` or `session.select_stream(..., chunk_size=1000)` to bound resident memory on multi-million-row reads.
+- **DuckDB Hybrid Materialization & Container Memory Clamping**: Small DuckDB point lookups (`< 64` rows) and Arrow-divergent types (`HUGEINT`, `MAP`, `INTERVAL`, `TIMETZ`) materialize directly via `fetchall()` to avoid ~110 µs Arrow conversion overhead on 1-row reads, while larger analytical scans stream natively through Arrow. In containerized deployments (Kubernetes / Cloud Run), `DuckDBConfig` inspects Linux cgroup v1/v2 memory limits (`resolve_cgroup_memory_limit`) so DuckDB's buffer manager sizes its default `memory_limit` to the container quota rather than host physical RAM.
+- **Large Analytical Exports & Streaming Coercion**: Use `session.select_to_arrow(..., return_format="batches")`, `pipeline.read_arrow_batches(...)`, or `session.select_stream(..., chunk_size=1000)` to bound resident memory on multi-million-row reads and bulk loads.
+- **Multi-Tier Metadata Caching (`MultiTierCache`)**: Pair in-process `UnifiedCache` (L1) with an external `CacheBackendProtocol` (L2, such as Redis or Memcached via `MultiTierCache`) when sharing expensive catalog introspection or schema metadata across multi-worker processes.
 
 ## Summary Checklist
 

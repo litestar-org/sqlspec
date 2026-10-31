@@ -39,12 +39,12 @@ SQL statement encapsulation, dialect configuration, batched `StatementStack` pip
 ::: sqlspec.core.statement.StatementConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.core.statement.ProcessedState
     options:
       heading_level: 3
-      members: false
+      members:
+        - reset
 
 ::: sqlspec.core.statement.get_default_config
     options:
@@ -68,21 +68,17 @@ SQL statement encapsulation, dialect configuration, batched `StatementStack` pip
 ::: sqlspec.core.stack.StackOperation
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.core.metrics.StackExecutionMetrics
     options:
       heading_level: 3
-      members: false
 
 ## Explain Options
 
 ::: sqlspec.core.explain.ExplainOptions
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.core.explain.ExplainFormat
     options:
       heading_level: 3
-      members: false

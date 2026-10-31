@@ -582,26 +582,55 @@
 .md-typeset .doc-heading {
   font-weight: 600;
   margin-top: 1.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.38rem;
 }
 
 .md-typeset h3.doc-heading {
-  padding-top: 0.75rem;
+  padding-top: 0.85rem;
   border-top: 1px solid var(--md-default-fg-color--lightest);
 }
 
 .md-typeset h4.doc-heading {
   font-size: 0.92rem;
-  margin-top: 1.15rem;
+  margin-top: 1.25rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed var(--md-default-fg-color--lightest);
+}
+
+.md-typeset .doc-signature {
+  border-radius: 7px;
+  margin-block: 0.45rem 0.75rem;
 }
 
 .md-typeset .doc-contents {
-  padding-inline-start: 0.9rem;
+  padding-inline-start: 0.95rem;
   border-inline-start: 2px solid var(--md-default-fg-color--lightest);
   margin-bottom: 1.5rem;
 }
 
+.md-typeset .doc-class > .doc-contents {
+  border-inline-start: 2px solid rgba(59, 130, 246, 0.28);
+}
+
+.md-typeset .doc-function > .doc-contents {
+  border-inline-start: 2px solid rgba(237, 182, 65, 0.42);
+}
+
 .md-typeset .doc-contents:not(.first) {
   padding-inline-start: 0.85rem;
+}
+
+.md-typeset .doc-section-title {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+  margin-top: 0.35rem;
 }
 
 .md-typeset .doc-symbol {
@@ -622,6 +651,78 @@
   background-color: rgba(59, 130, 246, 0.16);
   color: #93c5fd;
   border: 1px solid rgba(96, 165, 250, 0.32);
+}
+
+.md-typeset .doc-labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin-inline-start: 0.25rem;
+}
+
+.md-typeset .doc-label {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  font-family: var(--md-code-font-family);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 0.08rem 0.45rem;
+  line-height: 1.35;
+  border: 1px solid var(--sqlspec-inline-code-border);
+  background-color: var(--sqlspec-inline-code-bg);
+  color: var(--md-default-fg-color--light);
+}
+
+[data-md-color-scheme="default"] .md-typeset .doc-label-async code,
+[data-md-color-scheme="default"] .md-typeset .doc-label-async {
+  background-color: #f0f9ff;
+  border-color: #bae6fd;
+  color: #0369a1;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .doc-label-async code,
+[data-md-color-scheme="slate"] .md-typeset .doc-label-async {
+  background-color: rgba(14, 165, 233, 0.16);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #7dd3fc;
+}
+
+[data-md-color-scheme="default"] .md-typeset .doc-label-classmethod,
+[data-md-color-scheme="default"] .md-typeset .doc-label-staticmethod {
+  background-color: #fffbeb;
+  border-color: #fde68a;
+  color: #b45309;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .doc-label-classmethod,
+[data-md-color-scheme="slate"] .md-typeset .doc-label-staticmethod {
+  background-color: rgba(245, 158, 11, 0.15);
+  border-color: rgba(251, 191, 36, 0.35);
+  color: #fcd34d;
+}
+
+[data-md-color-scheme="default"] .md-typeset .doc-label-property,
+[data-md-color-scheme="default"] .md-typeset .doc-label-cached {
+  background-color: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .doc-label-property,
+[data-md-color-scheme="slate"] .md-typeset .doc-label-cached {
+  background-color: rgba(16, 185, 129, 0.15);
+  border-color: rgba(52, 211, 153, 0.35);
+  color: #6ee7b7;
+}
+
+.md-typeset .doc-label code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
 }
 
 .md-typeset .doc .md-typeset__table {
@@ -658,6 +759,22 @@
   width: 50%;
 }
 
+.md-typeset .doc-contents table:not([class]) tr:has(> th:nth-child(4):last-child) > th:nth-child(1) {
+  width: 20%;
+}
+
+.md-typeset .doc-contents table:not([class]) tr:has(> th:nth-child(4):last-child) > th:nth-child(2) {
+  width: 24%;
+}
+
+.md-typeset .doc-contents table:not([class]) tr:has(> th:nth-child(4):last-child) > th:nth-child(3) {
+  width: 40%;
+}
+
+.md-typeset .doc-contents table:not([class]) tr:has(> th:nth-child(4):last-child) > th:nth-child(4) {
+  width: 16%;
+}
+
 .md-typeset .doc-contents table:not([class]) th,
 .md-typeset .doc-contents table:not([class]) td {
   min-width: 0;
@@ -666,7 +783,8 @@
 }
 
 .md-typeset .doc-contents table:not([class]) td:nth-child(1) code,
-.md-typeset .doc-contents table:not([class]) td:nth-child(2) code {
+.md-typeset .doc-contents table:not([class]) td:nth-child(2) code,
+.md-typeset .doc-contents table:not([class]) td:nth-child(4) code {
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -682,6 +800,19 @@
   font-size: 0.78rem;
 }
 
+.md-typeset > .md-typeset__scrollwrap table:not([class]) thead th {
+  background-color: var(--md-default-bg-color--light);
+  font-weight: 600;
+}
+
+.md-typeset table:not([class]) tbody tr:nth-child(even) {
+  background-color: rgba(148, 163, 184, 0.04);
+}
+
+.md-typeset table:not([class]) tbody tr:hover {
+  background-color: rgba(59, 130, 246, 0.06);
+}
+
 .md-typeset > .md-typeset__scrollwrap table:not([class]) th,
 .md-typeset > .md-typeset__scrollwrap table:not([class]) td {
   padding: 0.55rem 0.75rem;
@@ -689,6 +820,17 @@
 
 .md-typeset > .md-typeset__scrollwrap table:not([class]) td code {
   white-space: nowrap;
+}
+
+.md-typeset pre.mermaid,
+.md-typeset div.mermaid {
+  background-color: var(--md-default-bg-color--light);
+  border: 1px solid var(--sqlspec-code-block-border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin: 1.25rem 0;
+  text-align: center;
+  overflow-x: auto;
 }
 
 .md-footer-meta:not(:has(.md-copyright__highlight, .md-social)) {

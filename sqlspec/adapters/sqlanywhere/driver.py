@@ -227,11 +227,6 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
         finally:
             self._transaction_active = False
 
-    def _release_open_work(self) -> None:
-        """Roll back work left open before connection is returned to the pool."""
-        with contextlib.suppress(SQLSpecError):
-            self.rollback()
-
     def with_cursor(self, connection: "SqlanywhereConnection") -> "SqlanywhereCursor":
         return SqlanywhereCursor(connection)
 
@@ -390,6 +385,11 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
 
     def resolve_rowcount(self, cursor: "SqlanywhereRawCursor") -> int:
         return resolve_rowcount(cursor)
+
+    def _release_open_work(self) -> None:
+        """Roll back work left open before connection is returned to the pool."""
+        with contextlib.suppress(SQLSpecError):
+            self.rollback()
 
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"

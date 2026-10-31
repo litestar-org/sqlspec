@@ -16,7 +16,7 @@ from sqlspec.extensions.litestar import (
 )
 ```
 
-Litestar plugin, ASGI transaction and correlation middlewares, server-side session store base class, and Litestar Channels backend. See the [Litestar Integration Guide](../../integrations/litestar.md) for usage examples.
+Litestar plugin, ASGI transaction and correlation middlewares, server-side session store base class, and Litestar Channels backend. Adapter-specific `LitestarConfig` TypedDicts and `BaseSQLSpecStore` subclasses are documented on each [Database Adapter](../adapters/index.md) page. See the [Litestar Integration Guide](../../integrations/litestar.md) for usage examples.
 
 ## Plugin & Configuration
 
@@ -33,7 +33,6 @@ Litestar plugin, ASGI transaction and correlation middlewares, server-side sessi
 ::: sqlspec.extensions.litestar.plugin.CommitMode
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.config.LitestarConfig
     options:
@@ -46,7 +45,6 @@ Litestar plugin, ASGI transaction and correlation middlewares, server-side sessi
 ::: sqlspec.extensions.litestar.plugin.CorrelationMiddleware
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.extensions.litestar.store.BaseSQLSpecStore
     options:

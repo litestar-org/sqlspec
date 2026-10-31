@@ -15,19 +15,17 @@ from sqlspec.adapters.db2 import (
 )
 ```
 
-Synchronous and asynchronous IBM Db2 LUW adapters built on `ibm_db`. Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md) and [`AsyncDriverAdapterBase`](../driver/async.md). See the [IBM Db2 Setup Guide](../../databases/db2.md) for usage examples.
+Synchronous and asynchronous IBM Db2 LUW adapters built on `ibm_db`. Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md) and [`AsyncDriverAdapterBase`](../driver/async.md). See the [IBM Db2 Setup Guide](../../databases/db2.md) for usage examples and the [IBM Db2 Data Dictionary & SQL Catalog](../data-dictionary/dialects/db2.md).
 
 ## Configuration & Parameters
 
 ::: sqlspec.adapters.db2.Db2SyncConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.adapters.db2.Db2AsyncConfig
     options:
       heading_level: 3
-      members: false
 
 ::: sqlspec.adapters.db2.Db2ConnectionParams
     options:
@@ -53,7 +51,7 @@ Synchronous and asynchronous IBM Db2 LUW adapters built on `ibm_db`. Inherited e
       separate_signature: false
       show_signature_annotations: true
 
-## Driver & Pool
+## Driver, Pool & Data Dictionary
 
 ::: sqlspec.adapters.db2.Db2SyncDriver
     options:
@@ -75,44 +73,58 @@ Synchronous and asynchronous IBM Db2 LUW adapters built on `ibm_db`. Inherited e
       heading_level: 3
       members: false
 
-## Extension Stores
+::: sqlspec.adapters.db2.data_dictionary.Db2SyncDataDictionary
+    options:
+      heading_level: 3
+      members: false
+
+::: sqlspec.adapters.db2.data_dictionary.Db2AsyncDataDictionary
+    options:
+      heading_level: 3
+      members: false
+
+## Extension Stores & Configs
+
+::: sqlspec.adapters.db2.litestar.Db2LitestarConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.db2.litestar.Db2SyncStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.db2.litestar.Db2AsyncStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.db2.adk.Db2SyncADKStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.db2.adk.Db2AsyncADKStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.db2.adk.Db2SyncADKMemoryStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.db2.adk.Db2AsyncADKMemoryStore
     options:
       heading_level: 4
-      members: false
+
+::: sqlspec.adapters.db2.events.Db2EventsConfig
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
 
 ::: sqlspec.adapters.db2.events.Db2SyncEventQueueStore
     options:
       heading_level: 4
-      members: false
 
 ::: sqlspec.adapters.db2.events.Db2AsyncEventQueueStore
     options:
       heading_level: 4
-      members: false

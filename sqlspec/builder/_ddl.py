@@ -24,6 +24,7 @@ from sqlspec.builder._parsing_utils import (
     _is_simple_identifier,
     _mark_explicit_table_quotes,
     _normalize_dialect,
+    _truthy_metadata_flag,
     parse_order_expression,
 )
 from sqlspec.core import SQL
@@ -60,7 +61,6 @@ __all__ = (
     "RenameTable",
     "Truncate",
     "compile_table_ddl_results",
-    "truthy_metadata_flag",
 )
 
 CONSTRAINT_TYPE_PRIMARY_KEY = "PRIMARY KEY"
@@ -282,6 +282,9 @@ _TEMPORAL_SCALE_TYPES = frozenset({"datetime2", "datetimeoffset", "time"})
 _ORACLE_ON_DELETE_ACTIONS = frozenset({FOREIGN_KEY_ACTION_CASCADE, FOREIGN_KEY_ACTION_SET_NULL})
 _NO_PARTIAL_INDEX_DIALECTS = frozenset({"duckdb"})
 _NO_CASCADE_SEQUENCE_DIALECTS = frozenset({"tsql", "oracle", "spanner", "bigquery", "db2"})
+_COMMENT_ON_DIALECTS = frozenset({"postgres", "oracle", "db2", "duckdb", "snowflake"})
+_INCLUDE_INDEX_DIALECTS = frozenset({"postgres", "tsql", "db2"})
+_STORING_INDEX_DIALECTS = frozenset({"spanner", "spangres"})
 _PARENTHESIZED_DEFAULT_DIALECTS = frozenset({"sqlite", "mysql", "spanner"})
 _SELF_PARENTHESIZED_GENERATED_DIALECTS = frozenset({"postgres", "mysql", "sqlite"})
 _GENERIC_NORMALIZATION_DIALECTS = frozenset({"oracle", "db2", "snowflake"})
@@ -981,7 +984,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
                 dialect=dialect,
                 fragment_dialect=fragment_dialect,
                 primary_key=use_inline_pk and col_name == pk_cols[0],
-                unique=truthy_metadata_flag(_first_present(row, "is_unique", "unique"))
+                unique=_truthy_metadata_flag(_first_present(row, "is_unique", "unique"))
                 and col_name not in pk_cols
                 and (col_name,) not in seen_unique_cols,
                 fallback_default=default_constraint_map.get(col_name),
@@ -1303,7 +1306,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         identity_val = None if is_computed else _resolve_metadata_identity(row)
         auto_increment = False if (is_computed or identity_val is not None) else _resolve_metadata_auto_increment(row)
         if (identity_val is not None or auto_increment) and (
-            norm_dialect == "duckdb" or (norm_dialect == "sqlite" and not primary_key)
+            norm_dialect in {"duckdb", "bigquery"} or (norm_dialect == "sqlite" and not primary_key)
         ):
             warnings.append(
                 f"Column {col_name!r} is an identity/auto-increment column; {norm_dialect} cannot express it on this "
@@ -1333,6 +1336,9 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
                 "declare; emitted as text"
             )
             dtype = sql_type_for_category("text", norm_dialect)
+        col_comment = (
+            _first_non_empty_str(row, "comment", "column_comment", "description") if norm_dialect == "mysql" else None
+        )
         self.column(
             name=_catalog_name(col_name, dialect, fragment_dialect),
             dtype=dtype,
@@ -1341,6 +1347,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             primary_key=primary_key,
             unique=unique,
             auto_increment=auto_increment,
+            comment=col_comment,
             check=_first_non_empty_str(row, "check"),
             collate=_first_non_empty_str(row, "collate", "collation", "collation_name"),
             identity=identity_val,
@@ -1670,9 +1677,9 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         known_columns: "Sequence[str] | None",
         warnings: "list[str]",
     ) -> "CreateIndex | None":
-        if truthy_metadata_flag(_first_present(row, "is_primary", "is_primary_key", "primary_key")):
+        if _truthy_metadata_flag(_first_present(row, "is_primary", "is_primary_key", "primary_key")):
             return None
-        if truthy_metadata_flag(row.get("is_unique_constraint")):
+        if _truthy_metadata_flag(row.get("is_unique_constraint")):
             return None
 
         index_name = _first_non_empty_str(row, "index_name", "name")
@@ -1684,6 +1691,13 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
             schema if schema is not None else _first_non_empty_str(row, "schema_name", "schema", "table_schema")
         )
         if not resolved_table:
+            return None
+
+        norm_dialect = _normalize_dialect(dialect) if dialect else None
+        if norm_dialect == "bigquery":
+            warnings.append(
+                f"BigQuery does not support secondary CREATE INDEX statements; index '{index_name}' omitted"
+            )
             return None
 
         fragment_dialect = source_dialect if source_dialect is not None else dialect
@@ -1713,8 +1727,8 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
                 return None
             where_text = _first_non_empty_str(row, "where", "filter_definition", "predicate")
             has_filter_val = row.get("has_filter")
-            is_partial = truthy_metadata_flag(has_filter_val) or truthy_metadata_flag(row.get("is_partial"))
-            if where_text and (has_filter_val is None or truthy_metadata_flag(has_filter_val)):
+            is_partial = _truthy_metadata_flag(has_filter_val) or _truthy_metadata_flag(row.get("is_partial"))
+            if where_text and (has_filter_val is None or _truthy_metadata_flag(has_filter_val)):
                 where_expr = _parse_catalog_fragment(where_text, fragment_dialect)
                 if where_expr is None:
                     warnings.append(f"Index {index_name}: predicate could not be parsed ({where_text}); index omitted")
@@ -1723,7 +1737,7 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
                 warnings.append(f"Index {index_name} is partial but the catalog did not report its predicate; omitted")
                 return None
 
-        if where_expr is not None and _normalize_dialect(dialect) in _NO_PARTIAL_INDEX_DIALECTS:
+        if where_expr is not None and norm_dialect in _NO_PARTIAL_INDEX_DIALECTS:
             warnings.append(f"DuckDB does not support partial indexes; index '{index_name}' omitted")
             return None
 
@@ -1732,12 +1746,21 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
             builder.in_schema(_catalog_name(resolved_schema, dialect, fragment_dialect))
         builder.on(_catalog_name(resolved_table, dialect, fragment_dialect), *key_exprs)
 
-        if truthy_metadata_flag(_first_present(row, "is_unique", "unique")):
+        if _truthy_metadata_flag(_first_present(row, "is_unique", "unique")):
             builder.unique()
 
         inc_cols = _split_metadata_columns(_first_present(row, "included_columns", "include", "include_columns"))
         if inc_cols:
-            builder.include(*(_catalog_name(col, dialect, fragment_dialect) for col in inc_cols))
+            if (
+                norm_dialect is None
+                or norm_dialect in _INCLUDE_INDEX_DIALECTS
+                or norm_dialect in _STORING_INDEX_DIALECTS
+            ):
+                builder.include(*(_catalog_name(col, dialect, fragment_dialect) for col in inc_cols))
+            else:
+                warnings.append(
+                    f"Index {index_name}: covering INCLUDE columns are not supported on {norm_dialect} and were omitted"
+                )
 
         if where_expr is not None:
             builder.where(where_expr)
@@ -1748,7 +1771,6 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         using_method = _first_non_empty_str(row, "using", "index_type", "access_method")
         if using_method:
             using_upper = using_method.strip().upper().replace("_", " ")
-            norm_dialect = _normalize_dialect(dialect) if dialect else None
             if using_upper not in _MSSQL_STORAGE_INDEX_TYPES and not (
                 using_upper == "BTREE" and norm_dialect in {"tsql", "mssql", "sqlite"}
             ):
@@ -1779,6 +1801,16 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
                 include_cols.append(_parse_ddl_identifier(inc_col, dialect=effective_dialect))
             else:
                 include_cols.append(inc_col.copy())
+
+        if (
+            include_cols
+            and norm_dialect is not None
+            and norm_dialect not in _INCLUDE_INDEX_DIALECTS
+            and norm_dialect not in _STORING_INDEX_DIALECTS
+        ):
+            self._raise_builder_error(
+                f"Dialect '{effective_dialect}' does not support INCLUDE covering columns on indexes."
+            )
 
         where_expr: exp.Expr | None = None
         if self._where is not None:
@@ -1839,6 +1871,15 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
                     if idx < len(opt_columns) and isinstance(opt_columns[idx], exp.Ordered):
                         opt_columns[idx].set("desc", False)
         return optimized
+
+    def _has_sql_postprocessing(self) -> bool:
+        return bool(self._include_columns)
+
+    def _postprocess_built_sql(self, sql_string: str, dialect: "DialectType" = None) -> str:
+        target_dialect = _normalize_dialect(dialect) if dialect is not None else self.dialect_name
+        if self._include_columns and target_dialect in _STORING_INDEX_DIALECTS:
+            return sql_string.replace(" INCLUDE (", " STORING (", 1)
+        return sql_string
 
 
 class Truncate(DDLBuilder, _CascadeRestrictDDLMixin):
@@ -2887,9 +2928,23 @@ def compile_table_ddl_results(
         )
 
     lossy: list[str] = []
+    normalized_columns = [_normalize_metadata_row(col) for col in columns]
+    fragment_dialect = source_dialect if source_dialect is not None else dialect
+
+    merged_column_comments: dict[str, str] = {}
+    for row in normalized_columns:
+        col_name = _first_non_empty_str(row, "column_name", "name")
+        col_comment = _first_non_empty_str(row, "comment", "column_comment", "description")
+        if col_name and col_comment:
+            merged_column_comments[col_name] = col_comment
+    if column_comments:
+        merged_column_comments.update({
+            col_name: col_comment for col_name, col_comment in column_comments.items() if col_name and col_comment
+        })
+
     table_builder = CreateTable.from_metadata(
         table_name,
-        columns,
+        normalized_columns,
         constraints=constraints,
         foreign_keys=foreign_keys,
         schema=schema,
@@ -2897,15 +2952,25 @@ def compile_table_ddl_results(
         source_dialect=source_dialect,
         warnings=lossy,
     )
+    if dialect_str == "mysql":
+        if table_comment:
+            table_builder.comment(table_comment)
+        if merged_column_comments:
+            by_builder_name = {
+                _catalog_name(col_name, dialect, fragment_dialect): col_comment
+                for col_name, col_comment in merged_column_comments.items()
+            }
+            for col_def in table_builder._columns:
+                col_comment_val = by_builder_name.get(col_def.name) or merged_column_comments.get(col_def.name)
+                if col_comment_val:
+                    col_def.comment = col_comment_val
     statements: list[str] = [table_builder.build(dialect=dialect).sql.rstrip(";").strip()]
 
-    normalized_columns = [_normalize_metadata_row(col) for col in columns]
     known_columns = [
         col_name
         for col_name in (_first_non_empty_str(row, "column_name", "name") for row in normalized_columns)
         if col_name
     ]
-    fragment_dialect = source_dialect if source_dialect is not None else dialect
     constraint_names: set[str] = {
         c.name
         for c in table_builder._constraints
@@ -2924,7 +2989,7 @@ def compile_table_ddl_results(
         raw_idx_name = _first_non_empty_str(index_row, "index_name", "name")
         if raw_idx_name and _catalog_name(raw_idx_name, dialect, fragment_dialect) in constraint_names:
             continue
-        idx_builder = CreateIndex.from_metadata(
+        idx_builder = CreateIndex._from_metadata_row(
             index_row,
             table_name=table_name,
             schema=schema or "",
@@ -2950,34 +3015,31 @@ def compile_table_ddl_results(
                     continue
             statements.append(idx_builder.build(dialect=dialect).sql.rstrip(";").strip())
 
-    quoted_table = _catalog_name(table_name, dialect, source_dialect)
-    quoted_schema = _catalog_name(schema, dialect, source_dialect) if schema else None
-    if table_comment:
-        tbl_comment = CommentOn(dialect=dialect).on_table(quoted_table).is_(table_comment)
-        if quoted_schema:
-            tbl_comment.in_schema(quoted_schema)
-        statements.append(tbl_comment.build(dialect=dialect).sql.rstrip(";").strip())
+    if dialect_str is None or dialect_str in _COMMENT_ON_DIALECTS:
+        quoted_table = _catalog_name(table_name, dialect, source_dialect)
+        quoted_schema = _catalog_name(schema, dialect, source_dialect) if schema else None
+        if table_comment:
+            tbl_comment = CommentOn(dialect=dialect).on_table(quoted_table).is_(table_comment)
+            if quoted_schema:
+                tbl_comment.in_schema(quoted_schema)
+            statements.append(tbl_comment.build(dialect=dialect).sql.rstrip(";").strip())
 
-    merged_column_comments: dict[str, str] = {}
-    for row in normalized_columns:
-        col_name = _first_non_empty_str(row, "column_name", "name")
-        col_comment = _first_non_empty_str(row, "comment", "column_comment", "description")
-        if col_name and col_comment:
-            merged_column_comments[col_name] = col_comment
-    if column_comments:
-        merged_column_comments.update({
-            col_name: col_comment for col_name, col_comment in column_comments.items() if col_name and col_comment
-        })
-
-    for col_name, col_comment in merged_column_comments.items():
-        col_comment_builder = (
-            CommentOn(dialect=dialect)
-            .on_column(quoted_table, _catalog_name(col_name, dialect, source_dialect))
-            .is_(col_comment)
+        for col_name, col_comment in merged_column_comments.items():
+            col_comment_builder = (
+                CommentOn(dialect=dialect)
+                .on_column(quoted_table, _catalog_name(col_name, dialect, source_dialect))
+                .is_(col_comment)
+            )
+            if quoted_schema:
+                col_comment_builder.in_schema(quoted_schema)
+            statements.append(col_comment_builder.build(dialect=dialect).sql.rstrip(";").strip())
+    elif dialect_str != "mysql":
+        if table_comment:
+            lossy.append(f"Table comment is not supported by {dialect_str}; comment omitted")
+        lossy.extend(
+            f"Column comment on {col_name!r} is not supported by {dialect_str}; comment omitted"
+            for col_name in merged_column_comments
         )
-        if quoted_schema:
-            col_comment_builder.in_schema(quoted_schema)
-        statements.append(col_comment_builder.build(dialect=dialect).sql.rstrip(";").strip())
 
     ddl_text = ";\n\n".join(stmt for stmt in statements if stmt) + ";"
     return DDLResult(
@@ -2990,26 +3052,10 @@ def compile_table_ddl_results(
     )
 
 
-def truthy_metadata_flag(value: Any) -> bool:
-    """Interpret a catalog flag value (bool, number, or ``yes``/``true``/``1`` text) as a boolean.
-
-    Args:
-        value: Raw catalog flag value.
-
-    Returns:
-        Whether the flag is set.
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
-    return bool(value)
-
-
 def _normalize_metadata_row(item: Any) -> dict[str, Any]:
     """Normalize a metadata mapping, ObjectMetadata, or ForeignKeyMetadata into a dict."""
+    if type(item) is dict and "attributes" not in item and "identity" not in item and all(type(k) is str for k in item):
+        return item
     if isinstance(item, Mapping):
         result: dict[str, Any] = {str(k): v for k, v in item.items()}
         nested_attrs = result.get("attributes")
@@ -3120,7 +3166,7 @@ def _resolve_metadata_column_type(row: Mapping[str, Any], dialect: "DialectType 
         if max_length is not None:
             raw_len = _safe_int(max_length, 0)
             if raw_len > 0:
-                is_mssql_bytes = truthy_metadata_flag(row.get("from_mssql_byte_length")) or (
+                is_mssql_bytes = _truthy_metadata_flag(row.get("from_mssql_byte_length")) or (
                     char_len is None
                     and (
                         norm_dialect in {"tsql", "mssql"}
@@ -3165,13 +3211,17 @@ def _translate_catalog_type(
     if norm_source is None or norm_source == norm_target:
         return dtype
     with contextlib.suppress(ParseError):
-        return exp.DataType.build(dtype, dialect=norm_source).sql(dialect=norm_target)
+        built = exp.DataType.build(dtype, dialect=norm_source)
+        rendered = built.sql(dialect=norm_target)
+        if norm_target == "sqlite" and _sqlite_type_affinity(rendered) != _sqlite_type_affinity(dtype):
+            return dtype
+        return rendered
     return dtype
 
 
 def _resolve_metadata_not_null(row: Mapping[str, Any]) -> bool:
     if row.get("not_null") is not None:
-        return truthy_metadata_flag(row["not_null"])
+        return _truthy_metadata_flag(row["not_null"])
     nullable_val = _first_present(row, "is_nullable", "nullable")
     if nullable_val is None:
         return False
@@ -3195,7 +3245,7 @@ def _resolve_metadata_computed(row: Mapping[str, Any]) -> tuple[str | exp.Expr |
     persisted_val = _first_present(row, "is_persisted_computed", "is_stored", "persisted")
     persisted: bool | None
     if persisted_val is not None:
-        persisted = truthy_metadata_flag(persisted_val)
+        persisted = _truthy_metadata_flag(persisted_val)
     elif generated_kind in {"v", "virtual"} or "virtual generated" in extra:
         persisted = False
     elif generated_kind in {"s", "stored"} or "stored generated" in extra:
@@ -3204,9 +3254,9 @@ def _resolve_metadata_computed(row: Mapping[str, Any]) -> tuple[str | exp.Expr |
         persisted = None
 
     is_generated = (
-        truthy_metadata_flag(row.get("is_computed"))
-        or truthy_metadata_flag(row.get("is_generated"))
-        or truthy_metadata_flag(row.get("virtual_column"))
+        _truthy_metadata_flag(row.get("is_computed"))
+        or _truthy_metadata_flag(row.get("is_generated"))
+        or _truthy_metadata_flag(row.get("virtual_column"))
         or generated_kind in {"s", "v", "stored", "virtual"}
         or extra in {"generated", "virtual generated", "stored generated"}
     )
@@ -3229,7 +3279,7 @@ def _resolve_metadata_computed(row: Mapping[str, Any]) -> tuple[str | exp.Expr |
 
 def _is_hidden_metadata_column(row: Mapping[str, Any]) -> bool:
     """Return whether a catalog column is a system-generated hidden column (Oracle ``SYS_NC*`` columns)."""
-    if not truthy_metadata_flag(row.get("hidden_column")):
+    if not _truthy_metadata_flag(row.get("hidden_column")):
         return False
     name = _first_non_empty_str(row, "column_name", "name") or ""
     return name.upper().startswith("SYS_")
@@ -3249,7 +3299,7 @@ def _resolve_metadata_identity(row: Mapping[str, Any]) -> str | None:
         if ident_clean not in {"", "N", "NO", "NONE", "FALSE", "0", "NOT_APPLICABLE"}:
             return ident_clean
 
-    if truthy_metadata_flag(row.get("is_identity")) or truthy_metadata_flag(row.get("identity_column")):
+    if _truthy_metadata_flag(row.get("is_identity")) or _truthy_metadata_flag(row.get("identity_column")):
         seed = row.get("identity_seed")
         inc = row.get("identity_increment")
         if seed is not None and inc is not None:
@@ -3263,7 +3313,7 @@ def _resolve_metadata_identity(row: Mapping[str, Any]) -> str | None:
 
 
 def _resolve_metadata_auto_increment(row: Mapping[str, Any]) -> bool:
-    if truthy_metadata_flag(row.get("auto_increment")):
+    if _truthy_metadata_flag(row.get("auto_increment")):
         return True
     extra = str(row.get("extra") or "").lower()
     return "auto_increment" in extra or "autoincrement" in extra
@@ -3422,7 +3472,7 @@ def _extract_metadata_primary_key(
         is_pk_val = _first_present(row, "is_primary", "is_primary_key", "primary_key")
         if isinstance(is_pk_val, int) and not isinstance(is_pk_val, bool) and is_pk_val > 0:
             pk_candidates.append((is_pk_val, idx, col_name))
-        elif truthy_metadata_flag(is_pk_val) or str(row.get("column_key") or "").strip().upper() == "PRI":
+        elif _truthy_metadata_flag(is_pk_val) or str(row.get("column_key") or "").strip().upper() == "PRI":
             pk_candidates.append((idx + 1, idx, col_name))
 
     pk_candidates.sort(key=lambda item: (item[0], item[1]))
@@ -3471,12 +3521,17 @@ def _supported_foreign_key_actions(
         if on_update and on_update != FOREIGN_KEY_ACTION_RESTRICT:
             warnings.append(f"Foreign key {label}: Oracle does not support ON UPDATE {on_update}; action omitted")
         return resolved_delete, None
-    if norm_dialect == "duckdb":
+    if norm_dialect in {"duckdb", "bigquery"}:
+        label_dialect = "BigQuery" if norm_dialect == "bigquery" else "DuckDB"
         implicit_actions = {FOREIGN_KEY_ACTION_RESTRICT}
         if on_delete and on_delete not in implicit_actions:
-            warnings.append(f"Foreign key {label}: DuckDB does not support ON DELETE {on_delete}; action omitted")
+            warnings.append(
+                f"Foreign key {label}: {label_dialect} does not support ON DELETE {on_delete}; action omitted"
+            )
         if on_update and on_update not in implicit_actions:
-            warnings.append(f"Foreign key {label}: DuckDB does not support ON UPDATE {on_update}; action omitted")
+            warnings.append(
+                f"Foreign key {label}: {label_dialect} does not support ON UPDATE {on_update}; action omitted"
+            )
         return None, None
     if norm_dialect == "tsql":
         return (
@@ -3508,6 +3563,8 @@ def _find_matching_metadata_fk(
     ref_table: str,
     quoted_cols: Sequence[str],
     quoted_ref_cols: Sequence[str],
+    on_delete: str | None = None,
+    on_update: str | None = None,
 ) -> dict[str, Any] | None:
     """Find an existing merged FK entry that belongs to the same constraint group."""
     for existing in merged:
@@ -3523,6 +3580,20 @@ def _find_matching_metadata_fk(
             tuple(existing["columns"]) == tuple(quoted_cols)
             and existing["ref_table"] == ref_table
             and tuple(existing["ref_columns"]) == tuple(quoted_ref_cols)
+        ):
+            return existing
+        if (
+            quoted_name is None
+            and fk_group_id is None
+            and existing["name"] is None
+            and existing.get("_fk_group_id") is None
+            and existing["ref_table"] == ref_table
+            and existing["on_delete"] == on_delete
+            and existing["on_update"] == on_update
+            and len(quoted_cols) == 1
+            and len(quoted_ref_cols) == 1
+            and quoted_cols[0] not in existing["columns"]
+            and quoted_ref_cols[0] not in existing["ref_columns"]
         ):
             return existing
     return None
@@ -3603,8 +3674,8 @@ def _extract_metadata_foreign_keys(
             ref_table = f"{_catalog_name(ref_schema, dialect, source_dialect)}.{ref_table}"
 
         on_delete, on_update = _metadata_fk_actions(row, defn)
-        deferrable = truthy_metadata_flag(_first_present(row, "deferrable", "is_deferrable"))
-        initially_deferred = truthy_metadata_flag(row.get("initially_deferred"))
+        deferrable = _truthy_metadata_flag(_first_present(row, "deferrable", "is_deferrable"))
+        initially_deferred = _truthy_metadata_flag(row.get("initially_deferred"))
         quoted_cols = [_catalog_name(col, dialect, source_dialect) for col in cols]
         quoted_ref_cols = (
             [_catalog_name(col, dialect, source_dialect) for col in ref_cols] if ref_is_catalog_name else ref_cols
@@ -3618,6 +3689,8 @@ def _extract_metadata_foreign_keys(
             ref_table=ref_table,
             quoted_cols=quoted_cols,
             quoted_ref_cols=quoted_ref_cols,
+            on_delete=on_delete,
+            on_update=on_update,
         )
 
         if matched_existing is not None:
@@ -3748,7 +3821,7 @@ def _metadata_index_descending_flags(row: Mapping[str, Any], count: int) -> list
         else [raw_orders]
     )
     flags = [
-        str(value).strip().upper() in {"D", "DESC"} or (not isinstance(value, str) and truthy_metadata_flag(value))
+        str(value).strip().upper() in {"D", "DESC"} or (not isinstance(value, str) and _truthy_metadata_flag(value))
         for value in values
     ]
     return (flags + [False] * count)[:count]
@@ -3768,7 +3841,12 @@ def _explicit_or_bare_identifier(
     """Return an identifier for a raw catalog name, explicitly quoted when its spelling requires it."""
     if not _catalog_name_needs_quotes(name, dialect, source_dialect):
         return exp.to_identifier(name)
-    return _explicit_identifier(name)
+    norm_dialect = _normalize_dialect(dialect)
+    case_dialect = norm_dialect if source_dialect is None else _normalize_dialect(source_dialect)
+    target_name = name
+    if _BARE_IDENTIFIER_RE.fullmatch(name) and _fold_identifier(name, case_dialect) == name:
+        target_name = _fold_identifier(name, norm_dialect)
+    return _explicit_identifier(target_name)
 
 
 def _explicit_identifier(name: str) -> exp.Identifier:
@@ -3922,7 +4000,12 @@ def _catalog_name(name: str, dialect: "DialectType | None", source_dialect: "Dia
     """
     if not _catalog_name_needs_quotes(name, dialect, source_dialect):
         return name
-    return exp.Identifier(this=name, quoted=True).sql(dialect=_normalize_dialect(dialect))
+    norm_dialect = _normalize_dialect(dialect)
+    case_dialect = norm_dialect if source_dialect is None else _normalize_dialect(source_dialect)
+    target_name = name
+    if _BARE_IDENTIFIER_RE.fullmatch(name) and _fold_identifier(name, case_dialect) == name:
+        target_name = _fold_identifier(name, norm_dialect)
+    return exp.Identifier(this=target_name, quoted=True).sql(dialect=norm_dialect)
 
 
 def _fold_identifier(name: str, dialect: str | None) -> str:
@@ -4262,10 +4345,11 @@ def _dialect_foreign_key_actions(
     on_update = constraint.on_update
     norm_dialect = _normalize_dialect(dialect) if dialect else None
     implicit_actions = {FOREIGN_KEY_ACTION_NO_ACTION, FOREIGN_KEY_ACTION_RESTRICT}
-    if norm_dialect == "duckdb":
+    if norm_dialect in {"duckdb", "bigquery"}:
+        label_dialect = "BigQuery" if norm_dialect == "bigquery" else "DuckDB"
         for action_type, action in (("ON DELETE", on_delete), ("ON UPDATE", on_update)):
             if action and action not in implicit_actions:
-                msg = f"DuckDB does not support {action_type} {action} on foreign keys"
+                msg = f"{label_dialect} does not support {action_type} {action} on foreign keys"
                 raise SQLBuilderError(msg)
         return None, None
     if norm_dialect != "oracle":

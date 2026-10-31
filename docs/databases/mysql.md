@@ -4,12 +4,48 @@ SQLSpec provides MySQL and MariaDB adapters sharing unified error translation (`
 
 ## Install and When to Choose
 
-| Adapter | Install Command | Mode | Best Fit |
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[asyncmy]"
+    # or: uv add "sqlspec[pymysql]"
+    # or: uv add "sqlspec[aiomysql]"
+    # or: uv add "sqlspec[mysql-connector]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[asyncmy]"
+    # or: pip install "sqlspec[pymysql]"
+    # or: pip install "sqlspec[aiomysql]"
+    # or: pip install "sqlspec[mysql-connector]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[asyncmy]"
+    # or: pdm add "sqlspec[pymysql]"
+    # or: pdm add "sqlspec[aiomysql]"
+    # or: pdm add "sqlspec[mysql-connector]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[asyncmy]"
+    # or: poetry add "sqlspec[pymysql]"
+    # or: poetry add "sqlspec[aiomysql]"
+    # or: poetry add "sqlspec[mysql-connector]"
+    ```
+
+| Adapter | Extra | Mode | Best Fit |
 | --- | --- | --- | --- |
-| `asyncmy` | `uv add "sqlspec[asyncmy]"` | Async | Recommended Cython-accelerated `asyncio` driver for MySQL 8+ and MariaDB. |
-| `pymysql` | `uv add "sqlspec[pymysql]"` | Sync | Pure-Python synchronous driver with Google Cloud SQL connector support (`sqlspec[cloud-sql]`). |
-| `aiomysql` | `uv add "sqlspec[aiomysql]"` | Async | Pure-Python `asyncio` driver built over `PyMySQL` for PyPy or pure-Python environments. |
-| `mysqlconnector` | `uv add "sqlspec[mysql-connector]"` | Sync + Async | Official Oracle MySQL Connector/Python supporting both sync pools and native async connections. |
+| `asyncmy` | `sqlspec[asyncmy]` | Async | Recommended Cython-accelerated `asyncio` driver for MySQL 8+ and MariaDB. |
+| `pymysql` | `sqlspec[pymysql]` | Sync | Pure-Python synchronous driver with Google Cloud SQL connector support (`sqlspec[cloud-sql]`). |
+| `aiomysql` | `sqlspec[aiomysql]` | Async | Pure-Python `asyncio` driver built over `PyMySQL` for PyPy or pure-Python environments. |
+| `mysqlconnector` | `sqlspec[mysql-connector]` | Sync + Async | Official Oracle MySQL Connector/Python supporting both sync pools and native async connections. |
 
 ## Minimal Connection and Pool Setup
 

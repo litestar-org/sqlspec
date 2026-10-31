@@ -25,17 +25,57 @@ hide:
 
 ## Install
 
-Install `sqlspec` with `uv`. Python's built-in `sqlite3` adapter works immediately with zero extra driver packages:
+Install `sqlspec` with your preferred package manager. Python's built-in `sqlite3` adapter works immediately with zero extra driver packages:
 
-```bash
-uv add sqlspec
-```
+=== "uv"
+
+    ```bash
+    uv add sqlspec
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install sqlspec
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add sqlspec
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add sqlspec
+    ```
 
 Add optional database driver, schema validation, or framework extras when connecting to external engines:
 
-```bash
-uv add "sqlspec[asyncpg,msgspec,litestar]"
-```
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[asyncpg,msgspec,litestar]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[asyncpg,msgspec,litestar]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[asyncpg,msgspec,litestar]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[asyncpg,msgspec,litestar]"
+    ```
 
 ## First Query
 
@@ -52,7 +92,7 @@ Run live SQLite queries directly in your browser in the [Interactive Playground]
 | Section | What You Will Find |
 | --- | --- |
 | **[Learn](learn/index.md)** | Progressive SQLite-first tutorials covering configuration, querying, parameters, typed schema mapping, transactions, `.sql` files, query builders, filtering, migrations, Arrow pipelines, observability, testing, and production recipes. |
-| **[Databases](/databases/)** | Central Capability Matrix plus concise setup, connection pool, type coercion, and dialect guides for PostgreSQL, CockroachDB, SQLite, MySQL, MariaDB, Oracle, SQL Server, Db2, DuckDB, BigQuery, Spanner, ADBC, and Arrow ODBC. |
+| **[Databases](/databases/)** | Central Capability Matrix plus concise setup, connection pool, type coercion, and dialect guides for PostgreSQL, CockroachDB, SQLite, MySQL, MariaDB, Oracle, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, DuckDB, BigQuery, Spanner, ADBC, and Arrow ODBC. |
 | **[Integrations](/integrations/)** | Unified plugin, dependency injection, session store, event queue, and agent memory guides for Litestar, Google ADK, Events, FastAPI, Starlette, Flask, Sanic, and Dishka. |
 | **[Playground](playground.md)** | Zero-install WebAssembly (Pyodide) SQLite environment running `SQLSpec` directly in your browser tab. |
 | **[Reference](/reference/)** | Focused API reference pages for `SQLSpec`, configurations, drivers, statements, builders, migrations, storage, data dictionaries, extensions, CLI commands, and adapter classes. |

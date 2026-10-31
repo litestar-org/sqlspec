@@ -165,6 +165,28 @@ def test_duckdb_execute_many_caches_bulk_insert_sql_fragments(tmp_path: Path, mo
         config.close_pool()
 
 
+class _SpyDuckDBRelation:
+    """Proxy relation for counting to_arrow_table and fetchall calls."""
+
+    __slots__ = ("_counts", "_relation")
+
+    def __init__(self, relation: Any, counts: dict[str, int]) -> None:
+        self._relation = relation
+        self._counts = counts
+
+    @property
+    def description(self) -> Any:
+        return self._relation.description
+
+    def fetchall(self) -> list[Any]:
+        self._counts["fetchall"] += 1
+        return list(self._relation.fetchall())
+
+    def to_arrow_table(self, *args: Any, **kwargs: Any) -> Any:
+        self._counts["arrow"] += 1
+        return self._relation.to_arrow_table(*args, **kwargs)
+
+
 class _SpyDuckDBCursor:
     """Proxy cursor for counting to_arrow_table and fetchall calls."""
 
@@ -183,6 +205,12 @@ class _SpyDuckDBCursor:
     @property
     def description(self) -> Any:
         return self._connection.description
+
+    def sql(self, query: str, *, params: Any = None) -> "_SpyDuckDBRelation | None":
+        relation = self._connection.sql(query, params=params)
+        if relation is None:
+            return None
+        return _SpyDuckDBRelation(relation, self._counts)
 
     def execute(self, sql: str, parameters: Any = None) -> Self:
         if parameters is not None:

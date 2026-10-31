@@ -56,6 +56,13 @@ session.execute_many(
 
 ## Cross-Dialect Placeholder Translation
 
+```mermaid
+flowchart LR
+    Params["Input SQL + Parameters (:name, ?, $1)"] --> Lexer["SQL Lexer (Skips Strings & Casts)"]
+    Lexer --> Profile["Dialect Parameter Profile"]
+    Profile --> Wire["Compiled SQL + Bound Wire Args"]
+```
+
 | Input Style Written in SQL | Example | Compiled Output (`asyncpg`) | Compiled Output (`sqlite` / `duckdb`) | Compiled Output (`spanner`) |
 | --- | --- | --- | --- | --- |
 | Named colon (`:name`) | `WHERE status = :status` | `WHERE status = $1` | `WHERE status = ?` | `WHERE status = @status` |
