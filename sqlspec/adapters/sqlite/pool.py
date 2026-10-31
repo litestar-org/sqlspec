@@ -153,19 +153,25 @@ class SqliteConnectionPool:
             SqliteConnection: A thread-local connection.
         """
         connection = self._get_thread_connection()
+        depth = getattr(self._thread_local, "depth", 0)
+        self._thread_local.depth = depth + 1
         try:
             yield connection
         except BaseException:
-            with contextlib.suppress(Exception):
-                end_transaction(connection, commit=False)
-            raise
-        else:
-            try:
-                end_transaction(connection, commit=True)
-            except BaseException:
+            if self._thread_local.depth == 1:
                 with contextlib.suppress(Exception):
                     end_transaction(connection, commit=False)
-                raise
+            raise
+        else:
+            if self._thread_local.depth == 1:
+                try:
+                    end_transaction(connection, commit=False)
+                except BaseException:
+                    with contextlib.suppress(Exception):
+                        end_transaction(connection, commit=False)
+                    raise
+        finally:
+            self._thread_local.depth -= 1
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""

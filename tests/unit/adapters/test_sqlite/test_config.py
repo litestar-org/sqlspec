@@ -1,5 +1,6 @@
 """SQLite configuration normalization tests."""
 
+import threading
 from os import PathLike
 from pathlib import Path
 from typing import Literal, get_args, get_origin, get_type_hints
@@ -275,3 +276,28 @@ def test_create_connection_returns_a_caller_owned_connection(tmp_path: Path) -> 
             pooled.execute("SELECT 1")
     finally:
         config.close_pool()
+
+
+def test_default_memory_database_uses_shared_cache() -> None:
+    config = SqliteConfig()
+    assert "cache=shared" in config.connection_config["database"]
+    pool = config.provide_pool()
+    try:
+        with pool.get_connection() as conn:
+            conn.execute("CREATE TABLE shared_probe (id INT)")
+            conn.commit()
+
+        results: list[int] = []
+
+        def worker() -> None:
+            with pool.get_connection() as conn:
+                row = conn.execute("SELECT count(*) FROM shared_probe").fetchone()
+                if row:
+                    results.append(row[0])
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        assert results == [0]
+    finally:
+        pool.close()

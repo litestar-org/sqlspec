@@ -175,28 +175,12 @@ class SqliteDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Args:
-            cursor: SQLite cursor object
-            statement: SQL statement containing multiple statements
-
-        Returns:
-            ExecutionResult with script execution details
-        """
+        """Execute SQL script with statement splitting and parameter handling."""
         self._rowid_target_cache.clear()
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-
-        for stmt in statements:
-            cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
-            successful_count += 1
-
-        return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+        try:
+            return super().dispatch_execute_script(cursor, statement)
+        finally:
+            self._rowid_target_cache.clear()
 
     def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
         """Begin a database transaction.

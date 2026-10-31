@@ -342,3 +342,14 @@ def test_sqlite_json_converter_and_unregister() -> None:
     register_type_handlers()
     unregister_type_handlers()
     assert (dict, sqlite3.PrepareProtocol) not in sqlite3.adapters
+
+
+def test_sqlite_dispatch_execute_script_emits_events() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        driver = SqliteDriver(connection=connection)
+        result = driver.execute_script("CREATE TABLE scr_sync (x INT); INSERT INTO scr_sync VALUES (1);")
+        assert result.total_statements == 2
+        assert result.successful_statements == 2
+    finally:
+        connection.close()

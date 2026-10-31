@@ -155,8 +155,8 @@ def test_get_connection_rolls_back_open_transaction_on_exception() -> None:
     pool.close()
 
 
-def test_get_connection_commits_open_transaction_on_clean_exit() -> None:
-    """A clean with-block exit commits the open transaction."""
+def test_get_connection_rolls_back_open_transaction_on_clean_exit() -> None:
+    """A clean with-block exit rolls back the uncommitted transaction."""
     pool = SqliteConnectionPool(connection_parameters={"database": ":memory:"}, enable_optimizations=False)
     with pool.get_connection() as connection:
         connection.execute("CREATE TABLE widgets (id INTEGER PRIMARY KEY)")
@@ -167,7 +167,7 @@ def test_get_connection_commits_open_transaction_on_clean_exit() -> None:
 
     with pool.get_connection() as connection:
         count = connection.execute("SELECT COUNT(*) FROM widgets").fetchone()[0]
-    assert count == 1
+    assert count == 0
 
     pool.close()
 
@@ -387,5 +387,43 @@ def test_memory_pool_replaces_a_closed_connection() -> None:
             connection.close()
         with pool.get_connection() as replacement:
             assert replacement.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        pool.close()
+
+
+def test_uncommitted_writes_rollback_on_exit() -> None:
+    pool = SqliteConnectionPool({"database": ":memory:"})
+    try:
+        with pool.get_connection() as conn:
+            conn.execute("CREATE TABLE test_rb (x INT)")
+            conn.execute("INSERT INTO test_rb VALUES (1)")
+            conn.commit()
+
+        with pool.get_connection() as conn:
+            conn.execute("INSERT INTO test_rb VALUES (2)")
+
+        with pool.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM test_rb").fetchall()
+            assert rows == [(1,)]
+    finally:
+        pool.close()
+
+
+def test_nested_get_connection_reentrancy_depth() -> None:
+    pool = SqliteConnectionPool({"database": ":memory:"})
+    try:
+        with pool.get_connection() as conn1:
+            conn1.execute("CREATE TABLE test_depth (x INT)")
+            conn1.commit()
+            conn1.execute("INSERT INTO test_depth VALUES (1)")
+            with pool.get_connection() as conn2:
+                assert conn1 is conn2
+                conn2.execute("INSERT INTO test_depth VALUES (2)")
+            assert getattr(conn1, "in_transaction", False)
+            conn1.commit()
+
+        with pool.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM test_depth").fetchall()
+            assert rows == [(1,), (2,)]
     finally:
         pool.close()
