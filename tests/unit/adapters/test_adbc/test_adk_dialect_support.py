@@ -16,7 +16,7 @@ from sqlspec.adapters.adbc.adk.store import (
     format_pgvector_literal,
 )
 from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
-from sqlspec.adapters.adbc.litestar.store import ADBCStore
+from sqlspec.adapters.adbc.litestar.store import AdbcStore
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -336,9 +336,9 @@ def test_sqlite_adk_store_encodes_and_decodes_timestamps() -> None:
 
 
 def test_adbc_litestar_store_handles_pg_extensions_and_bigquery_snowflake(monkeypatch: Any) -> None:
-    """ADBCStore should recognize Postgres extension dialects, omit indexes on BigQuery/Snowflake, and use select_one_or_none."""
+    """AdbcStore should recognize Postgres extension dialects, omit indexes on BigQuery/Snowflake, and use select_one_or_none."""
     config = AdbcConfig(connection_config={"driver_name": "bigquery"})
-    store = ADBCStore(config)
+    store = AdbcStore(config)
     store._dialect = "bigquery"  # pyright: ignore[reportPrivateUsage]
 
     ddl = store._table_ddl()  # pyright: ignore[reportPrivateUsage]

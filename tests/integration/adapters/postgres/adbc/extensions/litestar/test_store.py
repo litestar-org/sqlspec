@@ -13,16 +13,16 @@ from collections.abc import AsyncGenerator
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
-from sqlspec.adapters.adbc.litestar import ADBCStore
+from sqlspec.adapters.adbc.litestar import AdbcStore
 
 pytestmark = [pytest.mark.xdist_group("postgres"), pytest.mark.adbc, pytest.mark.integration]
 
 
 @pytest.fixture
-async def adbc_store(adbc_postgres_config: AdbcConfig) -> AsyncGenerator[ADBCStore, None]:
+async def adbc_store(adbc_postgres_config: AdbcConfig) -> AsyncGenerator[AdbcStore, None]:
     """Create an ADBC store with PostgreSQL backend."""
     adbc_postgres_config.extension_config = {"litestar": {"session_table": "test_adbc_sessions"}}
-    store = ADBCStore(adbc_postgres_config)
+    store = AdbcStore(adbc_postgres_config)
     await store.create_table()
     try:
         yield store
@@ -31,7 +31,7 @@ async def adbc_store(adbc_postgres_config: AdbcConfig) -> AsyncGenerator[ADBCSto
             await store.delete_all()
 
 
-async def test_sync_to_thread_concurrency(adbc_store: ADBCStore) -> None:
+async def test_sync_to_thread_concurrency(adbc_store: AdbcStore) -> None:
     """ADBC PostgreSQL supports concurrent store reads and writes through sync_to_thread."""
 
     async def write_session(session_id: int) -> None:

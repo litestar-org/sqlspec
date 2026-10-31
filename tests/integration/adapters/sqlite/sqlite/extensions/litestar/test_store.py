@@ -20,11 +20,11 @@ if TYPE_CHECKING:
     from litestar.stores.base import Store
     from litestar.stores.registry import StoreRegistry
 
-    from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
+    from sqlspec.adapters.sqlite.litestar.store import SqliteStore
 else:
     Store = import_optional_attr("litestar.stores.base", "Store")
     StoreRegistry = import_optional_attr("litestar.stores.registry", "StoreRegistry")
-    SQLiteStore = import_optional_attr("sqlspec.adapters.sqlite.litestar.store", "SQLiteStore")
+    SqliteStore = import_optional_attr("sqlspec.adapters.sqlite.litestar.store", "SqliteStore")
 
 pytest.importorskip("litestar")
 
@@ -32,19 +32,19 @@ pytestmark = [pytest.mark.sqlite, pytest.mark.integration, pytest.mark.xdist_gro
 
 
 @pytest.fixture
-async def sqlite_store() -> "AsyncGenerator[SQLiteStore, None]":
+async def sqlite_store() -> "AsyncGenerator[SqliteStore, None]":
     """Create SQLite store with shared in-memory database."""
     config = SqliteConfig(
         connection_config={"database": "file:test_sessions_mem?mode=memory&cache=shared", "uri": True},
         extension_config={"litestar": {"session_table": "test_sessions"}},
     )
-    store = SQLiteStore(config)
+    store = SqliteStore(config)
     await store.create_table()
     yield store
     await store.delete_all()
 
 
-async def test_sync_to_thread_concurrency(sqlite_store: "SQLiteStore") -> None:
+async def test_sync_to_thread_concurrency(sqlite_store: "SqliteStore") -> None:
     """Test concurrent access via sync_to_thread wrapper.
 
     SQLite has write serialization, so we test sequential writes
@@ -62,7 +62,7 @@ async def test_sync_to_thread_concurrency(sqlite_store: "SQLiteStore") -> None:
         assert result == f"data_{i}".encode()
 
 
-async def test_store_implements_litestar_store_contract(sqlite_store: "SQLiteStore") -> None:
+async def test_store_implements_litestar_store_contract(sqlite_store: "SqliteStore") -> None:
     """SQLite stores satisfy Litestar's nominal store and registry contract."""
     registry = StoreRegistry()
 

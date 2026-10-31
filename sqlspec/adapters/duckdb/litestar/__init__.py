@@ -1,5 +1,5 @@
 """Litestar integration for DuckDB adapter."""
 
-from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
+from sqlspec.adapters.duckdb.litestar.store import DuckDBStore
 
-__all__ = ("DuckdbStore",)
+__all__ = ("DuckDBStore",)

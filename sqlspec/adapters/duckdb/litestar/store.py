@@ -10,10 +10,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.duckdb.config import DuckDBConfig
 
 
-__all__ = ("DuckdbStore",)
+__all__ = ("DuckDBStore",)
 
 
-class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
+class DuckDBStore(BaseSQLSpecStore["DuckDBConfig"]):
     """DuckDB session store using synchronous DuckDB driver.
 
     Implements server-side session storage for Litestar using DuckDB

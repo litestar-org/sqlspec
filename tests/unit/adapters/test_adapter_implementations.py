@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+import sqlspec.adapters
 from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig
@@ -703,3 +704,32 @@ def test_every_config_declares_type_coercion_capabilities() -> None:
         assert caps is not DatabaseConfigProtocol.type_coercion_capabilities, (
             f"{config_cls.__name__}.type_coercion_capabilities is the base default object"
         )
+
+
+def _litestar_store_targets() -> "list[tuple[str, str]]":
+    """Return ``(adapter, config class)`` pairs for adapters that ship a Litestar store."""
+    targets: list[tuple[str, str]] = []
+    adapters_root = Path(sqlspec.adapters.__file__).parent
+    for config_path in sorted(adapters_root.glob("*/config.py")):
+        adapter = config_path.parent.name
+        if not (config_path.parent / "litestar" / "store.py").exists():
+            continue
+        module = importlib.import_module(f"sqlspec.adapters.{adapter}.config")
+        for name, value in vars(module).items():
+            if (
+                isinstance(value, type)
+                and value.__module__ == module.__name__
+                and name.endswith("Config")
+                and issubclass(value, DatabaseConfigProtocol)
+            ):
+                targets.append((adapter, name))
+    return targets
+
+
+@pytest.mark.parametrize(("adapter", "config_name"), _litestar_store_targets())
+def test_litestar_session_migration_resolves_store_class(adapter: str, config_name: str) -> None:
+    """The Litestar session migration derives the store class name from the config class name."""
+    store_name = config_name.replace("Config", "Store")
+    store_module = importlib.import_module(f"sqlspec.adapters.{adapter}.litestar.store")
+
+    assert hasattr(store_module, store_name), f"{adapter}: expected {store_name} in litestar/store.py"

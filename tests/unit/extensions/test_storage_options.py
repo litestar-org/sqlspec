@@ -20,7 +20,7 @@ from sqlspec.adapters.cockroach_asyncpg.litestar import CockroachAsyncpgStore
 from sqlspec.adapters.cockroach_psycopg.litestar import CockroachPsycopgAsyncStore, CockroachPsycopgSyncStore
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.adapters.sqlite.events import SqliteEventQueueStore
-from sqlspec.adapters.sqlite.litestar import SQLiteStore
+from sqlspec.adapters.sqlite.litestar import SqliteStore
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -138,7 +138,7 @@ def test_sqlite_litestar_pragma_profile_applied() -> None:
             "litestar": {"pragma_profile": True, "pragma_overrides": {"cache_size": -32000, "journal_mode": "WAL"}}
         }
     )
-    store = SQLiteStore(config)
+    store = SqliteStore(config)
     connection = RecordingConnection()
 
     store.prepare_schema_sync(SimpleNamespace(connection=connection))

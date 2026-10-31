@@ -75,27 +75,27 @@ Embedded analytical database adapter built on `duckdb` with zero-copy Apache Arr
 
 ## Extension Stores & Configs
 
-::: sqlspec.adapters.duckdb.litestar.DuckdbStore
+::: sqlspec.adapters.duckdb.litestar.DuckDBStore
     options:
       heading_level: 4
 
-::: sqlspec.adapters.duckdb.adk.DuckdbADKConfig
-    options:
-      heading_level: 4
-      separate_signature: false
-      show_signature_annotations: true
-
-::: sqlspec.adapters.duckdb.adk.DuckdbADKFTSOptions
+::: sqlspec.adapters.duckdb.adk.DuckDBADKConfig
     options:
       heading_level: 4
       separate_signature: false
       show_signature_annotations: true
 
-::: sqlspec.adapters.duckdb.adk.DuckdbADKStore
+::: sqlspec.adapters.duckdb.adk.DuckDBADKFTSOptions
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
+
+::: sqlspec.adapters.duckdb.adk.DuckDBADKStore
     options:
       heading_level: 4
 
-::: sqlspec.adapters.duckdb.adk.DuckdbADKMemoryStore
+::: sqlspec.adapters.duckdb.adk.DuckDBADKMemoryStore
     options:
       heading_level: 4
 

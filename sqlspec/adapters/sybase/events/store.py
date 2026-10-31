@@ -4,12 +4,12 @@ from sqlspec.adapters.sybase.config import SybaseConfig
 from sqlspec.adapters.sybase.core import escape_sql_literal, quote_bracket_identifier, split_schema_and_table
 from sqlspec.extensions.events import BaseEventQueueStore
 
-__all__ = ("SybaseEventQueueStore", "SybaseSyncEventQueueStore")
+__all__ = ("SybaseEventQueueStore",)
 
 _VARCHAR_TEXT_THRESHOLD = 4000
 
 
-class SybaseSyncEventQueueStore(BaseEventQueueStore[SybaseConfig]):
+class SybaseEventQueueStore(BaseEventQueueStore[SybaseConfig]):
     """Sybase ASE DDL hooks for the event queue store."""
 
     __slots__ = ()
@@ -73,9 +73,6 @@ class SybaseSyncEventQueueStore(BaseEventQueueStore[SybaseConfig]):
         object_name = escape_sql_literal(_object_name(self.table_name))
         escaped_statement = escape_sql_literal(statement.rstrip().rstrip(";"))
         return f"IF OBJECT_ID('{object_name}', 'U') IS NOT NULL EXECUTE('{escaped_statement}');"
-
-
-SybaseEventQueueStore = SybaseSyncEventQueueStore
 
 
 def _object_name(table_name: str) -> str:

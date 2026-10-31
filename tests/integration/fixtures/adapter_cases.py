@@ -76,7 +76,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
     from sqlspec.adapters.adbc.adk import AdbcADKStore
-    from sqlspec.adapters.adbc.litestar import ADBCStore
+    from sqlspec.adapters.adbc.litestar import AdbcStore
     from sqlspec.adapters.aiomysql import AiomysqlConfig, AiomysqlDriver, AiomysqlDriverFeatures
     from sqlspec.adapters.aiomysql.adk import AiomysqlADKStore
     from sqlspec.adapters.aiomysql.litestar import AiomysqlStore
@@ -111,8 +111,8 @@ if TYPE_CHECKING:
     from sqlspec.adapters.db2.adk import Db2AsyncADKStore, Db2SyncADKStore
     from sqlspec.adapters.db2.litestar import Db2AsyncStore, Db2SyncStore
     from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver, DuckDBDriverFeatures
-    from sqlspec.adapters.duckdb.adk import DuckdbADKStore
-    from sqlspec.adapters.duckdb.litestar import DuckdbStore
+    from sqlspec.adapters.duckdb.adk import DuckDBADKStore
+    from sqlspec.adapters.duckdb.litestar import DuckDBStore
     from sqlspec.adapters.mssql_python import MssqlPythonConfig, MssqlPythonDriver
     from sqlspec.adapters.mssql_python.adk import MssqlPythonADKStore
     from sqlspec.adapters.mysqlconnector import (
@@ -152,7 +152,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.pymysql.litestar import PyMysqlStore
     from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
     from sqlspec.adapters.sqlite.adk import SqliteADKStore
-    from sqlspec.adapters.sqlite.litestar import SQLiteStore
+    from sqlspec.adapters.sqlite.litestar import SqliteStore
     from tests.integration.adapters.bigquery._wedge import describe_wedge, is_emulator_wedge
     from tests.integration.fixtures.bigquery import _bigquery_connection_config
     from tests.integration.fixtures.mysql import _mysql_connection_config
@@ -161,7 +161,7 @@ else:
     AdbcConfig = import_optional_attr("sqlspec.adapters.adbc", "AdbcConfig")
     AdbcDriver = import_optional_attr("sqlspec.adapters.adbc", "AdbcDriver")
     AdbcADKStore = import_optional_attr("sqlspec.adapters.adbc.adk", "AdbcADKStore")
-    ADBCStore = import_optional_attr("sqlspec.adapters.adbc.litestar", "ADBCStore")
+    AdbcStore = import_optional_attr("sqlspec.adapters.adbc.litestar", "AdbcStore")
     AiomysqlConfig = import_optional_attr("sqlspec.adapters.aiomysql", "AiomysqlConfig")
     AiomysqlDriver = import_optional_attr("sqlspec.adapters.aiomysql", "AiomysqlDriver")
     AiomysqlDriverFeatures = import_optional_attr("sqlspec.adapters.aiomysql", "AiomysqlDriverFeatures")
@@ -230,8 +230,8 @@ else:
     DuckDBConfig = import_optional_attr("sqlspec.adapters.duckdb", "DuckDBConfig")
     DuckDBDriver = import_optional_attr("sqlspec.adapters.duckdb", "DuckDBDriver")
     DuckDBDriverFeatures = import_optional_attr("sqlspec.adapters.duckdb", "DuckDBDriverFeatures")
-    DuckdbADKStore = import_optional_attr("sqlspec.adapters.duckdb.adk", "DuckdbADKStore")
-    DuckdbStore = import_optional_attr("sqlspec.adapters.duckdb.litestar", "DuckdbStore")
+    DuckDBADKStore = import_optional_attr("sqlspec.adapters.duckdb.adk", "DuckDBADKStore")
+    DuckDBStore = import_optional_attr("sqlspec.adapters.duckdb.litestar", "DuckDBStore")
     MssqlPythonConfig = import_optional_attr("sqlspec.adapters.mssql_python", "MssqlPythonConfig")
     MssqlPythonDriver = import_optional_attr("sqlspec.adapters.mssql_python", "MssqlPythonDriver")
     MssqlPythonADKStore = import_optional_attr("sqlspec.adapters.mssql_python.adk", "MssqlPythonADKStore")
@@ -289,7 +289,7 @@ else:
     SpannerAsyncConfig = import_optional_attr("sqlspec.adapters.spanner", "SpannerAsyncConfig")
     SpannerSyncConfig = import_optional_attr("sqlspec.adapters.spanner", "SpannerSyncConfig")
     SqliteADKStore = import_optional_attr("sqlspec.adapters.sqlite.adk", "SqliteADKStore")
-    SQLiteStore = import_optional_attr("sqlspec.adapters.sqlite.litestar", "SQLiteStore")
+    SqliteStore = import_optional_attr("sqlspec.adapters.sqlite.litestar", "SqliteStore")
     describe_wedge = import_optional_attr("tests.integration.adapters.bigquery._wedge", "describe_wedge")
     is_emulator_wedge = import_optional_attr("tests.integration.adapters.bigquery._wedge", "is_emulator_wedge")
     _bigquery_connection_config = import_optional_attr(
@@ -1846,14 +1846,14 @@ _STORE_EXTENSION_CONFIG: dict[str, Any] = {"litestar": {"session_table": _STORE_
 
 
 @pytest.fixture
-async def contract_sqlite_store() -> "AsyncGenerator[SQLiteStore, None]":
+async def contract_sqlite_store() -> "AsyncGenerator[SqliteStore, None]":
     """Provide a ready SQLite Litestar store for contract tests."""
     pytest.importorskip("litestar")
     config = SqliteConfig(
         connection_config={"database": "file:contract_store_sqlite?mode=memory&cache=shared", "uri": True},
         extension_config=_STORE_EXTENSION_CONFIG,
     )
-    store = SQLiteStore(config)
+    store = SqliteStore(config)
     await store.create_table()
     yield store
     with contextlib.suppress(Exception):
@@ -1876,7 +1876,7 @@ async def contract_aiosqlite_store() -> "AsyncGenerator[AiosqliteStore, None]":
 
 
 @pytest.fixture
-async def contract_duckdb_store(tmp_path: Path) -> "AsyncGenerator[DuckdbStore, None]":
+async def contract_duckdb_store(tmp_path: Path) -> "AsyncGenerator[DuckDBStore, None]":
     """Provide a ready DuckDB Litestar store for contract tests."""
     pytest.importorskip("duckdb")
     pytest.importorskip("litestar")
@@ -1884,7 +1884,7 @@ async def contract_duckdb_store(tmp_path: Path) -> "AsyncGenerator[DuckdbStore, 
         connection_config={"database": str(tmp_path / f"store_{uuid4().hex}.duckdb")},
         extension_config=_STORE_EXTENSION_CONFIG,
     )
-    store = DuckdbStore(config)
+    store = DuckDBStore(config)
     await store.create_table()
     yield store
     with contextlib.suppress(Exception):
@@ -2077,7 +2077,7 @@ async def contract_arrow_odbc_store(mssql_service: MSSQLService) -> "AsyncGenera
 
 
 @pytest.fixture
-async def contract_adbc_store(postgres_service: PostgresService) -> "AsyncGenerator[ADBCStore, None]":
+async def contract_adbc_store(postgres_service: PostgresService) -> "AsyncGenerator[AdbcStore, None]":
     """Provide a ready PostgreSQL-backed ADBC Litestar store for contract tests."""
     pytest.importorskip("adbc_driver_manager")
     pytest.importorskip("pyarrow")
@@ -2086,7 +2086,7 @@ async def contract_adbc_store(postgres_service: PostgresService) -> "AsyncGenera
         connection_config={"uri": _adbc_postgres_uri(postgres_service), "driver_name": "adbc_driver_postgresql"},
         extension_config=_STORE_EXTENSION_CONFIG,
     )
-    store = ADBCStore(config)
+    store = AdbcStore(config)
     await store.create_table()
     yield store
     with contextlib.suppress(Exception):
@@ -2195,7 +2195,7 @@ def adk_store_duckdb(tmp_path: Path) -> "Callable[..., Any]":
             connection_config={"database": str(tmp_path / f"adk_{suffix}.duckdb")},
             extension_config=_adk_extension_config(suffix),
         )
-        return config, DuckdbADKStore(config)
+        return config, DuckDBADKStore(config)
 
     return make
 

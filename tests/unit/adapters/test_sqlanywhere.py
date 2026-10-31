@@ -21,7 +21,7 @@ from sqlspec.adapters.sqlanywhere import (
     driver_profile,
 )
 from sqlspec.adapters.sqlanywhere.adk import SqlanywhereADKConfig, SqlanywhereADKMemoryStore, SqlanywhereADKStore
-from sqlspec.adapters.sqlanywhere.events import SqlanywhereEventQueueStore, SqlanywhereSyncEventQueueStore
+from sqlspec.adapters.sqlanywhere.events import SqlanywhereEventQueueStore
 from sqlspec.adapters.sqlanywhere.litestar import SqlanywhereStore
 from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
@@ -376,7 +376,7 @@ def test_sqlanywhere_data_dictionary_version_and_metadata() -> None:
 
 
 def test_sqlanywhere_migration_tracker_and_extension_stores() -> None:
-    """SqlanywhereSyncMigrationTracker, SqlanywhereStore, SqlanywhereSyncEventQueueStore, and SqlanywhereADKStore emit SQL Anywhere DDL."""
+    """SqlanywhereSyncMigrationTracker, SqlanywhereStore, SqlanywhereEventQueueStore, and SqlanywhereADKStore emit SQL Anywhere DDL."""
     tracker = SqlanywhereSyncMigrationTracker(version_table_name="DBA.ddl_migrations")
     ddl_text = tracker._idempotent_tracking_table_ddl_text()
     assert "CREATE TABLE IF NOT EXISTS" in ddl_text
@@ -408,8 +408,8 @@ def test_sqlanywhere_migration_tracker_and_extension_stores() -> None:
     drop_litestar_sql = litestar_store._drop_table_sql()
     assert "DROP TABLE IF EXISTS" in drop_litestar_sql[0]
 
-    event_store = SqlanywhereSyncEventQueueStore(config)
-    assert SqlanywhereEventQueueStore is SqlanywhereSyncEventQueueStore
+    event_store = SqlanywhereEventQueueStore(config)
+    assert SqlanywhereEventQueueStore is SqlanywhereEventQueueStore
     event_statements = event_store.create_statements()
     assert "LONG VARCHAR" in event_statements[0]
     assert "TIMESTAMP" in event_statements[0]

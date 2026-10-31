@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore
+from sqlspec.adapters.duckdb.adk import DuckDBADKMemoryStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import StoredMemory
 
@@ -35,20 +35,20 @@ def _build_record(
     )
 
 
-def _build_store(tmp_path: Path) -> DuckdbADKMemoryStore:
+def _build_store(tmp_path: Path) -> DuckDBADKMemoryStore:
     db_path = tmp_path / "test_adk_memory.duckdb"
     config = DuckDBConfig(connection_config={"database": str(db_path)})
-    store = DuckdbADKMemoryStore(config)
+    store = DuckDBADKMemoryStore(config)
     store.create_tables()
     return store
 
 
-def _build_fts_store(tmp_path: Path) -> DuckdbADKMemoryStore:
+def _build_fts_store(tmp_path: Path) -> DuckDBADKMemoryStore:
     db_path = tmp_path / "test_adk_memory_fts.duckdb"
     config = DuckDBConfig(
         connection_config={"database": str(db_path)}, extension_config={"adk": {"memory_use_fts": True}}
     )
-    store = DuckdbADKMemoryStore(config)
+    store = DuckDBADKMemoryStore(config)
     with config.provide_connection() as conn:
         if not store._ensure_fts_extension(conn):  # pyright: ignore[reportPrivateUsage]
             pytest.skip("DuckDB FTS extension is unavailable")

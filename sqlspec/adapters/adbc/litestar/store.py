@@ -25,10 +25,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
 
 
-__all__ = ("ADBCStore",)
+__all__ = ("AdbcStore",)
 
 
-class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
+class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
     """ADBC session store using synchronous ADBC driver.
 
     Implements server-side session storage for Litestar using ADBC

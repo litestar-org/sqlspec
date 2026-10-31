@@ -49,7 +49,7 @@ Apache Arrow Database Connectivity (ADBC) adapter supporting zero-copy Arrow ing
 
 ## Extension Stores & Configs
 
-::: sqlspec.adapters.adbc.litestar.ADBCStore
+::: sqlspec.adapters.adbc.litestar.AdbcStore
     options:
       heading_level: 4
 

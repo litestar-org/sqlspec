@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from sqlspec.adapters.duckdb.adk import DuckdbADKStore
+from sqlspec.adapters.duckdb.adk import DuckDBADKStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import StoredEvent
 
@@ -21,7 +21,7 @@ pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
 
 @pytest.fixture
-def duckdb_adk_store(tmp_path: Path) -> "Generator[DuckdbADKStore, None, None]":
+def duckdb_adk_store(tmp_path: Path) -> "Generator[DuckDBADKStore, None, None]":
     """Create DuckDB ADK store with temporary file-based database.
 
     Args:
@@ -39,7 +39,7 @@ def duckdb_adk_store(tmp_path: Path) -> "Generator[DuckdbADKStore, None, None]":
             connection_config={"database": str(db_path)},
             extension_config={"adk": {"session_table": "test_sessions", "events_table": "test_events"}},
         )
-        store = DuckdbADKStore(config)
+        store = DuckDBADKStore(config)
         store.create_tables()
         yield store
     finally:
@@ -47,7 +47,7 @@ def duckdb_adk_store(tmp_path: Path) -> "Generator[DuckdbADKStore, None, None]":
             db_path.unlink()
 
 
-def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
+def test_event_with_optional_fields(duckdb_adk_store: DuckDBADKStore) -> None:
     """Test creating events with optional fields stored in event_data."""
     session_id = "session-008"
     duckdb_adk_store.create_session(session_id, "test-app", "user-008", {})
@@ -87,7 +87,7 @@ def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
     assert event_data["turn_complete"] is False
 
 
-def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
+def test_event_ordering_by_timestamp(duckdb_adk_store: DuckDBADKStore) -> None:
     """Test events are ordered by timestamp ascending."""
     session_id = "session-009"
     duckdb_adk_store.create_session(session_id, "test-app", "user-009", {})
@@ -136,7 +136,7 @@ def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
     assert event_ids == ["event-first", "event-middle", "event-last"]
 
 
-def test_session_state_with_complex_data(duckdb_adk_store: DuckdbADKStore) -> None:
+def test_session_state_with_complex_data(duckdb_adk_store: DuckDBADKStore) -> None:
     """Test session state with nested JSON structures."""
     session_id = "session-complex"
     complex_state = {
@@ -158,7 +158,7 @@ def test_session_state_with_complex_data(duckdb_adk_store: DuckdbADKStore) -> No
     assert session["state"]["conversation"]["turn_count"] == 5
 
 
-def test_event_data_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
+def test_event_data_round_trip(duckdb_adk_store: DuckDBADKStore) -> None:
     """Test storing and retrieving event data via event_data."""
     session_id = "session-json-rt"
     duckdb_adk_store.create_session(session_id, "test-app", "user-012", {})
@@ -185,7 +185,7 @@ def test_event_data_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
     assert events[0]["event_data"]["content"] == {"data": "value"}
 
 
-def test_concurrent_session_updates(duckdb_adk_store: DuckdbADKStore) -> None:
+def test_concurrent_session_updates(duckdb_adk_store: DuckDBADKStore) -> None:
     """Test multiple updates to same session."""
     session_id = "session-concurrent"
     duckdb_adk_store.create_session(session_id, "test-app", "user-013", {"counter": 0})
@@ -222,7 +222,7 @@ def test_owner_id_column_with_integer(tmp_path: Path) -> None:
                 }
             },
         )
-        store = DuckdbADKStore(config_with_extension)
+        store = DuckDBADKStore(config_with_extension)
         store.create_tables()
 
         assert store.owner_id_column_name == "tenant_id"
@@ -265,7 +265,7 @@ def test_owner_id_column_with_ubigint(tmp_path: Path) -> None:
                 }
             },
         )
-        store = DuckdbADKStore(config_with_extension)
+        store = DuckDBADKStore(config_with_extension)
         store.create_tables()
 
         assert store.owner_id_column_name == "owner_id"
@@ -311,7 +311,7 @@ def test_owner_id_column_foreign_key_constraint(tmp_path: Path) -> None:
                 }
             },
         )
-        store = DuckdbADKStore(config_with_extension)
+        store = DuckDBADKStore(config_with_extension)
         store.create_tables()
 
         store.create_session(
@@ -353,7 +353,7 @@ def test_owner_id_column_without_value(tmp_path: Path) -> None:
                 }
             },
         )
-        store = DuckdbADKStore(config_with_extension)
+        store = DuckDBADKStore(config_with_extension)
         store.create_tables()
 
         session = store.create_session(
@@ -390,7 +390,7 @@ def test_owner_id_column_with_varchar(tmp_path: Path) -> None:
                 }
             },
         )
-        store = DuckdbADKStore(config_with_extension)
+        store = DuckDBADKStore(config_with_extension)
         store.create_tables()
 
         session = store.create_session(
@@ -434,7 +434,7 @@ def test_owner_id_column_multiple_sessions(tmp_path: Path) -> None:
                 }
             },
         )
-        store = DuckdbADKStore(config_with_extension)
+        store = DuckDBADKStore(config_with_extension)
         store.create_tables()
 
         for i in range(5):
@@ -477,7 +477,7 @@ def test_owner_id_column_query_by_fk(tmp_path: Path) -> None:
                 }
             },
         )
-        store = DuckdbADKStore(config_with_extension)
+        store = DuckDBADKStore(config_with_extension)
         store.create_tables()
 
         store.create_session("s1", "app", "u1", {"val": 1}, owner_id=1)

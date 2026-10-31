@@ -60,7 +60,7 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
       separate_signature: false
       show_signature_annotations: true
 
-::: sqlspec.adapters.sqlite.litestar.SQLiteStore
+::: sqlspec.adapters.sqlite.litestar.SqliteStore
     options:
       heading_level: 4
 

@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
-from sqlspec.adapters.adbc.litestar.store import ADBCStore
+from sqlspec.adapters.adbc.litestar.store import AdbcStore
 
 __all__ = ()
 
@@ -25,7 +25,7 @@ __all__ = ()
 def test_adbc_litestar_store_enterprise_dialect_primitives(
     dialect: str, expected_placeholder: str, expected_ts_expr: str, expected_ddl_fragment: str
 ) -> None:
-    store = ADBCStore(_make_adbc_config("sqlite:///:memory:"))
+    store = AdbcStore(_make_adbc_config("sqlite:///:memory:"))
     store._dialect = "mssql" if dialect == "tsql" else dialect
 
     assert store._get_param_placeholder(1) == expected_placeholder
@@ -36,7 +36,7 @@ def test_adbc_litestar_store_enterprise_dialect_primitives(
 def test_adbc_litestar_store_normalize_tsql_dialect() -> None:
     driver_stub = SimpleNamespace(dialect="tsql")
     config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(driver_stub))
-    store = ADBCStore(cast("Any", config_stub))
+    store = AdbcStore(cast("Any", config_stub))
     assert store._get_dialect() == "mssql"
 
 
@@ -45,7 +45,7 @@ def test_adbc_litestar_store_normalize_tsql_dialect() -> None:
     [("oracle", "SQLCODE != -942"), ("db2", "SYSCAT.TABLES"), ("mssql", "IF OBJECT_ID")],
 )
 def test_adbc_litestar_store_enterprise_drop_sql(dialect: str, expected_drop_fragment: str) -> None:
-    store = ADBCStore(_make_adbc_config("sqlite:///:memory:"))
+    store = AdbcStore(_make_adbc_config("sqlite:///:memory:"))
     store._dialect = dialect
     drop_sql = "\n".join(store._drop_table_sql())
     assert expected_drop_fragment in drop_sql
@@ -67,7 +67,7 @@ def test_adbc_litestar_store_enterprise_set_uses_check_then_insert_or_update(dia
             pass
 
     config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
-    store = ADBCStore(cast("Any", config_stub))
+    store = AdbcStore(cast("Any", config_stub))
     store._dialect = dialect
     store._set("sess_1", b"payload", expires_in=None)
 

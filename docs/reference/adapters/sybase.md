@@ -86,6 +86,6 @@ Synchronous SAP Adaptive Server Enterprise (Sybase ASE) 16.0+ adapter built on `
     options:
       heading_level: 4
 
-::: sqlspec.adapters.sybase.events.SybaseSyncEventQueueStore
+::: sqlspec.adapters.sybase.events.SybaseEventQueueStore
     options:
       heading_level: 4

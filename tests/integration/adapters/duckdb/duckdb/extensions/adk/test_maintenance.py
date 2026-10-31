@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore, DuckdbADKStore
+from sqlspec.adapters.duckdb.adk import DuckDBADKMemoryStore, DuckDBADKStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.extensions.adk import StoredEvent, StoredMemory
 from sqlspec.extensions.adk.maintenance import (
@@ -57,7 +57,7 @@ def _event(*, app_name: str, session_id: str, timestamp: datetime) -> StoredEven
 def test_duckdb_prune_sessions_scopes_to_app_name(tmp_path: Path) -> None:
     """Pruning sessions for one application leaves other applications untouched."""
     config = _config(tmp_path, "prune_sessions")
-    store = DuckdbADKStore(config)
+    store = DuckDBADKStore(config)
     store.create_tables()
 
     stale = datetime.now(UTC) - timedelta(days=120)
@@ -77,7 +77,7 @@ def test_duckdb_prune_sessions_scopes_to_app_name(tmp_path: Path) -> None:
 def test_duckdb_prune_events_scopes_to_app_name(tmp_path: Path) -> None:
     """Pruning events for one application leaves other applications' events intact."""
     config = _config(tmp_path, "prune_events")
-    store = DuckdbADKStore(config)
+    store = DuckDBADKStore(config)
     store.create_tables()
 
     stale = datetime.now(UTC) - timedelta(days=200)
@@ -95,7 +95,7 @@ def test_duckdb_prune_events_scopes_to_app_name(tmp_path: Path) -> None:
 def test_duckdb_prune_user_state_scopes_to_app_name(tmp_path: Path) -> None:
     """User state pruning honors both the idle threshold and the application filter."""
     config = _config(tmp_path, "prune_user_state")
-    store = DuckdbADKStore(config)
+    store = DuckDBADKStore(config)
     store.create_tables()
 
     for app in ("app_keep", "app_prune"):
@@ -115,7 +115,7 @@ def test_duckdb_prune_user_state_scopes_to_app_name(tmp_path: Path) -> None:
 def test_duckdb_prune_memory_respects_scope(tmp_path: Path) -> None:
     """Memory pruning removes user-scoped entries while preserving app-scoped ones."""
     config = _config(tmp_path, "prune_memory")
-    store = DuckdbADKMemoryStore(config)
+    store = DuckDBADKMemoryStore(config)
     store.create_tables()
 
     stale = datetime.now(UTC) - timedelta(days=200)

@@ -27,7 +27,7 @@ from sqlspec.adapters.sybase import (
 )
 from sqlspec.adapters.sybase._typing import SybaseRawCursor
 from sqlspec.adapters.sybase.adk import SybaseADKConfig, SybaseADKMemoryStore, SybaseADKStore
-from sqlspec.adapters.sybase.events import SybaseEventQueueStore, SybaseSyncEventQueueStore
+from sqlspec.adapters.sybase.events import SybaseEventQueueStore
 from sqlspec.adapters.sybase.litestar import SybaseStore
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
@@ -411,7 +411,7 @@ def test_sybase_data_dictionary_reflection() -> None:
 
 
 def test_sybase_migration_tracker_and_extension_stores() -> None:
-    """SybaseSyncMigrationTracker, SybaseStore, SybaseSyncEventQueueStore, and SybaseADKStore emit ASE-safe SQL."""
+    """SybaseSyncMigrationTracker, SybaseStore, SybaseEventQueueStore, and SybaseADKStore emit ASE-safe SQL."""
     tracker = SybaseSyncMigrationTracker(version_table_name="dbo.ddl_migrations")
     ddl_text = tracker._idempotent_tracking_table_ddl_text()
     assert "IF OBJECT_ID(" in ddl_text
@@ -437,8 +437,8 @@ def test_sybase_migration_tracker_and_extension_stores() -> None:
     assert "BIGDATETIME" in litestar_ddl
     assert "GETUTCDATE()" in litestar_ddl
 
-    assert SybaseEventQueueStore is SybaseSyncEventQueueStore
-    event_store = SybaseSyncEventQueueStore(config)
+    assert SybaseEventQueueStore is SybaseEventQueueStore
+    event_store = SybaseEventQueueStore(config)
     event_stmts = event_store.create_statements()
     assert "TEXT" in event_stmts[0]
     assert "BIGDATETIME" in event_stmts[0]

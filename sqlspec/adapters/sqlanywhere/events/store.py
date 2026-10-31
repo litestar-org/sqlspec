@@ -3,12 +3,12 @@
 from sqlspec.adapters.sqlanywhere.config import SqlanywhereConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
-__all__ = ("SqlanywhereEventQueueStore", "SqlanywhereSyncEventQueueStore")
+__all__ = ("SqlanywhereEventQueueStore",)
 
 _VARCHAR_TEXT_THRESHOLD = 4000
 
 
-class SqlanywhereSyncEventQueueStore(BaseEventQueueStore[SqlanywhereConfig]):
+class SqlanywhereEventQueueStore(BaseEventQueueStore[SqlanywhereConfig]):
     """SAP SQL Anywhere DDL hooks for the event queue store."""
 
     __slots__ = ()
@@ -26,6 +26,3 @@ class SqlanywhereSyncEventQueueStore(BaseEventQueueStore[SqlanywhereConfig]):
 
     def _timestamp_default(self) -> str:
         return "CURRENT UTC TIMESTAMP"
-
-
-SqlanywhereEventQueueStore = SqlanywhereSyncEventQueueStore

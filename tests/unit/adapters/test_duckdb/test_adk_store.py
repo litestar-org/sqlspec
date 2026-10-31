@@ -9,8 +9,8 @@ from unittest.mock import MagicMock
 import pytest
 
 import sqlspec.adapters.duckdb.adk as duckdb_adk
-from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore, DuckdbADKStore
-from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
+from sqlspec.adapters.duckdb.adk import DuckDBADKMemoryStore, DuckDBADKStore
+from sqlspec.adapters.duckdb.litestar.store import DuckDBStore
 from sqlspec.config import ADKConfig
 
 
@@ -27,10 +27,10 @@ def _normalize_sql(sql: str) -> str:
 def test_duckdb_adk_config_types_adapter_local_optimizations() -> None:
     """DuckDB ADK optimization settings are typed on the adapter-local extension config."""
 
-    assert hasattr(duckdb_adk, "DuckdbADKConfig")
-    assert hasattr(duckdb_adk, "DuckdbADKFTSOptions")
-    duckdb_adk_config = cast("Any", duckdb_adk.DuckdbADKConfig)
-    duckdb_adk_fts_options = cast("Any", duckdb_adk.DuckdbADKFTSOptions)
+    assert hasattr(duckdb_adk, "DuckDBADKConfig")
+    assert hasattr(duckdb_adk, "DuckDBADKFTSOptions")
+    duckdb_adk_config = cast("Any", duckdb_adk.DuckDBADKConfig)
+    duckdb_adk_fts_options = cast("Any", duckdb_adk.DuckDBADKFTSOptions)
 
     assert cast("Any", ADKConfig).__optional_keys__ <= duckdb_adk_config.__optional_keys__
 
@@ -60,7 +60,7 @@ def test_duckdb_adk_config_types_adapter_local_optimizations() -> None:
 def test_duckdb_adk_events_table_uses_plain_schema_by_default() -> None:
     """DuckDB ADK event DDL stays unchanged unless DuckDB-specific config opts in."""
 
-    store = DuckdbADKStore(_mock_config())
+    store = DuckDBADKStore(_mock_config())
 
     sql = store._events_table_ddl()
 
@@ -87,7 +87,7 @@ def test_duckdb_adk_events_table_uses_plain_schema_by_default() -> None:
 def test_duckdb_adk_events_table_applies_adapter_local_generated_columns() -> None:
     """DuckDB ADK generated event projection columns and indexes are opt-in."""
 
-    store = DuckdbADKStore(
+    store = DuckDBADKStore(
         _mock_config({"enable_event_generated_columns": True, "enable_event_generated_column_indexes": True})
     )
 
@@ -110,7 +110,7 @@ def test_duckdb_adk_events_table_applies_adapter_local_generated_columns() -> No
 def test_duckdb_adk_memory_fts_pragmas_use_default_options() -> None:
     """DuckDB ADK FTS PRAGMA rendering preserves the current default options."""
 
-    store = DuckdbADKMemoryStore(_mock_config({"memory_use_fts": True}))
+    store = DuckDBADKMemoryStore(_mock_config({"memory_use_fts": True}))
 
     assert (
         store._fts_index_ddl(overwrite=False) == "PRAGMA create_fts_index('adk_memory', 'id', 'content_text', "
@@ -125,7 +125,7 @@ def test_duckdb_adk_memory_fts_pragmas_use_default_options() -> None:
 def test_duckdb_adk_memory_fts_pragmas_apply_adapter_local_options() -> None:
     """DuckDB ADK FTS options come from extension_config["adk"], not driver_features."""
 
-    store = DuckdbADKMemoryStore(
+    store = DuckDBADKMemoryStore(
         _mock_config({
             "memory_use_fts": True,
             "memory_fts_options": {
@@ -177,11 +177,11 @@ def _normalized(sql: str) -> str:
     return " ".join(sql.split())
 
 
-def _session_store_with_connection() -> "tuple[DuckdbADKStore, _SessionListConnection]":
+def _session_store_with_connection() -> "tuple[DuckDBADKStore, _SessionListConnection]":
     conn = _SessionListConnection()
     config = _mock_config()
     config.provide_connection = lambda *_a, **_k: conn
-    return DuckdbADKStore(config), conn
+    return DuckDBADKStore(config), conn
 
 
 def test_duckdb_list_sessions_binds_order_and_page() -> None:
@@ -274,7 +274,7 @@ def test_duckdb_adk_delete_helpers_use_returning_row_count() -> None:
     conn = _DeleteConn()
     config = _mock_config()
     config.provide_connection = lambda *_a, **_k: conn
-    store = DuckdbADKStore(config)
+    store = DuckDBADKStore(config)
     cutoff = datetime.now(UTC)
 
     assert store._delete_expired_events(cutoff) == 2
@@ -285,7 +285,7 @@ def test_duckdb_adk_delete_helpers_use_returning_row_count() -> None:
 
 def test_duckdb_adk_ensure_fts_extension_loads_before_installing() -> None:
     """_ensure_fts_extension should try LOAD fts first and skip INSTALL fts when already installed."""
-    store = DuckdbADKMemoryStore(_mock_config({"memory_use_fts": True}))
+    store = DuckDBADKMemoryStore(_mock_config({"memory_use_fts": True}))
     executed: list[str] = []
 
     class _Conn:
@@ -297,8 +297,8 @@ def test_duckdb_adk_ensure_fts_extension_loads_before_installing() -> None:
 
 
 def test_duckdb_litestar_store_uses_timestamptz_and_normalizes_utc() -> None:
-    """DuckdbStore DDL and queries use TIMESTAMPTZ/CURRENT_TIMESTAMP and normalize naive timestamps to UTC."""
-    store = DuckdbStore(_mock_config())
+    """DuckDBStore DDL and queries use TIMESTAMPTZ/CURRENT_TIMESTAMP and normalize naive timestamps to UTC."""
+    store = DuckDBStore(_mock_config())
     ddl = store._table_ddl()
     assert "TIMESTAMPTZ" in ddl
     naive = datetime(2026, 1, 1, 12, 0, 0)

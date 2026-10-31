@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 
-__all__ = ("DuckdbADKConfig", "DuckdbADKFTSOptions", "DuckdbADKMemoryStore", "DuckdbADKStore")
+__all__ = ("DuckDBADKConfig", "DuckDBADKFTSOptions", "DuckDBADKMemoryStore", "DuckDBADKStore")
 
 logger = get_logger("sqlspec.adapters.duckdb.adk.store")
 
@@ -44,7 +44,7 @@ DUCKDB_FTS_DEFAULT_OPTIONS: Final[dict[str, str | int]] = {
 }
 
 
-class DuckdbADKFTSOptions(TypedDict):
+class DuckDBADKFTSOptions(TypedDict):
     """DuckDB FTS ``PRAGMA create_fts_index`` options for ADK memory search."""
 
     stemmer: NotRequired[str]
@@ -66,7 +66,7 @@ class DuckdbADKFTSOptions(TypedDict):
     """Whether initial FTS index creation overwrites an existing index. Defaults to ``0``."""
 
 
-class DuckdbADKConfig(ADKConfig):
+class DuckDBADKConfig(ADKConfig):
     """DuckDB-specific ADK extension settings.
 
     Use these keys inside ``extension_config["adk"]`` with the DuckDB ADK stores.
@@ -79,11 +79,11 @@ class DuckdbADKConfig(ADKConfig):
     enable_event_generated_column_indexes: NotRequired[bool]
     """Index generated event projection columns when generated columns are enabled."""
 
-    memory_fts_options: NotRequired[DuckdbADKFTSOptions]
+    memory_fts_options: NotRequired[DuckDBADKFTSOptions]
     """DuckDB FTS ``PRAGMA create_fts_index`` options for ADK memory search."""
 
 
-class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
+class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
     """DuckDB ADK store for Google Agent Development Kit.
 
     Implements session and event storage for Google Agent Development Kit
@@ -872,7 +872,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.commit()
 
 
-class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
+class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
     """DuckDB ADK memory store using synchronous DuckDB driver with async wrappers.
 
     Implements memory entry storage for Google Agent Development Kit
@@ -1257,15 +1257,15 @@ def _raise_session_not_found(session_id: str) -> None:
     raise ValueError(msg)
 
 
-def _adk_config(config: Any) -> DuckdbADKConfig:
+def _adk_config(config: Any) -> DuckDBADKConfig:
     """Return DuckDB ADK extension settings from ``extension_config["adk"]``."""
     extension_config = getattr(config, "extension_config", {})
     if not isinstance(extension_config, dict):
-        return cast("DuckdbADKConfig", {})
+        return cast("DuckDBADKConfig", {})
     adk_config = extension_config.get("adk", {})
     if not isinstance(adk_config, dict):
-        return cast("DuckdbADKConfig", {})
-    return cast("DuckdbADKConfig", adk_config)
+        return cast("DuckDBADKConfig", {})
+    return cast("DuckDBADKConfig", adk_config)
 
 
 def _validate_duckdb_fts_options(options: Mapping[str, object]) -> None:

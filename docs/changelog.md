@@ -260,7 +260,7 @@ important operational fixes.
   savepoints, SQLSTATE/vendor exception mapping, and default
   `enable_lowercase_column_names=True` normalization for Oracle and Db2.
   ([#839](https://github.com/litestar-org/sqlspec/pull/839))
-* `ADBCStore` (Litestar sessions), `AdbcEventQueueStore` (event channels),
+* `AdbcStore` (Litestar sessions), `AdbcEventQueueStore` (event channels),
   `AdbcADKStore`, and `AdbcADKMemoryStore` (Google ADK sessions and memory)
   add Oracle (`oracle`) and IBM Db2 (`db2`) backend support with idempotent
   DDL guards (PL/SQL `SQLCODE` blocks for Oracle and `SYSCAT` catalog probes
