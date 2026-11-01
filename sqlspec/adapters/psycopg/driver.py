@@ -17,9 +17,8 @@ from sqlspec.adapters.psycopg._typing import (
 )
 from sqlspec.adapters.psycopg._typing import psycopg_module as psycopg
 from sqlspec.adapters.psycopg.core import (
-    TRANSACTION_STATUS_ACTIVE,
+    OPEN_TRANSACTION_STATUSES,
     TRANSACTION_STATUS_INERROR,
-    TRANSACTION_STATUS_INTRANS,
     PipelineCursorEntry,
     PreparedStackOperation,
     PsycopgAsyncStreamSource,
@@ -51,6 +50,8 @@ from sqlspec.core import (
     is_copy_to_operation,
     register_driver_profile,
 )
+from sqlspec.core.parameters import ParameterValidator
+from sqlspec.core.sqlcommenter import format_wire_sqlcomment
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
     AsyncRowStream,
@@ -619,15 +620,18 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Resolve rowcount from psycopg cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
+    def _format_wire_sql(self, sql: str) -> str:
+        """Apply wire-level literal percent escaping and sqlcommenter formatting."""
+        formatted = sql
+        if "%" in formatted:
+            formatted = escape_literal_percent(formatted, True, ParameterValidator())
+        if not self.statement_config.enable_sqlcommenter:
+            return formatted
+        return format_wire_sqlcomment(formatted, self.statement_config)
+
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        expected_percents = cached.parameter_profile.total_count if params else 0
-        if cached.compiled_sql.count("%") != expected_percents:
-            statement = self._cached_statement(
-                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-            )
-            return self._execute_cached_statement(statement)
         return super()._execute_cache_hit(sql, params, cached)
 
     def _execute_stack_pipeline(
@@ -717,11 +721,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Check if connection is in transaction."""
         info = getattr(self.connection, "info", None)
         status = getattr(info, "transaction_status", None)
-        return self._transaction_active or status in {
-            TRANSACTION_STATUS_ACTIVE,
-            TRANSACTION_STATUS_INTRANS,
-            TRANSACTION_STATUS_INERROR,
-        }
+        return self._transaction_active or status in OPEN_TRANSACTION_STATUSES
 
     def _restore_original_autocommit(self) -> None:
         """Restore autocommit after a completed SQLSpec-owned transaction."""
@@ -1133,10 +1133,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         if overwrite:
             truncate_sql = build_truncate_command(table)
             exc_handler = self.handle_database_exceptions()
-            async with self.with_cursor(self.connection) as cursor, exc_handler:
-                await cursor.execute(truncate_sql)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            async with self.with_cursor(self.connection) as cursor:
+                await self._run_with_exception_handler(exc_handler, cursor.execute, truncate_sql)
+            self._check_pending_exception(exc_handler)
         columns, batch_iter = self._coerce_arrow_batches(source)
         first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
         metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
@@ -1146,12 +1145,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             exc_handler = self.handle_database_exceptions()
             async with AsyncExitStack() as stack:
-                await stack.enter_async_context(exc_handler)
                 cursor = await stack.enter_async_context(self.with_cursor(self.connection))
                 copy_ctx = await stack.enter_async_context(cursor.copy(copy_sql))
                 if use_binary:
                     for chunk in self._iter_pgcopy_binary_chunks(all_batches, columns=columns, metrics=metrics):
-                        await copy_ctx.write(chunk)
+                        await self._run_with_exception_handler(exc_handler, copy_ctx.write, chunk)
                 else:
                     for batch in all_batches:
                         metrics["rows_processed"] += int(batch.num_rows)
@@ -1163,9 +1161,8 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                                 self.prepare_driver_parameters(records, self.statement_config, is_many=True),
                             )
                         for record in records:
-                            await copy_ctx.write_row(record)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+                            await self._run_with_exception_handler(exc_handler, copy_ctx.write_row, record)
+            self._check_pending_exception(exc_handler)
         telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -1197,15 +1194,18 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Resolve rowcount from psycopg cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
+    def _format_wire_sql(self, sql: str) -> str:
+        """Apply wire-level literal percent escaping and sqlcommenter formatting."""
+        formatted = sql
+        if "%" in formatted:
+            formatted = escape_literal_percent(formatted, True, ParameterValidator())
+        if not self.statement_config.enable_sqlcommenter:
+            return formatted
+        return format_wire_sqlcomment(formatted, self.statement_config)
+
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        expected_percents = cached.parameter_profile.total_count if params else 0
-        if cached.compiled_sql.count("%") != expected_percents:
-            statement = self._cached_statement(
-                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-            )
-            return await self._execute_cached_statement(statement)
         return await super()._execute_cache_hit(sql, params, cached)
 
     async def _execute_stack_pipeline(
@@ -1295,11 +1295,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Check if connection is in transaction."""
         info = getattr(self.connection, "info", None)
         status = getattr(info, "transaction_status", None)
-        return self._transaction_active or status in {
-            TRANSACTION_STATUS_ACTIVE,
-            TRANSACTION_STATUS_INTRANS,
-            TRANSACTION_STATUS_INERROR,
-        }
+        return self._transaction_active or status in OPEN_TRANSACTION_STATUSES
 
     async def _restore_original_autocommit(self) -> None:
         """Restore autocommit after a completed SQLSpec-owned transaction."""

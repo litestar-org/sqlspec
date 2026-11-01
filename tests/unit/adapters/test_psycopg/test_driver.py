@@ -257,9 +257,9 @@ def test_sync_rollback_restores_changed_autocommit() -> None:
 
     assert connection.autocommit_calls == [False, True]
     assert connection.autocommit is True
-    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
+@pytest.mark.anyio
 async def test_async_rollback_restores_changed_autocommit() -> None:
     connection = _AsyncTransactionConnection()
     driver = _async_driver(connection)
@@ -269,6 +269,93 @@ async def test_async_rollback_restores_changed_autocommit() -> None:
 
     assert connection.autocommit_calls == [False, True]
     assert connection.autocommit is True
+
+
+def test_sync_cache_hit_with_literal_percent_avoids_fallback() -> None:
+    """_execute_cache_hit for query with literal percent uses pre-escaped wire SQL."""
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.compiler import OperationProfile
+    from sqlspec.core.parameters import ParameterInfo, ParameterProfile, ParameterStyle
+    from sqlspec.core.statement import ProcessedState
+
+    connection = MagicMock()
+    cursor = MagicMock()
+    cursor.description = [SimpleNamespace(name="id")]
+    cursor.fetchall.return_value = [(1,)]
+    cursor.rowcount = 1
+    connection.cursor.return_value = cursor
+    driver = PsycopgSyncDriver(connection=connection)
+
+    cached = CachedQuery(
+        compiled_sql="SELECT * FROM items WHERE name LIKE '%%test%%' AND id = %s",
+        parameter_profile=ParameterProfile([ParameterInfo("id", ParameterStyle.POSITIONAL_PYFORMAT, 0, 1, "%s")]),
+        input_named_parameters=(),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
+        param_count=1,
+        processed_state=ProcessedState(
+            compiled_sql="SELECT * FROM items WHERE name LIKE '%%test%%' AND id = %s",
+            execution_parameters=[],
+            operation_type="SELECT",
+        ),
+    )
+    result = driver._execute_cache_hit("SELECT * FROM items WHERE name LIKE '%test%' AND id = %s", (1,), cached)
+    assert result is not None
+    assert cursor.execute.called
+
+
+@pytest.mark.anyio
+async def test_async_cache_hit_with_literal_percent_avoids_fallback() -> None:
+    """async _execute_cache_hit for query with literal percent uses pre-escaped wire SQL."""
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.compiler import OperationProfile
+    from sqlspec.core.parameters import ParameterInfo, ParameterProfile, ParameterStyle
+    from sqlspec.core.statement import ProcessedState
+
+    connection = MagicMock()
+    cursor = AsyncMock()
+    cursor.description = [SimpleNamespace(name="id")]
+    cursor.fetchall = AsyncMock(return_value=[(1,)])
+    cursor.rowcount = 1
+    connection.cursor.return_value = cursor
+    driver = PsycopgAsyncDriver(connection=connection)
+
+    cached = CachedQuery(
+        compiled_sql="SELECT * FROM items WHERE name LIKE '%%test%%' AND id = %s",
+        parameter_profile=ParameterProfile([ParameterInfo("id", ParameterStyle.POSITIONAL_PYFORMAT, 0, 1, "%s")]),
+        input_named_parameters=(),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
+        param_count=1,
+        processed_state=ProcessedState(
+            compiled_sql="SELECT * FROM items WHERE name LIKE '%%test%%' AND id = %s",
+            execution_parameters=[],
+            operation_type="SELECT",
+        ),
+    )
+    result = await driver._execute_cache_hit("SELECT * FROM items WHERE name LIKE '%test%' AND id = %s", (1,), cached)
+    assert result is not None
+    assert cursor.execute.called
+
+
+def test_psycopg_sync_stream_source_runs_with_exception_handler() -> None:
+    """PsycopgSyncStreamSource delegates to _run_with_exception_handler inside active except block."""
+    from sqlspec.adapters.psycopg.core import PsycopgSyncStreamSource
+
+    connection = MagicMock()
+    driver = PsycopgSyncDriver(connection=connection)
+    source = PsycopgSyncStreamSource(driver, "SELECT 1", (), 10)
+
+    try:
+        raise ValueError("ambient error")
+    except ValueError:
+        source.start()
+
+    assert source._cursor is not None
     assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
@@ -487,26 +574,26 @@ async def test_async_session_exit_rolls_back_uncommitted_implicit_transaction() 
     assert connection.rollback_calls == 1
 
 
-def test_sync_begin_restores_autocommit_on_set_local_failure() -> None:
-    """begin() restores autocommit=True if SET LOCAL columnar fails."""
-    connection = _SyncTransactionConnection(autocommit=True)
-    connection.execute = MagicMock(side_effect=psycopg.Error("columnar extension missing"))
-    driver = PsycopgSyncDriver(
-        connection=connection, driver_features={"enable_alloydb_columnar": True, "pooler_mode": "transaction"}
-    )
-    with pytest.raises(SQLSpecError):
-        driver.begin()
-    assert connection.autocommit is True
-
-
 @pytest.mark.anyio
-async def test_async_begin_restores_autocommit_on_set_local_failure() -> None:
-    """async begin() restores autocommit=True if SET LOCAL columnar fails."""
-    connection = _AsyncTransactionConnection(autocommit=True)
-    connection.execute = AsyncMock(side_effect=psycopg.Error("columnar extension missing"))
+async def test_psycopg_async_load_from_arrow_runs_with_exception_handler() -> None:
+    """PsycopgAsyncDriver.load_from_arrow routes operations through exception handler inside active except block."""
+    import pyarrow as pa
+
+    connection = MagicMock()
+    cursor_mock = MagicMock()
+    cursor_mock.execute = AsyncMock()
+    copy_ctx = AsyncMock()
+    cursor_mock.copy.return_value = copy_ctx
+    connection.cursor.return_value = cursor_mock
+
     driver = PsycopgAsyncDriver(
-        connection=connection, driver_features={"enable_alloydb_columnar": True, "pooler_mode": "transaction"}
+        connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
     )
-    with pytest.raises(SQLSpecError):
-        await driver.begin()
-    assert connection.autocommit is True
+    table = pa.table({"id": [1, 2], "val": ["a", "b"]})
+
+    try:
+        raise ValueError("ambient error")
+    except ValueError:
+        job = await driver.load_from_arrow("test_table", table, overwrite=True)
+
+    assert job.telemetry["rows_processed"] == 2

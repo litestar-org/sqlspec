@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ParameterStyleConfig, StackOperation
 
 __all__ = (
+    "OPEN_TRANSACTION_STATUSES",
     "TRANSACTION_STATUS_ACTIVE",
     "TRANSACTION_STATUS_IDLE",
     "TRANSACTION_STATUS_INERROR",
@@ -94,6 +95,11 @@ TRANSACTION_STATUS_ACTIVE = 1
 TRANSACTION_STATUS_INTRANS = 2
 TRANSACTION_STATUS_INERROR = 3
 TRANSACTION_STATUS_UNKNOWN = 4
+OPEN_TRANSACTION_STATUSES: Final[tuple[int, ...]] = (
+    TRANSACTION_STATUS_ACTIVE,
+    TRANSACTION_STATUS_INTRANS,
+    TRANSACTION_STATUS_INERROR,
+)
 
 
 class PreparedStackOperation(NamedTuple):
@@ -306,27 +312,12 @@ class PsycopgSyncStreamSource:
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            transaction = self._driver.connection.transaction()
-            transaction.__enter__()
-            self._transaction = transaction
-            try:
-                cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
-                cursor.itersize = self._chunk_size
-                execute_with_optional_parameters(cursor, self._sql, self._parameters)
-                self._cursor = cursor
-            except BaseException as exc:
-                self._transaction = None
-                with contextlib.suppress(Exception):
-                    transaction.__exit__(type(exc), exc, exc.__traceback__)
-                raise
+        self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        with handler:
-            rows = self._cursor.fetchmany(self._chunk_size)
+        rows = self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
@@ -348,6 +339,21 @@ class PsycopgSyncStreamSource:
                     transaction.__exit__(RuntimeError, RuntimeError("stream failed"), None)
                 else:
                     transaction.__exit__(None, None, None)
+
+    def _start(self) -> None:
+        transaction = self._driver.connection.transaction()
+        transaction.__enter__()
+        self._transaction = transaction
+        try:
+            cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+            cursor.itersize = self._chunk_size
+            execute_with_optional_parameters(cursor, self._sql, self._parameters)
+            self._cursor = cursor
+        except BaseException as exc:
+            self._transaction = None
+            with contextlib.suppress(Exception):
+                transaction.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
 
 class PsycopgAsyncStreamSource:
@@ -606,7 +612,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     error_type = type(error)
     mapped_error = _EXCEPTION_MAPPING.get(error_type)
     if mapped_error is None:
