@@ -70,6 +70,7 @@ __all__ = (
     "build_copy_from_command",
     "build_pipeline_execution_result",
     "build_postgres_extension_probe_names",
+    "build_postgres_storage_params_sql",
     "build_profile",
     "build_statement_config",
     "build_truncate_command",
@@ -134,6 +135,39 @@ def build_copy_from_command(table: str, columns: "list[str]", *, binary: bool = 
 
 def build_truncate_command(table: str) -> "PsycopgComposed":
     return PsycopgSQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
+
+
+def build_postgres_storage_params_sql(
+    settings: "dict[str, object] | Mapping[str, object] | None",
+    *,
+    include_autovacuum: bool = False,
+    default_fillfactor: int | None = None,
+    default_vacuum_scale: float | None = None,
+    default_analyze_scale: float | None = None,
+    section: str = "storage",
+) -> str:
+    """Format PostgreSQL table storage parameters (WITH fillfactor = ...) clause."""
+    options: list[str] = []
+    config_dict = dict(settings) if settings else {}
+    fillfactor = config_dict.get("fillfactor", default_fillfactor)
+    if fillfactor is not None:
+        if not isinstance(fillfactor, int) or isinstance(fillfactor, bool) or fillfactor not in range(10, 101):
+            msg = f"extension_config['{section}']['fillfactor'] must be an integer from 10 to 100"
+            raise ValueError(msg)
+        options.append(f"fillfactor = {fillfactor}")
+    if include_autovacuum:
+        scales = (
+            ("autovacuum_vacuum_scale_factor", default_vacuum_scale),
+            ("autovacuum_analyze_scale_factor", default_analyze_scale),
+        )
+        for key, default_val in scales:
+            value = config_dict.get(key, default_val)
+            if value is not None:
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+                    msg = f"extension_config['{section}']['{key}'] must be a number from 0 to 1"
+                    raise ValueError(msg)
+                options.append(f"{key} = {float(value):g}")
+    return f" WITH ({', '.join(options)})" if options else ""
 
 
 def build_profile() -> "DriverParameterProfile":
