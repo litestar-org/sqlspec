@@ -91,6 +91,23 @@ def test_dispatch_execute_select_compiles_to_pyformat_and_collects_rows() -> Non
     assert result.data_row_count == 1
 
 
+def test_execute_output_into_does_not_fetch_client_rows() -> None:
+    """OUTPUT INTO must not fetch a result set that the native cursor does not expose."""
+
+    class OutputIntoCursor(FakeCursor):
+        def fetchall(self) -> list[Any]:
+            msg = "OUTPUT INTO does not expose a client result set"
+            raise AssertionError(msg)
+
+    cursor = OutputIntoCursor(rowcount=1)
+    driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection(cursor)))
+
+    result = driver.execute("INSERT INTO dbo.users OUTPUT inserted.id INTO @ids DEFAULT VALUES")
+
+    assert result.rows_affected == 1
+    assert result.get_data() == []
+
+
 def test_dispatch_execute_many_uses_executemany_and_rowcount() -> None:
     """execute_many dispatch should forward batch parameters to pymssql."""
     from sqlspec.adapters.pymssql.core import default_statement_config

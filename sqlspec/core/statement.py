@@ -576,8 +576,9 @@ class SQL:
 
         if state.parsed_expression:
             expr = state.parsed_expression
-            if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)) and expr.args.get("returning"):
-                return True
+            if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)):
+                returning = expr.args.get("returning")
+                return bool(returning) and not (isinstance(returning, exp.Returning) and returning.args.get("into"))
 
         return False
 
