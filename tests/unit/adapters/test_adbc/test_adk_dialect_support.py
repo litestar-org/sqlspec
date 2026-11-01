@@ -399,7 +399,7 @@ def test_detect_enterprise_dialects_in_adk_stores(driver_name: str, expected_dia
     config = AdbcConfig(connection_config={"driver_name": driver_name})
     store = AdbcADKStore(config)
     mem_store = AdbcADKMemoryStore(config)
-    assert store.dialect() == expected_dialect
+    assert store.dialect == expected_dialect
     assert mem_store.dialect == expected_dialect
 
 
@@ -408,7 +408,7 @@ def test_detect_dialect_fallback_to_statement_config() -> None:
     config = AdbcConfig(connection_config={}, statement_config=StatementConfig(dialect="oracle"))
     store = AdbcADKStore(config)
     mem_store = AdbcADKMemoryStore(config)
-    assert store.dialect() == "oracle"
+    assert store.dialect == "oracle"
     assert mem_store.dialect == "oracle"
 
 
@@ -760,3 +760,62 @@ def _store_for(driver_name: str) -> AdbcADKStore:
 
 def _normalized(sql: str) -> str:
     return " ".join(sql.split())
+
+
+def test_oracle_adk_memory_store_pre_queries_existing_event_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AdbcADKMemoryStore pre-queries existing event_ids on non-returning dialects."""
+    executed_statements: list[str] = []
+    mock_cursor = MagicMock()
+    mock_cursor.fetchall.return_value = [("evt-existing",)]
+
+    def record_execute(sql: str, _params: Any = None) -> None:
+        executed_statements.append(sql)
+
+    mock_cursor.execute.side_effect = record_execute
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__.return_value = mock_conn
+    mock_ctx.__exit__.return_value = None
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: mock_ctx)
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "oracle", "uri": ":memory:"},
+        extension_config={"adk": {"enable_memory": True}},
+    )
+    mem_store = AdbcADKMemoryStore(config)
+    now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+    count = mem_store.insert_memory_entries([
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app1",
+            "user_id": "user1",
+            "scope": "user",
+            "event_id": "evt-existing",
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"parts": [{"text": "hello"}]},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+        {
+            "id": "mem-2",
+            "session_id": "sess-1",
+            "app_name": "app1",
+            "user_id": "user1",
+            "scope": "user",
+            "event_id": "evt-new",
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"parts": [{"text": "world"}]},
+            "content_text": "world",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    ])
+
+    assert any("SELECT event_id FROM" in s for s in executed_statements)
+    assert count == 1

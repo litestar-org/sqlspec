@@ -13,13 +13,16 @@ Supports:
     - Snowflake: BINARY data type, TIMESTAMP WITH TIME ZONE, ? parameters, MERGE
 """
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlspec.adapters.adbc.core import is_postgres_dialect
+from sqlspec.adapters.adbc.core import _DB2_INDEX_EXISTS_SQL, _DB2_TABLE_EXISTS_SQL, is_postgres_dialect
+from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
+from sqlspec.exceptions import IntegrityError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
-from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
+from sqlspec.utils.text import normalize_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
@@ -333,9 +336,14 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             END;
             """.strip()
             with self._config.provide_session() as driver:
-                driver.execute(table_block)
-                driver.execute(index_block)
-                driver.commit()
+                try:
+                    driver.execute(table_block)
+                    driver.execute(index_block)
+                    driver.commit()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
             self._log_table_created()
             return
 
@@ -343,18 +351,30 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             schema_name, catalog_table = _split_db2_table_name(self._table_name)
             index_name = normalize_identifier(f"idx_{self._table_name}_expires_at", "db2")
             with self._config.provide_session() as driver:
-                if driver.select_one_or_none(_DB2_TABLE_EXISTS_SQL, (schema_name, catalog_table)) is None:
-                    driver.execute(self._table_ddl().strip())
-                if driver.select_one_or_none(_DB2_INDEX_EXISTS_SQL, (schema_name, index_name)) is None:
-                    driver.execute(f"CREATE INDEX idx_{self._table_name}_expires_at ON {self._table_name}(expires_at)")
-                driver.commit()
+                try:
+                    if driver.select_one_or_none(_DB2_TABLE_EXISTS_SQL, (schema_name, catalog_table)) is None:
+                        driver.execute(self._table_ddl().strip())
+                    if driver.select_one_or_none(_DB2_INDEX_EXISTS_SQL, (schema_name, index_name)) is None:
+                        driver.execute(
+                            f"CREATE INDEX idx_{self._table_name}_expires_at ON {self._table_name}(expires_at)"
+                        )
+                    driver.commit()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
             self._log_table_created()
             return
 
         sql_text = self._table_ddl()
         with self._config.provide_session() as driver:
-            driver.execute_script(sql_text)
-            driver.commit()
+            try:
+                driver.execute_script(sql_text)
+                driver.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    driver.rollback()
+                raise
         self._log_table_created()
 
     def _drop_table_sql(self) -> "list[str]":
@@ -450,7 +470,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 INSERT OR REPLACE INTO {self._table_name} (session_id, data, expires_at)
                 VALUES ({p1}, {p2}, {p3})
                 """
-            elif is_postgres_dialect(dialect):
+            elif is_postgres_dialect(dialect) or dialect == "duckdb":
                 if expires_at is None:
                     sql = f"""
                     INSERT INTO {self._table_name} (session_id, data, expires_at)
@@ -459,26 +479,13 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                     SET data = EXCLUDED.data, expires_at = NULL
                     """
                     with self._config.provide_session() as driver:
-                        driver.execute(sql, key, data)
-                        driver.commit()
-                    return
-                sql = f"""
-                INSERT INTO {self._table_name} (session_id, data, expires_at)
-                VALUES ({p1}, {p2}, {p3})
-                ON CONFLICT (session_id) DO UPDATE
-                SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at
-                """
-            else:
-                if expires_at is None:
-                    sql = f"""
-                    INSERT INTO {self._table_name} (session_id, data, expires_at)
-                    VALUES ({p1}, {p2}, NULL)
-                    ON CONFLICT (session_id) DO UPDATE
-                    SET data = EXCLUDED.data, expires_at = NULL
-                    """
-                    with self._config.provide_session() as driver:
-                        driver.execute(sql, key, data)
-                        driver.commit()
+                        try:
+                            driver.execute(sql, key, data)
+                            driver.commit()
+                        except Exception:
+                            with contextlib.suppress(Exception):
+                                driver.rollback()
+                            raise
                     return
                 sql = f"""
                 INSERT INTO {self._table_name} (session_id, data, expires_at)
@@ -494,38 +501,59 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             """
         elif dialect in {"bigquery", "snowflake", "oracle", "db2", "mssql"}:
             with self._config.provide_session() as driver:
-                check_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE session_id = {p1}"
-                result = driver.select_one(check_sql, key)
-                exists = result and result.get("count", 0) > 0
+                try:
+                    check_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE session_id = {p1}"
+                    result = driver.select_one(check_sql, key)
+                    exists = result and result.get("count", 0) > 0
 
-                if exists:
-                    if expires_at is None:
+                    if exists:
+                        if expires_at is None:
+                            sql = f"""
+                            UPDATE {self._table_name}
+                            SET data = {p1}, expires_at = NULL
+                            WHERE session_id = {p2}
+                            """
+                            driver.execute(sql, data, key)
+                        else:
+                            sql = f"""
+                            UPDATE {self._table_name}
+                            SET data = {p1}, expires_at = {p2}
+                            WHERE session_id = {p3}
+                            """
+                            driver.execute(sql, data, expires_at, key)
+                    elif expires_at is None:
                         sql = f"""
-                        UPDATE {self._table_name}
-                        SET data = {p1}, expires_at = NULL
-                        WHERE session_id = {p2}
+                        INSERT INTO {self._table_name} (session_id, data, expires_at)
+                        VALUES ({p1}, {p2}, NULL)
                         """
-                        driver.execute(sql, data, key)
+                        try:
+                            driver.execute(sql, key, data)
+                        except IntegrityError:
+                            sql = f"""
+                            UPDATE {self._table_name}
+                            SET data = {p1}, expires_at = NULL
+                            WHERE session_id = {p2}
+                            """
+                            driver.execute(sql, data, key)
                     else:
                         sql = f"""
-                        UPDATE {self._table_name}
-                        SET data = {p1}, expires_at = {p2}
-                        WHERE session_id = {p3}
+                        INSERT INTO {self._table_name} (session_id, data, expires_at)
+                        VALUES ({p1}, {p2}, {p3})
                         """
-                        driver.execute(sql, data, expires_at, key)
-                elif expires_at is None:
-                    sql = f"""
-                    INSERT INTO {self._table_name} (session_id, data, expires_at)
-                    VALUES ({p1}, {p2}, NULL)
-                    """
-                    driver.execute(sql, key, data)
-                else:
-                    sql = f"""
-                    INSERT INTO {self._table_name} (session_id, data, expires_at)
-                    VALUES ({p1}, {p2}, {p3})
-                    """
-                    driver.execute(sql, key, data, expires_at)
-                driver.commit()
+                        try:
+                            driver.execute(sql, key, data, expires_at)
+                        except IntegrityError:
+                            sql = f"""
+                            UPDATE {self._table_name}
+                            SET data = {p1}, expires_at = {p2}
+                            WHERE session_id = {p3}
+                            """
+                            driver.execute(sql, data, expires_at, key)
+                    driver.commit()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
                 return
         else:
             sql = f"""
@@ -536,8 +564,13 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             """
 
         with self._config.provide_session() as driver:
-            driver.execute(sql, key, data, expires_at)
-            driver.commit()
+            try:
+                driver.execute(sql, key, data, expires_at)
+                driver.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    driver.rollback()
+                raise
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete using ADBC driver."""
@@ -545,8 +578,13 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE session_id = {p1}"
 
         with self._config.provide_session() as driver:
-            driver.execute(sql, key)
-            driver.commit()
+            try:
+                driver.execute(sql, key)
+                driver.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    driver.rollback()
+                raise
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all using ADBC driver."""
@@ -554,8 +592,13 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         sql = f"DELETE FROM {self._table_name}"
 
         with self._config.provide_session() as driver:
-            driver.execute(sql)
-            driver.commit()
+            try:
+                driver.execute(sql)
+                driver.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    driver.rollback()
+                raise
 
     def _exists(self, key: str) -> bool:
         """Synchronous implementation of exists using ADBC driver."""
@@ -614,36 +657,31 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             delete_sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts}"
 
             with self._config.provide_session() as driver:
-                result = driver.select_one(count_sql)
-                count = result.get("count", 0) if result else 0
+                try:
+                    result = driver.select_one(count_sql)
+                    count = result.get("count", 0) if result else 0
 
-                if count > 0:
-                    driver.execute(delete_sql)
-                    driver.commit()
-                    self._log_delete_expired(count)
-
-                return count
+                    if count > 0:
+                        driver.execute(delete_sql)
+                        driver.commit()
+                        self._log_delete_expired(count)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
+                else:
+                    return count
 
         with self._config.provide_session() as driver:
-            exec_result = driver.execute(sql)
-            driver.commit()
-            count = exec_result.rows_affected
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
-
-
-_DB2_TABLE_EXISTS_SQL = (
-    "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
-)
-_DB2_INDEX_EXISTS_SQL = (
-    "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
-)
-_MIN_QUALIFIED_PARTS = 2
-
-
-def _split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
-    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
-    if len(parts) >= _MIN_QUALIFIED_PARTS:
-        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
-    return None, normalize_identifier(parts[0] if parts else table_name, "db2")
+            try:
+                exec_result = driver.execute(sql)
+                driver.commit()
+                count = exec_result.rows_affected
+                if count > 0:
+                    self._log_delete_expired(count)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    driver.rollback()
+                raise
+            else:
+                return count

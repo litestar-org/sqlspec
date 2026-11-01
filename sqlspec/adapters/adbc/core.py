@@ -48,6 +48,7 @@ from sqlspec.exceptions import (
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
 from sqlspec.utils.module_loader import import_optional, import_string
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 from sqlspec.utils.uuids import uuid4, uuid_from_string
@@ -2162,3 +2163,19 @@ def _apply_driver_manager_config(config: "dict[str, Any]", driver_kind: "str | N
 
 
 driver_profile: Final[DriverParameterProfile] = build_profile()
+
+_DB2_TABLE_EXISTS_SQL: Final = (
+    "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
+)
+_DB2_INDEX_EXISTS_SQL: Final = (
+    "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
+)
+_MIN_QUALIFIED_PARTS: Final = 2
+
+
+def split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
+    """Split qualified DB2 table name into schema and table components."""
+    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
+    if len(parts) >= _MIN_QUALIFIED_PARTS:
+        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
+    return None, normalize_identifier(parts[0] if parts else table_name, "db2")

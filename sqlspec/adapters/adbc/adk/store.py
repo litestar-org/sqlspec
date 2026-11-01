@@ -8,11 +8,14 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.adbc.core import (
+    _DB2_INDEX_EXISTS_SQL,
+    _DB2_TABLE_EXISTS_SQL,
     driver_kind_from_driver_name,
     is_postgres_dialect,
     is_shared_object_driver,
     resolve_dialect_from_config,
 )
+from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.config import ADKConfig
 from sqlspec.core.parameters._validator import PARAMETER_REGEX
 from sqlspec.exceptions import ImproperConfigurationError
@@ -20,7 +23,6 @@ from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession,
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -49,7 +51,7 @@ class AdbcADKConfig(ADKConfig):
     """Vector index type for PostgreSQL. Defaults to 'hnsw'."""
 
     scann_num_leaves: NotRequired[int]
-    """Number of leaves for ScaNN index on PostgreSQL. Defaults to 50."""
+    """Number of leaves for ScaNN index on PostgreSQL. Defaults to 100."""
 
     scann_quantizer: NotRequired[Literal["SQ8", "FP32"]]
     """Quantizer for ScaNN index on PostgreSQL. Defaults to 'SQ8'."""
@@ -224,6 +226,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Set a metadata value."""
         self._set_metadata(key, value)
 
+    @property
     def dialect(self) -> str:
         """Return the detected database dialect."""
         return self._dialect
@@ -2194,7 +2197,20 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                for entry in entries:
+                entries_to_insert = entries
+                if not use_returning:
+                    event_ids = [entry["event_id"] for entry in entries if "event_id" in entry]
+                    if event_ids:
+                        placeholders = ", ".join("?" for _ in event_ids)
+                        select_sql = f"SELECT event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})"
+                        self._execute(cursor, select_sql, tuple(event_ids))
+                        existing_rows = cursor.fetchall()
+                        existing_event_ids = {row[0] for row in existing_rows}
+                        entries_to_insert = [
+                            entry for entry in entries if entry.get("event_id") not in existing_event_ids
+                        ]
+
+                for entry in entries_to_insert:
                     content_json = self._serialize_json_field(entry["content_json"])
                     metadata_json = self._serialize_json_field(entry.get("metadata_json"))
                     raw_emb = entry.get("embedding")
@@ -2270,21 +2286,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                         if cursor.fetchone():
                             inserted_count += 1
                     else:
-                        try:
-                            self._execute(cursor, sql, params)
-                            inserted_count += 1
-                        except Exception as exc:
-                            exc_str = str(exc).lower()
-                            if (
-                                "unique" in exc_str
-                                or "constraint" in exc_str
-                                or "duplicate" in exc_str
-                                or "ora-00001" in exc_str
-                                or "sql0803n" in exc_str
-                                or "23505" in exc_str
-                            ):
-                                continue
-                            raise
+                        self._execute(cursor, sql, params)
+                        inserted_count += 1
                 conn.commit()
             except Exception:
                 with contextlib.suppress(Exception):
@@ -2622,15 +2625,6 @@ def decode_adbc_pgvector(raw_embedding: Any) -> "list[float] | None":
     return [float(v) for v in raw_embedding]
 
 
-_DB2_TABLE_EXISTS_SQL: Final = (
-    "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
-)
-_DB2_INDEX_EXISTS_SQL: Final = (
-    "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
-)
-_MIN_QUALIFIED_PARTS: Final = 2
-
-
 @lru_cache(maxsize=256)
 def _postgresql_store_sql(sql: str) -> str:
     """Cache positional SQL conversion without changing quoted or commented text."""
@@ -2667,13 +2661,6 @@ def _metadata_key_column(dialect: str) -> str:
     if dialect == DIALECT_DB2:
         return '"KEY"'
     return "key"
-
-
-def _split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
-    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
-    if len(parts) >= _MIN_QUALIFIED_PARTS:
-        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
-    return None, normalize_identifier(parts[0] if parts else table_name, "db2")
 
 
 def _db2_table_exists(cursor: Any, table_name: str) -> bool:
