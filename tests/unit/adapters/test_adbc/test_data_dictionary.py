@@ -19,7 +19,7 @@ from sqlspec.adapters.adbc.data_dictionary import (
     _normalize_native_statistics,
     _normalize_native_tables,
 )
-from sqlspec.data_dictionary import MetadataFidelity, MetadataSource, MetadataSupport
+from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
 from sqlspec.exceptions import OperationalError
 
 SQLITE_OBJECTS_PAYLOAD: list[dict[str, Any]] = [
@@ -525,6 +525,47 @@ def test_adbc_view_ddl_is_explicitly_unsupported() -> None:
     assert result.fidelity == MetadataFidelity.UNSUPPORTED
     assert result.source == MetadataSource.DRIVER_METADATA
     assert result.warnings
+
+
+@pytest.mark.parametrize("target_dialect", [None, "postgres"])
+def test_adbc_table_and_schema_ddl_preserve_detected_dialect_and_quoted_names(target_dialect: str | None) -> None:
+    """DDL orchestration uses the active ADBC dialect for quoted catalog names and target rendering."""
+    config = AdbcConfig(connection_config={"driver_name": "sqlite"})
+    with config.provide_session() as driver:
+        driver.execute('CREATE TABLE "Mixed Items" ("Mixed ID" INTEGER PRIMARY KEY, "Label" TEXT)')
+        dictionary = driver.data_dictionary
+        table = dictionary.get_ddl(
+            driver,
+            '"Mixed Items"',
+            schema='"main"',
+            include_dependencies=False,
+            prefer_native=False,
+            target_dialect=target_dialect,
+        )
+        schema = dictionary.get_schema_ddl(
+            driver,
+            schema='"main"',
+            include_domains=("tables",),
+            include_dependencies=False,
+            prefer_native=False,
+            target_dialect=target_dialect,
+        )
+    dialect = target_dialect or "sqlite"
+    assert table.status == MetadataSupport.SUPPORTED
+    assert (table.identity.name, table.identity.schema, table.identity.dialect) == ("Mixed Items", "main", dialect)
+    assert isinstance(table.ddl, str)
+    assert '"Mixed Items"' in table.ddl
+    assert '"Mixed ID"' in table.ddl
+    assert len(schema.items) == 1
+    item = schema.items[0]
+    assert isinstance(item, DDLResult)
+    assert (item.identity.name, item.identity.schema, item.identity.dialect, item.status) == (
+        "Mixed Items",
+        "main",
+        dialect,
+        MetadataSupport.SUPPORTED,
+    )
+    assert item.ddl == table.ddl
 
 
 def test_get_statistics_uses_native_statistic_names_when_available() -> None:

@@ -768,9 +768,11 @@ class DataDictionaryMixin:
             return (None, None)
         if _ddl_dialect_or_none(type(self).dialect) is not None and isinstance(self, DataDictionaryDialectMixin):
             with contextlib.suppress(ValueError):
-                _, exact_schema = self.resolve_ddl_object_name(driver, "_", schema)
+                _, exact_schema = type(self).resolve_ddl_object_name(self, driver, "_", schema)
                 getter_schema = (
-                    self.exact_catalog_identifier(driver, exact_schema) if exact_schema is not None else None
+                    type(self).exact_catalog_identifier(self, driver, exact_schema)
+                    if exact_schema is not None
+                    else None
                 )
                 return (exact_schema, getter_schema)
         stripped = schema.strip()
