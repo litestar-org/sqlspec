@@ -4,11 +4,15 @@ import gc
 import importlib.metadata
 import json
 import os
+import sys
 import threading
 import weakref
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from importlib import import_module
+from importlib.machinery import ModuleSpec
+from types import ModuleType
 from typing import Any, cast, get_type_hints
 from unittest.mock import MagicMock
 
@@ -30,6 +34,25 @@ from sqlspec.adapters.adbc.pool import AdbcConnectionPool
 from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.utils.module_loader import reset_dependency_cache
+
+
+@pytest.fixture
+def optional_driver_imports(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str, bool], None]]:
+    """Control optional SDK package imports through Python's module registry."""
+    configured: set[str] = set()
+
+    def configure(package: str, installed: bool) -> None:
+        module = ModuleType(package) if installed else None
+        if module is not None:
+            module.__spec__ = ModuleSpec(package, loader=None, is_package=True)
+        monkeypatch.setitem(sys.modules, package, module)
+        reset_dependency_cache(package)
+        configured.add(package)
+
+    yield configure
+    for package in configured:
+        reset_dependency_cache(package)
 
 
 def test_adbc_config_runs_connection_create_callback(monkeypatch: Any) -> None:
@@ -587,16 +610,16 @@ def test_resolve_driver_name_from_uri() -> None:
     assert _resolve_driver_name(config) == "adbc_driver_postgresql.dbapi.connect"
 
 
-def test_resolve_driver_name_gizmosql_alias(monkeypatch: Any) -> None:
+def test_resolve_driver_name_gizmosql_alias(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """Resolve GizmoSQL aliases to the FlightSQL driver when native gizmosql driver is absent."""
-    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
     assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
 
 
-def test_resolve_driver_name_from_gizmosql_uri(monkeypatch: Any) -> None:
+def test_resolve_driver_name_from_gizmosql_uri(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """Detect FlightSQL driver from GizmoSQL URI schemes when native gizmosql driver is absent."""
-    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"uri": "gizmosql://localhost:31337"})
     assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
     config = AdbcConfig(connection_config={"uri": "gizmo://localhost:31337"})
@@ -667,9 +690,9 @@ def test_connection_config_dict_preserves_db_kwargs_for_non_bigquery() -> None:
     assert "foo" not in resolved
 
 
-def test_flightsql_lifts_username_password_into_db_kwargs(monkeypatch: Any) -> None:
+def test_flightsql_lifts_username_password_into_db_kwargs(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """Top-level username/password move into db_kwargs on the FlightSQL fallback route."""
-    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql", "username": "alice", "password": "secret"})
     resolved = _get_connection_config_dict(config)
 
@@ -678,36 +701,38 @@ def test_flightsql_lifts_username_password_into_db_kwargs(monkeypatch: Any) -> N
     assert "password" not in resolved
 
 
-def test_flightsql_lifts_tls_skip_verify_true(monkeypatch: Any) -> None:
+def test_flightsql_lifts_tls_skip_verify_true(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """tls_skip_verify=True maps to the FlightSQL ADBC option key on the FlightSQL fallback route."""
-    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql", "tls_skip_verify": True})
     resolved = _get_connection_config_dict(config)
 
     assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"
 
 
-def test_flightsql_lifts_tls_skip_verify_false(monkeypatch: Any) -> None:
+def test_flightsql_lifts_tls_skip_verify_false(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """tls_skip_verify=False maps to the FlightSQL ADBC option key on the FlightSQL fallback route."""
-    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql", "tls_skip_verify": False})
     resolved = _get_connection_config_dict(config)
 
     assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "false"
 
 
-def test_flightsql_lifts_authorization_header(monkeypatch: Any) -> None:
+def test_flightsql_lifts_authorization_header(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """authorization_header maps to the FlightSQL ADBC option key."""
-    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql", "authorization_header": "Bearer token"})
     resolved = _get_connection_config_dict(config)
 
     assert resolved["db_kwargs"]["adbc.flight.sql.authorization_header"] == "Bearer token"
 
 
-def test_flightsql_explicit_db_kwargs_wins_over_top_level_shortcuts(monkeypatch: Any) -> None:
+def test_flightsql_explicit_db_kwargs_wins_over_top_level_shortcuts(
+    optional_driver_imports: Callable[[str, bool], None],
+) -> None:
     """User-supplied db_kwargs entries take precedence over top-level shortcuts."""
-    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(
         connection_config={
             "driver_name": "gizmosql",
@@ -800,9 +825,9 @@ def test_gizmosql_parameter_style_is_qmark() -> None:
     assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
 
 
-def test_gizmo_alias_resolves_to_flightsql(monkeypatch: Any) -> None:
+def test_gizmo_alias_resolves_to_flightsql(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """The short 'gizmo' alias resolves to FlightSQL driver when native gizmosql driver is absent."""
-    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"driver_name": "gizmo"})
     assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
     assert config.statement_config.dialect == "duckdb"
@@ -1088,11 +1113,11 @@ def test_db2_driver_aliases_uri_and_parameter_profile() -> None:
         }
 
 
-def test_mssql_driver_manager_fallback_and_tsql_statement_config(monkeypatch: Any) -> None:
+def test_mssql_driver_manager_fallback_and_tsql_statement_config(
+    optional_driver_imports: Callable[[str, bool], None],
+) -> None:
     """When adbc_driver_mssql is absent, mssql routes through adbc_driver_manager with driver='mssql'."""
-    monkeypatch.setattr(
-        "sqlspec.adapters.adbc.core.import_optional", lambda name: None if name == "adbc_driver_mssql" else MagicMock()
-    )
+    optional_driver_imports("adbc_driver_mssql", False)
 
     for conn_cfg in (
         {"driver_name": "mssql", "uri": "sqlserver://sa:Pass@localhost:1433?database=master"},
@@ -1113,22 +1138,17 @@ def test_mssql_driver_manager_fallback_and_tsql_statement_config(monkeypatch: An
         assert resolved["db_kwargs"]["uri"].startswith(("sqlserver://", "mssql://"))
 
 
-def test_mssql_native_package_preferred_when_installed(monkeypatch: Any) -> None:
+def test_mssql_native_package_preferred_when_installed(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """When adbc_driver_mssql is installed, mssql resolves to adbc_driver_mssql.dbapi.connect."""
-    monkeypatch.setattr(
-        "sqlspec.adapters.adbc.core.import_optional", lambda name: MagicMock() if name == "adbc_driver_mssql" else None
-    )
+    optional_driver_imports("adbc_driver_mssql", True)
     config = AdbcConfig(connection_config={"driver_name": "mssql", "uri": "sqlserver://localhost:1433"})
     assert _resolve_driver_name(config) == "adbc_driver_mssql.dbapi.connect"
     assert config.statement_config.dialect == "tsql"
 
 
-def test_gizmosql_prefers_native_driver_when_installed(monkeypatch: Any) -> None:
+def test_gizmosql_prefers_native_driver_when_installed(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """When adbc_driver_gizmosql is installed, gizmosql resolves to adbc_driver_gizmosql.dbapi.connect."""
-    monkeypatch.setattr(
-        "sqlspec.adapters.adbc.core.import_optional",
-        lambda name: MagicMock() if name == "adbc_driver_gizmosql" else None,
-    )
+    optional_driver_imports("adbc_driver_gizmosql", True)
     config = AdbcConfig(
         connection_config={
             "driver_name": "gizmosql",
@@ -1149,9 +1169,11 @@ def test_gizmosql_prefers_native_driver_when_installed(monkeypatch: Any) -> None
     assert _get_connection_config_dict(explicit_autocommit)["autocommit"] is True
 
 
-def test_gizmosql_flightsql_fallback_lifts_auth_type_into_db_kwargs(monkeypatch: Any) -> None:
+def test_gizmosql_flightsql_fallback_lifts_auth_type_into_db_kwargs(
+    optional_driver_imports: Callable[[str, bool], None],
+) -> None:
     """When adbc_driver_gizmosql is absent, auth_type is lifted into db_kwargs['adbc.gizmosql.auth_type']."""
-    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(
         connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "auth_type": "external"}
     )

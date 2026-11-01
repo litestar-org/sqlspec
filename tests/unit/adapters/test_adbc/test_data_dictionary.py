@@ -10,6 +10,7 @@ pytest.importorskip("adbc_driver_manager")
 
 from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
 
+from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.data_dictionary import (
     AdbcDataDictionary,
     _arrow_type_to_sql,
@@ -502,20 +503,19 @@ def test_adbc_get_objects_unique_check_constraints_are_lossy() -> None:
     assert all(item.attributes["is_lossy"] is True for item in constraint_items)
 
 
-def test_adbc_ddl_is_unsupported_without_dialect_pack() -> None:
-    """ADBC transport metadata should not claim lossless DDL."""
-    driver = Mock()
-    driver.dialect = "duckdb"
-
-    result = AdbcDataDictionary().get_ddl(
-        driver,
-        "items",
-        schema="main",
-        object_type="view",
-        include_dependencies=False,
-        prefer_native=False,
-        redact=False,
-    )
+def test_adbc_view_ddl_is_explicitly_unsupported() -> None:
+    """ADBC transport metadata should not claim lossless view DDL."""
+    config = AdbcConfig(connection_config={"driver_name": "sqlite"})
+    with config.provide_session() as driver:
+        result = driver.data_dictionary.get_ddl(
+            driver,
+            "items",
+            schema="main",
+            object_type="view",
+            include_dependencies=False,
+            prefer_native=False,
+            redact=False,
+        )
 
     assert result.identity.name == "items"
     assert result.identity.object_type == "view"

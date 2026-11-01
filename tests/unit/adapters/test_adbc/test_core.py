@@ -1,5 +1,6 @@
 """Unit tests for ADBC core execute-many helpers."""
 
+import json
 from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
@@ -163,56 +164,40 @@ def test_collect_rows_uses_precomputed_column_names() -> None:
     assert column_names == ["id", "name"]
 
 
-def test_prepare_parameters_with_casts_uses_type_converter_factory(monkeypatch: Any) -> None:
+def test_prepare_parameters_with_casts_uses_custom_json_serializer() -> None:
     statement_config = get_statement_config("postgres")
-    factory_calls: list[tuple[str, int]] = []
-
-    class FakeConverter:
-        def convert_dict(self, value: dict[str, Any]) -> str:
-            return f"factory:{sorted(value.items())!r}"
-
-    def fake_factory(dialect: str, cache_size: int = 5000) -> FakeConverter:
-        factory_calls.append((dialect, cache_size))
-        return FakeConverter()
-
-    monkeypatch.setattr(adbc_core, "get_adbc_type_converter", fake_factory)
-
-    prepared = prepare_parameters_with_casts(
-        [{"id": 1}], {}, statement_config, dialect="postgres", json_serializer=lambda value: str(value)
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(
+            json_serializer=lambda value: json.dumps({"custom": value}, separators=(",", ":"))
+        )
     )
 
-    assert prepared == ["factory:[('id', 1)]"]
-    assert factory_calls == [("postgres", 5000)]
+    prepared = prepare_parameters_with_casts([{"id": 1}], {}, statement_config, dialect="postgres", json_serializer=str)
+
+    assert prepared == ['{"custom":{"id":1}}']
 
 
-def test_prepare_batch_with_casts_creates_converter_once(monkeypatch: Any) -> None:
+def test_prepare_batch_with_casts_uses_custom_json_serializer_for_each_row() -> None:
     statement_config = get_statement_config("postgres")
-    factory_calls: list[tuple[str, int]] = []
-
-    class FakeConverter:
-        def convert_dict(self, value: dict[str, Any]) -> str:
-            return f"factory:{sorted(value.items())!r}"
-
-    def fake_factory(dialect: str, cache_size: int = 5000) -> FakeConverter:
-        factory_calls.append((dialect, cache_size))
-        return FakeConverter()
-
-    monkeypatch.setattr(adbc_core, "get_adbc_type_converter", fake_factory)
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(
+            json_serializer=lambda value: json.dumps({"custom": value}, separators=(",", ":"))
+        )
+    )
 
     prepared = prepare_batch_with_casts(
         [(1, {"name": "alice"}), (2, {"name": "bob"}), (3, {"name": "carol"})],
         {1: "INT"},
         statement_config,
         dialect="postgres",
-        json_serializer=lambda value: str(value),
+        json_serializer=str,
     )
 
     assert prepared == [
-        (1, "factory:[('name', 'alice')]"),
-        (2, "factory:[('name', 'bob')]"),
-        (3, "factory:[('name', 'carol')]"),
+        (1, '{"custom":{"name":"alice"}}'),
+        (2, '{"custom":{"name":"bob"}}'),
+        (3, '{"custom":{"name":"carol"}}'),
     ]
-    assert factory_calls == [("postgres", 5000)]
 
 
 def test_prepare_parameters_with_casts_supports_subclass_type_dispatch() -> None:
@@ -908,15 +893,16 @@ def test_rewrite_postgres_uuid_placeholders() -> None:
     assert arrays == (2,)
 
 
-def test_rewrite_uuid_cache() -> None:
-    """_rewrite_postgres_uuid_placeholders caches results in _REWRITE_UUID_CACHE."""
+def test_repeated_uuid_bindings_preserve_sql_and_current_parameter_values() -> None:
+    """Repeated statement rewrites retain each call's current UUID binding."""
     sql = "SELECT $1 WHERE id = $2"
-    key = (sql, (1,), (), "postgres")
-    adbc_core._REWRITE_UUID_CACHE.pop(key, None)
-    res1 = adbc_core._rewrite_postgres_uuid_placeholders(sql, (1,), (), "postgres")
-    assert key in adbc_core._REWRITE_UUID_CACHE
-    res2 = adbc_core._rewrite_postgres_uuid_placeholders(sql, (1,), (), "postgres")
-    assert res1 is res2
+    first = UUID("12345678-1234-5678-1234-567812345678")
+    second = UUID("87654321-4321-8765-4321-876543218765")
+    first_sql, first_parameters = prepare_postgres_uuid_bindings(sql, [first, 1], is_many=False, dialect="postgres")
+    second_sql, second_parameters = prepare_postgres_uuid_bindings(sql, [second, 2], is_many=False, dialect="postgres")
+    assert first_sql == second_sql == "SELECT CAST($1 AS UUID) WHERE id = $2"
+    assert first_parameters == [str(first), 1]
+    assert second_parameters == [str(second), 2]
 
 
 def test_strict_coercion_types() -> None:
