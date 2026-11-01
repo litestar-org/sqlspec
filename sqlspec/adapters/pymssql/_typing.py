@@ -83,6 +83,7 @@ class PymssqlSessionContext:
         "_acquire_connection",
         "_connection",
         "_driver",
+        "_driver_cls",
         "_driver_features",
         "_prepare_driver",
         "_release_connection",
@@ -96,21 +97,25 @@ class PymssqlSessionContext:
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PymssqlDriver], PymssqlDriver]",
+        driver_cls: "type[PymssqlDriver] | None" = None,
     ) -> None:
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
+        self._driver_cls = driver_cls
         self._connection: Any = None
         self._driver: PymssqlDriver | None = None
 
     def __enter__(self) -> "PymssqlDriver":
         global _DRIVER_CLS
-        if _DRIVER_CLS is None:
+        driver_cls = self._driver_cls or _DRIVER_CLS
+        if driver_cls is None:
             _DRIVER_CLS = import_optional_attr("sqlspec.adapters.pymssql.driver", "PymssqlDriver")
+            driver_cls = _DRIVER_CLS
         self._connection = self._acquire_connection()
-        self._driver = _DRIVER_CLS(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         assert self._driver is not None

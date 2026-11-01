@@ -126,13 +126,13 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=True)
-    return ".".join(quote_bracket_identifier(part) for part in parts)
+    return ".".join([quote_bracket_identifier(part) for part in parts])
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
     """Build a pymssql-compatible INSERT statement."""
-    column_clause = ", ".join(quote_bracket_identifier(column) for column in columns)
-    placeholders = ", ".join("%s" for _ in columns)
+    column_clause = ", ".join([quote_bracket_identifier(column) for column in columns])
+    placeholders = ", ".join(["%s"] * len(columns))
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
@@ -141,7 +141,13 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     if not parameters or "%" not in sql:
         return sql
     keep = {info.position for info in validator.extract_parameters(sql)}
-    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
+    result: list[str] = []
+    for index, char in enumerate(sql):
+        if char == "%" and index not in keep:
+            result.append("%%")
+        else:
+            result.append(char)
+    return "".join(result)
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:

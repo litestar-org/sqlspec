@@ -267,3 +267,11 @@ def test_freetds_error_code_mapping() -> None:
     assert isinstance(create_mapped_exception(Exception(20009, "Server is unavailable")), DatabaseConnectionError)
     assert isinstance(create_mapped_exception(Exception(20047, "Connection closed")), DatabaseConnectionError)
     assert isinstance(create_mapped_exception(InterfaceError("Connection broken")), DatabaseConnectionError)
+
+
+def test_percent_escaping_performance() -> None:
+    """escape_literal_percent correctly handles string literals and placeholders."""
+    validator = default_statement_config.parameter_validator
+    sql = "SELECT [id] FROM [t] WHERE [name] LIKE '50%' AND [cat] = %s"
+    escaped = escape_literal_percent(sql, ("books",), validator)
+    assert escaped == "SELECT [id] FROM [t] WHERE [name] LIKE '50%%' AND [cat] = %s"

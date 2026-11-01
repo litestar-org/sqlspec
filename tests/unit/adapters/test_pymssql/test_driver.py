@@ -6,7 +6,8 @@ import pytest
 from pymssql import IntegrityError as PymssqlIntegrityError
 
 from sqlspec import StatementStack
-from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor
+from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor, PymssqlSessionContext
+from sqlspec.adapters.pymssql.core import default_statement_config
 from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLSpecError, StackExecutionError, TransactionError, UniqueViolationError
@@ -391,3 +392,19 @@ def test_cache_hit_fast_path_percent_escape() -> None:
         "SELECT [id], [name] FROM [dbo].[users] WHERE [id] = %s", (1,), cast("Any", cached)
     )
     assert result.get_data() == [{"id": 1, "name": "Ada"}]
+
+
+def test_session_context_initialization() -> None:
+    """PymssqlSessionContext accepts explicit driver_cls factory without dynamic import."""
+    cursor = FakeCursor()
+    conn = FakeConnection(cursor)
+    context = PymssqlSessionContext(
+        acquire_connection=lambda: conn,
+        release_connection=lambda *args, **kwargs: None,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+        driver_cls=PymssqlDriver,
+    )
+    with context as driver:
+        assert isinstance(driver, PymssqlDriver)
