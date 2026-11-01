@@ -154,7 +154,7 @@ class CockroachPsycopgAsyncExceptionHandler(PsycopgAsyncExceptionHandler):
 class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
     """CockroachDB sync driver using psycopg.crdb."""
 
-    __slots__ = ("_enable_retry", "_follower_staleness", "_retry_config")
+    __slots__ = ("_enable_retry", "_follower_reads_enabled", "_follower_staleness", "_retry_config")
     dialect = "postgres"
 
     def __init__(
@@ -172,7 +172,9 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
 
         self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
-        self._follower_staleness = cast("str | None", self.driver_features.get("default_staleness"))
+        self._follower_reads_enabled = bool(self.driver_features.get("enable_follower_reads", False))
+        raw_staleness = cast("str | None", self.driver_features.get("default_staleness"))
+        self._follower_staleness = validate_follower_read_staleness(raw_staleness) if raw_staleness else None
         self._data_dictionary = None
 
     @property
@@ -367,7 +369,11 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
     ) -> "SQLResult":
         auto_started = (
             self._begin_follower_read_transaction()
-            if (cached.operation_profile.returns_rows and not cached.operation_profile.modifies_rows)
+            if (
+                self._follower_reads_enabled
+                and cached.operation_profile.returns_rows
+                and not cached.operation_profile.modifies_rows
+            )
             else False
         )
         try:
@@ -400,12 +406,9 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         return rows
 
     def _apply_follower_reads(self) -> None:
-        if not self.driver_features.get("enable_follower_reads", False):
+        if not self._follower_reads_enabled or not self._follower_staleness:
             return
-        if not self._follower_staleness:
-            return
-        staleness = validate_follower_read_staleness(self._follower_staleness)
-        self.connection.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {staleness}")).close()
+        self.connection.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")).close()
 
     def _begin_follower_read_transaction(self) -> bool:
         """Open the transaction a follower read needs so the staleness clause can lead it.
@@ -414,9 +417,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         clause with nowhere to go, so a read opens one here when the caller has
         not already done so.
         """
-        if not self.driver_features.get("enable_follower_reads", False):
-            return False
-        if not self._follower_staleness:
+        if not self._follower_reads_enabled or not self._follower_staleness:
             return False
         if self._connection_in_transaction():
             return False
@@ -427,7 +428,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
 class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
     """CockroachDB async driver using psycopg.crdb."""
 
-    __slots__ = ("_enable_retry", "_follower_staleness", "_retry_config")
+    __slots__ = ("_enable_retry", "_follower_reads_enabled", "_follower_staleness", "_retry_config")
     dialect = "postgres"
 
     def __init__(
@@ -445,7 +446,9 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
 
         self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
-        self._follower_staleness = cast("str | None", self.driver_features.get("default_staleness"))
+        self._follower_reads_enabled = bool(self.driver_features.get("enable_follower_reads", False))
+        raw_staleness = cast("str | None", self.driver_features.get("default_staleness"))
+        self._follower_staleness = validate_follower_read_staleness(raw_staleness) if raw_staleness else None
         self._data_dictionary = None
 
     @property
@@ -629,7 +632,11 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
     ) -> "SQLResult":
         auto_started = (
             await self._begin_follower_read_transaction()
-            if (cached.operation_profile.returns_rows and not cached.operation_profile.modifies_rows)
+            if (
+                self._follower_reads_enabled
+                and cached.operation_profile.returns_rows
+                and not cached.operation_profile.modifies_rows
+            )
             else False
         )
         try:
@@ -662,12 +669,11 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         return rows
 
     async def _apply_follower_reads(self) -> None:
-        if not self.driver_features.get("enable_follower_reads", False):
+        if not self._follower_reads_enabled or not self._follower_staleness:
             return
-        if not self._follower_staleness:
-            return
-        staleness = validate_follower_read_staleness(self._follower_staleness)
-        cursor = await self.connection.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {staleness}"))
+        cursor = await self.connection.execute(
+            cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")
+        )
         await cursor.close()
 
     async def _begin_follower_read_transaction(self) -> bool:
@@ -677,9 +683,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         clause with nowhere to go, so a read opens one here when the caller has
         not already done so.
         """
-        if not self.driver_features.get("enable_follower_reads", False):
-            return False
-        if not self._follower_staleness:
+        if not self._follower_reads_enabled or not self._follower_staleness:
             return False
         if self._connection_in_transaction():
             return False
