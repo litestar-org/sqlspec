@@ -280,7 +280,7 @@ class CockroachPsycopgSyncConfig(
         self._user_connection_hook: Callable[[CockroachSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
-        self._user_configure: Callable[[CockroachSyncConnection], Any] | None = connection_config.pop("configure", None)
+        self._user_configure: Callable[[CockroachSyncConnection], Any] | None = connection_config.get("configure")
 
         super().__init__(
             connection_config=connection_config,
@@ -363,6 +363,7 @@ class CockroachPsycopgSyncConfig(
 
     def _create_pool(self) -> "ConnectionPool":
         all_config = dict(self.connection_config)
+        all_config.pop("configure", None)
 
         pool_parameters = {
             "min_size": all_config.pop("min_size", 4),
@@ -522,9 +523,7 @@ class CockroachPsycopgAsyncConfig(
         self._user_connection_hook: Callable[[CockroachAsyncConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
-        self._user_configure: Callable[[CockroachAsyncConnection], Any] | None = connection_config.pop(
-            "configure", None
-        )
+        self._user_configure: Callable[[CockroachAsyncConnection], Any] | None = connection_config.get("configure")
 
         super().__init__(
             connection_config=connection_config,
@@ -607,6 +606,7 @@ class CockroachPsycopgAsyncConfig(
 
     async def _create_pool(self) -> "AsyncConnectionPool":
         all_config = dict(self.connection_config)
+        all_config.pop("configure", None)
 
         pool_parameters = {
             "min_size": all_config.pop("min_size", 4),

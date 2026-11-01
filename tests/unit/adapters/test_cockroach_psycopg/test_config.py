@@ -941,6 +941,90 @@ async def test_cockroach_psycopg_async_user_configure_runs_after_internal_setup(
         assert call_order == ["internal_autocommit", "user_cb"]
 
 
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("override_kind", "expected"),
+    [
+        ("inherit", ["original"]),
+        ("mapping", ["replacement"]),
+        ("mapping_none", []),
+        ("keyword", ["replacement"]),
+        ("keyword_none", []),
+        ("keyword_precedence", []),
+    ],
+)
+async def test_cockroach_psycopg_derived_connection_preserves_configure(
+    async_mode: bool, override_kind: str, expected: list[str]
+) -> None:
+    """Derived connections inherit configure callbacks and honor explicit replacements."""
+    calls: list[str] = []
+
+    def original_callback(_connection: Any) -> None:
+        calls.append("original")
+
+    def replacement_callback(_connection: Any) -> None:
+        calls.append("replacement")
+
+    async def async_original_callback(connection: Any) -> None:
+        original_callback(connection)
+
+    async def async_replacement_callback(connection: Any) -> None:
+        replacement_callback(connection)
+
+    original = async_original_callback if async_mode else original_callback
+    replacement = async_replacement_callback if async_mode else replacement_callback
+    source_config: dict[str, Any] = {"autocommit": True, "configure": original}
+    config = (
+        CockroachPsycopgAsyncConfig(connection_config=source_config)
+        if async_mode
+        else CockroachPsycopgSyncConfig(connection_config=source_config)
+    )
+    overrides: dict[str, Any] = {}
+    if override_kind in {"mapping", "keyword_precedence"}:
+        overrides["connection_config_overrides"] = {"configure": replacement}
+    elif override_kind == "mapping_none":
+        overrides["connection_config_overrides"] = {"configure": None}
+    if override_kind == "keyword":
+        overrides["configure"] = replacement
+    elif override_kind in {"keyword_none", "keyword_precedence"}:
+        overrides["configure"] = None
+    derived = config.derive_pool(**overrides)
+    fake_connection = MagicMock()
+    fake_connection.set_autocommit = AsyncMock()
+    sdk_connection = "AsyncCrdbConnection" if async_mode else "CrdbConnection"
+    connect = AsyncMock(return_value=fake_connection) if async_mode else MagicMock(return_value=fake_connection)
+
+    with patch(f"sqlspec.adapters.cockroach_psycopg.config.psycopg_crdb.{sdk_connection}.connect", connect):
+        if isinstance(derived, CockroachPsycopgAsyncConfig):
+            await derived.create_connection()
+        else:
+            derived.create_connection()
+        assert calls == expected
+        calls.clear()
+        with (
+            patch("sqlspec.adapters.cockroach_psycopg.config.ConnectionPool", _SyncPoolSpy),
+            patch("sqlspec.adapters.cockroach_psycopg.config.AsyncConnectionPool", _AsyncPoolSpy),
+        ):
+            if isinstance(derived, CockroachPsycopgAsyncConfig):
+                await derived.create_pool()
+                pool_kwargs = _AsyncPoolSpy.calls[-1][1]
+                await pool_kwargs["configure"](fake_connection)
+            else:
+                derived.create_pool()
+                pool_kwargs = _SyncPoolSpy.calls[-1][1]
+                pool_kwargs["configure"](fake_connection)
+        assert pool_kwargs["kwargs"] == {"autocommit": True}
+        assert calls == expected
+        calls.clear()
+        if isinstance(config, CockroachPsycopgAsyncConfig):
+            await config.create_connection()
+        else:
+            config.create_connection()
+
+    assert calls == ["original"]
+    assert source_config["configure"] is original
+
+
 def test_cockroach_psycopg_adk_hash_shard_bucket_count_validation() -> None:
     """Invalid hash_shard_bucket_count must raise ValueError in cockroach_psycopg adk store."""
     from sqlspec.adapters.cockroach_psycopg.adk.store import CockroachPsycopgADKConfig, _cockroach_hash_shard_clause
@@ -951,8 +1035,8 @@ def test_cockroach_psycopg_adk_hash_shard_bucket_count_validation() -> None:
 
 
 async def test_cockroach_psycopg_adk_memory_search_with_embedding() -> None:
-    """search_entries with embedding executes vector cosine search in cockroach_psycopg."""
-    executed_queries: list[str] = []
+    """An embedding argument preserves text search against the canonical memory schema."""
+    executed_queries: list[tuple[str, Any]] = []
 
     class _FakeCursor:
         description = [
@@ -968,11 +1052,10 @@ async def test_cockroach_psycopg_adk_memory_search_with_embedding() -> None:
             ("content_text",),
             ("metadata_json",),
             ("inserted_at",),
-            ("embedding",),
         ]
 
         async def execute(self, sql: bytes, params: Any) -> None:
-            executed_queries.append(sql.decode())
+            executed_queries.append((sql.decode(), params))
 
         async def fetchall(self) -> list[Any]:
             return []
@@ -998,9 +1081,13 @@ async def test_cockroach_psycopg_adk_memory_search_with_embedding() -> None:
     object.__setattr__(config, "provide_connection", lambda: _FakeCtx())
     store = CockroachPsycopgAsyncADKMemoryStore(config)
 
-    await store.search_entries(query="hello", app_name="app", user_id="u1", embedding=[0.1, 0.2, 0.3])
+    result = await store.search_entries(query="hello", app_name="app", user_id="u1", limit=7, embedding=[0.1, 0.2, 0.3])
+    assert result == []
     assert len(executed_queries) == 1
-    assert "embedding <=>" in executed_queries[0]
+    sql, params = executed_queries[0]
+    assert "content_text ILIKE %s" in sql
+    assert "ORDER BY timestamp DESC" in sql
+    assert params == ("app", "u1", "%hello%", 7)
 
 
 async def test_cockroach_psycopg_adk_memory_insert_batch_unnest() -> None:
