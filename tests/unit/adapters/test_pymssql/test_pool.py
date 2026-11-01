@@ -5,7 +5,7 @@ from typing import Any, cast
 
 import pytest
 
-from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakePymssqlModule
+from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakeCursor, FakePymssqlModule
 
 
 def test_pool_connects_with_config_and_runs_hook(monkeypatch) -> None:
@@ -38,7 +38,7 @@ def test_pool_recycles_failed_health_check(monkeypatch) -> None:
     import sqlspec.adapters.pymssql.pool as pool_module
     from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 
-    first = FakeConnection()
+    first = FakeConnection(FakeCursor(error=OSError("connection lost")))
     second = FakeConnection()
     connections = [first, second]
 
@@ -49,7 +49,6 @@ def test_pool_recycles_failed_health_check(monkeypatch) -> None:
 
     fake_module = SequencedModule()
     monkeypatch.setattr(pool_module, "pymssql", fake_module)
-    monkeypatch.setattr(PymssqlConnectionPool, "_is_connection_alive", lambda *_: False)
 
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=0.5)
 
@@ -57,6 +56,7 @@ def test_pool_recycles_failed_health_check(monkeypatch) -> None:
     pool._thread_local.last_used = 0.0  # pyright: ignore[reportPrivateUsage]
     assert cast(object, pool.acquire()) is second
     assert first.closed is True
+    assert first.cursor_obj.closed is True
     assert len(fake_module.connect_calls) == 2
 
 
@@ -65,23 +65,15 @@ def test_pool_zero_health_check_interval_disables_health_check(monkeypatch) -> N
     import sqlspec.adapters.pymssql.pool as pool_module
     from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 
-    connection = FakeConnection()
+    connection = FakeConnection(FakeCursor(error=OSError("health checks should be disabled")))
     fake_module = FakePymssqlModule(connection)
     monkeypatch.setattr(pool_module, "pymssql", fake_module)
-    health_checks = 0
-
-    def _fail_if_called(*_args: Any) -> bool:
-        nonlocal health_checks
-        health_checks += 1
-        return False
-
-    monkeypatch.setattr(PymssqlConnectionPool, "_is_connection_alive", _fail_if_called)
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=0)
 
     assert cast(object, pool.acquire()) is connection
     pool._thread_local.last_used = 0.0  # pyright: ignore[reportPrivateUsage]
     assert cast(object, pool.acquire()) is connection
-    assert health_checks == 0
+    assert connection.cursor_obj.calls == []
     assert len(fake_module.connect_calls) == 1
 
 
@@ -171,21 +163,23 @@ def test_pool_registry_does_not_grow_across_replacements(monkeypatch) -> None:
     class SequencedModule(FakePymssqlModule):
         def connect(self, **kwargs: Any) -> FakeConnection:
             self.connect_calls.append(kwargs)
-            return FakeConnection()
+            return FakeConnection(FakeCursor(error=OSError("connection lost")))
 
     monkeypatch.setattr(pool_module, "pymssql", SequencedModule())
-    monkeypatch.setattr(PymssqlConnectionPool, "_is_connection_alive", lambda *_: False)
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=0.5)
 
+    connections = []
     for _ in range(4):
-        pool.acquire()
+        connections.append(cast("FakeConnection", pool.acquire()))
         pool._thread_local.last_used = 0.0  # pyright: ignore[reportPrivateUsage]
 
-    assert len(pool._connection_registry) == 1  # pyright: ignore[reportPrivateUsage]
+    assert pool.size() == 1
+    assert [connection.closed for connection in connections] == [True, True, True, False]
 
     pool.close()
 
-    assert pool._connection_registry == set()  # pyright: ignore[reportPrivateUsage]
+    assert pool.size() == 0
+    assert all(connection.closed for connection in connections)
 
 
 def test_pool_reentrant_thread_checkout(monkeypatch: Any) -> None:
