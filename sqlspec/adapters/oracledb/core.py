@@ -47,6 +47,8 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    QueryTimeoutError,
+    SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
@@ -395,6 +397,7 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     1400: (NotNullViolationError, "not-null constraint violation"),
     1407: (NotNullViolationError, "not-null constraint violation"),
     1438: (DataError, "numeric precision overflow"),
+    1476: (DataError, "divisor is equal to zero"),
     1652: (OperationalError, "tablespace full"),
     1722: (DataError, "invalid number"),
     1830: (DataError, "date format picture ends before converting entire input string"),
@@ -408,9 +411,10 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     3113: (DatabaseConnectionError, "end-of-file on communication channel"),
     3114: (DatabaseConnectionError, "not connected to ORACLE"),
     3135: (DatabaseConnectionError, "connection lost contact"),
+    3136: (ConnectionTimeoutError, "inbound connection timed out"),
     4068: (OperationalError, "existing state of packages has been discarded"),
     8176: (TransactionError, "consistent read failure"),
-    8177: (TransactionError, "cannot serialize access"),
+    8177: (SerializationConflictError, "cannot serialize access"),
     12154: (DatabaseConnectionError, "TNS resolution failed"),
     12170: (ConnectionTimeoutError, "connect timeout"),
     12505: (DatabaseConnectionError, "listener rejected"),
@@ -421,11 +425,15 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     28000: (PermissionDeniedError, "the account is locked"),
     28001: (PermissionDeniedError, "the password has expired"),
     30006: (OperationalError, "resource busy; acquire with WAIT timeout expired"),
+    40441: (DataError, "JSON syntax error"),
+    42699: (SerializationConflictError, "transaction isolation violation"),
+    51803: (DataError, "vector operation error"),
 }
 
 _DPY_ERROR_CODE_MAPPING: "dict[str, tuple[type[SQLSpecError], str]]" = {
     "DPY-1001": (DatabaseConnectionError, "not connected to database"),
     "DPY-4011": (DatabaseConnectionError, "connection was closed"),
+    "DPY-4024": (QueryTimeoutError, "query execution timeout expired"),
     "DPY-6000": (DatabaseConnectionError, "cannot connect to database"),
     "DPY-6001": (DatabaseConnectionError, "cannot connect to database"),
     "DPY-6005": (ConnectionTimeoutError, "cannot connect to database"),
@@ -1796,9 +1804,13 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if not isinstance(error_code, int) or isinstance(error_code, bool) or not error_code:
         error_text = str(error_obj)
         for dpy_code, (error_class, error_desc) in _DPY_ERROR_CODE_MAPPING.items():
-            if error_text.startswith(dpy_code):
+            if dpy_code in error_text:
                 return _create_oracle_error(error, None, error_class, f"{error_desc} [{dpy_code}]")
-        return _create_oracle_error(error, None, SQLSpecError, "database error")
+        ora_match = re.search(r"ORA-(\d+)", error_text)
+        if ora_match:
+            error_code = int(ora_match.group(1))
+        else:
+            return _create_oracle_error(error, None, SQLSpecError, "database error")
 
     mapping = _ERROR_CODE_MAPPING.get(error_code)
     if mapping:

@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """Unit tests for OracleDB ``apply_driver_features`` defaults."""
 
 import inspect
@@ -506,3 +505,55 @@ def test_apply_wallet_ssl_context_noop_when_no_wallet() -> None:
     conn_config: dict[str, Any] = {"user": "app", "password": "secret"}
     apply_wallet_ssl_context(conn_config)
     assert "ssl_context" not in conn_config
+
+
+def test_ora_08177_maps_to_serialization_conflict_error() -> None:
+    """ORA-08177 maps to SerializationConflictError."""
+    import oracledb
+
+    from sqlspec.adapters.oracledb.core import create_mapped_exception
+    from sqlspec.exceptions import SerializationConflictError
+
+    error = oracledb.DatabaseError("ORA-08177: can't serialize access for this transaction")
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, SerializationConflictError)
+
+
+def test_ora_42699_maps_to_serialization_conflict_error() -> None:
+    """ORA-42699 maps to SerializationConflictError."""
+    import oracledb
+
+    from sqlspec.adapters.oracledb.core import create_mapped_exception
+    from sqlspec.exceptions import SerializationConflictError
+
+    error = oracledb.DatabaseError("ORA-42699: transaction isolation violation")
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, SerializationConflictError)
+
+
+def test_dpy_4024_maps_to_query_timeout_error() -> None:
+    """DPY-4024 maps to QueryTimeoutError."""
+    import oracledb
+
+    from sqlspec.adapters.oracledb.core import create_mapped_exception
+    from sqlspec.exceptions import QueryTimeoutError
+
+    error = oracledb.OperationalError("DPY-4024: call timeout expired")
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, QueryTimeoutError)
+
+
+def test_ora_data_and_timeout_error_mappings() -> None:
+    """Verify ORA-40441, ORA-51803, ORA-01476 map to DataError, ORA-03136 maps to ConnectionTimeoutError."""
+    import oracledb
+
+    from sqlspec.adapters.oracledb.core import create_mapped_exception
+    from sqlspec.exceptions import ConnectionTimeoutError, DataError
+
+    assert isinstance(create_mapped_exception(oracledb.DatabaseError("ORA-40441: JSON syntax error")), DataError)
+    assert isinstance(create_mapped_exception(oracledb.DatabaseError("ORA-51803: vector operation error")), DataError)
+    assert isinstance(create_mapped_exception(oracledb.DatabaseError("ORA-01476: divisor is equal to zero")), DataError)
+    assert isinstance(
+        create_mapped_exception(oracledb.DatabaseError("ORA-03136: inbound connection timed out")),
+        ConnectionTimeoutError,
+    )

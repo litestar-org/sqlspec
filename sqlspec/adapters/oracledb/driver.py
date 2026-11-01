@@ -4,7 +4,7 @@ import logging
 from itertools import chain
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Protocol, cast, overload
 
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
@@ -84,6 +84,7 @@ from sqlspec.driver import (
     hash_stack_operations,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.arrow_helpers import coerce_oracle_df_to_arrow_table
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -156,7 +157,7 @@ and falls back to sequential execution on databases that cannot pipeline.
 """
 
 
-class OraclePipelineMixin:
+class OraclePipelineMixin(CommonDriverAttributesMixin):
     """Shared helpers for Oracle pipeline execution."""
 
     __slots__ = ()
@@ -194,7 +195,7 @@ class OraclePipelineMixin:
     def _compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> "tuple[str, Any]":
-        compiled_sql, prepared_parameters = super()._compiled_sql(  # type: ignore[misc]
+        compiled_sql, prepared_parameters = super()._compiled_sql(
             statement, statement_config, flatten_single_parameters=flatten_single_parameters
         )
         if getattr(self, "_session_tracing_enabled", False):
@@ -249,9 +250,7 @@ class OraclePipelineMixin:
             msg = f"Unsupported stack operation method: {operation.method}"
             raise ValueError(msg)
 
-        compiled_sql, prepared_parameters = driver._compiled_sql(  # pyright: ignore[reportPrivateUsage]
-            sql_statement, config
-        )
+        compiled_sql, prepared_parameters = self._compiled_sql(sql_statement, config)
         summary = describe_stack_statement(operation.statement)
         return _CompiledStackOperation(
             statement=sql_statement,
@@ -379,13 +378,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         "_data_dictionary",
         "_fetch_kwargs",
         "_oracle_version_cache",
-        "_pipeline_support",
-        "_pipeline_support_reason",
         "_row_metadata_cache",
         "_session_tracing_enabled",
         "_transaction_active",
     )
     dialect = "oracle"
+    _pipeline_support: ClassVar[bool] = False
+    _pipeline_support_reason: ClassVar[str] = "asyncio_thin_required"
+
+    def _pipeline_native_supported(self) -> bool:
+        """Sync Oracle connections do not support native pipelining."""
+        return False
 
     def __init__(
         self,
@@ -400,8 +403,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: OracledbSyncDataDictionary | None = None
-        self._pipeline_support: bool | None = None
-        self._pipeline_support_reason: str | None = None
         self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
@@ -872,17 +873,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         )
 
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
-        """Execute a StatementStack using Oracle's pipeline when available."""
-        if not isinstance(stack, StatementStack) or not stack:
-            return super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        blocker = self._stack_native_blocker(stack)
-        if blocker is not None:
-            self._log_pipeline_skip(blocker, stack)
-            return super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        if not self._pipeline_native_supported():
-            self._log_pipeline_skip(self._pipeline_support_reason or "database_version", stack)
+        """Execute a StatementStack sequentially on the sync driver."""
+        self._require_capability("stack_execution")
+        self._log_pipeline_skip("asyncio_thin_required", stack)
         return super().execute_stack(stack, continue_on_error=continue_on_error)
 
     def select_to_storage(
@@ -1290,19 +1283,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 batch_schema = batch_table.schema
             record_batches.extend(batch_table.to_batches())
         return record_batches, batch_schema
-
-    def _pipeline_native_supported(self) -> bool:
-        if self._pipeline_support is not None:
-            return self._pipeline_support
-
-        if self.stack_native_disabled:
-            self._pipeline_support = False
-            self._pipeline_support_reason = "env_override"
-            return False
-
-        self._pipeline_support = False
-        self._pipeline_support_reason = "asyncio_thin_required"
-        return False
 
 
 class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
@@ -2258,7 +2238,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 if owns_transaction:
                     try:
                         await self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover
+                    except Exception as rollback_error:
                         logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
                 if isinstance(exc, StackExecutionError):
                     raise

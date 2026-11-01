@@ -758,4 +758,4 @@ def _litestar_table_feature_clause(config: Any, in_memory: bool) -> str:
         range_partition_key="expires_at",
         table_options_key="table_options",
     )
-    return report["clause"]
+    return report["plsql_clause"]

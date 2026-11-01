@@ -7,10 +7,7 @@ efficient LOB (Large Object) processing and vector helpers.
 import array
 from typing import Any
 
-from sqlspec.adapters.oracledb._vector_handlers import (
-    numpy_converter_in,  # pyright: ignore[reportPrivateUsage]
-    numpy_converter_out,  # pyright: ignore[reportPrivateUsage]
-)
+from sqlspec.adapters.oracledb._vector_handlers import numpy_converter_in, numpy_converter_out
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.sync_tools import ensure_async_

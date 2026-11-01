@@ -220,7 +220,7 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
             range_partition_key="available_at",
             table_options_key="table_options",
         )
-        return report["clause"]
+        return report["plsql_clause"]
 
 
 class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
@@ -337,7 +337,7 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
             range_partition_key="available_at",
             table_options_key="table_options",
         )
-        return report["clause"]
+        return report["plsql_clause"]
 
 
 def _init_oracle_settings(extension_settings: "dict[str, Any]") -> "tuple[bool, JSONStorageType | None]":

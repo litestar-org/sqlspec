@@ -3,7 +3,7 @@
 import contextlib
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.oracledb._typing import DEQ_IMMEDIATE, DEQ_ON_COMMIT
 from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub
@@ -213,22 +213,22 @@ def create_event_backend(
     match (backend_name, is_async):
         case ("aq", False):
             try:
-                return OracleSyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+                return OracleSyncAQEventBackend(cast("OracleSyncConfig", config), extension_settings)
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
         case ("aq", True):
             try:
-                return OracleAsyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+                return OracleAsyncAQEventBackend(cast("OracleAsyncConfig", config), extension_settings)
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
         case ("txeventq", False):
             try:
-                return OracleSyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+                return OracleSyncTxEventQEventBackend(cast("OracleSyncConfig", config), extension_settings)
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
         case ("txeventq", True):
             try:
-                return OracleAsyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+                return OracleAsyncTxEventQEventBackend(cast("OracleAsyncConfig", config), extension_settings)
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
         case _:

@@ -3507,7 +3507,7 @@ def _adk_table_feature_clause(
         hash_partition_key=hash_partition_key,
         range_partition_key=range_partition_key,
     )
-    return report["clause"]
+    return report["plsql_clause"]
 
 
 async def _read_lob_async(data: Any) -> Any:
