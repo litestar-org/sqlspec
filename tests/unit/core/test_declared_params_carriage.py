@@ -4,9 +4,15 @@ Validates all seven propagation/reset sites for the SQL._declared_parameters slo
 plus loader population and driver-derivation preservation.
 """
 
+import copy
+import pickle
+
+import pytest
+
 from sqlspec.core import ParameterDeclaration
 from sqlspec.core._pool import get_sql_pool
 from sqlspec.core.statement import SQL
+from sqlspec.loader import SQLFileLoader
 
 _SENTINEL = (ParameterDeclaration("a", "int", required=False),)
 
@@ -60,8 +66,6 @@ def test_pool_recycle_does_not_leak_declared_parameters() -> None:
 
 
 def test_get_sql_populates_declared_parameters() -> None:
-    from sqlspec.loader import SQLFileLoader
-
     loader = SQLFileLoader()
     loader.add_named_sql("q", "select :a", parameters=[ParameterDeclaration("a", "int", description="id")])
     sql = loader.get_sql("q")
@@ -69,8 +73,6 @@ def test_get_sql_populates_declared_parameters() -> None:
 
 
 def test_undeclared_get_sql_has_empty_declarations() -> None:
-    from sqlspec.loader import SQLFileLoader
-
     loader = SQLFileLoader()
     loader.add_named_sql("plain", "select 1")
     assert loader.get_sql("plain").declared_parameters == ()
@@ -81,20 +83,25 @@ def test_constructor_kwarg_sets_declarations() -> None:
     assert sql.declared_parameters == _SENTINEL
 
 
-def test_declarations_survive_deepcopy() -> None:
-    import copy
+@pytest.mark.parametrize("operation", ["pickle", "deepcopy"])
+@pytest.mark.parametrize("source", ["constructor", "loader"])
+def test_declarations_survive_serialization(operation: str, source: str) -> None:
+    """Public SQL round trips preserve declaration types and all metadata fields."""
+    declarations = (
+        ParameterDeclaration("a", "int", "Account identifier", required=False),
+        ParameterDeclaration("b", "str", required=True),
+    )
+    if source == "loader":
+        loader = SQLFileLoader()
+        loader.add_named_sql("declared", "SELECT :a, :b", parameters=list(declarations))
+        sql = loader.get_sql("declared").copy(parameters={"a": 1, "b": "group"})
+    else:
+        sql = SQL("SELECT :a, :b", a=1, b="group", declared_parameters=declarations)
 
-    sql = SQL("select :a", {"a": 1}, declared_parameters=_SENTINEL)
-    new = copy.deepcopy(sql)
-    assert new.declared_parameters == _SENTINEL
+    restored = pickle.loads(pickle.dumps(sql)) if operation == "pickle" else copy.deepcopy(sql)
 
-
-def test_declarations_survive_pickle_roundtrip() -> None:
-    import pickle
-
-    sql = SQL("select :a", {"a": 1}, declared_parameters=_SENTINEL)
-    new = pickle.loads(pickle.dumps(sql))
-    assert new.declared_parameters == _SENTINEL
+    assert restored.declared_parameters == declarations
+    assert all(type(declaration) is ParameterDeclaration for declaration in restored.declared_parameters)
 
 
 def test_declarations_survive_driver_prepare_with_filter() -> None:
