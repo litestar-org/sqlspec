@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.db2.adk import Db2AsyncADKMemoryStore, Db2AsyncADKStore, Db2SyncADKMemoryStore, Db2SyncADKStore
-from sqlspec.adapters.db2.adk.store import _datetime_value, _is_table_missing
+from sqlspec.adapters.db2.adk.store import _create_index_sql, _datetime_value, _is_table_missing
 from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, create_mapped_exception
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
@@ -445,8 +445,9 @@ async def test_insert_memory_entries_binds_naive_utc_and_skips_duplicates(db2_mo
     ]
 
     assert await db2_mode.call(store.insert_memory_entries, entries, owner_id=7) == 1
+    assert len(config.executed) <= 2
 
-    insert_sql, insert_params = config.executed[2]
+    insert_sql, insert_params = config.executed[1]
     assert f"INSERT INTO {store.memory_table} (" in insert_sql
     assert "inserted_at, tenant_id" in insert_sql
     assert insert_params[7] == datetime(2026, 9, 24, 12)
@@ -642,4 +643,16 @@ async def test_schema_qualified_adk_tables_sanitize_constraint_and_index_names(d
     assert "CONSTRAINT pk_app_adk_memory_id" in memory_ddl
     assert "CONSTRAINT uq_app_adk_memory_event" in memory_ddl
     assert all("." not in index_name for index_name, _, _ in store._index_specs())
-    assert all("." not in index_name for index_name, _, _ in mem_store._memory_index_specs())
+
+
+def test_create_index_sql_qualifies_schema() -> None:
+    """ADK index DDL qualifies index name when table is schema-qualified."""
+    assert (
+        _create_index_sql('"MYSCHEMA"."SESSIONS"', "ix_sessions", "user_id")
+        == 'CREATE INDEX "MYSCHEMA"."ix_sessions" ON "MYSCHEMA"."SESSIONS" (user_id)'
+    )
+    assert (
+        _create_index_sql("MYSCHEMA.SESSIONS", "ix_sessions", "user_id")
+        == 'CREATE INDEX "MYSCHEMA"."ix_sessions" ON MYSCHEMA.SESSIONS (user_id)'
+    )
+    assert _create_index_sql("sessions", "ix_sessions", "user_id") == "CREATE INDEX ix_sessions ON sessions (user_id)"

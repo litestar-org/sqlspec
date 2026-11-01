@@ -68,7 +68,11 @@ def session_index_ddl(table: str) -> str:
     Returns:
         Db2 DDL for the expiry index.
     """
-    return f"CREATE INDEX {session_index_name(table)} ON {table}(expires_at)"
+    schema, _ = split_db2_table_name(table)
+    idx_name = session_index_name(table)
+    if schema is not None:
+        return f'CREATE INDEX "{schema}"."{idx_name}" ON {table}(expires_at)'
+    return f"CREATE INDEX {idx_name} ON {table}(expires_at)"
 
 
 def select_session_sql(table: str) -> str:
