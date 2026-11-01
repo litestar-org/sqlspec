@@ -1071,3 +1071,55 @@ async def test_cockroach_psycopg_adk_memory_insert_batch_unnest() -> None:
     assert count == 2
     assert len(executed_queries) == 1
     assert "unnest" in executed_queries[0].lower()
+
+
+def test_cockroach_psycopg_sync_get_columns_and_indexes_by_table() -> None:
+    """CockroachPsycopgSyncDataDictionary executes by_table query when table is specified."""
+    from sqlspec.adapters.cockroach_psycopg.data_dictionary import CockroachPsycopgSyncDataDictionary
+
+    calls: list[tuple[Any, dict[str, Any]]] = []
+    driver = MagicMock()
+
+    def fake_select(query: Any, **kwargs: Any) -> list[Any]:
+        calls.append((query, kwargs))
+        return []
+
+    driver.select = fake_select
+    dd = CockroachPsycopgSyncDataDictionary()
+
+    dd.get_columns(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+    calls.clear()
+    dd.get_indexes(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+
+async def test_cockroach_psycopg_async_get_columns_and_indexes_by_table() -> None:
+    """CockroachPsycopgAsyncDataDictionary executes by_table query when table is specified."""
+    from sqlspec.adapters.cockroach_psycopg.data_dictionary import CockroachPsycopgAsyncDataDictionary
+
+    calls: list[tuple[Any, dict[str, Any]]] = []
+    driver = MagicMock()
+
+    async def fake_select(query: Any, **kwargs: Any) -> list[Any]:
+        calls.append((query, kwargs))
+        return []
+
+    driver.select = AsyncMock(side_effect=fake_select)
+    dd = CockroachPsycopgAsyncDataDictionary()
+
+    await dd.get_columns(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+    calls.clear()
+    await dd.get_indexes(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
