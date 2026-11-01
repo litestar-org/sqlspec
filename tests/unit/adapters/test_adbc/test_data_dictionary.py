@@ -200,9 +200,7 @@ def test_get_foreign_keys_empty_native_result_falls_back() -> None:
             "catalog_db_schemas": [
                 {
                     "db_schema_name": "main",
-                    "db_schema_tables": [
-                        {"table_name": "t2", "table_type": "table", "table_columns": [], "table_constraints": []}
-                    ],
+                    "db_schema_tables": [{"table_name": "t2", "table_type": "table", "table_columns": []}],
                 }
             ],
         }
@@ -214,6 +212,38 @@ def test_get_foreign_keys_empty_native_result_falls_back() -> None:
 
     assert result == fallback
     driver.select.assert_called_once()
+
+
+def test_empty_foreign_keys_not_failed() -> None:
+    """Tables with empty constraints list should return empty list without falling back."""
+    driver = Mock()
+    driver.dialect = "duckdb"
+    driver.connection.adbc_get_objects.return_value = _make_reader([
+        {
+            "catalog_name": "memory",
+            "catalog_db_schemas": [
+                {
+                    "db_schema_name": "main",
+                    "db_schema_tables": [
+                        {"table_name": "t2", "table_type": "table", "table_columns": [], "table_constraints": []}
+                    ],
+                }
+            ],
+        }
+    ])
+
+    result = AdbcDataDictionary().get_foreign_keys(driver, table="t2")
+
+    assert result == []
+    driver.select.assert_not_called()
+
+
+def test_snowflake_indexes_fallback() -> None:
+    """Snowflake dialect returns empty indexes without raising SQLFileNotFoundError."""
+    driver = Mock()
+    driver.dialect = "snowflake"
+    result = AdbcDataDictionary().get_indexes(driver, table="t1")
+    assert result == []
 
 
 def test_get_columns_schema_wide_incomplete_falls_back() -> None:
