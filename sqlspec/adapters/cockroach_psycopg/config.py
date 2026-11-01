@@ -305,12 +305,12 @@ class CockroachPsycopgSyncConfig(
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = psycopg_crdb.CrdbConnection.connect(conninfo, **connection_kwargs)
         try:
-            self._configure_connection(cast("CockroachSyncConnection", connection))
+            self._configure_connection(connection)
         except BaseException:
             with suppress(Exception):
                 connection.close()
             raise
-        return cast("CockroachSyncConnection", connection)
+        return connection
 
     def provide_session(
         self,
@@ -549,12 +549,12 @@ class CockroachPsycopgAsyncConfig(
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = await psycopg_crdb.AsyncCrdbConnection.connect(conninfo, **connection_kwargs)
         try:
-            await self._configure_async_connection(cast("CockroachAsyncConnection", connection))
+            await self._configure_async_connection(connection)
         except BaseException:
             with suppress(Exception):
                 await connection.close()
             raise
-        return cast("CockroachAsyncConnection", connection)
+        return connection
 
     def provide_session(
         self,

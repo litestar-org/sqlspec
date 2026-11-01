@@ -15,6 +15,7 @@ import pytest
 
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
+    CockroachPsycopgAsyncDriver,
     CockroachPsycopgAsyncSessionContext,
     CockroachPsycopgDriverFeatures,
     CockroachPsycopgRetryConfig,
@@ -1123,3 +1124,38 @@ async def test_cockroach_psycopg_async_get_columns_and_indexes_by_table() -> Non
     assert len(calls) == 1
     assert calls[0][1]["table_name"] == "users"
     assert calls[0][1]["schema_name"] is None
+
+
+def test_cockroach_psycopg_sync_execute_native_storage_under_active_exception() -> None:
+    """_execute_native_storage in sync driver inside active except block works cleanly."""
+    conn = MagicMock()
+    conn.autocommit = True
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [{"rows": 1}]
+    conn.cursor.return_value = cursor
+
+    driver = CockroachPsycopgSyncDriver(connection=conn)
+    try:
+        raise ValueError("outer error")
+    except ValueError:
+        rows = driver._execute_native_storage("SELECT 1", [])
+        assert rows == [{"rows": 1}]
+
+
+async def test_cockroach_psycopg_async_execute_native_storage_under_active_exception() -> None:
+    """_execute_native_storage in async driver inside active except block works cleanly."""
+    conn = MagicMock()
+    conn.autocommit = True
+    cursor = MagicMock()
+    cursor.fetchall = AsyncMock(return_value=[{"rows": 1}])
+    cursor.execute = AsyncMock()
+    cursor.__aenter__ = AsyncMock(return_value=cursor)
+    cursor.__aexit__ = AsyncMock()
+    conn.cursor.return_value = cursor
+
+    driver = CockroachPsycopgAsyncDriver(connection=conn)
+    try:
+        raise ValueError("outer error")
+    except ValueError:
+        rows = await driver._execute_native_storage("SELECT 1", [])
+        assert rows == [{"rows": 1}]

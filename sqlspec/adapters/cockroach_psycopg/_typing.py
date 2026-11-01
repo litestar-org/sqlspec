@@ -32,10 +32,10 @@ if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
     from sqlspec.core import StatementConfig
 
-    CockroachSyncConnection: TypeAlias = CrdbConnection[PsycopgDictRow]
-    CockroachAsyncConnection: TypeAlias = AsyncCrdbConnection[PsycopgDictRow]
-    CockroachSyncCursor: TypeAlias = Cursor[PsycopgDictRow]
-    CockroachAsyncCursor: TypeAlias = AsyncCursor[PsycopgDictRow]
+    CockroachSyncConnection: TypeAlias = CrdbConnection[Any]
+    CockroachAsyncConnection: TypeAlias = AsyncCrdbConnection[Any]
+    CockroachSyncCursor: TypeAlias = Cursor[Any]
+    CockroachAsyncCursor: TypeAlias = AsyncCursor[Any]
 else:
     CockroachSyncConnection = cockroach_psycopg_crdb.CrdbConnection
     CockroachAsyncConnection = cockroach_psycopg_crdb.AsyncCrdbConnection

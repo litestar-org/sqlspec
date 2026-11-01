@@ -1,6 +1,7 @@
 """CockroachDB psycopg driver implementation."""
 
 import asyncio
+import sys
 import time
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -396,13 +397,20 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
 
     def _execute_native_storage(self, command: str, parameters: "list[Any]") -> "list[dict[str, Any]]":
         handler = self.handle_database_exceptions()
-        rows = []
-        with self.with_cursor(self.connection) as cursor, handler:
-            cursor.row_factory = dict_row
-            cursor.execute(command.encode("utf-8"), parameters)
-            rows = cursor.fetchall()
-        if handler.pending_exception is not None:
-            raise handler.pending_exception
+
+        def _fetch() -> list[dict[str, Any]]:
+            with self.with_cursor(self.connection) as cursor:
+                cursor.row_factory = dict_row
+                cursor.execute(command.encode("utf-8"), parameters)
+                return cursor.fetchall()
+
+        if sys.exc_info()[1] is None:
+            with handler:
+                rows = _fetch()
+        else:
+            res = self._run_with_exception_handler(handler, _fetch)
+            rows = res if res is not None else []
+        self._check_pending_exception(handler)
         return rows
 
     def _apply_follower_reads(self) -> None:
@@ -659,13 +667,20 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
 
     async def _execute_native_storage(self, command: str, parameters: "list[Any]") -> "list[dict[str, Any]]":
         handler = self.handle_database_exceptions()
-        rows = []
-        async with self.with_cursor(self.connection) as cursor, handler:
-            cursor.row_factory = dict_row
-            await cursor.execute(command.encode("utf-8"), parameters)
-            rows = await cursor.fetchall()
-        if handler.pending_exception is not None:
-            raise handler.pending_exception
+
+        async def _fetch() -> list[dict[str, Any]]:
+            async with self.with_cursor(self.connection) as cursor:
+                cursor.row_factory = dict_row
+                await cursor.execute(command.encode("utf-8"), parameters)
+                return await cursor.fetchall()
+
+        if sys.exc_info()[1] is None:
+            async with handler:
+                rows = await _fetch()
+        else:
+            res = await self._run_with_exception_handler(handler, _fetch)
+            rows = res if res is not None else []
+        self._check_pending_exception(handler)
         return rows
 
     async def _apply_follower_reads(self) -> None:
