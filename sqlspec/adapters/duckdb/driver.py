@@ -15,6 +15,7 @@ from sqlspec.adapters.duckdb.core import (
     _DuckDBStreamSource,
     _resolve_native_storage_target,
     _restore_uuid_columns,
+    cleanup_duckdb_profile_path,
     collect_rows,
     configure_duckdb_statement_profiling,
     create_duckdb_profile_path,
@@ -50,6 +51,7 @@ from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
+    from pathlib import Path
 
     import pyarrow as pa
 
@@ -97,7 +99,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     the sqlspec.core modules for statement processing and caching.
     """
 
-    __slots__ = ("_data_dictionary", "_transaction_active")
+    __slots__ = ("_created_profile_path", "_data_dictionary", "_transaction_active")
     dialect = "duckdb"
 
     def __init__(
@@ -113,8 +115,18 @@ class DuckDBDriver(SyncDriverAdapterBase):
         driver_features = dict(driver_features) if driver_features else {}
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._created_profile_path: Path | None = None
         self._data_dictionary: DuckDBDataDictionary | None = None
         self._transaction_active = False
+
+    def close(self) -> None:
+        """Close driver and clean up temporary statement profile files."""
+        if self._created_profile_path is not None:
+            cleanup_duckdb_profile_path(self._created_profile_path)
+            self._created_profile_path = None
+
+    def __del__(self) -> None:
+        self.close()
 
     @property
     def data_dictionary(self) -> "DuckDBDataDictionary":
@@ -297,27 +309,26 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
     def begin(self) -> None:
         """Begin a database transaction."""
-        try:
-            self.connection.execute("BEGIN TRANSACTION")
-        except duckdb.Error as e:
-            raise create_mapped_exception(e) from e
+        handler = self.handle_database_exceptions()
+        self._run_with_exception_handler(handler, self.connection.execute, "BEGIN TRANSACTION")
+        self._check_pending_exception(handler)
         self._transaction_active = True
 
     def commit(self) -> None:
         """Commit the current transaction."""
+        handler = self.handle_database_exceptions()
         try:
-            self.connection.commit()
-        except duckdb.Error as e:
-            raise create_mapped_exception(e) from e
+            self._run_with_exception_handler(handler, self.connection.commit)
+            self._check_pending_exception(handler)
         finally:
             self._transaction_active = False
 
     def rollback(self) -> None:
         """Rollback the current transaction."""
+        handler = self.handle_database_exceptions()
         try:
-            self.connection.rollback()
-        except duckdb.Error as e:
-            raise create_mapped_exception(e) from e
+            self._run_with_exception_handler(handler, self.connection.rollback)
+            self._check_pending_exception(handler)
         finally:
             self._transaction_active = False
 
@@ -350,14 +361,25 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set DuckDB search_path for migration SQL."""
-        self.connection.execute(f"SET search_path = {quote_identifier(schema)}")
+        handler = self.handle_database_exceptions()
+        self._run_with_exception_handler(
+            handler, self.connection.execute, f"SET search_path = {quote_identifier(schema)}"
+        )
+        self._check_pending_exception(handler)
 
     def has_schema(self, schema: str) -> bool:
         """Return whether a DuckDB schema exists."""
-        result = self.connection.execute(
-            "SELECT 1 FROM information_schema.schemata WHERE schema_name = ?", [schema]
-        ).fetchone()
-        return result is not None
+
+        def _check_schema() -> bool:
+            result = self.connection.execute(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = ?", [schema]
+            ).fetchone()
+            return result is not None
+
+        handler = self.handle_database_exceptions()
+        res = self._run_with_exception_handler(handler, _check_schema)
+        self._check_pending_exception(handler)
+        return bool(res)
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         """Create context manager for DuckDB cursor.
@@ -502,7 +524,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         if arrow_result is None:
             msg = "Unreachable"
-            raise RuntimeError(msg)  # pragma: no cover
+            raise RuntimeError(msg)
 
         return arrow_result
 
@@ -730,6 +752,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         profile_path = create_duckdb_profile_path()
         configure_duckdb_statement_profiling(cursor, profile_path)
         self.driver_features["_duckdb_profile_path"] = str(profile_path)
+        self._created_profile_path = profile_path
 
     def _capture_statement_profile(self, executed_sql: str) -> "dict[str, Any] | None":
         """Read the latest DuckDB JSON profile and stage it for StatementEvent emission."""
@@ -958,29 +981,33 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Open a native Arrow reader through DuckDB's exception boundary."""
         ensure_pyarrow()
         handler = self.handle_database_exceptions()
-        description: list[Any] | None = None
-        reader: Any | None = None
         stream_cursor, close_cursor = self._acquire_stream_cursor()
         close_cb = stream_cursor.close if close_cursor else None
-        try:
-            with handler:
-                sql_method = getattr(stream_cursor, "sql", None)
-                if callable(sql_method):
-                    relation: Any = sql_method(sql, params=parameters or None)
-                    description = relation.description if relation is not None else None
-                    if description and description_has_arrow_divergent_types(description):
-                        cursor_result = stream_cursor.execute(sql, normalize_execute_parameters(parameters))
-                        reader = _DuckDBFetchManyReader(cursor_result, chunk_size, description, close_callback=close_cb)
-                    else:
-                        reader = relation.to_arrow_reader(chunk_size) if relation is not None else None
+
+        def _fetch_reader() -> "tuple[Any, list[Any] | None]":
+            reader: Any = None
+            sql_method = getattr(stream_cursor, "sql", None)
+            if callable(sql_method):
+                relation: Any = sql_method(sql, params=parameters or None)
+                description = relation.description if relation is not None else None
+                if description and description_has_arrow_divergent_types(description):
+                    cursor_result = stream_cursor.execute(sql, normalize_execute_parameters(parameters))
+                    reader = _DuckDBFetchManyReader(cursor_result, chunk_size, description, close_callback=close_cb)
                 else:
-                    result = stream_cursor.execute(sql, normalize_execute_parameters(parameters))
-                    description = result.description
-                    if description and description_has_arrow_divergent_types(description):
-                        reader = _DuckDBFetchManyReader(result, chunk_size, description, close_callback=close_cb)
-                    else:
-                        reader = result.to_arrow_reader(chunk_size)
+                    reader = relation.to_arrow_reader(chunk_size) if relation is not None else None
+            else:
+                result = stream_cursor.execute(sql, normalize_execute_parameters(parameters))
+                description = result.description
+                if description and description_has_arrow_divergent_types(description):
+                    reader = _DuckDBFetchManyReader(result, chunk_size, description, close_callback=close_cb)
+                else:
+                    reader = result.to_arrow_reader(chunk_size)
+            return reader, description
+
+        try:
+            reader_result = self._run_with_exception_handler(handler, _fetch_reader)
             self._check_pending_exception(handler)
+            reader, description = _ensure_stream_reader_result(reader_result)
             reader = _ensure_arrow_reader(reader)
             if close_cursor and not isinstance(reader, _DuckDBFetchManyReader):
                 reader = arrow_reader_with_deferred_close(reader, stream_cursor.close)
@@ -1040,6 +1067,13 @@ def _ensure_arrow_reader(reader: Any) -> Any:
         msg = "DuckDB did not return an Arrow record batch reader."
         raise SQLSpecError(msg)
     return reader
+
+
+def _ensure_stream_reader_result(result: "tuple[Any, list[Any] | None] | None") -> "tuple[Any, list[Any] | None]":
+    if result is None:
+        msg = "DuckDB did not return an Arrow record batch reader."
+        raise SQLSpecError(msg)
+    return result
 
 
 def _is_plain_values_insert(expression: exp.Insert, column_count: int) -> bool:

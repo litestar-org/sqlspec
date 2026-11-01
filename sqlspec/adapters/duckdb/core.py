@@ -619,16 +619,28 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     )
 
 
+_DUCKDB_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?")
+
+
+def _parse_duckdb_version(raw_version: str) -> tuple[int, int, int]:
+    """Parse installed DuckDB version string into a 3-tuple of integers."""
+    match = _DUCKDB_VERSION_RE.match(raw_version.strip())
+    if match is None:
+        return (0, 0, 0)
+    major = int(match.group(1)) if match.group(1) else 0
+    minor = int(match.group(2)) if match.group(2) else 0
+    patch = int(match.group(3)) if match.group(3) else 0
+    return (major, minor, patch)
+
+
+_INSTALLED_DUCKDB_VERSION: Final[tuple[int, int, int]] = _parse_duckdb_version(
+    str(getattr(duckdb_module, "__version__", ""))
+)
+
+
 def duckdb_version_tuple() -> "tuple[int, int, int]":
     """Return the installed DuckDB version as a 3-tuple of integers."""
-    try:
-        raw = getattr(duckdb_module, "__version__", "")
-        parts = [int(part) for part in raw.split(".") if part.isdigit()]
-        while len(parts) < _VERSION_COMPONENTS:
-            parts.append(0)
-        return parts[0], parts[1], parts[2]
-    except Exception:
-        return (0, 0, 0)
+    return _INSTALLED_DUCKDB_VERSION
 
 
 _DUCKDB_COPY_FILENAME_FOLLOWS_QUERY: Final[bool] = duckdb_version_tuple() >= (2, 0, 0)

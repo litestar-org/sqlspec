@@ -614,3 +614,12 @@ def test_pool_thread_connection_checkout() -> None:
         {"database": ":memory:"}, secrets=[{"name": "s2", "value_provider": lambda: {}}]
     )
     assert pool_dynamic._has_dynamic_secrets is True
+
+
+def test_pool_unused_constants_removal() -> None:
+    """Unused pool constants are removed from sqlspec.adapters.duckdb.pool."""
+    import sqlspec.adapters.duckdb.pool as pool_mod
+
+    assert not hasattr(pool_mod, "DEFAULT_MIN_POOL")
+    assert not hasattr(pool_mod, "DEFAULT_MAX_POOL")
+    assert not hasattr(pool_mod, "POOL_TIMEOUT")

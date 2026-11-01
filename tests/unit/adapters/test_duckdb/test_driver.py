@@ -277,3 +277,36 @@ def test_select_column_name_cache_concurrency() -> None:
     assert len(res2.data) == 2
     hint2 = driver._cache_holder.get_row_count_hint(sql)
     assert hint2 == 2
+
+
+def test_auxiliary_exception_isolation() -> None:
+    """Auxiliary methods route through exception handler with active exception isolation."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    try:
+        raise ValueError("ambient error")
+    except ValueError:
+        driver.begin()
+        driver.commit()
+
+
+def test_migration_helpers_exception_mapping() -> None:
+    """set_migration_session_schema and has_schema map exceptions properly."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    assert driver.has_schema("main") is True
+    driver.set_migration_session_schema("main")
+
+
+def test_profiling_temp_file_cleanup() -> None:
+    """Driver cleans up temporary profile JSON file upon close."""
+    config = DuckDBConfig(
+        connection_config={"database": ":memory:"}, driver_features={"enable_statement_profiling": True}
+    )
+    driver = DuckDBDriver(config.create_connection(), driver_features={"enable_statement_profiling": True})
+    driver.execute("SELECT 1")
+    profile_path = driver._created_profile_path
+    assert profile_path is not None
+    assert profile_path.exists()
+    driver.close()
+    assert not profile_path.exists()
