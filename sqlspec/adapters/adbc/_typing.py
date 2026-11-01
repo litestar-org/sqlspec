@@ -121,10 +121,16 @@ class AdbcSessionContext:
             return self._prepare_driver(self._driver)
         except BaseException as exc:
             connection = self._connection
+            driver = self._driver
             self._connection = None
             self._driver = None
+            if driver is not None:
+                with contextlib.suppress(BaseException):
+                    driver.close_streams()
             with contextlib.suppress(BaseException):
-                self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+                self._release_connection(
+                    connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__, driver=driver
+                )
             raise
 
     def __exit__(
@@ -132,9 +138,22 @@ class AdbcSessionContext:
     ) -> "bool | None":
         if self._connection is not None:
             connection = self._connection
+            driver = self._driver
             self._connection = None
             self._driver = None
-            self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            first_error: BaseException | None = None
+            if driver is not None:
+                try:
+                    driver.close_streams()
+                except BaseException as exc:
+                    first_error = exc
+            try:
+                self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb, driver=driver)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+            if exc_type is None and first_error is not None:
+                raise first_error
         return None
 
 

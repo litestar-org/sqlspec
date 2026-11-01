@@ -98,14 +98,14 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
 class AdbcSelectStreamSource:
     """Native ADBC chunk source backed by a ``RecordBatchReader``."""
 
-    __slots__ = ("_chunk_size", "_cursor_manager", "_driver", "_parameters", "_reader", "_remainder", "_sql")
+    __slots__ = ("_chunk_size", "_driver", "_owner", "_parameters", "_reader", "_remainder", "_sql")
 
     def __init__(self, driver: "AdbcDriver", sql: str, parameters: Any, chunk_size: int = 1000) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
-        self._cursor_manager: AdbcCursor | None = None
+        self._owner: _AdbcArrowStreamOwner | None = None
         self._reader: Any = None
         self._remainder: list[dict[str, Any]] = []
 
@@ -136,13 +136,19 @@ class AdbcSelectStreamSource:
             self._driver._check_pending_exception(handler)
         except BaseException:
             if cursor is not None:
-                handle_postgres_rollback(self._driver._dialect_name, cursor, logger)
-            with contextlib.suppress(Exception):
+                with contextlib.suppress(BaseException):
+                    handle_postgres_rollback(self._driver._dialect_name, cursor, logger)
+            with contextlib.suppress(BaseException):
                 cursor_manager.__exit__(None, None, None)
             raise
 
-        self._cursor_manager = cursor_manager
-        self._reader = iter(reader)
+        self._owner = _AdbcArrowStreamOwner(reader, cursor)
+        try:
+            self._reader = iter(reader)
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                self.close()
+            raise
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         chunk_size = self._chunk_size
@@ -192,11 +198,13 @@ class AdbcSelectStreamSource:
 
     def close(self, error: bool = False) -> None:
         self._reader = None
-        cursor_manager = self._cursor_manager
-        self._cursor_manager = None
-        if cursor_manager is not None:
-            with contextlib.suppress(Exception):
-                cursor_manager.__exit__(None, None, None)
+        self._remainder = []
+        if self._owner is not None:
+            if error:
+                with contextlib.suppress(BaseException):
+                    self._owner.close()
+            else:
+                self._owner.close()
 
 
 @final
@@ -212,10 +220,12 @@ class AdbcDriver(SyncDriverAdapterBase):
         "_data_dictionary",
         "_detected_dialect",
         "_dialect_name",
+        "_has_streams",
         "_is_flightsql",
         "_is_postgres",
         "_json_serializer",
         "_previous_autocommit",
+        "_stream_closers",
         "_transaction_active",
         "dialect",
     )
@@ -258,6 +268,26 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._transaction_active = False
         self._previous_autocommit: bool | None = None
+        self._has_streams = False
+        self._stream_closers: list[Callable[[], None]] = []
+
+    @property
+    def has_streams(self) -> bool:
+        """Return whether this session created any lazy native stream."""
+        return self._has_streams
+
+    def close_streams(self) -> None:
+        """Close every registered native owner before returning a session connection."""
+        closers, self._stream_closers = self._stream_closers, []
+        first_error: BaseException | None = None
+        for close in closers:
+            try:
+                close()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     @property
     def data_dictionary(self) -> "AdbcDataDictionary":
@@ -462,10 +492,14 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
         """Return a native ADBC stream backed by ``fetch_record_batch()``."""
+        self._has_streams = True
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        return SyncRowStream(AdbcSelectStreamSource(self, sql, prepared_parameters, chunk_size=chunk_size))
+        source = AdbcSelectStreamSource(self, sql, prepared_parameters, chunk_size=chunk_size)
+        stream: SyncRowStream[dict[str, Any]] = SyncRowStream(source)
+        self._stream_closers.extend((source.close, stream.close))
+        return stream
 
     def begin(self) -> None:
         """Begin database transaction.
@@ -640,6 +674,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         arrow_result: ArrowResult | None = None
 
         if return_format in {"reader", "batches"}:
+            if return_format == "reader":
+                self._has_streams = True
             cursor_manager = self.with_cursor(self.connection)
             cursor = None
             reader: Any = None
@@ -663,9 +699,11 @@ class AdbcDriver(SyncDriverAdapterBase):
                         )
                     else:
                         reader = fetch_record_batch()
-                except Exception:
-                    handle_postgres_rollback(self._dialect_name, cursor, logger)
-                    cursor_manager.__exit__(None, None, None)
+                except BaseException:
+                    with contextlib.suppress(BaseException):
+                        handle_postgres_rollback(self._dialect_name, cursor, logger)
+                    with contextlib.suppress(BaseException):
+                        cursor_manager.__exit__(None, None, None)
                     cursor = None
                     raise
 
@@ -682,33 +720,39 @@ class AdbcDriver(SyncDriverAdapterBase):
                         cursor_manager.__exit__(None, None, None)
                 msg = "ADBC did not return an Arrow reader."
                 raise SQLSpecError(msg)
-            if bool(self.driver_features.get("enable_lowercase_column_names", False)) and hasattr(reader, "schema"):
-                raw_names = list(reader.schema.names)
-                normalized_names = normalize_column_names(raw_names, self.driver_features)
-                pa = import_optional("pyarrow")
-                if normalized_names != raw_names and pa is not None:
-                    new_schema = pa.schema([
-                        field.with_name(name) for field, name in zip(reader.schema, normalized_names, strict=True)
-                    ])
-                    source_reader = reader
-
-                    def _lower_batches() -> Any:
-                        for batch in source_reader:
-                            yield batch.rename_columns(normalized_names)
-
-                    reader = pa.RecordBatchReader.from_batches(new_schema, _lower_batches())
+            owner = _AdbcArrowStreamOwner(reader, cursor)
+            if return_format == "reader":
+                self._stream_closers.append(owner.close)
             try:
-                return build_arrow_result_from_reader(
+                if bool(self.driver_features.get("enable_lowercase_column_names", False)) and hasattr(reader, "schema"):
+                    raw_names = list(reader.schema.names)
+                    normalized_names = normalize_column_names(raw_names, self.driver_features)
+                    pa = import_optional("pyarrow")
+                    if normalized_names != raw_names and pa is not None:
+                        new_schema = pa.schema([
+                            field.with_name(name) for field, name in zip(reader.schema, normalized_names, strict=True)
+                        ])
+                        source_reader = reader
+
+                        def _lower_batches() -> Any:
+                            for batch in source_reader:
+                                yield batch.rename_columns(normalized_names)
+
+                        reader = pa.RecordBatchReader.from_batches(new_schema, _lower_batches())
+                result = build_arrow_result_from_reader(
                     prepared_statement,
-                    arrow_reader_with_deferred_close(reader, cursor.close),
+                    arrow_reader_with_deferred_close(reader, owner.finish),
                     return_format=return_format,
                     batch_size=batch_size,
                     arrow_schema=arrow_schema,
                 )
+                if return_format == "batches":
+                    owner.close()
             except BaseException:
-                with contextlib.suppress(Exception):
-                    cursor_manager.__exit__(None, None, None)
+                with contextlib.suppress(BaseException):
+                    owner.close()
                 raise
+            return result
 
         with self.with_cursor(self.connection) as cursor, exc_handler:
             if cursor is None:
@@ -720,8 +764,9 @@ class AdbcDriver(SyncDriverAdapterBase):
             try:
                 cursor.execute(sql, parameters=execute_parameters)
                 arrow_table = cursor.fetch_arrow_table()
-            except Exception:
-                handle_postgres_rollback(self._dialect_name, cursor, logger)
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    handle_postgres_rollback(self._dialect_name, cursor, logger)
                 raise
 
             if bool(self.driver_features.get("enable_lowercase_column_names", False)) and hasattr(
@@ -1073,6 +1118,40 @@ def _parse_adbc_ingest_target(
         kwargs["db_schema_name"] = parts[1]
         return parts[-1], kwargs
     return table, kwargs
+
+
+class _AdbcArrowStreamOwner:
+    """Close actual native owners independently of lazy wrapper iteration."""
+
+    __slots__ = ("_close_error", "_closed", "_cursor", "_reader")
+
+    def __init__(self, reader: Any, cursor: "AdbcRawCursor") -> None:
+        self._reader = reader
+        self._cursor = cursor
+        self._closed = False
+        self._close_error: BaseException | None = None
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            try:
+                close_reader = getattr(self._reader, "close", None)
+                if callable(close_reader):
+                    close_reader()
+            except BaseException as exc:
+                self._close_error = exc
+            try:
+                self._cursor.close()
+            except BaseException as exc:
+                if self._close_error is None:
+                    self._close_error = exc
+        if self._close_error is not None:
+            raise self._close_error
+
+    def finish(self) -> None:
+        """Finalize lazy iteration without replacing its exception or raising from GC."""
+        with contextlib.suppress(BaseException):
+            self.close()
 
 
 def _fetch_record_batch(cursor: Any) -> Any:

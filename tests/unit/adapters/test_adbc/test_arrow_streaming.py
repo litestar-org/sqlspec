@@ -6,11 +6,14 @@ import pyarrow as pa
 import pytest
 from adbc_driver_manager import AdbcStatusCode, DatabaseError
 
+from sqlspec.adapters.adbc._typing import AdbcSessionContext
+from sqlspec.adapters.adbc.core import get_statement_config
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcSelectStreamSource
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc._typing import AdbcConnection
+    from sqlspec.driver import SyncRowStream
 
 
 _STORAGE_CAPABILITIES = {
@@ -22,18 +25,44 @@ _STORAGE_CAPABILITIES = {
 }
 
 
+class _AdbcStreamingReader:
+    def __init__(self) -> None:
+        table = pa.table({"x": [1, 2, 3]})
+        self.schema = table.schema
+        self._reader = pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=2))
+        self.close_count = 0
+        self.close_error: BaseException | None = None
+
+    def __iter__(self) -> "_AdbcStreamingReader":
+        return self
+
+    def __next__(self) -> pa.RecordBatch:
+        return self._reader.read_next_batch()
+
+    def read_next_batch(self) -> pa.RecordBatch:
+        return next(self)
+
+    def close(self) -> None:
+        self.close_count += 1
+        self._reader.close()
+        if self.close_error is not None:
+            raise self.close_error
+
+
 class _AdbcStreamingCursor:
     def __init__(self) -> None:
         self.closed = False
+        self.close_count = 0
+        self.close_error: BaseException | None = None
+        self.reader_obj = _AdbcStreamingReader()
         self.executed: list[tuple[str, object]] = []
         self.ingest_calls: list[tuple[str, object, str, dict[str, Any]]] = []
 
     def execute(self, sql: str, parameters: object = None) -> None:
         self.executed.append((sql, parameters))
 
-    def fetch_record_batch(self) -> pa.RecordBatchReader:
-        table = pa.table({"x": [1, 2, 3]})
-        return pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=2))
+    def fetch_record_batch(self) -> _AdbcStreamingReader:
+        return self.reader_obj
 
     def fetch_arrow_table(self) -> pa.Table:
         msg = "reader formats should use fetch_record_batch(), not fetch_arrow_table()"
@@ -45,6 +74,9 @@ class _AdbcStreamingCursor:
 
     def close(self) -> None:
         self.closed = True
+        self.close_count += 1
+        if self.close_error is not None:
+            raise self.close_error
 
 
 class _AdbcStreamingConnection:
@@ -56,6 +88,158 @@ class _AdbcStreamingConnection:
 
     def cursor(self) -> _AdbcStreamingCursor:
         return self.cursor_obj
+
+
+@pytest.mark.parametrize("kind", ["row", "reader"])
+@pytest.mark.parametrize("progress", ["never", "partial", "exhausted"])
+def test_session_closes_lazy_stream_owners_before_release(kind: str, progress: str) -> None:
+    """All lazy streams taint their session and close actual native owners before release."""
+    connection = _AdbcStreamingConnection()
+    released: list[AdbcDriver] = []
+
+    def release(_connection: Any, **kwargs: Any) -> None:
+        expected_closes = 0 if kind == "row" and progress == "never" else 1
+        assert connection.cursor_obj.close_count == expected_closes
+        assert connection.cursor_obj.reader_obj.close_count == expected_closes
+        assert kwargs["driver"].has_streams is True
+        released.append(kwargs["driver"])
+
+    context = AdbcSessionContext(
+        acquire_connection=lambda: connection,
+        release_connection=release,
+        statement_config=get_statement_config("sqlite"),
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+    stream: SyncRowStream[dict[str, Any]] | None = None
+    with context as driver:
+        if kind == "row":
+            stream = driver.select_stream("SELECT 1 AS x", native_only=True, chunk_size=1)
+            if progress == "partial":
+                assert next(stream) == {"x": 1}
+            elif progress == "exhausted":
+                assert list(stream) == [{"x": 1}, {"x": 2}, {"x": 3}]
+        else:
+            reader = driver.select_to_arrow("SELECT 1 AS x", return_format="reader").data
+            if progress == "partial":
+                assert reader.read_next_batch().to_pydict() == {"x": [1, 2]}
+            elif progress == "exhausted":
+                assert reader.read_all().to_pydict() == {"x": [1, 2, 3]}
+    assert released == [driver]
+    driver.close_streams()
+    if stream is not None:
+        assert list(stream) == []
+
+
+def test_lazy_fallback_stream_taints_session_before_execution() -> None:
+    """The generic lazy fallback also prevents reuse before it opens native resources."""
+    connection = _AdbcStreamingConnection()
+    released: list[AdbcDriver] = []
+
+    def release(_connection: Any, **kwargs: Any) -> None:
+        assert kwargs["driver"].has_streams is True
+        assert connection.cursor_obj.executed == []
+        assert connection.cursor_obj.close_count == 0
+        released.append(kwargs["driver"])
+
+    context = AdbcSessionContext(
+        acquire_connection=lambda: connection,
+        release_connection=release,
+        statement_config=get_statement_config("sqlite"),
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+    with context as driver:
+        stream = driver.select_stream("UPDATE items SET x = 1")
+    assert released == [driver]
+    stream.close()
+
+
+@pytest.mark.parametrize("stage", ["exit", "body", "setup"])
+def test_session_stream_cleanup_attempts_all_owners_and_preserves_primary(stage: str) -> None:
+    """Cleanup attempts every native reader/cursor and release, preserving setup/body errors."""
+    cursors = [_AdbcStreamingCursor(), _AdbcStreamingCursor()]
+    available = iter(cursors)
+
+    class _MultipleStreamingConnection(_AdbcStreamingConnection):
+        def cursor(self) -> _AdbcStreamingCursor:
+            return next(available)
+
+    connection = _MultipleStreamingConnection()
+    primary = KeyboardInterrupt("primary interruption")
+    first_cleanup = RuntimeError("first reader cleanup failed")
+    cursors[0].reader_obj.close_error = first_cleanup
+    cursors[0].close_error = RuntimeError("cursor cleanup failed")
+    cursors[1].reader_obj.close_error = SystemExit("second reader cleanup failed")
+    released: list[AdbcDriver] = []
+    drivers: list[AdbcDriver] = []
+    readers: list[Any] = []
+
+    def open_readers(driver: AdbcDriver) -> None:
+        drivers.append(driver)
+        readers.extend(driver.select_to_arrow("SELECT 1 AS x", return_format="reader").data for _ in range(2))
+
+    def prepare(driver: AdbcDriver) -> AdbcDriver:
+        if stage == "setup":
+            open_readers(driver)
+            raise primary
+        return driver
+
+    def release(_connection: Any, **kwargs: Any) -> None:
+        for cursor in cursors:
+            assert cursor.close_count == 1
+            assert cursor.reader_obj.close_count == 1
+        released.append(kwargs["driver"])
+        raise RuntimeError("release cleanup failed")
+
+    context = AdbcSessionContext(
+        acquire_connection=lambda: connection,
+        release_connection=release,
+        statement_config=get_statement_config("sqlite"),
+        driver_features={},
+        prepare_driver=prepare,
+    )
+    expected = RuntimeError if stage == "exit" else KeyboardInterrupt
+    with pytest.raises(expected) as caught, context as driver:
+        open_readers(driver)
+        if stage == "body":
+            raise primary
+    assert caught.value is (first_cleanup if stage == "exit" else primary)
+    assert released == drivers
+    context.__exit__(None, None, None)
+    drivers[0].close_streams()
+    assert [cursor.close_count for cursor in cursors] == [1, 1]
+
+
+def test_eager_arrow_batches_close_owners_without_tainting_session() -> None:
+    """Eager batches release their native resources immediately and remain reusable."""
+    connection = _AdbcStreamingConnection()
+    driver = AdbcDriver(cast("AdbcConnection", connection), dialect="sqlite")
+    result = driver.select_to_arrow("SELECT 1 AS x", return_format="batches")
+    assert [batch.to_pydict() for batch in result.data] == [{"x": [1, 2]}, {"x": [3]}]
+    assert driver.has_streams is False
+    assert connection.cursor_obj.close_count == 1
+    assert connection.cursor_obj.reader_obj.close_count == 1
+    driver.close_streams()
+    assert connection.cursor_obj.close_count == 1
+
+
+def test_materialized_arrow_table_does_not_taint_session() -> None:
+    """Materialized tables close their cursor and do not require stream eviction."""
+
+    class _MaterializedCursor(_AdbcStreamingCursor):
+        def fetch_arrow_table(self) -> pa.Table:
+            return pa.table({"x": [1, 2, 3]})
+
+    connection = _AdbcStreamingConnection()
+    connection.cursor_obj = _MaterializedCursor()
+    driver = AdbcDriver(cast("AdbcConnection", connection), dialect="sqlite")
+    result = driver.select_to_arrow("SELECT 1 AS x", return_format="table")
+    assert result.data.to_pydict() == {"x": [1, 2, 3]}
+    assert driver.has_streams is False
+    assert connection.cursor_obj.close_count == 1
+    driver.close_streams()
+    assert connection.cursor_obj.close_count == 1
 
 
 def test_select_to_arrow_reader_uses_fetch_record_batch_and_defers_cursor_close() -> None:
@@ -104,15 +288,16 @@ def test_load_from_arrow_passes_record_batch_reader_to_adbc_ingest() -> None:
     assert job.telemetry["destination"] == "target_table"
 
 
-def test_select_to_arrow_postgres_rolls_back_on_error() -> None:
+@pytest.mark.parametrize("return_format", ["table", "reader"])
+@pytest.mark.parametrize("primary", [RuntimeError("postgres failure"), KeyboardInterrupt("query interrupted")])
+def test_select_to_arrow_postgres_rolls_back_on_error(return_format: Any, primary: BaseException) -> None:
     class _PostgresErrorCursor:
         def __init__(self, conn: "_PostgresErrorConnection") -> None:
             self.connection = conn
             self.closed = False
 
         def execute(self, sql: str, parameters: object = None) -> None:
-            msg = "postgres failure"
-            raise RuntimeError(msg)
+            raise primary
 
         def close(self) -> None:
             self.closed = True
@@ -120,6 +305,7 @@ def test_select_to_arrow_postgres_rolls_back_on_error() -> None:
     class _PostgresErrorConnection:
         def __init__(self) -> None:
             self.rolled_back = False
+            self.cursor_obj = _PostgresErrorCursor(self)
 
         def adbc_get_info(self) -> dict[str, str]:
             return {"vendor_name": "PostgreSQL", "driver_name": "adbc_driver_postgresql"}
@@ -128,14 +314,16 @@ def test_select_to_arrow_postgres_rolls_back_on_error() -> None:
             self.rolled_back = True
 
         def cursor(self) -> _PostgresErrorCursor:
-            return _PostgresErrorCursor(self)
+            return self.cursor_obj
 
     connection = _PostgresErrorConnection()
     driver = AdbcDriver(cast("AdbcConnection", connection), dialect="postgres")
 
-    with pytest.raises((RuntimeError, SQLSpecError)):
-        driver.select_to_arrow("SELECT 1", return_format="table")
+    with pytest.raises(type(primary)) as caught:
+        driver.select_to_arrow("SELECT 1", return_format=return_format)
+    assert caught.value is primary
     assert connection.rolled_back is True
+    assert connection.cursor_obj.closed is True
 
 
 def test_select_stream_start_closes_cursor_and_rolls_back_postgres_on_failure() -> None:
