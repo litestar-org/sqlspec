@@ -7,6 +7,7 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from adbc_driver_manager import AdbcStatusCode
 from adbc_driver_manager import Error as _AdbcNativeError
 from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
 from adbc_driver_manager import OperationalError as AdbcOperationalError
@@ -38,6 +39,7 @@ __all__ = (
     "AdbcOperationalError",
     "AdbcRawCursor",
     "AdbcSessionContext",
+    "AdbcStatusCode",
 )
 
 

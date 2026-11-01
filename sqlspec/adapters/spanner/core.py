@@ -15,6 +15,7 @@ from sqlglot.errors import SqlglotError
 from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
 from sqlspec.adapters.spanner._typing import SpannerTypeCode as TypeCode
 from sqlspec.adapters.spanner._typing import spanner_exceptions as api_exceptions
+from sqlspec.adapters.spanner._typing import spanner_param_types
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.core import (
     DriverParameterProfile,
@@ -39,7 +40,6 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
-from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -1059,10 +1059,7 @@ _DDL_TIMEOUT_SECONDS: Final[float] = 300.0
 
 def _json_param_type() -> Any:
     """Return the SPANNER_PARAM_TYPES JSON type or fallback to STRING."""
-    param_types_module = import_optional_attr("google.cloud.spanner_v1", "param_types")
-    if param_types_module is not None:
-        return getattr(param_types_module, "JSON", getattr(param_types_module, "STRING", None))
-    return None
+    return getattr(spanner_param_types, "JSON", getattr(spanner_param_types, "STRING", None))
 
 
 def _extract_spanner_json_codecs(config: Any) -> "tuple[Callable[[Any], str], Callable[[str], Any]]":

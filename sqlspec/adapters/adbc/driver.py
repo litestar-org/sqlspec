@@ -69,7 +69,6 @@ if TYPE_CHECKING:
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext")
 
 logger = get_logger("sqlspec.adapters.adbc")
-_pa: Any = import_optional("pyarrow")
 _DIALECTS_WITHOUT_SAVEPOINTS = frozenset({"bigquery", "duckdb", "snowflake"})
 
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
@@ -686,8 +685,9 @@ class AdbcDriver(SyncDriverAdapterBase):
             if bool(self.driver_features.get("enable_lowercase_column_names", False)) and hasattr(reader, "schema"):
                 raw_names = list(reader.schema.names)
                 normalized_names = normalize_column_names(raw_names, self.driver_features)
-                if normalized_names != raw_names and _pa is not None:
-                    new_schema = _pa.schema([
+                pa = import_optional("pyarrow")
+                if normalized_names != raw_names and pa is not None:
+                    new_schema = pa.schema([
                         field.with_name(name) for field, name in zip(reader.schema, normalized_names, strict=True)
                     ])
 
@@ -695,7 +695,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                         for batch in reader:
                             yield batch.rename_columns(normalized_names)
 
-                    reader = _pa.RecordBatchReader.from_batches(new_schema, _lower_batches())
+                    reader = pa.RecordBatchReader.from_batches(new_schema, _lower_batches())
             try:
                 return build_arrow_result_from_reader(
                     prepared_statement,
@@ -814,7 +814,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         ingest_mode = "replace" if overwrite else "create_append"
         target_table, ingest_kwargs = _parse_adbc_ingest_target(table, mode=ingest_mode)
 
-        if isinstance(source_data, _pa.RecordBatchReader):
+        if hasattr(source_data, "read_next_batch"):
             row_count = 0
             exc_handler = self.handle_database_exceptions()
             with self.with_cursor(self.connection) as cursor, exc_handler:

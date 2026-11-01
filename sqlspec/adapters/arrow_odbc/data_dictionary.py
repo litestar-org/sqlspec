@@ -30,13 +30,9 @@ from sqlspec.utils.text import normalize_identifier, quote_identifier
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    import pyarrow as pa
-
     from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
     from sqlspec.core import SQL
     from sqlspec.data_dictionary._types import DialectConfig
-else:
-    pa = import_optional("pyarrow")
 
 __all__ = ("ArrowOdbcDataDictionary",)
 
@@ -319,6 +315,8 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
 
 def _arrow_type_to_sql(data_type: Any) -> str:
     ensure_pyarrow()
+    pa = import_optional("pyarrow")
+    assert pa is not None
     types = pa.types
     if types.is_boolean(data_type):
         return "BOOLEAN"

@@ -42,7 +42,7 @@ from sqlspec.core import (
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.typing import import_optional
+from sqlspec.typing import PYARROW_INSTALLED, ArrowReturnFormat, StatementParameters
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -53,17 +53,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
-    import pyarrow as pa
-
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, CachedQuery, SQLResult, Statement, StatementFilter
     from sqlspec.core.result._base import RowFormat
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
-else:
-    pa = import_optional("pyarrow")
 
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
 
@@ -625,7 +620,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
         source_data = source.get_data() if hasattr(source, "get_data") else source
         arrow_table = None
         arrow_source: object
-        if isinstance(source_data, pa.RecordBatchReader):
+        is_reader = hasattr(source_data, "read_next_batch")
+        if is_reader:
             arrow_source = source_data
         else:
             arrow_table = self._coerce_arrow_table(source_data)
@@ -657,7 +653,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 raise
         self._check_pending_exception(exc_handler)
 
-        if isinstance(source_data, pa.RecordBatchReader):
+        if is_reader:
             telemetry_payload: StorageTelemetry = {
                 "rows_processed": inserted_rows,
                 "bytes_processed": 0,
@@ -768,7 +764,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         hint = self._cache_holder.get_row_count_hint(cache_key)
         sql_method = getattr(cursor, "sql", None)
         if (
-            pa is not None
+            PYARROW_INSTALLED
             and (hint is None or hint >= ARROW_MIN_ROWS)
             and not profiling_enabled
             and callable(sql_method)
@@ -822,7 +818,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         description = cursor.description
         hint = self._cache_holder.get_row_count_hint(compiled_sql)
         if (
-            pa is None
+            not PYARROW_INSTALLED
             or (hint is not None and hint < ARROW_MIN_ROWS)
             or description_has_arrow_divergent_types(description)
             or not hasattr(cursor, "to_arrow_table")
@@ -939,7 +935,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     @staticmethod
     def _build_arrow_table(rows: "list[Any]", column_names: "list[str]") -> Any | None:
         """Build a pyarrow table from batch rows when they share a stable shape."""
-        if not rows or pa is None:
+        if not rows or not PYARROW_INSTALLED:
             return None
         first_row = rows[0]
 
@@ -950,6 +946,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
             if any(not isinstance(row, (list, tuple)) or len(row) != len(column_names) for row in rows):
                 return None
             try:
+                import pyarrow as pa
+
                 return pa.Table.from_arrays([pa.array(col) for col in zip(*rows, strict=True)], names=column_names)
             except Exception:
                 return None

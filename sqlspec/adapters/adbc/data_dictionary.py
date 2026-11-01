@@ -57,7 +57,6 @@ if TYPE_CHECKING:
 __all__ = ("AdbcDataDictionary",)
 
 logger = get_logger("sqlspec.adapters.adbc")
-_pa: Any = import_optional("pyarrow")
 
 _NATIVE_TABLE_TYPES: Final = frozenset({"table", "base table"})
 _NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError, AttributeError)
@@ -1002,7 +1001,9 @@ def _normalize_native_constraints(
 
 def _arrow_type_to_sql(data_type: Any) -> str:
     ensure_pyarrow()
-    types = _pa.types
+    pa = import_optional("pyarrow")
+    assert pa is not None
+    types = pa.types
     if types.is_boolean(data_type):
         return "BOOLEAN"
     if types.is_int8(data_type) or types.is_int16(data_type) or types.is_uint8(data_type) or types.is_uint16(data_type):

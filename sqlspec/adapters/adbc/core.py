@@ -16,6 +16,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from sqlspec.adapters.adbc._typing import AdbcStatusCode
 from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter, get_adbc_type_converter
 from sqlspec.core import (
     DriverParameterProfile,
@@ -53,8 +54,6 @@ from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 from sqlspec.utils.uuids import uuid4, uuid_from_string
-
-AdbcStatusCode: Any = import_optional_attr("adbc_driver_manager", "AdbcStatusCode")
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping

@@ -45,8 +45,9 @@ from sqlspec.exceptions import (
     UniqueViolationError,
     _classify_timeout_or_cancellation,
 )
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
+from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_errors
@@ -60,9 +61,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
     BigQueryLoadFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv", "avro", "orc"]
-
-_pa: Any = import_optional("pyarrow")
-_pq: Any = import_optional("pyarrow.parquet")
 
 __all__ = (
     "BigQueryStreamSource",
@@ -184,21 +182,23 @@ def try_bulk_insert(
     if _has_synthetic_positional_keys(remapped_parameters):
         return None
 
+    if not PYARROW_INSTALLED:
+        logger.debug("pyarrow not available, falling back to literal inlining")
+        return None
+
     try:
-        ensure_pyarrow()
-        arrow_table = _pa.Table.from_pylist(remapped_parameters)
+        pa = import_pyarrow()
+        pq = import_pyarrow_parquet()
+        arrow_table = pa.Table.from_pylist(remapped_parameters)
 
         buffer = io.BytesIO()
-        _pq.write_table(arrow_table, buffer)
+        pq.write_table(arrow_table, buffer)
         buffer.seek(0)
 
         job_config = build_load_job_config("parquet", overwrite=False)
         job = connection.load_table_from_file(buffer, table_name, job_config=job_config, timeout=result_timeout)
         job.result(timeout=result_timeout)
         return len(remapped_parameters)
-    except ImportError:
-        logger.debug("pyarrow not available, falling back to literal inlining")
-        return None
     except Exception as exc:
         logger.debug("Bulk insert failed, falling back to literal inlining: %s", exc)
         return None

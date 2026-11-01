@@ -212,10 +212,7 @@ def test_import_failure_falls_back_to_parquet(monkeypatch: pytest.MonkeyPatch) -
         driver_features={"enable_storage_write_api": True, "storage_capabilities": CAPABILITIES},
     )
 
-    def _raise(_self: Any, _table: str, _arrow: Any) -> Any:
-        raise ImportError("bigquery_storage not available")
-
-    monkeypatch.setattr(BigQueryDriver, "_load_arrow_via_storage_write_api", _raise)
+    monkeypatch.setattr("sqlspec.adapters.bigquery.driver.BigQueryStorageWriteModule", None)
 
     driver.load_from_arrow("dataset.table", pa.table({"id": [1]}))
 

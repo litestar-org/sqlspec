@@ -200,3 +200,191 @@ def test_pytest_collect_only_succeeds_without_plugin_registration_errors() -> No
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "tests"], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, f"pytest --collect-only failed:\n{result.stderr}\n{result.stdout}"
+
+
+ADAPTER_DRIVERS: dict[str, tuple[str, ...]] = {
+    "adbc": ("adbc_driver_manager",),
+    "aiomysql": ("aiomysql",),
+    "aiosqlite": ("aiosqlite",),
+    "arrow_odbc": ("arrow_odbc",),
+    "asyncmy": ("asyncmy",),
+    "asyncpg": ("asyncpg",),
+    "bigquery": ("google.cloud.bigquery",),
+    "cockroach_asyncpg": ("asyncpg",),
+    "cockroach_psycopg": ("psycopg",),
+    "db2": ("ibm_db", "ibm_db_dbi"),
+    "duckdb": ("duckdb",),
+    "mssql_python": ("mssql_python",),
+    "mysqlconnector": ("mysql.connector",),
+    "oracledb": ("oracledb",),
+    "psqlpy": ("psqlpy",),
+    "psycopg": ("psycopg",),
+    "pymssql": ("pymssql",),
+    "pymysql": ("pymysql",),
+    "spanner": ("google.cloud.spanner_v1",),
+    "sqlanywhere": ("sqlanydb",),
+    "sqlite": (),
+    "sybase": ("pymssql",),
+}
+"""Driver module(s) each adapter imports; every package under ``sqlspec/adapters/`` must be registered."""
+
+DRIVER_PACKAGE_DEPENDENCIES: dict[str, tuple[str, ...]] = {"aiomysql": ("pymysql",)}
+"""Other registered driver modules that a driver package itself depends on (aiomysql requires PyMySQL)."""
+
+SECONDARY_OPTIONAL_MODULES = (
+    "pyarrow",
+    "pandas",
+    "polars",
+    "numpy",
+    "pgvector",
+    "rich",
+    "opentelemetry",
+    "litestar",
+    "pydantic",
+    "fsspec",
+    "obstore",
+    "google.cloud.storage",
+    "google.cloud.sql.connector",
+    "google.cloud.alloydb.connector",
+)
+
+DRIVER_OWNED_OPTIONAL_IMPORTS: dict[str, frozenset[str]] = {
+    "adbc": frozenset({"pyarrow", "pandas", "polars", "numpy"}),
+    "arrow_odbc": frozenset({"pyarrow", "numpy"}),
+    "bigquery": frozenset({"pyarrow", "pandas", "numpy", "opentelemetry"}),
+    "mysqlconnector": frozenset({"opentelemetry"}),
+    "spanner": frozenset({"opentelemetry"}),
+}
+"""Optional modules the driver SDK imports on its own when installed; sqlspec code does not import them."""
+
+
+def test_every_adapter_package_is_registered() -> None:
+    """Every adapter package declares its driver so the import-contract gates cover it."""
+    packages = {
+        path.name
+        for path in Path("sqlspec/adapters").iterdir()
+        if path.is_dir() and (path / "__init__.py").exists() and not path.name.startswith(("_", "."))
+    }
+    assert packages == set(ADAPTER_DRIVERS)
+
+
+@pytest.mark.parametrize("adapter", sorted(name for name, drivers in ADAPTER_DRIVERS.items() if drivers))
+def test_adapter_import_raises_driver_module_not_found(adapter: str) -> None:
+    """Importing an adapter without its driver raises the driver's own ModuleNotFoundError."""
+    drivers = ADAPTER_DRIVERS[adapter]
+    script = f"""
+import importlib.abc
+import sys
+
+blocked = {drivers!r}
+
+class BlockDriver(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if any(fullname == name or fullname.startswith(name + ".") for name in blocked):
+            raise ModuleNotFoundError(f"No module named {{fullname!r}}", name=fullname)
+        return None
+
+sys.meta_path.insert(0, BlockDriver())
+try:
+    import sqlspec.adapters.{adapter}
+except ModuleNotFoundError as exc:
+    assert exc.name and any(exc.name == name or exc.name.startswith(name + ".") or name.startswith(exc.name + ".") for name in blocked), exc.name
+else:
+    raise AssertionError("adapter imported without its driver")
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("adapter", sorted(ADAPTER_DRIVERS))
+def test_adapter_imports_with_every_other_driver_blocked(adapter: str) -> None:
+    """Each adapter works without any other adapter's driver installed."""
+    own = {*ADAPTER_DRIVERS[adapter], *DRIVER_PACKAGE_DEPENDENCIES.get(adapter, ())}
+    blocked = sorted({name for drivers in ADAPTER_DRIVERS.values() for name in drivers} - own)
+    script = f"""
+import importlib
+import importlib.abc
+import sys
+
+blocked = {blocked!r}
+
+class BlockOtherDrivers(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if any(fullname == name or fullname.startswith(name + ".") for name in blocked):
+            raise ModuleNotFoundError(f"No module named {{fullname!r}}", name=fullname)
+        return None
+
+sys.meta_path.insert(0, BlockOtherDrivers())
+package = importlib.import_module("sqlspec.adapters.{adapter}")
+for name in getattr(package, "__all__", ()):
+    getattr(package, name)
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("adapter", sorted(ADAPTER_DRIVERS))
+def test_adapter_import_does_not_load_secondary_optional_modules(adapter: str) -> None:
+    """Importing an adapter loads only its driver, plus optional modules the driver SDK imports itself."""
+    allowed = sorted(DRIVER_OWNED_OPTIONAL_IMPORTS.get(adapter, frozenset()))
+    script = (
+        f"import sys, importlib; importlib.import_module('sqlspec.adapters.{adapter}'); "
+        f"print(','.join(m for m in {SECONDARY_OPTIONAL_MODULES!r} if m in sys.modules and m not in {allowed!r}))"
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+    leaked = [name for name in result.stdout.strip().split(",") if name]
+    assert not leaked, f"import sqlspec.adapters.{adapter} eagerly imported: {leaked}"
+
+
+def _is_type_checking(test: ast.expr) -> bool:
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
+
+
+def _imports_driver(module_name: str, drivers: tuple[str, ...]) -> bool:
+    return any(module_name == name or module_name.startswith(name + ".") for name in drivers)
+
+
+def test_adapter_modules_follow_import_contract() -> None:
+    """Adapter modules import their driver directly and defer secondary optional modules to first use."""
+    violations: list[str] = []
+    for adapter, drivers in sorted(ADAPTER_DRIVERS.items()):
+        for py_file in sorted(Path("sqlspec/adapters", adapter).rglob("*.py")):
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            function_lines: set[int] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    function_lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+            for node in ast.walk(tree):
+                location = f"{py_file}:{getattr(node, 'lineno', '?')}"
+                if isinstance(node, ast.If) and isinstance(node.test, ast.UnaryOp):
+                    if isinstance(node.test.op, ast.Not) and _is_type_checking(node.test.operand):
+                        violations.append(f"{location}: use one `if TYPE_CHECKING: ... else:` block")
+                if isinstance(node, ast.ClassDef) and node.name.startswith("_"):
+                    if any(marker in node.name for marker in ("Stub", "Unavailable", "Missing")):
+                        violations.append(f"{location}: placeholder class {node.name} for a missing dependency")
+                if isinstance(node, ast.Try):
+                    for handler in node.handlers:
+                        names = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+                        catches_import_error = any(
+                            isinstance(n, ast.Name) and n.id in {"ImportError", "ModuleNotFoundError"} for n in names
+                        )
+                        reraises = any(isinstance(child, ast.Raise) for child in ast.walk(handler))
+                        if catches_import_error and not reraises:
+                            violations.append(f"{location}: import fallback via try/except {ast.unparse(handler.type)}")
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                func_name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+                first = node.args[0]
+                if func_name not in {"import_optional", "import_optional_attr", "import_module"}:
+                    continue
+                if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+                    continue
+                if _imports_driver(first.value, drivers):
+                    violations.append(f"{location}: {func_name}({first.value!r}) for the adapter's own driver")
+                elif node.lineno not in function_lines and first.value.split(".")[0] in {
+                    name.split(".")[0] for name in SECONDARY_OPTIONAL_MODULES
+                }:
+                    violations.append(f"{location}: module-level {func_name}({first.value!r}); resolve on first use")
+    assert not violations, "Adapter import contract violations:\n" + "\n".join(violations)

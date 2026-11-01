@@ -29,20 +29,16 @@ from sqlspec.core import (
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import DataError, ImproperConfigurationError, SQLSpecError
-from sqlspec.typing import import_optional
+from sqlspec.typing import ArrowException
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
-    import pyarrow as pa
-
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, ParameterProfile, Statement, StatementConfig, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
-else:
-    pa = import_optional("pyarrow")
 
 __all__ = ("ArrowOdbcCursor", "ArrowOdbcDriver", "ArrowOdbcExceptionHandler", "resolve_dialect_from_dbms_name")
 
@@ -55,7 +51,7 @@ class ArrowOdbcExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if isinstance(exc_val, ArrowOdbcError) or (pa is not None and isinstance(exc_val, pa.ArrowException)):
+        if isinstance(exc_val, (ArrowOdbcError, ArrowException)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -493,10 +489,11 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         with self.with_cursor(self.connection):
 
             def _insert_op() -> bool:
-                if isinstance(source, pa.Table) and hasattr(self.connection, "from_table_to_db"):
+                is_table = hasattr(source, "to_batches") and not hasattr(source, "read_next_batch")
+                if is_table and hasattr(self.connection, "from_table_to_db"):
                     self.connection.from_table_to_db(source=source, target=target_table, chunk_size=resolved_chunk_size)
                     return True
-                reader = _table_to_reader(source, resolved_chunk_size) if isinstance(source, pa.Table) else source
+                reader = _table_to_reader(source, resolved_chunk_size) if is_table else source
                 if hasattr(self.connection, "insert_into_table"):
                     self.connection.insert_into_table(reader=reader, table=target_table, chunk_size=resolved_chunk_size)
                     return True
@@ -557,7 +554,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         if overwrite:
             target = _db2_table_reference(table) if self._dialect == "db2" else _quote_odbc_table(table)
             self.execute(f"DELETE FROM {target}")
-        if isinstance(raw_source, pa.RecordBatchReader) and hasattr(self.connection, "insert_into_table"):
+        if hasattr(raw_source, "read_next_batch") and hasattr(self.connection, "insert_into_table"):
             self.bulk_insert_arrow(table, raw_source)
             telemetry_payload: StorageTelemetry = {
                 "rows_processed": 0,
@@ -678,6 +675,9 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         renamed = schema
         for index, name in enumerate(names):
             renamed = renamed.set(index, renamed.field(index).with_name(name))
+        ensure_pyarrow()
+        import pyarrow as pa
+
         return pa.RecordBatchReader.from_batches(
             renamed, (pa.RecordBatch.from_arrays(batch.columns, schema=renamed) for batch in reader)
         )
@@ -826,6 +826,7 @@ def _odbc_parameters(parameters: Any, *, naive_utc_datetimes: bool = False) -> "
 
 def _reader_to_table(reader: Any) -> Any:
     ensure_pyarrow()
+    import pyarrow as pa
 
     if isinstance(reader, pa.Table):
         return reader
@@ -845,6 +846,7 @@ def _reader_to_table(reader: Any) -> Any:
 
 def _to_pyarrow_reader(reader: object) -> "ArrowRecordBatchReader":
     ensure_pyarrow()
+    import pyarrow as pa
 
     if isinstance(reader, pa.RecordBatchReader):
         return reader
@@ -866,6 +868,7 @@ def _to_pyarrow_reader(reader: object) -> "ArrowRecordBatchReader":
 
 def _table_to_reader(table: Any, chunk_size: int) -> Any:
     ensure_pyarrow()
+    import pyarrow as pa
 
     return pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=chunk_size))
 

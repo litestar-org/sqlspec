@@ -6,9 +6,7 @@ from sqlspec.typing import import_optional
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
-    import pyarrow as pa
-else:
-    pa = import_optional("pyarrow")
+    from pyarrow import DataType
 
 __all__ = ("odbc_type_to_arrow",)
 
@@ -66,7 +64,7 @@ _ODBC_ARROW_TYPE_SPECS: Final[dict[str, tuple[str, tuple[Any, ...], dict[str, An
 _ARROW_TYPE_CACHE: "dict[tuple[str, tuple[Any, ...], tuple[tuple[str, Any], ...]], Any]" = {}
 
 
-def odbc_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: int | None = None) -> "pa.DataType":
+def odbc_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: int | None = None) -> "DataType":
     """Resolve an ODBC SQL type name to an Arrow data type."""
     normalized_type = sql_type.lower().split("(", 1)[0].strip()
     if normalized_type in {"decimal", "numeric"} and precision is not None and scale is not None:
@@ -82,14 +80,16 @@ def odbc_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: in
     return _arrow_type(name, args, kwargs)
 
 
-def _arrow_type(name: str, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> "pa.DataType":
+def _arrow_type(name: str, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> "DataType":
     kwargs_key = tuple(sorted((kwargs or {}).items()))
     cache_key = (name, args, kwargs_key)
     cached = _ARROW_TYPE_CACHE.get(cache_key)
     if cached is not None:
-        return cast("pa.DataType", cached)
+        return cast("DataType", cached)
 
     ensure_pyarrow()
+    pa = import_optional("pyarrow")
+    assert pa is not None
     resolved = getattr(pa, name)(*args, **(kwargs or {}))
     _ARROW_TYPE_CACHE[cache_key] = resolved
-    return cast("pa.DataType", resolved)
+    return cast("DataType", resolved)

@@ -441,7 +441,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             client_options = self.connection_config.get("client_options")
             if client_options is not None and client_options is not Empty:
                 client_kwargs["client_options"] = client_options
-            self._storage_write_client = BigQueryStorageWriteModule.BigQueryWriteClient(**client_kwargs)
+            write_client_cls = cast("Any", BigQueryStorageWriteModule).BigQueryWriteClient
+            self._storage_write_client = write_client_cls(**client_kwargs)
         return self._storage_write_client
 
     def _resolve_default_dataset(self) -> "str | None":

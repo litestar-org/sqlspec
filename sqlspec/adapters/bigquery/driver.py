@@ -62,8 +62,9 @@ from sqlspec.core import (
 )
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError, StorageOperationFailedError
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
+from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -85,8 +86,6 @@ __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQ
 logger = get_logger(__name__)
 _DATASET_TABLE_PARTS = 2
 _PROJECT_DATASET_TABLE_PARTS = 3
-_pa: Any = import_optional("pyarrow")
-_pq: Any = import_optional("pyarrow.parquet")
 
 
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
@@ -826,20 +825,23 @@ class BigQueryDriver(SyncDriverAdapterBase):
         ensure_pyarrow()
         qualified_table = self._qualify_table_name(table)
 
-        if self._enable_storage_write_api and not overwrite and not uses_local_bigquery_endpoint(self.connection):
-            try:
-                telemetry_payload = self._load_arrow_via_storage_write_api(qualified_table, arrow_table)
-            except ImportError as exc:
-                logger.warning("Storage Write API unavailable, falling back to Parquet load job: %s", exc)
-            else:
-                if telemetry:
-                    telemetry_payload.setdefault("extra", {})
-                    telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
-                self._attach_partition_telemetry(telemetry_payload, partitioner)
-                return self._storage_job(telemetry_payload)
+        if (
+            self._enable_storage_write_api
+            and not overwrite
+            and not uses_local_bigquery_endpoint(self.connection)
+            and BigQueryStorageWriteModule is not None
+            and BigQueryStorageWriteTypes is not None
+        ):
+            telemetry_payload = self._load_arrow_via_storage_write_api(qualified_table, arrow_table)
+            if telemetry:
+                telemetry_payload.setdefault("extra", {})
+                telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
+            self._attach_partition_telemetry(telemetry_payload, partitioner)
+            return self._storage_job(telemetry_payload)
 
+        pq = import_pyarrow_parquet()
         buffer = io.BytesIO()
-        _pq.write_table(arrow_table, buffer)
+        pq.write_table(arrow_table, buffer)
         buffer.seek(0)
         job_config = build_load_job_config("parquet", overwrite)
         exc_handler = self.handle_database_exceptions()
@@ -1041,7 +1043,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
             client = provider(self.connection)
         else:
             credentials = getattr(self.connection, "_credentials", None)
-            client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
+            write_client_cls = cast("Any", BigQueryStorageWriteModule).BigQueryWriteClient
+            client = write_client_cls(credentials=credentials)
         parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
         write_stream_type_enum = types.WriteStream.Type.COMMITTED if is_committed else types.WriteStream.Type.PENDING
         write_stream = client.create_write_stream(
@@ -1115,42 +1118,42 @@ def _bigquery_arrow_reader_from_iterable(
     batches: "Iterable[ArrowRecordBatch]", schema: Any = None
 ) -> "ArrowRecordBatchReader":
     ensure_pyarrow()
+    pa = import_pyarrow()
     iterator = iter(batches)
     try:
         first_batch = next(iterator)
     except StopIteration:
-        if isinstance(schema, _pa.Schema):
+        if isinstance(schema, pa.Schema):
             empty_schema = schema
         elif isinstance(schema, (list, tuple)):
             type_map = {
-                "INTEGER": _pa.int64(),
-                "INT64": _pa.int64(),
-                "FLOAT": _pa.float64(),
-                "FLOAT64": _pa.float64(),
-                "BOOLEAN": _pa.bool_(),
-                "BOOL": _pa.bool_(),
-                "STRING": _pa.string(),
-                "BYTES": _pa.binary(),
-                "DATE": _pa.date32(),
-                "DATETIME": _pa.timestamp("us"),
-                "TIMESTAMP": _pa.timestamp("us", tz="UTC"),
-                "NUMERIC": _pa.decimal128(38, 9),
-                "BIGNUMERIC": _pa.decimal256(76, 38),
+                "INTEGER": pa.int64(),
+                "INT64": pa.int64(),
+                "FLOAT": pa.float64(),
+                "FLOAT64": pa.float64(),
+                "BOOLEAN": pa.bool_(),
+                "BOOL": pa.bool_(),
+                "STRING": pa.string(),
+                "BYTES": pa.binary(),
+                "DATE": pa.date32(),
+                "DATETIME": pa.timestamp("us"),
+                "TIMESTAMP": pa.timestamp("us", tz="UTC"),
+                "NUMERIC": pa.decimal128(38, 9),
+                "BIGNUMERIC": pa.decimal256(76, 38),
             }
             fields = [
-                _pa.field(
+                pa.field(
                     getattr(field, "name", str(field)),
-                    type_map.get(str(getattr(field, "field_type", "")).upper(), _pa.null()),
+                    type_map.get(str(getattr(field, "field_type", "")).upper(), pa.null()),
                 )
                 for field in schema
             ]
-            empty_schema = _pa.schema(fields)
+            empty_schema = pa.schema(fields)
         else:
-            empty_schema = _pa.schema([])
-        return cast("ArrowRecordBatchReader", _pa.RecordBatchReader.from_batches(empty_schema, ()))
+            empty_schema = pa.schema([])
+        return cast("ArrowRecordBatchReader", pa.RecordBatchReader.from_batches(empty_schema, ()))
     return cast(
-        "ArrowRecordBatchReader",
-        _pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator)),
+        "ArrowRecordBatchReader", pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator))
     )
 
 
