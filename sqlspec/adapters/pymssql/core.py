@@ -215,7 +215,7 @@ def apply_driver_features(
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
-    features.setdefault("use_pool", True)
+    features.setdefault("enable_pooling", True)
     features.setdefault("events_backend", "poll_queue")
     features.setdefault("enable_uuid_conversion", False)
 

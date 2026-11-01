@@ -25,6 +25,11 @@ important operational fixes.
 
 **Changed:**
 
+* Removed legacy `pgbouncer` and `pgbouncer_mode` flags from PostgreSQL driver features across `asyncpg`, `psycopg`, and `psqlpy` in favor of canonical `pooler_mode="transaction"`.
+* Removed the `pgbouncer` key from `AsyncpgConnectionConfig`; set `driver_features={"pooler_mode": "transaction"}` instead.
+* Removed the empty `SybaseADKConfig`, `SqlanywhereADKConfig`, `Db2LitestarConfig`, and `Db2EventsConfig` TypedDicts; use the base `ADKConfig`, `LitestarConfig`, and `EventsConfig`.
+* Renamed `use_pool` to `enable_pooling` (default `True`) across `mssql_python` and `pymssql` driver features.
+* Replaced `null_pool` in `psycopg` connection configuration and driver features with canonical `enable_pooling=False`.
 * Replaced correlated per-column scalar subqueries in data dictionary `columns.sql` and `indexes.sql` catalog queries across `postgres`, `cockroach`, `mssql`, `mysql`, `oracle`, `db2`, and `duckdb` with pre-aggregated CTEs and joins, and reduced `ColumnMetadata` to its 18 core catalog fields.
   ([#866](https://github.com/litestar-org/sqlspec/pull/866))
 * Redesigned the documentation site architecture around Zensical and `mkdocstrings-python` with Diataxis-aligned navigation (`Getting Started`, `Learn`, `Adapters`, `Extensions`, `Examples`, `Reference`), interactive WebAssembly SQL playground, runnable `docs/examples/` snippets, conceptual Mermaid diagrams, and tabbed package manager and `SQLFileLoader` examples.

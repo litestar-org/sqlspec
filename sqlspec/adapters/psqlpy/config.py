@@ -148,10 +148,6 @@ class PsqlpyDriverFeatures(TypedDict):
     """Enable ``google_columnar_engine.enable_columnar_scan=on`` at session startup or per transaction."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
     """External pooler compatibility mode; executes queries with ``prepared=False`` when not ``session``."""
-    pgbouncer: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling prepared execution."""
-    pgbouncer_mode: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling prepared execution."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -288,9 +284,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
-            features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
-        )
+        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"}
         if bool(features_dict.get("enable_alloydb_columnar", False)) and not is_transaction_pooler:
             columnar_opt = "-c google_columnar_engine.enable_columnar_scan=on"
             existing_options = connection_config.get("options")
@@ -413,8 +407,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             conn_cfg.update(build_connection_config(direct_dsn))
         features: dict[str, Any] = dict(self.driver_features)
         features["pooler_mode"] = "session"
-        features["pgbouncer"] = False
-        features["pgbouncer_mode"] = False
         features["direct_dsn"] = None
         if self._user_connection_hook is not None:
             features["on_connection_create"] = self._user_connection_hook

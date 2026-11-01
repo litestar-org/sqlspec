@@ -390,7 +390,7 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Merge mssql-python driver-feature defaults with caller overrides."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    features.setdefault("use_pool", True)
+    features.setdefault("enable_pooling", True)
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
 

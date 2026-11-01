@@ -13,6 +13,8 @@ import sqlspec.adapters.psycopg.config as psycopg_config
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncSessionContext, PsycopgSyncSessionContext
 from sqlspec.adapters.psycopg.config import (
     PsycopgAsyncConfig,
+    PsycopgConnectionParams,
+    PsycopgDriverFeatures,
     PsycopgPoolParams,
     PsycopgSyncConfig,
     build_connection_config,
@@ -701,11 +703,11 @@ def test_psycopg_pooler_mode_transaction_sets_prepare_threshold_none_and_alloydb
     assert async_config.connection_config["prepare_threshold"] is None
     assert async_config.driver_features["pooler_mode"] == "statement"
 
-    alias_config = PsycopgSyncConfig(
-        connection_config={"conninfo": "postgresql://localhost/db"}, driver_features={"pgbouncer": True}
-    )
-    assert alias_config.connection_config["prepare_threshold"] is None
-    assert alias_config.driver_features["pooler_mode"] == "transaction"
+    assert "pgbouncer" not in PsycopgDriverFeatures.__annotations__
+    assert "pgbouncer_mode" not in PsycopgDriverFeatures.__annotations__
+    assert "null_pool" not in PsycopgDriverFeatures.__annotations__
+    assert "null_pool" not in PsycopgConnectionParams.__annotations__
+    assert "enable_pooling" in PsycopgDriverFeatures.__annotations__
 
     mock_connector = MagicMock()
     expected_conn = MagicMock()
@@ -750,15 +752,13 @@ async def test_psycopg_enable_alloydb_columnar_and_derive_direct_config() -> Non
     )
     assert "-c google_columnar_engine.enable_columnar_scan=on" in auto_sync.connection_config["options"]
 
-    auto_pgbouncer_sync = PsycopgSyncConfig(
+    tx_sync = PsycopgSyncConfig(
         connection_config={"conninfo": "postgresql://pooler:6432/db"},
-        driver_features={"enable_alloydb_columnar": True, "pooler_mode": "auto", "pgbouncer": True},
+        driver_features={"enable_alloydb_columnar": True, "pooler_mode": "transaction"},
     )
-    assert auto_pgbouncer_sync.driver_features["pooler_mode"] == "transaction"
-    assert auto_pgbouncer_sync.driver_features["pgbouncer"] is True
-    assert auto_pgbouncer_sync.driver_features["pgbouncer_mode"] is True
-    assert "options" not in auto_pgbouncer_sync.connection_config
-    assert auto_pgbouncer_sync.connection_config["prepare_threshold"] is None
+    assert tx_sync.driver_features["pooler_mode"] == "transaction"
+    assert "options" not in tx_sync.connection_config
+    assert tx_sync.connection_config["prepare_threshold"] is None
 
     with pytest.raises(ImproperConfigurationError, match="Invalid pooler_mode"):
         PsycopgSyncConfig(

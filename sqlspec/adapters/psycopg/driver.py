@@ -744,11 +744,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Return True when AlloyDB columnar GUC must be set transaction-locally."""
         if not self.driver_features.get("enable_alloydb_columnar"):
             return False
-        return bool(
-            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
-            or self.driver_features.get("pgbouncer")
-            or self.driver_features.get("pgbouncer_mode")
-        )
+        return self.driver_features.get("pooler_mode") in {"transaction", "statement"}
 
 
 class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
@@ -1326,11 +1322,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Return True when AlloyDB columnar GUC must be set transaction-locally."""
         if not self.driver_features.get("enable_alloydb_columnar"):
             return False
-        return bool(
-            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
-            or self.driver_features.get("pgbouncer")
-            or self.driver_features.get("pgbouncer_mode")
-        )
+        return self.driver_features.get("pooler_mode") in {"transaction", "statement"}
 
 
 def _attribute_pipeline_failure(

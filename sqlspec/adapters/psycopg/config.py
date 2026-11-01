@@ -96,7 +96,6 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "min_size",
     "name",
     "num_workers",
-    "null_pool",
     "open",
     "reconnect_failed",
     "reconnect_timeout",
@@ -190,8 +189,6 @@ class PsycopgPoolParams(PsycopgConnectionParams):
     """Callback invoked when pool reconnection attempts exceed ``reconnect_timeout``."""
     kwargs: NotRequired["dict[str, Any]"]
     """Explicit connection keyword mapping passed to ``psycopg.connect``."""
-    null_pool: NotRequired[bool]
-    """Use ``NullConnectionPool`` / ``AsyncNullConnectionPool`` so idle connections are never retained."""
 
 
 class PsycopgDriverFeatures(TypedDict):
@@ -227,14 +224,10 @@ class PsycopgDriverFeatures(TypedDict):
     """Enable binary streaming format for Arrow ingestion via PGCOPY binary protocol."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"]]
     """External pooler compatibility mode; sets ``prepare_threshold=None`` in ``transaction`` or ``statement`` mode."""
-    pgbouncer: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
-    pgbouncer_mode: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
-    null_pool: NotRequired[bool]
-    """Enable ``NullConnectionPool`` / ``AsyncNullConnectionPool`` for serverless or external pooler deployments."""
+    enable_pooling: NotRequired[bool]
+    """Enable connection pooling (defaults to ``True``; ``False`` uses ``NullConnectionPool`` / ``AsyncNullConnectionPool``)."""
 
 
 def build_connection_config(connection_config: "PsycopgPoolParams | Mapping[str, Any] | None") -> dict[str, Any]:
@@ -358,11 +351,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         features_dict.setdefault("enable_alloydb_iam_auth", False)
         features_dict.setdefault("alloydb_ip_type", "PRIVATE")
         pooler_mode = features_dict.get("pooler_mode", "session")
-        is_transaction_pooler = bool(
-            pooler_mode in {"transaction", "statement"}
-            or features_dict.get("pgbouncer")
-            or features_dict.get("pgbouncer_mode")
-        )
+        is_transaction_pooler = pooler_mode in {"transaction", "statement"}
         if is_transaction_pooler:
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
@@ -407,17 +396,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             conn_cfg.update(build_connection_config(direct_dsn))
         else:
             conn_cfg["conninfo"] = str(direct_dsn)
-        is_pooled = bool(
-            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
-            or self.driver_features.get("pgbouncer")
-            or self.driver_features.get("pgbouncer_mode")
-        )
+        is_pooled = self.driver_features.get("pooler_mode") in {"transaction", "statement"}
         if is_pooled and conn_cfg.get("prepare_threshold") is None:
             conn_cfg.pop("prepare_threshold", None)
         features = dict(self.driver_features)
         features["pooler_mode"] = "session"
-        features["pgbouncer"] = False
-        features["pgbouncer_mode"] = False
         features["direct_dsn"] = None
         return type(self)(
             connection_config=conn_cfg,
@@ -564,7 +547,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
         all_config = dict(self.connection_config)
-        all_config.pop("null_pool", None)
         auth_token_provider = all_config.pop("auth_token_provider", None)
         default_max_lifetime = _AUTH_TOKEN_DEFAULT_MAX_LIFETIME if auth_token_provider is not None else 3600.0
 
@@ -617,9 +599,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self._setup_alloydb_connector(all_config, pool_parameters)
             conninfo = None
 
-        is_null_pool = bool(self.connection_config.get("null_pool") or self.driver_features.get("null_pool"))
-        pool_cls = NullConnectionPool if is_null_pool else ConnectionPool
-        if is_null_pool:
+        pooling_disabled = not bool(self.driver_features.get("enable_pooling", True))
+        pool_cls = NullConnectionPool if pooling_disabled else ConnectionPool
+        if pooling_disabled:
             pool_parameters.pop("min_size", None)
 
         if conninfo:
@@ -825,11 +807,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "on_connection_create", None
         )
         pooler_mode = features_dict.get("pooler_mode", "session")
-        is_transaction_pooler = bool(
-            pooler_mode in {"transaction", "statement"}
-            or features_dict.get("pgbouncer")
-            or features_dict.get("pgbouncer_mode")
-        )
+        is_transaction_pooler = pooler_mode in {"transaction", "statement"}
         if is_transaction_pooler:
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
@@ -871,17 +849,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             conn_cfg.update(build_connection_config(direct_dsn))
         else:
             conn_cfg["conninfo"] = str(direct_dsn)
-        is_pooled = bool(
-            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
-            or self.driver_features.get("pgbouncer")
-            or self.driver_features.get("pgbouncer_mode")
-        )
+        is_pooled = self.driver_features.get("pooler_mode") in {"transaction", "statement"}
         if is_pooled and conn_cfg.get("prepare_threshold") is None:
             conn_cfg.pop("prepare_threshold", None)
         features = dict(self.driver_features)
         features["pooler_mode"] = "session"
-        features["pgbouncer"] = False
-        features["pgbouncer_mode"] = False
         features["direct_dsn"] = None
         return type(self)(
             connection_config=conn_cfg,
@@ -982,7 +954,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Create the actual async connection pool."""
 
         all_config = dict(self.connection_config)
-        all_config.pop("null_pool", None)
         auth_token_provider = all_config.pop("auth_token_provider", None)
         default_max_lifetime = _AUTH_TOKEN_DEFAULT_MAX_LIFETIME if auth_token_provider is not None else 3600.0
 
@@ -1029,9 +1000,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         kwargs = all_config.pop("kwargs", {})
         all_config.update(kwargs)
 
-        is_null_pool = bool(self.connection_config.get("null_pool") or self.driver_features.get("null_pool"))
-        pool_cls = AsyncNullConnectionPool if is_null_pool else AsyncConnectionPool
-        if is_null_pool:
+        pooling_disabled = not bool(self.driver_features.get("enable_pooling", True))
+        pool_cls = AsyncNullConnectionPool if pooling_disabled else AsyncConnectionPool
+        if pooling_disabled:
             pool_parameters.pop("min_size", None)
 
         if conninfo:

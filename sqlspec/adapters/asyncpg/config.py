@@ -123,8 +123,6 @@ class AsyncpgConnectionConfig(TypedDict):
     """Default per-command execution timeout in seconds."""
     statement_cache_size: NotRequired[int]
     """Maximum number of server-side prepared statements cached per connection (``0`` disables caching)."""
-    pgbouncer: NotRequired[bool]
-    """Disable prepared statement caching for transaction-pooling proxies such as PgBouncer."""
     max_cached_statement_lifetime: NotRequired[int]
     """Maximum age in seconds before cached prepared statements are evicted."""
     max_cacheable_statement_size: NotRequired[int]
@@ -211,10 +209,6 @@ class AsyncpgDriverFeatures(TypedDict):
     """Async hook invoked with each raw ``asyncpg`` connection after internal codec setup."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
     """External pooler compatibility mode; sets ``statement_cache_size=0`` in ``transaction`` or ``statement`` mode."""
-    pgbouncer: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
-    pgbouncer_mode: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
     type_codecs: NotRequired["list[dict[str, Any]]"]
@@ -351,16 +345,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             dict(raw_server_settings) if isinstance(raw_server_settings, Mapping) else None
         )
         normalized_conn_cfg = build_connection_config(raw_conn_cfg)
-        if raw_conn_cfg.get("pgbouncer"):
-            features_dict["pgbouncer"] = True
-            features_dict["pgbouncer_mode"] = True
-            if features_dict.get("pooler_mode") in {None, "session", "auto"}:
-                features_dict["pooler_mode"] = "transaction"
-        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
-            features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
-        )
+        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"}
         if is_transaction_pooler:
-            normalized_conn_cfg.setdefault("statement_cache_size", 0)
+            normalized_conn_cfg["statement_cache_size"] = 0
         if bool(features_dict.get("enable_alloydb_columnar", False)) and not is_transaction_pooler:
             merged_settings = dict(self._explicit_server_settings) if self._explicit_server_settings is not None else {}
             merged_settings.setdefault("google_columnar_engine.enable_columnar_scan", "on")
@@ -414,7 +401,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         for key in _POOL_ONLY_CONFIG_KEYS:
             config.pop(key, None)
 
-        if self.driver_features.get("pgbouncer"):
+        if self.driver_features.get("pooler_mode") in {"transaction", "statement"}:
             config["statement_cache_size"] = 0
 
         if self.driver_features.get("enable_cloud_sql", False):
@@ -514,8 +501,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             conn_cfg.update(build_connection_config(direct_dsn))
         features: dict[str, Any] = dict(self.driver_features)
         features["pooler_mode"] = "session"
-        features["pgbouncer"] = False
-        features["pgbouncer_mode"] = False
         features["direct_dsn"] = None
         if self._user_connection_hook is not None:
             features["on_connection_create"] = self._user_connection_hook
@@ -648,7 +633,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             config["password"] = auth_token_provider
             config.setdefault("max_inactive_connection_lifetime", _AUTH_TOKEN_DEFAULT_INACTIVE_LIFETIME)
 
-        if self.connection_config.get("pgbouncer") or self.driver_features.get("pgbouncer"):
+        if self.driver_features.get("pooler_mode") in {"transaction", "statement"}:
             config["statement_cache_size"] = 0
 
         if self.driver_features.get("enable_cloud_sql", False):

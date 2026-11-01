@@ -95,8 +95,6 @@ class CockroachAsyncpgConnectionConfig(TypedDict):
     """Application identifier forwarded via ``server_settings``."""
     cluster: NotRequired[str]
     """CockroachDB Serverless / Cloud routing cluster identifier."""
-    pgbouncer: NotRequired[bool]
-    """Disable prepared statement caching when connecting through a transaction pooler."""
     default_transaction_use_follower_reads: NotRequired[bool]
     """Session setting enabling bounded-staleness follower reads on read-only transactions."""
     results_buffer_size: NotRequired[int]

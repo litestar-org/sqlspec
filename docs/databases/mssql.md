@@ -96,7 +96,7 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
 | `encrypt` / `trust_server_certificate` / `server_certificate` | `mssql_python` | TLS 1.2/1.3 encryption policy (`strict`, `mandatory`, `optional`) and certificate pinning. |
 | `application_intent` / `multi_subnet_failover` | `mssql_python` | Always On availability group read-only routing (`ReadOnly` / `ReadWrite`) and parallel subnet failover. |
 | `pool_min_size` / `pool_max_size` | Both | Connection pool bounds on `MssqlPythonConnectionPool` and `PymssqlConnectionPool`. |
-| `use_pool` | `mssql_python` (`driver_features`) | Toggles SQLSpec's managed `MssqlPythonConnectionPool` (`True` by default). |
+| `enable_pooling` | `mssql_python`, `pymssql` (`driver_features`) | Toggles SQLSpec's managed connection pooling (`True` by default). |
 | `encryption` / `tds_version` / `login_timeout` | `pymssql` | FreeTDS transport encryption and TDS protocol negotiation settings. |
 
 See [MSSQL Python Reference](/reference/adapters/mssql-python/) and [PyMSSQL Reference](/reference/adapters/pymssql/) for complete TypedDict field documentation.

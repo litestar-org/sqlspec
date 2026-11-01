@@ -709,9 +709,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     def _is_transaction_pooler_mode(self) -> bool:
         pooler_mode = self.driver_features.get("pooler_mode", "session")
-        return pooler_mode in {"transaction", "statement"} or bool(
-            self.driver_features.get("pgbouncer") or self.driver_features.get("pgbouncer_mode")
-        )
+        return pooler_mode in {"transaction", "statement"}
 
     def _should_set_local_columnar(self) -> bool:
         return bool(self.driver_features.get("enable_alloydb_columnar", False)) and self._is_transaction_pooler_mode()

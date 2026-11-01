@@ -287,19 +287,14 @@ async def test_psqlpy_session_context_rolls_back_open_transaction_on_exit() -> N
 @pytest.mark.anyio
 async def test_psqlpy_pooler_mode_transaction_disables_prepared_statements() -> None:
     """Transaction pooler mode should construct a valid ConnectionPool and pass prepared=False on execution."""
+    assert "pgbouncer" not in PsqlpyDriverFeatures.__annotations__
+    assert "pgbouncer_mode" not in PsqlpyDriverFeatures.__annotations__
     config = PsqlpyConfig(
         connection_config={"dsn": "postgresql://localhost:6432/test"}, driver_features={"pooler_mode": "transaction"}
     )
     assert config.driver_features["pooler_mode"] == "transaction"
     pool = await config.create_pool()
     pool.close()
-
-    alias_config = PsqlpyConfig(
-        connection_config={"dsn": "postgresql://localhost:6432/test"}, driver_features={"pgbouncer": True}
-    )
-    assert alias_config.driver_features["pooler_mode"] == "transaction"
-    alias_pool = await alias_config.create_pool()
-    alias_pool.close()
 
     conn = AsyncMock()
     conn.fetch.return_value = _ExtensionQueryResult(set())
@@ -335,12 +330,12 @@ async def test_psqlpy_derive_direct_config_and_columnar_engine() -> None:
     )
     assert auto_direct_config.connection_config["options"] == "-c google_columnar_engine.enable_columnar_scan=on"
 
-    auto_pgbouncer_config = PsqlpyConfig(
+    tx_columnar_config = PsqlpyConfig(
         connection_config={"dsn": "postgresql://pooler:6432/test"},
-        driver_features={"pooler_mode": "auto", "pgbouncer": True, "enable_alloydb_columnar": True},
+        driver_features={"pooler_mode": "transaction", "enable_alloydb_columnar": True},
     )
-    assert auto_pgbouncer_config.driver_features["pooler_mode"] == "transaction"
-    assert "options" not in auto_pgbouncer_config.connection_config
+    assert tx_columnar_config.driver_features["pooler_mode"] == "transaction"
+    assert "options" not in tx_columnar_config.connection_config
 
     with pytest.raises(ImproperConfigurationError, match="Invalid pooler_mode"):
         PsqlpyConfig(

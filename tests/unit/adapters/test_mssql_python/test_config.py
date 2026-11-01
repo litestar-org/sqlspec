@@ -10,6 +10,7 @@ from sqlspec.adapters.mssql_python._typing import MssqlPythonSessionContext
 from sqlspec.adapters.mssql_python.config import (
     MssqlPythonConfig,
     MssqlPythonConnectionParams,
+    MssqlPythonDriverFeatures,
     _normalize_mssql_python_init,
 )
 from sqlspec.adapters.mssql_python.core import build_connection_config
@@ -318,12 +319,15 @@ def test_second_pool_same_params_no_warn(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_normalize_mssql_python_init_returns_config_features_and_hook() -> None:
     seen: list[DummyConnection] = []
 
+    assert "use_pool" not in MssqlPythonDriverFeatures.__annotations__
+    assert "enable_pooling" in MssqlPythonDriverFeatures.__annotations__
+
     normalized, features, hook = _normalize_mssql_python_init(
-        {"server": "localhost"}, {"on_connection_create": seen.append, "use_pool": False}
+        {"server": "localhost"}, {"on_connection_create": seen.append, "enable_pooling": False}
     )
 
     assert normalized == {"server": "localhost"}
-    assert features["use_pool"] is False
+    assert features["enable_pooling"] is False
     assert "on_connection_create" not in features
     assert hook is not None
     hook(cast(Any, DummyConnection()))

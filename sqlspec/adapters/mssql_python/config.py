@@ -139,7 +139,7 @@ class MssqlPythonPoolParams(MssqlPythonConnectionParams):
 class MssqlPythonDriverFeatures(TypedDict):
     """mssql-python driver feature flags."""
 
-    use_pool: NotRequired[bool]
+    enable_pooling: NotRequired[bool]
     """Enable SQLSpec connection pooling around ``mssql-python`` connections (defaults to ``True``)."""
     json_serializer: "NotRequired[Callable[[Any], str]]"
     """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""
@@ -295,7 +295,7 @@ def _create_mssql_python_pool(
 ) -> "MssqlPythonConnectionPool":
     pool_size = int(connection_config.get("pool_size", 100))
     pool_idle_timeout = int(connection_config.get("pool_idle_timeout", 600))
-    pool_enabled = bool(connection_config.get("pool_enabled", driver_features.get("use_pool", True)))
+    pool_enabled = bool(connection_config.get("pool_enabled", driver_features.get("enable_pooling", True)))
     connection_string, connect_kwargs = build_connection_config(connection_config)
     return MssqlPythonConnectionPool(
         connection_string=connection_string,

@@ -98,9 +98,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         self._data_dictionary: PsqlpyDataDictionary | None = None
         self._transaction_active = False
         pooler_mode = self.driver_features.get("pooler_mode", "session")
-        self._pooler_unprepared = pooler_mode in {"transaction", "statement"} or bool(
-            self.driver_features.get("pgbouncer") or self.driver_features.get("pgbouncer_mode")
-        )
+        self._pooler_unprepared = pooler_mode in {"transaction", "statement"}
 
     @property
     def data_dictionary(self) -> "PsqlpyDataDictionary":

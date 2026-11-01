@@ -5,7 +5,7 @@ from typing import get_type_hints
 import pytest
 
 from sqlspec.adapters.pymssql import build_connection_config
-from sqlspec.adapters.pymssql.config import PymssqlConfig, PymssqlConnectionParams
+from sqlspec.adapters.pymssql.config import PymssqlConfig, PymssqlConnectionParams, PymssqlDriverFeatures
 from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 
@@ -167,8 +167,10 @@ def test_use_datetime2_default() -> None:
 
 
 def test_driver_features_mssql_parity() -> None:
-    """PymssqlConfig defaults use_pool to True and harmonizes driver features."""
+    """PymssqlConfig defaults enable_pooling to True and harmonizes driver features."""
+    assert "use_pool" not in PymssqlDriverFeatures.__annotations__
+    assert "enable_pooling" in PymssqlDriverFeatures.__annotations__
     config = PymssqlConfig()
-    assert config.driver_features.get("use_pool") is True
+    assert config.driver_features.get("enable_pooling") is True
     assert config.driver_features.get("events_backend") == "poll_queue"
     assert config.driver_features.get("enable_uuid_conversion") is False

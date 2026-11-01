@@ -126,9 +126,6 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if found_user:
         config["user"] = user_val
 
-    if config.pop("pgbouncer", False):
-        config["statement_cache_size"] = 0
-
     return config
 
 
@@ -311,12 +308,9 @@ def apply_driver_features(
     processed_features.setdefault("enable_alloydb", False)
     processed_features.setdefault("enable_events", True)
     processed_features.setdefault("events_backend", "notify")
-    pgbouncer_enabled = bool(processed_features.get("pgbouncer") or processed_features.get("pgbouncer_mode"))
-    processed_features["pgbouncer"] = pgbouncer_enabled
-    processed_features["pgbouncer_mode"] = pgbouncer_enabled
     raw_pooler_mode = processed_features.get("pooler_mode")
     if raw_pooler_mode is None:
-        processed_features["pooler_mode"] = "transaction" if pgbouncer_enabled else "session"
+        processed_features["pooler_mode"] = "session"
     else:
         normalized_mode = str(raw_pooler_mode).lower()
         if normalized_mode not in {"session", "transaction", "statement", "auto"}:
@@ -324,12 +318,7 @@ def apply_driver_features(
                 f"Invalid pooler_mode: {raw_pooler_mode!r}. Expected 'session', 'transaction', 'statement', or 'auto'."
             )
             raise ImproperConfigurationError(msg)
-        processed_features["pooler_mode"] = (
-            "transaction" if normalized_mode == "auto" and pgbouncer_enabled else normalized_mode
-        )
-    if processed_features["pooler_mode"] in {"transaction", "statement"}:
-        processed_features["pgbouncer"] = True
-        processed_features["pgbouncer_mode"] = True
+        processed_features["pooler_mode"] = "session" if normalized_mode == "auto" else normalized_mode
     processed_features.setdefault("direct_dsn", None)
     processed_features.setdefault("enable_alloydb_columnar", False)
 

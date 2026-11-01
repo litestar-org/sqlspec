@@ -215,12 +215,9 @@ def apply_driver_features(
     features.setdefault("enable_pg_textsearch", True)
     features.setdefault("enable_alloydb_columnar", False)
     features.setdefault("enable_pgcopy_binary", False)
-    pgbouncer_enabled = bool(features.get("pgbouncer") or features.get("pgbouncer_mode"))
-    features["pgbouncer"] = pgbouncer_enabled
-    features["pgbouncer_mode"] = pgbouncer_enabled
     raw_pooler_mode = features.get("pooler_mode")
     if raw_pooler_mode is None:
-        features["pooler_mode"] = "transaction" if pgbouncer_enabled else "session"
+        features["pooler_mode"] = "session"
     else:
         normalized_mode = str(raw_pooler_mode).lower()
         if normalized_mode not in {"session", "transaction", "statement", "auto"}:
@@ -228,10 +225,7 @@ def apply_driver_features(
                 f"Invalid pooler_mode: {raw_pooler_mode!r}. Expected 'session', 'transaction', 'statement', or 'auto'."
             )
             raise ImproperConfigurationError(msg)
-        features["pooler_mode"] = "transaction" if normalized_mode == "auto" and pgbouncer_enabled else normalized_mode
-    if features["pooler_mode"] in {"transaction", "statement"}:
-        features["pgbouncer"] = True
-        features["pgbouncer_mode"] = True
+        features["pooler_mode"] = "session" if normalized_mode == "auto" else normalized_mode
     features.setdefault("direct_dsn", None)
 
     parameter_config = _parameter_config(driver_profile, serializer, deserializer)
