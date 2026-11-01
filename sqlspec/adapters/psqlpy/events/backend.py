@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 __all__ = ("PsqlpyEventsBackend", "PsqlpyHybridEventsBackend", "create_event_backend")
 
 
-logger = get_logger("sqlspec.events.psqlpy")
+logger = get_logger("sqlspec.adapters.psqlpy.events.backend")
 _MIN_LISTENER_POOL_SIZE = 2
 _MAX_SEEN_MARKERS = 1_024
 
@@ -241,14 +241,15 @@ class PsqlpyHybridEventsBackend:
                 return await self._dequeue_reconciled(channel)
             self._queue._reset_empty_poll_delay(channel)
             self._runtime.increment_metric("events.listener.wakeup")
-            batch_size = _extract_batch_size(payload)
-            is_new, should_drain = self._marker_state.register(channel, _extract_marker_id(payload), batch_size)
+            parsed_payload = _parse_notify_payload(payload)
+            batch_size = _extract_batch_size(parsed_payload)
+            is_new, should_drain = self._marker_state.register(channel, _extract_marker_id(parsed_payload), batch_size)
             if is_new and batch_size > 1:
                 self._runtime.increment_metric("events.marker.coalesced", batch_size - 1)
             if not should_drain:
                 self._runtime.increment_metric("events.marker.duplicate")
                 continue
-            event_id = _extract_event_id(payload)
+            event_id = _extract_event_id(parsed_payload)
             if event_id is not None:
                 event = await self._queue.dequeue_by_event_id(event_id)
                 if event is not None:
@@ -354,6 +355,10 @@ def create_event_backend(
 
 
 def _validate_listener_pool_capacity(config: "PsqlpyConfig") -> None:
+    raw_features = config.driver_features
+    driver_features = raw_features if isinstance(raw_features, dict) else {}
+    if driver_features.get("direct_dsn"):
+        return
     max_size = config.connection_config.get("max_db_pool_size")
     if max_size is not None and max_size < _MIN_LISTENER_POOL_SIZE:
         msg = (
@@ -362,34 +367,40 @@ def _validate_listener_pool_capacity(config: "PsqlpyConfig") -> None:
         raise ImproperConfigurationError(msg)
 
 
-def _extract_event_id(payload: "str | None") -> "str | None":
-    if not payload:
+def _parse_notify_payload(payload: "dict[str, Any] | str | None") -> "dict[str, Any] | None":
+    if isinstance(payload, dict):
+        return payload
+    if not payload or not isinstance(payload, str):
         return None
-    raw = from_json(payload)
-    if isinstance(raw, dict):
-        event_id = raw.get("event_id")
-        return event_id if isinstance(event_id, str) else None
-    return None
+    try:
+        raw = from_json(payload)
+        return raw if isinstance(raw, dict) else None
+    except (TypeError, ValueError):
+        return None
 
 
-def _extract_batch_size(payload: "str | None") -> int:
-    if not payload:
+def _extract_event_id(payload: "dict[str, Any] | str | None") -> "str | None":
+    parsed = payload if isinstance(payload, dict) else _parse_notify_payload(payload)
+    if parsed is None:
+        return None
+    event_id = parsed.get("event_id")
+    return event_id if isinstance(event_id, str) else None
+
+
+def _extract_batch_size(payload: "dict[str, Any] | str | None") -> int:
+    parsed = payload if isinstance(payload, dict) else _parse_notify_payload(payload)
+    if parsed is None:
         return 0
-    raw = from_json(payload)
-    if isinstance(raw, dict):
-        batch_size = raw.get("batch_size")
-        return batch_size if isinstance(batch_size, int) else 0
-    return 0
+    batch_size = parsed.get("batch_size")
+    return batch_size if isinstance(batch_size, int) else 0
 
 
-def _extract_marker_id(payload: "str | None") -> "str | None":
-    if not payload:
+def _extract_marker_id(payload: "dict[str, Any] | str | None") -> "str | None":
+    parsed = payload if isinstance(payload, dict) else _parse_notify_payload(payload)
+    if parsed is None:
         return None
-    raw = from_json(payload)
-    if isinstance(raw, dict):
-        marker_id = raw.get("marker_id", raw.get("event_id"))
-        return marker_id if isinstance(marker_id, str) else None
-    return None
+    marker_id = parsed.get("marker_id", parsed.get("event_id"))
+    return marker_id if isinstance(marker_id, str) else None
 
 
 def _record_dequeue_result(runtime: Any, event: "EventMessage | None") -> None:
