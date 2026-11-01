@@ -129,3 +129,39 @@ def test_sync_data_dictionary_explicit_schema_skips_connection_lookup() -> None:
     data_dictionary.get_tables(cast(Any, driver), schema="custom")
     assert driver.select_calls[0][1]["schema_name"] == "custom"
     assert len(driver.executed) == 0
+
+
+def test_data_dictionary_capabilities() -> None:
+    """The sync data dictionary implements schemas, objects, details, routines, privileges, and filtered dependencies."""
+    driver = FakeSyncDriver()
+    data_dictionary = PymssqlSyncDataDictionary()
+
+    schemas_result = data_dictionary.get_schemas(cast(Any, driver))
+    assert schemas_result.domain == "schemas"
+
+    objects_result = data_dictionary.get_objects(cast(Any, driver), schema="sales")
+    assert objects_result.domain == "objects"
+
+    details_result = data_dictionary.get_table_details(cast(Any, driver), "orders", schema="sales")
+    assert details_result.domain == "tables"
+
+    routines_result = data_dictionary.get_routines(cast(Any, driver), schema="sales")
+    assert routines_result.domain == "routines"
+
+    privileges_result = data_dictionary.get_privileges(cast(Any, driver), object_name="orders", schema="sales")
+    assert privileges_result.domain == "privileges"
+
+    deps_result = data_dictionary.get_dependencies(cast(Any, driver), object_name="orders", schema="sales")
+    assert deps_result.domain == "dependencies"
+
+
+def test_mssql_catalog_cte_aggregations() -> None:
+    """Constraints, indexes, and DDL templates use STRING_AGG CTE aggregations without FOR XML PATH."""
+    data_dictionary = PymssqlSyncDataDictionary()
+    constraints_sql = data_dictionary.get_query_text("constraints", "by_schema")
+    assert "STRING_AGG" in constraints_sql
+    assert "FOR XML PATH" not in constraints_sql
+
+    indexes_sql = data_dictionary.get_query_text("indexes", "by_schema")
+    assert "STRING_AGG" in indexes_sql
+    assert "FOR XML PATH" not in indexes_sql

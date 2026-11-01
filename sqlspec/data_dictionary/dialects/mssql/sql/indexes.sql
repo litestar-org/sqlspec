@@ -1,5 +1,25 @@
 -- name: by_schema
 -- dialect: mssql
+WITH index_key_columns AS (
+    SELECT
+        ic.object_id,
+        ic.index_id,
+        STRING_AGG(CAST(c.name AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY ic.key_ordinal) AS columns
+    FROM sys.index_columns AS ic
+    INNER JOIN sys.columns AS c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+    WHERE ic.is_included_column = 0
+    GROUP BY ic.object_id, ic.index_id
+),
+index_included_columns AS (
+    SELECT
+        ic.object_id,
+        ic.index_id,
+        STRING_AGG(CAST(c.name AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY ic.index_column_id) AS included_columns
+    FROM sys.index_columns AS ic
+    INNER JOIN sys.columns AS c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+    WHERE ic.is_included_column = 1
+    GROUP BY ic.object_id, ic.index_id
+)
 SELECT
     s.name AS schema_name,
     t.name AS table_name,
@@ -12,37 +32,41 @@ SELECT
     i.filter_definition,
     ds.name AS data_space_name,
     ps.name AS partition_scheme_name,
-    STUFF((
-        SELECT ',' + c2.name
-        FROM sys.index_columns AS ic2
-        INNER JOIN sys.columns AS c2 ON ic2.object_id = c2.object_id AND ic2.column_id = c2.column_id
-        WHERE ic2.object_id = i.object_id
-          AND ic2.index_id = i.index_id
-          AND ic2.is_included_column = 0
-        ORDER BY ic2.key_ordinal
-        FOR XML PATH(''), TYPE
-    ).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS columns,
-    STUFF((
-        SELECT ',' + c3.name
-        FROM sys.index_columns AS ic3
-        INNER JOIN sys.columns AS c3 ON ic3.object_id = c3.object_id AND ic3.column_id = c3.column_id
-        WHERE ic3.object_id = i.object_id
-          AND ic3.index_id = i.index_id
-          AND ic3.is_included_column = 1
-        ORDER BY ic3.index_column_id
-        FOR XML PATH(''), TYPE
-    ).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS included_columns
+    kc.columns,
+    inc.included_columns
 FROM sys.indexes AS i
 INNER JOIN sys.tables AS t ON i.object_id = t.object_id
 INNER JOIN sys.schemas AS s ON t.schema_id = s.schema_id
 LEFT JOIN sys.data_spaces AS ds ON i.data_space_id = ds.data_space_id
 LEFT JOIN sys.partition_schemes AS ps ON ds.data_space_id = ps.data_space_id
+LEFT JOIN index_key_columns AS kc ON kc.object_id = i.object_id AND kc.index_id = i.index_id
+LEFT JOIN index_included_columns AS inc ON inc.object_id = i.object_id AND inc.index_id = i.index_id
 WHERE (:schema_name IS NULL OR s.name = :schema_name)
   AND i.name IS NOT NULL
 ORDER BY s.name, t.name, i.name;
 
 -- name: by_table
 -- dialect: mssql
+WITH index_key_columns AS (
+    SELECT
+        ic.object_id,
+        ic.index_id,
+        STRING_AGG(CAST(c.name AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY ic.key_ordinal) AS columns
+    FROM sys.index_columns AS ic
+    INNER JOIN sys.columns AS c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+    WHERE ic.is_included_column = 0
+    GROUP BY ic.object_id, ic.index_id
+),
+index_included_columns AS (
+    SELECT
+        ic.object_id,
+        ic.index_id,
+        STRING_AGG(CAST(c.name AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY ic.index_column_id) AS included_columns
+    FROM sys.index_columns AS ic
+    INNER JOIN sys.columns AS c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+    WHERE ic.is_included_column = 1
+    GROUP BY ic.object_id, ic.index_id
+)
 SELECT
     s.name AS schema_name,
     t.name AS table_name,
@@ -55,31 +79,15 @@ SELECT
     i.filter_definition,
     ds.name AS data_space_name,
     ps.name AS partition_scheme_name,
-    STUFF((
-        SELECT ',' + c2.name
-        FROM sys.index_columns AS ic2
-        INNER JOIN sys.columns AS c2 ON ic2.object_id = c2.object_id AND ic2.column_id = c2.column_id
-        WHERE ic2.object_id = i.object_id
-          AND ic2.index_id = i.index_id
-          AND ic2.is_included_column = 0
-        ORDER BY ic2.key_ordinal
-        FOR XML PATH(''), TYPE
-    ).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS columns,
-    STUFF((
-        SELECT ',' + c3.name
-        FROM sys.index_columns AS ic3
-        INNER JOIN sys.columns AS c3 ON ic3.object_id = c3.object_id AND ic3.column_id = c3.column_id
-        WHERE ic3.object_id = i.object_id
-          AND ic3.index_id = i.index_id
-          AND ic3.is_included_column = 1
-        ORDER BY ic3.index_column_id
-        FOR XML PATH(''), TYPE
-    ).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS included_columns
+    kc.columns,
+    inc.included_columns
 FROM sys.indexes AS i
 INNER JOIN sys.tables AS t ON i.object_id = t.object_id
 INNER JOIN sys.schemas AS s ON t.schema_id = s.schema_id
 LEFT JOIN sys.data_spaces AS ds ON i.data_space_id = ds.data_space_id
 LEFT JOIN sys.partition_schemes AS ps ON ds.data_space_id = ps.data_space_id
+LEFT JOIN index_key_columns AS kc ON kc.object_id = i.object_id AND kc.index_id = i.index_id
+LEFT JOIN index_included_columns AS inc ON inc.object_id = i.object_id AND inc.index_id = i.index_id
 WHERE s.name = :schema_name
   AND t.name = :table_name
   AND i.name IS NOT NULL
