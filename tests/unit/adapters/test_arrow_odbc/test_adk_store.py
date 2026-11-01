@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for arrow-odbc ADK store data-dictionary existence checks."""
 
 from typing import Any
@@ -6,7 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sqlspec.adapters.arrow_odbc.adk import ArrowOdbcADKStore
+from sqlspec.adapters.arrow_odbc.adk import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def _mock_config(adk_config: "dict[str, object] | None" = None) -> MagicMock:
@@ -173,3 +173,23 @@ def test_arrow_odbc_list_sessions_rejects_invalid_options(
         store.list_sessions("app", **options)
 
     assert calls == []
+
+
+def test_arrow_odbc_adk_store_requires_mssql_or_db2() -> None:
+    """ArrowOdbcADKStore requires dialect mssql or db2."""
+    config = MagicMock()
+    config.statement_config.dialect = "sqlite"
+    config.extension_config = {"adk": {}}
+
+    with pytest.raises(ImproperConfigurationError, match="ArrowOdbcADKStore requires dialect"):
+        ArrowOdbcADKStore(config)
+
+
+def test_arrow_odbc_adk_memory_store_rejects_embedding() -> None:
+    """ArrowOdbcADKMemoryStore rejects embeddings with NotImplementedError."""
+    config = _mock_config({"enable_memory": True})
+    config.statement_config.dialect = "mssql"
+    mem_store = ArrowOdbcADKMemoryStore(config)
+
+    with pytest.raises(NotImplementedError, match="Vector embeddings are not supported"):
+        mem_store.search_entries("hello", "app", "user", embedding=[0.1, 0.2])

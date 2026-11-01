@@ -243,17 +243,12 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         )
         probe_sql = f"SELECT * FROM {qualified} WHERE 1=0"
         try:
-            reader = driver._read_arrow_batches(  # pyright: ignore[reportPrivateUsage]
-                probe_sql, None, 1, fetch_concurrently=False
-            )
+            reader = driver._read_arrow_batches(probe_sql, None, 1, fetch_concurrently=False)
         except Exception:
             return []
         columns: list[ColumnMetadata] = []
         raw_names = [field.name for field in reader.schema]
-        normalized_names = normalize_column_names(
-            raw_names,
-            driver._lowercase_column_names,  # pyright: ignore[reportPrivateUsage]
-        )
+        normalized_names = normalize_column_names(raw_names, driver._lowercase_column_names)
         for position, (field, column_name) in enumerate(zip(reader.schema, normalized_names, strict=False), start=1):
             entry: ColumnMetadata = {
                 "table_name": table,
