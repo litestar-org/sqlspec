@@ -238,10 +238,15 @@ async def test_psycopg_async_and_asyncpg_and_psqlpy_auth_token_provider() -> Non
     with patch("sqlspec.adapters.psqlpy.config.ConnectionPool", side_effect=fake_psqlpy_pool):
         await psqlpy_cfg._create_pool()
     assert captured_psqlpy["password"] == "async-iam-token"
-    assert (
-        build_psqlpy_connection_config({"username": "u", "auth_token_provider": lambda: "sync-tok"})["password"]
-        == "sync-tok"
-    )
+    sync_calls: list[str] = []
+
+    def sync_provider() -> str:
+        sync_calls.append("called")
+        return "sync-tok"
+
+    deferred = build_psqlpy_connection_config({"username": "u", "auth_token_provider": sync_provider})
+    assert "password" not in deferred
+    assert sync_calls == []
 
 
 def test_adbc_auth_token_provider_resolves_fresh_credentials() -> None:

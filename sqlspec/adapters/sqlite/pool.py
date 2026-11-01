@@ -40,6 +40,7 @@ class SqliteConnectionPool:
     __slots__ = (
         "_anchor_connection",
         "_checked_out_count",
+        "_connection_depths",
         "_connection_parameters",
         "_connection_registry",
         "_enable_foreign_keys",
@@ -90,6 +91,7 @@ class SqliteConnectionPool:
         self._connection_registry: set[SqliteConnection] = set()
         self._thread_connections: dict[threading.Thread, SqliteConnection] = {}
         self._checked_out_count = 0
+        self._connection_depths: dict[SqliteConnection, int] = {}
         self._generation = 0
         self._registry_lock = threading.Lock()
         self._enable_optimizations = enable_optimizations
@@ -157,31 +159,36 @@ class SqliteConnectionPool:
             SqliteConnection: A thread-local connection.
         """
         connection = self._get_thread_connection()
-        depth = getattr(self._thread_local, "depth", 0)
-        self._thread_local.depth = depth + 1
-        if self._thread_local.depth == 1:
-            with self._registry_lock:
+        with self._registry_lock:
+            depth = self._connection_depths.get(connection, 0)
+            self._connection_depths[connection] = depth + 1
+            if depth == 0:
                 self._checked_out_count += 1
+        outermost = depth == 0
         try:
             yield connection
         except BaseException:
-            if self._thread_local.depth == 1:
+            if outermost:
                 with contextlib.suppress(Exception):
                     end_transaction(connection, commit=False)
             raise
         else:
-            if self._thread_local.depth == 1:
+            if outermost:
                 try:
-                    end_transaction(connection, commit=False)
+                    end_transaction(connection, commit=True)
                 except BaseException:
                     with contextlib.suppress(Exception):
                         end_transaction(connection, commit=False)
                     raise
         finally:
-            if self._thread_local.depth == 1:
-                with self._registry_lock:
+            with self._registry_lock:
+                remaining = self._connection_depths.get(connection, 1) - 1
+                if remaining > 0:
+                    self._connection_depths[connection] = remaining
+                else:
+                    self._connection_depths.pop(connection, None)
+                if outermost and self._checked_out_count > 0:
                     self._checked_out_count -= 1
-            self._thread_local.depth -= 1
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
@@ -190,6 +197,7 @@ class SqliteConnectionPool:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
             self._thread_connections.clear()
+            self._connection_depths.clear()
             self._checked_out_count = 0
             anchor = self._anchor_connection
             self._anchor_connection = None

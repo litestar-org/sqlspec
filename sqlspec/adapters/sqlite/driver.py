@@ -197,9 +197,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         Raises:
             SQLSpecError: If transaction cannot be started
         """
-        transaction_mode = (
-            mode if mode is not None else self.driver_features.get("default_transaction_mode", "IMMEDIATE")
-        )
+        transaction_mode = mode if mode is not None else self.driver_features.get("default_transaction_mode")
         if transaction_mode is not None and transaction_mode not in {"DEFERRED", "IMMEDIATE", "EXCLUSIVE"}:
             msg = "Transaction mode must be DEFERRED, IMMEDIATE, or EXCLUSIVE"
             raise ImproperConfigurationError(msg)

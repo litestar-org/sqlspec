@@ -280,10 +280,8 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
 class AsyncmySessionContext:
     """Async context manager for AsyncMy sessions.
 
-    This class is intentionally excluded from mypyc compilation to avoid ABI
-    boundary issues. It receives callables from uncompiled config classes and
-    instantiates compiled Driver objects, acting as a bridge between compiled
-    and uncompiled code.
+    Acquires a connection from the config, builds the driver, and releases the
+    connection when the session ends.
     """
 
     __slots__ = (

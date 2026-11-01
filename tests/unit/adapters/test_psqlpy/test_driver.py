@@ -11,6 +11,7 @@ from sqlspec.adapters.psqlpy.core import build_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL
 from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.exceptions import SQLSpecError
 
 
 @pytest.mark.anyio
@@ -122,17 +123,15 @@ async def test_psqlpy_prepare_parameters_with_casts_zero_allocation() -> None:
 @pytest.mark.anyio
 async def test_psqlpy_execute_cache_hit_direct_fast_path() -> None:
     """_execute_cache_hit executes directly on connection without calling _execute_cached_statement."""
-    from sqlspec.core.cache import CachedQuery, StatementOperationProfile
-
     conn = AsyncMock()
     conn.fetch = AsyncMock(return_value=[{"col": 1}])
     driver = PsqlpyDriver(connection=cast("Any", conn), statement_config=build_statement_config())
+    statement = SQL("SELECT 1 AS col", statement_config=driver.statement_config)
+    statement.compile()
+    driver._cache_statement(statement)
+    cached = driver._stmt_cache.get(statement.raw_sql)
+    assert cached is not None
 
-    cached = CachedQuery(
-        compiled_sql="SELECT 1 AS col",
-        operation_profile=StatementOperationProfile(returns_rows=True),
-        operation_type="SELECT",
-    )
     result = await driver._execute_cache_hit("SELECT 1 AS col", (), cached)
     assert result.data == [{"col": 1}]
     assert conn.fetch.await_count == 1
@@ -149,14 +148,14 @@ async def test_psqlpy_load_from_arrow_preserves_cause_on_failure() -> None:
     driver = PsqlpyDriver(
         connection=cast("Any", conn),
         statement_config=build_statement_config(),
-        driver_features={"enable_pgcopy_binary": True, "arrow_import_enabled": True},
+        driver_features={"enable_pgcopy_binary": True, "storage_capabilities": {"arrow_import_enabled": True}},
     )
     tbl = pa.Table.from_arrays([pa.array([1, 2])], names=["id"])
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(SQLSpecError) as exc_info:
         await driver.load_from_arrow("items", tbl)
 
-    assert exc_info.value.__cause__ is not None or "binary copy network drop" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ConnectionExecuteError)
 
 
 def test_psqlpy_driver_class_cached_in_resolve() -> None:

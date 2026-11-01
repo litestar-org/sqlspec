@@ -155,8 +155,8 @@ def test_get_connection_rolls_back_open_transaction_on_exception() -> None:
     pool.close()
 
 
-def test_get_connection_rolls_back_open_transaction_on_clean_exit() -> None:
-    """A clean with-block exit rolls back the uncommitted transaction."""
+def test_get_connection_commits_open_transaction_on_clean_exit() -> None:
+    """A clean with-block exit commits the open transaction."""
     pool = SqliteConnectionPool(connection_parameters={"database": ":memory:"}, enable_optimizations=False)
     with pool.get_connection() as connection:
         connection.execute("CREATE TABLE widgets (id INTEGER PRIMARY KEY)")
@@ -167,8 +167,33 @@ def test_get_connection_rolls_back_open_transaction_on_clean_exit() -> None:
 
     with pool.get_connection() as connection:
         count = connection.execute("SELECT COUNT(*) FROM widgets").fetchone()[0]
-    assert count == 0
+    assert count == 1
 
+    pool.close()
+
+
+def test_get_connection_exits_cleanly_on_another_thread() -> None:
+    """A scope entered on one thread can be exited on another without losing the commit."""
+    pool = SqliteConnectionPool(connection_parameters={"database": ":memory:"}, enable_optimizations=False)
+    scope = pool.get_connection()
+    connection = scope.__enter__()
+    connection.execute("CREATE TABLE widgets (id INTEGER PRIMARY KEY)")
+    connection.execute("INSERT INTO widgets (id) VALUES (1)")
+    errors: list[BaseException] = []
+
+    def _exit() -> None:
+        try:
+            scope.__exit__(None, None, None)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=_exit)
+    worker.start()
+    worker.join(timeout=10)
+
+    assert errors == []
+    assert pool.checked_out() == 0
+    assert connection.execute("SELECT COUNT(*) FROM widgets").fetchone()[0] == 1
     pool.close()
 
 
@@ -387,24 +412,6 @@ def test_memory_pool_replaces_a_closed_connection() -> None:
             connection.close()
         with pool.get_connection() as replacement:
             assert replacement.execute("SELECT 1").fetchone() == (1,)
-    finally:
-        pool.close()
-
-
-def test_uncommitted_writes_rollback_on_exit() -> None:
-    pool = SqliteConnectionPool({"database": ":memory:"})
-    try:
-        with pool.get_connection() as conn:
-            conn.execute("CREATE TABLE test_rb (x INT)")
-            conn.execute("INSERT INTO test_rb VALUES (1)")
-            conn.commit()
-
-        with pool.get_connection() as conn:
-            conn.execute("INSERT INTO test_rb VALUES (2)")
-
-        with pool.get_connection() as conn:
-            rows = conn.execute("SELECT * FROM test_rb").fetchall()
-            assert rows == [(1,)]
     finally:
         pool.close()
 

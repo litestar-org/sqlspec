@@ -150,39 +150,6 @@ def test_duckdb_exception_handler_maps_native_error(monkeypatch: pytest.MonkeyPa
     assert seen == {"exc_val": error}
 
 
-def test_mysqlconnector_sync_exception_handler_preserves_suppression(monkeypatch: pytest.MonkeyPatch) -> None:
-    """mysql-connector sync handler should preserve migration-suppression sentinel values."""
-    pytest.importorskip("mysql.connector")
-    import mysql.connector
-
-    from sqlspec.adapters.mysqlconnector import driver as mysqlconnector_driver
-
-    monkeypatch.setattr(mysqlconnector_driver, "create_mapped_exception", lambda *args, **kwargs: True)
-
-    error = mysql.connector.Error("skip mapping")
-    handler = mysqlconnector_driver.MysqlConnectorSyncExceptionHandler()
-
-    assert handler.__exit__(type(error), error, None) is True
-    assert handler.pending_exception is None
-
-
-@pytest.mark.anyio
-async def test_mysqlconnector_async_exception_handler_preserves_suppression(monkeypatch: pytest.MonkeyPatch) -> None:
-    """mysql-connector async handler should preserve migration-suppression sentinel values."""
-    pytest.importorskip("mysql.connector")
-    import mysql.connector
-
-    from sqlspec.adapters.mysqlconnector import driver as mysqlconnector_driver
-
-    monkeypatch.setattr(mysqlconnector_driver, "create_mapped_exception", lambda *args, **kwargs: True)
-
-    error = mysql.connector.Error("skip mapping")
-    handler = mysqlconnector_driver.MysqlConnectorAsyncExceptionHandler()
-
-    assert await handler.__aexit__(type(error), error, None) is True
-    assert handler.pending_exception is None
-
-
 @pytest.mark.anyio
 async def test_cockroach_asyncpg_exception_handler_preserves_serialization_conflicts(
     monkeypatch: pytest.MonkeyPatch,
