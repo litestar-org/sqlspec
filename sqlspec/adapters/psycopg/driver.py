@@ -17,6 +17,7 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgSyncSessionContext,
 )
 from sqlspec.adapters.psycopg._typing import psycopg_module as psycopg
+from sqlspec.adapters.psycopg._typing import psycopg_sql as pg_sql
 from sqlspec.adapters.psycopg.core import (
     OPEN_TRANSACTION_STATUSES,
     TRANSACTION_STATUS_INERROR,
@@ -51,8 +52,6 @@ from sqlspec.core import (
     is_copy_to_operation,
     register_driver_profile,
 )
-from sqlspec.core.parameters import ParameterValidator
-from sqlspec.core.sqlcommenter import format_wire_sqlcomment
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
     AsyncRowStream,
@@ -65,7 +64,7 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.text import normalize_identifier, quote_identifier
+from sqlspec.utils.text import normalize_identifier
 from sqlspec.utils.type_guards import is_readable, resolve_row_format
 
 if TYPE_CHECKING:
@@ -75,6 +74,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult
     from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.typing import ArrowRecordBatch
 
 
 __all__ = (
@@ -455,16 +455,14 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
         normalized_schema = normalize_identifier(schema, "postgres")
-        quoted_schema = quote_identifier(normalized_schema)
-        sql = f'SET LOCAL search_path TO {quoted_schema}, "$user", public'
+        sql = PsycopgSQL('SET LOCAL search_path TO {}, "$user", public').format(pg_sql.Identifier(normalized_schema))
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(sql)
 
     def set_migration_non_transactional_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for non-transactional migration SQL."""
         normalized_schema = normalize_identifier(schema, "postgres")
-        quoted_schema = quote_identifier(normalized_schema)
-        sql = f'SET search_path TO {quoted_schema}, "$user", public'
+        sql = PsycopgSQL('SET search_path TO {}, "$user", public').format(pg_sql.Identifier(normalized_schema))
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(sql)
 
@@ -589,29 +587,38 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             copy_sql = build_copy_from_command(table, columns, binary=use_binary)
             all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             exc_handler = self.handle_database_exceptions()
-            with ExitStack() as stack:
-                cursor = stack.enter_context(self.with_cursor(self.connection))
-                copy_ctx = stack.enter_context(cursor.copy(copy_sql))
-                if use_binary:
-                    for chunk in self._iter_pgcopy_binary_chunks(all_batches, columns=columns, metrics=metrics):
-                        self._run_with_exception_handler(exc_handler, copy_ctx.write, chunk)
-                else:
-                    for batch in all_batches:
-                        metrics["rows_processed"] += int(batch.num_rows)
-                        metrics["bytes_processed"] += int(batch.nbytes)
-                        records = self._arrow_batch_to_rows(batch, columns)
-                        if self._arrow_rows_need_preparation(batch):
-                            records = cast(
-                                "list[Any]",
-                                self.prepare_driver_parameters(records, self.statement_config, is_many=True),
-                            )
-                        for record in records:
-                            self._run_with_exception_handler(exc_handler, copy_ctx.write_row, record)
+            self._run_with_exception_handler(
+                exc_handler, self._copy_arrow_batches, copy_sql, all_batches, columns, metrics, use_binary
+            )
             self._check_pending_exception(exc_handler)
         telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
+
+    def _copy_arrow_batches(
+        self,
+        copy_sql: "PsycopgComposed",
+        batches: "abc.Iterable[ArrowRecordBatch]",
+        columns: list[str],
+        metrics: dict[str, int],
+        use_binary: bool,
+    ) -> None:
+        with self.with_cursor(self.connection) as cursor, cursor.copy(copy_sql) as copy_ctx:
+            if use_binary:
+                for chunk in self._iter_pgcopy_binary_chunks(batches, columns=columns, metrics=metrics):
+                    copy_ctx.write(chunk)
+            else:
+                for batch in batches:
+                    metrics["rows_processed"] += int(batch.num_rows)
+                    metrics["bytes_processed"] += int(batch.nbytes)
+                    records = self._arrow_batch_to_rows(batch, columns)
+                    if self._arrow_rows_need_preparation(batch):
+                        records = cast(
+                            "list[Any]", self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                        )
+                    for record in records:
+                        copy_ctx.write_row(record)
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psycopg sync rows for the direct execution path."""
@@ -623,18 +630,15 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Resolve rowcount from psycopg cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
-    def _format_wire_sql(self, sql: str) -> str:
-        """Apply wire-level literal percent escaping and sqlcommenter formatting."""
-        formatted = sql
-        if "%" in formatted:
-            formatted = escape_literal_percent(formatted, True, ParameterValidator())
-        if not self.statement_config.enable_sqlcommenter:
-            return formatted
-        return format_wire_sqlcomment(formatted, self.statement_config)
-
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
+        expected_percents = cached.parameter_profile.total_count if params else 0
+        if cached.compiled_sql.count("%") != expected_percents:
+            statement = self._cached_statement(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return self._execute_cached_statement(statement)
         return super()._execute_cache_hit(sql, params, cached)
 
     def _execute_stack_pipeline(
@@ -1028,16 +1032,14 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
         normalized_schema = normalize_identifier(schema, "postgres")
-        quoted_schema = quote_identifier(normalized_schema)
-        sql = f'SET LOCAL search_path TO {quoted_schema}, "$user", public'
+        sql = PsycopgSQL('SET LOCAL search_path TO {}, "$user", public').format(pg_sql.Identifier(normalized_schema))
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(sql)
 
     async def set_migration_non_transactional_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for non-transactional migration SQL."""
         normalized_schema = normalize_identifier(schema, "postgres")
-        quoted_schema = quote_identifier(normalized_schema)
-        sql = f'SET search_path TO {quoted_schema}, "$user", public'
+        sql = PsycopgSQL('SET search_path TO {}, "$user", public').format(pg_sql.Identifier(normalized_schema))
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(sql)
 
@@ -1167,29 +1169,38 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             copy_sql = build_copy_from_command(table, columns, binary=use_binary)
             all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             exc_handler = self.handle_database_exceptions()
-            async with AsyncExitStack() as stack:
-                cursor = await stack.enter_async_context(self.with_cursor(self.connection))
-                copy_ctx = await stack.enter_async_context(cursor.copy(copy_sql))
-                if use_binary:
-                    for chunk in self._iter_pgcopy_binary_chunks(all_batches, columns=columns, metrics=metrics):
-                        await self._run_with_exception_handler(exc_handler, copy_ctx.write, chunk)
-                else:
-                    for batch in all_batches:
-                        metrics["rows_processed"] += int(batch.num_rows)
-                        metrics["bytes_processed"] += int(batch.nbytes)
-                        records = self._arrow_batch_to_rows(batch, columns)
-                        if self._arrow_rows_need_preparation(batch):
-                            records = cast(
-                                "list[Any]",
-                                self.prepare_driver_parameters(records, self.statement_config, is_many=True),
-                            )
-                        for record in records:
-                            await self._run_with_exception_handler(exc_handler, copy_ctx.write_row, record)
+            await self._run_with_exception_handler(
+                exc_handler, self._copy_arrow_batches, copy_sql, all_batches, columns, metrics, use_binary
+            )
             self._check_pending_exception(exc_handler)
         telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
+
+    async def _copy_arrow_batches(
+        self,
+        copy_sql: "PsycopgComposed",
+        batches: "abc.Iterable[ArrowRecordBatch]",
+        columns: list[str],
+        metrics: dict[str, int],
+        use_binary: bool,
+    ) -> None:
+        async with self.with_cursor(self.connection) as cursor, cursor.copy(copy_sql) as copy_ctx:
+            if use_binary:
+                for chunk in self._iter_pgcopy_binary_chunks(batches, columns=columns, metrics=metrics):
+                    await copy_ctx.write(chunk)
+            else:
+                for batch in batches:
+                    metrics["rows_processed"] += int(batch.num_rows)
+                    metrics["bytes_processed"] += int(batch.nbytes)
+                    records = self._arrow_batch_to_rows(batch, columns)
+                    if self._arrow_rows_need_preparation(batch):
+                        records = cast(
+                            "list[Any]", self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                        )
+                    for record in records:
+                        await copy_ctx.write_row(record)
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psycopg async rows for the direct execution path."""
@@ -1201,18 +1212,15 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Resolve rowcount from psycopg cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
-    def _format_wire_sql(self, sql: str) -> str:
-        """Apply wire-level literal percent escaping and sqlcommenter formatting."""
-        formatted = sql
-        if "%" in formatted:
-            formatted = escape_literal_percent(formatted, True, ParameterValidator())
-        if not self.statement_config.enable_sqlcommenter:
-            return formatted
-        return format_wire_sqlcomment(formatted, self.statement_config)
-
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
+        expected_percents = cached.parameter_profile.total_count if params else 0
+        if cached.compiled_sql.count("%") != expected_percents:
+            statement = self._cached_statement(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return await self._execute_cached_statement(statement)
         return await super()._execute_cache_hit(sql, params, cached)
 
     async def _execute_stack_pipeline(

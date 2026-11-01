@@ -1,7 +1,7 @@
 """Oracle-specific ADK store tests for LOB handling, JSON types, and FK columns."""
 
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
@@ -16,7 +16,7 @@ from sqlspec.adapters.oracledb.adk import (
     OracleSyncADKMemoryStore,
     OracleSyncADKStore,
 )
-from sqlspec.extensions.adk import StoredEvent
+from sqlspec.extensions.adk import StoredEvent, StoredMemory
 
 pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.oracledb, pytest.mark.integration]
 
@@ -530,9 +530,9 @@ async def oracle_async_memory_store(
 
 
 @pytest.fixture
-async def oracle_sync_memory_store(
+def oracle_sync_memory_store(
     oracle_sync_config: "OracleSyncConfig",
-) -> "AsyncGenerator[OracleSyncADKMemoryStore, None]":
+) -> "Generator[OracleSyncADKMemoryStore, None, None]":
     """Create a sync Oracle ADK memory store with tables created per test."""
     store = OracleSyncADKMemoryStore(oracle_sync_config)
     store.create_tables()
@@ -550,7 +550,7 @@ async def test_oracle_async_adk_memory_store_insert_and_search_embedding(
     user_id = "user-vec"
     now = datetime.now(UTC)
     embedding = [0.1 * i for i in range(768)]
-    entries = [
+    entries: list[StoredMemory] = [
         {
             "id": _unique_session_id("mem-vec"),
             "session_id": _unique_session_id("sess-vec"),
@@ -585,7 +585,7 @@ def test_oracle_sync_adk_memory_store_insert_and_search_embedding(
     user_id = "user-vec-sync"
     now = datetime.now(UTC)
     embedding = [0.1 * i for i in range(768)]
-    entries = [
+    entries: list[StoredMemory] = [
         {
             "id": _unique_session_id("mem-vec-sync"),
             "session_id": _unique_session_id("sess-vec-sync"),

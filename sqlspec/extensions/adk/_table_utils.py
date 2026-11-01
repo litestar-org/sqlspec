@@ -6,7 +6,7 @@ from typing import Final
 
 __all__ = ("ensure_table_name", "owner_id_column_name", "reset_drop_sql", "unique_statements")
 
-_VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$")
+_VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
 _MAX_TABLE_NAME_LENGTH: Final = 63
 
@@ -40,8 +40,16 @@ def reset_drop_sql(
     return unique_statements(statements)
 
 
-def ensure_table_name(table_name: str) -> None:
-    """Validate table name for SQL safety."""
+def ensure_table_name(table_name: str, *, max_parts: int = 1) -> None:
+    """Validate table identifier components supported by the store.
+
+    Args:
+        table_name: Table name to validate.
+        max_parts: Maximum number of identifier components the store supports.
+
+    Raises:
+        ValueError: If a name component is empty, invalid, or too long.
+    """
     if not table_name:
         msg = "Table name cannot be empty"
         raise ValueError(msg)
@@ -52,7 +60,7 @@ def ensure_table_name(table_name: str) -> None:
             msg = f"Table name too long: {len(part)} chars (max {_MAX_TABLE_NAME_LENGTH})"
             raise ValueError(msg)
 
-    if not _VALID_TABLE_NAME_PATTERN.match(table_name):
+    if len(parts) > max_parts or any(not _VALID_TABLE_NAME_PATTERN.fullmatch(part) for part in parts):
         msg = (
             f"Invalid table name: {table_name!r}. "
             "Must start with letter/underscore and contain only alphanumeric characters and underscores"

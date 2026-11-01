@@ -1043,7 +1043,10 @@ class _DuckDBFetchManyReader:
         self._close_callback = close_callback
 
     def read_next_batch(self) -> _DuckDBFetchManyBatch:
-        rows = self._target.fetchmany(self._chunk_size)
+        target = self._target
+        if target is None:
+            raise StopIteration
+        rows = target.fetchmany(self._chunk_size)
         if not rows:
             self.close()
             raise StopIteration
@@ -1051,13 +1054,17 @@ class _DuckDBFetchManyReader:
         return _DuckDBFetchManyBatch(dict_rows)
 
     def close(self) -> None:
-        close_method = getattr(self._target, "close", None)
-        if callable(close_method):
-            close_method()
+        target = self._target
+        self._target = None
         if self._close_callback is not None:
             callback = self._close_callback
             self._close_callback = None
             callback()
+        elif target is not None:
+            # DuckDB 2 keeps execute results active until they are completed.
+            complete_method = getattr(target, "complete", None)
+            if callable(complete_method):
+                complete_method()
 
 
 def _ensure_arrow_reader(reader: Any) -> Any:

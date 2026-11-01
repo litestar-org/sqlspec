@@ -4,7 +4,7 @@ import inspect
 import logging
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_session_store_config
 from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
@@ -47,6 +47,8 @@ class _ADKStoreCommon(Generic[ConfigT]):
         "_user_state_table",
     )
 
+    _max_table_name_parts: ClassVar[int] = 1
+
     def __init__(self, config: ConfigT) -> None:
         """Initialize the ADK store.
 
@@ -73,11 +75,11 @@ class _ADKStoreCommon(Generic[ConfigT]):
         self._owner_id_column_name: str | None = (
             owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-        ensure_table_name(self._session_table)
-        ensure_table_name(self._events_table)
-        ensure_table_name(self._app_state_table)
-        ensure_table_name(self._user_state_table)
-        ensure_table_name(self._metadata_table)
+        ensure_table_name(self._session_table, max_parts=self._max_table_name_parts)
+        ensure_table_name(self._events_table, max_parts=self._max_table_name_parts)
+        ensure_table_name(self._app_state_table, max_parts=self._max_table_name_parts)
+        ensure_table_name(self._user_state_table, max_parts=self._max_table_name_parts)
+        ensure_table_name(self._metadata_table, max_parts=self._max_table_name_parts)
 
     @property
     def config(self) -> ConfigT:

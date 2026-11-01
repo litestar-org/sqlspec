@@ -2,7 +2,7 @@
 """Unit tests for mysql-connector ADK store extension configuration."""
 
 import asyncio
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
@@ -16,6 +16,7 @@ from sqlspec.adapters.mysqlconnector.adk import (
     MysqlConnectorSyncADKStore,
 )
 from sqlspec.config import ADKConfig
+from sqlspec.extensions.adk import StoredEvent
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -493,15 +494,13 @@ def test_mysqlconnector_sync_append_event_rolls_back_if_commit_fails() -> None:
     config.provide_connection = lambda *_a, **_k: conn
 
     store = MysqlConnectorSyncADKStore(config)
-    event: dict[str, Any] = {
+    event: StoredEvent = {
         "id": "e-1",
         "session_id": "sess-1",
         "app_name": "app",
         "user_id": "u1",
-        "event_id": "evt-1",
-        "event_type": "user",
         "event_data": {"msg": "hi"},
-        "timestamp": None,
+        "timestamp": datetime.now(UTC),
         "invocation_id": "inv-1",
     }
 

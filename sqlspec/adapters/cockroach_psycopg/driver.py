@@ -397,6 +397,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
 
     def _execute_native_storage(self, command: str, parameters: "list[Any]") -> "list[dict[str, Any]]":
         handler = self.handle_database_exceptions()
+        rows: list[dict[str, Any]] = []
 
         def _fetch() -> list[dict[str, Any]]:
             with self.with_cursor(self.connection) as cursor:
@@ -667,6 +668,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
 
     async def _execute_native_storage(self, command: str, parameters: "list[Any]") -> "list[dict[str, Any]]":
         handler = self.handle_database_exceptions()
+        rows: list[dict[str, Any]] = []
 
         async def _fetch() -> list[dict[str, Any]]:
             async with self.with_cursor(self.connection) as cursor:

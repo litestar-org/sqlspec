@@ -337,8 +337,47 @@ def _build_standalone_connection_params(connection_config: "Mapping[str, Any]") 
     config.pop("max_lifetime_session", None)
     config.pop("session_callback", None)
     config.pop("threaded", None)
+    config.pop("getmode", None)
+    config.pop("ping_interval", None)
+    config.pop("ping_timeout", None)
+    config.pop("max_sessions_per_shard", None)
+    config.pop("pool_class", None)
+    connection_type = config.pop("connectiontype", None)
+    if connection_type is not None:
+        config["conn_class"] = connection_type
     apply_wallet_ssl_context(config)
     return config
+
+
+def _initialize_oracle_client(connection_config: "Mapping[str, Any]") -> None:
+    """Initialize requested Thick mode before creating a pool or connection."""
+    lib_dir = connection_config.get("lib_dir")
+    if (
+        not (connection_config.get("thick_mode") or lib_dir is not None or connection_config.get("soda_metadata_cache"))
+        or not oracledb.is_thin_mode()
+    ):
+        return
+    client_config = {}
+    if lib_dir is not None:
+        client_config["lib_dir"] = lib_dir
+    if connection_config.get("config_dir") is not None:
+        client_config["config_dir"] = connection_config["config_dir"]
+    try:
+        oracledb.init_oracle_client(**client_config)
+    except oracledb.Error as exc:
+        msg = f"Failed to initialize Oracle client in thick mode: {exc}"
+        raise ImproperConfigurationError(msg) from exc
+
+
+def _validate_async_oracle_mode(connection_config: "Mapping[str, Any]") -> None:
+    """Reject Thick mode settings unsupported by async connections."""
+    if (
+        connection_config.get("thick_mode")
+        or connection_config.get("lib_dir") is not None
+        or connection_config.get("soda_metadata_cache")
+    ):
+        msg = "OracleAsyncConfig only supports Thin mode; Thick mode options (thick_mode, lib_dir, soda_metadata_cache) require OracleSyncConfig."
+        raise ImproperConfigurationError(msg)
 
 
 def _derive_oracle_pool_kwargs(
@@ -437,7 +476,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
 
 
 class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ("_ctx",)
+    __slots__ = ()
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         super().__init__(config)
@@ -531,6 +570,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         Returns:
             An Oracle Connection instance.
         """
+        _initialize_oracle_client(self.connection_config)
         config = _build_standalone_connection_params(self.connection_config)
         conn = oracledb.connect(**config)
         self._init_connection(conn, "")
@@ -620,20 +660,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create the actual connection pool."""
+        _initialize_oracle_client(self.connection_config)
         config = dict(self.connection_config)
-        thick_mode = config.pop("thick_mode", False)
-        lib_dir = config.pop("lib_dir", None)
-        if (thick_mode or lib_dir is not None or config.get("soda_metadata_cache")) and oracledb.is_thin_mode():
-            client_config = {}
-            if lib_dir is not None:
-                client_config["lib_dir"] = lib_dir
-            if config.get("config_dir") is not None:
-                client_config["config_dir"] = config["config_dir"]
-            try:
-                oracledb.init_oracle_client(**client_config)
-            except oracledb.Error as exc:
-                msg = f"Failed to initialize Oracle client in thick mode: {exc}"
-                raise ImproperConfigurationError(msg) from exc
+        config.pop("thick_mode", None)
+        config.pop("lib_dir", None)
 
         apply_wallet_ssl_context(config)
 
@@ -837,6 +867,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         Returns:
             An Oracle AsyncConnection instance.
         """
+        _validate_async_oracle_mode(self.connection_config)
         config = _build_standalone_connection_params(self.connection_config)
         conn = await oracledb.connect_async(**config)
         await self._init_connection(conn, "")
@@ -923,13 +954,10 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
     async def _create_pool(self) -> "OracleAsyncConnectionPool":
         """Create the actual async connection pool."""
+        _validate_async_oracle_mode(self.connection_config)
         config = dict(self.connection_config)
-        thick_mode = config.pop("thick_mode", False)
-        lib_dir = config.pop("lib_dir", None)
-        soda_metadata_cache = config.get("soda_metadata_cache", False)
-        if thick_mode or lib_dir is not None or soda_metadata_cache:
-            msg = "OracleAsyncConfig only supports Thin mode; Thick mode options (thick_mode, lib_dir, soda_metadata_cache) require OracleSyncConfig."
-            raise ImproperConfigurationError(msg)
+        config.pop("thick_mode", None)
+        config.pop("lib_dir", None)
 
         apply_wallet_ssl_context(config)
 

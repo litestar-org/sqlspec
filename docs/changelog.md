@@ -25,36 +25,81 @@ important operational fixes.
 
 **Changed:**
 
+
+* Renamed public Litestar stores: `SQLiteStore` to `SqliteStore`, `ADBCStore` to `AdbcStore`, and `DuckdbStore` to `DuckDBStore`. Update imports and store construction accordingly. DuckDB ADK exports likewise use `DuckDBADKStore`, `DuckDBADKMemoryStore`, `DuckDBADKConfig`, and `DuckDBADKFTSOptions` instead of their `Duckdb` spellings.
+
+* Removed `SybaseSyncEventQueueStore` and `SqlanywhereSyncEventQueueStore`; use `SybaseEventQueueStore` and `SqlanywhereEventQueueStore` respectively.
+
+* Standardized database failures as SQLSpec exceptions across statement execution, cached queries, bulk loads, and transaction boundaries. Code catching native driver errors should catch the corresponding `sqlspec.exceptions` classes instead. Constraint violations retain specific classes such as `UniqueViolationError` and `ForeignKeyViolationError`; syntax errors raise `SQLParsingError`. MySQL errors 1061 and 1091 now raise `OperationalError` instead of being suppressed. Original driver exceptions remain available as causes when the driver supplies an exception object.
+
+* Changed default SQLite `:memory:` pools to share one database across connections within that pool. Shared cache does not enable dirty reads by default; applications that deliberately need dirty reads must explicitly configure `read_uncommitted`.
+
+* Successful Psycopg `on_connection_create` hooks now commit their setup transaction before a connection enters the pool. Session settings such as `search_path` and timezone persist, and failed setup is rolled back. Hooks must not rely on their writes remaining uncommitted.
+
+* ADK table-name validation now rejects schema or dataset qualifiers where the selected adapter cannot generate valid qualified DDL. Supported schema-qualified stores retain that capability.
+
+* ADK schema changes target newly initialized stores. Existing ADK tables must be reset and recreated for this release; resetting removes their stored sessions and memories. Upgrade migrations for these schema changes are deferred.
+
 * Removed legacy `pgbouncer` and `pgbouncer_mode` flags from PostgreSQL driver features across `asyncpg`, `psycopg`, and `psqlpy` in favor of canonical `pooler_mode="transaction"`.
+
 * Removed the `pgbouncer` key from `AsyncpgConnectionConfig`; set `driver_features={"pooler_mode": "transaction"}` instead.
+
 * Removed the empty `SybaseADKConfig`, `SqlanywhereADKConfig`, `Db2LitestarConfig`, and `Db2EventsConfig` TypedDicts; use the base `ADKConfig`, `LitestarConfig`, and `EventsConfig`.
+
 * Renamed `use_pool` to `enable_pooling` (default `True`) across `mssql_python` and `pymssql` driver features.
+
 * Renamed `arrow_odbc` `enable_driver_pooling` to `enable_pooling` and BigQuery `use_query_and_wait` to `enable_query_and_wait`.
+
 * Removed the ADBC `strict_type_coercion` and `arrow_extension_types` driver feature aliases; use `enable_strict_type_coercion` and `enable_arrow_extension_types`.
+
 * Declared driver feature keys that adapters already read: `events_backend` on `ArrowOdbcDriverFeatures` and `default_query_job_config` on `BigQueryDriverFeatures`.
+
 * Replaced `null_pool` in `psycopg` connection configuration and driver features with canonical `enable_pooling=False`.
+
 * Defaulted `enable_correlation_middleware` to `True` across all web framework extensions (`Litestar`, `FastAPI`, `Starlette`, `Sanic`, `Flask`).
+
 * Standardized adapter driver imports: importing `sqlspec.adapters.<name>` eagerly imports that adapter's driver, raising the native `ModuleNotFoundError` when the driver is not installed, while non-driver optional dependencies load on first use.
+
 * Documented Oracle AQ dequeue commit behavior as at-most-once delivery.
+
 * Added SAP SQL Anywhere integration driver test suite with hermetic in-container client runtime extraction.
-* Replaced correlated per-column scalar subqueries in data dictionary `columns.sql` and `indexes.sql` catalog queries across `postgres`, `cockroach`, `mssql`, `mysql`, `oracle`, `db2`, and `duckdb` with pre-aggregated CTEs and joins, and reduced `ColumnMetadata` to its 18 core catalog fields.
+
+* Replaced correlated per-column scalar subqueries in data dictionary `columns.sql` and `indexes.sql` catalog queries across `postgres`, `cockroach`, `mysql`, `oracle`, `db2`, and `duckdb` with pre-aggregated CTEs and joins, and reduced `ColumnMetadata` to its 18 core catalog fields.
   ([#866](https://github.com/litestar-org/sqlspec/pull/866))
+
 * Redesigned the documentation site architecture around Zensical and `mkdocstrings-python` with Diataxis-aligned navigation (`Getting Started`, `Learn`, `Adapters`, `Extensions`, `Examples`, `Reference`), interactive WebAssembly SQL playground, runnable `docs/examples/` snippets, conceptual Mermaid diagrams, and tabbed package manager and `SQLFileLoader` examples.
   ([#864](https://github.com/litestar-org/sqlspec/pull/864),
   [#867](https://github.com/litestar-org/sqlspec/pull/867),
   [#869](https://github.com/litestar-org/sqlspec/pull/869))
+
 * Migrated integration test infrastructure to clientless `pytest-databases` fixtures (`#859`).
   ([#859](https://github.com/litestar-org/sqlspec/pull/859))
+
 * Upgraded CI GitHub Actions `astral-sh/setup-uv` from `10.3.1` to `10.3.3` and pinned `actions/checkout` (`6.0.2`), `actions/setup-python` (`7.1.0`), `actions/cache` (`6.0.0`), and `actions/upload-pages-artifact` / `actions/deploy-pages` in `.github/workflows/ci.yml` and `.github/workflows/docs.yml`.
   ([#872](https://github.com/litestar-org/sqlspec/pull/872))
 
 **Fixed:**
 
+
+* Preserved supported Arrow conversion and mutation paths for Asyncmy and Spanner while reporting their native capabilities accurately; corrected ADBC lowercase readers, DuckDB stream ownership and table filtering, and SQL Server Arrow cursor lifetimes.
+
+* Corrected Oracle session-renewal bindings, pipeline error conversion, ADK batch-error handling, standalone connection setup, and deferred Arrow failures. Text-only Oracle memory stores remain available on servers without native vector support.
+
+* Preserved PostgreSQL cache-hit query semantics, affected-row counts, mapped exceptions, JSON scalar values, and ADK embeddings. Psycopg connection hooks leave pooled connections idle, COPY finalization errors are translated, and Asyncpg continue-on-error stacks recover through savepoints inside caller transactions.
+
+* Preserved SQL Server 2016 constraint and index metadata queries with compatible catalog aggregation.
+
+* Corrected SQL Anywhere implicit-transaction cleanup, Db2 ADK index-name matching and event deduplication, MySQL batch percent escaping, optional Connector/Python async-pool imports, privilege filters, and mutable DDL capture settings.
+
 * Removed runtime `duckdb` imports from `sqlspec.adapters.adbc` (`AdbcDataDictionary` and `sqlspec/adapters/adbc/core.py`) and enforced strict adapter import isolation across all 20 database adapters in `tests/unit/test_import_time.py`.
   ([#865](https://github.com/litestar-org/sqlspec/pull/865))
+
 * Eliminated extra row copies and `UserWarning` in `DuckDBDriver.select_to_arrow` on DuckDB 2.0+ by routing parameterless `SELECT` queries through `connection.sql(query).to_arrow_table()` and `to_arrow_reader(batch_size=...)` when no open DB-API transaction is active on the connection.
+
 * Fixed `compile_table_ddl_results` and `CreateIndex` cross-dialect DDL synthesis to emit `COMMENT ON` only on dialects that support it (`postgres`, `oracle`, `db2`, `duckdb`, `snowflake`), inline `COMMENT` clauses on `mysql` and `mariadb`, render `STORING (...)` on `spanner` and `spangres`, fold unquoted source identifiers to target case before quoting target-only reserved keywords, and preserve SQLite `NUMERIC` type affinity.
+
 * Fixed `MigrationSquasher.fold_canonical_ddl` to fall back cleanly to raw statement concatenation when a migration contains interleaved DML or procedural blocks (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY`, `DO`, `CALL`), preserve table-level constraints across `ALTER TABLE ... RENAME COLUMN` and `DROP COLUMN`, and update `sqlspec_migrations` tracker history atomically inside a single transaction when applying squashed migrations.
+
 * Fixed `write_fixture_shards` to unlink stale shard and legacy single-file artifacts (`<table>.json`, `<table>.json.gz`, and higher-numbered shards) before writing new shards so subsequent `load_fixture` calls do not read orphaned records.
 
 ### v0.69.0 - Oracle PKCS#12 wallet conversion, TNS alias resolution, proximity RRF, and server-side DBMS_CLOUD ingestion

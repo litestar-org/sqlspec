@@ -56,6 +56,8 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
     connector_name: ClassVar[str] = "arrow_odbc"
     __slots__ = ("_sql",)
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "ArrowOdbcConfig") -> None:
         super().__init__(config)
         self._sql = _adk_sql_for(config)
@@ -433,6 +435,8 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
     """
 
     __slots__ = ("_sql",)
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "ArrowOdbcConfig") -> None:
         super().__init__(config)

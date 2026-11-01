@@ -23,6 +23,7 @@ from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
+from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     import ssl
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.storage import StorageCapabilities
 
 
 __all__ = (
@@ -457,6 +459,15 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """Return queue polling defaults for Asyncmy adapters."""
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        capabilities["parquet_import_enabled"] = arrow_ready
+        capabilities["parquet_export_enabled"] = arrow_ready
+        return capabilities
 
     async def _create_pool(self) -> "AsyncmyPool":
         """Create the actual async connection pool.

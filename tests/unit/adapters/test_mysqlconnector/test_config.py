@@ -1,6 +1,8 @@
 """Unit tests for mysql-connector configuration modernization."""
 
 import asyncio
+import subprocess
+import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
@@ -466,6 +468,36 @@ async def test_async_pool_unavailable_preserves_standalone_connections(monkeypat
     assert await MysqlConnectorAsyncConfig()._acquire_async_connection() is connection
     with pytest.raises(ImproperConfigurationError, match=r"9\.4"):
         await MysqlConnectorAsyncConfig(connection_config={"pool_size": 2})._acquire_async_connection()
+
+
+def test_sync_config_imports_without_native_async_pooling() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib.abc
+import sys
+import mysql.connector.aio
+
+sys.modules.pop("mysql.connector.aio.pooling", None)
+
+class MissingAsyncPool(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "mysql.connector.aio.pooling":
+            raise ModuleNotFoundError(fullname, name=fullname)
+        return None
+
+sys.meta_path.insert(0, MissingAsyncPool())
+from sqlspec.adapters.mysqlconnector import MysqlConnectorSyncConfig
+assert MysqlConnectorSyncConfig().connection_config["host"] == "localhost"
+""",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_sync_create_pool_preserves_zero_pool_size(monkeypatch: pytest.MonkeyPatch) -> None:

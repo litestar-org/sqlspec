@@ -40,6 +40,8 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
     connector_name: ClassVar[str] = "sybase"
     __slots__ = ()
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "SybaseConfig") -> None:
         super().__init__(config)
 
@@ -446,6 +448,8 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
     """Sybase ASE ADK memory store using pymssql."""
 
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "SybaseConfig") -> None:
         super().__init__(config)

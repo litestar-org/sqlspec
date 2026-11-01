@@ -485,14 +485,8 @@ def test_sqlanywhere_adk_store_handles_native_missing_table(monkeypatch: pytest.
     config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
     store = SqlanywhereADKStore(config)
 
-    class FakeSqlanydbError(SqlanywhereError):
-        def __init__(self, sqlstate: str, sqlcode: int, message: str) -> None:
-            super().__init__(message)
-            self.sqlstate = sqlstate
-            self.sqlcode = sqlcode
-
     def _table_missing(_self: Any, *_args: Any, **_kwargs: Any) -> None:
-        raise FakeSqlanydbError("42S02", -141, "Table 'adk_session' not found")
+        raise SqlanywhereError("Table 'adk_session' not found", -141)
 
     monkeypatch.setattr(SqlanywhereADKStore, "_execute_fetchone", _table_missing)
     assert store.get_session("app", "user", "sess") is None
@@ -550,14 +544,8 @@ def test_sqlanywhere_adk_memory_store_handles_native_missing_table(monkeypatch: 
     config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
     store = SqlanywhereADKMemoryStore(config)
 
-    class FakeSqlanydbError(SqlanywhereError):
-        def __init__(self, sqlstate: str, sqlcode: int, message: str) -> None:
-            super().__init__(message)
-            self.sqlstate = sqlstate
-            self.sqlcode = sqlcode
-
     def _table_missing(_self: Any, *_args: Any, **_kwargs: Any) -> None:
-        raise FakeSqlanydbError("42S02", -141, "Table 'adk_memory' not found")
+        raise SqlanywhereError("Table 'adk_memory' not found", -141)
 
     monkeypatch.setattr(SqlanywhereADKMemoryStore, "_execute_fetchall", _table_missing)
     assert store.search_entries("query", "app", "user") == []
@@ -623,8 +611,7 @@ def test_sqlanywhere_sync_data_dictionary_instantiation() -> None:
 
 def test_sqlanywhere_has_schema_under_active_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     """has_schema runs cleanly inside an active exception block without isolation leak."""
-    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
-    driver = SqlanywhereDriver(config)
+    driver = SqlanywhereDriver(cast("SqlanywhereConnection", FakeConnection()))
 
     class DummyCursor:
         def execute(self, _sql: str, _params: Any = ()) -> None:
@@ -658,8 +645,7 @@ def test_sqlanywhere_format_identifier_and_insert_statement() -> None:
 
 def test_sqlanywhere_commit_and_rollback_raise_transaction_error() -> None:
     """commit() and rollback() wrap caught exceptions in TransactionError."""
-    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
-    driver = SqlanywhereDriver(config)
+    driver = SqlanywhereDriver(cast("SqlanywhereConnection", FakeConnection()))
 
     class FailingConnection:
         def commit(self) -> None:
@@ -675,34 +661,20 @@ def test_sqlanywhere_commit_and_rollback_raise_transaction_error() -> None:
         driver.rollback()
 
 
-def test_sqlanywhere_session_context_committed_does_not_rollback() -> None:
-    """An explicitly committed session context does not issue rollback() on exit."""
-    rollback_called = False
-
-    class TrackingConnection:
-        def commit(self) -> None:
-            pass
-
-        def rollback(self) -> None:
-            nonlocal rollback_called
-            rollback_called = True
-
-        def close(self) -> None:
-            pass
-
-    conn = TrackingConnection()
+def test_sqlanywhere_session_context_rolls_back_implicit_work() -> None:
+    """DML without begin() must be rolled back before a pooled connection is reused."""
+    conn = FakeConnection()
     ctx = SqlanywhereSessionContext(
-        acquire_connection=lambda: conn,
+        acquire_connection=lambda: cast("SqlanywhereConnection", conn),
         release_connection=lambda _c, **_kw: None,
         statement_config=default_statement_config,
         driver_features={},
         prepare_driver=lambda d: d,
     )
     with ctx as driver:
-        driver.begin()
-        driver.commit()
+        driver.execute("INSERT INTO items (id) VALUES (1)")
 
-    assert rollback_called is False
+    assert conn.rollbacks == 1
 
 
 def test_sqlanywhere_connection_pool_bounds_max_size(monkeypatch: pytest.MonkeyPatch) -> None:

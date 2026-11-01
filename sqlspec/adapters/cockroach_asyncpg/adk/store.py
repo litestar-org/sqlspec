@@ -72,6 +72,8 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
     __slots__ = ()
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "CockroachAsyncpgConfig") -> None:
         super().__init__(config)
 
@@ -586,6 +588,8 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
     """CockroachDB ADK memory store using asyncpg driver."""
 
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "CockroachAsyncpgConfig") -> None:
         super().__init__(config)

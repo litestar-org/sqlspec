@@ -10,6 +10,7 @@ from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
@@ -705,19 +706,28 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         content_texts = [entry["content_text"] for entry in entries]
         metadata_jsons = [entry.get("metadata_json") for entry in entries]
         inserted_ats = [entry["inserted_at"] for entry in entries]
+        embeddings = [
+            to_json([float(value) for value in embedding])
+            if (embedding := entry.get("embedding")) is not None
+            else None
+            for entry in entries
+        ]
 
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._memory_table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
                 {self._owner_id_column_name}, timestamp, content_json,
-                content_text, metadata_json, inserted_at
+                content_text, metadata_json, inserted_at, embedding
             )
-            SELECT * FROM unnest(
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
+                owner_id, timestamp, content_json, content_text, metadata_json, inserted_at, embedding::vector
+            FROM unnest(
                 $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
                 $5::varchar[], $6::varchar[], $7::varchar[], $8::varchar[],
-                $9::timestamptz[], $10::jsonb[], $11::text[], $12::jsonb[], $13::timestamptz[]
-            )
+                $9::timestamptz[], $10::jsonb[], $11::text[], $12::jsonb[], $13::timestamptz[], $14::text[]
+            ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
+                owner_id, timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
             ON CONFLICT (event_id) DO NOTHING
             RETURNING 1
             """
@@ -736,18 +746,22 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 content_texts,
                 metadata_jsons,
                 inserted_ats,
+                embeddings,
             ]
         else:
             sql = f"""
             INSERT INTO {self._memory_table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
-                timestamp, content_json, content_text, metadata_json, inserted_at
+                timestamp, content_json, content_text, metadata_json, inserted_at, embedding
             )
-            SELECT * FROM unnest(
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at, embedding::vector
+            FROM unnest(
                 $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
                 $5::varchar[], $6::varchar[], $7::varchar[],
-                $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[]
-            )
+                $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[], $13::text[]
+            ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
             ON CONFLICT (event_id) DO NOTHING
             RETURNING 1
             """
@@ -764,6 +778,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 content_texts,
                 metadata_jsons,
                 inserted_ats,
+                embeddings,
             ]
 
         async with self._config.provide_connection() as conn:

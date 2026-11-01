@@ -72,7 +72,7 @@ The `duckdb` dialect pack defines `24` named queries across `17` domain `.sql` f
 | `schemas.sql` | `list` | *none* |
 | `sequences.sql` | `by_schema` | `:schema_name` |
 | `system.sql` | `logs`, `memory`, `settings` | *none* |
-| `tables.sql` | `by_schema` | `:schema_name` |
+| `tables.sql` | `by_schema` | `:schema_name`, `:table_name` |
 | `types.sql` | `by_schema` | `:schema_name` |
 | `version.sql` | `current` | *none* |
 | `views.sql` | `by_schema` | `:schema_name` |
@@ -860,6 +860,7 @@ The `duckdb` dialect pack defines `24` named queries across `17` domain `.sql` f
     LEFT JOIN dependency_levels dl ON dl.table_name = t.table_name
     WHERE t.table_type = 'BASE TABLE'
       AND t.table_schema = COALESCE(:schema_name, current_schema())
+      AND (:table_name IS NULL OR t.table_name = :table_name)
     ORDER BY level, t.table_name;
     ```
 

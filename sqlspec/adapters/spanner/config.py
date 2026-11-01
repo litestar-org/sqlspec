@@ -46,6 +46,7 @@ from sqlspec.driver import (
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -67,6 +68,7 @@ if TYPE_CHECKING:
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.storage import StorageCapabilities
 
 __all__ = (
     "SpannerAsyncConfig",
@@ -423,6 +425,14 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
 
         self._client: Client | None = None
         self._database: Database | None = None
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        return capabilities
 
     def get_database(self) -> "Database":
         """Return the configured database, creating the pool and client on first use.
@@ -827,6 +837,14 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
 
         self._client: AsyncClient | None = None
         self._database: AsyncDatabase | None = None
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        return capabilities
 
     async def get_database(self) -> "AsyncDatabase":
         """Return the configured database, creating the pool and client on first use.

@@ -75,6 +75,32 @@ def test_config_defaults() -> None:
     assert config.connection_config["size"] == 10
 
 
+@pytest.mark.parametrize("config_type", [SpannerSyncConfig, SpannerAsyncConfig])
+def test_arrow_conversion_storage_capabilities(config_type: type[SpannerSyncConfig] | type[SpannerAsyncConfig]) -> None:
+    config = config_type(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+
+    capabilities = config.storage_capabilities()
+
+    assert capabilities["arrow_import_enabled"] is True
+    assert capabilities["arrow_export_enabled"] is True
+    assert config.supports_native_arrow_import is False
+    assert config.supports_native_arrow_export is False
+    assert config.driver_features["storage_capabilities"] == capabilities
+
+
+@pytest.mark.parametrize("config_type", [SpannerSyncConfig, SpannerAsyncConfig])
+def test_arrow_conversion_storage_preserves_explicit_disable(
+    config_type: type[SpannerSyncConfig] | type[SpannerAsyncConfig],
+) -> None:
+    capabilities = {"arrow_import_enabled": False, "arrow_export_enabled": False}
+    config = config_type(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        driver_features={"storage_capabilities": capabilities},
+    )
+
+    assert config.driver_features["storage_capabilities"] == capabilities
+
+
 def test_min_sessions_is_rejected() -> None:
     """Spanner's current session pool classes do not support min_sessions."""
     with pytest.raises(ImproperConfigurationError, match="min_sessions"):

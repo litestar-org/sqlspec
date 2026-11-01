@@ -388,6 +388,74 @@ async def test_async_create_connection_unpooled(monkeypatch: pytest.MonkeyPatch)
     assert config.connection_instance is None
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_standalone_connections_filter_pool_options(is_async: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pool-configured config can also create a standalone connection."""
+    connection_type = (
+        oracle_config_module.oracledb.AsyncConnection if is_async else oracle_config_module.oracledb.Connection
+    )
+    connect = AsyncMock() if is_async else Mock()
+    monkeypatch.setattr(oracle_config_module.oracledb, "connect_async" if is_async else "connect", connect)
+    config_type = OracleAsyncConfig if is_async else OracleSyncConfig
+    config = config_type(
+        connection_config={
+            "user": "scott",
+            "password": "tiger",
+            "dsn": "localhost/xe",
+            "min": 1,
+            "max": 4,
+            "increment": 1,
+            "getmode": PoolGetMode.WAIT,
+            "ping_interval": 60,
+            "ping_timeout": 5000,
+            "max_sessions_per_shard": 2,
+            "pool_class": oracle_config_module.oracledb.ConnectionPool,
+            "connectiontype": connection_type,
+        }
+    )
+
+    result = config.create_connection()
+    if isawaitable(result):
+        result = await result
+
+    assert result is connect.return_value
+    connect.assert_called_once_with(user="scott", password="tiger", dsn="localhost/xe", conn_class=connection_type)
+
+
+@pytest.mark.parametrize("options", [{"thick_mode": True}, {"lib_dir": "/oracle/lib"}, {"soda_metadata_cache": True}])
+def test_standalone_sync_connection_initializes_thick_mode(
+    options: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    initialize = Mock(side_effect=lambda **_kwargs: calls.append("initialize"))
+    connect = Mock(side_effect=lambda **_kwargs: calls.append("connect") or _StubConnection())
+    monkeypatch.setattr(oracle_config_module.oracledb, "is_thin_mode", lambda: True)
+    monkeypatch.setattr(oracle_config_module.oracledb, "init_oracle_client", initialize)
+    monkeypatch.setattr(oracle_config_module.oracledb, "connect", connect)
+    config = OracleSyncConfig(connection_config=options)
+
+    config.create_connection()
+
+    assert calls == ["initialize", "connect"]
+    initialize.assert_called_once_with(**({"lib_dir": options["lib_dir"]} if "lib_dir" in options else {}))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("options", [{"thick_mode": True}, {"lib_dir": "/oracle/lib"}, {"soda_metadata_cache": True}])
+async def test_standalone_async_connection_rejects_thick_mode(
+    options: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connect = AsyncMock()
+    monkeypatch.setattr(oracle_config_module.oracledb, "connect_async", connect)
+    config = OracleAsyncConfig(connection_config=options)
+
+    with pytest.raises(ImproperConfigurationError, match="only supports Thin mode"):
+        await config.create_connection()
+
+    connect.assert_not_called()
+
+
 def test_derive_pool_produces_identical_configurations_across_sync_and_async() -> None:
     """derive_pool produces identical connection configurations across sync and async configs."""
     common_cfg = {"user": "scott", "password": "tiger", "dsn": "localhost/xe", "min": 2, "max": 10}

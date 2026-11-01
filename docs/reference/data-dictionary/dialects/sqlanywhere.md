@@ -35,7 +35,7 @@ Introspects SAP SQL Anywhere `SYS` catalog views (`SYS.SYSTAB`, `SYS.SYSTABCOL`,
 | `supports_schemas` | `True` | `json` | `LONG VARCHAR` |
 | `supports_sequences` | `True` | `smallint` | `SMALLINT` |
 | `supports_skip_locked` | `True` | `string` | `VARCHAR(255)` |
-| `supports_transactional_ddl` | `True` | `text` | `LONG VARCHAR` |
+| `supports_transactional_ddl` | `False` | `text` | `LONG VARCHAR` |
 | `supports_transactions` | `True` | `time` | `TIME` |
 | `supports_update_from` | `True` | `timestamp` | `TIMESTAMP` |
 | `supports_upsert` | `True` | `uuid` | `UNIQUEIDENTIFIER` |

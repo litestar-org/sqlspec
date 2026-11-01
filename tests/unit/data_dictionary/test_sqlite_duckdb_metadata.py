@@ -489,6 +489,30 @@ def test_duckdb_metadata_capabilities_profile() -> None:
         driver.connection.close()
 
 
+@pytest.mark.parametrize(("table", "expected_names"), [("target", ["target"]), ("missing", [])])
+def test_duckdb_table_details_filters_requested_table(table: str, expected_names: list[str]) -> None:
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    try:
+        driver.execute_script("""
+            CREATE SCHEMA app;
+            CREATE TABLE app.target (id INTEGER);
+            CREATE TABLE app.other (id INTEGER);
+            CREATE TABLE target (id INTEGER);
+        """)
+
+        details = driver.data_dictionary.get_table_details(driver, table=table, schema="app")
+
+        assert {row["table_name"] for row in driver.data_dictionary.get_tables(driver, schema="app")} == {
+            "target",
+            "other",
+        }
+        assert details.capability.support == MetadataSupport.SUPPORTED
+        assert [cast("dict[str, object]", item)["table_name"] for item in details.items] == expected_names
+    finally:
+        driver.connection.close()
+
+
 def test_duckdb_unwired_sql_domains() -> None:
     """DuckDBDataDictionary wires schemas, objects, routines, databases, extensions, system, and table_details."""
     config = DuckDBConfig(connection_config={"database": ":memory:"})
@@ -503,7 +527,7 @@ def test_duckdb_unwired_sql_domains() -> None:
 
         objects = driver.data_dictionary.get_objects(driver, schema="custom_schema")
         assert objects.domain == "objects"
-        assert any(obj.get("object_name") == "test_unwired" for obj in objects.items)
+        assert any(cast("dict[str, object]", obj).get("object_name") == "test_unwired" for obj in objects.items)
 
         routines = driver.data_dictionary.get_routines(driver, schema="custom_schema")
         assert routines.domain == "routines"
@@ -519,7 +543,7 @@ def test_duckdb_unwired_sql_domains() -> None:
         table_details = driver.data_dictionary.get_table_details(driver, table="test_unwired", schema="custom_schema")
         assert table_details.domain == "tables"
         assert len(table_details.items) == 1
-        assert table_details.items[0]["table_name"] == "test_unwired"
+        assert cast("dict[str, object]", table_details.items[0])["table_name"] == "test_unwired"
 
         system_settings = driver.data_dictionary.get_system_metadata(driver, "settings", include_system=True)
         assert system_settings.request.domain == "settings"

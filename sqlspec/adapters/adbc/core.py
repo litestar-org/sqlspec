@@ -8,7 +8,6 @@ import tempfile
 from collections.abc import Sized
 from functools import partial
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
@@ -880,9 +879,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-        1. SQLSTATE codes (most reliable for ADBC drivers)
-        2. Error message patterns
-        3. Default SQLSpecError fallback
+        1. Cancellation and timeout status codes
+        2. SQLSTATE codes and vendor-specific diagnostics
+        3. Error message patterns
+        4. Generic ADBC status codes or SQLSpecError fallback
 
     Args:
         error: The ADBC exception to map
@@ -892,7 +892,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         A SQLSpec exception that wraps the original error
     """
     _ = logger
-    if status_mapped := _map_adbc_status_exception(error):
+    status_mapped = _map_adbc_status_exception(error)
+    if isinstance(status_mapped, (QueryTimeoutError, OperationCancelledError)):
         return status_mapped
 
     raw_message = str(error)
@@ -933,6 +934,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     if "connection" in error_msg or "connect" in error_msg:
         return _create_adbc_error(error, DatabaseConnectionError, "connection error")
+
+    if status_mapped is not None:
+        return status_mapped
 
     return _create_adbc_error(error, SQLSpecError, "database error")
 
@@ -1466,9 +1470,6 @@ class _RewriteCacheState:
         self.misses = 0
         self.cache.clear()
 
-    def info(self) -> Any:
-        return SimpleNamespace(hits=self.hits, misses=self.misses, maxsize=self.maxsize, currsize=len(self.cache))
-
 
 _REWRITE_CACHE_STATE: Final[_RewriteCacheState] = _RewriteCacheState(256)
 _REWRITE_UUID_CACHE: Final[
@@ -1545,10 +1546,6 @@ def _rewrite_postgres_uuid_placeholders(
         _REWRITE_CACHE_STATE.cache.pop(next(iter(_REWRITE_CACHE_STATE.cache)))
     _REWRITE_CACHE_STATE.cache[cache_key] = result
     return result
-
-
-setattr(_rewrite_postgres_uuid_placeholders, "cache_clear", _REWRITE_CACHE_STATE.clear)
-setattr(_rewrite_postgres_uuid_placeholders, "cache_info", _REWRITE_CACHE_STATE.info)
 
 
 def _sequence_holds_uuid(values: "list[Any] | tuple[Any, ...]") -> bool:

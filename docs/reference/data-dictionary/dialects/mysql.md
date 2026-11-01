@@ -85,7 +85,7 @@ The `mysql` dialect pack defines `27` named queries across `18` domain `.sql` fi
 | `objects.sql` | `by_schema` | `:schema_name` |
 | `partitions.sql` | `by_schema` | `:schema_name` |
 | `plugins.sql` | `list` | *none* |
-| `privileges.sql` | `by_schema` | `:schema_name` |
+| `privileges.sql` | `by_schema` | `:object_name`, `:schema_name` |
 | `routines.sql` | `by_schema` | `:schema_name` |
 | `schemas.sql` | `list` | `:schema_name` |
 | `system.sql` | `performance_schema_tables`, `sys_schema_table_statistics` | `:schema_name` |
@@ -450,6 +450,7 @@ The `mysql` dialect pack defines `27` named queries across `18` domain `.sql` fi
         NULL AS column_name
     FROM information_schema.table_privileges
     WHERE table_schema = COALESCE(:schema_name, DATABASE())
+      AND (:object_name IS NULL OR table_name = :object_name)
     UNION ALL
     SELECT
         grantee,
@@ -461,6 +462,7 @@ The `mysql` dialect pack defines `27` named queries across `18` domain `.sql` fi
         column_name
     FROM information_schema.column_privileges
     WHERE table_schema = COALESCE(:schema_name, DATABASE())
+      AND (:object_name IS NULL OR table_name = :object_name)
     ORDER BY schema_name, table_name, column_name, grantee, privilege_type;
     ```
 

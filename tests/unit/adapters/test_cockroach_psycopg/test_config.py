@@ -943,13 +943,11 @@ async def test_cockroach_psycopg_async_user_configure_runs_after_internal_setup(
 
 def test_cockroach_psycopg_adk_hash_shard_bucket_count_validation() -> None:
     """Invalid hash_shard_bucket_count must raise ValueError in cockroach_psycopg adk store."""
-    from sqlspec.adapters.cockroach_psycopg.adk.store import _cockroach_hash_shard_clause
+    from sqlspec.adapters.cockroach_psycopg.adk.store import CockroachPsycopgADKConfig, _cockroach_hash_shard_clause
 
-    bad_config = CockroachPsycopgSyncConfig(
-        extension_config={"adk": {"enable_hash_sharded_indexes": True, "hash_shard_bucket_count": -1}}
-    )
+    bad_config: CockroachPsycopgADKConfig = {"enable_hash_sharded_indexes": True, "hash_shard_bucket_count": -1}
     with pytest.raises(ValueError, match="hash_shard_bucket_count"):
-        _cockroach_hash_shard_clause(bad_config.extension_config["adk"])
+        _cockroach_hash_shard_clause(bad_config)
 
 
 async def test_cockroach_psycopg_adk_memory_search_with_embedding() -> None:

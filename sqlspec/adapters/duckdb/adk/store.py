@@ -98,9 +98,13 @@ def _split_duckdb_table_name(table_name: str) -> tuple[str, str]:
         Tuple of (schema, bare_table_name). If unqualified, schema defaults to 'main'.
     """
     parts = split_qualified_identifier(table_name.strip(), quote_chars='"')
+    if not parts:
+        msg = "DuckDB table name must not be empty."
+        raise ValueError(msg)
+    first_part = parts[0]
     if len(parts) > 1:
-        return parts[0], parts[1]
-    return "main", parts[0]
+        return first_part, parts[1]
+    return "main", first_part
 
 
 class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
@@ -120,6 +124,8 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
     """
 
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "DuckDBConfig") -> None:
         """Initialize DuckDB ADK store.
@@ -910,6 +916,8 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
     """
 
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "DuckDBConfig") -> None:
         """Initialize DuckDB ADK memory store.

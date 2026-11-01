@@ -84,4 +84,3 @@ FROM all_ind_expressions ie
 WHERE ie.index_owner = COALESCE(:schema_name, USER)
   AND (:table_name IS NULL OR ie.table_name = :table_name)
 ORDER BY ie.index_owner, ie.table_name, ie.index_name, ie.column_position;
-

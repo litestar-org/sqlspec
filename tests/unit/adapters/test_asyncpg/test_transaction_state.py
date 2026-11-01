@@ -1,6 +1,7 @@
 """asyncpg transaction control uses the native transaction handle."""
 
 import inspect
+from asyncio import CancelledError
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -114,7 +115,8 @@ async def test_a_stream_can_open_a_transaction_after_driver_begin() -> None:
 async def test_stream_source_reuses_outer_transaction_without_savepoint() -> None:
     """AsyncpgStreamSource should not start a nested savepoint when already in a transaction."""
     connection = _FakeConnection()
-    connection.cursor = AsyncMock(return_value=MagicMock(fetch=AsyncMock(return_value=[])))  # type: ignore[attr-defined]
+    cursor = MagicMock(_portal_name="portal", _close_portal=AsyncMock(), fetch=AsyncMock(return_value=[]))
+    connection.cursor = AsyncMock(return_value=cursor)  # type: ignore[attr-defined]
     driver = AsyncpgDriver(cast("Any", connection))
 
     await driver.begin()
@@ -123,10 +125,11 @@ async def test_stream_source_reuses_outer_transaction_without_savepoint() -> Non
     await source.close()
 
     assert connection.transaction_calls == ["start"]
+    cursor._close_portal.assert_awaited_once_with(None)
 
 
-async def test_stream_source_suppresses_rollback_error_on_cursor_failure() -> None:
-    """AsyncpgStreamSource should suppress rollback errors when cursor creation fails."""
+async def test_stream_start_failure_retires_connection_when_rollback_fails() -> None:
+    """A failed startup rollback retires the socket while preserving the cursor failure."""
     tx = MagicMock()
     tx.start = AsyncMock()
     tx.rollback = AsyncMock(side_effect=RuntimeError("connection lost"))
@@ -134,12 +137,53 @@ async def test_stream_source_suppresses_rollback_error_on_cursor_failure() -> No
     conn.transaction = MagicMock(return_value=tx)
     conn.is_in_transaction = MagicMock(return_value=False)
     conn.cursor = AsyncMock(side_effect=ValueError("cursor failed"))
+    conn.close = AsyncMock()
     driver = AsyncpgDriver(cast("Any", conn))
 
     source = AsyncpgStreamSource(driver, "SELECT 1", (), 10)
     with pytest.raises(ValueError, match="cursor failed"):
         await source.start()
     assert source._transaction is None  # pyright: ignore[reportPrivateUsage]
+    conn.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("owns_transaction", [False, True])
+@pytest.mark.parametrize("error", [False, True])
+async def test_stream_closes_portal_before_owned_transaction(owns_transaction: bool, error: bool) -> None:
+    """The native portal closes before transaction control without ending a caller transaction."""
+    calls: list[str] = []
+    connection = MagicMock()
+    driver = AsyncpgDriver(cast("Any", connection))
+    source = AsyncpgStreamSource(driver, "SELECT 1", (), 10, 4.0)
+    cursor = MagicMock()
+    cursor._portal_name = "portal"
+    cursor._close_portal = AsyncMock(side_effect=lambda _: calls.append("portal"))
+    source._cursor = cursor  # pyright: ignore[reportPrivateUsage]
+    if owns_transaction:
+        source._transaction = MagicMock(  # pyright: ignore[reportPrivateUsage]
+            commit=AsyncMock(side_effect=lambda: calls.append("commit")),
+            rollback=AsyncMock(side_effect=lambda: calls.append("rollback")),
+        )
+
+    await source.close(error=error)
+
+    assert calls == (["portal", "rollback" if error else "commit"] if owns_transaction else ["portal"])
+    cursor._close_portal.assert_awaited_once_with(4.0)
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("portal close failed"), CancelledError()])
+async def test_stream_cleanup_failure_retires_connection(failure: BaseException) -> None:
+    """Failed or cancelled portal cleanup cannot return a dirty socket to the pool."""
+    connection = MagicMock(close=AsyncMock())
+    driver = AsyncpgDriver(cast("Any", connection))
+    source = AsyncpgStreamSource(driver, "SELECT 1", (), 10)
+    source._cursor = MagicMock(  # pyright: ignore[reportPrivateUsage]
+        _portal_name="portal", _close_portal=AsyncMock(side_effect=failure)
+    )
+
+    with pytest.raises(type(failure)):
+        await source.close(error=True)
+    connection.close.assert_awaited_once()
 
 
 async def test_begin_resets_stale_transaction_and_maps_exceptions() -> None:
@@ -330,19 +374,45 @@ async def test_asyncpg_execute_stack_in_outer_transaction_does_not_commit_or_rol
     """execute_stack with continue_on_error inside an outer transaction must not commit or rollback."""
     conn = MagicMock()
     conn.is_in_transaction = MagicMock(return_value=True)
-    conn.execute = AsyncMock(side_effect=["UPDATE 1", RuntimeError("failed op")])
+
+    async def execute(sql: str) -> str:
+        if sql == "UPDATE t SET x = 2":
+            raise RuntimeError("failed op")
+        return "UPDATE 1" if sql.startswith("UPDATE") else ""
+
+    conn.execute = AsyncMock(side_effect=execute)
 
     driver = AsyncpgDriver(cast("Any", conn))
     driver._transaction = MagicMock()
 
-    stack = StatementStack().push_execute("UPDATE t SET x = 1").push_execute("UPDATE t SET x = 2")
+    stack = (
+        StatementStack()
+        .push_execute("UPDATE t SET x = 1")
+        .push_execute("UPDATE t SET x = 2")
+        .push_execute("UPDATE t SET x = 3")
+    )
 
     results = await driver.execute_stack(stack, continue_on_error=True)
-    assert len(results) == 2
+    assert len(results) == 3
     assert results[0].result is not None
     assert results[1].error is not None
+    assert results[2].rows_affected == 1
     assert driver._transaction is not None
-    conn.execute.assert_called()
+    commands = [call.args[0] for call in conn.execute.await_args_list]
+    savepoints = [command.removeprefix("SAVEPOINT ") for command in commands if command.startswith("SAVEPOINT ")]
+    assert len(savepoints) == 3
+    assert commands == [
+        f"SAVEPOINT {savepoints[0]}",
+        "UPDATE t SET x = 1",
+        f"RELEASE SAVEPOINT {savepoints[0]}",
+        f"SAVEPOINT {savepoints[1]}",
+        "UPDATE t SET x = 2",
+        f"ROLLBACK TO SAVEPOINT {savepoints[1]}",
+        f"RELEASE SAVEPOINT {savepoints[1]}",
+        f"SAVEPOINT {savepoints[2]}",
+        "UPDATE t SET x = 3",
+        f"RELEASE SAVEPOINT {savepoints[2]}",
+    ]
 
 
 async def test_asyncpg_exception_mapping_timeout_and_interface_errors() -> None:

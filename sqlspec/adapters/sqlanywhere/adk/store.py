@@ -34,6 +34,8 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
     connector_name: ClassVar[str] = "sqlanywhere"
     __slots__ = ()
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "SqlanywhereConfig") -> None:
         super().__init__(config)
 
@@ -410,6 +412,8 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
     """SAP SQL Anywhere ADK memory store using sqlanydb."""
 
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "SqlanywhereConfig") -> None:
         super().__init__(config)

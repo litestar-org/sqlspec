@@ -11,7 +11,7 @@ from sqlspec.adapters.psqlpy.core import build_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLSpecError, UniqueViolationError
 
 
 @pytest.mark.anyio
@@ -135,6 +135,35 @@ async def test_psqlpy_execute_cache_hit_direct_fast_path() -> None:
     result = await driver._execute_cache_hit("SELECT 1 AS col", (), cached)
     assert result.data == [{"col": 1}]
     assert conn.fetch.await_count == 1
+
+
+@pytest.mark.parametrize("query", ["UPDATE items SET qty = 1", "UPDATE items SET qty = ?"])
+async def test_psqlpy_cached_dml_preserves_rowcount(query: str) -> None:
+    """DML without RETURNING retains its affected-row count after the query is cached."""
+    native_result = SimpleNamespace(result=lambda: [{psqlpy_core._DML_COUNT_COLUMN: 3}])
+    connection = SimpleNamespace(fetch=AsyncMock(return_value=native_result), execute=AsyncMock())
+    driver = PsqlpyDriver(connection=cast("Any", connection))
+    parameters = (1,) if "?" in query else ()
+
+    results = [await driver.execute(query, *parameters) for _ in range(2)]
+
+    assert [result.rows_affected for result in results] == [3, 3]
+    assert connection.fetch.await_count == 2
+
+
+async def test_psqlpy_cached_query_maps_native_errors() -> None:
+    """A warmed cache retains the same exception translation and cause as ordinary execution."""
+    from psqlpy.exceptions import ConnectionExecuteError
+
+    native_result = SimpleNamespace(result=lambda: [{"value": 1}])
+    native_error = ConnectionExecuteError("duplicate key value violates unique constraint items_pk")
+    connection = SimpleNamespace(fetch=AsyncMock(side_effect=[native_result, native_error]))
+    driver = PsqlpyDriver(connection=cast("Any", connection))
+
+    assert (await driver.execute("SELECT 1 AS value")).get_data() == [{"value": 1}]
+    with pytest.raises(UniqueViolationError) as error:
+        await driver.execute("SELECT 1 AS value")
+    assert error.value.__cause__ is native_error
 
 
 @pytest.mark.anyio

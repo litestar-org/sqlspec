@@ -402,6 +402,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         features = dict(self.driver_features)
         features["pooler_mode"] = "session"
         features["direct_dsn"] = None
+        if self._user_connection_hook is not None:
+            features["on_connection_create"] = self._user_connection_hook
         return type(self)(
             connection_config=conn_cfg,
             migration_config=dict(self.migration_config) if self.migration_config else None,
@@ -659,7 +661,15 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             register_pgvector_sync(conn)
 
         if self._user_connection_hook is not None:
-            self._user_connection_hook(conn)
+            try:
+                self._user_connection_hook(conn)
+                if not conn.autocommit:
+                    conn.commit()
+            except BaseException:
+                if not conn.autocommit:
+                    with suppress(Exception):
+                        conn.rollback()
+                raise
 
     def _ensure_pg_textsearch_available(self) -> None:
         if self._pg_textsearch_available:
@@ -855,6 +865,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         features = dict(self.driver_features)
         features["pooler_mode"] = "session"
         features["direct_dsn"] = None
+        if self._user_connection_hook is not None:
+            features["on_connection_create"] = self._user_connection_hook
         return type(self)(
             connection_config=conn_cfg,
             migration_config=dict(self.migration_config) if self.migration_config else None,
@@ -1065,9 +1077,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             await register_pgvector_async(conn)
 
         if self._user_connection_hook is not None:
-            hook_res = self._user_connection_hook(conn)
-            if inspect.isawaitable(hook_res):
-                await hook_res
+            try:
+                hook_res = self._user_connection_hook(conn)
+                if inspect.isawaitable(hook_res):
+                    await hook_res
+                if not conn.autocommit:
+                    await conn.commit()
+            except BaseException:
+                if not conn.autocommit:
+                    with suppress(Exception):
+                        await conn.rollback()
+                raise
 
     def _ensure_pg_textsearch_available(self) -> None:
         if self._pg_textsearch_available:

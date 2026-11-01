@@ -800,6 +800,7 @@ def test_oracle_adk_memory_store_pre_queries_existing_event_ids(monkeypatch: pyt
             "content_text": "hello",
             "metadata_json": None,
             "inserted_at": now,
+            "embedding": None,
         },
         {
             "id": "mem-2",
@@ -814,6 +815,7 @@ def test_oracle_adk_memory_store_pre_queries_existing_event_ids(monkeypatch: pyt
             "content_text": "world",
             "metadata_json": None,
             "inserted_at": now,
+            "embedding": None,
         },
     ])
 

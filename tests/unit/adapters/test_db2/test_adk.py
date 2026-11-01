@@ -421,7 +421,7 @@ async def test_insert_memory_entries_binds_naive_utc_and_skips_duplicates(db2_mo
     """Memory inserts bind naive-UTC times, include the owner column, and skip known event ids."""
     store, config = _memory_store(
         db2_mode,
-        FakeDb2Cursor(rows=[("m0",)], description=db2_description("id")),
+        FakeDb2Cursor(rows=[("m0", "e0")], description=db2_description("id", "event_id")),
         adk={"owner_id_column": "tenant_id INTEGER"},
     )
     stamp = datetime(2026, 9, 24, 14, tzinfo=timezone(timedelta(hours=2)))
@@ -645,14 +645,58 @@ async def test_schema_qualified_adk_tables_sanitize_constraint_and_index_names(d
     assert all("." not in index_name for index_name, _, _ in store._index_specs())
 
 
+@pytest.mark.parametrize(
+    ("table", "schema"), [("MYSCHEMA.SESSIONS", "MYSCHEMA"), ('"App".sessions', "App"), ('"A""B".sessions', 'A"B')]
+)
+async def test_adk_index_catalog_probes_preserve_schema(db2_mode: DriverMode, table: str, schema: str) -> None:
+    """Index existence checks use the schema and index casing emitted by DDL."""
+    store, config = _session_store(db2_mode)
+    store._session_table = table
+
+    await db2_mode.call(store.create_tables)
+
+    index_probes = [params for sql, params in config.executed if sql == INDEX_EXISTS_SQL]
+    assert index_probes[:2] == [(schema, name.upper()) for name, _, _ in store._index_specs()[:2]]
+
+
+@pytest.mark.parametrize("lowercase_columns", [True, False])
+async def test_memory_replay_deduplicates_event_ids_with_native_casing(
+    db2_mode: DriverMode, lowercase_columns: bool
+) -> None:
+    """A replayed event is skipped even when the returned memory ID differs."""
+    store, config = _memory_store(
+        db2_mode, FakeDb2Cursor(rows=[("old-memory", "same-event")], description=db2_description("id", "event_id"))
+    )
+    config.driver_features["enable_lowercase_column_names"] = lowercase_columns
+    stamp = datetime.now(UTC)
+    entry = StoredMemory(
+        id="new-memory",
+        session_id="s1",
+        app_name="app",
+        user_id="u1",
+        scope="user",
+        event_id="same-event",
+        author=None,
+        timestamp=stamp,
+        content_json={},
+        content_text="text",
+        metadata_json=None,
+        inserted_at=stamp,
+        embedding=None,
+    )
+
+    assert await db2_mode.call(store.insert_memory_entries, [entry]) == 0
+    assert len(config.executed) == 1
+
+
 def test_create_index_sql_qualifies_schema() -> None:
     """ADK index DDL qualifies index name when table is schema-qualified."""
     assert (
         _create_index_sql('"MYSCHEMA"."SESSIONS"', "ix_sessions", "user_id")
-        == 'CREATE INDEX "MYSCHEMA"."ix_sessions" ON "MYSCHEMA"."SESSIONS" (user_id)'
+        == 'CREATE INDEX "MYSCHEMA"."IX_SESSIONS" ON "MYSCHEMA"."SESSIONS" (user_id)'
     )
     assert (
         _create_index_sql("MYSCHEMA.SESSIONS", "ix_sessions", "user_id")
-        == 'CREATE INDEX "MYSCHEMA"."ix_sessions" ON MYSCHEMA.SESSIONS (user_id)'
+        == 'CREATE INDEX "MYSCHEMA"."IX_SESSIONS" ON MYSCHEMA.SESSIONS (user_id)'
     )
     assert _create_index_sql("sessions", "ix_sessions", "user_id") == "CREATE INDEX ix_sessions ON sessions (user_id)"

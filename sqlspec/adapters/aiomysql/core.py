@@ -524,8 +524,6 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     """Escape literal percent characters before driver-side interpolation."""
     if not parameters or "%" not in sql:
         return sql
-    if isinstance(parameters, (tuple, list)) and sql.count("%") == len(parameters):
-        return sql
     keep = {info.position for info in validator.extract_parameters(sql)}
     if len(keep) == sql.count("%"):
         return sql

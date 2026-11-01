@@ -348,6 +348,7 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         Returns:
             True when ``SYSCAT.SCHEMATA`` lists the schema.
         """
+        exists = False
         handler = self.handle_database_exceptions()
         with handler, self.with_cursor(self.connection) as cursor:
             cursor.execute("SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = ?", (normalize_identifier(schema, "db2"),))

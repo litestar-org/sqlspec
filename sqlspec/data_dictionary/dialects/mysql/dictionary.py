@@ -56,7 +56,6 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
     def __init__(self) -> None:
         super().__init__()
         self._engine_version_cache: dict[int, MySQLEngineVersion | None] = {}
-        self._ddl_context_cache: dict[int, tuple[str | None, str | None, str | None]] = {}
 
     async def get_version(self, driver: "AsyncDriverAdapterBase") -> "VersionInfo | None":
         """Get MySQL database version information."""
@@ -253,35 +252,18 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         _ = include_dependencies, redact
         if object_type.strip().upper() not in MYSQL_SHOW_CREATE_OBJECT_TYPES:
             return None
-        cache_key = _get_driver_cache_key(driver)
-        ddl_ctx = self._ddl_context_cache.get(cache_key)
-        if ddl_ctx is None:
-            try:
-                row_ctx = await driver.select_one(
-                    "SELECT VERSION() AS raw_version, @@sql_mode AS sql_mode, @@sql_quote_show_create AS sql_quote_show_create",
-                    schema_type=dict,
-                )
-                ddl_ctx = (
-                    str(row_ctx.get("raw_version")) if row_ctx.get("raw_version") is not None else None,
-                    str(row_ctx.get("sql_mode")) if row_ctx.get("sql_mode") is not None else None,
-                    str(row_ctx.get("sql_quote_show_create"))
-                    if row_ctx.get("sql_quote_show_create") is not None
-                    else None,
-                )
-            except Exception:
-                raw_version = await driver.select_value_or_none(self.get_query_text("version", "current"))
-                sql_mode = await driver.select_value_or_none("SELECT @@sql_mode")
-                sql_quote_show_create = await driver.select_value_or_none("SELECT @@sql_quote_show_create")
-                ddl_ctx = (
-                    str(raw_version) if raw_version is not None else None,
-                    str(sql_mode) if sql_mode is not None else None,
-                    str(sql_quote_show_create) if sql_quote_show_create is not None else None,
-                )
-            if len(self._ddl_context_cache) >= _MAX_ENGINE_VERSION_CACHE_SIZE:
-                self._ddl_context_cache.pop(next(iter(self._ddl_context_cache)))
-            self._ddl_context_cache[cache_key] = ddl_ctx
-
-        raw_version, sql_mode, sql_quote_show_create = ddl_ctx
+        try:
+            row_ctx = await driver.select_one(
+                "SELECT VERSION() AS raw_version, @@sql_mode AS sql_mode, @@sql_quote_show_create AS sql_quote_show_create",
+                schema_type=dict,
+            )
+            raw_version = row_ctx.get("raw_version")
+            sql_mode = row_ctx.get("sql_mode")
+            sql_quote_show_create = row_ctx.get("sql_quote_show_create")
+        except Exception:
+            raw_version = await driver.select_value_or_none(self.get_query_text("version", "current"))
+            sql_mode = await driver.select_value_or_none("SELECT @@sql_mode")
+            sql_quote_show_create = await driver.select_value_or_none("SELECT @@sql_quote_show_create")
         statement = build_mysql_show_create_statement(object_name, schema, object_type)
         try:
             row = await driver.select_one(statement, schema_type=dict)
@@ -355,7 +337,7 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         params: dict[str, Any] = {"schema_name": schema_name}
         if table_name is not None:
             params["table_name"] = table_name
-        if object_name is not None:
+        if domain == "privileges":
             params["object_name"] = object_name
         rows = await driver.select(query.sql, **params)
         return MetadataResult(domain, capability=capability, items=tuple(rows))
@@ -370,7 +352,6 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
     def __init__(self) -> None:
         super().__init__()
         self._engine_version_cache: dict[int, MySQLEngineVersion | None] = {}
-        self._ddl_context_cache: dict[int, tuple[str | None, str | None, str | None]] = {}
 
     def get_version(self, driver: "SyncDriverAdapterBase") -> "VersionInfo | None":
         """Get MySQL database version information."""
@@ -567,35 +548,18 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
         _ = include_dependencies, redact
         if object_type.strip().upper() not in MYSQL_SHOW_CREATE_OBJECT_TYPES:
             return None
-        cache_key = _get_driver_cache_key(driver)
-        ddl_ctx = self._ddl_context_cache.get(cache_key)
-        if ddl_ctx is None:
-            try:
-                row_ctx = driver.select_one(
-                    "SELECT VERSION() AS raw_version, @@sql_mode AS sql_mode, @@sql_quote_show_create AS sql_quote_show_create",
-                    schema_type=dict,
-                )
-                ddl_ctx = (
-                    str(row_ctx.get("raw_version")) if row_ctx.get("raw_version") is not None else None,
-                    str(row_ctx.get("sql_mode")) if row_ctx.get("sql_mode") is not None else None,
-                    str(row_ctx.get("sql_quote_show_create"))
-                    if row_ctx.get("sql_quote_show_create") is not None
-                    else None,
-                )
-            except Exception:
-                raw_version = driver.select_value_or_none(self.get_query_text("version", "current"))
-                sql_mode = driver.select_value_or_none("SELECT @@sql_mode")
-                sql_quote_show_create = driver.select_value_or_none("SELECT @@sql_quote_show_create")
-                ddl_ctx = (
-                    str(raw_version) if raw_version is not None else None,
-                    str(sql_mode) if sql_mode is not None else None,
-                    str(sql_quote_show_create) if sql_quote_show_create is not None else None,
-                )
-            if len(self._ddl_context_cache) >= _MAX_ENGINE_VERSION_CACHE_SIZE:
-                self._ddl_context_cache.pop(next(iter(self._ddl_context_cache)))
-            self._ddl_context_cache[cache_key] = ddl_ctx
-
-        raw_version, sql_mode, sql_quote_show_create = ddl_ctx
+        try:
+            row_ctx = driver.select_one(
+                "SELECT VERSION() AS raw_version, @@sql_mode AS sql_mode, @@sql_quote_show_create AS sql_quote_show_create",
+                schema_type=dict,
+            )
+            raw_version = row_ctx.get("raw_version")
+            sql_mode = row_ctx.get("sql_mode")
+            sql_quote_show_create = row_ctx.get("sql_quote_show_create")
+        except Exception:
+            raw_version = driver.select_value_or_none(self.get_query_text("version", "current"))
+            sql_mode = driver.select_value_or_none("SELECT @@sql_mode")
+            sql_quote_show_create = driver.select_value_or_none("SELECT @@sql_quote_show_create")
         statement = build_mysql_show_create_statement(object_name, schema, object_type)
         try:
             row = driver.select_one(statement, schema_type=dict)
@@ -669,7 +633,7 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
         params: dict[str, Any] = {"schema_name": schema_name}
         if table_name is not None:
             params["table_name"] = table_name
-        if object_name is not None:
+        if domain == "privileges":
             params["object_name"] = object_name
         rows = driver.select(query.sql, **params)
         return MetadataResult(domain, capability=capability, items=tuple(rows))

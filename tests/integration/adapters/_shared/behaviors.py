@@ -620,34 +620,54 @@ async def _assert_aiosqlite_stream_arraysize(driver: object, case: DriverCase) -
 
 async def _assert_asyncpg_stream_transaction(driver: object, case: DriverCase) -> None:
     async_driver = cast("AsyncContractDriver", driver)
-    stream = async_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
-    await anext(aiter(stream))
-    assert stream._source._transaction is not None  # pyright: ignore[reportPrivateUsage]
-    assert stream._source._cursor is not None  # pyright: ignore[reportPrivateUsage]
-    await stream.aclose()
-    assert stream._source._transaction is None  # pyright: ignore[reportPrivateUsage]
-    assert stream._source._cursor is None  # pyright: ignore[reportPrivateUsage]
-    await async_driver.execute(case.table.select_count_sql)
-
-
-def _assert_psycopg_named_cursor(driver: object, case: DriverCase) -> None:
-    sync_driver = cast("SyncContractDriver", driver)
-    stream = sync_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
-    try:
-        next(iter(stream))
-        assert stream._source._cursor.name  # pyright: ignore[reportPrivateUsage]
-    finally:
-        stream.close()
-
-
-async def _assert_psycopg_named_cursor_async(driver: object, case: DriverCase) -> None:
-    async_driver = cast("AsyncContractDriver", driver)
+    connection = cast("Any", driver).connection
+    was_in_transaction = connection.is_in_transaction()
     stream = async_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
     try:
-        await anext(aiter(stream))
-        assert stream._source._cursor.name  # pyright: ignore[reportPrivateUsage]
+        first = await anext(aiter(stream))
+        assert first["value"] == 0
+        assert connection.is_in_transaction() is True
     finally:
         await stream.aclose()
+    assert connection.is_in_transaction() is was_in_transaction
+    assert int(cast("int", await async_driver.select_value(case.table.select_count_sql))) == case.streaming_row_count
+    await async_driver.begin()
+    try:
+        await async_driver.execute(case.table.insert_named_sql, name="stream_caller_probe", value=-1, note=None)
+        async with async_driver.select_stream(case.table.select_ordered_sql, chunk_size=1) as caller_stream:
+            assert (await anext(aiter(caller_stream)))["value"] == -1
+        assert connection.is_in_transaction() is True
+    finally:
+        await async_driver.rollback()
+    assert await async_driver.select(case.table.select_by_name_named_sql, name="stream_caller_probe") == []
+
+
+def _assert_psycopg_stream_transaction(driver: object, case: DriverCase) -> None:
+    sync_driver = cast("SyncContractDriver", driver)
+    connection = cast("Any", driver).connection
+    original_status = connection.info.transaction_status
+    stream = sync_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        assert next(iter(stream))["value"] == 0
+        assert connection.info.transaction_status == 2
+    finally:
+        stream.close()
+    assert connection.info.transaction_status == original_status
+    assert int(cast("int", sync_driver.select_value(case.table.select_count_sql))) == case.streaming_row_count
+
+
+async def _assert_psycopg_stream_transaction_async(driver: object, case: DriverCase) -> None:
+    async_driver = cast("AsyncContractDriver", driver)
+    connection = cast("Any", driver).connection
+    original_status = connection.info.transaction_status
+    stream = async_driver.select_stream(case.table.select_ordered_sql, chunk_size=10)
+    try:
+        assert (await anext(aiter(stream)))["value"] == 0
+        assert connection.info.transaction_status == 2
+    finally:
+        await stream.aclose()
+    assert connection.info.transaction_status == original_status
+    assert int(cast("int", await async_driver.select_value(case.table.select_count_sql))) == case.streaming_row_count
 
 
 def _assert_pymysql_sscursor(driver: object, case: DriverCase) -> None:
@@ -693,8 +713,8 @@ async def _assert_mysqlconnector_unbuffered_async(driver: object, case: DriverCa
 register_sync_extra_assertion("streaming_native:sqlite", _STREAMING_SCOPE, _assert_sqlite_stream_arraysize)
 register_async_extra_assertion("streaming_native:aiosqlite", _STREAMING_SCOPE, _assert_aiosqlite_stream_arraysize)
 register_async_extra_assertion("streaming_native:asyncpg", _STREAMING_SCOPE, _assert_asyncpg_stream_transaction)
-register_sync_extra_assertion("streaming_native:psycopg", _STREAMING_SCOPE, _assert_psycopg_named_cursor)
-register_async_extra_assertion("streaming_native:psycopg", _STREAMING_SCOPE, _assert_psycopg_named_cursor_async)
+register_sync_extra_assertion("streaming_native:psycopg", _STREAMING_SCOPE, _assert_psycopg_stream_transaction)
+register_async_extra_assertion("streaming_native:psycopg", _STREAMING_SCOPE, _assert_psycopg_stream_transaction_async)
 register_sync_extra_assertion("streaming_native:pymysql", _STREAMING_SCOPE, _assert_pymysql_sscursor)
 register_async_extra_assertion("streaming_native:aiomysql", _STREAMING_SCOPE, _assert_async_sscursor)
 register_async_extra_assertion("streaming_native:asyncmy", _STREAMING_SCOPE, _assert_async_sscursor)
@@ -758,58 +778,6 @@ class _StreamErrorProbe(Exception):
     """Sentinel raised to force a mid-stream chunk fetch failure without a live database error."""
 
 
-class _SyncTransactionRecorder:
-    """Delegating transaction wrapper recording whether commit or rollback fired during stream close."""
-
-    def __init__(self, inner: Any, log: "list[str]") -> None:
-        object.__setattr__(self, "_inner", inner)
-        object.__setattr__(self, "_log", log)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(object.__getattribute__(self, "_inner"), name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        setattr(object.__getattribute__(self, "_inner"), name, value)
-
-    def commit(self, *args: Any, **kwargs: Any) -> Any:
-        object.__getattribute__(self, "_log").append("commit")
-        return object.__getattribute__(self, "_inner").commit(*args, **kwargs)
-
-    def rollback(self, *args: Any, **kwargs: Any) -> Any:
-        object.__getattribute__(self, "_log").append("rollback")
-        return object.__getattribute__(self, "_inner").rollback(*args, **kwargs)
-
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
-        object.__getattribute__(self, "_log").append("rollback" if exc_type is not None else "commit")
-        return object.__getattribute__(self, "_inner").__exit__(exc_type, exc, tb)
-
-
-class _AsyncTransactionRecorder:
-    """Delegating async transaction wrapper recording whether commit or rollback fired during stream close."""
-
-    def __init__(self, inner: Any, log: "list[str]") -> None:
-        object.__setattr__(self, "_inner", inner)
-        object.__setattr__(self, "_log", log)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(object.__getattribute__(self, "_inner"), name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        setattr(object.__getattribute__(self, "_inner"), name, value)
-
-    async def commit(self, *args: Any, **kwargs: Any) -> Any:
-        object.__getattribute__(self, "_log").append("commit")
-        return await object.__getattribute__(self, "_inner").commit(*args, **kwargs)
-
-    async def rollback(self, *args: Any, **kwargs: Any) -> Any:
-        object.__getattribute__(self, "_log").append("rollback")
-        return await object.__getattribute__(self, "_inner").rollback(*args, **kwargs)
-
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
-        object.__getattribute__(self, "_log").append("rollback" if exc_type is not None else "commit")
-        return await object.__getattribute__(self, "_inner").__aexit__(exc_type, exc, tb)
-
-
 class _SyncStreamFetchFailSource:
     """Delegating sync stream source that forces the next chunk fetch to fail and delegates close to the origin."""
 
@@ -846,21 +814,16 @@ def _assert_sync_stream_error_close_rollback(driver: object, case: DriverCase) -
     """Assert a mid-stream fetch failure rolls back a stream-owned transaction instead of committing."""
     sync_driver = cast("SyncContractDriver", driver)
     table = case.table
+    sync_driver.rollback()
     stream = sync_driver.select_stream(table.select_ordered_sql, chunk_size=1)
     iterator = iter(stream)
     next(iterator)
     real_source = stream._source  # pyright: ignore[reportPrivateUsage]
-    assert real_source._transaction is not None  # pyright: ignore[reportPrivateUsage]
-    log: list[str] = []
-    real_source._transaction = _SyncTransactionRecorder(real_source._transaction, log)  # pyright: ignore[reportPrivateUsage]
+    sync_driver.execute(table.insert_named_sql, name="stream_rollback_probe", value=-1, note=None)
     stream._source = _SyncStreamFetchFailSource(real_source)  # pyright: ignore[reportPrivateUsage]
     with pytest.raises(_StreamErrorProbe):
         next(iterator)
-    assert log
-    assert log[0] == "rollback"
-    assert "commit" not in log
-    with contextlib.suppress(Exception):
-        sync_driver.rollback()
+    assert sync_driver.select(table.select_by_name_named_sql, name="stream_rollback_probe") == []
     assert int(cast("int", sync_driver.select_value(table.select_count_sql))) == case.streaming_row_count
 
 
@@ -868,21 +831,22 @@ async def _assert_async_stream_error_close_rollback(driver: object, case: Driver
     """Assert a mid-stream fetch failure rolls back a stream-owned transaction instead of committing."""
     async_driver = cast("AsyncContractDriver", driver)
     table = case.table
+    await async_driver.rollback()
     stream = async_driver.select_stream(table.select_ordered_sql, chunk_size=1)
     iterator = aiter(stream)
     await anext(iterator)
     real_source = stream._source  # pyright: ignore[reportPrivateUsage]
-    assert real_source._transaction is not None  # pyright: ignore[reportPrivateUsage]
-    log: list[str] = []
-    real_source._transaction = _AsyncTransactionRecorder(real_source._transaction, log)  # pyright: ignore[reportPrivateUsage]
+    # CockroachDB rejects another bound statement while the asyncpg cursor's portal is open.
+    supports_probe_insert = case.adapter != "cockroach_asyncpg"
+    if supports_probe_insert:
+        await async_driver.execute(table.insert_named_sql, name="stream_rollback_probe", value=-1, note=None)
     stream._source = _AsyncStreamFetchFailSource(real_source)  # pyright: ignore[reportPrivateUsage]
     with pytest.raises(_StreamErrorProbe):
         await anext(iterator)
-    assert log
-    assert log[0] == "rollback"
-    assert "commit" not in log
-    with contextlib.suppress(Exception):
-        await async_driver.rollback()
+    if supports_probe_insert:
+        assert await async_driver.select(table.select_by_name_named_sql, name="stream_rollback_probe") == []
+    else:
+        assert cast("Any", driver).connection.is_in_transaction() is False
     assert int(cast("int", await async_driver.select_value(table.select_count_sql))) == case.streaming_row_count
 
 

@@ -6,15 +6,8 @@ import pyarrow as pa
 import pytest
 
 import sqlspec.adapters.spanner.driver as spanner_driver
+from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
-
-CAPABILITIES = {
-    "arrow_export_enabled": True,
-    "arrow_import_enabled": True,
-    "parquet_export_enabled": True,
-    "parquet_import_enabled": True,
-    "partition_strategies": ["fixed"],
-}
 
 
 class _FakeTransaction:
@@ -34,7 +27,8 @@ class _FakeTransaction:
 @pytest.fixture
 def mutations_driver(monkeypatch: pytest.MonkeyPatch) -> SpannerSyncDriver:
     monkeypatch.setattr(spanner_driver, "SpannerTransaction", _FakeTransaction)
-    return SpannerSyncDriver(cast("Any", _FakeTransaction()), driver_features={"storage_capabilities": CAPABILITIES})
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    return SpannerSyncDriver(cast("Any", _FakeTransaction()), driver_features=config.driver_features)
 
 
 def test_load_from_arrow_uses_single_insert_or_update(mutations_driver: SpannerSyncDriver) -> None:

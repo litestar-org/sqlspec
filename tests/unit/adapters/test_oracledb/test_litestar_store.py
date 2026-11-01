@@ -2,12 +2,13 @@
 
 from datetime import UTC, datetime, timedelta
 from typing import Any, Self, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
-from sqlspec.adapters.oracledb.litestar import OracleSyncStore
+from sqlspec.adapters.oracledb.litestar import OracleAsyncStore, OracleSyncStore
 
 
 class _FakeCursor:
@@ -186,3 +187,30 @@ def test_oracle_store_set_rolls_back_on_execute_failure() -> None:
         store._set("fail-key", b"data")
 
     connection.rollback.assert_called_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_session_renewal_binds_each_sql_placeholder(is_async: bool) -> None:
+    config = MagicMock()
+    config.extension_config = {}
+    cursor = MagicMock()
+    cursor.fetchone.return_value = (b"payload", datetime(2026, 5, 10, tzinfo=UTC))
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    if is_async:
+        cursor.execute = AsyncMock()
+        cursor.fetchone = AsyncMock(return_value=cursor.fetchone.return_value)
+        connection.commit = AsyncMock()
+        config.provide_connection.return_value.__aenter__.return_value = connection
+        store = OracleAsyncStore(config)
+    else:
+        config.provide_connection.return_value.__enter__.return_value = connection
+        store = OracleSyncStore(config)
+
+    result = await store.get("session-1", renew_for=60)
+
+    assert result == b"payload"
+    assert cursor.execute.call_count == 2
+    assert cursor.execute.call_args.args[1] == (60, 60, "session-1")
+    connection.commit.assert_called_once()

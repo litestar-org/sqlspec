@@ -17,12 +17,13 @@ from mysql.connector import cursor as _mysql_connector_cursor
 from mysql.connector import pooling as _mysql_connector_pooling
 from mysql.connector.aio import MySQLConnection as _MysqlConnectorAsyncConnection
 from mysql.connector.aio import cursor as _mysql_connector_aio_cursor
-from mysql.connector.aio.pooling import MySQLConnectionPool as MysqlConnectorAsyncPool
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import ClassVar, Protocol, TypeAlias
+
+    from mysql.connector.aio.pooling import MySQLConnectionPool as MysqlConnectorAsyncPool
 
     from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
     from sqlspec.core import StatementConfig
@@ -83,6 +84,12 @@ if TYPE_CHECKING:
     MysqlConnectorMysqlModule: TypeAlias = MysqlConnectorMysqlModuleProtocol
     MysqlConnectorAsyncRawCursor: TypeAlias = MysqlConnectorAsyncRawCursorProtocol
 else:
+    try:
+        from mysql.connector.aio.pooling import MySQLConnectionPool as MysqlConnectorAsyncPool
+    except ModuleNotFoundError as exc:
+        if exc.name != "mysql.connector.aio.pooling":
+            raise
+        MysqlConnectorAsyncPool = None
     MysqlConnectorAio = _mysql_connector_aio
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection

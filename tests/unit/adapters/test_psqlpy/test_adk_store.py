@@ -297,6 +297,6 @@ async def test_psqlpy_memory_store_normalizes_tuple_embeddings_on_insert_and_sea
     results = await store.search_entries("", "app", "user-1", embedding=(0.1, 0.2))
 
     assert inserted == 1
-    assert "unnest" in conn.fetch_calls[0][0].lower()
+    assert conn.fetch_calls[0][1][-1] == ["[0.1,0.2]"]
     assert conn.fetch_calls[1][1][0] == [0.1, 0.2]
     assert results[0]["embedding"] == [0.1, 0.2]

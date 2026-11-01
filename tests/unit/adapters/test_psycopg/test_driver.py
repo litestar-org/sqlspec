@@ -1,5 +1,6 @@
 """Unit tests for psycopg driver transaction behavior."""
 
+import inspect
 from asyncio import CancelledError
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ import pytest
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL
-from sqlspec.exceptions import SerializationConflictError, SQLSpecError
+from sqlspec.exceptions import SerializationConflictError, SQLSpecError, UniqueViolationError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
@@ -271,75 +272,41 @@ async def test_async_rollback_restores_changed_autocommit() -> None:
     assert connection.autocommit is True
 
 
-def test_sync_cache_hit_with_literal_percent_avoids_fallback() -> None:
-    """_execute_cache_hit for query with literal percent uses pre-escaped wire SQL."""
-    from sqlspec.core.cache import CachedQuery
-    from sqlspec.core.compiler import OperationProfile
-    from sqlspec.core.parameters import ParameterInfo, ParameterProfile, ParameterStyle
-    from sqlspec.core.statement import ProcessedState
-
-    connection = MagicMock()
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    ("query", "parameters", "wire_sql"),
+    [
+        ("SELECT '100%' AS value", (), "SELECT '100%' AS value"),
+        ("SELECT 10 % 3 AS value", (), "SELECT 10 % 3 AS value"),
+        ("SELECT %s AS value WHERE '100%' LIKE '100%'", (1,), "SELECT %s AS value WHERE '100%%' LIKE '100%%'"),
+    ],
+)
+async def test_cached_percent_sql_preserves_native_binding(
+    is_async: bool, query: str, parameters: tuple[int, ...], wire_sql: str
+) -> None:
+    """Cached and uncached execution apply percent escaping only with native parameters."""
     cursor = MagicMock()
-    cursor.description = [SimpleNamespace(name="id")]
-    cursor.fetchall.return_value = [(1,)]
+    cursor.description = [SimpleNamespace(name="value", type_code=23)]
     cursor.rowcount = 1
-    connection.cursor.return_value = cursor
-    driver = PsycopgSyncDriver(connection=connection)
-
-    cached = CachedQuery(
-        compiled_sql="SELECT * FROM items WHERE name LIKE '%%test%%' AND id = %s",
-        parameter_profile=ParameterProfile([ParameterInfo("id", ParameterStyle.POSITIONAL_PYFORMAT, 0, 1, "%s")]),
-        input_named_parameters=(),
-        applied_wrap_types=False,
-        parameter_casts={},
-        operation_type="SELECT",
-        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
-        param_count=1,
-        processed_state=ProcessedState(
-            compiled_sql="SELECT * FROM items WHERE name LIKE '%%test%%' AND id = %s",
-            execution_parameters=[],
-            operation_type="SELECT",
-        ),
-    )
-    result = driver._execute_cache_hit("SELECT * FROM items WHERE name LIKE '%test%' AND id = %s", (1,), cached)
-    assert result is not None
-    assert cursor.execute.called
-
-
-@pytest.mark.anyio
-async def test_async_cache_hit_with_literal_percent_avoids_fallback() -> None:
-    """async _execute_cache_hit for query with literal percent uses pre-escaped wire SQL."""
-    from sqlspec.core.cache import CachedQuery
-    from sqlspec.core.compiler import OperationProfile
-    from sqlspec.core.parameters import ParameterInfo, ParameterProfile, ParameterStyle
-    from sqlspec.core.statement import ProcessedState
-
+    if is_async:
+        cursor.execute = AsyncMock()
+        cursor.fetchall = AsyncMock(return_value=[(1,)])
+        cursor.close = AsyncMock()
+    else:
+        cursor.fetchall.return_value = [(1,)]
     connection = MagicMock()
-    cursor = AsyncMock()
-    cursor.description = [SimpleNamespace(name="id")]
-    cursor.fetchall = AsyncMock(return_value=[(1,)])
-    cursor.rowcount = 1
     connection.cursor.return_value = cursor
-    driver = PsycopgAsyncDriver(connection=connection)
+    driver = PsycopgAsyncDriver(connection) if is_async else PsycopgSyncDriver(connection)
 
-    cached = CachedQuery(
-        compiled_sql="SELECT * FROM items WHERE name LIKE '%%test%%' AND id = %s",
-        parameter_profile=ParameterProfile([ParameterInfo("id", ParameterStyle.POSITIONAL_PYFORMAT, 0, 1, "%s")]),
-        input_named_parameters=(),
-        applied_wrap_types=False,
-        parameter_casts={},
-        operation_type="SELECT",
-        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
-        param_count=1,
-        processed_state=ProcessedState(
-            compiled_sql="SELECT * FROM items WHERE name LIKE '%%test%%' AND id = %s",
-            execution_parameters=[],
-            operation_type="SELECT",
-        ),
-    )
-    result = await driver._execute_cache_hit("SELECT * FROM items WHERE name LIKE '%test%' AND id = %s", (1,), cached)
-    assert result is not None
-    assert cursor.execute.called
+    for _ in range(2):
+        result = driver.execute(query, *parameters)
+        if inspect.isawaitable(result):
+            result = await result
+        assert result.get_data() == [{"value": 1}]
+
+    assert [call.args[0] for call in cursor.execute.call_args_list] == [wire_sql, wire_sql]
+    bound = [tuple(call.args[1]) if len(call.args) > 1 else () for call in cursor.execute.call_args_list]
+    assert bound == [parameters, parameters]
 
 
 def test_psycopg_sync_stream_source_runs_with_exception_handler() -> None:
@@ -597,6 +564,45 @@ async def test_psycopg_async_load_from_arrow_runs_with_exception_handler() -> No
         job = await driver.load_from_arrow("test_table", table, overwrite=True)
 
     assert job.telemetry["rows_processed"] == 2
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("binary", [False, True])
+@pytest.mark.parametrize("failure_phase", ["enter", "exit"])
+async def test_copy_lifecycle_maps_native_errors(is_async: bool, binary: bool, failure_phase: str) -> None:
+    """COPY setup and finalization errors retain SQLSpec mapping even inside an except block."""
+    import pyarrow as pa
+
+    native_error = psycopg.errors.UniqueViolation("duplicate key value violates unique constraint items_pk")
+    copy_context = AsyncMock() if is_async else MagicMock()
+    enter = copy_context.__aenter__ if is_async else copy_context.__enter__
+    exit_ = copy_context.__aexit__ if is_async else copy_context.__exit__
+    enter.return_value = copy_context
+    if failure_phase == "enter":
+        enter.side_effect = native_error
+    else:
+        exit_.side_effect = native_error
+    cursor = MagicMock()
+    cursor.copy.return_value = copy_context
+    if is_async:
+        cursor.close = AsyncMock()
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    features = {"storage_capabilities": {"arrow_import_enabled": True}, "enable_pgcopy_binary": binary}
+    driver = (
+        PsycopgAsyncDriver(connection, driver_features=features)
+        if is_async
+        else PsycopgSyncDriver(connection, driver_features=features)
+    )
+
+    try:
+        raise ValueError("ambient exception")
+    except ValueError:
+        with pytest.raises(UniqueViolationError) as error:
+            result = driver.load_from_arrow("items", pa.table({"id": [1, 1]}))
+            if inspect.isawaitable(result):
+                await result
+    assert error.value.__cause__ is native_error
 
 
 def test_sync_dispatch_execute_script_emits_statement_observer_events() -> None:

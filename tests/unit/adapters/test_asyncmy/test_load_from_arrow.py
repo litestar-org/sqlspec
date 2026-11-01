@@ -11,6 +11,7 @@ import pytest
 
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
+from sqlspec.exceptions import StorageCapabilityError
 
 _CAPS: dict[str, Any] = {
     "arrow_export_enabled": True,
@@ -70,9 +71,7 @@ async def test_load_from_arrow_explicit_bulk_disable_uses_executemany(connection
     config = AsyncmyConfig(
         connection_config={"local_infile": connection_opt_in}, driver_features={"enable_local_infile_bulk_load": False}
     )
-    driver = AsyncmyDriver(
-        connection=cast("Any", conn), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
-    )
+    driver = AsyncmyDriver(connection=cast("Any", conn), driver_features=config.driver_features)
 
     job = await driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
 
@@ -91,6 +90,19 @@ async def test_load_from_arrow_overwrite_truncates_first() -> None:
 
     assert conn._cursor.execute_calls[0] == "TRUNCATE TABLE `orders`"
     assert conn._cursor.executemany_calls[0][0].startswith("INSERT INTO")
+
+
+async def test_config_preserves_explicit_arrow_import_disable() -> None:
+    conn = _FakeConnection()
+    config = AsyncmyConfig(
+        driver_features=cast("Any", {"storage_capabilities": {**_CAPS, "arrow_import_enabled": False}})
+    )
+    driver = AsyncmyDriver(connection=cast("Any", conn), driver_features=config.driver_features)
+
+    with pytest.raises(StorageCapabilityError, match="Arrow import"):
+        await driver.load_from_arrow("orders", pa.table({"id": [1]}))
+
+    assert conn._cursor.executemany_calls == []
 
 
 async def test_load_from_storage_reads_parquet_and_delegates(tmp_path: Path) -> None:

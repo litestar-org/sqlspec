@@ -470,7 +470,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 INSERT OR REPLACE INTO {self._table_name} (session_id, data, expires_at)
                 VALUES ({p1}, {p2}, {p3})
                 """
-            elif is_postgres_dialect(dialect) or dialect == "duckdb":
+            else:
                 if expires_at is None:
                     sql = f"""
                     INSERT INTO {self._table_name} (session_id, data, expires_at)

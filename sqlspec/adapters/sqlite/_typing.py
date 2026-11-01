@@ -97,7 +97,7 @@ class SqliteSessionContext:
         "_statement_config",
     )
 
-    _default_driver_class: ClassVar[Any] = None
+    _default_driver_class: ClassVar["type[SqliteDriver] | None"] = None
 
     def __init__(
         self,

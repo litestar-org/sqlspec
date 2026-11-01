@@ -46,6 +46,25 @@ def test_default_pool_uses_native_like_shared_pragma_profile() -> None:
         pool.close()
 
 
+def test_default_memory_connections_do_not_read_uncommitted_rows() -> None:
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    config = SqliteConfig()
+    other = config.provide_pool().new_connection()
+    try:
+        with config.provide_connection() as connection:
+            connection.execute("CREATE TABLE isolated_rows (value INTEGER)")
+            connection.execute("BEGIN")
+            connection.execute("INSERT INTO isolated_rows VALUES (1)")
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                other.execute("SELECT value FROM isolated_rows")
+            connection.rollback()
+            assert other.execute("SELECT COUNT(*) FROM isolated_rows").fetchone() == (0,)
+    finally:
+        other.close()
+        config.close_pool()
+
+
 def test_disable_optimizations_preserves_native_memory_profile() -> None:
     native_connection = sqlite3.connect(":memory:", timeout=30.0)
     pool = SqliteConnectionPool({"database": ":memory:", "timeout": 30.0}, enable_optimizations=False)

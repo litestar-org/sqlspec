@@ -312,6 +312,7 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
 
     async def _execute_native_storage(self, command: str, parameters: "list[Any]") -> "list[dict[str, Any]]":
         handler = self.handle_database_exceptions()
+        rows: list[dict[str, Any]] = []
 
         async def _fetch() -> list[dict[str, Any]]:
             return [dict(row) for row in await self.connection.fetch(command, *parameters)]

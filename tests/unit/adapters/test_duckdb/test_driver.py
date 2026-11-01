@@ -244,6 +244,25 @@ def test_select_stream_hugeint_interval_divergent_types() -> None:
     assert chunks[0]["val"] == 170141183460469231731687303715884105727
 
 
+@pytest.mark.parametrize("exhaust_stream", [True, False])
+def test_select_stream_preserves_active_transaction(exhaust_stream: bool) -> None:
+    with duckdb.connect(":memory:") as connection:
+        driver = DuckDBDriver(connection)
+        driver.execute("CREATE TABLE items (id INTEGER)")
+        driver.begin()
+        driver.execute("INSERT INTO items VALUES (1)")
+
+        with driver.select_stream("SELECT id::HUGEINT AS id FROM items", chunk_size=1) as stream:
+            if exhaust_stream:
+                assert list(stream) == [{"id": 1}]
+            else:
+                assert next(stream) == {"id": 1}
+
+        assert driver.select_value("SELECT COUNT(*) FROM items") == 1
+        driver.rollback()
+        assert driver.select_value("SELECT COUNT(*) FROM items") == 0
+
+
 def test_concurrent_execute_many_ast_mutation() -> None:
     """dispatch_execute_many does not mutate parsed_expression.meta."""
     config = DuckDBConfig(connection_config={"database": ":memory:"})

@@ -42,10 +42,12 @@ def test_literal_percent_is_escaped_only_when_parameters_are_bound(adapter: str,
             "insert into t (a) values (%s) on duplicate key update a = a % 2",
         ),
         ("update t set a = %s where n like 'a%'", "update t set a = %s where n like 'a%%'"),
+        ("update t set a = %s where a % 2 = 0", "update t set a = %s where a %% 2 = 0"),
     ],
 )
+@pytest.mark.parametrize("parameter_sets", [[(1,)], [(1,), (2,)]])
 async def test_execute_many_percent_escaping_respects_bulk_insert_shape(
-    adapter: str, class_name: str, sql: str, expected: str
+    adapter: str, class_name: str, sql: str, expected: str, parameter_sets: list[tuple[int]]
 ) -> None:
     from unittest.mock import AsyncMock, Mock
 
@@ -54,7 +56,7 @@ async def test_execute_many_percent_escaping_respects_bulk_insert_shape(
     cursor = Mock(rowcount=1)
     if adapter != "pymysql":
         cursor.executemany = AsyncMock()
-    statement = SQL(sql, [(1,)], statement_config=driver.statement_config, is_many=True)
+    statement = SQL(sql, parameter_sets, statement_config=driver.statement_config, is_many=True)
     result = driver.dispatch_execute_many(cursor, statement)
     if adapter != "pymysql":
         await result

@@ -1,7 +1,8 @@
 """Unit tests for mssql_python Arrow and BulkCopy driver methods."""
 
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, cast
+from collections.abc import Iterable, Iterator
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -44,7 +45,15 @@ class ArrowCursor:
         import pyarrow as pa
 
         table = pa.table({"x": [1, 2, 3]})
-        return pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=batch_size))
+
+        def batches() -> Iterator[Any]:
+            for batch in table.to_batches(max_chunksize=batch_size):
+                if self.closed:
+                    raise mssql_python.Error("cursor closed before Arrow batch was read", "")
+                yield batch
+
+        reader = pa.RecordBatchReader.from_batches(table.schema, batches())
+        return SimpleNamespace(schema=reader.schema, read_next_batch=reader.read_next_batch, close=reader.close)
 
     def bulkcopy(self, target_table: str, rows: Iterable[object], **kwargs: object) -> dict[str, object]:
         copied_rows = list(rows)

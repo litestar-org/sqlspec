@@ -24,6 +24,7 @@ from sqlspec.extensions.adk import (
 )
 from sqlspec.extensions.adk.memory import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
@@ -38,6 +39,8 @@ class _Db2ADKStoreMixin:
     """Table layout, index, drop, upsert and event-query builders shared by the Db2 ADK session stores."""
 
     __slots__ = ()
+
+    _max_table_name_parts: ClassVar[int] = 2
 
     if TYPE_CHECKING:
         _session_table: str
@@ -596,6 +599,8 @@ class _Db2ADKMemoryStoreMixin:
 
     __slots__ = ()
 
+    _max_table_name_parts: ClassVar[int] = 2
+
     if TYPE_CHECKING:
         _memory_table: str
 
@@ -653,11 +658,11 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             f"SELECT id, event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})",
             tuple(e["event_id"] for e in unique_entries),
         )
-        existing_ids = {str(row.get("event_id") or row.get("id") or next(iter(row.values()))) for row in existing_rows}
+        existing_ids = {str(row["event_id"] if "event_id" in row else row["EVENT_ID"]) for row in existing_rows}
 
         with self._config.provide_session() as driver:
             for entry in unique_entries:
-                if entry["event_id"] in existing_ids or entry["id"] in existing_ids:
+                if entry["event_id"] in existing_ids:
                     continue
                 driver.execute(insert_sql, _memory_insert_row(entry, has_owner, owner_id))
                 inserted_count += 1
@@ -773,11 +778,11 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
             f"SELECT id, event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})",
             tuple(e["event_id"] for e in unique_entries),
         )
-        existing_ids = {str(row.get("event_id") or row.get("id") or next(iter(row.values()))) for row in existing_rows}
+        existing_ids = {str(row["event_id"] if "event_id" in row else row["EVENT_ID"]) for row in existing_rows}
 
         async with self._config.provide_session() as driver:
             for entry in unique_entries:
-                if entry["event_id"] in existing_ids or entry["id"] in existing_ids:
+                if entry["event_id"] in existing_ids:
                     continue
                 await driver.execute(insert_sql, _memory_insert_row(entry, has_owner, owner_id))
                 inserted_count += 1
@@ -940,7 +945,7 @@ CREATE TABLE {table} (
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:
     schema, _ = split_db2_table_name(table)
     if schema is not None:
-        return f'CREATE INDEX "{schema}"."{index_name}" ON {table} ({columns})'
+        return f"CREATE INDEX {quote_identifier(schema)}.{quote_identifier(index_name.upper())} ON {table} ({columns})"
     return f"CREATE INDEX {index_name} ON {table} ({columns})"
 
 
@@ -1204,7 +1209,7 @@ def _create_missing(driver: "Db2SyncDriver", probe_sql: str, name: str, ddl: str
     if table is not None:
         table_schema, _ = split_db2_table_name(table)
         if table_schema is not None:
-            schema = table_schema.upper()
+            schema = table_schema
     if driver.select_one_or_none(probe_sql, (schema, object_name)) is None:
         driver.execute(ddl)
 
@@ -1225,7 +1230,7 @@ async def _create_missing_async(
     if table is not None:
         table_schema, _ = split_db2_table_name(table)
         if table_schema is not None:
-            schema = table_schema.upper()
+            schema = table_schema
     if await driver.select_one_or_none(probe_sql, (schema, object_name)) is None:
         await driver.execute(ddl)
 

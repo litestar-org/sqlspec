@@ -3,8 +3,10 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from inspect import isawaitable
+from types import SimpleNamespace
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -22,7 +24,8 @@ from sqlspec.adapters.oracledb.adk import (
 from sqlspec.adapters.oracledb.adk.store import _event_data_column_ddl
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, OracleVersionInfo
 from sqlspec.config import ADKConfig
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.extensions.adk import StoredMemory
 
 
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:
@@ -45,6 +48,177 @@ def _config_for_storage(storage_type: JSONStorageType) -> MagicMock:
     cache.version = version
     config._oracle_version_cache = cache
     return config
+
+
+def _config_for_vectors() -> MagicMock:
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config._oracle_version_cache.version = OracleVersionInfo(23, 4, 0, compatible="23.4.0")
+    return config
+
+
+def _memory_entry() -> StoredMemory:
+    timestamp = datetime(2026, 5, 10, 12, tzinfo=UTC)
+    return {
+        "id": "memory-1",
+        "session_id": "session-1",
+        "app_name": "app",
+        "user_id": "user",
+        "scope": "user",
+        "event_id": "event-1",
+        "author": "user",
+        "timestamp": timestamp,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": timestamp,
+        "embedding": None,
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("error_code", [1, 1400, 12899, 51803])
+async def test_memory_batch_errors_commit_only_duplicate_skips(is_async: bool, error_code: int) -> None:
+    import oracledb
+
+    config = _config_for_storage(JSONStorageType.BLOB_JSON)
+    config.extension_config = {"adk": {}}
+    cursor = MagicMock()
+    batch_error = SimpleNamespace(code=error_code, message=f"ORA-{error_code:05d}: rejected memory")
+    cursor.getbatcherrors.return_value = [batch_error]
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    if is_async:
+        cursor.executemany = AsyncMock()
+        connection.commit = AsyncMock()
+        connection.rollback = AsyncMock()
+        config.provide_connection.return_value.__aenter__.return_value = connection
+        store = OracleAsyncADKMemoryStore(config)
+    else:
+        config.provide_connection.return_value.__enter__.return_value = connection
+        store = OracleSyncADKMemoryStore(config)
+
+    entries: list[StoredMemory] = [_memory_entry(), {**_memory_entry(), "id": "memory-2"}]
+    if error_code == 1:
+        result = store.insert_memory_entries(entries)
+        if isawaitable(result):
+            result = await result
+        assert result == 1
+        connection.commit.assert_called_once()
+        connection.rollback.assert_not_called()
+    else:
+        with pytest.raises(oracledb.DatabaseError) as exc_info:
+            result = store.insert_memory_entries(entries)
+            if isawaitable(result):
+                await result
+        assert exc_info.value.args[0] is batch_error
+        connection.commit.assert_not_called()
+        connection.rollback.assert_called_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("use_fts", [False, True])
+@pytest.mark.parametrize(
+    "version",
+    [
+        OracleVersionInfo(19, 0, 0, compatible="19.0.0"),
+        OracleVersionInfo(21, 3, 0, compatible="21.0.0"),
+        OracleVersionInfo(23, 4, 0, compatible="23.0.0"),
+    ],
+)
+async def test_legacy_memory_retains_text_storage_and_rejects_vectors(
+    is_async: bool, use_fts: bool, version: OracleVersionInfo
+) -> None:
+    config = _config_for_storage(JSONStorageType.BLOB_JSON)
+    config._oracle_version_cache.version = version
+    config.extension_config = {"adk": {"memory_use_fts": use_fts}}
+    cursor = MagicMock()
+    cursor.getbatcherrors.return_value = []
+    timestamp = _memory_entry()["timestamp"]
+    cursor.fetchall.return_value = [
+        (
+            "memory-1",
+            "session-1",
+            "app",
+            "user",
+            "user",
+            "event-1",
+            "user",
+            timestamp,
+            b'{"text":"hello"}',
+            "hello",
+            None,
+            timestamp,
+            None,
+        )
+    ]
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    executed: list[str] = []
+
+    def execute(sql: str, _params: Any) -> None:
+        assert "NULL AS embedding" in sql
+        executed.append(sql)
+
+    if is_async:
+        cursor.execute = AsyncMock(side_effect=execute)
+        cursor.executemany = AsyncMock()
+        cursor.fetchall = AsyncMock(return_value=cursor.fetchall.return_value)
+        connection.commit = AsyncMock()
+        config.provide_connection.return_value.__aenter__.return_value = connection
+        store = OracleAsyncADKMemoryStore(config)
+    else:
+        cursor.execute.side_effect = execute
+        config.provide_connection.return_value.__enter__.return_value = connection
+        store = OracleSyncADKMemoryStore(config)
+
+    ddl = store._memory_table_ddl()
+    if isawaitable(ddl):
+        ddl = await ddl
+    from sqlglot import parse_one
+    from sqlglot.expressions import Create
+
+    create_sql = ddl.split("EXECUTE IMMEDIATE '", 1)[1].split("';", 1)[0].replace("''", "'")
+    table = parse_one(create_sql, dialect="oracle")
+    assert isinstance(table, Create)
+    assert {column.name for column in table.this.expressions} == {
+        "id",
+        "session_id",
+        "app_name",
+        "user_id",
+        "scope",
+        "event_id",
+        "author",
+        "timestamp",
+        "content_json",
+        "metadata_json",
+        "content_text",
+        "inserted_at",
+    }
+
+    inserted = store.insert_memory_entries([_memory_entry()])
+    if isawaitable(inserted):
+        inserted = await inserted
+    assert inserted == 1
+    insert_sql, bind_rows = cursor.executemany.call_args.args
+    assert "timestamp, content_json" in insert_sql
+    assert set(bind_rows[0]) == set(_memory_entry()) - {"embedding"}
+
+    records = store.search_entries("hello", "app", "user")
+    if isawaitable(records):
+        records = await records
+    assert len(executed) == 1
+    assert [(record["id"], record["embedding"]) for record in records] == [("memory-1", None)]
+
+    with pytest.raises(ImproperConfigurationError, match=r"23\.4"):
+        result = store.insert_memory_entries([{**_memory_entry(), "embedding": [0.1]}])
+        if isawaitable(result):
+            await result
+    with pytest.raises(ImproperConfigurationError, match=r"23\.4"):
+        result = store.search_entries("hello", "app", "user", embedding=[0.1])
+        if isawaitable(result):
+            await result
 
 
 def test_oracle_adk_config_types_adapter_local_optimizations() -> None:
@@ -302,16 +476,19 @@ def test_oracle_sync_adk_memory_rows_to_records_deserializes_json_fields() -> No
     assert records[0]["embedding"] is None
 
 
-def test_oracle_adk_memory_ddl_declares_embedding_vector() -> None:
+@pytest.mark.anyio
+async def test_oracle_adk_memory_ddl_declares_embedding_vector() -> None:
     """Memory table DDL declares an embedding VECTOR column with configured dimensions."""
-    config = _mock_config({})
+    config = _config_for_vectors()
+    config.extension_config = {"adk": {}}
     store = OracleSyncADKMemoryStore(config)
-    sql = store._memory_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+    sql = store._memory_table_ddl()
     assert "embedding VECTOR(768, FLOAT32)" in sql
 
-    custom_config = _mock_config({"vector_dimensions": 1536})
+    custom_config = _config_for_vectors()
+    custom_config.extension_config = {"adk": {"vector_dimensions": 1536}}
     custom_store = OracleAsyncADKMemoryStore(custom_config)
-    custom_sql = custom_store._memory_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+    custom_sql = await custom_store._memory_table_ddl()
     assert "embedding VECTOR(1536, FLOAT32)" in custom_sql
 
 
@@ -319,7 +496,7 @@ def test_oracle_adk_sync_insert_binds_embedding_array() -> None:
     """Sync memory store binds embeddings as float arrays."""
     import array
 
-    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config = _config_for_vectors()
     config.extension_config = {"adk": {}}
     store = OracleSyncADKMemoryStore(config)
     conn = MagicMock()
@@ -329,7 +506,7 @@ def test_oracle_adk_sync_insert_binds_embedding_array() -> None:
     config.provide_connection.return_value.__enter__.return_value = conn
 
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
-    entries = [
+    entries: list[StoredMemory] = [
         {
             "id": "mem-1",
             "session_id": "sess-1",
@@ -414,7 +591,7 @@ def test_oracle_adk_memory_store_batch_insert() -> None:
 
     store = OracleSyncADKMemoryStore(config)
     now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
-    entries = [
+    entries: list[StoredMemory] = [
         {
             "id": "mem-1",
             "session_id": "sess-1",
@@ -428,6 +605,7 @@ def test_oracle_adk_memory_store_batch_insert() -> None:
             "content_text": "text 1",
             "metadata_json": None,
             "inserted_at": now,
+            "embedding": None,
         },
         {
             "id": "mem-2",
@@ -442,6 +620,7 @@ def test_oracle_adk_memory_store_batch_insert() -> None:
             "content_text": "text 2",
             "metadata_json": None,
             "inserted_at": now,
+            "embedding": None,
         },
     ]
     inserted = store.insert_memory_entries(entries)
@@ -517,6 +696,9 @@ class _RecordingCursor:
     def executemany(self, sql: str, params: Any = None, **_kwargs: Any) -> None:
         for p in params or []:
             self.calls.append((sql, dict(p or {})))
+
+    def getbatcherrors(self) -> list[Any]:
+        return []
 
     def fetchall(self) -> "list[Any]":
         return []
@@ -783,7 +965,7 @@ def test_oracle_adk_owner_id_column_ddl_escapes_single_quotes() -> None:
 def test_oracle_sync_adk_memory_fts_sanitizes_query_and_hybrid_rrf_fuses_candidates() -> None:
     cursor = _RecordingCursor()
     conn = _RecordingConnection(cursor)
-    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config = _config_for_vectors()
     config.extension_config = {"adk": {"memory_use_fts": True}}
     config.provide_connection = lambda *_a, **_k: conn
     store = OracleSyncADKMemoryStore(config)
@@ -811,7 +993,7 @@ def test_oracle_sync_adk_memory_fts_sanitizes_query_and_hybrid_rrf_fuses_candida
 async def test_oracle_async_adk_memory_fts_sanitizes_query_and_hybrid_rrf_fuses_candidates() -> None:
     cursor = _AsyncRecordingCursor()
     conn = _RecordingConnection(cursor)
-    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config = _config_for_vectors()
     config.extension_config = {"adk": {"memory_use_fts": True}}
     config.provide_connection = lambda *_a, **_k: conn
     store = OracleAsyncADKMemoryStore(config)
@@ -829,7 +1011,7 @@ def test_oracle_sync_adk_memory_hybrid_rrf_near_and_exact_fallback() -> None:
     """Sync ADK memory store forwards fts_operator='NEAR' and approximate=False."""
     cursor = _RecordingCursor()
     conn = _RecordingConnection(cursor)
-    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config = _config_for_vectors()
     config.extension_config = {"adk": {"memory_use_fts": True, "fts_operator": "NEAR", "approximate": False}}
     config.provide_connection = lambda *_a, **_k: conn
     store = OracleSyncADKMemoryStore(config)
@@ -856,7 +1038,7 @@ async def test_oracle_async_adk_memory_hybrid_rrf_near_and_exact_fallback() -> N
     """Async ADK memory store forwards fts_operator='NEAR' and approximate=False."""
     cursor = _AsyncRecordingCursor()
     conn = _RecordingConnection(cursor)
-    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config = _config_for_vectors()
     config.extension_config = {"adk": {"memory_use_fts": True, "fts_operator": "NEAR", "approximate": False}}
     config.provide_connection = lambda *_a, **_k: conn
     store = OracleAsyncADKMemoryStore(config)

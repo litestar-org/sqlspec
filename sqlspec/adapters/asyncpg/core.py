@@ -531,18 +531,23 @@ class AsyncpgStreamSource:
         return [dict(record) for record in records]
 
     async def close(self, error: bool = False) -> None:
+        cursor = self._cursor
         self._cursor = None
         transaction = self._transaction
         self._transaction = None
-        if transaction is not None:
-            try:
+        try:
+            if cursor is not None and getattr(cursor, "_portal_name", None):
+                # asyncpg has no public cursor close; CockroachDB requires closing its portal before transaction control.
+                await cursor._close_portal(self._timeout)
+            if transaction is not None:
                 if error:
                     await transaction.rollback()
                 else:
                     await transaction.commit()
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await transaction.rollback()
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self._driver.connection.close()
+            raise
 
     async def _start(self) -> None:
         already_in_tx = self._driver._connection_in_transaction()
@@ -559,8 +564,11 @@ class AsyncpgStreamSource:
             transaction = self._transaction
             self._transaction = None
             if transaction is not None:
-                with contextlib.suppress(Exception):
+                try:
                     await transaction.rollback()
+                except BaseException:
+                    with contextlib.suppress(Exception):
+                        await self._driver.connection.close()
             raise
 
 
@@ -601,9 +609,7 @@ def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
 
 def _is_pre_serialized_json(value: str) -> bool:
     stripped = value.strip()
-    if not (
-        (stripped.startswith("{") and stripped.endswith("}")) or (stripped.startswith("[") and stripped.endswith("]"))
-    ):
+    if not stripped or stripped[0] not in '{["-0123456789tfn':
         return False
     try:
         from_json(stripped)

@@ -475,6 +475,7 @@ class _FakeDb2SessionState:
         self.connection = FakeDb2Connection(list(cursors), autocommit=True)
         self.extension_config: dict[str, Any] = extension_config or {}
         self.statement_config = default_statement_config
+        self.driver_features: dict[str, Any] = {}
 
     @property
     def executed(self) -> "list[tuple[str, Any]]":
@@ -488,7 +489,9 @@ class FakeDb2SessionConfig(_FakeDb2SessionState):
     @contextmanager
     def provide_session(self, **_: Any) -> "Iterator[Db2SyncDriver]":
         """Yield a driver bound to the shared fake connection."""
-        yield Db2SyncDriver(self.connection, statement_config=default_statement_config)
+        yield Db2SyncDriver(
+            self.connection, statement_config=default_statement_config, driver_features=self.driver_features
+        )
 
 
 class FakeDb2AsyncSessionConfig(_FakeDb2SessionState):
@@ -502,7 +505,9 @@ class FakeDb2AsyncSessionConfig(_FakeDb2SessionState):
     async def provide_session(self, **_: Any) -> "AsyncIterator[Any]":
         """Yield an async driver bound to the shared fake connection."""
         yield db2_driver.Db2AsyncDriver(
-            FakeDb2AsyncConnection(self.connection), statement_config=default_statement_config
+            FakeDb2AsyncConnection(self.connection),
+            statement_config=default_statement_config,
+            driver_features=self.driver_features,
         )
 
 

@@ -107,7 +107,7 @@ The `sqlite` dialect pack defines `23` named queries across `15` domain `.sql` f
     -- name: by_table
     -- dialect: sqlite
     SELECT
-        :schema_name AS schema_name,
+        COALESCE(:schema_name, 'main') AS schema_name,
         :table_name AS table_name,
         ti.name AS column_name,
         ti.type AS data_type,
@@ -128,7 +128,7 @@ The `sqlite` dialect pack defines `23` named queries across `15` domain `.sql` f
         END AS extra,
         ti.hidden IN (2, 3) AS is_generated,
         CASE WHEN ti.hidden = 1 THEN 1 ELSE 0 END AS is_hidden
-    FROM pragma_table_xinfo(:table_name, :schema_name) AS ti
+    FROM pragma_table_xinfo(:table_name, COALESCE(:schema_name, 'main')) AS ti
     LEFT JOIN {schema_prefix}sqlite_schema AS sm ON sm.type = 'table' AND sm.name = :table_name
     ORDER BY ti.cid;
     ```
@@ -348,7 +348,7 @@ The `sqlite` dialect pack defines `23` named queries across `15` domain `.sql` f
     -- name: by_table
     -- dialect: sqlite
     SELECT
-        :schema_name AS schema_name,
+        COALESCE(:schema_name, 'main') AS schema_name,
         :table_name AS table_name,
         il.name AS index_name,
         il."unique" AS is_unique,
@@ -362,8 +362,8 @@ The `sqlite` dialect pack defines `23` named queries across `15` domain `.sql` f
         ix.coll AS collation,
         ix.key AS is_key_column,
         sm.sql AS index_sql
-    FROM pragma_index_list(:table_name, :schema_name) AS il
-    JOIN pragma_index_xinfo(il.name, :schema_name) AS ix
+    FROM pragma_index_list(:table_name, COALESCE(:schema_name, 'main')) AS il
+    JOIN pragma_index_xinfo(il.name, COALESCE(:schema_name, 'main')) AS ix
     LEFT JOIN {schema_prefix}sqlite_schema AS sm
       ON sm.type = 'index'
      AND sm.name = il.name
@@ -373,7 +373,7 @@ The `sqlite` dialect pack defines `23` named queries across `15` domain `.sql` f
     -- name: columns_by_index
     -- dialect: sqlite
     SELECT
-        :schema_name AS schema_name,
+        COALESCE(:schema_name, 'main') AS schema_name,
         :index_name AS index_name,
         ix.seqno,
         ix.cid AS column_id,
@@ -381,7 +381,7 @@ The `sqlite` dialect pack defines `23` named queries across `15` domain `.sql` f
         ix.desc AS is_descending,
         ix.coll AS collation,
         ix.key AS is_key_column
-    FROM pragma_index_xinfo(:index_name, :schema_name) AS ix
+    FROM pragma_index_xinfo(:index_name, COALESCE(:schema_name, 'main')) AS ix
     ORDER BY ix.seqno;
 
     -- name: index_columns_by_index

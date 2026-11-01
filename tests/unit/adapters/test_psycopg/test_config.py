@@ -629,13 +629,14 @@ def test_async_config_normalizes_aliases() -> None:
     assert "db" not in config.connection_config
 
 
-def test_psycopg_sync_configure_connection_supports_dict_row_and_rolls_back_after_hook() -> None:
-    """_configure_connection should handle dict_row probe results and roll back before user hooks when autocommit=False."""
+def test_psycopg_sync_configure_connection_commits_hook_after_extension_probe() -> None:
+    """The probe and SQL hook both leave a non-autocommit connection idle."""
     events: list[str] = []
     connection = MagicMock()
     connection.autocommit = False
     connection.execute.return_value.fetchall.return_value = [{"extname": "pg_textsearch"}]
     connection.rollback.side_effect = lambda: events.append("rollback")
+    connection.commit.side_effect = lambda: events.append("commit")
 
     config = PsycopgSyncConfig(
         driver_features={
@@ -650,12 +651,12 @@ def test_psycopg_sync_configure_connection_supports_dict_row_and_rolls_back_afte
 
     assert config.pg_textsearch_available is True
     assert config.statement_config.dialect == "pg_textsearch"
-    assert events == ["rollback", "hook"]
+    assert events == ["rollback", "hook", "commit"]
 
 
 @pytest.mark.anyio
-async def test_psycopg_async_configure_connection_supports_dict_row_and_rolls_back_after_hook() -> None:
-    """_configure_async_connection should handle dict_row probe results and roll back before user hooks when autocommit=False."""
+async def test_psycopg_async_configure_connection_commits_hook_after_extension_probe() -> None:
+    """The probe and SQL hook both leave a non-autocommit connection idle."""
     events: list[str] = []
     connection = AsyncMock()
     connection.autocommit = False
@@ -670,6 +671,7 @@ async def test_psycopg_async_configure_connection_supports_dict_row_and_rolls_ba
         events.append("hook")
 
     connection.rollback = AsyncMock(side_effect=record_rollback)
+    connection.commit = AsyncMock(side_effect=lambda: events.append("commit"))
 
     config = PsycopgAsyncConfig(
         driver_features={
@@ -684,7 +686,57 @@ async def test_psycopg_async_configure_connection_supports_dict_row_and_rolls_ba
 
     assert config.pg_textsearch_available is True
     assert config.statement_config.dialect == "pg_textsearch"
-    assert events == ["rollback", "hook"]
+    assert events == ["rollback", "hook", "commit"]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("failure_phase", ["hook", "commit"])
+async def test_failed_connection_initialization_rolls_back(is_async: bool, failure_phase: str) -> None:
+    """A failed hook or setup commit rolls its transaction back before propagating the error."""
+    connection = AsyncMock() if is_async else MagicMock()
+    connection.autocommit = False
+    native_error = RuntimeError("initialization failed")
+    hook = AsyncMock() if is_async else MagicMock()
+    if failure_phase == "hook":
+        hook.side_effect = native_error
+    else:
+        connection.commit.side_effect = native_error
+    config = (
+        PsycopgAsyncConfig(driver_features={"on_connection_create": hook})
+        if is_async
+        else PsycopgSyncConfig(driver_features={"on_connection_create": hook})
+    )
+    config._pgvector_available = False  # pyright: ignore[reportPrivateUsage]
+
+    with pytest.raises(RuntimeError, match="initialization failed"):
+        if isinstance(config, PsycopgAsyncConfig):
+            await config._configure_async_connection(connection)  # pyright: ignore[reportPrivateUsage]
+        else:
+            config._configure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+    assert connection.rollback.call_count == 1
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_direct_config_preserves_connection_initialization_hook(is_async: bool) -> None:
+    """Bypassing a pooler keeps the configured physical-connection initialization."""
+    hook = AsyncMock() if is_async else MagicMock()
+    config = (
+        PsycopgAsyncConfig(
+            driver_features={"direct_dsn": "postgresql://localhost/direct", "on_connection_create": hook}
+        )
+        if is_async
+        else PsycopgSyncConfig(
+            driver_features={"direct_dsn": "postgresql://localhost/direct", "on_connection_create": hook}
+        )
+    )
+    direct = config.derive_direct_config()
+    connection = AsyncMock() if is_async else MagicMock()
+    connection.autocommit = True
+    if isinstance(direct, PsycopgAsyncConfig):
+        await direct._configure_async_connection(connection)  # pyright: ignore[reportPrivateUsage]
+    else:
+        direct._configure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+    hook.assert_called_once_with(connection)
 
 
 def test_psycopg_pooler_mode_transaction_sets_prepare_threshold_none_and_alloydb_class(

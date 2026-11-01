@@ -367,6 +367,17 @@ def test_asyncmy_config_capability_flags() -> None:
     assert AsyncmyConfig.supports_native_parquet_import is False
 
 
+def test_conversion_capabilities_require_pyarrow(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(AsyncmyConfig, "_dependency_available", staticmethod(lambda _: False))
+
+    capabilities = AsyncmyConfig().storage_capabilities()
+
+    assert capabilities["arrow_import_enabled"] is False
+    assert capabilities["arrow_export_enabled"] is False
+    assert capabilities["parquet_import_enabled"] is False
+    assert capabilities["parquet_export_enabled"] is False
+
+
 async def test_asyncmy_session_context_initialization() -> None:
     """AsyncmySessionContext enters and exits using AsyncmyDriver without circular imports."""
     from unittest.mock import AsyncMock, MagicMock

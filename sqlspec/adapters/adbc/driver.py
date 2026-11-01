@@ -690,9 +690,10 @@ class AdbcDriver(SyncDriverAdapterBase):
                     new_schema = pa.schema([
                         field.with_name(name) for field, name in zip(reader.schema, normalized_names, strict=True)
                     ])
+                    source_reader = reader
 
                     def _lower_batches() -> Any:
-                        for batch in reader:
+                        for batch in source_reader:
                             yield batch.rename_columns(normalized_names)
 
                     reader = pa.RecordBatchReader.from_batches(new_schema, _lower_batches())

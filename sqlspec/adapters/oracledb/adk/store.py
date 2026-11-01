@@ -19,6 +19,8 @@ from sqlspec.adapters.oracledb.core import (
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, OracleVersionInfo, storage_type_from_version
 from sqlspec.builder._vector_distance import build_oracle_hnsw_subquery, build_oracle_hybrid_rrf_sql
 from sqlspec.config import ADKConfig
+from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
     BaseSyncADKStore,
@@ -250,7 +252,7 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "                event_id VARCHAR2(128) NOT NULL UNIQUE,\n"
     "                author VARCHAR2(256){1},\n"
     "                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,\n"
-    "                embedding VECTOR({11}, FLOAT32),\n"
+    "                {11}"
     "                {2},\n"
     "                content_text CLOB NOT NULL,\n"
     "                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
@@ -388,6 +390,26 @@ def _rollback_sync(conn: Any) -> None:
 async def _rollback_async(conn: Any) -> None:
     with contextlib.suppress(Exception):
         await conn.rollback()
+
+
+def _memory_supports_vectors(version: "OracleVersionInfo | None") -> bool:
+    if version is None or (version.major, version.minor, version.patch) < (23, 4, 0):
+        return False
+    compatible = parse_oracle_version_components(version.compatible) if version.compatible else None
+    return compatible is None or compatible >= (23, 4, 0)
+
+
+def _require_memory_vectors(version: "OracleVersionInfo | None") -> None:
+    if not _memory_supports_vectors(version):
+        msg = "Oracle memory embeddings require Oracle Database and COMPATIBLE version 23.4 or later."
+        raise ImproperConfigurationError(msg)
+
+
+def _memory_insert_count(entry_count: int, batch_errors: "list[Any]") -> int:
+    for error in batch_errors:
+        if error.code != ORACLE_DUPLICATE_KEY_ERROR:
+            raise OracleDatabaseError(error)
+    return entry_count - len(batch_errors)
 
 
 def coerce_decimal_values(value: Any) -> Any:
@@ -2472,15 +2494,21 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         if not entries:
             return 0
 
+        version = await self._get_version_info()
+        supports_vectors = _memory_supports_vectors(version)
+        if any(entry.get("embedding") is not None for entry in entries):
+            _require_memory_vectors(version)
+        embedding_column = ", embedding" if supports_vectors else ""
+        embedding_param = ", :embedding" if supports_vectors else ""
         owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
         owner_param = ", :owner_id" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {self._memory_table} (
             id, session_id, app_name, user_id, scope, event_id, author{owner_column},
-            timestamp, embedding, content_json, content_text, metadata_json, inserted_at
+            timestamp{embedding_column}, content_json, content_text, metadata_json, inserted_at
         ) VALUES (
             :id, :session_id, :app_name, :user_id, :scope, :event_id, :author{owner_param},
-            :timestamp, :embedding, :content_json, :content_text, :metadata_json, :inserted_at
+            :timestamp{embedding_param}, :content_json, :content_text, :metadata_json, :inserted_at
         )
         """
 
@@ -2499,12 +2527,13 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 "event_id": entry["event_id"],
                 "author": entry["author"],
                 "timestamp": entry["timestamp"],
-                "embedding": bound_embedding,
                 "content_json": content_json,
                 "content_text": entry["content_text"],
                 "metadata_json": metadata_json,
                 "inserted_at": entry["inserted_at"],
             }
+            if supports_vectors:
+                p["embedding"] = bound_embedding
             if self._owner_id_column_name:
                 p["owner_id"] = owner_id
             batch_params.append(p)
@@ -2514,13 +2543,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 coerced_batch = [await coerce_large_parameters_async(conn, p) for p in batch_params]
                 with conn.cursor() as cursor:
                     await cursor.executemany(sql, coerced_batch, batcherrors=True)
-                    batch_errors = list(cursor.getbatcherrors()) if hasattr(cursor, "getbatcherrors") else []
-                    duplicates = sum(
-                        1
-                        for e in batch_errors
-                        if getattr(e, "code", getattr(e, "full_code", None)) == ORACLE_DUPLICATE_KEY_ERROR
-                    )
-                    inserted_count = len(entries) - duplicates
+                    inserted_count = _memory_insert_count(len(entries), cursor.getbatcherrors())
                     await conn.commit()
                     return inserted_count
             except BaseException:
@@ -2541,6 +2564,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             raise RuntimeError(msg)
 
         effective_limit = limit if limit is not None else self._max_results
+        if embedding is not None:
+            _require_memory_vectors(await self._get_version_info())
 
         try:
             if embedding is not None and self._use_fts:
@@ -2628,10 +2653,12 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         return _extract_json_value(data)
 
     async def _memory_table_ddl(self) -> str:
-        storage_type = await self._detect_json_storage_type()
-        return self._memory_table_ddl_for_type(storage_type)
+        version = await self._get_version_info()
+        return self._memory_table_ddl_for_type(
+            storage_type_from_version(version), supports_vectors=_memory_supports_vectors(version)
+        )
 
-    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType") -> str:
+    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType", *, supports_vectors: bool = False) -> str:
         if storage_type == JSONStorageType.JSON_NATIVE:
             json_columns = """
                 content_json JSON,
@@ -2676,7 +2703,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             self._memory_table,
             self._memory_table,
             fts_index,
-            self._vector_dimensions,
+            f"embedding VECTOR({self._vector_dimensions}, FLOAT32),\n                " if supports_vectors else "",
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -2764,12 +2791,15 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         if not sanitized_query:
             return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        embedding_column = (
+            "embedding" if _memory_supports_vectors(await self._get_version_info()) else "NULL AS embedding"
+        )
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at, embedding,
+                   timestamp, content_json, content_text, metadata_json, inserted_at, {embedding_column},
                    SCORE(1) AS score
             FROM {self._memory_table}
             WHERE {where_scope}
@@ -2861,12 +2891,15 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        embedding_column = (
+            "embedding" if _memory_supports_vectors(await self._get_version_info()) else "NULL AS embedding"
+        )
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at, embedding
+                   timestamp, content_json, content_text, metadata_json, inserted_at, {embedding_column}
             FROM {self._memory_table}
             WHERE {where_scope}
               AND LOWER(content_text) LIKE :pattern
@@ -2964,15 +2997,21 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         if not entries:
             return 0
 
+        version = self._get_version_info()
+        supports_vectors = _memory_supports_vectors(version)
+        if any(entry.get("embedding") is not None for entry in entries):
+            _require_memory_vectors(version)
+        embedding_column = ", embedding" if supports_vectors else ""
+        embedding_param = ", :embedding" if supports_vectors else ""
         owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
         owner_param = ", :owner_id" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {self._memory_table} (
             id, session_id, app_name, user_id, scope, event_id, author{owner_column},
-            timestamp, embedding, content_json, content_text, metadata_json, inserted_at
+            timestamp{embedding_column}, content_json, content_text, metadata_json, inserted_at
         ) VALUES (
             :id, :session_id, :app_name, :user_id, :scope, :event_id, :author{owner_param},
-            :timestamp, :embedding, :content_json, :content_text, :metadata_json, :inserted_at
+            :timestamp{embedding_param}, :content_json, :content_text, :metadata_json, :inserted_at
         )
         """
 
@@ -2991,12 +3030,13 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 "event_id": entry["event_id"],
                 "author": entry["author"],
                 "timestamp": entry["timestamp"],
-                "embedding": bound_embedding,
                 "content_json": content_json,
                 "content_text": entry["content_text"],
                 "metadata_json": metadata_json,
                 "inserted_at": entry["inserted_at"],
             }
+            if supports_vectors:
+                p["embedding"] = bound_embedding
             if self._owner_id_column_name:
                 p["owner_id"] = owner_id
             batch_params.append(p)
@@ -3006,13 +3046,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 coerced_batch = [coerce_large_parameters_sync(conn, p) for p in batch_params]
                 with conn.cursor() as cursor:
                     cursor.executemany(sql, coerced_batch, batcherrors=True)
-                    batch_errors = list(cursor.getbatcherrors()) if hasattr(cursor, "getbatcherrors") else []
-                    duplicates = sum(
-                        1
-                        for e in batch_errors
-                        if getattr(e, "code", getattr(e, "full_code", None)) == ORACLE_DUPLICATE_KEY_ERROR
-                    )
-                    inserted_count = len(entries) - duplicates
+                    inserted_count = _memory_insert_count(len(entries), cursor.getbatcherrors())
                     conn.commit()
                     return inserted_count
             except BaseException:
@@ -3034,6 +3068,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             raise RuntimeError(msg)
 
         effective_limit = limit if limit is not None else self._max_results
+        if embedding is not None:
+            _require_memory_vectors(self._get_version_info())
 
         try:
             if embedding is not None and self._use_fts:
@@ -3119,10 +3155,12 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         return _extract_json_value(data)
 
     def _memory_table_ddl(self) -> str:
-        storage_type = self._detect_json_storage_type()
-        return self._memory_table_ddl_for_type(storage_type)
+        version = self._get_version_info()
+        return self._memory_table_ddl_for_type(
+            storage_type_from_version(version), supports_vectors=_memory_supports_vectors(version)
+        )
 
-    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType") -> str:
+    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType", *, supports_vectors: bool = False) -> str:
         if storage_type == JSONStorageType.JSON_NATIVE:
             json_columns = """
                 content_json JSON,
@@ -3167,7 +3205,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             self._memory_table,
             self._memory_table,
             fts_index,
-            self._vector_dimensions,
+            f"embedding VECTOR({self._vector_dimensions}, FLOAT32),\n                " if supports_vectors else "",
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -3255,12 +3293,13 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         if not sanitized_query:
             return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        embedding_column = "embedding" if _memory_supports_vectors(self._get_version_info()) else "NULL AS embedding"
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at, embedding,
+                   timestamp, content_json, content_text, metadata_json, inserted_at, {embedding_column},
                    SCORE(1) AS score
             FROM {self._memory_table}
             WHERE {where_scope}
@@ -3350,12 +3389,13 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        embedding_column = "embedding" if _memory_supports_vectors(self._get_version_info()) else "NULL AS embedding"
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at, embedding
+                   timestamp, content_json, content_text, metadata_json, inserted_at, {embedding_column}
             FROM {self._memory_table}
             WHERE {where_scope}
               AND LOWER(content_text) LIKE :pattern

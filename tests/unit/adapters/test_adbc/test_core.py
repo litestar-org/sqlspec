@@ -732,6 +732,29 @@ def test_adbc_status_code_mappings(status_code: AdbcStatusCode, expected_cls: ty
     assert isinstance(mapped, expected_cls)
 
 
+@pytest.mark.parametrize(
+    ("status_code", "sqlstate", "message", "expected_cls"),
+    [
+        (AdbcStatusCode.INVALID_ARGUMENT, "23505", "duplicate key", UniqueViolationError),
+        (AdbcStatusCode.INVALID_ARGUMENT, "23502", "null value", NotNullViolationError),
+        (AdbcStatusCode.INVALID_ARGUMENT, "23514", "check constraint", CheckViolationError),
+        (AdbcStatusCode.INTEGRITY, "23503", "foreign key constraint", ForeignKeyViolationError),
+        (AdbcStatusCode.INVALID_ARGUMENT, "42601", "invalid SQL", SQLParsingError),
+        (AdbcStatusCode.INVALID_ARGUMENT, None, "syntax error near SELEC", SQLParsingError),
+        (AdbcStatusCode.INTERNAL, None, "ORA-00001: unique constraint violated", UniqueViolationError),
+    ],
+)
+def test_adbc_specific_diagnostics_override_generic_status(
+    status_code: AdbcStatusCode, sqlstate: str | None, message: str, expected_cls: type[SQLSpecError]
+) -> None:
+    error = DatabaseError(message, status_code=status_code, sqlstate=sqlstate)
+
+    mapped = adbc_core.create_mapped_exception(error)
+
+    assert type(mapped) is expected_cls
+    assert mapped.__cause__ is error
+
+
 def test_duckdb_copy_ast_transformer_caching() -> None:
     """DuckDB statement config omits ast_transformer so compiled SQL can be cached."""
     config = get_statement_config("duckdb").replace(enable_caching=True)
@@ -802,7 +825,7 @@ def test_session_context_driver() -> None:
         statement_config=get_statement_config("postgres"),
         driver_features={},
         prepare_driver=lambda d: d,
-        driver_class=mock_driver_cls,
+        driver_class=cast("type[AdbcDriver]", mock_driver_cls),
     )
     with ctx as driver:
         assert driver is driver_instance
@@ -855,6 +878,7 @@ def test_select_to_arrow_lowercase_columns() -> None:
     result = driver.select_to_arrow("SELECT UPPER_COL FROM t", return_format="reader")
     reader = result.data
     assert reader.schema.names == ["upper_col"]
+    assert reader.read_all().to_pylist() == [{"upper_col": 1}, {"upper_col": 2}]
 
 
 def test_adbc_exception_isolation() -> None:

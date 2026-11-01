@@ -334,6 +334,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                 _execute_cursor(cursor, "SELECT 1 FROM sys.schemas WHERE name = ?", (schema,))
                 return cursor.fetchone() is not None
 
+        result = False
         exc_handler = self.handle_database_exceptions()
         if sys.exc_info()[1] is None:
             with exc_handler:
@@ -341,7 +342,6 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         else:
             result = bool(self._run_with_exception_handler(exc_handler, _check_schema))
         self._check_pending_exception(exc_handler)
-        return bool(result)
         return result
 
     def select_to_arrow(
@@ -411,39 +411,40 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        def _fetch_table_arrow() -> Any:
-            nonlocal reader
+        def _fetch_arrow() -> "ArrowResult":
             with self.with_cursor(self.connection) as cursor:
                 _execute_cursor(cursor, sql, prepared_parameters)
                 if return_format == "batches":
                     reader = _cursor_arrow_reader(cursor, arrow_kwargs)
                     if reader is not None:
-                        return None
-                return cursor.arrow(**arrow_kwargs)
+                        return build_arrow_result_from_reader(
+                            prepared_statement,
+                            arrow_reader_with_deferred_close(reader, cursor.close),
+                            return_format=return_format,
+                            batch_size=batch_size,
+                            arrow_schema=arrow_schema,
+                        )
+                table = cursor.arrow(**arrow_kwargs)
+                if table is None:
+                    msg = "mssql-python did not return an Arrow table."
+                    raise SQLSpecError(msg)
+                return build_arrow_result_from_table(
+                    prepared_statement,
+                    table,
+                    return_format=return_format,
+                    batch_size=batch_size,
+                    arrow_schema=arrow_schema,
+                )
 
+        result: ArrowResult | None = None
         exc_handler = self.handle_database_exceptions()
         if sys.exc_info()[1] is None:
             with exc_handler:
-                table = _fetch_table_arrow()
+                result = _fetch_arrow()
         else:
-            table = self._run_with_exception_handler(exc_handler, _fetch_table_arrow)
+            result = self._run_with_exception_handler(exc_handler, _fetch_arrow)
         self._check_pending_exception(exc_handler)
-
-        if return_format == "batches" and reader is not None:
-            return build_arrow_result_from_reader(
-                prepared_statement,
-                reader,
-                return_format=return_format,
-                batch_size=batch_size,
-                arrow_schema=arrow_schema,
-            )
-
-        if table is None:
-            msg = "mssql-python did not return an Arrow table."
-            raise SQLSpecError(msg)
-        return build_arrow_result_from_table(
-            prepared_statement, table, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
-        )
+        return cast("ArrowResult", result)
 
     def bulk_copy(
         self,
@@ -479,6 +480,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                 )
                 return _coerce_bulk_copy_result(raw_result, cursor)
 
+        result: MssqlPythonBulkCopyResult | None = None
         exc_handler = self.handle_database_exceptions()
         if sys.exc_info()[1] is None:
             with exc_handler:

@@ -128,8 +128,6 @@ class SqliteConnectionPool:
                     _execute_and_close(connection, "PRAGMA synchronous = OFF")
                     _execute_and_close(connection, "PRAGMA temp_store = MEMORY")
                     _execute_and_close(connection, f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}")
-                    if self._is_shared_memory:
-                        _execute_and_close(connection, "PRAGMA read_uncommitted = ON")
                 else:
                     _enable_wal(connection)
                     _execute_and_close(connection, "PRAGMA synchronous = NORMAL")

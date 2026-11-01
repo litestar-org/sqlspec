@@ -48,6 +48,8 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
     connector_name: ClassVar[str] = "mssql_python"
     __slots__ = ("_json_column_type", "_native_json")
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
         adk_config = _adk_config(config)
@@ -431,6 +433,8 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
     """SQL Server ADK memory store using mssql-python."""
 
     __slots__ = ("_json_column_type", "_native_json")
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)

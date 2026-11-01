@@ -131,7 +131,7 @@ def test_resolve_row_metadata_single_pass_unknown_type_code_shape_is_conservativ
 
 def test_resolve_row_metadata_cache_contract_still_holds_after_single_pass_rewrite() -> None:
     description = [("ID", _TypeCode("DB_TYPE_NUMBER"))]
-    cache: dict[object, object] = {}
+    cache: dict[object, tuple[object, list[str], bool]] = {}
     (first_names, first_requires_lob) = resolve_row_metadata(description, {}, cache)
     (second_names, second_requires_lob) = resolve_row_metadata(description, {}, cache)
     assert second_names is first_names

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.adapters.db2.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, split_db2_table_name, to_db_timestamp, utc_now
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
@@ -36,7 +37,7 @@ def session_index_name(table: str) -> str:
     Returns:
         The upper-folded index name.
     """
-    return f"IX_{session_catalog_names(table)[1]}_EXP"
+    return f"IX_{session_catalog_names(table)[1]}_EXP".upper()
 
 
 def session_table_ddl(table: str) -> str:
@@ -71,7 +72,7 @@ def session_index_ddl(table: str) -> str:
     schema, _ = split_db2_table_name(table)
     idx_name = session_index_name(table)
     if schema is not None:
-        return f'CREATE INDEX "{schema}"."{idx_name}" ON {table}(expires_at)'
+        return f"CREATE INDEX {quote_identifier(schema)}.{quote_identifier(idx_name)} ON {table}(expires_at)"
     return f"CREATE INDEX {idx_name} ON {table}(expires_at)"
 
 

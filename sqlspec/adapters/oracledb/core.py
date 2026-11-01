@@ -1779,6 +1779,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         A SQLSpec exception that wraps the original error
     """
     del logger
+    if not isinstance(error, BaseException):
+        error = oracledb_module.DatabaseError(error)
     error_obj = error.args[0] if getattr(error, "args", None) else None
     if not error_obj:
         return _create_oracle_error(error, None, SQLSpecError, "database error")

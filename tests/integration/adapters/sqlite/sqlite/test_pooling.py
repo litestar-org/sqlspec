@@ -48,7 +48,7 @@ def test_regular_memory_auto_conversion(sqlite_config_regular_memory: SqliteConf
 
     connection_config = build_connection_config(config.connection_config)
     db_uri = connection_config["database"]
-    assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
+    assert db_uri.startswith("file:memory_") and "cache=shared" in db_uri
     assert connection_config["uri"] is True
 
     with config.provide_session() as session1:
@@ -248,7 +248,7 @@ def test_config_memory_database_conversion() -> None:
 
     try:
         db_uri = config.connection_config["database"]
-        assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
+        assert db_uri.startswith("file:memory_") and "cache=shared" in db_uri
         assert config.connection_config["uri"] is True
 
         with config.provide_session() as session:
@@ -267,7 +267,7 @@ def test_config_default_database() -> None:
 
     try:
         db_uri = config.connection_config["database"]
-        assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
+        assert db_uri.startswith("file:memory_") and "cache=shared" in db_uri
         assert config.connection_config["uri"] is True
 
         with config.provide_session() as session:

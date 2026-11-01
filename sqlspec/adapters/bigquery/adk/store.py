@@ -77,6 +77,8 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         "_require_partition_filter",
     )
 
+    _max_table_name_parts = 3
+
     def __init__(self, config: BigQueryConfig) -> None:
         """Initialize the BigQuery ADK store.
 

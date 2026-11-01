@@ -14,7 +14,7 @@ from sqlspec.adapters.oracledb.driver import OracleAsyncDriver
 
 
 class _FakeOpResult:
-    def __init__(self, error: "Exception | None" = None) -> None:
+    def __init__(self, error: "Any | None" = None) -> None:
         self.error = error
 
 
@@ -115,7 +115,7 @@ async def test_native_stack_wraps_mapped_error() -> None:
     """Stack execution errors wrap mapped SQLSpec exceptions, not raw driver errors."""
     import oracledb
 
-    from sqlspec.exceptions import SQLSpecError
+    from sqlspec.exceptions import SQLSpecError, StackExecutionError
 
     native_err = oracledb.DatabaseError("ORA-00001: unique constraint violated")
     results = [_FakeOpResult(native_err)]
@@ -124,5 +124,42 @@ async def test_native_stack_wraps_mapped_error() -> None:
 
     stack_results = await driver._execute_stack_native(_stack(), continue_on_error=True)
     assert len(stack_results) == 1
-    assert stack_results[0].error is not None
-    assert isinstance(stack_results[0].error.original_error, SQLSpecError)
+    error = stack_results[0].error
+    assert isinstance(error, StackExecutionError)
+    assert isinstance(error.original_error, SQLSpecError)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("continue_on_error", [False, True])
+async def test_stack_maps_native_pipeline_error_records(continue_on_error: bool) -> None:
+    import oracledb
+    from oracledb.errors import _Error
+
+    from sqlspec.exceptions import StackExecutionError, UniqueViolationError
+
+    native_error = _Error("ORA-00001: unique constraint violated", code=1)
+    connection = _FakePipelineConnection([_FakeOpResult(), _FakeOpResult(native_error), _FakeOpResult()])
+    driver = OracleAsyncDriver(cast("Any", connection))
+    driver._pipeline_support = True
+
+    if continue_on_error:
+        results = await driver.execute_stack(_stack(), continue_on_error=True)
+        assert len(results) == 3
+        assert results[0].error is None
+        assert results[2].error is None
+        error = results[1].error
+        assert connection.commit_count == 1
+        assert connection.rollback_count == 0
+    else:
+        with pytest.raises(StackExecutionError) as exc_info:
+            await driver.execute_stack(_stack())
+        error = exc_info.value
+        assert connection.commit_count == 0
+        assert connection.rollback_count == 1
+
+    assert isinstance(error, StackExecutionError)
+    assert error.operation_index == 1
+    assert isinstance(error.original_error, UniqueViolationError)
+    cause = error.original_error.__cause__
+    assert isinstance(cause, oracledb.DatabaseError)
+    assert cause.args[0] is native_error

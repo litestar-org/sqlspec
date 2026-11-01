@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Mapping
-from contextlib import suppress
+from contextlib import asynccontextmanager, nullcontext, suppress
 from io import BytesIO
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -39,14 +39,16 @@ from sqlspec.driver import (
     BaseAsyncExceptionHandler,
     StackExecutionObserver,
     describe_stack_statement,
+    validate_savepoint_name,
 )
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_guards import has_sqlstate
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig
@@ -655,27 +657,32 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """
         for index, operation in enumerate(stack.operations):
             try:
-                normalized: NormalizedStackOperation | None = None
-                if operation.method == "execute":
-                    kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
-                    statement_config = kwargs.pop("statement_config", None)
-                    config = statement_config or self.statement_config
+                scope = self._stack_savepoint() if continue_on_error and caller_in_tx else nullcontext()
+                async with scope:
+                    normalized: NormalizedStackOperation | None = None
+                    if operation.method == "execute":
+                        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+                        statement_config = kwargs.pop("statement_config", None)
+                        config = statement_config or self.statement_config
 
-                    sql_statement = self.prepare_statement(
-                        operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
-                    )
-                    if not sql_statement.is_script and not sql_statement.is_many:
-                        sql_text, prepared_parameters = self._compiled_sql(sql_statement, config)
-                        prepared_parameters = cast("tuple[Any, ...] | dict[str, Any] | None", prepared_parameters)
-                        normalized = NormalizedStackOperation(
-                            operation=operation, statement=sql_statement, sql=sql_text, parameters=prepared_parameters
+                        sql_statement = self.prepare_statement(
+                            operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
                         )
+                        if not sql_statement.is_script and not sql_statement.is_many:
+                            sql_text, prepared_parameters = self._compiled_sql(sql_statement, config)
+                            prepared_parameters = cast("tuple[Any, ...] | dict[str, Any] | None", prepared_parameters)
+                            normalized = NormalizedStackOperation(
+                                operation=operation,
+                                statement=sql_statement,
+                                sql=sql_text,
+                                parameters=prepared_parameters,
+                            )
 
-                if normalized is not None:
-                    stack_result = await self._execute_stack_operation_prepared(normalized)
-                else:
-                    result = await self._execute_stack_operation(operation)
-                    stack_result = StackResult(result=result)
+                    if normalized is not None:
+                        stack_result = await self._execute_stack_operation_prepared(normalized)
+                    else:
+                        result = await self._execute_stack_operation(operation)
+                        stack_result = StackResult(result=result)
             except Exception as exc:
                 stack_error = StackExecutionError(
                     index,
@@ -695,6 +702,18 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             results.append(stack_result)
             if continue_on_error and not caller_in_tx:
                 await self._commit_stack_success()
+
+    @asynccontextmanager
+    async def _stack_savepoint(self) -> "AsyncIterator[None]":
+        name = validate_savepoint_name(f"sqlspec_stack_{uuid4().hex}")
+        await self.connection.execute(f"SAVEPOINT {name}")
+        try:
+            yield
+        except BaseException:
+            await self.connection.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            raise
+        finally:
+            await self.connection.execute(f"RELEASE SAVEPOINT {name}")
 
     async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
         result = await self._execute_cached_statement(normalized.statement)

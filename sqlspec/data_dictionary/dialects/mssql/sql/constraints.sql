@@ -1,27 +1,25 @@
 -- name: by_schema
 -- dialect: mssql
-WITH key_constraint_columns AS (
-    SELECT
-        ic.object_id,
-        ic.index_id,
-        STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal) AS column_name
-    FROM sys.index_columns AS ic
-    INNER JOIN sys.columns AS c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-    WHERE ic.is_included_column = 0
-    GROUP BY ic.object_id, ic.index_id
-)
 SELECT
     s.name AS schema_name,
     t.name AS table_name,
     kc.name AS constraint_name,
     kc.type_desc AS constraint_type,
     CAST(kc.is_system_named AS BIT) AS is_system_named,
-    kcc.column_name,
+    STUFF((
+        SELECT ',' + c2.name
+        FROM sys.index_columns AS ic2
+        INNER JOIN sys.columns AS c2 ON ic2.object_id = c2.object_id AND ic2.column_id = c2.column_id
+        WHERE ic2.object_id = kc.parent_object_id
+          AND ic2.index_id = kc.unique_index_id
+          AND ic2.is_included_column = 0
+        ORDER BY ic2.key_ordinal
+        FOR XML PATH(''), TYPE
+    ).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS column_name,
     NULL AS definition
 FROM sys.key_constraints AS kc
 INNER JOIN sys.tables AS t ON kc.parent_object_id = t.object_id
 INNER JOIN sys.schemas AS s ON t.schema_id = s.schema_id
-LEFT JOIN key_constraint_columns AS kcc ON kc.parent_object_id = kcc.object_id AND kc.unique_index_id = kcc.index_id
 WHERE (:schema_name IS NULL OR s.name = :schema_name)
 UNION ALL
 SELECT
@@ -54,28 +52,26 @@ ORDER BY schema_name, table_name, constraint_name;
 
 -- name: by_table
 -- dialect: mssql
-WITH key_constraint_columns AS (
-    SELECT
-        ic.object_id,
-        ic.index_id,
-        STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal) AS column_name
-    FROM sys.index_columns AS ic
-    INNER JOIN sys.columns AS c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-    WHERE ic.is_included_column = 0
-    GROUP BY ic.object_id, ic.index_id
-)
 SELECT
     s.name AS schema_name,
     t.name AS table_name,
     kc.name AS constraint_name,
     kc.type_desc AS constraint_type,
     CAST(kc.is_system_named AS BIT) AS is_system_named,
-    kcc.column_name,
+    STUFF((
+        SELECT ',' + c2.name
+        FROM sys.index_columns AS ic2
+        INNER JOIN sys.columns AS c2 ON ic2.object_id = c2.object_id AND ic2.column_id = c2.column_id
+        WHERE ic2.object_id = kc.parent_object_id
+          AND ic2.index_id = kc.unique_index_id
+          AND ic2.is_included_column = 0
+        ORDER BY ic2.key_ordinal
+        FOR XML PATH(''), TYPE
+    ).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS column_name,
     NULL AS definition
 FROM sys.key_constraints AS kc
 INNER JOIN sys.tables AS t ON kc.parent_object_id = t.object_id
 INNER JOIN sys.schemas AS s ON t.schema_id = s.schema_id
-LEFT JOIN key_constraint_columns AS kcc ON kc.parent_object_id = kcc.object_id AND kc.unique_index_id = kcc.index_id
 WHERE s.name = :schema_name
   AND t.name = :table_name
 UNION ALL

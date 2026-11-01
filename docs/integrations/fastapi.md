@@ -58,8 +58,10 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which shares `Starlett
 | `commit_mode` | `"manual" | "autocommit" | "autocommit_include_redirect"` | `"manual"` | Controls automatic transaction commit or rollback based on response status codes. |
 | `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic commit. |
 | `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic rollback. |
-| `enable_correlation_middleware` | `bool` | `False` | Extracts or generates `X-Request-ID` correlation IDs into `CorrelationContext`. |
+| `enable_correlation_middleware` | `bool` | `True` | Extracts or generates `X-Request-ID` correlation IDs into `CorrelationContext`. |
 | `enable_sqlcommenter_middleware` | `bool` | `False` | Populates `SQLCommenterContext` with FastAPI route, method, and trace attributes. |
+
+Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
 
 ## Declarative Filter Dependencies
 

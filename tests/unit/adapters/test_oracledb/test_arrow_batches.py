@@ -214,6 +214,66 @@ def test_select_to_arrow_maps_native_database_error() -> None:
         driver.select_to_arrow("SELECT * FROM non_existent", return_format="table")
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("return_format", ["batches", "reader"])
+async def test_arrow_batch_failure_preserves_database_error(is_async: bool, return_format: Any) -> None:
+    import oracledb
+
+    from sqlspec.exceptions import SQLParsingError
+
+    class _FailingConnection:
+        def fetch_df_all(self, **_kwargs: Any) -> None:
+            raise AssertionError("batch export should use fetch_df_batches")
+
+        def fetch_df_batches(self, **_kwargs: Any) -> Iterator[pa.Table]:
+            raise oracledb.DatabaseError("ORA-00942: missing table")
+            yield pa.table({"ID": [1]})
+
+    class _FailingAsyncConnection:
+        async def fetch_df_all(self, **_kwargs: Any) -> None:
+            raise AssertionError("batch export should use fetch_df_batches")
+
+        async def fetch_df_batches(self, **_kwargs: Any) -> AsyncIterator[pa.Table]:
+            raise oracledb.DatabaseError("ORA-00942: missing table")
+            yield pa.table({"ID": [1]})
+
+    with pytest.raises(SQLParsingError, match="ORA-00942") as exc_info:
+        if is_async:
+            await OracleAsyncDriver(cast("Any", _FailingAsyncConnection())).select_to_arrow(
+                "SELECT * FROM missing", return_format=return_format
+            )
+        else:
+            OracleSyncDriver(cast("Any", _FailingConnection())).select_to_arrow(
+                "SELECT * FROM missing", return_format=return_format
+            )
+
+    assert isinstance(exc_info.value.__cause__, oracledb.DatabaseError)
+
+
+def test_lazy_arrow_reader_maps_errors_after_the_first_batch() -> None:
+    import oracledb
+
+    from sqlspec.exceptions import SQLParsingError
+
+    class _FailingConnection:
+        def fetch_df_batches(self, **_kwargs: Any) -> Iterator[pa.Table]:
+            yield pa.table({"ID": [1]})
+            raise oracledb.DatabaseError("ORA-00942: missing table")
+
+        def fetch_df_all(self, **_kwargs: Any) -> None:
+            raise AssertionError("reader export should use fetch_df_batches")
+
+    result = OracleSyncDriver(cast("Any", _FailingConnection())).select_to_arrow(
+        "SELECT * FROM example", return_format="reader"
+    )
+    reader = result.get_data()
+    assert reader.read_next_batch().to_pydict() == {"ID": [1]}
+    with pytest.raises(SQLParsingError, match="ORA-00942") as exc_info:
+        reader.read_next_batch()
+    assert isinstance(exc_info.value.__cause__, oracledb.DatabaseError)
+
+
 def test_sync_select_to_arrow_reader_yields_lazily() -> None:
     """return_format=reader yields record batches lazily from the underlying stream."""
     yielded: list[int] = []

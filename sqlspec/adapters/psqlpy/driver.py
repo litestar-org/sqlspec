@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
     from sqlspec.core import ArrowResult, SQLResult
-    from sqlspec.driver import ExecutionResult
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
@@ -142,23 +142,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             )
 
         if statement.operation_type in {"INSERT", "UPDATE", "DELETE"}:
-            base_sql, comment_suffix = split_sqlcomment(sql)
-            count_sql = _dml_count_query(base_sql)
-            if count_sql is not None:
-                wire_count_sql = f"{count_sql} {comment_suffix}" if comment_suffix else count_sql
-                count_result = (
-                    await cursor.fetch(wire_count_sql, params, prepared=False)
-                    if self._is_transaction_pooler_mode()
-                    else await cursor.fetch(wire_count_sql, params)
-                )
-                count_rows, _ = collect_rows(count_result)
-                if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
-                    msg = "psqlpy DML row count query returned an invalid result"
-                    raise SQLSpecError(msg)
-                rows_affected = count_rows[0][_DML_COUNT_COLUMN]
-                if type(rows_affected) is not int or rows_affected < 0:
-                    msg = "psqlpy DML row count query returned an invalid count"
-                    raise SQLSpecError(msg)
+            rows_affected = await self._fetch_dml_rowcount(cursor, sql, params)
+            if rows_affected is not None:
                 return self.create_execution_result(cursor, rowcount_override=rows_affected)
 
         result = (
@@ -169,6 +154,29 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         rows_affected = extract_rows_affected(result)
 
         return self.create_execution_result(cursor, rowcount_override=rows_affected)
+
+    async def _fetch_dml_rowcount(
+        self, cursor: "PsqlpyConnection", sql: str, params: "Sequence[Any] | Mapping[str, Any]"
+    ) -> int | None:
+        base_sql, comment_suffix = split_sqlcomment(sql)
+        count_sql = _dml_count_query(base_sql)
+        if count_sql is None:
+            return None
+        wire_count_sql = f"{count_sql} {comment_suffix}" if comment_suffix else count_sql
+        count_result = (
+            await cursor.fetch(wire_count_sql, params, prepared=False)
+            if self._pooler_unprepared
+            else await cursor.fetch(wire_count_sql, params)
+        )
+        count_rows, _ = collect_rows(count_result)
+        if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
+            msg = "psqlpy DML row count query returned an invalid result"
+            raise SQLSpecError(msg)
+        rows_affected = count_rows[0][_DML_COUNT_COLUMN]
+        if type(rows_affected) is not int or rows_affected < 0:
+            msg = "psqlpy DML row count query returned an invalid count"
+            raise SQLSpecError(msg)
+        return rows_affected
 
     async def dispatch_execute_many(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
@@ -553,8 +561,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         data, _ = collect_rows(rows)
         return {str(row["column_name"]) for row in data}
 
-    async def _execute_cache_hit(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
+    async def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute cached psqlpy queries with cast-aware parameter preparation."""
         prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
@@ -583,6 +591,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 row_format="dict",
                 compiled_sql=wire_sql,
             )
+        if cached.operation_type in {"INSERT", "UPDATE", "DELETE"}:
+            rows_affected = await self._fetch_dml_rowcount(self.connection, wire_sql, args)
+            if rows_affected is not None:
+                return DMLResult(cached.operation_type, rows_affected)
         result = (
             await self.connection.execute(wire_sql, args, prepared=False)
             if self._pooler_unprepared

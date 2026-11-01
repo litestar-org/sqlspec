@@ -167,7 +167,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                         WHERE session_id = :2
                         """
                         try:
-                            await cursor.execute(update_sql, (expires_in_seconds, key))
+                            await cursor.execute(update_sql, (expires_in_seconds, expires_in_seconds, key))
                             await conn.commit()
                         except BaseException:
                             with contextlib.suppress(Exception):
@@ -511,7 +511,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                     WHERE session_id = :2
                     """
                     try:
-                        cursor.execute(update_sql, (expires_in_seconds, key))
+                        cursor.execute(update_sql, (expires_in_seconds, expires_in_seconds, key))
                         conn.commit()
                     except BaseException:
                         with contextlib.suppress(Exception):

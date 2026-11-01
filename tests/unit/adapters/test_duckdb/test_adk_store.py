@@ -6,6 +6,7 @@ from textwrap import dedent
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
+import duckdb
 import pytest
 
 import sqlspec.adapters.duckdb.adk as duckdb_adk
@@ -319,6 +320,27 @@ def test_search_entries_embedding_warning() -> None:
     store = DuckDBADKMemoryStore(_mock_config())
     with pytest.raises(NotImplementedError, match="does not support embedding-based search"):
         store.search_entries("query", "app", "user", embedding=[0.1, 0.2, 0.3])
+
+
+def test_schema_qualified_adk_tables_create_in_the_configured_schema() -> None:
+    """Qualified session and memory DDL creates tables and indexes in DuckDB."""
+    session_store = DuckDBADKStore(_mock_config({"session_table": "custom.sessions"}))
+    memory_store = DuckDBADKMemoryStore(_mock_config({"memory_table": "custom.memories"}))
+
+    with duckdb.connect() as connection:
+        connection.execute("CREATE SCHEMA custom")
+        connection.execute(session_store._sessions_table_ddl())
+        connection.execute(memory_store._memory_table_ddl())
+
+        assert connection.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name", ["custom"]
+        ).fetchall() == [("memories",), ("sessions",)]
+
+
+def test_duckdb_adk_rejects_catalog_qualified_table_names() -> None:
+    """The ADK schema helpers support schema.table, without a catalog component."""
+    with pytest.raises(ValueError, match="Invalid table name"):
+        DuckDBADKMemoryStore(_mock_config({"memory_table": "catalog.custom.memories"}))
 
 
 def test_schema_qualified_fts_table(monkeypatch: pytest.MonkeyPatch) -> None:

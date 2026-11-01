@@ -841,6 +841,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                         arrow_schema,
                     ),
                 )
+                self._check_pending_exception(exc_handler)
                 record_batches, _ = batches_result
                 rows_affected = sum(batch.num_rows for batch in record_batches)
                 return create_arrow_result(prepared_statement, record_batches, rows_affected=rows_affected)
@@ -1244,14 +1245,19 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             oracle_dfs = self.connection.fetch_df_batches(
                 statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
             )
-        for oracle_df in oracle_dfs:
-            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
-            column_names = normalize_column_names(batch_table.column_names, self.driver_features)
-            if column_names != batch_table.column_names:
-                batch_table = batch_table.rename_columns(column_names)
-            if arrow_schema is not None:
-                batch_table = batch_table.cast(arrow_schema)
-            yield from batch_table.to_batches()
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        try:
+            for oracle_df in oracle_dfs:
+                batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
+                column_names = normalize_column_names(batch_table.column_names, self.driver_features)
+                if column_names != batch_table.column_names:
+                    batch_table = batch_table.rename_columns(column_names)
+                if arrow_schema is not None:
+                    batch_table = batch_table.cast(arrow_schema)
+                yield from batch_table.to_batches()
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _fetch_arrow_record_batches(
         self,
@@ -1750,6 +1756,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                         arrow_schema,
                     ),
                 )
+                self._check_pending_exception(exc_handler)
                 record_batches, batch_schema = batches_result
                 rows_affected = sum(batch.num_rows for batch in record_batches)
                 pa = import_pyarrow()

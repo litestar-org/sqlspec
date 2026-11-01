@@ -210,6 +210,8 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
 
     __slots__ = ()
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
         super().__init__(config)
 
@@ -699,6 +701,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
     """CockroachDB ADK store using psycopg sync driver."""
 
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
         super().__init__(config)
@@ -1211,6 +1215,8 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
 
     __slots__ = ()
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
         super().__init__(config)
 
@@ -1447,6 +1453,8 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
     """CockroachDB ADK memory store using psycopg sync driver."""
 
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
         super().__init__(config)

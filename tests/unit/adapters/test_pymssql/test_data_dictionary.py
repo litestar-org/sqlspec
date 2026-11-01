@@ -153,15 +153,3 @@ def test_data_dictionary_capabilities() -> None:
 
     deps_result = data_dictionary.get_dependencies(cast(Any, driver), object_name="orders", schema="sales")
     assert deps_result.domain == "dependencies"
-
-
-def test_mssql_catalog_cte_aggregations() -> None:
-    """Constraints, indexes, and DDL templates use STRING_AGG CTE aggregations without FOR XML PATH."""
-    data_dictionary = PymssqlSyncDataDictionary()
-    constraints_sql = data_dictionary.get_query_text("constraints", "by_schema")
-    assert "STRING_AGG" in constraints_sql
-    assert "FOR XML PATH" not in constraints_sql
-
-    indexes_sql = data_dictionary.get_query_text("indexes", "by_schema")
-    assert "STRING_AGG" in indexes_sql
-    assert "FOR XML PATH" not in indexes_sql

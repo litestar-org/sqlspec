@@ -16,14 +16,14 @@ SQLSpec ships 13 dialect-specific SQL catalog packs under `sqlspec/data_dictiona
 | **DuckDB** (`duckdb`) | `None` | Native `duckdb_*().sql` catalog functions + AST synthesis | `17` | `24` | [DuckDB Catalog](duckdb.md) |
 | **MySQL** (`mysql`) | `None` | Native `SHOW CREATE` + `information_schema` synthesis | `18` | `27` | [MySQL Catalog](mysql.md) |
 | **MariaDB** (`mariadb`) | `None` | Native `SHOW CREATE` + MariaDB sequence & constraint reflection | `17` | `27` | [MariaDB Catalog](mariadb.md) |
-| **Oracle Database** (`oracle`) | `None` | Native `DBMS_METADATA.GET_DDL` + AST fallback | `22` | `35` | [Oracle Database Catalog](oracle.md) |
+| **Oracle Database** (`oracle`) | `None` | Native `DBMS_METADATA.GET_DDL` + AST fallback | `22` | `36` | [Oracle Database Catalog](oracle.md) |
 | **SQL Server** (`mssql`) | `dbo` | AST synthesis + `OBJECT_DEFINITION()` for views/routines/triggers | `19` | `31` | [SQL Server Catalog](mssql.md) |
 | **Sybase ASE** (`sybase`) | `dbo` | AST synthesis + `dbo.syscomments` object text reassembly | `9` | `16` | [Sybase ASE Catalog](sybase.md) |
 | **SAP SQL Anywhere** (`sqlanywhere`) | `DBA` | AST synthesis + `SYS.SYSTAB` / `SYS.SYSPROCEDURE` definitions | `9` | `16` | [SAP SQL Anywhere Catalog](sqlanywhere.md) |
-| **IBM Db2** (`db2`) | `None` | AST synthesis + `SYSCAT` catalog text definitions | `9` | `16` | [IBM Db2 Catalog](db2.md) |
+| **IBM Db2** (`db2`) | `None` | AST synthesis + `SYSCAT` catalog text definitions | `9` | `14` | [IBM Db2 Catalog](db2.md) |
 | **Google BigQuery** (`bigquery`) | `None` | Native `INFORMATION_SCHEMA.TABLES.ddl` + AST fallback | `14` | `30` | [Google BigQuery Catalog](bigquery.md) |
 | **Google Cloud Spanner** (`spanner`) | `None` | AST synthesis with `INTERLEAVE IN PARENT` & `ROW DELETION POLICY` (`GoogleSQL` & `PostgreSQL` modes) | `5` | `8` | [Google Cloud Spanner Catalog](spanner.md) |
-| **Total (`13` dialects)** | - | - | **`190`** | **`297`** | - |
+| **Total (`13` dialects)** | - | - | **`190`** | **`296`** | - |
 
 ## Cross-Dialect Capability Matrix
 

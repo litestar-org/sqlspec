@@ -70,7 +70,7 @@ def test_commit_is_visible_to_new_connection(
     try:
         cursor = connection.cursor()
         cursor.execute(f"SELECT name FROM {items_table} WHERE id = 20")
-        assert cursor.fetchone()[0] == "kept"
+        assert cursor.fetchall() == [("kept",)]
     finally:
         connection.close()
 

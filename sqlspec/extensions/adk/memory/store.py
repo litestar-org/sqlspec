@@ -2,7 +2,7 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_memory_store_config, _ADKMemoryStoreConfig
 from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
@@ -46,6 +46,8 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         "_vector_index_type",
     )
 
+    _max_table_name_parts: ClassVar[int] = 1
+
     def __init__(self, config: ConfigT) -> None:
         """Initialize the ADK memory store.
 
@@ -56,7 +58,7 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         store_config = self._store_config_from_extension()
         self._enabled: bool = store_config.get("enable_memory", True)
         self._memory_table: str = str(store_config["memory_table"])
-        ensure_table_name(self._memory_table)
+        ensure_table_name(self._memory_table, max_parts=self._max_table_name_parts)
         self._use_fts: bool = bool(store_config.get("use_fts", False))
         self._max_results: int = store_config.get("max_results", 20)
         self._vector_index_type: str = store_config.get("vector_index_type", "hnsw")
