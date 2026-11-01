@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,6 +13,11 @@ from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.adapters.spanner.core import default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 from sqlspec.exceptions import OperationalError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from sqlspec.adapters.spanner._typing import SpannerAsyncConnection, SpannerSyncConnection
 
 
 class _StreamResult:
@@ -61,13 +66,19 @@ async def _consume_stream(driver: Any, is_async: bool, *, fails_fetch: bool = Fa
 async def test_stream_maps_sdk_errors_with_ambient_application_exception(
     is_async: bool, phase: str, ambient: bool
 ) -> None:
-    error = api_exceptions.ServiceUnavailable("Spanner unavailable")
+    error = cast("Callable[[str], api_exceptions.ServiceUnavailable]", api_exceptions.ServiceUnavailable)(
+        "Spanner unavailable"
+    )
     result = _StreamResult(error)
     execute = AsyncMock() if is_async else MagicMock()
     execute.side_effect = error if phase == "start" else None
     execute.return_value = result
     connection = SimpleNamespace(execute_sql=execute)
-    driver = SpannerAsyncDriver(connection=connection) if is_async else SpannerSyncDriver(connection=connection)
+    driver = (
+        SpannerAsyncDriver(connection=cast("SpannerAsyncConnection", connection))
+        if is_async
+        else SpannerSyncDriver(connection=cast("SpannerSyncConnection", connection))
+    )
 
     with pytest.raises(OperationalError, match="Spanner unavailable") as caught:
         try:
@@ -89,7 +100,11 @@ async def test_stream_succeeds_with_ambient_application_exception(is_async: bool
     result = _StreamResult(None)
     execute = AsyncMock(return_value=result) if is_async else MagicMock(return_value=result)
     connection = SimpleNamespace(execute_sql=execute)
-    driver = SpannerAsyncDriver(connection=connection) if is_async else SpannerSyncDriver(connection=connection)
+    driver = (
+        SpannerAsyncDriver(connection=cast("SpannerAsyncConnection", connection))
+        if is_async
+        else SpannerSyncDriver(connection=cast("SpannerSyncConnection", connection))
+    )
     error = LookupError("application error")
 
     try:

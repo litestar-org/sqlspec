@@ -2,7 +2,7 @@
 
 import sqlite3
 from collections.abc import Iterator
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 import pytest
 
@@ -21,6 +21,11 @@ from sqlspec.data_dictionary import (
     SystemMetadataResult,
 )
 from sqlspec.driver import SyncDataDictionaryBase
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+_CursorT = TypeVar("_CursorT", bound=sqlite3.Cursor)
 
 REQUIRED_MSSQL_DOMAIN_QUERIES = {
     "schemas": ("list",),
@@ -77,8 +82,14 @@ class CatalogCursor(sqlite3.Cursor):
 class CatalogConnection(sqlite3.Connection):
     """Provide the DB-API cursor surface shared by the SQL Server SDKs."""
 
-    def cursor(self, *args: Any, **kwargs: Any) -> CatalogCursor:
-        return super().cursor(factory=CatalogCursor)
+    @overload
+    def cursor(self, factory: None = None) -> CatalogCursor: ...
+
+    @overload
+    def cursor(self, factory: "Callable[[sqlite3.Connection], _CursorT]") -> _CursorT: ...
+
+    def cursor(self, factory: "Callable[[sqlite3.Connection], sqlite3.Cursor] | None" = None) -> sqlite3.Cursor:
+        return super().cursor(factory=CatalogCursor if factory is None else factory)
 
 
 @pytest.fixture(params=[MssqlPythonDriver, PymssqlDriver], ids=["mssql_python", "pymssql"])
