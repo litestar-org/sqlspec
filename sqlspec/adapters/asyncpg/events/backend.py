@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Native and hybrid PostgreSQL backends for EventChannel."""
 
 import logging

@@ -10,15 +10,9 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
-from sqlspec.core.config_runtime import (
-    build_postgres_extension_probe_names,
-    is_postgres_extension_active,
-    resolve_postgres_extension_state,
-    resolve_runtime_statement_config,
-)
+from sqlspec.core.config_runtime import resolve_runtime_statement_config
 from sqlspec.exceptions import (
     CheckViolationError,
-    ConnectionTimeoutError,
     DatabaseConnectionError,
     DeadlockError,
     ForeignKeyViolationError,
@@ -54,7 +48,6 @@ __all__ = (
     "NormalizedStackOperation",
     "apply_driver_features",
     "build_connection_config",
-    "build_postgres_extension_probe_names",
     "build_postgres_storage_params_sql",
     "build_profile",
     "build_statement_config",
@@ -63,13 +56,10 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
-    "invoke_prepared_statement",
-    "is_postgres_extension_active",
     "parse_status",
     "register_json_codecs",
     "register_pgvector_support",
     "resolve_many_rowcount",
-    "resolve_postgres_extension_state",
     "resolve_runtime_statement_config",
 )
 
@@ -205,39 +195,6 @@ def configure_parameter_serializers(
 
     effective_deserializer = deserializer or parameter_config.json_deserializer or from_json
     return parameter_config.replace(json_serializer=serializer, json_deserializer=effective_deserializer)
-
-
-async def invoke_prepared_statement(
-    prepared: Any, parameters: "tuple[Any, ...] | dict[str, Any] | list[Any] | None", *, fetch: bool, **kwargs: Any
-) -> Any:
-    """Invoke an AsyncPG prepared statement with optional parameters.
-
-    Args:
-        prepared: AsyncPG prepared statement object.
-        parameters: Prepared parameters payload.
-        fetch: Whether to fetch rows.
-        **kwargs: Native execution options, including timeout.
-
-    Returns:
-        Query result or status message.
-    """
-    if parameters is None:
-        if fetch:
-            return await prepared.fetch(**kwargs)
-        await prepared.fetch(**kwargs)
-        return prepared.get_statusmsg()
-
-    if isinstance(parameters, dict):
-        values = tuple(parameters.values())
-        if fetch:
-            return await prepared.fetch(*values, **kwargs)
-        await prepared.fetch(*values, **kwargs)
-        return prepared.get_statusmsg()
-
-    if fetch:
-        return await prepared.fetch(*parameters, **kwargs)
-    await prepared.fetch(*parameters, **kwargs)
-    return prepared.get_statusmsg()
 
 
 def build_statement_config(
@@ -454,10 +411,10 @@ _EXCEPTION_MAPPING_DISPATCHER.register(
     asyncpg.exceptions.InvalidAuthorizationSpecificationError, ("28000", PermissionDeniedError, "authorization error")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.ConnectionDoesNotExistError, ("08003", ConnectionTimeoutError, "connection does not exist")
+    asyncpg.exceptions.ConnectionDoesNotExistError, ("08003", DatabaseConnectionError, "connection does not exist")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.CannotConnectNowError, ("57P03", ConnectionTimeoutError, "cannot connect now")
+    asyncpg.exceptions.CannotConnectNowError, ("57P03", DatabaseConnectionError, "cannot connect now")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
     asyncpg.exceptions.PostgresSyntaxError, ("42601", SQLParsingError, "SQL syntax error")

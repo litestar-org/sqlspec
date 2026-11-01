@@ -494,6 +494,21 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         materialized = list(records)
         if not materialized:
+            if overwrite:
+                table_name, schema_name, quoted_target = self._copy_target(table)
+                try:
+                    await self.connection.execute(f"TRUNCATE TABLE {quoted_target}")
+                except Exception as exc:
+                    mapped = create_mapped_exception(exc)
+                    msg = f"Failed to truncate table '{table}': {exc}"
+                    raise type(mapped)(msg) from exc
+                empty_telemetry: StorageTelemetry = {
+                    "bytes_processed": 0,
+                    "destination": table,
+                    "format": "records",
+                    "rows_processed": 0,
+                }
+                return self._storage_job(empty_telemetry)
             msg = "load_from_records requires at least one record."
             raise ImproperConfigurationError(msg)
 
@@ -547,22 +562,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             "rows_processed": len(copy_rows),
         }
         return self._storage_job(telemetry_payload)
-
-    async def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Read an artifact from storage and ingest it via COPY."""
-
-        return await super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
 
     def _timeout_value(self, config: "StatementConfig") -> float | None:
         for options in (config.execution_args, self.statement_config.execution_args):

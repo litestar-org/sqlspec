@@ -7,8 +7,6 @@ is in progress" hazard). asyncpg's per-channel add_listener callback fans
 notifications into one queue per consumer task.
 """
 
-# pyright: reportPrivateUsage=false
-
 import asyncio
 import contextlib
 import logging
@@ -162,7 +160,7 @@ class AsyncpgListenerHub:
 
     def _get_consumer_queue(self, channel: str) -> "asyncio.Queue[str] | None":
         task = asyncio.current_task()
-        if task is None:  # pragma: no cover
+        if task is None:
             msg = "AsyncpgListenerHub.dequeue requires an active asyncio task"
             raise RuntimeError(msg)
         queues = self._queues.get(channel)

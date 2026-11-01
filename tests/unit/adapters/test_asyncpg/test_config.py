@@ -14,14 +14,10 @@ from sqlspec.adapters.asyncpg.config import (
     AsyncpgDriverFeatures,
     AsyncpgPoolConfig,
 )
-from sqlspec.adapters.asyncpg.core import (
-    build_connection_config,
-    build_postgres_extension_probe_names,
-    build_statement_config,
-    resolve_postgres_extension_state,
-)
+from sqlspec.adapters.asyncpg.core import build_connection_config, build_statement_config
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.core import StatementConfig, StatementStack
+from sqlspec.core.config_runtime import build_postgres_extension_probe_names, resolve_postgres_extension_state
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -322,6 +318,10 @@ def test_asyncpg_config_normalizes_aliases() -> None:
 def test_asyncpg_driver_features_contract_retains_configured_keys() -> None:
     """AsyncpgConfig retains on_connection_create and type_codecs and populates event defaults."""
     assert "connection_instance" not in AsyncpgDriverFeatures.__annotations__
+    assert "enable_pgcopy_binary" in AsyncpgDriverFeatures.__annotations__
+    assert AsyncpgConfig.supports_native_arrow_export is False
+    assert AsyncpgConfig.supports_native_parquet_export is False
+    assert AsyncpgConfig.supports_native_parquet_import is False
 
     async def hook(_: object) -> None:
         return None

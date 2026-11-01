@@ -201,6 +201,8 @@ class AsyncpgDriverFeatures(TypedDict):
     """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb_columnar: NotRequired[bool]
     """Enable ``google_columnar_engine.enable_columnar_scan=on`` at session startup or per transaction."""
+    enable_pgcopy_binary: NotRequired[bool]
+    """Enable binary COPY format for Arrow table ingestion."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec event channel pub/sub support (defaults to ``True`` when ``events`` is configured)."""
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
@@ -292,13 +294,13 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     """Configuration for AsyncPG database connections using TypedDict."""
 
     driver_type: "ClassVar[type[AsyncpgDriver]]" = AsyncpgDriver
-    connection_type: "ClassVar[type[AsyncpgConnection]]" = AsyncpgConnection  # type: ignore[assignment]
+    connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncpgConnection)
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
-    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_export: "ClassVar[bool]" = False
     supports_native_arrow_import: "ClassVar[bool]" = True
-    supports_native_parquet_export: "ClassVar[bool]" = True
-    supports_native_parquet_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = False
+    supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_row_streaming: "ClassVar[bool]" = True
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
         datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=True, uuid_binding="native"
