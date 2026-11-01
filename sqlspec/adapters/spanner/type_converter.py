@@ -189,56 +189,66 @@ def coerce_params_for_spanner(
         return None
 
     json_object_type = _get_json_object_type()
-    coerced: dict[str, Any] = {}
-    changed = False
+    coerced: dict[str, Any] | None = None
     for key, raw_value in params.items():
         value = raw_value
+        val_changed = False
+        new_val = value
         if type(raw_value) is TypedParameter:
             value = raw_value.value
-            changed = True
+            new_val = value
+            val_changed = True
             declared = raw_value.semantic_name
             if declared is not None:
                 normalized_declared = declared.strip().upper()
                 if normalized_declared in {"ARRAY<FLOAT32>", "VECTOR"} and isinstance(value, (list, tuple)):
-                    coerced[key] = [float(item) for item in value]
+                    new_val = [float(item) for item in value]
+                    if coerced is None:
+                        coerced = dict(params)
+                    coerced[key] = new_val
                     continue
                 if normalized_declared == "FLOAT32" and value is not None:
-                    coerced[key] = float(value)
+                    new_val = float(value)
+                    if coerced is None:
+                        coerced = dict(params)
+                    coerced[key] = new_val
                     continue
         if isinstance(value, _UUID_TYPES):
             if enable_uuid_conversion:
-                coerced[key] = str(value)
-                changed = True
-            else:
-                coerced[key] = value
+                new_val = str(value)
+                val_changed = True
         elif isinstance(value, bytes):
-            coerced[key] = bytes_to_spanner(value)
-            changed = True
+            new_val = bytes_to_spanner(value)
+            val_changed = True
         elif isinstance(value, datetime) and value.tzinfo is None:
-            coerced[key] = value.replace(tzinfo=UTC)
-            changed = True
+            new_val = value.replace(tzinfo=UTC)
+            val_changed = True
         elif isinstance(value, timedelta):
-            coerced[key] = Interval(days=value.days, nanos=(value.seconds * 1_000_000 + value.microseconds) * 1000)
-            changed = True
+            new_val = Interval(days=value.days, nanos=(value.seconds * 1_000_000 + value.microseconds) * 1000)
+            val_changed = True
         elif isinstance(value, json_object_type):
-            coerced[key] = value
+            pass
         elif isinstance(value, dict):
-            coerced[key] = spanner_json(value, json_serializer=json_serializer)
-            changed = True
+            new_val = spanner_json(value, json_serializer=json_serializer)
+            val_changed = True
         elif isinstance(value, (list, tuple)):
             if should_json_encode_sequence(value):
-                coerced[key] = spanner_json(list(value), json_serializer=json_serializer)
-                changed = True
+                new_val = spanner_json(list(value), json_serializer=json_serializer)
+                val_changed = True
             else:
                 coerced_seq, seq_changed = _coerce_sequence_elements(
                     value, enable_uuid_conversion=enable_uuid_conversion
                 )
-                coerced[key] = coerced_seq
                 if seq_changed:
-                    changed = True
-        else:
-            coerced[key] = value
-    return coerced if changed else params
+                    new_val = coerced_seq
+                    val_changed = True
+
+        if val_changed:
+            if coerced is None:
+                coerced = dict(params)
+            coerced[key] = new_val
+
+    return coerced if coerced is not None else params
 
 
 def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
@@ -301,12 +311,15 @@ def _coerce_sequence_elements(
     value: "list[Any] | tuple[Any, ...]", *, enable_uuid_conversion: bool
 ) -> "tuple[list[Any] | tuple[Any, ...], bool]":
     """Coerce elements inside a 1-D sequence parameter when required by Spanner."""
-    needs_element_coercion = any(
-        isinstance(item, (timedelta, bytes))
-        or (enable_uuid_conversion and isinstance(item, _UUID_TYPES))
-        or (isinstance(item, datetime) and item.tzinfo is None)
-        for item in value
-    )
+    needs_element_coercion = False
+    for item in value:
+        if (
+            isinstance(item, (timedelta, bytes))
+            or (enable_uuid_conversion and isinstance(item, _UUID_TYPES))
+            or (isinstance(item, datetime) and item.tzinfo is None)
+        ):
+            needs_element_coercion = True
+            break
     if not needs_element_coercion:
         if isinstance(value, tuple):
             return list(value), True
@@ -375,7 +388,11 @@ def _infer_sequence_param_type(value: Any, param_types: Any, json_type: Any) -> 
         return json_type
     if not value:
         return None
-    first = next((item for item in value if item is not None), None)
+    first = None
+    for item in value:
+        if item is not None:
+            first = item
+            break
     if first is None:
         return None
     if isinstance(first, bool):

@@ -2,6 +2,7 @@
 
 import contextlib
 import re
+import sys
 from collections.abc import Callable, Iterable, Mapping
 from functools import partial
 from itertools import islice
@@ -154,12 +155,24 @@ def build_execute_kwargs(
     return kwargs
 
 
+_EXECUTE_OPTION_KEYS: Final[tuple[str, ...]] = (
+    "request_options",
+    "query_options",
+    "directed_read_options",
+    "retry",
+    "timeout",
+    "last_statement",
+)
+
+
 def pop_execute_options(kwargs: dict[str, Any]) -> "SpannerExecuteOptions | None":
     """Remove native execution options before processing SQL parameters."""
-    if not any(
-        key in kwargs
-        for key in ("request_options", "query_options", "directed_read_options", "retry", "timeout", "last_statement")
-    ):
+    has_options = False
+    for key in _EXECUTE_OPTION_KEYS:
+        if key in kwargs:
+            has_options = True
+            break
+    if not has_options:
         return None
     return SpannerExecuteOptions(
         request_options=kwargs.pop("request_options", None),
@@ -371,9 +384,14 @@ def collect_rows(
         Tuple of (rows, column_names).
     """
     resolved_column_names = column_names if column_names is not None else [field.name for field in fields]
-    if column_plan is None and all(type(row) is tuple for row in rows):
-        return rows, resolved_column_names
     if column_plan is None:
+        all_tuples = True
+        for row in rows:
+            if type(row) is not tuple:
+                all_tuples = False
+                break
+        if all_tuples:
+            return rows, resolved_column_names
         return [tuple(row) for row in rows], resolved_column_names
 
     data: list[Any] = []
@@ -897,13 +915,20 @@ class SpannerSyncStreamSource(_SpannerStreamSourceBase):
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
+        if sys.exc_info()[1] is None:
+            with handler:
+                result_set = self._driver.connection.execute_sql(
+                    self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+                )
+                self._result_set = result_set
+                self._row_iterator = cast("Generator[Any, None, None]", iter(result_set))
+            self._driver._check_pending_exception(handler)
+        else:
             result_set = self._driver.connection.execute_sql(
                 self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
             )
             self._result_set = result_set
             self._row_iterator = cast("Generator[Any, None, None]", iter(result_set))
-        self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         row_iterator = self._row_iterator
@@ -911,9 +936,12 @@ class SpannerSyncStreamSource(_SpannerStreamSourceBase):
             return []
         handler = self._driver.handle_database_exceptions()
         rows: list[Any] = []
-        with handler:
+        if sys.exc_info()[1] is None:
+            with handler:
+                rows = list(islice(row_iterator, self._chunk_size))
+            self._driver._check_pending_exception(handler)
+        else:
             rows = list(islice(row_iterator, self._chunk_size))
-        self._driver._check_pending_exception(handler)
         if not rows:
             return []
         return self._rows_to_chunk(rows)
@@ -945,13 +973,20 @@ class SpannerAsyncStreamSource(_SpannerStreamSourceBase):
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        async with handler:
+        if sys.exc_info()[1] is None:
+            async with handler:
+                result_set = await self._driver.connection.execute_sql(
+                    self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+                )
+                self._result_set = result_set
+                self._row_iterator = cast("AsyncGenerator[Any, None]", result_set.__aiter__())
+            self._driver._check_pending_exception(handler)
+        else:
             result_set = await self._driver.connection.execute_sql(
                 self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
             )
             self._result_set = result_set
             self._row_iterator = cast("AsyncGenerator[Any, None]", result_set.__aiter__())
-        self._driver._check_pending_exception(handler)
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         row_iterator = self._row_iterator
@@ -959,11 +994,16 @@ class SpannerAsyncStreamSource(_SpannerStreamSourceBase):
             return []
         handler = self._driver.handle_database_exceptions()
         rows: list[Any] = []
-        async with handler:
+        if sys.exc_info()[1] is None:
+            async with handler:
+                with contextlib.suppress(StopAsyncIteration):
+                    while len(rows) < self._chunk_size:
+                        rows.append(await row_iterator.__anext__())
+            self._driver._check_pending_exception(handler)
+        else:
             with contextlib.suppress(StopAsyncIteration):
                 while len(rows) < self._chunk_size:
                     rows.append(await row_iterator.__anext__())
-        self._driver._check_pending_exception(handler)
         if not rows:
             return []
         return self._rows_to_chunk(rows)
