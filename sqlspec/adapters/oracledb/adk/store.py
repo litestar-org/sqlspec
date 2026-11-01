@@ -1,7 +1,7 @@
 """Oracle ADK store for Google Agent Development Kit session/event storage."""
 
 import array
-from decimal import Decimal
+import contextlib
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
 from typing_extensions import TypedDict
@@ -12,6 +12,8 @@ from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseErr
 from sqlspec.adapters.oracledb.core import (
     coerce_large_parameters_async,
     coerce_large_parameters_sync,
+    read_oracle_lob_async,
+    read_oracle_lob_sync,
     sanitize_oracle_text_query,
 )
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, OracleVersionInfo, storage_type_from_version
@@ -27,6 +29,7 @@ from sqlspec.extensions.adk import (
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_converters import build_nested_decimal_normalizer
 from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
@@ -377,6 +380,16 @@ class OracleADKConfig(ADKConfig):
     """Raw Oracle table options for the ADK memory table."""
 
 
+def _rollback_sync(conn: Any) -> None:
+    with contextlib.suppress(Exception):
+        conn.rollback()
+
+
+async def _rollback_async(conn: Any) -> None:
+    with contextlib.suppress(Exception):
+        await conn.rollback()
+
+
 def coerce_decimal_values(value: Any) -> Any:
     return _coerce_decimal_values(value)
 
@@ -498,10 +511,14 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
 
         async with self._config.provide_connection() as conn:
-            coerced_params = await coerce_large_parameters_async(conn, params)
-            with conn.cursor() as cursor:
-                await cursor.execute(sql, coerced_params)
-                await conn.commit()
+            try:
+                coerced_params = await coerce_large_parameters_async(conn, params)
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, coerced_params)
+                    await conn.commit()
+            except BaseException:
+                await _rollback_async(conn)
+                raise
 
         result = await self.get_session(app_name, user_id, session_id)
         if result is None:
@@ -675,9 +692,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
 
         async with self._config.provide_connection() as conn:
-            with conn.cursor() as cursor:
-                await cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
-                await conn.commit()
+            try:
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                    await conn.commit()
+            except BaseException:
+                await _rollback_async(conn)
+                raise
 
     async def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session.
@@ -694,21 +715,25 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            coerced_params = await coerce_large_parameters_async(
-                conn,
-                {
-                    "id": event_record["id"],
-                    "app_name": event_record["app_name"],
-                    "user_id": event_record["user_id"],
-                    "session_id": event_record["session_id"],
-                    "invocation_id": event_record["invocation_id"],
-                    "timestamp": event_record["timestamp"],
-                    "event_data": await self._serialize_event_data(event_record["event_data"]),
-                },
-            )
-            with conn.cursor() as cursor:
-                await cursor.execute(sql, coerced_params)
-                await conn.commit()
+            try:
+                coerced_params = await coerce_large_parameters_async(
+                    conn,
+                    {
+                        "id": event_record["id"],
+                        "app_name": event_record["app_name"],
+                        "user_id": event_record["user_id"],
+                        "session_id": event_record["session_id"],
+                        "invocation_id": event_record["invocation_id"],
+                        "timestamp": event_record["timestamp"],
+                        "event_data": await self._serialize_event_data(event_record["event_data"]),
+                    },
+                )
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, coerced_params)
+                    await conn.commit()
+            except BaseException:
+                await _rollback_async(conn)
+                raise
 
     async def append_event_and_update_state(
         self,
@@ -1690,9 +1715,14 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
         sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
 
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
-            conn.commit()
+        with self._config.provide_connection() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                    conn.commit()
+            except BaseException:
+                _rollback_sync(conn)
+                raise
 
     def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
@@ -1704,21 +1734,26 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         )
         """
 
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            params = coerce_large_parameters_sync(
-                conn,
-                {
-                    "id": event_record["id"],
-                    "app_name": event_record["app_name"],
-                    "user_id": event_record["user_id"],
-                    "session_id": event_record["session_id"],
-                    "invocation_id": event_record["invocation_id"],
-                    "timestamp": event_record["timestamp"],
-                    "event_data": self._serialize_event_data(event_record["event_data"]),
-                },
-            )
-            cursor.execute(sql, params)
-            conn.commit()
+        with self._config.provide_connection() as conn:
+            try:
+                params = coerce_large_parameters_sync(
+                    conn,
+                    {
+                        "id": event_record["id"],
+                        "app_name": event_record["app_name"],
+                        "user_id": event_record["user_id"],
+                        "session_id": event_record["session_id"],
+                        "invocation_id": event_record["invocation_id"],
+                        "timestamp": event_record["timestamp"],
+                        "event_data": self._serialize_event_data(event_record["event_data"]),
+                    },
+                )
+                with conn.cursor() as cursor:
+                    cursor.execute(sql, params)
+                    conn.commit()
+            except BaseException:
+                _rollback_sync(conn)
+                raise
 
     def append_event_and_update_state(
         self,
@@ -2449,37 +2484,48 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         )
         """
 
-        inserted_count = 0
-        async with self._config.provide_connection() as conn:
-            with conn.cursor() as cursor:
-                for entry in entries:
-                    content_json = await self._serialize_json_field(entry["content_json"])
-                    metadata_json = await self._serialize_json_field(entry["metadata_json"])
-                    embedding_val = entry.get("embedding")
-                    bound_embedding = array.array("f", embedding_val) if embedding_val is not None else None
-                    params: dict[str, Any] = {
-                        "id": entry["id"],
-                        "session_id": entry["session_id"],
-                        "app_name": entry["app_name"],
-                        "user_id": entry["user_id"],
-                        "scope": entry.get("scope", "user"),
-                        "event_id": entry["event_id"],
-                        "author": entry["author"],
-                        "timestamp": entry["timestamp"],
-                        "embedding": bound_embedding,
-                        "content_json": content_json,
-                        "content_text": entry["content_text"],
-                        "metadata_json": metadata_json,
-                        "inserted_at": entry["inserted_at"],
-                    }
-                    if self._owner_id_column_name:
-                        params["owner_id"] = owner_id
-                    params = await coerce_large_parameters_async(conn, params)
-                    if await self._execute_insert_entry(cursor, sql, params):
-                        inserted_count += 1
-                await conn.commit()
+        batch_params: list[dict[str, Any]] = []
+        for entry in entries:
+            content_json = await self._serialize_json_field(entry["content_json"])
+            metadata_json = await self._serialize_json_field(entry["metadata_json"])
+            embedding_val = entry.get("embedding")
+            bound_embedding = array.array("f", embedding_val) if embedding_val is not None else None
+            p: dict[str, Any] = {
+                "id": entry["id"],
+                "session_id": entry["session_id"],
+                "app_name": entry["app_name"],
+                "user_id": entry["user_id"],
+                "scope": entry.get("scope", "user"),
+                "event_id": entry["event_id"],
+                "author": entry["author"],
+                "timestamp": entry["timestamp"],
+                "embedding": bound_embedding,
+                "content_json": content_json,
+                "content_text": entry["content_text"],
+                "metadata_json": metadata_json,
+                "inserted_at": entry["inserted_at"],
+            }
+            if self._owner_id_column_name:
+                p["owner_id"] = owner_id
+            batch_params.append(p)
 
-        return inserted_count
+        async with self._config.provide_connection() as conn:
+            try:
+                coerced_batch = [await coerce_large_parameters_async(conn, p) for p in batch_params]
+                with conn.cursor() as cursor:
+                    await cursor.executemany(sql, coerced_batch, batcherrors=True)
+                    batch_errors = list(cursor.getbatcherrors()) if hasattr(cursor, "getbatcherrors") else []
+                    duplicates = sum(
+                        1
+                        for e in batch_errors
+                        if getattr(e, "code", getattr(e, "full_code", None)) == ORACLE_DUPLICATE_KEY_ERROR
+                    )
+                    inserted_count = len(entries) - duplicates
+                    await conn.commit()
+                    return inserted_count
+            except BaseException:
+                await _rollback_async(conn)
+                raise
 
     async def search_entries(
         self,
@@ -2930,36 +2976,48 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         )
         """
 
-        inserted_count = 0
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            for entry in entries:
-                content_json = self._serialize_json_field(entry["content_json"])
-                metadata_json = self._serialize_json_field(entry["metadata_json"])
-                embedding_val = entry.get("embedding")
-                bound_embedding = array.array("f", embedding_val) if embedding_val is not None else None
-                params: dict[str, Any] = {
-                    "id": entry["id"],
-                    "session_id": entry["session_id"],
-                    "app_name": entry["app_name"],
-                    "user_id": entry["user_id"],
-                    "scope": entry.get("scope", "user"),
-                    "event_id": entry["event_id"],
-                    "author": entry["author"],
-                    "timestamp": entry["timestamp"],
-                    "embedding": bound_embedding,
-                    "content_json": content_json,
-                    "content_text": entry["content_text"],
-                    "metadata_json": metadata_json,
-                    "inserted_at": entry["inserted_at"],
-                }
-                if self._owner_id_column_name:
-                    params["owner_id"] = owner_id
-                params = coerce_large_parameters_sync(conn, params)
-                if self._execute_insert_entry(cursor, sql, params):
-                    inserted_count += 1
-            conn.commit()
+        batch_params: list[dict[str, Any]] = []
+        for entry in entries:
+            content_json = self._serialize_json_field(entry["content_json"])
+            metadata_json = self._serialize_json_field(entry["metadata_json"])
+            embedding_val = entry.get("embedding")
+            bound_embedding = array.array("f", embedding_val) if embedding_val is not None else None
+            p: dict[str, Any] = {
+                "id": entry["id"],
+                "session_id": entry["session_id"],
+                "app_name": entry["app_name"],
+                "user_id": entry["user_id"],
+                "scope": entry.get("scope", "user"),
+                "event_id": entry["event_id"],
+                "author": entry["author"],
+                "timestamp": entry["timestamp"],
+                "embedding": bound_embedding,
+                "content_json": content_json,
+                "content_text": entry["content_text"],
+                "metadata_json": metadata_json,
+                "inserted_at": entry["inserted_at"],
+            }
+            if self._owner_id_column_name:
+                p["owner_id"] = owner_id
+            batch_params.append(p)
 
-        return inserted_count
+        with self._config.provide_connection() as conn:
+            try:
+                coerced_batch = [coerce_large_parameters_sync(conn, p) for p in batch_params]
+                with conn.cursor() as cursor:
+                    cursor.executemany(sql, coerced_batch, batcherrors=True)
+                    batch_errors = list(cursor.getbatcherrors()) if hasattr(cursor, "getbatcherrors") else []
+                    duplicates = sum(
+                        1
+                        for e in batch_errors
+                        if getattr(e, "code", getattr(e, "full_code", None)) == ORACLE_DUPLICATE_KEY_ERROR
+                    )
+                    inserted_count = len(entries) - duplicates
+                    conn.commit()
+                    return inserted_count
+            except BaseException:
+                _rollback_sync(conn)
+                raise
 
     def search_entries(
         self,
@@ -3371,20 +3429,11 @@ def _raise_session_not_found(session_id: str) -> NoReturn:
     raise ValueError(msg)
 
 
+_normalize_decimals = build_nested_decimal_normalizer(mode="float")
+
+
 def _coerce_decimal_values(value: Any) -> Any:
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, dict):
-        return {key: _coerce_decimal_values(val) for key, val in value.items()}
-    if isinstance(value, list):
-        return [_coerce_decimal_values(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_coerce_decimal_values(item) for item in value)
-    if isinstance(value, set):
-        return {_coerce_decimal_values(item) for item in value}
-    if isinstance(value, frozenset):
-        return frozenset(_coerce_decimal_values(item) for item in value)
-    return value
+    return _normalize_decimals(value)
 
 
 def _oracle_text_value(value: Any) -> str:
@@ -3462,17 +3511,11 @@ def _adk_table_feature_clause(
 
 
 async def _read_lob_async(data: Any) -> Any:
-    if is_async_readable(data):
-        return await data.read()
-    if is_readable(data):
-        return data.read()
-    return data
+    return await read_oracle_lob_async(data)
 
 
 def _read_lob_sync(data: Any) -> Any:
-    if is_readable(data):
-        return data.read()
-    return data
+    return read_oracle_lob_sync(data)
 
 
 def _build_oracle_scope_where(

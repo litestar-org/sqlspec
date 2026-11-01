@@ -348,12 +348,13 @@ def test_oracle_adk_sync_insert_binds_embedding_array() -> None:
     ]
     inserted = store.insert_memory_entries(entries)
     assert inserted == 1
-    assert cursor.execute.called
-    _call_sql, call_params = cursor.execute.call_args[0]
-    assert "embedding" in call_params
-    assert isinstance(call_params["embedding"], array.array)
-    assert call_params["embedding"].typecode == "f"
-    assert list(call_params["embedding"]) == pytest.approx([0.1, 0.2, 0.3])
+    assert cursor.executemany.called
+    _call_sql, call_params = cursor.executemany.call_args[0]
+    first_param = call_params[0]
+    assert "embedding" in first_param
+    assert isinstance(first_param["embedding"], array.array)
+    assert first_param["embedding"].typecode == "f"
+    assert list(first_param["embedding"]) == pytest.approx([0.1, 0.2, 0.3])
 
 
 def test_oracle_adk_memory_rows_to_records_decodes_embedding() -> None:
@@ -381,6 +382,73 @@ def test_oracle_adk_memory_rows_to_records_decodes_embedding() -> None:
     records = store._rows_to_records([row])
     assert len(records) == 1
     assert records[0]["embedding"] == pytest.approx([0.1, 0.2, 0.3])
+
+
+def test_adk_store_mutation_rolls_back_on_error() -> None:
+    """ADK store mutation rolls back connection on error."""
+    cursor = MagicMock()
+    cursor.execute.side_effect = RuntimeError("mutation error")
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    config = _config_for_storage(JSONStorageType.BLOB_JSON)
+    config.extension_config = {"adk": {}}
+    config.provide_connection.return_value.__enter__.return_value = conn
+
+    store = OracleSyncADKStore(config)
+    with pytest.raises(RuntimeError, match="mutation error"):
+        store.delete_session("app", "user", "sess-1")
+
+    conn.rollback.assert_called_once()
+
+
+def test_oracle_adk_memory_store_batch_insert() -> None:
+    """ADK memory store executes batch insert via executemany."""
+    cursor = MagicMock()
+    cursor.rowcount = 2
+    cursor.getbatcherrors.return_value = []
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config.extension_config = {"adk": {}}
+    config.provide_connection.return_value.__enter__.return_value = conn
+
+    store = OracleSyncADKMemoryStore(config)
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    entries = [
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user",
+            "scope": "user",
+            "event_id": "ev-1",
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"k": 1},
+            "content_text": "text 1",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+        {
+            "id": "mem-2",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user",
+            "scope": "user",
+            "event_id": "ev-2",
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"k": 2},
+            "content_text": "text 2",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    ]
+    inserted = store.insert_memory_entries(entries)
+    assert inserted == 2
+    cursor.executemany.assert_called_once()
+    assert len(cursor.executemany.call_args[0][1]) == 2
+    conn.commit.assert_called_once()
 
 
 def _sync_store_with_driver() -> "tuple[Any, MagicMock, MagicMock]":
@@ -445,6 +513,10 @@ class _RecordingCursor:
 
     def execute(self, sql: str, params: "dict[str, Any] | None" = None) -> None:
         self.calls.append((sql, dict(params or {})))
+
+    def executemany(self, sql: str, params: Any = None, **_kwargs: Any) -> None:
+        for p in params or []:
+            self.calls.append((sql, dict(p or {})))
 
     def fetchall(self) -> "list[Any]":
         return []

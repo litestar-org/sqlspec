@@ -137,6 +137,8 @@ __all__ = (
     "normalize_execute_many_parameters_sync",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
+    "read_oracle_lob_async",
+    "read_oracle_lob_sync",
     "release_extracted_wallet_dir",
     "resolve_dbms_cloud_source_uri",
     "resolve_row_metadata",
@@ -3062,6 +3064,22 @@ def _validate_oracle_contexts(contexts: "Mapping[str, Mapping[str, Any]]") -> No
 def _resolve_callable_or_str(value: "str | Callable[[], str | None] | None") -> str | None:
     if callable(value):
         return value()
+    return value
+
+
+async def read_oracle_lob_async(value: Any) -> Any:
+    """Read a LOB value asynchronously from an async connection or return raw data."""
+    if is_async_readable(value):
+        return await value.read()
+    if is_readable(value):
+        return value.read()
+    return value
+
+
+def read_oracle_lob_sync(value: Any) -> Any:
+    """Read a LOB value synchronously from a sync connection or return raw data."""
+    if is_readable(value):
+        return value.read()
     return value
 
 

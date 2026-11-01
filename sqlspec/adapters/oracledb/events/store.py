@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired
 
 from typing_extensions import TypedDict
 
-from sqlspec.adapters.oracledb._storage import oracle_table_feature_report
+from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, validate_oracle_identifier
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, storage_type_from_version
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
@@ -133,6 +133,8 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
     def __init__(self, config: "OracleSyncConfig") -> None:
         """Initialize Oracle sync event queue store."""
         super().__init__(config)
+        for part in self.table_name.split("."):
+            validate_oracle_identifier(part, "table name")
         self._in_memory, self._json_storage_override = _init_oracle_settings(self._extension_settings)
 
     def create_statements(self) -> "list[str]":
@@ -248,6 +250,8 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
     def __init__(self, config: "OracleAsyncConfig") -> None:
         """Initialize Oracle async event queue store."""
         super().__init__(config)
+        for part in self.table_name.split("."):
+            validate_oracle_identifier(part, "table name")
         self._in_memory, self._json_storage_override = _init_oracle_settings(self._extension_settings)
 
     def create_statements(self) -> "list[str]":

@@ -3,6 +3,8 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any, Self, cast
 
+import pytest
+
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
 from sqlspec.adapters.oracledb.litestar import OracleSyncStore
@@ -113,7 +115,7 @@ def test_oracle_sync_store_expires_in_uses_database_clock() -> None:
 
     sql, parameters = cursor.executed[0]
     assert "SELECT expires_at, SYSTIMESTAMP" in sql
-    assert parameters == {"session_id": "session-1"}
+    assert parameters == ("session-1",)
 
 
 def test_oracle_litestar_store_interval_partition_on_expires_at() -> None:
@@ -163,3 +165,24 @@ def test_oracle_litestar_store_table_ddl_sanitizes_and_truncates_index_name() ->
 
     assert "CREATE INDEX idx_my_very_long_schema_oracle" in ddl
     assert "idx_my_very_long_schema.oracle" not in ddl
+
+
+def test_oracle_store_set_rolls_back_on_execute_failure() -> None:
+    """Store mutations roll back connection on execution failure."""
+    from unittest.mock import MagicMock
+
+    cursor = MagicMock()
+    cursor.execute.side_effect = RuntimeError("execute failed")
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    config = MagicMock()
+    config.provide_connection.return_value = context
+    config.extension_config = {}
+
+    store = OracleSyncStore(config)
+    with pytest.raises(RuntimeError, match="execute failed"):
+        store._set("fail-key", b"data")
+
+    connection.rollback.assert_called_once()

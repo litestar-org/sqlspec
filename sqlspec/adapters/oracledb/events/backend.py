@@ -10,6 +10,7 @@ from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQ
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventMessage, parse_event_timestamp
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -272,6 +273,11 @@ def _build_envelope(
 
 def _parse_message(channel: str, payload: Any) -> EventMessage:
     """Parse Oracle AQ message payload into EventMessage."""
+    if isinstance(payload, (str, bytes)):
+        with contextlib.suppress(Exception):
+            parsed = from_json(payload)
+            if isinstance(parsed, dict):
+                payload = parsed
     if not isinstance(payload, dict):
         payload = {"payload": payload}
     payload_channel = payload.get("channel")
