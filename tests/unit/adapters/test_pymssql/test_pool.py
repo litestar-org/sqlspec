@@ -3,6 +3,8 @@
 import threading
 from typing import Any, cast
 
+import pytest
+
 from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakePymssqlModule
 
 
@@ -210,3 +212,53 @@ def test_pool_reentrant_thread_checkout(monkeypatch: Any) -> None:
     assert not connection.closed
     pool.close()
     assert connection.closed
+
+
+def test_pool_recovers_after_failed_acquisition_and_retires_failed_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed connect must not prevent a later failed checkout from retiring its connection."""
+    import sqlspec.adapters.pymssql.pool as pool_module
+    from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+
+    dirty_connection = FakeConnection()
+    clean_connection = FakeConnection()
+    attempts: list[OSError | FakeConnection] = [
+        OSError("temporary connect failure"),
+        dirty_connection,
+        clean_connection,
+    ]
+
+    class RecoveringModule(FakePymssqlModule):
+        def connect(self, **kwargs: Any) -> FakeConnection:
+            outcome = attempts.pop(0)
+            if isinstance(outcome, OSError):
+                raise outcome
+            return outcome
+
+    monkeypatch.setattr(pool_module, "pymssql", RecoveringModule())
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0, health_check_interval=0)
+
+    try:
+        with pytest.raises(OSError, match="temporary connect failure"), pool.get_connection():
+            pytest.fail("Failed acquisition must not enter the checkout body")
+
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+
+        with pytest.raises(ValueError, match="failed transaction"), pool.get_connection() as connection:
+            assert connection is dirty_connection
+            dirty_connection.autocommit(False)
+            raise ValueError("failed transaction")
+
+        assert dirty_connection.closed is True
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+
+        with pool.get_connection() as replacement:
+            assert replacement is clean_connection
+            assert clean_connection.closed is False
+            assert clean_connection.autocommit_state is True
+            assert pool.checked_out() == 1
+
+        assert pool.checked_out() == 0
+    finally:
+        pool.close()

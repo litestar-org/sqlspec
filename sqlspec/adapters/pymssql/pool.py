@@ -95,8 +95,8 @@ class PymssqlConnectionPool:
             A thread-local database connection.
         """
         depth = getattr(self._thread_local, "depth", 0)
-        self._thread_local.depth = depth + 1
         connection = self.acquire()
+        self._thread_local.depth = depth + 1
         try:
             yield connection
         except Exception:
