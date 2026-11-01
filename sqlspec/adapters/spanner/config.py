@@ -249,6 +249,8 @@ class SpannerDriverFeatures(TypedDict):
     """Event queue backend name (``'poll_queue'``)."""
     enable_batch_write_api: "NotRequired[bool]"
     """Route ``load_from_arrow`` through Spanner ``batch_write`` mutation groups instead of single-transaction mutations (defaults to ``False``)."""
+    on_connection_create: "NotRequired[Callable[[Any], Any | None] | None]"
+    """Callback invoked after a new Spanner connection (Snapshot or Transaction) is created."""
 
 
 def build_connection_config(
@@ -296,6 +298,13 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
 
         self._session = cast("Any", database).snapshot(multi_use=True)
         self._connection = cast("SpannerSyncConnection", self._session.__enter__())
+        hook = getattr(self._config, "_user_connection_hook", None) or getattr(
+            self._config, "on_connection_create", None
+        )
+        if hook:
+            modified = hook(self._connection)
+            if modified is not None:
+                self._connection = cast("SpannerSyncConnection", modified)
         return self._connection
 
     def __exit__(
@@ -360,8 +369,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         "type[SpannerSyncConnection]", SpannerSyncConnection
     )
     supports_transactional_ddl: ClassVar[bool] = False
-    supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = False
+    supports_native_arrow_import: ClassVar[bool] = False
     supports_native_parquet_export: ClassVar[bool] = False
     supports_native_parquet_import: ClassVar[bool] = False
     type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
@@ -386,11 +395,16 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        on_connection_create: "Callable[[Any], Any | None] | None" = None,
         **kwargs: Any,
     ) -> None:
         self.connection_config, raw_driver_features = _prepare_settings(
             connection_config, driver_features, default_pool_type=FixedSizePool
         )
+        user_connection_hook = on_connection_create or cast(
+            "Callable[[Any], Any | None] | None", raw_driver_features.pop("on_connection_create", None)
+        )
+        self._user_connection_hook = user_connection_hook
         statement_config, processed_features = apply_driver_features(
             statement_config or default_statement_config, raw_driver_features
         )
@@ -687,6 +701,13 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
 
         self._session = cast("Any", database).snapshot(multi_use=True)
         self._connection = cast("SpannerAsyncConnection", await self._session.__aenter__())
+        hook = getattr(self._config, "_user_connection_hook", None) or getattr(
+            self._config, "on_connection_create", None
+        )
+        if hook:
+            modified = hook(self._connection)
+            if modified is not None:
+                self._connection = cast("SpannerAsyncConnection", modified)
         return self._connection
 
     async def __aexit__(
@@ -752,8 +773,8 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         "type[SpannerAsyncConnection]", SpannerAsyncConnection
     )
     supports_transactional_ddl: ClassVar[bool] = False
-    supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = False
+    supports_native_arrow_import: ClassVar[bool] = False
     supports_native_parquet_export: ClassVar[bool] = False
     supports_native_parquet_import: ClassVar[bool] = False
     type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
@@ -778,11 +799,16 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        on_connection_create: "Callable[[Any], Any | None] | None" = None,
         **kwargs: Any,
     ) -> None:
         self.connection_config, raw_driver_features = _prepare_settings(
             connection_config, driver_features, default_pool_type=AsyncFixedSizePool
         )
+        user_connection_hook = on_connection_create or cast(
+            "Callable[[Any], Any | None] | None", raw_driver_features.pop("on_connection_create", None)
+        )
+        self._user_connection_hook = user_connection_hook
         statement_config, processed_features = apply_driver_features(
             statement_config or default_statement_config, raw_driver_features
         )

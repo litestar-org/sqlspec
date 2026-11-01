@@ -1,5 +1,6 @@
 """Spanner driver implementation."""
 
+import contextvars
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, overload
 
@@ -79,6 +80,10 @@ __all__ = (
     "SpannerSyncDriver",
     "SpannerSyncExceptionHandler",
     "SpannerSyncSessionContext",
+)
+
+_pending_spanner_options: contextvars.ContextVar[SpannerExecuteOptions | None] = contextvars.ContextVar(
+    "_pending_spanner_options", default=None
 )
 
 
@@ -394,12 +399,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         execute_options = pop_execute_options(kwargs)
         if execute_options is None:
             return super().execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        previous_options = self._pending_execute_options
-        self._pending_execute_options = execute_options
+        token = _pending_spanner_options.set(execute_options)
         try:
             return super().execute(statement, *parameters, statement_config=statement_config, **kwargs)
         finally:
-            self._pending_execute_options = previous_options
+            _pending_spanner_options.reset(token)
 
     def execute_many(
         self,
@@ -414,12 +418,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         execute_options = pop_execute_options(kwargs)
         if execute_options is None:
             return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
-        previous_options = self._pending_execute_options
-        self._pending_execute_options = execute_options
+        token = _pending_spanner_options.set(execute_options)
         try:
             return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
         finally:
-            self._pending_execute_options = previous_options
+            _pending_spanner_options.reset(token)
 
     def execute_script(
         self,
@@ -433,12 +436,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         execute_options = pop_execute_options(kwargs)
         if execute_options is None:
             return super().execute_script(statement, *parameters, statement_config=statement_config, **kwargs)
-        previous_options = self._pending_execute_options
-        self._pending_execute_options = execute_options
+        token = _pending_spanner_options.set(execute_options)
         try:
             return super().execute_script(statement, *parameters, statement_config=statement_config, **kwargs)
         finally:
-            self._pending_execute_options = previous_options
+            _pending_spanner_options.reset(token)
 
     @overload
     def select_stream(
@@ -737,9 +739,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._check_pending_exception(exc_handler)
 
     def _execute_kwargs(self, *, for_read: bool = False, for_batch: bool = False) -> dict[str, Any]:
-        return build_execute_kwargs(
-            self.driver_features, self._pending_execute_options, for_read=for_read, for_batch=for_batch
-        )
+        options = _pending_spanner_options.get() or self._pending_execute_options
+        return build_execute_kwargs(self.driver_features, options, for_read=for_read, for_batch=for_batch)
 
     def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
         return chunk_mutation_rows(columns, records, self._coerce_params)
@@ -1076,12 +1077,11 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         execute_options = pop_execute_options(kwargs)
         if execute_options is None:
             return await super().execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        previous_options = self._pending_execute_options
-        self._pending_execute_options = execute_options
+        token = _pending_spanner_options.set(execute_options)
         try:
             return await super().execute(statement, *parameters, statement_config=statement_config, **kwargs)
         finally:
-            self._pending_execute_options = previous_options
+            _pending_spanner_options.reset(token)
 
     async def execute_many(
         self,
@@ -1098,14 +1098,13 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             return await super().execute_many(
                 statement, parameters, *filters, statement_config=statement_config, **kwargs
             )
-        previous_options = self._pending_execute_options
-        self._pending_execute_options = execute_options
+        token = _pending_spanner_options.set(execute_options)
         try:
             return await super().execute_many(
                 statement, parameters, *filters, statement_config=statement_config, **kwargs
             )
         finally:
-            self._pending_execute_options = previous_options
+            _pending_spanner_options.reset(token)
 
     async def execute_script(
         self,
@@ -1119,12 +1118,11 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         execute_options = pop_execute_options(kwargs)
         if execute_options is None:
             return await super().execute_script(statement, *parameters, statement_config=statement_config, **kwargs)
-        previous_options = self._pending_execute_options
-        self._pending_execute_options = execute_options
+        token = _pending_spanner_options.set(execute_options)
         try:
             return await super().execute_script(statement, *parameters, statement_config=statement_config, **kwargs)
         finally:
-            self._pending_execute_options = previous_options
+            _pending_spanner_options.reset(token)
 
     @overload
     def select_stream(
@@ -1173,8 +1171,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                 native_only=native_only,
                 **kwargs,
             )
-        previous_options = self._pending_execute_options
-        self._pending_execute_options = execute_options
+        token = _pending_spanner_options.set(execute_options)
         try:
             return super().select_stream(
                 statement,
@@ -1186,7 +1183,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                 **kwargs,
             )
         finally:
-            self._pending_execute_options = previous_options
+            _pending_spanner_options.reset(token)
 
     async def select_to_storage(
         self,
@@ -1423,9 +1420,8 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             raise create_mapped_exception(exc) from exc
 
     def _execute_kwargs(self, *, for_read: bool = False, for_batch: bool = False) -> dict[str, Any]:
-        return build_execute_kwargs(
-            self.driver_features, self._pending_execute_options, for_read=for_read, for_batch=for_batch
-        )
+        options = _pending_spanner_options.get() or self._pending_execute_options
+        return build_execute_kwargs(self.driver_features, options, for_read=for_read, for_batch=for_batch)
 
     def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
         return chunk_mutation_rows(columns, records, self._coerce_params)

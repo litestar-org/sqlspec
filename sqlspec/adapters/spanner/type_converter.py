@@ -92,10 +92,10 @@ def bytes_to_spanner(value: "bytes | None") -> "bytes | None":
 def spanner_to_bytes(value: Any) -> "bytes | None":
     """Convert Spanner BYTES result to Python bytes.
 
-    Handles both raw bytes and base64-encoded bytes.
+    Handles both raw bytes and base64-encoded bytes or strings.
 
     Args:
-        value: Value from Spanner (bytes or None).
+        value: Value from Spanner (bytes, str, or None).
 
     Returns:
         Python bytes or None.
@@ -103,7 +103,10 @@ def spanner_to_bytes(value: Any) -> "bytes | None":
     if value is None:
         return None
     if isinstance(value, (bytes, str)):
-        return base64.b64decode(value)
+        try:
+            return base64.b64decode(value, validate=True)
+        except Exception:
+            return value if isinstance(value, bytes) else value.encode("utf-8")
     return None
 
 
