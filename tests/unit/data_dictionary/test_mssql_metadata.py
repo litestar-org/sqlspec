@@ -1,11 +1,15 @@
 """SQL Server data-dictionary metadata tests."""
 
+import sqlite3
+from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
 
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
+from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.adapters.pymssql.data_dictionary import PymssqlSyncDataDictionary
+from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.data_dictionary import (
     DataDictionaryLoader,
     DDLResult,
@@ -16,6 +20,7 @@ from sqlspec.data_dictionary import (
     SystemMetadataRequest,
     SystemMetadataResult,
 )
+from sqlspec.driver import SyncDataDictionaryBase
 
 REQUIRED_MSSQL_DOMAIN_QUERIES = {
     "schemas": ("list",),
@@ -59,6 +64,82 @@ class FakeSyncDriver:
         if "sqlspec:mssql:dmv_exec_requests" in query_text:
             return [{"session_id": 57, "login_name": "sa", "sql_text": "SELECT secret"}]
         return []
+
+
+class CatalogCursor(sqlite3.Cursor):
+    """Execute SDK-bound SQL against a local substitute SQL Server catalog."""
+
+    def execute(self, sql: str, parameters: Any = ()) -> "CatalogCursor":
+        super().execute(sql.replace("%s", "?"), parameters)
+        return self
+
+
+class CatalogConnection(sqlite3.Connection):
+    """Provide the DB-API cursor surface shared by the SQL Server SDKs."""
+
+    def cursor(self, *args: Any, **kwargs: Any) -> CatalogCursor:
+        return super().cursor(factory=CatalogCursor)
+
+
+@pytest.fixture(params=[MssqlPythonDriver, PymssqlDriver], ids=["mssql_python", "pymssql"])
+def catalog_driver(request: pytest.FixtureRequest) -> Iterator[MssqlPythonDriver | PymssqlDriver]:
+    """Run real drivers and dictionary SQL with only the external SDK substituted."""
+    connection = sqlite3.connect(":memory:", factory=CatalogConnection)
+    connection.create_function("DB_NAME", 0, lambda: "app")
+    connection.create_function("SCHEMA_NAME", 0, lambda: "dbo")
+    connection.executescript("""
+        ATTACH DATABASE ':memory:' AS sys;
+        CREATE TABLE sys.schemas (schema_id INTEGER, name TEXT);
+        CREATE TABLE sys.tables (
+            object_id INTEGER, schema_id INTEGER, name TEXT, create_date TEXT, modify_date TEXT,
+            is_memory_optimized INTEGER, durability INTEGER, durability_desc TEXT,
+            temporal_type INTEGER, temporal_type_desc TEXT, history_table_id INTEGER
+        );
+        INSERT INTO sys.schemas VALUES (1, 'dbo');
+        INSERT INTO sys.tables VALUES
+            (10, 1, 'accounts', '2026-01-01', '2026-02-01', 0, 0, 'SCHEMA_AND_DATA',
+             2, 'SYSTEM_VERSIONED_TEMPORAL_TABLE', 11),
+            (11, 1, 'accounts_history', '2026-01-01', '2026-01-01', 0, 0, 'SCHEMA_AND_DATA',
+             1, 'HISTORY_TABLE', NULL);
+    """)
+    try:
+        yield request.param(cast(Any, connection))
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("schema", [None, "dbo"])
+def test_table_details_selects_requested_table_with_rich_metadata(
+    catalog_driver: MssqlPythonDriver | PymssqlDriver, schema: str | None
+) -> None:
+    """A detail lookup preserves table identity, rich fields, and missing-table behavior."""
+    dictionary = cast("SyncDataDictionaryBase", catalog_driver.data_dictionary)
+    result = dictionary.get_table_details(catalog_driver, "accounts", schema)
+
+    assert result.items == (
+        {
+            "catalog_name": "app",
+            "schema_name": "dbo",
+            "table_name": "accounts",
+            "table_type": "BASE TABLE",
+            "create_date": "2026-01-01",
+            "modify_date": "2026-02-01",
+            "is_memory_optimized": 0,
+            "durability": 0,
+            "durability_desc": "SCHEMA_AND_DATA",
+            "temporal_type": 2,
+            "temporal_type_desc": "SYSTEM_VERSIONED_TEMPORAL_TABLE",
+            "history_schema_name": "dbo",
+            "history_table_name": "accounts_history",
+        },
+    )
+    history = dictionary.get_table_details(catalog_driver, "accounts_history", schema)
+    assert len(history.items) == 1
+    history_row = cast("dict[str, object]", history.items[0])
+    assert history_row["table_name"] == "accounts_history"
+    assert history_row["history_table_name"] is None
+    missing = dictionary.get_table_details(catalog_driver, "missing", schema)
+    assert missing.items == ()
 
 
 def test_mssql_domain_query_pack_supports_required_catalog_queries() -> None:

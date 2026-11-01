@@ -298,7 +298,7 @@ class MssqlPythonSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionar
         capability = self.get_metadata_capabilities(driver, ("tables",)).get("tables")
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=table, operation="table_details")
         rows = driver.select(
-            self.get_domain_query("tables", "all_by_schema"), schema_name=schema_name, table_name=table
+            self.get_domain_query("tables", "details_by_table"), schema_name=schema_name, table_name=table
         )
         return MetadataResult("tables", capability=capability, items=tuple(rows))
 
