@@ -1,32 +1,24 @@
 """SAP SQL Anywhere integration test fixtures."""
 
-import ctypes
-import io
-import os
-import tarfile
 from collections.abc import Generator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from pytest_databases.docker.sqlanywhere import SQLAnywhereService, sqlanywhere_client_libs
 
 from sqlspec.adapters.sqlanywhere import SqlanywhereConfig
 
 if TYPE_CHECKING:
-    from pytest_databases.docker.sqlanywhere import SQLAnywhereService
-
     from sqlspec.adapters.sqlanywhere import SqlanywhereDriver
 
 __all__ = (
-    "sqlanywhere_client_runtime",
+    "sqlanywhere_client_libs",
     "sqlanywhere_config",
     "sqlanywhere_connection_config",
     "sqlanywhere_session",
     "xdist_sqlanywhere_isolation_level",
 )
-
-_CLIENT_LIBRARY_DEPENDENCIES = ("libdbtasks16_r.so", "libdblib16_r.so")
-_CLIENT_DIRECTORIES = ("lib64", "res")
 
 
 @pytest.fixture(scope="session")
@@ -36,45 +28,8 @@ def xdist_sqlanywhere_isolation_level() -> str:
 
 
 @pytest.fixture(scope="session")
-def sqlanywhere_client_runtime(
-    sqlanywhere_service: "SQLAnywhereService", tmp_path_factory: pytest.TempPathFactory
-) -> Generator[Path, None, None]:
-    """Provide the SQL Anywhere ``dbcapi`` client runtime to ``sqlanydb``.
-
-    ``sqlanydb`` is a ctypes wrapper over SAP's native ``dbcapi`` library, which is not on
-    PyPI. When ``SQLANY_API_DLL`` is not already configured, the runtime is copied out of the
-    server container, its dependent libraries are preloaded, and ``SQLANY16`` /
-    ``SQLANY_API_DLL`` are set before the first connection initializes ``sqlanydb``.
-    """
-    configured = os.environ.get("SQLANY_API_DLL")
-    if configured:
-        yield Path(configured).parent
-        return
-    root = tmp_path_factory.mktemp("sqlanywhere-client")
-    install_root = os.environ.get("SQLANYWHERE_CLIENT_ROOT", "/opt/sqlanywhere16")
-    for directory in _CLIENT_DIRECTORIES:
-        chunks, _ = sqlanywhere_service.container.get_archive(f"{install_root}/{directory}")
-        with tarfile.open(fileobj=io.BytesIO(b"".join(chunks))) as archive:
-            archive.extractall(root, filter="data")
-    library_dir = root / "lib64"
-    for name in _CLIENT_LIBRARY_DEPENDENCIES:
-        ctypes.CDLL(str(library_dir / name), mode=ctypes.RTLD_GLOBAL)
-    previous = {key: os.environ.get(key) for key in ("SQLANY16", "SQLANY_API_DLL")}
-    os.environ["SQLANY16"] = str(root)
-    os.environ["SQLANY_API_DLL"] = str(library_dir / "libdbcapi_r.so")
-    try:
-        yield library_dir
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
-@pytest.fixture(scope="session")
 def sqlanywhere_connection_config(
-    sqlanywhere_service: "SQLAnywhereService", sqlanywhere_client_runtime: Path
+    sqlanywhere_service: "SQLAnywhereService", sqlanywhere_client_libs: Path
 ) -> dict[str, Any]:
     """Return ``sqlanydb`` connection parameters for the SQL Anywhere service."""
     return {
