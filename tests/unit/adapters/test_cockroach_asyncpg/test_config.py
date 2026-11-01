@@ -620,3 +620,21 @@ async def test_cockroach_asyncpg_select_stream_follower_reads() -> None:
     assert rows == [{"id": 1}]
     assert any("AS OF SYSTEM TIME '-10s'" in s for s in executed_statements)
     tx.commit.assert_awaited()
+
+
+async def test_cockroach_asyncpg_load_from_records_executemany() -> None:
+    """CockroachAsyncpgDriver.load_from_records uses executemany instead of binary COPY."""
+    conn = MagicMock()
+    conn.executemany = AsyncMock()
+    conn.copy_records_to_table = AsyncMock()
+    conn.copy_to_table = AsyncMock()
+
+    driver = CockroachAsyncpgDriver(
+        connection=conn, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
+    )
+    job = await driver.load_from_records("events", [{"id": 1, "name": "test"}], columns=["id", "name"])
+    assert job.telemetry["rows_processed"] == 1
+    conn.executemany.assert_awaited_once()
+    assert 'INSERT INTO "events"' in conn.executemany.await_args[0][0]
+    conn.copy_records_to_table.assert_not_called()
+    conn.copy_to_table.assert_not_called()

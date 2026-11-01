@@ -1,8 +1,9 @@
 """CockroachDB AsyncPG driver implementation."""
 
 import asyncio
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from sqlspec.adapters.asyncpg.core import create_mapped_exception, driver_profile
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
@@ -21,7 +22,9 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.core import SQL, register_driver_profile
 from sqlspec.driver import AsyncRowStream
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
@@ -207,6 +210,165 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         return await super().load_from_storage(
             table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
+
+    async def load_from_records(
+        self,
+        table: str,
+        records: "Sequence[Mapping[str, Any]] | Sequence[Sequence[Any]]",
+        *,
+        columns: "list[str] | None" = None,
+        overwrite: bool = False,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load mapping or positional records with batched INSERT."""
+        if stage_table or conflict_keys or drop_indexes:
+            return await super().load_from_records(
+                table,
+                records,
+                columns=columns,
+                overwrite=overwrite,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
+        self._require_capability("arrow_import_enabled")
+        materialized = list(records)
+        _, _, quoted_target = self._copy_target(table)
+        if overwrite:
+            try:
+                await self.connection.execute(f"TRUNCATE TABLE {quoted_target}")
+            except Exception as exc:
+                mapped = create_mapped_exception(exc)
+                msg = f"Failed to truncate table '{table}': {exc}"
+                raise type(mapped)(msg) from exc
+        if not materialized:
+            empty_telemetry: StorageTelemetry = {
+                "bytes_processed": 0,
+                "destination": table,
+                "format": "records",
+                "rows_processed": 0,
+            }
+            return self._storage_job(empty_telemetry)
+
+        first = materialized[0]
+        if isinstance(first, Mapping):
+            resolved_columns = columns if columns is not None else list(first.keys())
+            expected_keys = set(resolved_columns)
+            copy_rows: list[tuple[Any, ...]] = []
+            for record in materialized:
+                if not isinstance(record, Mapping):
+                    msg = "load_from_records mapping records must all be mappings."
+                    raise ImproperConfigurationError(msg)
+                if set(record.keys()) != expected_keys:
+                    msg = "load_from_records mapping records must all share the same keys."
+                    raise ImproperConfigurationError(msg)
+                copy_rows.append(tuple(record[column] for column in resolved_columns))
+        else:
+            if columns is None:
+                msg = "load_from_records requires columns when records are positional sequences."
+                raise ImproperConfigurationError(msg)
+            resolved_columns = columns
+            copy_rows = []
+            for record in materialized:
+                if isinstance(record, Mapping):
+                    msg = "load_from_records positional records must all have the same shape."
+                    raise ImproperConfigurationError(msg)
+                row = tuple(record)
+                if len(row) != len(resolved_columns):
+                    msg = "load_from_records positional records must match the number of columns."
+                    raise ImproperConfigurationError(msg)
+                copy_rows.append(row)
+
+        cols_str = ", ".join(quote_identifier(c) for c in resolved_columns)
+        placeholders = ", ".join(f"${i}" for i in range(1, len(resolved_columns) + 1))
+        insert_sql = f"INSERT INTO {quoted_target} ({cols_str}) VALUES ({placeholders})"
+        try:
+            await self.connection.executemany(insert_sql, copy_rows)
+        except Exception as exc:
+            raise create_mapped_exception(exc) from exc
+
+        telemetry_payload: StorageTelemetry = {
+            "bytes_processed": 0,
+            "destination": table,
+            "format": "records",
+            "rows_processed": len(copy_rows),
+        }
+        return self._storage_job(telemetry_payload)
+
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: Any,
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+        stage_table: "bool | str | None" = None,
+        conflict_keys: "Sequence[str] | None" = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: "Sequence[str] | None" = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: "Mapping[str, str] | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow table/batches into CockroachDB table via batched INSERT fallback."""
+        if stage_table or conflict_keys or drop_indexes:
+            return await super().load_from_arrow(
+                table,
+                source,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=stage_table,
+                conflict_keys=conflict_keys,
+                on_conflict=on_conflict,
+                exclude_update_columns=exclude_update_columns,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts=type_casts,
+            )
+        _, _, quoted_target = self._copy_target(table)
+        if overwrite:
+            try:
+                await self.connection.execute(f"TRUNCATE TABLE {quoted_target}")
+            except Exception as exc:
+                mapped = create_mapped_exception(exc)
+                msg = f"Failed to truncate table '{table}': {exc}"
+                raise type(mapped)(msg) from exc
+        resolved_columns, batch_iter = self._coerce_arrow_batches(source)
+        cols_str = ", ".join(quote_identifier(c) for c in resolved_columns)
+        placeholders = ", ".join(f"${i}" for i in range(1, len(resolved_columns) + 1))
+        insert_sql = f"INSERT INTO {quoted_target} ({cols_str}) VALUES ({placeholders})"
+        metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
+        for batch in batch_iter:
+            if batch.num_rows == 0:
+                continue
+            metrics["rows_processed"] += int(batch.num_rows)
+            metrics["bytes_processed"] += int(batch.nbytes)
+            rows = self._arrow_batch_to_rows(batch, resolved_columns)
+            if rows:
+                try:
+                    await self.connection.executemany(insert_sql, rows)
+                except Exception as exc:
+                    raise create_mapped_exception(exc) from exc
+        telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def _wants_follower_read(self, statement: "SQL") -> bool:
         """Return True when a statement may run under a follower-read transaction."""
