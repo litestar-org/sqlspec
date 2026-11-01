@@ -450,6 +450,7 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
             content_json, content_text, metadata_json{owner_column}
         )
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{owner_value}
+        FROM SYS.DUMMY
         WHERE NOT EXISTS (
             SELECT 1 FROM {_table_ref(self._memory_table)}
             WHERE event_id = ?
@@ -508,7 +509,12 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
         ORDER BY timestamp DESC
         LIMIT ?
         """
-        rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%", limit_value))
+        try:
+            rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%", limit_value))
+        except SqlanywhereError as exc:
+            if _is_sqlanywhere_table_missing(exc):
+                return []
+            raise
         return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:

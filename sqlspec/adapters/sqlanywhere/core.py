@@ -142,13 +142,13 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=True)
-    return ".".join(quote_double_identifier(part) for part in parts)
+    return ".".join([quote_double_identifier(part) for part in parts])
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
     """Build a QMARK-parameterized INSERT statement for SQL Anywhere."""
-    column_clause = ", ".join(quote_double_identifier(column) for column in columns)
-    placeholders = ", ".join("?" for _ in columns)
+    column_clause = ", ".join([quote_double_identifier(column) for column in columns])
+    placeholders = ", ".join(["?"] * len(columns)) if columns else ""
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 

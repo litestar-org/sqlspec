@@ -4,7 +4,13 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.sybase._typing import SybaseCursor
-from sqlspec.adapters.sybase.core import escape_sql_literal, quote_bracket_identifier, split_schema_and_table
+from sqlspec.adapters.sybase.core import (
+    create_mapped_exception,
+    escape_sql_literal,
+    quote_bracket_identifier,
+    resolve_rowcount,
+    split_schema_and_table,
+)
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -101,30 +107,33 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
         WHERE session_id = %s
           AND (expires_at IS NULL OR expires_at > GETUTCDATE())
         """
-        with self._config.provide_connection() as conn:
-            with SybaseCursor(conn) as cursor:
-                cursor.execute(sql, (key,))
-                row = cursor.fetchone()
+        try:
+            with self._config.provide_connection() as conn:
+                with SybaseCursor(conn) as cursor:
+                    cursor.execute(sql, (key,))
+                    row = cursor.fetchone()
 
-            if row is None:
-                return None
+                if row is None:
+                    return None
 
-            expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-            if renew_for is not None and expires_at is not None:
-                new_expires_at = self._calculate_expires_at(renew_for)
-                if new_expires_at is not None:
-                    with SybaseCursor(conn) as update_cursor:
-                        update_cursor.execute(
-                            f"""
-                            UPDATE {table_ref}
-                            SET expires_at = %s, updated_at = GETUTCDATE()
-                            WHERE session_id = %s
-                            """,
-                            (new_expires_at, key),
-                        )
-                    conn.commit()
+                expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
+                if renew_for is not None and expires_at is not None:
+                    new_expires_at = self._calculate_expires_at(renew_for)
+                    if new_expires_at is not None:
+                        with SybaseCursor(conn) as update_cursor:
+                            update_cursor.execute(
+                                f"""
+                                UPDATE {table_ref}
+                                SET expires_at = %s, updated_at = GETUTCDATE()
+                                WHERE session_id = %s
+                                """,
+                                (new_expires_at, key),
+                            )
+                        conn.commit()
 
-            return _coerce_bytes(_row_value(row, "data", 0))
+                return _coerce_bytes(_row_value(row, "data", 0))
+        except Exception as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = self._value_to_bytes(value)
@@ -139,22 +148,31 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
             INSERT INTO {table_ref} (session_id, data, expires_at)
             VALUES (%s, %s, %s)
         """
-        with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
-            cursor.execute(sql, (key, data, expires_at, key, key, data, expires_at))
-            conn.commit()
+        try:
+            with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
+                cursor.execute(sql, (key, data, expires_at, key, key, data, expires_at))
+                conn.commit()
+        except Exception as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _delete(self, key: str) -> None:
         table_ref = _table_ref(self._table_name)
-        with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
-            cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = %s", (key,))
-            conn.commit()
+        try:
+            with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
+                cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = %s", (key,))
+                conn.commit()
+        except Exception as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _delete_all(self) -> None:
         table_ref = _table_ref(self._table_name)
-        with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
-            cursor.execute(f"TRUNCATE TABLE {table_ref}")
-            conn.commit()
-        self._log_delete_all()
+        try:
+            with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
+                cursor.execute(f"TRUNCATE TABLE {table_ref}")
+                conn.commit()
+            self._log_delete_all()
+        except Exception as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _exists(self, key: str) -> bool:
         table_ref = _table_ref(self._table_name)
@@ -164,23 +182,29 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
         WHERE session_id = %s
           AND (expires_at IS NULL OR expires_at > GETUTCDATE())
         """
-        with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
-            cursor.execute(sql, (key,))
-            return cursor.fetchone() is not None
+        try:
+            with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
+                cursor.execute(sql, (key,))
+                return cursor.fetchone() is not None
+        except Exception as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _expires_in(self, key: str) -> "int | None":
         table_ref = _table_ref(self._table_name)
-        with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
-            cursor.execute(f"SELECT expires_at FROM {table_ref} WHERE session_id = %s", (key,))
-            row = cursor.fetchone()
+        try:
+            with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
+                cursor.execute(f"SELECT expires_at FROM {table_ref} WHERE session_id = %s", (key,))
+                row = cursor.fetchone()
 
-        if row is None:
-            return None
-        expires_at = _normalize_utc(_row_value(row, "expires_at", 0))
-        if expires_at is None:
-            return None
-        remaining = expires_at - datetime.now(UTC)
-        return max(0, int(remaining.total_seconds()))
+            if row is None:
+                return None
+            expires_at = _normalize_utc(_row_value(row, "expires_at", 0))
+            if expires_at is None:
+                return None
+            remaining = expires_at - datetime.now(UTC)
+            return max(0, int(remaining.total_seconds()))
+        except Exception as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _delete_expired(self) -> int:
         table_ref = _table_ref(self._table_name)
@@ -189,13 +213,16 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
         WHERE expires_at IS NOT NULL
           AND expires_at < GETUTCDATE()
         """
-        with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
-            cursor.execute(sql)
-            count = int(getattr(cursor, "rowcount", 0) or 0)
-            conn.commit()
-        if count > 0:
-            self._log_delete_expired(count)
-        return count
+        try:
+            with self._config.provide_connection() as conn, SybaseCursor(conn) as cursor:
+                cursor.execute(sql)
+                count = resolve_rowcount(cursor)
+                conn.commit()
+            if count > 0:
+                self._log_delete_expired(count)
+            return count
+        except Exception as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 def _table_ref(table_name: str) -> str:

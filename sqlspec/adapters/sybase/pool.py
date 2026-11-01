@@ -98,10 +98,10 @@ class SybaseConnectionPool:
         Returns:
             SybaseConnection: A newly opened, fully configured connection.
         """
-        module = pymssql
-        if module is None:
-            module = _load_pymssql_module()
-        connection = module.connect(**self._connection_parameters)
+        global pymssql
+        if pymssql is None:
+            pymssql = _load_pymssql_module()
+        connection = pymssql.connect(**self._connection_parameters)
 
         if self._on_connection_create is not None:
             self._on_connection_create(connection)

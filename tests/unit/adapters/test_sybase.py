@@ -21,10 +21,14 @@ from sqlspec.adapters.sybase import (
     SybaseDriver,
     SybaseExceptionHandler,
     SybaseSyncDataDictionary,
+    _ERROR_CODE_MAPPING,
     build_connection_config,
+    build_insert_statement,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    escape_literal_percent,
+    format_identifier,
 )
 from sqlspec.adapters.sybase._typing import SybaseRawCursor
 from sqlspec.adapters.sybase.adk import SybaseADKConfig, SybaseADKMemoryStore, SybaseADKStore
@@ -48,6 +52,7 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     TransactionError,
+    UniqueViolationError,
     UniqueViolationError,
 )
 
@@ -545,3 +550,144 @@ def test_sybase_native_error_handling_and_missing_table(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(SybaseADKStore, "_execute_fetchone", _table_missing)
     assert store.get_session("app", "user", "sess") is None
+
+
+def test_sybase_commit_maps_deadlock_error_1205() -> None:
+    """Simulate error 1205 during driver.commit(); assert DeadlockError is raised."""
+    cursor = FakeCursor()
+    conn = FakeConnection(cursor)
+    driver = SybaseDriver(cast("SybaseConnection", conn))
+
+    def _fail_commit() -> None:
+        raise pymssql.OperationalError(1205, "Your transaction was deadlock victim (1205)")
+
+    conn.commit = _fail_commit
+    with pytest.raises(DeadlockError, match="Failed to commit Sybase ASE transaction"):
+        driver.commit()
+
+
+def test_sybase_adk_store_maps_unique_violation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SybaseADKStore raises UniqueViolationError on duplicate key violation."""
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    store = SybaseADKStore(cast("Any", config))
+
+    class DummyCursor:
+        def execute(self, _sql: str, _params: Any = ()) -> None:
+            raise pymssql.IntegrityError(2601, "Attempt to insert duplicate key row with unique index")
+
+        def close(self) -> None:
+            pass
+
+    class DummyConnection:
+        def cursor(self, as_dict: bool = False) -> DummyCursor:
+            return DummyCursor()
+
+        def rollback(self) -> None:
+            pass
+
+    monkeypatch.setattr(config, "provide_connection", lambda: DummyConnection())
+    with pytest.raises(UniqueViolationError):
+        store._execute("INSERT INTO dummy VALUES (1)")
+
+
+def test_sybase_litestar_store_get_raises_sqlspec_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SybaseStore._get() maps raw database errors to SQLSpecError."""
+    config = MagicMock()
+    store = SybaseStore(cast("Any", config))
+
+    class FailingCursor:
+        def execute(self, _sql: str, _params: Any = ()) -> None:
+            raise pymssql.OperationalError("Connection lost")
+
+        def close(self) -> None:
+            pass
+
+    class FailingConnection:
+        def cursor(self) -> FailingCursor:
+            return FailingCursor()
+
+    monkeypatch.setattr(config, "provide_connection", lambda: FailingConnection())
+    with pytest.raises(SQLSpecError):
+        store._get("session-1")
+
+
+def test_sybase_has_schema_under_active_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """has_schema runs cleanly inside an active exception block without isolation leak."""
+    config = MagicMock()
+    driver = SybaseDriver(config)
+
+    class DummyCursor:
+        def execute(self, _sql: str, _params: Any = ()) -> None:
+            pass
+
+        def fetchone(self) -> Any:
+            return (1,)
+
+        def close(self) -> None:
+            pass
+
+    class DummyConnection:
+        def cursor(self) -> DummyCursor:
+            return DummyCursor()
+
+    monkeypatch.setattr(driver, "connection", DummyConnection())
+
+    try:
+        raise RuntimeError("active error")
+    except RuntimeError:
+        has_user = driver.has_schema("dbo")
+        assert has_user is True
+
+
+def test_sybase_pool_new_connection_caches_pymssql_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """new_connection caches pymssql module reference at module level."""
+    from sqlspec.adapters.sybase import pool as sybase_pool
+
+    import_count = 0
+    real_import = sybase_pool._load_pymssql_module
+
+    def mock_load() -> Any:
+        nonlocal import_count
+        import_count += 1
+        return real_import()
+
+    monkeypatch.setattr(sybase_pool, "_load_pymssql_module", mock_load)
+    monkeypatch.setattr(sybase_pool, "pymssql", None)
+
+    pool = sybase_pool.SybaseConnectionPool({"server": "localhost", "database": "demo"})
+    monkeypatch.setattr("pymssql.connect", lambda **_kw: FakeConnection(FakeCursor()))
+
+    _ = pool.new_connection()
+    assert sybase_pool.pymssql is not None
+    assert import_count == 1
+
+    _ = pool.new_connection()
+    assert import_count == 1
+
+
+def test_sybase_format_identifier_and_insert_statements() -> None:
+    """format_identifier, build_insert_statement, and escape_literal_percent format queries correctly."""
+    assert format_identifier("dbo.my_table") == "[dbo].[my_table]"
+    sql = build_insert_statement("my_table", ["col1", "col2"])
+    assert sql == "INSERT INTO [my_table] ([col1], [col2]) VALUES (%s, %s)"
+    escaped = escape_literal_percent("SELECT * FROM t WHERE val LIKE '100%' AND id = %s", ("1",), default_statement_config.parameter_validator)
+    assert "100%%" in escaped
+
+
+def test_sybase_migration_tracker_existing_columns_query() -> None:
+    """_existing_columns_query resolves USER_NAME() when schema is unqualified."""
+    tracker_unqualified = SybaseSyncMigrationTracker(version_table="my_versions")
+    query_unqualified = tracker_unqualified._existing_columns_query()
+    assert "u.name = USER_NAME()" in query_unqualified
+    assert "o.name = 'my_versions'" in query_unqualified
+
+    tracker_qualified = SybaseSyncMigrationTracker(version_table="custom_schema.my_versions")
+    query_qualified = tracker_qualified._existing_columns_query()
+    assert "u.name = 'custom_schema'" in query_qualified
+    assert "o.name = 'my_versions'" in query_qualified
+
+
+def test_sybase_error_code_mapping_count() -> None:
+    """_ERROR_CODE_MAPPING contains 38 error codes."""
+    assert len(_ERROR_CODE_MAPPING) == 38

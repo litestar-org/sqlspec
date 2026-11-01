@@ -9,7 +9,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sqlanywhere._typing import SqlanywhereConnection
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import MissingDependencyError, OperationalError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -142,8 +142,17 @@ class SqlanywhereConnectionPool:
 
     def _create_connection(self) -> SqlanywhereConnection:
         self._prune_dead_thread_connections()
+        with self._registry_lock:
+            if self._max_size > 0 and len(self._connection_registry) >= self._max_size:
+                msg = f"Connection pool exhausted (max_size={self._max_size})"
+                raise OperationalError(msg)
         connection = self.new_connection()
         with self._registry_lock:
+            if self._max_size > 0 and len(self._connection_registry) >= self._max_size:
+                with contextlib.suppress(Exception):
+                    connection.close()
+                msg = f"Connection pool exhausted (max_size={self._max_size})"
+                raise OperationalError(msg)
             self._connection_registry.add(connection)
             self._connection_threads[connection] = threading.current_thread()
         return connection
