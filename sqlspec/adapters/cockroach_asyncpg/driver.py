@@ -32,8 +32,8 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.asyncpg.core import AsyncpgStreamSource
     from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgConnection
-    from sqlspec.core import StatementConfig
-    from sqlspec.driver import ExecutionResult
+    from sqlspec.core import SQLResult, StatementConfig
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
@@ -429,6 +429,25 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         auto_started = await self._begin_follower_read_transaction() if self._wants_follower_read(statement) else False
         try:
             result = await super().dispatch_execute(cursor, statement)
+        except BaseException:
+            if auto_started and self._connection_in_transaction():
+                with suppress(Exception):
+                    await self.rollback()
+            raise
+        if auto_started and self._connection_in_transaction():
+            await self.commit()
+        return result
+
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        auto_started = (
+            await self._begin_follower_read_transaction()
+            if (cached.operation_profile.returns_rows and not cached.operation_profile.modifies_rows)
+            else False
+        )
+        try:
+            result = await super()._execute_cache_hit(sql, params, cached)
         except BaseException:
             if auto_started and self._connection_in_transaction():
                 with suppress(Exception):

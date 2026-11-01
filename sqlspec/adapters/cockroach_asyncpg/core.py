@@ -234,7 +234,7 @@ def build_native_export(
     query: str, parameters: "list[Any]", uri: str, file_format: str, options: "dict[str, Any]"
 ) -> "tuple[str, list[Any]]":
     """Wrap compiled query SQL without embedding destination or CSV values."""
-    format_sql = {"csv": "CSV", "parquet": "PARQUET"}[file_format]
+    format_sql = "PARQUET" if file_format == "parquet" else "CSV"
     values = [*parameters, uri]
     command = "EXPORT INTO " + format_sql + " " + ("$" + str(len(values)))
     if file_format == "csv" and "nullas" in options:
@@ -250,7 +250,7 @@ def build_native_import(table: str, uri: str, file_format: str, options: "dict[s
         msg = "Table name must not be empty"
         raise ValueError(msg)
     target = ".".join(quote_identifier(part) for part in parts)
-    format_sql = {"csv": "CSV", "parquet": "PARQUET"}[file_format]
+    format_sql = "PARQUET" if file_format == "parquet" else "CSV"
     values: list[Any] = [uri]
     command = "IMPORT INTO " + target + " " + format_sql + " DATA (" + "$1" + ")"
     clauses = []
