@@ -42,11 +42,17 @@ async def test_register_json_codecs_success() -> None:
 
     assert json_call.kwargs["encoder"]({"value": 1}) == b'{"value":1}'
     assert json_call.kwargs["encoder"]("console") == b'"console"'
+    assert json_call.kwargs["encoder"]("123") == b'"123"'
+    assert json_call.kwargs["encoder"]("true") == b'"true"'
+    assert json_call.kwargs["encoder"]("null") == b'"null"'
     assert json_call.kwargs["encoder"]('{"pre":"serialized"}') == b'{"pre":"serialized"}'
     assert json_call.kwargs["encoder"](b'\x01{"value":1}') == b'{"value":1}'
     assert json_call.kwargs["decoder"](b'{"value":1}') == {"value": 1}
     assert jsonb_call.kwargs["encoder"]({"value": 1}) == b'\x01{"value":1}'
     assert jsonb_call.kwargs["encoder"]("console") == b'\x01"console"'
+    assert jsonb_call.kwargs["encoder"]("123") == b'\x01"123"'
+    assert jsonb_call.kwargs["encoder"]("true") == b'\x01"true"'
+    assert jsonb_call.kwargs["encoder"]("null") == b'\x01"null"'
     assert jsonb_call.kwargs["encoder"]('{"pre":"serialized"}') == b'\x01{"pre":"serialized"}'
     assert jsonb_call.kwargs["encoder"](b'\x01{"value":1}') == b'\x01{"value":1}'
     assert jsonb_call.kwargs["decoder"](b'\x01{"value":1}') == {"value": 1}

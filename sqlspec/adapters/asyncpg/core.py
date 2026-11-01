@@ -1,5 +1,6 @@
 """AsyncPG adapter compiled helpers."""
 
+import asyncio
 import contextlib
 import datetime as dt
 import re
@@ -17,6 +18,7 @@ from sqlspec.core.config_runtime import (
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
+    DatabaseConnectionError,
     DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
@@ -25,6 +27,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    QueryTimeoutError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -411,6 +414,13 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         A SQLSpec exception that wraps the original error
     """
     del logger
+    if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+        return QueryTimeoutError(str(error))
+    if isinstance(error, OSError) or (
+        asyncpg is not None and isinstance(error, getattr(asyncpg, "InterfaceError", ()))
+    ):
+        return DatabaseConnectionError(str(error))
+
     mapped_error = _EXCEPTION_MAPPING_DISPATCHER.get(error)
     if mapped_error is not None:
         error_code, error_class, description = mapped_error
@@ -554,10 +564,9 @@ def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
 
 def _is_pre_serialized_json(value: str) -> bool:
     stripped = value.strip()
-    if not stripped:
-        return False
-    first = stripped[0]
-    if first not in '{["-0123456789tfn':
+    if not (
+        (stripped.startswith("{") and stripped.endswith("}")) or (stripped.startswith("[") and stripped.endswith("]"))
+    ):
         return False
     try:
         from_json(stripped)

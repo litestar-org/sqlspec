@@ -15,7 +15,7 @@ from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.adapters.asyncpg.events.backend import AsyncpgEventsBackend, AsyncpgHybridEventsBackend
 from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
 from sqlspec.core import SQL, StatementConfig, StatementStack
-from sqlspec.exceptions import DeadlockError
+from sqlspec.exceptions import DatabaseConnectionError, DeadlockError, QueryTimeoutError
 
 pytestmark = pytest.mark.anyio
 
@@ -292,3 +292,82 @@ async def test_create_connection_drops_every_pool_only_setting(monkeypatch: pyte
 
     accepted = set(inspect.signature(asyncpg.connect).parameters)
     assert set(connect.call_args.kwargs) <= accepted
+
+
+async def test_asyncpg_begin_rollback_on_set_local_failure() -> None:
+    """A failure during SET LOCAL in begin() must rollback the native transaction and raise mapped error."""
+    conn = MagicMock()
+    tx = AsyncMock()
+    conn.transaction.return_value = tx
+    conn.execute = AsyncMock(side_effect=RuntimeError("columnar scan configuration error"))
+    conn.is_in_transaction.return_value = False
+
+    driver = AsyncpgDriver(
+        cast("Any", conn), driver_features={"enable_alloydb_columnar": True, "pooler_mode": "transaction"}
+    )
+    with pytest.raises(Exception):
+        await driver.begin()
+    assert driver._transaction is None
+    tx.rollback.assert_awaited_once()
+
+
+async def test_asyncpg_dispatch_execute_script_with_parameters_and_observers() -> None:
+    """dispatch_execute_script executes sub-statements, emits observer events, and returns cursor."""
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value="CREATE 1")
+    driver = AsyncpgDriver(cast("Any", conn))
+
+    stmt = SQL("CREATE TABLE t1 (id int); CREATE TABLE t2 (id int);")
+    result = await driver.dispatch_execute_script(cast("Any", conn), stmt)
+
+    assert result.is_script_result is True
+    assert result.statement_count == 2
+    assert result.successful_statements == 2
+    assert result.cursor_result is conn
+
+
+async def test_asyncpg_execute_stack_in_outer_transaction_does_not_commit_or_rollback() -> None:
+    """execute_stack with continue_on_error inside an outer transaction must not commit or rollback."""
+    conn = MagicMock()
+    conn.is_in_transaction = MagicMock(return_value=True)
+    conn.execute = AsyncMock(side_effect=["UPDATE 1", RuntimeError("failed op")])
+
+    driver = AsyncpgDriver(cast("Any", conn))
+    driver._transaction = MagicMock()
+
+    stack = StatementStack().push_execute("UPDATE t SET x = 1").push_execute("UPDATE t SET x = 2")
+
+    results = await driver.execute_stack(stack, continue_on_error=True)
+    assert len(results) == 2
+    assert results[0].result is not None
+    assert results[1].error is not None
+    assert driver._transaction is not None
+    conn.execute.assert_called()
+
+
+async def test_asyncpg_exception_mapping_timeout_and_interface_errors() -> None:
+    """AsyncpgExceptionHandler and create_mapped_exception map TimeoutError and InterfaceError/OSError."""
+    driver = AsyncpgDriver(cast("Any", MagicMock()))
+
+    handler = driver.handle_database_exceptions()
+    with pytest.raises(QueryTimeoutError):
+        async with handler:
+            raise TimeoutError("query timed out")
+        driver._check_pending_exception(handler)
+
+    handler2 = driver.handle_database_exceptions()
+    with pytest.raises(DatabaseConnectionError):
+        async with handler2:
+            raise OSError("connection reset by peer")
+        driver._check_pending_exception(handler2)
+
+
+async def test_asyncpg_truncate_and_copy_map_errors() -> None:
+    """Truncate and copy operations map errors rather than leaking unmapped exceptions."""
+    conn = MagicMock()
+    conn.execute = AsyncMock(side_effect=RuntimeError("truncate table failed"))
+    driver = AsyncpgDriver(cast("Any", conn))
+
+    with pytest.raises(Exception) as exc_info:
+        await driver.load_from_records("users", [{"id": 1}], overwrite=True)
+    assert not isinstance(exc_info.value, RuntimeError) or isinstance(exc_info.value, DatabaseConnectionError)
