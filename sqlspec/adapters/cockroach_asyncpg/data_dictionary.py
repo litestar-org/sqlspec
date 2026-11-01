@@ -28,7 +28,11 @@ from sqlspec.data_dictionary import (
     system_metadata_gated_result,
     unsupported_system_metadata_capability,
 )
-from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_json_type
+from sqlspec.data_dictionary.dialects.cockroachdb import (
+    COCKROACH_METADATA_DOMAINS,
+    COCKROACH_SUPPORTED_DOMAINS,
+    resolve_cockroachdb_json_type,
+)
 from sqlspec.driver import AsyncDataDictionaryBase
 
 if TYPE_CHECKING:
@@ -36,25 +40,6 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
 
 __all__ = ("CockroachAsyncpgDataDictionary",)
-
-
-_COCKROACH_METADATA_DOMAINS: tuple[str, ...] = (
-    "schemas",
-    "objects",
-    "tables",
-    "columns",
-    "constraints",
-    "indexes",
-    "views",
-    "sequences",
-    "comments",
-    "privileges",
-    "dependencies",
-    "ddl",
-    "crdb_internal",
-    "system",
-)
-_COCKROACH_SUPPORTED_DOMAINS = frozenset(d for d in _COCKROACH_METADATA_DOMAINS if d not in {"crdb_internal", "system"})
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -203,7 +188,7 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
         table_schema_name = None if schema is None else schema_name
         self._log_table_describe(driver, schema_name=table_schema_name, table_name=table_name, operation="columns")
         return await driver.select(
-            _cockroach_domain_sql("columns", "by_schema"),
+            _cockroach_domain_sql("columns", "by_table"),
             schema_name=table_schema_name,
             table_name=table_name,
             schema_type=ColumnMetadata,
@@ -223,10 +208,11 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
             )
 
         table_name = self.resolve_identifier(table)
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
+        table_schema_name = None if schema is None else schema_name
+        self._log_table_describe(driver, schema_name=table_schema_name, table_name=table_name, operation="indexes")
         return await driver.select(
-            _cockroach_domain_sql("indexes", "by_schema"),
-            schema_name=schema_name,
+            _cockroach_domain_sql("indexes", "by_table"),
+            schema_name=table_schema_name,
             table_name=table_name,
             schema_type=IndexMetadata,
         )
@@ -314,7 +300,7 @@ def _cockroach_metadata_capability(domain: str) -> MetadataCapability:
             risks=(MetadataRisk.EXPENSIVE, MetadataRisk.PRIVILEGED),
             warnings=("System metadata is opt-in and disabled by default.",),
         )
-    if domain in _COCKROACH_SUPPORTED_DOMAINS:
+    if domain in COCKROACH_SUPPORTED_DOMAINS:
         return MetadataCapability(
             domain=domain,
             support=MetadataSupport.SUPPORTED,
@@ -325,7 +311,7 @@ def _cockroach_metadata_capability(domain: str) -> MetadataCapability:
 
 
 def _cockroach_metadata_profile(adapter: str, domains: Sequence[str] | None) -> MetadataCapabilityProfile:
-    requested_domains = _COCKROACH_METADATA_DOMAINS if domains is None else tuple(domains)
+    requested_domains = COCKROACH_METADATA_DOMAINS if domains is None else tuple(domains)
     return MetadataCapabilityProfile(
         "cockroachdb",
         adapter=adapter,

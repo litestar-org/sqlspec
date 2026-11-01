@@ -10,7 +10,29 @@ __all__ = (
     "COCKROACHDB_FEATURE_VERSIONS",
     "COCKROACHDB_TYPE_MAPPINGS",
     "COCKROACHDB_VERSION_PATTERN",
+    "COCKROACH_METADATA_DOMAINS",
+    "COCKROACH_SUPPORTED_DOMAINS",
     "resolve_cockroachdb_json_type",
+)
+
+COCKROACH_METADATA_DOMAINS: tuple[str, ...] = (
+    "schemas",
+    "objects",
+    "tables",
+    "columns",
+    "constraints",
+    "indexes",
+    "views",
+    "sequences",
+    "comments",
+    "privileges",
+    "dependencies",
+    "ddl",
+    "crdb_internal",
+    "system",
+)
+COCKROACH_SUPPORTED_DOMAINS: frozenset[str] = frozenset(
+    d for d in COCKROACH_METADATA_DOMAINS if d not in {"crdb_internal", "system"}
 )
 
 

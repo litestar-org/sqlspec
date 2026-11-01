@@ -165,3 +165,18 @@ def test_postgres_system_and_constraints_query_contracts() -> None:
     assert "WITH con_cols AS (" in con_query
     assert "CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY" in con_query
     assert "ARRAY(SELECT att.attname" not in con_query
+
+
+def test_cockroach_constraints_and_columns_query_contracts() -> None:
+    """CockroachDB constraints and columns queries pre-aggregate and factor scalar subqueries."""
+    loader = DataDictionaryLoader()
+    con_query = loader.get_domain_query_text("cockroachdb", "constraints", "by_schema")
+    assert con_query is not None
+    assert "WITH con_cols AS (" in con_query
+    assert "array_agg(kcu.column_name::text ORDER BY kcu.ordinal_position)" in con_query
+    assert "ARRAY(SELECT kcu.column_name" not in con_query
+
+    cols_query = loader.get_domain_query_text("cockroachdb", "columns", "by_schema")
+    assert cols_query is not None
+    assert "WITH resolved_table_schema AS (" in cols_query
+    assert "FROM resolved_table_schema" in cols_query

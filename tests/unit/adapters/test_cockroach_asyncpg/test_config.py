@@ -638,3 +638,29 @@ async def test_cockroach_asyncpg_load_from_records_executemany() -> None:
     assert 'INSERT INTO "events"' in conn.executemany.await_args[0][0]
     conn.copy_records_to_table.assert_not_called()
     conn.copy_to_table.assert_not_called()
+
+
+async def test_cockroach_asyncpg_get_columns_and_indexes_by_table() -> None:
+    """CockroachAsyncpgDataDictionary executes by_table query when table is specified."""
+    from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
+
+    calls: list[tuple[Any, dict[str, Any]]] = []
+    driver = MagicMock()
+
+    async def fake_select(query: Any, **kwargs: Any) -> list[Any]:
+        calls.append((query, kwargs))
+        return []
+
+    driver.select = AsyncMock(side_effect=fake_select)
+    dd = CockroachAsyncpgDataDictionary()
+
+    await dd.get_columns(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+    calls.clear()
+    await dd.get_indexes(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
