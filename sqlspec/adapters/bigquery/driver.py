@@ -22,6 +22,7 @@ from sqlspec.adapters.bigquery._typing import (
     BigQuerySessionContext,
     BigQueryStorageWriteModule,
     BigQueryStorageWriteTypes,
+    GoogleAPIError,
     GoogleCloudError,
 )
 from sqlspec.adapters.bigquery.core import (
@@ -99,7 +100,7 @@ class BigQueryExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, GoogleCloudError):
+        if issubclass(exc_type, (GoogleCloudError, GoogleAPIError)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -1093,7 +1094,29 @@ def _bigquery_arrow_reader_from_iterable(
         if isinstance(schema, _pa.Schema):
             empty_schema = schema
         elif isinstance(schema, (list, tuple)):
-            empty_schema = _pa.schema([_pa.field(getattr(field, "name", str(field)), _pa.null()) for field in schema])
+            type_map = {
+                "INTEGER": _pa.int64(),
+                "INT64": _pa.int64(),
+                "FLOAT": _pa.float64(),
+                "FLOAT64": _pa.float64(),
+                "BOOLEAN": _pa.bool_(),
+                "BOOL": _pa.bool_(),
+                "STRING": _pa.string(),
+                "BYTES": _pa.binary(),
+                "DATE": _pa.date32(),
+                "DATETIME": _pa.timestamp("us"),
+                "TIMESTAMP": _pa.timestamp("us", tz="UTC"),
+                "NUMERIC": _pa.decimal128(38, 9),
+                "BIGNUMERIC": _pa.decimal256(76, 38),
+            }
+            fields = [
+                _pa.field(
+                    getattr(field, "name", str(field)),
+                    type_map.get(str(getattr(field, "field_type", "")).upper(), _pa.null()),
+                )
+                for field in schema
+            ]
+            empty_schema = _pa.schema(fields)
         else:
             empty_schema = _pa.schema([])
         return cast("ArrowRecordBatchReader", _pa.RecordBatchReader.from_batches(empty_schema, ()))

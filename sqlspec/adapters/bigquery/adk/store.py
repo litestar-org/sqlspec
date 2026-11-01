@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, cast
 
 from typing_extensions import TypedDict
 
-from sqlspec.adapters.bigquery._typing import GoogleCloudError
+from sqlspec.adapters.bigquery._typing import GoogleAPIError, GoogleCloudError
 from sqlspec.adapters.bigquery._typing import bigquery_module as bigquery
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.adapters.bigquery.core import build_dml_rowcount, create_mapped_exception
@@ -238,7 +238,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         try:
             job = client.query(sql, job_config=job_config)
             rows = [dict(row) for row in job.result()]
-        except GoogleCloudError as exc:
+        except (GoogleCloudError, GoogleAPIError) as exc:
             raise create_mapped_exception(exc) from exc
         self._last_dml_affected_rows = build_dml_rowcount(job, 0)
         return rows

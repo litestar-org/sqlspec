@@ -6,12 +6,13 @@ from unittest.mock import patch
 
 import pyarrow as pa
 import pytest
+from google.cloud.bigquery import SchemaField
 from google.cloud.bigquery_storage_v1 import types
 
 import sqlspec.adapters.bigquery.config as bigquery_config
 from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.core import build_arrow_write_stream_payload
-from sqlspec.adapters.bigquery.driver import BigQueryDriver
+from sqlspec.adapters.bigquery.driver import BigQueryDriver, _bigquery_arrow_reader_from_iterable
 from sqlspec.exceptions import ImproperConfigurationError, StorageOperationFailedError
 
 CAPABILITIES = {
@@ -330,3 +331,14 @@ def test_storage_write_api_finalizes_after_append_failure(monkeypatch: pytest.Mo
     client = _FakeWriteClient.instances[0]
     assert client.finalize_calls == ["projects/proj/datasets/dataset/tables/table/streams/s1"]
     assert client.commit_calls == []
+
+
+def test_arrow_reader_from_iterable_empty_with_schema() -> None:
+    """_bigquery_arrow_reader_from_iterable builds typed schema from field list when empty."""
+    fields = [SchemaField("id", "INTEGER"), SchemaField("name", "STRING")]
+    reader = _bigquery_arrow_reader_from_iterable([], schema=fields)
+
+    assert reader.schema.names == ["id", "name"]
+    assert reader.schema.field("id").type == pa.int64()
+    assert reader.schema.field("name").type == pa.string()
+    assert reader.read_all().num_rows == 0

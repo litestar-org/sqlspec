@@ -37,6 +37,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     StorageCapabilityError,
@@ -751,7 +752,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     try:
         status_code = error.code
     except AttributeError:
@@ -766,6 +767,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     if isinstance(error, api_exceptions.Cancelled):
         return _create_bigquery_error(error, status_code, OperationCancelledError, "query cancelled")
+
+    if isinstance(error, api_exceptions.RetryError):
+        return _create_bigquery_error(error, status_code, QueryTimeoutError, "query retry timeout expired")
 
     if error_class := _classify_timeout_or_cancellation(error_msg):
         return _create_bigquery_error(error, status_code, error_class, "query terminated")

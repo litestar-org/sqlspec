@@ -12,6 +12,7 @@ import google.cloud.bigquery as bigquery_module
 from google.api_core import exceptions as bigquery_exceptions
 from google.api_core.client_info import ClientInfo as BigQueryClientInfo
 from google.api_core.client_options import ClientOptions as BigQueryClientOptions
+from google.api_core.exceptions import GoogleAPIError
 from google.api_core.retry import Retry as BigQueryRetry
 from google.auth.credentials import Credentials as BigQueryCredentials
 from google.cloud.bigquery import ArrayQueryParameter, Client, ScalarQueryParameter, StructQueryParameter
@@ -58,6 +59,7 @@ __all__ = (
     "BigQuerySessionContext",
     "BigQueryStorageWriteModule",
     "BigQueryStorageWriteTypes",
+    "GoogleAPIError",
     "GoogleCloudError",
     "bigquery_exceptions",
     "bigquery_module",

@@ -9,6 +9,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
+from google.api_core.exceptions import RetryError
 from google.cloud import bigquery
 from google.cloud.bigquery import QueryJobConfig
 from google.cloud.exceptions import Forbidden, GoogleCloudError
@@ -33,7 +34,7 @@ from sqlspec.adapters.bigquery.core import (
     try_bulk_insert,
 )
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
-from sqlspec.adapters.bigquery.driver import BigQueryDriver
+from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.adapters.bigquery.events.store import BigQueryEventQueueStore
 from sqlspec.adapters.bigquery.litestar.store import BigQueryStore
 from sqlspec.core import ParameterStyle, TypedParameter
@@ -920,3 +921,19 @@ def _cloud_error(message: str, *, code: int, errors: list[dict[str, str]] | None
     err.code = code
     err._errors = errors or []
     return cast("GoogleCloudError", err)
+
+
+def test_retry_error_mapped_to_query_timeout() -> None:
+    """RetryError maps to QueryTimeoutError in BigQuery create_mapped_exception."""
+    err = RetryError("Deadline exceeded waiting for query", None)
+    mapped = create_mapped_exception(err)
+    assert isinstance(mapped, QueryTimeoutError)
+
+
+def test_exception_handler_catches_google_api_error() -> None:
+    """BigQueryExceptionHandler catches GoogleAPIError and maps it."""
+    handler = BigQueryExceptionHandler()
+    err = RetryError("Deadline exceeded", None)
+    with handler:
+        raise err
+    assert isinstance(handler.pending_exception, QueryTimeoutError)
