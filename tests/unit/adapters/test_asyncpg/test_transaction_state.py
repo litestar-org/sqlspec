@@ -10,7 +10,7 @@ import asyncpg
 import pytest
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.adapters.asyncpg.core import AsyncpgStreamSource
+from sqlspec.adapters.asyncpg.core import AsyncpgStreamSource, build_postgres_storage_params_sql
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.adapters.asyncpg.events.backend import AsyncpgEventsBackend, AsyncpgHybridEventsBackend
 from sqlspec.adapters.asyncpg.litestar.store import AsyncpgStore
@@ -371,3 +371,60 @@ async def test_asyncpg_truncate_and_copy_map_errors() -> None:
     with pytest.raises(Exception) as exc_info:
         await driver.load_from_records("users", [{"id": 1}], overwrite=True)
     assert not isinstance(exc_info.value, RuntimeError) or isinstance(exc_info.value, DatabaseConnectionError)
+
+
+def test_asyncpg_build_postgres_storage_params_sql() -> None:
+    """build_postgres_storage_params_sql consolidates storage and autovacuum clauses."""
+    settings = {"fillfactor": 85, "autovacuum_vacuum_scale_factor": 0.05, "autovacuum_analyze_scale_factor": 0.02}
+    clause = build_postgres_storage_params_sql(settings, include_autovacuum=True)
+    assert "WITH (" in clause
+    assert "fillfactor = 85" in clause
+    assert "autovacuum_vacuum_scale_factor = 0.05" in clause
+    assert "autovacuum_analyze_scale_factor = 0.02" in clause
+
+
+def test_asyncpg_events_validate_listener_pool_capacity_skips_when_direct_dsn() -> None:
+    """_validate_listener_pool_capacity should not enforce pool size when direct_dsn is configured."""
+    from sqlspec.adapters.asyncpg.events.backend import _validate_listener_pool_capacity
+
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test", "max_size": 1},
+        driver_features={"direct_dsn": "postgresql://localhost/direct"},
+    )
+    _validate_listener_pool_capacity(config)
+
+
+def test_asyncpg_events_parse_notify_payload_handles_malformed_json() -> None:
+    """Malformed NOTIFY payload does not raise and returns None safely."""
+    from sqlspec.adapters.asyncpg.events.backend import (
+        _extract_batch_size,
+        _extract_event_id,
+        _extract_marker_id,
+        _parse_notify_payload,
+    )
+
+    bad_payload = "not valid json {{"
+    assert _parse_notify_payload(bad_payload) is None
+    assert _extract_event_id(bad_payload) is None
+    assert _extract_batch_size(bad_payload) == 0
+    assert _extract_marker_id(bad_payload) is None
+
+    good_payload = '{"event_id": "e1", "batch_size": 5, "marker_id": "m1"}'
+    parsed = _parse_notify_payload(good_payload)
+    assert parsed is not None
+    assert _extract_event_id(parsed) == "e1"
+    assert _extract_batch_size(parsed) == 5
+    assert _extract_marker_id(parsed) == "m1"
+
+
+def test_asyncpg_events_resolve_listener_config_allows_mapping_direct_dsn() -> None:
+    """_resolve_listener_config accepts Mapping for direct_dsn without raising."""
+    from sqlspec.adapters.asyncpg.events._hub import AsyncpgListenerHub
+
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test"},
+        driver_features={"pooler_mode": "transaction", "direct_dsn": {"host": "localhost", "database": "direct_db"}},
+    )
+    hub = AsyncpgListenerHub(config)
+    resolved = hub._resolve_listener_config()
+    assert resolved is not None

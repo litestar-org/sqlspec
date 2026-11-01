@@ -12,6 +12,7 @@ notifications into one queue per consumer task.
 import asyncio
 import contextlib
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
@@ -187,7 +188,7 @@ class AsyncpgListenerHub:
             )
         ).lower()
         raw_direct_dsn = driver_features.get("direct_dsn")
-        direct_dsn = raw_direct_dsn if isinstance(raw_direct_dsn, str) and raw_direct_dsn else None
+        direct_dsn = raw_direct_dsn if isinstance(raw_direct_dsn, (str, Mapping)) and raw_direct_dsn else None
         if pooler_mode in {"transaction", "statement"} and not direct_dsn:
             logger.warning(
                 "PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode=%r without configuring driver_features['direct_dsn']",

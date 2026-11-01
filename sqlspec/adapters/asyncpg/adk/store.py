@@ -1,11 +1,12 @@
 """AsyncPG ADK store for Google Agent Development Kit session/event storage."""
 
 from contextlib import nullcontext
-from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, cast
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
-from sqlspec.adapters.asyncpg.core import parse_status
+from sqlspec.adapters.asyncpg.core import build_postgres_storage_params_sql, parse_status
 from sqlspec.config import ADKConfig, AsyncConfigT
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 
@@ -18,8 +19,6 @@ if TYPE_CHECKING:
 
 
 __all__ = ("AsyncpgADKConfig", "AsyncpgADKMemoryStore", "AsyncpgADKStore")
-
-POSTGRES_TABLE_NOT_FOUND_ERROR: Final = "42P01"
 
 
 class AsyncpgADKConfig(ADKConfig):
@@ -480,7 +479,9 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        table_options = _postgres_table_options(_adk_config(self._config))
+        table_options = build_postgres_storage_params_sql(
+            _adk_config(self._config), default_fillfactor=80, section="adk"
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -504,7 +505,9 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
 
     async def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
-        table_options = _postgres_table_options(adk_config, include_autovacuum=True)
+        table_options = build_postgres_storage_params_sql(
+            adk_config, include_autovacuum=True, default_fillfactor=80, section="adk"
+        )
         generated_columns = ""
         generated_indexes = ""
         if adk_config.get("enable_event_generated_columns", False):
@@ -544,7 +547,9 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
     async def _app_states_table_ddl(self) -> str:
-        table_options = _postgres_table_options(_adk_config(self._config))
+        table_options = build_postgres_storage_params_sql(
+            _adk_config(self._config), default_fillfactor=80, section="adk"
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
             app_name VARCHAR(128) PRIMARY KEY,
@@ -554,7 +559,9 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
     async def _user_states_table_ddl(self) -> str:
-        table_options = _postgres_table_options(_adk_config(self._config))
+        table_options = build_postgres_storage_params_sql(
+            _adk_config(self._config), default_fillfactor=80, section="adk"
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
             app_name VARCHAR(128) NOT NULL,
@@ -843,6 +850,9 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             )
 
         if self._vector_index_type == "scann":
+            if self._scann_quantizer.upper() not in {"SQ8", "FP32", "AH"}:
+                msg = f"Invalid SCaNN quantizer '{self._scann_quantizer}'. Must be one of: SQ8, FP32, AH"
+                raise ImproperConfigurationError(msg)
             indexes.append(
                 f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scann ON {self._memory_table} USING scann (embedding) WITH (num_leaves = {self._scann_num_leaves}, quantizer = '{self._scann_quantizer}');"
             )
@@ -900,30 +910,3 @@ def _adk_config(config: Any) -> AsyncpgADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("AsyncpgADKConfig", adk_config)
-
-
-def _postgres_table_options(adk_config: AsyncpgADKConfig, *, include_autovacuum: bool = False) -> str:
-    options = [_postgres_fillfactor_option(adk_config)]
-    if include_autovacuum:
-        options.extend(_postgres_autovacuum_options(adk_config))
-    return f" WITH ({', '.join(options)})"
-
-
-def _postgres_fillfactor_option(adk_config: AsyncpgADKConfig) -> str:
-    value = adk_config.get("fillfactor", 80)
-    if not isinstance(value, int) or isinstance(value, bool) or value not in range(10, 101):
-        msg = "extension_config['adk']['fillfactor'] must be an integer from 10 to 100"
-        raise ValueError(msg)
-    return f"fillfactor = {value}"
-
-
-def _postgres_autovacuum_options(adk_config: AsyncpgADKConfig) -> "list[str]":
-    options: list[str] = []
-    for key in ("autovacuum_vacuum_scale_factor", "autovacuum_analyze_scale_factor"):
-        value = adk_config.get(key)
-        if value is not None:
-            if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
-                msg = f"extension_config['adk']['{key}'] must be a number from 0 to 1"
-                raise ValueError(msg)
-            options.append(f"{key} = {float(value):g}")
-    return options

@@ -312,3 +312,12 @@ async def test_asyncpg_list_sessions_rejects_invalid_options_before_connecting(o
         await store.list_sessions("app", **options)
 
     assert conn.calls == []
+
+
+async def test_asyncpg_adk_scann_quantizer_validation() -> None:
+    """Invalid SCaNN quantizer must raise ImproperConfigurationError."""
+    settings = AsyncpgADKConfig(vector_index_type="scann", scann_quantizer="INVALID")
+    config = AsyncpgConfig(extension_config={"adk": settings})
+    store = AsyncpgADKMemoryStore(config)
+    with pytest.raises(ImproperConfigurationError, match="Invalid SCaNN quantizer"):
+        await store._memory_table_ddl()
