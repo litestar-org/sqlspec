@@ -3,7 +3,7 @@
 
 import inspect
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +11,9 @@ import pytest
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.spanner.events import SpannerAsyncEventQueueStore, SpannerSyncEventQueueStore
 from sqlspec.exceptions import ImproperConfigurationError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _mock_spanner_config(events_settings: dict[str, Any] | None = None, *, dialect: str = "spanner") -> MagicMock:
@@ -346,7 +349,9 @@ def test_events_store_ddl_error_mapping() -> None:
     from sqlspec.exceptions import SQLSpecError
 
     mock_db = MagicMock()
-    mock_db.update_ddl.side_effect = SpannerGoogleAPICallError("DDL failed")
+    mock_db.update_ddl.side_effect = cast("Callable[[str], SpannerGoogleAPICallError]", SpannerGoogleAPICallError)(
+        "DDL failed"
+    )
 
     config = MagicMock(spec=SpannerSyncConfig)
     config.extension_config = {"events": {"queue_table": "test_queue", "ddl_timeout": 300.0}}

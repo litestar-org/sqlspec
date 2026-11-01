@@ -16,7 +16,7 @@ class _FakeCursor:
 
     def __init__(self, rows: "list[tuple[Any, ...]] | None" = None) -> None:
         self.rows = list(rows or [])
-        self.executed: list[tuple[str, dict[str, Any] | None]] = []
+        self.executed: list[tuple[str, dict[str, Any] | tuple[object, ...] | None]] = []
         self.rowcount = 0
         self.closed = False
 
@@ -29,7 +29,7 @@ class _FakeCursor:
     def close(self) -> None:
         self.closed = True
 
-    def execute(self, sql: str, parameters: "dict[str, Any] | None" = None) -> None:
+    def execute(self, sql: str, parameters: "dict[str, Any] | tuple[object, ...] | None" = None) -> None:
         self.executed.append((sql, parameters))
 
     def fetchone(self) -> "tuple[Any, ...] | None":
@@ -149,6 +149,7 @@ def test_oracle_sync_store_set_large_blob_single_statement() -> None:
     sql, parameters = cursor.executed[0]
     assert "MERGE INTO oracle_sessions t" in sql
     assert parameters is not None
+    parameters = cast("dict[str, object]", parameters)
     assert parameters["session_id"] == "session-large"
     assert connection.created_lobs == [(DB_TYPE_BLOB, large_payload)]
     assert parameters["data"] == (DB_TYPE_BLOB, large_payload)

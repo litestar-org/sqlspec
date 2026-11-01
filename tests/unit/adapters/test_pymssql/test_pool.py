@@ -200,10 +200,10 @@ def test_pool_reentrant_thread_checkout(monkeypatch: Any) -> None:
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0)
 
     with pool.get_connection() as c1:
-        assert c1 is connection
+        assert cast(object, c1) is connection
         try:
             with pool.get_connection() as c2:
-                assert c2 is connection
+                assert cast(object, c2) is connection
                 raise ValueError("inner failure")
         except ValueError:
             pass
@@ -245,7 +245,7 @@ def test_pool_recovers_after_failed_acquisition_and_retires_failed_checkout(monk
         assert pool.size() == 0
 
         with pytest.raises(ValueError, match="failed transaction"), pool.get_connection() as connection:
-            assert connection is dirty_connection
+            assert cast(object, connection) is dirty_connection
             dirty_connection.autocommit(False)
             raise ValueError("failed transaction")
 
@@ -254,7 +254,7 @@ def test_pool_recovers_after_failed_acquisition_and_retires_failed_checkout(monk
         assert pool.size() == 0
 
         with pool.get_connection() as replacement:
-            assert replacement is clean_connection
+            assert cast(object, replacement) is clean_connection
             assert clean_connection.closed is False
             assert clean_connection.autocommit_state is True
             assert pool.checked_out() == 1

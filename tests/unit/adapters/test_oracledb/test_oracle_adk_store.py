@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from inspect import isawaitable
 from types import SimpleNamespace
-from typing import Any, NotRequired, Self, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -26,6 +26,9 @@ from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, Oracle
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.extensions.adk import StoredMemory
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
 
 
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:
@@ -100,7 +103,7 @@ async def test_memory_batch_errors_commit_only_duplicate_skips(is_async: bool, e
 
     entries: list[StoredMemory] = [_memory_entry(), {**_memory_entry(), "id": "memory-2"}]
     if error_code == 1:
-        result = store.insert_memory_entries(entries)
+        result: int | Awaitable[int] = store.insert_memory_entries(entries)
         if isawaitable(result):
             result = await result
         assert result == 1
@@ -197,7 +200,7 @@ async def test_legacy_memory_retains_text_storage_and_rejects_vectors(
         "inserted_at",
     }
 
-    inserted = store.insert_memory_entries([_memory_entry()])
+    inserted: int | Awaitable[int] = store.insert_memory_entries([_memory_entry()])
     if isawaitable(inserted):
         inserted = await inserted
     assert inserted == 1
