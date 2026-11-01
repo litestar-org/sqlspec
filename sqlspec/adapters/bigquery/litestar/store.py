@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NotRequired, cast
 
+from sqlspec.adapters.bigquery.core import _bigquery_partition_clauses, _positive_int_or_none
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -362,26 +363,3 @@ def _resolve_litestar_dataset_id(config: "BigQueryConfig") -> "str | None":
     if resolved_id:
         return str(resolved_id)
     return str(default_dataset)
-
-
-def _positive_int_or_none(value: object, key: str) -> "int | None":
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        msg = f"extension_config['litestar']['{key}'] must be a positive integer"
-        raise ValueError(msg)
-    return value
-
-
-def _bigquery_partition_clauses(
-    column: str, *, enabled: bool, expiration_days: "int | None", require_filter: bool
-) -> "tuple[str, str]":
-    if not enabled:
-        return "", ""
-    options: list[str] = []
-    if require_filter:
-        options.append("require_partition_filter = TRUE")
-    if expiration_days is not None:
-        options.append(f"partition_expiration_days = {expiration_days}")
-    options_clause = f"\n        OPTIONS({', '.join(options)})" if options else ""
-    return f"PARTITION BY DATE({column})\n        ", options_clause

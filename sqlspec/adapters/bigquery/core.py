@@ -1382,3 +1382,28 @@ def _create_bigquery_error(
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+
+def _positive_int_or_none(value: object, key: str) -> "int | None":
+    """Validate that an extension config setting is a positive integer or None."""
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        msg = f"'{key}' must be a positive integer"
+        raise ValueError(msg)
+    return value
+
+
+def _bigquery_partition_clauses(
+    column: str, *, enabled: bool, expiration_days: "int | None", require_filter: bool
+) -> "tuple[str, str]":
+    """Build BigQuery PARTITION BY and OPTIONS clauses for table DDL."""
+    if not enabled:
+        return "", ""
+    options: list[str] = []
+    if require_filter:
+        options.append("require_partition_filter = TRUE")
+    if expiration_days is not None:
+        options.append(f"partition_expiration_days = {expiration_days}")
+    options_clause = f" OPTIONS({', '.join(options)})" if options else ""
+    return f" PARTITION BY DATE({column})", options_clause
