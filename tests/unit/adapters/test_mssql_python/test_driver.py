@@ -1,10 +1,16 @@
 """Unit tests for mssql_python driver wiring."""
 
 from typing import Any, cast
+from unittest.mock import MagicMock
 
+import pytest
+from mssql_python import Error as MssqlPythonError
+
+from sqlspec.adapters.mssql_python.core import default_statement_config
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.core import SQL, StatementStack
+from sqlspec.exceptions import DeadlockError
 
 
 class DummyCursor:
@@ -26,6 +32,11 @@ class DummyCursor:
 
     def fetchall(self) -> list[Any]:
         return list(self.rows)
+
+    def fetchmany(self, size: int = 1) -> list[Any]:
+        result = self.rows[:size]
+        self.rows = self.rows[size:]
+        return result
 
     def close(self) -> None:
         self.closed = True
@@ -156,3 +167,56 @@ def test_dispatch_execute_fetches_rows_whenever_the_cursor_has_a_result_set() ->
 
     assert result.selected_data is not None
     assert len(result.selected_data) == 2
+
+
+def test_dispatch_execute_script_slices_parameters_and_emits_telemetry() -> None:
+    """Multi-statement scripts should slice parameters and emit statement events."""
+    connection = DummyConnection()
+    driver = MssqlPythonDriver(cast("Any", connection), statement_config=default_statement_config)
+    obs = MagicMock()
+    obs.has_statement_observers = True
+    driver._observability = obs
+
+    script = SQL(
+        "INSERT INTO t (id) VALUES (?); INSERT INTO t (id) VALUES (?);",
+        [1, 2],
+        statement_config=default_statement_config,
+        is_script=True,
+    )
+    result = driver.dispatch_execute_script(cast("Any", connection.cursor_obj), script)
+    assert result.statement_count == 2
+    assert result.successful_statements == 2
+    assert obs.emit_statement_event.call_count == 2
+
+
+def test_transaction_commit_deadlock_maps_to_deadlock_error() -> None:
+    """A 1205 deadlock error during commit should map to DeadlockError."""
+    connection = DummyConnection()
+
+    def _fail_commit() -> None:
+        raise MssqlPythonError("Transaction was deadlocked (1205)", "40001")
+
+    connection.commit = _fail_commit
+    driver = MssqlPythonDriver(cast("Any", connection))
+    driver.begin()
+
+    with pytest.raises(DeadlockError):
+        driver.commit()
+
+
+def test_stream_source_runs_inside_active_except_handler() -> None:
+    """Stream source start and fetch_chunk execute cleanly inside an active except block."""
+    cursor = DummyCursor()
+    cursor.description = [("id",)]
+    cursor.rows = [(1,), (2,)]
+    connection = DummyConnection()
+    connection.cursor_obj = cursor
+    driver = MssqlPythonDriver(cast("Any", connection))
+
+    try:
+        raise ValueError("ambient exception")
+    except ValueError:
+        stream = driver.select_stream("SELECT id FROM t", chunk_size=1)
+        assert stream is not None
+        rows = list(stream)
+        assert len(rows) == 2

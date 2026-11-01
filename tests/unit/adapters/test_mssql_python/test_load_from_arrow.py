@@ -3,6 +3,7 @@
 from typing import Any, cast
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
@@ -123,3 +124,20 @@ def test_arrow_overwrite_validates_source_before_delete() -> None:
     with pytest.raises((TypeError, ValueError)):
         driver.load_from_arrow("orders", object(), overwrite=True)
     assert conn._cursor.execute_calls == []
+
+
+def test_sync_load_from_storage_multipart(tmp_path: Any) -> None:
+    """load_from_storage delegates to base implementation and handles sequences of storage destinations."""
+    file1 = tmp_path / "part1.parquet"
+    file2 = tmp_path / "part2.parquet"
+    t1 = pa.table({"id": [1, 2]})
+    t2 = pa.table({"id": [3, 4]})
+    pq.write_table(t1, str(file1))
+    pq.write_table(t2, str(file2))
+
+    conn = _FakeConnection()
+    driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    job = driver.load_from_storage("orders", [str(file1), str(file2)], file_format="parquet")
+    assert job.telemetry["rows_processed"] == 4
+    assert len(conn._cursor.arrow_calls) == 2
