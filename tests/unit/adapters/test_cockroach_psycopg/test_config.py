@@ -8,7 +8,7 @@ Tests cover:
 - Connection config normalization
 """
 
-from typing import Any, cast
+from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -938,3 +938,136 @@ async def test_cockroach_psycopg_async_user_configure_runs_after_internal_setup(
         conn = await config.create_connection()
         assert conn is fake_conn
         assert call_order == ["internal_autocommit", "user_cb"]
+
+
+def test_cockroach_psycopg_adk_hash_shard_bucket_count_validation() -> None:
+    """Invalid hash_shard_bucket_count must raise ValueError in cockroach_psycopg adk store."""
+    from sqlspec.adapters.cockroach_psycopg.adk.store import _cockroach_hash_shard_clause
+
+    bad_config = CockroachPsycopgSyncConfig(
+        extension_config={"adk": {"enable_hash_sharded_indexes": True, "hash_shard_bucket_count": -1}}
+    )
+    with pytest.raises(ValueError, match="hash_shard_bucket_count"):
+        _cockroach_hash_shard_clause(bad_config.extension_config["adk"])
+
+
+async def test_cockroach_psycopg_adk_memory_search_with_embedding() -> None:
+    """search_entries with embedding executes vector cosine search in cockroach_psycopg."""
+    executed_queries: list[str] = []
+
+    class _FakeCursor:
+        description = [
+            ("id",),
+            ("session_id",),
+            ("app_name",),
+            ("user_id",),
+            ("scope",),
+            ("event_id",),
+            ("author",),
+            ("timestamp",),
+            ("content_json",),
+            ("content_text",),
+            ("metadata_json",),
+            ("inserted_at",),
+            ("embedding",),
+        ]
+
+        async def execute(self, sql: bytes, params: Any) -> None:
+            executed_queries.append(sql.decode())
+
+        async def fetchall(self) -> list[Any]:
+            return []
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            pass
+
+    class _FakeConn:
+        def cursor(self) -> _FakeCursor:
+            return _FakeCursor()
+
+    class _FakeCtx:
+        async def __aenter__(self) -> _FakeConn:
+            return _FakeConn()
+
+        async def __aexit__(self, *_a: Any) -> None:
+            pass
+
+    config = CockroachPsycopgAsyncConfig(extension_config={"adk": {"enable_memory": True}})
+    object.__setattr__(config, "provide_connection", lambda: _FakeCtx())
+    store = CockroachPsycopgAsyncADKMemoryStore(config)
+
+    await store.search_entries(query="hello", app_name="app", user_id="u1", embedding=[0.1, 0.2, 0.3])
+    assert len(executed_queries) == 1
+    assert "embedding <=>" in executed_queries[0]
+
+
+async def test_cockroach_psycopg_adk_memory_insert_batch_unnest() -> None:
+    """insert_memory_entries executes a single UNNEST query rather than an N+1 loop."""
+    executed_queries: list[str] = []
+
+    class _FakeCursor:
+        rowcount = 2
+
+        async def execute(self, sql: Any, params: Any) -> None:
+            executed_queries.append(str(sql))
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            pass
+
+    class _FakeConn:
+        def cursor(self) -> _FakeCursor:
+            return _FakeCursor()
+
+        async def commit(self) -> None:
+            pass
+
+    class _FakeCtx:
+        async def __aenter__(self) -> _FakeConn:
+            return _FakeConn()
+
+        async def __aexit__(self, *_a: Any) -> None:
+            pass
+
+    config = CockroachPsycopgAsyncConfig(extension_config={"adk": {"enable_memory": True}})
+    object.__setattr__(config, "provide_connection", lambda: _FakeCtx())
+    store = CockroachPsycopgAsyncADKMemoryStore(config)
+
+    entry1: Any = {
+        "id": "1",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "e1",
+        "author": "user",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "content_json": {},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": "2026-01-01T00:00:00Z",
+    }
+    entry2: Any = {
+        "id": "2",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "e2",
+        "author": "user",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "content_json": {},
+        "content_text": "world",
+        "metadata_json": None,
+        "inserted_at": "2026-01-01T00:00:00Z",
+    }
+
+    count = await store.insert_memory_entries([entry1, entry2])
+    assert count == 2
+    assert len(executed_queries) == 1
+    assert "unnest" in executed_queries[0].lower()

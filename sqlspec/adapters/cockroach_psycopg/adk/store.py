@@ -1234,7 +1234,21 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         if not entries:
             return 0
 
-        inserted_count = 0
+        ids = [entry["id"] for entry in entries]
+        session_ids = [entry["session_id"] for entry in entries]
+        app_names = [entry["app_name"] for entry in entries]
+        user_ids = [entry["user_id"] for entry in entries]
+        scopes = [entry.get("scope", "user") for entry in entries]
+        event_ids = [entry["event_id"] for entry in entries]
+        authors = [entry["author"] for entry in entries]
+        timestamps = [entry["timestamp"] for entry in entries]
+        content_jsons = [Jsonb(entry["content_json"]) for entry in entries]
+        content_texts = [entry["content_text"] for entry in entries]
+        metadata_jsons = [
+            Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None for entry in entries
+        ]
+        inserted_ats = [entry["inserted_at"] for entry in entries]
+
         table_ident = pg_sql.Identifier(*self._memory_table.split("."))
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
@@ -1242,30 +1256,61 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
                 id, session_id, app_name, user_id, scope, event_id, author,
                 {owner_id_col}, timestamp, content_json, content_text,
                 metadata_json, inserted_at
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            SELECT * FROM unnest(
+                %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=table_ident, owner_id_col=pg_sql.Identifier(self._owner_id_column_name))
+            owner_ids = [owner_id for _ in entries]
+            params: tuple[Any, ...] = (
+                ids,
+                session_ids,
+                app_names,
+                user_ids,
+                scopes,
+                event_ids,
+                authors,
+                owner_ids,
+                timestamps,
+                content_jsons,
+                content_texts,
+                metadata_jsons,
+                inserted_ats,
+            )
         else:
             query = pg_sql.SQL("""
             INSERT INTO {table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            SELECT * FROM unnest(
+                %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=table_ident)
+            params = (
+                ids,
+                session_ids,
+                app_names,
+                user_ids,
+                scopes,
+                event_ids,
+                authors,
+                timestamps,
+                content_jsons,
+                content_texts,
+                metadata_jsons,
+                inserted_ats,
+            )
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            for entry in entries:
-                if self._owner_id_column_name:
-                    await cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
-                else:
-                    await cur.execute(query, _build_insert_params(entry))
-                if cur.rowcount and cur.rowcount > 0:
-                    inserted_count += cur.rowcount
+            await cur.execute(query, params)
+            inserted_count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             await conn.commit()
 
         return inserted_count
@@ -1283,13 +1328,21 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query:
+        if not query and embedding is None:
             return []
 
         effective_limit = limit if limit is not None else self._max_results
 
         where_scope, scope_params = _build_cockroach_scope_where(app_name, user_id, scope_filter)
-        if self._use_fts:
+        if embedding is not None:
+            sql = f"""
+            SELECT * FROM {self._memory_table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            ORDER BY embedding <=> %s::float8[]::vector
+            LIMIT %s
+            """
+            params = (*scope_params, list(embedding), effective_limit)
+        elif self._use_fts:
             sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE {where_scope}
@@ -1298,6 +1351,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             LIMIT %s
             """
             search_param = query
+            params = (*scope_params, search_param, effective_limit)
         else:
             sql = f"""
             SELECT * FROM {self._memory_table}
@@ -1306,8 +1360,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             LIMIT %s
             """
             search_param = f"%{query}%"
-
-        params = (*scope_params, search_param, effective_limit)
+            params = (*scope_params, search_param, effective_limit)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor() as cur:
@@ -1420,7 +1473,21 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
         if not entries:
             return 0
 
-        inserted_count = 0
+        ids = [entry["id"] for entry in entries]
+        session_ids = [entry["session_id"] for entry in entries]
+        app_names = [entry["app_name"] for entry in entries]
+        user_ids = [entry["user_id"] for entry in entries]
+        scopes = [entry.get("scope", "user") for entry in entries]
+        event_ids = [entry["event_id"] for entry in entries]
+        authors = [entry["author"] for entry in entries]
+        timestamps = [entry["timestamp"] for entry in entries]
+        content_jsons = [Jsonb(entry["content_json"]) for entry in entries]
+        content_texts = [entry["content_text"] for entry in entries]
+        metadata_jsons = [
+            Jsonb(entry["metadata_json"]) if entry["metadata_json"] is not None else None for entry in entries
+        ]
+        inserted_ats = [entry["inserted_at"] for entry in entries]
+
         table_ident = pg_sql.Identifier(*self._memory_table.split("."))
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
@@ -1428,31 +1495,63 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
                 id, session_id, app_name, user_id, scope, event_id, author,
                 {owner_id_col}, timestamp, content_json, content_text,
                 metadata_json, inserted_at
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            SELECT * FROM unnest(
+                %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=table_ident, owner_id_col=pg_sql.Identifier(self._owner_id_column_name))
+            owner_ids = [owner_id for _ in entries]
+            params: tuple[Any, ...] = (
+                ids,
+                session_ids,
+                app_names,
+                user_ids,
+                scopes,
+                event_ids,
+                authors,
+                owner_ids,
+                timestamps,
+                content_jsons,
+                content_texts,
+                metadata_jsons,
+                inserted_ats,
+            )
         else:
             query = pg_sql.SQL("""
             INSERT INTO {table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            SELECT * FROM unnest(
+                %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
             )
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=table_ident)
+            params = (
+                ids,
+                session_ids,
+                app_names,
+                user_ids,
+                scopes,
+                event_ids,
+                authors,
+                timestamps,
+                content_jsons,
+                content_texts,
+                metadata_jsons,
+                inserted_ats,
+            )
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            for entry in entries:
-                if self._owner_id_column_name:
-                    cur.execute(query, _build_insert_params_with_owner(entry, owner_id))
-                else:
-                    cur.execute(query, _build_insert_params(entry))
-                if cur.rowcount and cur.rowcount > 0:
-                    inserted_count += cur.rowcount
+            cur.execute(query, params)
+            inserted_count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             conn.commit()
+
         return inserted_count
 
     def search_entries(
@@ -1469,13 +1568,21 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query:
+        if not query and embedding is None:
             return []
 
         effective_limit = limit if limit is not None else self._max_results
 
         where_scope, scope_params = _build_cockroach_scope_where(app_name, user_id, scope_filter)
-        if self._use_fts:
+        if embedding is not None:
+            sql = f"""
+            SELECT * FROM {self._memory_table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            ORDER BY embedding <=> %s::float8[]::vector
+            LIMIT %s
+            """
+            params = (*scope_params, list(embedding), effective_limit)
+        elif self._use_fts:
             sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE {where_scope}
@@ -1484,6 +1591,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             LIMIT %s
             """
             search_param = query
+            params = (*scope_params, search_param, effective_limit)
         else:
             sql = f"""
             SELECT * FROM {self._memory_table}
@@ -1492,8 +1600,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             LIMIT %s
             """
             search_param = f"%{query}%"
-
-        params = (*scope_params, search_param, effective_limit)
+            params = (*scope_params, search_param, effective_limit)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor() as cur:
@@ -1647,9 +1754,12 @@ def _cockroach_hash_shard_clause(adk_config: CockroachPsycopgADKConfig) -> str:
     if not adk_config.get("enable_hash_sharded_indexes", False):
         return ""
     bucket_count = adk_config.get("hash_shard_bucket_count")
-    if isinstance(bucket_count, int) and not isinstance(bucket_count, bool) and bucket_count > 0:
-        return f" USING HASH WITH (bucket_count = {bucket_count})"
-    return " USING HASH"
+    if bucket_count is None:
+        return " USING HASH"
+    if not isinstance(bucket_count, int) or isinstance(bucket_count, bool) or bucket_count <= 0:
+        msg = "extension_config['adk']['hash_shard_bucket_count'] must be a positive integer"
+        raise ValueError(msg)
+    return f" USING HASH WITH (bucket_count = {bucket_count})"
 
 
 def _cockroach_storing_clause(adk_config: CockroachPsycopgADKConfig, columns: tuple[str, ...]) -> str:
