@@ -16,13 +16,66 @@ from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
-from sqlspec.adapters.oracledb._json_handlers import is_json_payload
-from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
+from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson, is_json_payload
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
-from sqlspec.adapters.oracledb.data_dictionary import (
-    resolve_oracle_connection_compatible_major,
-    resolve_oracle_connection_major,
-)
+from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components
+
+
+class OracleVersionCache:
+    """Pool-scoped cache for the resolved Oracle server version.
+
+    One instance is created per config and shared with every driver spawned from
+    that config's pool, so the server version is resolved once per pool lifetime
+    rather than once per acquired session. The cache lives and dies with the
+    pool; a server upgrade under a live pool is out of scope and picked up on the
+    next pool restart.
+    """
+
+    __slots__ = ("resolved", "version")
+
+    def __init__(self) -> None:
+        self.resolved: bool = False
+        self.version: Any | None = None
+
+    def reset(self) -> None:
+        """Clear the cached version so the next resolution re-queries the server."""
+        self.resolved = False
+        self.version = None
+
+
+def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
+    """Resolve an Oracle server major without issuing a metadata query.
+
+    Pool-scoped data-dictionary metadata is authoritative when it has already
+    been resolved. Otherwise, use the connection callback cache and finally
+    python-oracledb's connection ``version`` string. The final fallback matters
+    for reacquired pool wrappers that do not retain dynamic attributes.
+    """
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        return int(version_cache.version.major)
+    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
+    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
+        return cached_major
+    version = getattr(connection, "version", None)
+    if not version:
+        return None
+    components = parse_oracle_version_components(str(version))
+    return components[0] if components is not None else None
+
+
+def resolve_oracle_connection_compatible_major(
+    connection: Any, version_cache: "OracleVersionCache | None" = None
+) -> "int | None":
+    """Resolve an Oracle server compatible major version without issuing a metadata query."""
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        comp = version_cache.version.compatible_major
+        return int(comp) if comp is not None else None
+    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
+    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
+        return cached_compatible
+    return None
+
+
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import (
     DriverParameterProfile,
@@ -33,7 +86,11 @@ from sqlspec.core import (
     create_sql_result,
 )
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.data_dictionary.dialects.oracle import ORACLE_JSON_STORAGE_NATIVE, resolve_oracle_json_storage
+from sqlspec.data_dictionary.dialects.oracle import (
+    ORACLE_JSON_STORAGE_NATIVE,
+    parse_oracle_version_components,
+    resolve_oracle_json_storage,
+)
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -94,6 +151,7 @@ __all__ = (
     "OracleSessionContextConfig",
     "OracleSyncStreamSource",
     "OracleTopologyConfig",
+    "OracleVersionCache",
     "apply_driver_features",
     "apply_oracle_session_trace_attributes",
     "apply_wallet_ssl_context",
@@ -141,6 +199,8 @@ __all__ = (
     "read_oracle_lob_sync",
     "release_extracted_wallet_dir",
     "resolve_dbms_cloud_source_uri",
+    "resolve_oracle_connection_compatible_major",
+    "resolve_oracle_connection_major",
     "resolve_row_metadata",
     "resolve_rowcount",
     "retain_extracted_wallet_dir",

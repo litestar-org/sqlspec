@@ -2,10 +2,16 @@
 
 from collections import defaultdict
 from enum import StrEnum
+from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.oracledb.core import (
+    OracleVersionCache,
+    resolve_oracle_connection_compatible_major,
+    resolve_oracle_connection_major,
+)
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -32,7 +38,6 @@ from sqlspec.data_dictionary import (
 from sqlspec.data_dictionary.dialects.oracle import (
     extract_oracle_version_value,
     list_oracle_available_features,
-    merge_oracle_table_lists,
     oracle_supports_json_blob,
     oracle_supports_native_json,
     oracle_supports_oson_blob,
@@ -170,63 +175,9 @@ class JSONStorageType(StrEnum):
     BLOB_PLAIN = "blob_plain"
 
 
-class OracleVersionCache:
-    """Pool-scoped cache for the resolved Oracle server version.
-
-    One instance is created per config and shared with every driver spawned from
-    that config's pool, so the server version is resolved once per pool lifetime
-    rather than once per acquired session. The cache lives and dies with the
-    pool; a server upgrade under a live pool is out of scope and picked up on the
-    next pool restart.
-    """
-
-    __slots__ = ("resolved", "version")
-
-    def __init__(self) -> None:
-        self.resolved: bool = False
-        self.version: OracleVersionInfo | None = None
-
-    def reset(self) -> None:
-        """Clear the cached version so the next resolution re-queries the server."""
-        self.resolved = False
-        self.version = None
-
-
 def storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
     """Public alias for :func:`_storage_type_from_version`."""
     return _storage_type_from_version(version_info)
-
-
-def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
-    """Resolve an Oracle server major without issuing a metadata query.
-
-    Pool-scoped data-dictionary metadata is authoritative when it has already
-    been resolved. Otherwise, use the connection callback cache and finally
-    python-oracledb's connection ``version`` string. The final fallback matters
-    for reacquired pool wrappers that do not retain dynamic attributes.
-    """
-    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
-        return version_cache.version.major
-    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
-    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
-        return cached_major
-    version = getattr(connection, "version", None)
-    if not version:
-        return None
-    components = parse_oracle_version_components(str(version))
-    return components[0] if components is not None else None
-
-
-def resolve_oracle_connection_compatible_major(
-    connection: Any, version_cache: "OracleVersionCache | None" = None
-) -> "int | None":
-    """Resolve an Oracle server compatible major version without issuing a metadata query."""
-    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
-        return version_cache.version.compatible_major
-    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
-    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
-        return cached_compatible
-    return None
 
 
 def _merge_index_expressions(
@@ -467,13 +418,9 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         """Get tables sorted by dependency order with full coverage."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
-        ordered_rows = driver.select(
+        return driver.select(
             self.get_query("tables", "by_schema"), schema_name=schema_name, table_name=None, schema_type=TableMetadata
         )
-        all_rows = driver.select(
-            self.get_query("tables", "names_by_schema"), schema_name=schema_name, schema_type=TableMetadata
-        )
-        return merge_oracle_table_lists(ordered_rows, all_rows)
 
     def get_columns(
         self, driver: "OracleSyncDriver", table: "str | None" = None, schema: "str | None" = None
@@ -892,13 +839,9 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         """Get tables sorted by dependency order with full coverage."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
-        ordered_rows = await driver.select(
+        return await driver.select(
             self.get_query("tables", "by_schema"), schema_name=schema_name, table_name=None, schema_type=TableMetadata
         )
-        all_rows = await driver.select(
-            self.get_query("tables", "names_by_schema"), schema_name=schema_name, schema_type=TableMetadata
-        )
-        return merge_oracle_table_lists(ordered_rows, all_rows)
 
     async def get_columns(
         self, driver: "OracleAsyncDriver", table: "str | None" = None, schema: "str | None" = None
@@ -1037,11 +980,19 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         ddl_value = await driver.select_value(
             query.sql, object_type=normalized_type, object_name=object_name, owner=schema
         )
+        if ddl_value is not None:
+            read = getattr(ddl_value, "read", None)
+            if callable(read):
+                res = read()
+                if isawaitable(res):
+                    ddl_value = await res
+                else:
+                    ddl_value = res
         return _oracle_ddl_metadata_result(
             object_type=normalized_type,
             object_name=object_name,
             owner=schema,
-            ddl_text=_coerce_oracle_ddl_text(ddl_value),
+            ddl_text=str(ddl_value) if ddl_value is not None else None,
         )
 
     def _build_version_info(

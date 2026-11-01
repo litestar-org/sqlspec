@@ -38,6 +38,56 @@ even when this module is compiled with mypyc.
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+
+def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an input type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
+        return fallback
+    return partial(_chained_input_handler, inner, fallback)
+
+
+def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an output type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
+        return fallback
+    return partial(_chained_output_handler, inner, fallback)
+
+
+def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
+    current = handler
+    while current is not None:
+        if current is target_inner:
+            return True
+        if not isinstance(current, partial) or current.func is not chain_function:
+            return False
+        inner, current = current.args
+        if inner is target_inner:
+            return True
+    return False
+
+
+def _chained_input_handler(
+    inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int
+) -> Any:
+    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, value, arraysize)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, value, arraysize)
+    return None
+
+
+def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
+    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, metadata)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, metadata)
+    return None
+
+
 from sqlspec.adapters.oracledb._param_types import OracleJson
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
@@ -50,11 +100,16 @@ from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_NVARCHAR,
     DB_TYPE_VARCHAR,
 )
-from sqlspec.adapters.oracledb.data_dictionary import (
+from sqlspec.adapters.oracledb.core import (
+    is_json_payload,
     resolve_oracle_connection_compatible_major,
     resolve_oracle_connection_major,
 )
-from sqlspec.data_dictionary.dialects.oracle import ORACLE_JSON_STORAGE_NATIVE, resolve_oracle_json_storage
+from sqlspec.data_dictionary.dialects.oracle import (
+    ORACLE_JSON_STORAGE_BLOB_PLAIN,
+    ORACLE_JSON_STORAGE_NATIVE,
+    resolve_oracle_json_storage,
+)
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -152,52 +207,6 @@ def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
     connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)
 
 
-def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an input type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
-        return fallback
-    return partial(_chained_input_handler, inner, fallback)
-
-
-def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an output type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
-        return fallback
-    return partial(_chained_output_handler, inner, fallback)
-
-
-def is_json_payload(value: Any) -> bool:
-    """Return True if the value should be claimed by the JSON input handler.
-
-    ``OracleJson``, ``dict``, empty ``list``/``tuple``, and ``list``/``tuple``
-    containing any non-numeric element are claimed. Non-empty sequences where
-    all elements are ``int``/``float`` (excluding ``bool``) are reserved for
-    the vector handler unless wrapped in ``OracleJson``.
-    """
-    if isinstance(value, OracleJson):
-        return True
-    if isinstance(value, dict):
-        return True
-    if isinstance(value, (list, tuple)):
-        if not value:
-            return True
-        return not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
-    return False
-
-
-def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
-    current = handler
-    while current is not None:
-        if current is target_inner:
-            return True
-        if not isinstance(current, partial) or current.func is not chain_function:
-            return False
-        inner, current = current.args
-        if inner is target_inner:
-            return True
-    return False
-
-
 def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
     """Oracle input type handler for JSON-shaped Python values."""
     if not is_json_payload(value):
@@ -206,9 +215,7 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
     server_major = resolve_oracle_connection_major(cursor.connection)
 
     if server_major is None:
-        if isinstance(value, OracleJson):
-            return cursor.var(DB_TYPE_JSON, arraysize=arraysize, inconverter=json_converter_in_native)
-        return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
+        return cursor.var(DB_TYPE_BLOB, arraysize=arraysize, inconverter=json_converter_in_blob)
 
     compatible_major = resolve_oracle_connection_compatible_major(cursor.connection)
     storage = resolve_oracle_json_storage(server_major, compatible_major=compatible_major)
@@ -216,6 +223,8 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
         if isinstance(value, OracleJson):
             return cursor.var(DB_TYPE_JSON, arraysize=arraysize, inconverter=json_converter_in_native)
         return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
+    if storage == ORACLE_JSON_STORAGE_BLOB_PLAIN:
+        return cursor.var(DB_TYPE_CLOB, arraysize=arraysize, inconverter=json_converter_in_clob)
     return cursor.var(DB_TYPE_BLOB, arraysize=arraysize, inconverter=json_converter_in_blob)
 
 
@@ -245,26 +254,4 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
         if type_code in _JSON_STRING_TYPE_CODES:
             return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=json_converter_out_clob)
 
-    return None
-
-
-def _chained_input_handler(
-    inner: Any, fallback: "Any | None", cursor: "Cursor | AsyncCursor", value: Any, arraysize: int
-) -> Any:
-    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, value, arraysize)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, value, arraysize)
-    return None
-
-
-def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, metadata)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, metadata)
     return None

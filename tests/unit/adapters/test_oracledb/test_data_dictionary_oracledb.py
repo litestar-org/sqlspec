@@ -618,3 +618,42 @@ async def test_oracle_async_get_indexes_merges_expressions() -> None:
     assert indexes[0]["index_name"] == "IDX_EMP_UPPER_EMAIL"
     assert indexes[0]["expressions"] == "UPPER(EMAIL)"
     assert indexes[0]["expression"] == "UPPER(EMAIL)"
+
+
+@pytest.mark.anyio
+async def test_oracle_async_get_native_object_ddl_awaits_async_lob() -> None:
+    """Async _get_native_object_ddl awaits an AsyncLOB read() instead of stringifying the coroutine."""
+    data_dictionary = OracledbAsyncDataDictionary()
+
+    class _AsyncLOB:
+        async def read(self) -> str:
+            return "CREATE TABLE FOO (ID NUMBER)"
+
+    class _AsyncDriverStub:
+        async def select_value(self, query: Any, **kwargs: Any) -> Any:
+            return _AsyncLOB()
+
+    driver = cast("OracleAsyncDriver", _AsyncDriverStub())
+    result = await data_dictionary._get_native_object_ddl(
+        driver, "FOO", schema="HR", object_type="TABLE", include_dependencies=False, redact=False
+    )
+    assert result is not None
+    assert result.ddl == "CREATE TABLE FOO (ID NUMBER)"
+    assert "<coroutine" not in str(result.ddl)
+
+
+def test_oracle_get_tables_single_query() -> None:
+    """get_tables issues a single catalog query (tables.by_schema) without a redundant names query."""
+    data_dictionary = OracledbSyncDataDictionary()
+    queries: list[str] = []
+
+    class _StubSyncDriver:
+        def select(self, query: Any, **kwargs: Any) -> list[dict[str, Any]]:
+            queries.append(str(query))
+            return [{"table_name": "T1"}]
+
+    driver = cast("OracleSyncDriver", _StubSyncDriver())
+    tables = data_dictionary.get_tables(driver, schema="HR")
+    assert len(tables) == 1
+    assert len(queries) == 1
+    assert "names_by_schema" not in queries[0]
