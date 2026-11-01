@@ -128,7 +128,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, FilterTypeT, OperationType, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
-    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.data_dictionary import DialectConfig
     from sqlspec.storage import (
         AsyncStoragePipeline,
         StorageBridgeJob,

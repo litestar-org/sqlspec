@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
     from sqlspec.core import SQL
-    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.data_dictionary import DialectConfig
 
 __all__ = ("ArrowOdbcDataDictionary",)
 

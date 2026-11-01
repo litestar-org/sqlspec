@@ -28,7 +28,7 @@ from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult
-    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.data_dictionary import DialectConfig
     from sqlspec.storage import StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable, PandasDataFrame, PolarsDataFrame
 

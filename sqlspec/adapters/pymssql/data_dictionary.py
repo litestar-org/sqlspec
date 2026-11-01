@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import SQL
-    from sqlspec.data_dictionary._types import DialectConfig, MetadataCapabilityProfile
+    from sqlspec.data_dictionary import DialectConfig, MetadataCapabilityProfile
 
 __all__ = ("MssqlVersionInfo", "PymssqlSyncDataDictionary")
 

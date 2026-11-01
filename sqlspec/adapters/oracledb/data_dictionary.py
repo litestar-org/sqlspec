@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
-    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.data_dictionary import DialectConfig
 
 __all__ = (
     "JSONStorageType",

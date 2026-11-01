@@ -28,7 +28,7 @@ from sqlspec.builder._parsing_utils import (
     parse_order_expression,
 )
 from sqlspec.core import SQL
-from sqlspec.data_dictionary._types import (
+from sqlspec.data_dictionary import (
     DDLResult,
     ForeignKeyMetadata,
     MetadataFidelity,

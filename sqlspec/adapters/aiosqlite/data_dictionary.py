@@ -31,7 +31,7 @@ from sqlspec.exceptions import SQLFileNotFoundError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
-    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.data_dictionary import DialectConfig
 
 __all__ = ("AiosqliteDataDictionary",)
 
