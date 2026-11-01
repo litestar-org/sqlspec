@@ -205,3 +205,25 @@ def test_mssql_python_store_supports_schema_qualified_and_quoted_table_names() -
     assert drop_sql == [
         "IF OBJECT_ID(N'[auth].[user''s_sessions]', N'U') IS NOT NULL DROP TABLE [auth].[user's_sessions];"
     ]
+
+
+async def test_mssql_python_store_delete_expired_returns_zero_when_negative() -> None:
+    """delete_expired should return 0 when rowcount is -1."""
+    connection = FakeConnection(rowcount=-1)
+    store = MssqlPythonStore(cast("Any", FakeConfig(connection=connection)))
+
+    count = await store.delete_expired()
+
+    assert count == 0
+    assert connection.commits == 1
+
+
+async def test_mssql_python_store_set_uses_holdlock() -> None:
+    """_set executes MERGE WITH (HOLDLOCK) to prevent concurrent insert races."""
+    connection = FakeConnection()
+    store = MssqlPythonStore(cast("Any", FakeConfig(connection=connection)))
+
+    await store.set("session-1", b"payload", expires_in=60)
+
+    merge_sql, _ = connection.executed[0]
+    assert "MERGE INTO [dbo].[mssql_sessions] WITH (HOLDLOCK) AS target" in merge_sql
