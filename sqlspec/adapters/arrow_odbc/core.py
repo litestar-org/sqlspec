@@ -25,8 +25,11 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
+from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
+
+pa: Any = import_optional("pyarrow")
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -176,7 +179,9 @@ def resolve_dialect_from_dbms_name(dbms_name: str | None) -> str:
 
 def create_mapped_exception(error: BaseException, *, logger: Any | None = None) -> SQLSpecError:
     """Map an arrow-odbc exception to SQLSpec's exception hierarchy."""
-    del logger
+    _ = logger
+    if pa is not None and isinstance(error, pa.ArrowException):
+        return DataError(f"PyArrow data error. Original error: {error}")
     message = str(error)
     if _is_sql_server_diagnostic(message):
         error_number = extract_native_error_number(error)

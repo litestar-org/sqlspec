@@ -2,6 +2,7 @@
 
 import contextlib
 import re
+import sys
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from itertools import chain
@@ -77,10 +78,20 @@ class ArrowOdbcStreamSource:
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            raw_reader = self._driver._read_arrow_batches(self._sql, self._parameters, self._chunk_size)
-            self._raw_reader = raw_reader
-            self._reader = iter(self._driver._normalize_reader(_to_pyarrow_reader(raw_reader)))
+        if sys.exc_info()[1] is None:
+            with handler:
+                raw_reader = self._driver._read_arrow_batches(self._sql, self._parameters, self._chunk_size)
+                self._raw_reader = raw_reader
+                self._reader = iter(self._driver._normalize_reader(_to_pyarrow_reader(raw_reader)))
+        else:
+
+            def _start_op() -> Any:
+                raw_reader = self._driver._read_arrow_batches(self._sql, self._parameters, self._chunk_size)
+                self._raw_reader = raw_reader
+                self._reader = iter(self._driver._normalize_reader(_to_pyarrow_reader(raw_reader)))
+                return self._reader
+
+            self._driver._run_with_exception_handler(handler, _start_op)
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -91,8 +102,11 @@ class ArrowOdbcStreamSource:
             batch: Any = None
             handler = self._driver.handle_database_exceptions()
             try:
-                with handler:
-                    batch = next(reader)
+                if sys.exc_info()[1] is None:
+                    with handler:
+                        batch = next(reader)
+                else:
+                    batch = self._driver._run_with_exception_handler(handler, next, reader)
             except StopIteration:
                 return []
             self._driver._check_pending_exception(handler)
@@ -300,9 +314,6 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             mapped = create_mapped_exception(exc)
             msg = f"Failed to begin transaction: {mapped}"
             raise type(mapped)(msg) from exc
-        except Exception as exc:
-            msg = f"Failed to begin transaction: {exc}"
-            raise SQLSpecError(msg) from exc
         self._transaction_active = True
 
     def commit(self) -> None:
@@ -390,23 +401,49 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         arrow_result: ArrowResult | None = None
 
         exc_handler = self.handle_database_exceptions()
-        with exc_handler, self.with_cursor(self.connection):
-            reader = self._read_arrow_batches(
-                sql,
-                _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2"),
-                resolved_batch_size,
-            )
-            if return_format in {"reader", "batches"}:
-                arrow_reader = self._normalize_reader(_to_pyarrow_reader(reader))
-                arrow_result = build_arrow_result_from_reader(
-                    prepared_statement,
-                    arrow_reader,
-                    return_format=return_format,
-                    batch_size=resolved_batch_size,
-                    arrow_schema=arrow_schema,
-                )
+        with self.with_cursor(self.connection):
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    reader = self._read_arrow_batches(
+                        sql,
+                        _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2"),
+                        resolved_batch_size,
+                    )
+                    if return_format in {"reader", "batches"}:
+                        arrow_reader = self._normalize_reader(_to_pyarrow_reader(reader))
+                        arrow_result = build_arrow_result_from_reader(
+                            prepared_statement,
+                            arrow_reader,
+                            return_format=return_format,
+                            batch_size=resolved_batch_size,
+                            arrow_schema=arrow_schema,
+                        )
+                    else:
+                        table = self._normalize_table(_reader_to_table(reader))
             else:
-                table = self._normalize_table(_reader_to_table(reader))
+
+                def _select_op() -> tuple[Any, Any]:
+                    r = self._read_arrow_batches(
+                        sql,
+                        _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2"),
+                        resolved_batch_size,
+                    )
+                    if return_format in {"reader", "batches"}:
+                        ar = self._normalize_reader(_to_pyarrow_reader(r))
+                        res = build_arrow_result_from_reader(
+                            prepared_statement,
+                            ar,
+                            return_format=return_format,
+                            batch_size=resolved_batch_size,
+                            arrow_schema=arrow_schema,
+                        )
+                        return None, res
+                    tbl = self._normalize_table(_reader_to_table(r))
+                    return tbl, None
+
+                res = self._run_with_exception_handler(exc_handler, _select_op)
+                if res is not None:
+                    table, arrow_result = res
         self._check_pending_exception(exc_handler)
 
         if arrow_result is not None:
@@ -453,15 +490,25 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         resolved_chunk_size = chunk_size or self._chunk_size()
         exc_handler = self.handle_database_exceptions()
         inserted = False
-        with exc_handler, self.with_cursor(self.connection):
-            if isinstance(source, pa.Table) and hasattr(self.connection, "from_table_to_db"):
-                self.connection.from_table_to_db(source=source, target=target_table, chunk_size=resolved_chunk_size)
-                inserted = True
-            else:
+        with self.with_cursor(self.connection):
+
+            def _insert_op() -> bool:
+                if isinstance(source, pa.Table) and hasattr(self.connection, "from_table_to_db"):
+                    self.connection.from_table_to_db(source=source, target=target_table, chunk_size=resolved_chunk_size)
+                    return True
                 reader = _table_to_reader(source, resolved_chunk_size) if isinstance(source, pa.Table) else source
                 if hasattr(self.connection, "insert_into_table"):
                     self.connection.insert_into_table(reader=reader, table=target_table, chunk_size=resolved_chunk_size)
-                    inserted = True
+                    return True
+                return False
+
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    inserted = _insert_op()
+            else:
+                ins = self._run_with_exception_handler(exc_handler, _insert_op)
+                if ins is not None:
+                    inserted = ins
         self._check_pending_exception(exc_handler)
 
         if inserted:
