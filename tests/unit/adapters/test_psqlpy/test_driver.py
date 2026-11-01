@@ -11,7 +11,7 @@ from sqlspec.adapters.psqlpy.core import build_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import SQLSpecError, UniqueViolationError
+from sqlspec.exceptions import UniqueViolationError
 
 
 @pytest.mark.anyio
@@ -167,24 +167,33 @@ async def test_psqlpy_cached_query_maps_native_errors() -> None:
 
 
 @pytest.mark.anyio
-async def test_psqlpy_load_from_arrow_preserves_cause_on_failure() -> None:
-    """load_from_arrow preserves underlying __cause__ on execution failure."""
+@pytest.mark.parametrize("binary_copy", [False, True], ids=["records", "binary"])
+async def test_psqlpy_load_from_arrow_stops_after_first_copy_failure(binary_copy: bool) -> None:
+    """A failed COPY stops the batch stream and preserves the first native cause."""
     import pyarrow as pa
     from psqlpy.exceptions import ConnectionExecuteError
 
-    conn = AsyncMock()
-    conn.binary_copy_to_table = AsyncMock(side_effect=ConnectionExecuteError("binary copy network drop"))
+    first_error = ConnectionExecuteError("duplicate key value violates unique constraint items_pk")
+    later_error = ConnectionExecuteError("later copy network drop")
+    copy = AsyncMock(side_effect=[first_error, later_error])
+    conn = SimpleNamespace(
+        binary_copy_to_table=copy,
+        copy_records_to_table=copy,
+        fetch=AsyncMock(return_value=SimpleNamespace(result=lambda: [])),
+    )
     driver = PsqlpyDriver(
         connection=cast("Any", conn),
         statement_config=build_statement_config(),
-        driver_features={"enable_pgcopy_binary": True, "storage_capabilities": {"arrow_import_enabled": True}},
+        driver_features={"enable_pgcopy_binary": binary_copy, "storage_capabilities": {"arrow_import_enabled": True}},
     )
-    tbl = pa.Table.from_arrays([pa.array([1, 2])], names=["id"])
+    batches = [pa.record_batch({"id": [value]}) for value in (1, 2)]
+    reader = pa.RecordBatchReader.from_batches(batches[0].schema, batches)
 
-    with pytest.raises(SQLSpecError) as exc_info:
-        await driver.load_from_arrow("items", tbl)
+    with pytest.raises(UniqueViolationError) as exc_info:
+        await driver.load_from_arrow("items", reader)
 
-    assert isinstance(exc_info.value.__cause__, ConnectionExecuteError)
+    assert copy.await_count == 1
+    assert exc_info.value.__cause__ is first_error
 
 
 def test_psqlpy_driver_class_cached_in_resolve() -> None:

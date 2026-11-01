@@ -431,6 +431,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                         await self._run_with_exception_handler(
                             exc_handler, cursor.binary_copy_to_table, payload, table_name, **copy_kwargs
                         )
+                        self._check_pending_exception(exc_handler)
                 else:
                     json_columns = await self._resolve_json_columns(schema_name, table_name)
                     deserializer = cast(
@@ -448,6 +449,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                                 coerce_json_columns(records, columns, json_columns, deserializer=deserializer),
                                 **copy_kwargs,
                             )
+                            self._check_pending_exception(exc_handler)
             self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
