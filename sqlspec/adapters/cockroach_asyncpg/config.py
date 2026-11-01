@@ -111,6 +111,10 @@ class CockroachAsyncpgConnectionConfig(TypedDict):
     """Startup CockroachDB session variables passed at connection time."""
     target_session_attrs: NotRequired[CockroachAsyncpgTargetSessionAttrs]
     """Required node session attribute when connecting across multiple hosts."""
+    statement_timeout: NotRequired[float | int | None]
+    """Statement execution timeout in seconds forwarded via server_settings."""
+    idle_in_transaction_session_timeout: NotRequired[float | int | None]
+    """Idle in transaction timeout in seconds forwarded via server_settings."""
     krbsrvname: NotRequired[str]
     """Kerberos service principal name for GSSAPI authentication."""
     gsslib: NotRequired[CockroachAsyncpgGSSLib]
@@ -192,24 +196,9 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
 
 
 class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
-    """Uses pool.acquire() context manager pattern instead of direct acquire/release."""
+    """Factory creating AsyncPG database connections for CockroachDB sessions."""
 
-    __slots__ = ("_ctx",)
-
-    def __init__(self, config: "CockroachAsyncpgConfig") -> None:
-        super().__init__(config)
-        self._ctx: Any | None = None
-
-    async def acquire_connection(self) -> "CockroachAsyncpgConnection":
-        pool = await self._config.provide_pool()
-        ctx = pool.acquire()
-        self._ctx = ctx
-        return cast("CockroachAsyncpgConnection", await ctx.__aenter__())
-
-    async def release_connection(self, _conn: "CockroachAsyncpgConnection", **kwargs: Any) -> None:
-        if self._ctx is not None:
-            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
-            self._ctx = None
+    __slots__ = ()
 
 
 class CockroachAsyncpgConnectionContext(AsyncPoolConnectionContext):
@@ -224,7 +213,7 @@ class CockroachAsyncpgConfig(
     """Configuration for CockroachDB using AsyncPG."""
 
     driver_type: "ClassVar[type[CockroachAsyncpgDriver]]" = CockroachAsyncpgDriver
-    connection_type: "ClassVar[type[CockroachAsyncpgConnection]]" = CockroachAsyncpgConnection  # type: ignore[assignment]
+    connection_type: "ClassVar[type[Any]]" = cast("type[Any]", CockroachAsyncpgConnection)
     supports_transactional_ddl: "ClassVar[bool]" = False
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True

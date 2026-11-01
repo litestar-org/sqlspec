@@ -1,6 +1,7 @@
 """CockroachDB AsyncPG driver implementation."""
 
 import asyncio
+import sys
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
@@ -116,7 +117,7 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         self._data_dictionary = None
 
     @property
-    def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":  # type: ignore[override]
+    def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":
         if self._data_dictionary is None:
             object.__setattr__(self, "_data_dictionary", CockroachAsyncpgDataDictionary())
         return cast("CockroachAsyncpgDataDictionary", self._data_dictionary)
@@ -473,11 +474,17 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
 
     async def _execute_native_storage(self, command: str, parameters: "list[Any]") -> "list[dict[str, Any]]":
         handler = self.handle_database_exceptions()
-        rows = []
-        async with handler:
-            rows = [dict(row) for row in await self.connection.fetch(command, *parameters)]
-        if handler.pending_exception is not None:
-            raise handler.pending_exception
+
+        async def _fetch() -> list[dict[str, Any]]:
+            return [dict(row) for row in await self.connection.fetch(command, *parameters)]
+
+        if sys.exc_info()[1] is None:
+            async with handler:
+                rows = await _fetch()
+        else:
+            res = await self._run_with_exception_handler(handler, _fetch)
+            rows = res if res is not None else []
+        self._check_pending_exception(handler)
         return rows
 
     async def _apply_follower_reads(self) -> None:

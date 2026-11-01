@@ -686,3 +686,23 @@ async def test_cockroach_asyncpg_cache_hit_with_cursor() -> None:
     upd2 = await driver.execute("UPDATE t SET x = 1")
     assert upd2.rows_affected == 1
     assert conn.execute.call_count == 2
+
+
+def test_cockroach_asyncpg_connection_config_timeout_annotations() -> None:
+    """CockroachAsyncpgConnectionConfig exposes statement_timeout and idle_in_transaction_session_timeout."""
+    annotations = CockroachAsyncpgConnectionConfig.__annotations__
+    assert "statement_timeout" in annotations
+    assert "idle_in_transaction_session_timeout" in annotations
+
+
+async def test_cockroach_asyncpg_execute_native_storage_under_active_exception() -> None:
+    """_execute_native_storage inside active except block does not pollute pending exception."""
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[{"rows": 1}])
+    driver = CockroachAsyncpgDriver(cast("Any", conn))
+
+    try:
+        raise ValueError("outer error")
+    except ValueError:
+        rows = await driver._execute_native_storage("SELECT 1", [])
+        assert rows == [{"rows": 1}]
