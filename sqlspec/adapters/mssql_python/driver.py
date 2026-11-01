@@ -18,6 +18,7 @@ from sqlspec.adapters.mssql_python.core import (
     driver_profile,
     format_identifier,
     materialize_tuple_rows,
+    normalize_execute_parameters,
     quote_bracket_identifier,
     resolve_column_names,
     resolve_many_rowcount,
@@ -669,12 +670,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        if not params:
-            statement = self._cached_statement(
-                sql, params, cached, None, params_are_simple=True, compiled_sql=cached.compiled_sql
-            )
-            return self._execute_cached_statement(statement)
-        return super()._execute_cache_hit(sql, params, cached)
+        return super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
 
     def _connection_in_transaction(self) -> bool:
         """Return True for explicit transactions and for open implicit transactions."""

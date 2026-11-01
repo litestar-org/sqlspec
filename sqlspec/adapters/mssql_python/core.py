@@ -51,6 +51,7 @@ __all__ = (
     "extract_error_number",
     "format_identifier",
     "materialize_tuple_rows",
+    "normalize_execute_parameters",
     "quote_bracket_identifier",
     "resolve_column_names",
     "resolve_many_rowcount",
@@ -157,6 +158,15 @@ def split_schema_and_table(identifier: str, *, default_schema: str = "dbo") -> t
     return parts[-2], parts[-1]
 
 
+def normalize_execute_parameters(parameters: Any) -> Any:
+    """Normalize parameters for mssql-python execute calls."""
+    if parameters is None:
+        return None
+    if isinstance(parameters, list):
+        return tuple(parameters)
+    return parameters
+
+
 def format_identifier(identifier: str) -> str:
     """Format a T-SQL identifier with bracket quoting."""
     cleaned = identifier.strip()
@@ -164,13 +174,13 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=True)
-    return ".".join(quote_bracket_identifier(part) for part in parts)
+    return ".".join([quote_bracket_identifier(part) for part in parts])
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
     """Build an mssql-python INSERT statement with positional qmark placeholders."""
-    column_clause = ", ".join(quote_bracket_identifier(column) for column in columns)
-    placeholders = ", ".join("?" for _ in columns)
+    column_clause = ", ".join([quote_bracket_identifier(column) for column in columns])
+    placeholders = ", ".join(["?"] * len(columns))
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
@@ -430,7 +440,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
     extra = config.pop("extra", None)
     if isinstance(extra, dict):
-        parts.extend(f"{key}={_format_connection_value(value)}" for key, value in extra.items() if value is not None)
+        parts.extend([f"{key}={_format_connection_value(value)}" for key, value in extra.items() if value is not None])
 
     for remaining_key, remaining_value in list(config.items()):
         if remaining_value is not None:
