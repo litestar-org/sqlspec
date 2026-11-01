@@ -543,17 +543,28 @@ class Db2AsyncConnectionPool:
         return True
 
     async def _is_connection_alive(self, connection: Any) -> bool:
-        """Ping the connection with ``SELECT 1 FROM SYSIBM.SYSDUMMY1``."""
+        """Ping the connection with ``SELECT 1 FROM SYSIBM.SYSDUMMY1``.
+
+        Close the cursor outside exception handling so compiled coroutine cleanup
+        does not retain the failed query as its caller's ambient exception.
+        """
+        cursor: Any = None
+        pending_error: BaseException | None = None
         try:
             cursor = await connection.cursor()
+            await cursor.execute("SELECT 1 FROM SYSIBM.SYSDUMMY1")
+            await cursor.fetchone()
+        except BaseException as exc:
+            pending_error = exc
+        if cursor is not None:
             try:
-                await cursor.execute("SELECT 1 FROM SYSIBM.SYSDUMMY1")
-                await cursor.fetchone()
-            finally:
                 await cursor.close()
-        except Exception:
-            return False
-        return True
+            except BaseException as exc:
+                if pending_error is None or isinstance(pending_error, Exception):
+                    pending_error = exc
+        if pending_error is not None and not isinstance(pending_error, Exception):
+            raise pending_error
+        return pending_error is None
 
     async def _close_connection(self, connection: Any) -> None:
         """Close a connection, suppressing driver errors."""

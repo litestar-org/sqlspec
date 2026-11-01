@@ -324,8 +324,9 @@ async def test_async_connection_create_hook_is_awaited(
         await pool.close()
 
 
+@pytest.mark.parametrize("close_fails", [False, True])
 async def test_cancelled_health_check_closes_detached_connection(
-    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch
+    fake_ibm_db: FakeModules, close_fails: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pool = Db2AsyncConnectionPool({"database": "TESTDB"}, max_size=1, health_check_interval=-1.0)
     connection = _as_fake(await pool.acquire())
@@ -333,13 +334,21 @@ async def test_cancelled_health_check_closes_detached_connection(
     checking = asyncio.Event()
     finish = asyncio.Event()
     execute = FakeDb2AsyncCursor.execute
+    close = FakeDb2AsyncCursor.close
 
     async def blocked_execute(cursor: FakeDb2AsyncCursor, operation: str, parameters: object = None) -> FakeDb2Cursor:
         checking.set()
         await finish.wait()
         return await execute(cursor, operation, parameters)
 
+    async def failing_close(cursor: FakeDb2AsyncCursor) -> None:
+        await close(cursor)
+        msg = "Cursor close failed during cancelled health check."
+        raise OSError(msg)
+
     monkeypatch.setattr(FakeDb2AsyncCursor, "execute", blocked_execute)
+    if close_fails:
+        monkeypatch.setattr(FakeDb2AsyncCursor, "close", failing_close)
     task = asyncio.create_task(pool.acquire())
     try:
         await asyncio.wait_for(checking.wait(), timeout=1.0)
