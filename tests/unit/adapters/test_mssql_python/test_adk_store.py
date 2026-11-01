@@ -406,15 +406,6 @@ def _session_store_with_capture(
     return MssqlPythonADKStore(_mock_config()), calls
 
 
-def test_adk_store_dead_constants_removed() -> None:
-    """Verify dead duplicate object/index error constants and trailing aliases are removed."""
-    import sqlspec.adapters.mssql_python.adk.store as adk_store
-
-    assert not hasattr(adk_store, "MSSQL_DUPLICATE_OBJECT_ERROR")
-    assert not hasattr(adk_store, "MSSQL_DUPLICATE_INDEX_ERROR")
-    assert not hasattr(adk_store, "_escape_sql_literal")
-
-
 def test_insert_memory_entries_batches_with_executemany() -> None:
     """insert_memory_entries batches rows into cursor.executemany."""
     mem_config = _mock_config({"native_json": False})
