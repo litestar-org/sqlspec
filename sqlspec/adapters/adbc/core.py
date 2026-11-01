@@ -6,8 +6,9 @@ import decimal
 import re
 import tempfile
 from collections.abc import Sized
-from functools import lru_cache, partial
+from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
@@ -106,8 +107,9 @@ __all__ = (
 COLUMN_CACHE_MAX_SIZE: int = 256
 _IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _UUID_TYPES: Final[tuple[type[Any], ...]] = tuple(build_uuid_coercions())
+NoneType: Final = type(None)
 _STRICT_COERCION_ALLOWED_TYPES: Final[tuple[type[Any], ...]] = (
-    type(None),
+    NoneType,
     bool,
     int,
     float,
@@ -1450,7 +1452,32 @@ def _is_uuid_array_data_type(target: Any) -> bool:
     return len(element_types) == 1 and _is_uuid_data_type(element_types[0])
 
 
-@lru_cache(maxsize=256)
+class _RewriteCacheState:
+    __slots__ = ("cache", "hits", "maxsize", "misses")
+
+    def __init__(self, maxsize: int = 256) -> None:
+        self.maxsize = maxsize
+        self.hits = 0
+        self.misses = 0
+        self.cache: dict[
+            tuple[str, tuple[int, ...], tuple[int, ...], str], tuple[str, tuple[int, ...], tuple[int, ...]]
+        ] = {}
+
+    def clear(self) -> None:
+        self.hits = 0
+        self.misses = 0
+        self.cache.clear()
+
+    def info(self) -> Any:
+        return SimpleNamespace(hits=self.hits, misses=self.misses, maxsize=self.maxsize, currsize=len(self.cache))
+
+
+_REWRITE_CACHE_STATE: Final[_RewriteCacheState] = _RewriteCacheState(256)
+_REWRITE_UUID_CACHE: Final[
+    dict[tuple[str, tuple[int, ...], tuple[int, ...], str], tuple[str, tuple[int, ...], tuple[int, ...]]]
+] = _REWRITE_CACHE_STATE.cache
+
+
 def _rewrite_postgres_uuid_placeholders(
     sql: str, scalar_ordinals: "tuple[int, ...]", array_ordinals: "tuple[int, ...]", dialect: str
 ) -> "tuple[str, tuple[int, ...], tuple[int, ...]]":
@@ -1463,6 +1490,13 @@ def _rewrite_postgres_uuid_placeholders(
     repeated executions of the same statement shape reuse the rewrite without
     parsing again.
     """
+    cache_key = (sql, scalar_ordinals, array_ordinals, dialect)
+    cached = _REWRITE_CACHE_STATE.cache.get(cache_key)
+    if cached is not None:
+        _REWRITE_CACHE_STATE.hits += 1
+        return cached
+
+    _REWRITE_CACHE_STATE.misses += 1
     try:
         expressions = cast(
             "list[exp.Expression]",
@@ -1497,21 +1531,26 @@ def _rewrite_postgres_uuid_placeholders(
     effective_array_set = set(effective_arrays)
     effective_set = set(effective_scalars) | effective_array_set
 
-    def wrap_parameter(node: exp.Expression) -> exp.Expression:
-        if not isinstance(node, exp.Parameter):
-            return node
-        ordinal = _parameter_ordinal(node)
-        if ordinal is None or ordinal not in effective_set:
-            return node
-        if _direct_parameter_cast(node) is not None:
-            return node
-        target_type = "UUID[]" if ordinal in effective_array_set else "UUID"
-        return exp.Cast(this=node.copy(), to=exp.DataType.build(target_type, dialect=dialect))
-
     for expression in expressions:
-        expression.transform(wrap_parameter, copy=False)
+        for node in list(expression.find_all(exp.Parameter)):
+            ordinal = _parameter_ordinal(node)
+            if ordinal is None or ordinal not in effective_set:
+                continue
+            if _direct_parameter_cast(node) is not None:
+                continue
+            target_type = "UUID[]" if ordinal in effective_array_set else "UUID"
+            node.replace(exp.Cast(this=node.copy(), to=exp.DataType.build(target_type, dialect=dialect)))
+
     rewritten = "; ".join(expression.sql(dialect=dialect, copy=False) for expression in expressions)
-    return rewritten, effective_scalars, effective_arrays
+    result = (rewritten, effective_scalars, effective_arrays)
+    if len(_REWRITE_CACHE_STATE.cache) >= _REWRITE_CACHE_STATE.maxsize:
+        _REWRITE_CACHE_STATE.cache.pop(next(iter(_REWRITE_CACHE_STATE.cache)))
+    _REWRITE_CACHE_STATE.cache[cache_key] = result
+    return result
+
+
+setattr(_rewrite_postgres_uuid_placeholders, "cache_clear", _REWRITE_CACHE_STATE.clear)
+setattr(_rewrite_postgres_uuid_placeholders, "cache_info", _REWRITE_CACHE_STATE.info)
 
 
 def _sequence_holds_uuid(values: "list[Any] | tuple[Any, ...]") -> bool:

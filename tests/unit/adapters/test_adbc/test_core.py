@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from decimal import Decimal
-from types import SimpleNamespace
+from types import NoneType, SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
 
@@ -26,6 +26,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_dialect_from_config,
     resolve_many_rowcount,
 )
+from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.core.compiler import SQLProcessor
 from sqlspec.dialects import PGTextSearch
@@ -741,3 +742,35 @@ def test_duckdb_copy_ast_transformer_caching() -> None:
     processor.compile("SELECT 1 WHERE x = :val", {"val": 42})
     processor.compile("SELECT 1 WHERE x = :val", {"val": 99})
     assert processor._cache_hits == 1
+
+
+def test_rewrite_postgres_uuid_placeholders() -> None:
+    """_rewrite_postgres_uuid_placeholders rewrites positional parameters to explicit UUID casts."""
+    sql = "SELECT $1, $2"
+    rewritten, scalars, arrays = adbc_core._rewrite_postgres_uuid_placeholders(sql, (1,), (2,), "postgres")
+    assert "UUID[]" in rewritten
+    assert scalars == (1,)
+    assert arrays == (2,)
+
+
+def test_rewrite_uuid_cache() -> None:
+    """_rewrite_postgres_uuid_placeholders caches results in _REWRITE_UUID_CACHE."""
+    sql = "SELECT $1 WHERE id = $2"
+    key = (sql, (1,), (), "postgres")
+    adbc_core._REWRITE_UUID_CACHE.pop(key, None)
+    res1 = adbc_core._rewrite_postgres_uuid_placeholders(sql, (1,), (), "postgres")
+    assert key in adbc_core._REWRITE_UUID_CACHE
+    res2 = adbc_core._rewrite_postgres_uuid_placeholders(sql, (1,), (), "postgres")
+    assert res1 is res2
+
+
+def test_strict_coercion_types() -> None:
+    """_STRICT_COERCION_ALLOWED_TYPES contains NoneType bound once at module top level."""
+    assert NoneType in adbc_core._STRICT_COERCION_ALLOWED_TYPES
+
+
+def test_type_converter_caching() -> None:
+    """get_adbc_type_converter caches output converter instances."""
+    conv1 = get_adbc_type_converter("postgres")
+    conv2 = get_adbc_type_converter("postgres")
+    assert conv1 is conv2
