@@ -28,7 +28,12 @@ from sqlspec.data_dictionary import (
     system_metadata_gated_result,
     unsupported_system_metadata_capability,
 )
-from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
+from sqlspec.data_dictionary.dialects.postgres import (
+    POSTGRES_METADATA_DOMAINS,
+    POSTGRES_SUPPORTED_DOMAINS,
+    POSTGRES_SYSTEM_METADATA_QUERIES,
+    resolve_postgres_json_type,
+)
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 
 if TYPE_CHECKING:
@@ -36,37 +41,6 @@ if TYPE_CHECKING:
     from sqlspec.core import SQL
 
 __all__ = ("PsycopgAsyncDataDictionary", "PsycopgSyncDataDictionary")
-
-
-_POSTGRES_METADATA_DOMAINS: tuple[str, ...] = (
-    "schemas",
-    "objects",
-    "tables",
-    "columns",
-    "constraints",
-    "indexes",
-    "views",
-    "materialized_views",
-    "sequences",
-    "types",
-    "routines",
-    "triggers",
-    "comments",
-    "privileges",
-    "dependencies",
-    "extensions",
-    "partitions",
-    "ddl",
-    "system",
-)
-_POSTGRES_SUPPORTED_DOMAINS = frozenset(d for d in _POSTGRES_METADATA_DOMAINS if d != "system")
-_POSTGRES_SYSTEM_METADATA_QUERIES = {
-    "settings": "settings",
-    "statement_history": "pg_stat_statements",
-    "pg_stat_statements": "pg_stat_statements",
-    "table_statistics": "table_stats",
-    "table_stats": "table_stats",
-}
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -89,7 +63,7 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
     ) -> tuple[SystemMetadataCapability, ...]:
         """Get PostgreSQL opt-in system metadata capability disclosures."""
         _ = driver
-        requested_domains = tuple(_POSTGRES_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
+        requested_domains = tuple(POSTGRES_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
         return tuple(_postgres_system_metadata_capability(domain) for domain in requested_domains)
 
     def get_schemas(self, driver: "PsycopgSyncDriver") -> MetadataResult:
@@ -163,7 +137,7 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
         if gate_result.capability.support != MetadataSupport.SUPPORTED:
             return gate_result
 
-        query_name = _POSTGRES_SYSTEM_METADATA_QUERIES.get(metadata_request.domain)
+        query_name = POSTGRES_SYSTEM_METADATA_QUERIES.get(metadata_request.domain)
         if query_name is None:
             return gate_result
         parameters: dict[str, object] = {}
@@ -367,7 +341,7 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
     ) -> tuple[SystemMetadataCapability, ...]:
         """Get PostgreSQL opt-in system metadata capability disclosures."""
         _ = driver
-        requested_domains = tuple(_POSTGRES_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
+        requested_domains = tuple(POSTGRES_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
         return tuple(_postgres_system_metadata_capability(domain) for domain in requested_domains)
 
     async def get_schemas(self, driver: "PsycopgAsyncDriver") -> MetadataResult:
@@ -443,7 +417,7 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
         if gate_result.capability.support != MetadataSupport.SUPPORTED:
             return gate_result
 
-        query_name = _POSTGRES_SYSTEM_METADATA_QUERIES.get(metadata_request.domain)
+        query_name = POSTGRES_SYSTEM_METADATA_QUERIES.get(metadata_request.domain)
         if query_name is None:
             return gate_result
         parameters: dict[str, object] = {}
@@ -637,7 +611,7 @@ def _postgres_metadata_capability(domain: str) -> MetadataCapability:
             risks=(MetadataRisk.EXPENSIVE, MetadataRisk.PRIVILEGED),
             warnings=("System metadata is opt-in and disabled by default.",),
         )
-    if domain in _POSTGRES_SUPPORTED_DOMAINS:
+    if domain in POSTGRES_SUPPORTED_DOMAINS:
         return MetadataCapability(
             domain=domain,
             support=MetadataSupport.SUPPORTED,
@@ -648,7 +622,7 @@ def _postgres_metadata_capability(domain: str) -> MetadataCapability:
 
 
 def _postgres_metadata_profile(adapter: str, domains: Sequence[str] | None) -> MetadataCapabilityProfile:
-    requested_domains = _POSTGRES_METADATA_DOMAINS if domains is None else tuple(domains)
+    requested_domains = POSTGRES_METADATA_DOMAINS if domains is None else tuple(domains)
     return MetadataCapabilityProfile(
         "postgres",
         adapter=adapter,
@@ -707,7 +681,7 @@ def _ddl_result_from_rows(
 
 
 def _postgres_system_metadata_capability(domain: str) -> SystemMetadataCapability:
-    if domain not in _POSTGRES_SYSTEM_METADATA_QUERIES:
+    if domain not in POSTGRES_SYSTEM_METADATA_QUERIES:
         return unsupported_system_metadata_capability(domain)
     return SystemMetadataCapability(
         domain,
