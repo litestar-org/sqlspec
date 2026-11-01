@@ -110,21 +110,31 @@ class AdbcSessionContext:
             driver_class = AdbcDriver
 
         self._connection = self._acquire_connection()
-        resolved_dialect = resolve_dialect_name(self._statement_config.dialect) or None
-        self._driver = driver_class(
-            connection=self._connection,
-            statement_config=self._statement_config,
-            driver_features=self._driver_features,
-            dialect=resolved_dialect,
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            resolved_dialect = resolve_dialect_name(self._statement_config.dialect) or None
+            self._driver = driver_class(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+                dialect=resolved_dialect,
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            connection = self._connection
+            self._connection = None
+            self._driver = None
+            with contextlib.suppress(BaseException):
+                self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            connection = self._connection
             self._connection = None
+            self._driver = None
+            self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
         return None
 
 

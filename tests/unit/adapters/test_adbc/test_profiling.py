@@ -2,10 +2,106 @@
 
 import subprocess
 import sys
+import tempfile
+from importlib import import_module
 from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.observability import ObservabilityConfig, StatementEvent
+
+
+@pytest.mark.parametrize("stage", ["path", "configuration"])
+@pytest.mark.parametrize("borrowed", [False, True])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_adbc_profiling_setup_failure_releases_owned_connection(
+    monkeypatch: pytest.MonkeyPatch, stage: str, borrowed: bool, cleanup_fails: bool
+) -> None:
+    """Profiling failures preserve setup errors and close only owned connections."""
+    connection = MagicMock()
+    primary = RuntimeError("profile setup failed")
+    removed: list[Path] = []
+    original_unlink = Path.unlink
+
+    def remove_profile(path: Path, missing_ok: bool = False) -> None:
+        if path.name.startswith("sqlspec_duckdb_profile_"):
+            removed.append(path)
+            if cleanup_fails:
+                raise KeyboardInterrupt("profile cleanup interrupted")
+        else:
+            original_unlink(path, missing_ok=missing_ok)
+
+    def temporary_directory() -> str:
+        raise primary
+
+    monkeypatch.setattr(import_module("adbc_driver_duckdb.dbapi"), "connect", lambda **_kwargs: connection)
+    monkeypatch.setattr(Path, "unlink", remove_profile)
+    if stage == "path":
+        monkeypatch.setattr(tempfile, "gettempdir", temporary_directory)
+    else:
+        connection.cursor.return_value.execute.side_effect = primary
+    if cleanup_fails:
+        connection.close.side_effect = SystemExit("connection cleanup interrupted")
+    config = AdbcConfig(
+        connection_config={"driver_name": "duckdb"},
+        connection_instance=connection if borrowed else None,
+        driver_features={"enable_statement_profiling": True},
+    )
+    context = config.provide_session()
+    with pytest.raises(RuntimeError) as caught:
+        context.__enter__()
+    assert caught.value is primary
+    context.__exit__(None, None, None)
+    if borrowed:
+        connection.close.assert_not_called()
+    else:
+        connection.close.assert_called_once_with()
+    if stage == "configuration":
+        assert len(removed) == 1
+        connection.cursor.return_value.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("setup_fails", [False, True])
+def test_adbc_profiling_cleanup_attempts_both_paths_and_release_once(
+    monkeypatch: pytest.MonkeyPatch, setup_fails: bool
+) -> None:
+    """A profile cleanup failure clears ownership and still attempts both path cleanups."""
+    connection = MagicMock()
+    primary = KeyboardInterrupt("metadata interrupted")
+    cleanup_error = RuntimeError("profile cleanup failed")
+    removed: list[Path] = []
+    original_unlink = Path.unlink
+
+    def remove_profile(path: Path, missing_ok: bool = False) -> None:
+        if path.name.startswith("sqlspec_duckdb_profile_"):
+            removed.append(path)
+            raise cleanup_error
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(import_module("adbc_driver_duckdb.dbapi"), "connect", lambda **_kwargs: connection)
+    monkeypatch.setattr(Path, "unlink", remove_profile)
+    if setup_fails:
+        connection.adbc_get_info.side_effect = primary
+    config = AdbcConfig(
+        connection_config={"driver_name": "duckdb"}, driver_features={"enable_statement_profiling": True}
+    )
+    context = config.provide_session()
+    if setup_fails:
+        with pytest.raises(KeyboardInterrupt) as setup_caught:
+            context.__enter__()
+        assert setup_caught.value is primary
+    else:
+        context.__enter__()
+        with pytest.raises(RuntimeError) as cleanup_caught:
+            context.__exit__(None, None, None)
+        assert cleanup_caught.value is cleanup_error
+    assert len(removed) == 2
+    assert removed[0] == removed[1]
+    context.__exit__(None, None, None)
+    assert len(removed) == 2
+    connection.close.assert_called_once_with()
 
 
 def test_adbc_duckdb_enable_statement_profiling_and_execute_script_events() -> None:

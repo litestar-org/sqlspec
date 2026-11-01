@@ -1,13 +1,15 @@
 """Unit tests for ADBC config normalization helpers."""
 
-from typing import Any, get_type_hints
+from typing import Any, cast, get_type_hints
 from unittest.mock import MagicMock
 
 import adbc_driver_manager.dbapi
+import adbc_driver_sqlite.dbapi
 import pytest
 from adbc_driver_bigquery import DatabaseOptions
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver, AdbcDriverFeatures
+from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.config import AdbcConnectionParams
 from sqlspec.adapters.adbc.core import (
     build_connection_config,
@@ -15,7 +17,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_driver_name_from_config,
 )
 from sqlspec.core import SQL, ParameterStyle
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
 def test_adbc_config_runs_connection_create_callback(monkeypatch: Any) -> None:
@@ -35,6 +37,95 @@ def test_adbc_config_runs_connection_create_callback(monkeypatch: Any) -> None:
     assert config.create_connection() is connection
     assert seen == [connection]
     assert "on_connection_create" not in config.driver_features
+
+
+@pytest.mark.parametrize("primary", [ValueError("hook failed"), KeyboardInterrupt("hook interrupted")])
+@pytest.mark.parametrize("cleanup_error", [None, RuntimeError("close failed"), SystemExit("close interrupted")])
+def test_adbc_config_hook_failure_closes_owned_connection(
+    monkeypatch: pytest.MonkeyPatch, primary: BaseException, cleanup_error: BaseException | None
+) -> None:
+    """A failing initialization hook preserves its error after closing its owned connection."""
+    connection = MagicMock()
+    connection.close.side_effect = cleanup_error
+    monkeypatch.setattr(adbc_driver_sqlite.dbapi, "connect", lambda **_kwargs: connection)
+
+    def fail_hook(_connection: Any) -> None:
+        raise primary
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite"}, driver_features={"on_connection_create": fail_hook}
+    )
+    expected = ImproperConfigurationError if isinstance(primary, Exception) else type(primary)
+    with pytest.raises(expected) as caught:
+        config.create_connection()
+    if isinstance(primary, Exception):
+        assert caught.value.__cause__ is primary
+    else:
+        assert caught.value is primary
+    connection.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("stage", ["constructor", "preparation"])
+@pytest.mark.parametrize("primary", [RuntimeError("setup failed"), KeyboardInterrupt("setup interrupted")])
+@pytest.mark.parametrize("cleanup_error", [None, SystemExit("release interrupted")])
+def test_adbc_session_setup_failure_releases_once(
+    stage: str, primary: BaseException, cleanup_error: BaseException | None
+) -> None:
+    """Failed session entry releases the acquisition with its original exception details."""
+    connection = MagicMock()
+    released: list[dict[str, Any]] = []
+
+    class FailingDriver:
+        def __init__(self, **kwargs: Any) -> None:
+            raise primary
+
+    def prepare(driver: AdbcDriver) -> AdbcDriver:
+        raise primary
+
+    def release(conn: Any, **kwargs: Any) -> None:
+        assert conn is connection
+        assert kwargs["exc_tb"] is primary.__traceback__
+        released.append(kwargs)
+        connection.close()
+        if cleanup_error is not None:
+            raise cleanup_error
+
+    context = AdbcSessionContext(
+        acquire_connection=lambda: connection,
+        release_connection=release,
+        statement_config=AdbcConfig(connection_config={"driver_name": "sqlite"}).statement_config,
+        driver_features={},
+        prepare_driver=prepare,
+        driver_class=cast("type[AdbcDriver]", FailingDriver) if stage == "constructor" else AdbcDriver,
+    )
+    with pytest.raises(type(primary)) as caught:
+        context.__enter__()
+    assert caught.value is primary
+    assert len(released) == 1
+    assert released[0]["exc_type"] is type(primary)
+    assert released[0]["exc_val"] is primary
+    context.__exit__(None, None, None)
+    connection.close.assert_called_once_with()
+
+
+def test_adbc_session_release_once_after_cleanup_failure() -> None:
+    """An exit failure cannot release an acquisition again on a later exit."""
+    connection = MagicMock()
+    cleanup_error = RuntimeError("close failed")
+    connection.close.side_effect = cleanup_error
+    context = AdbcSessionContext(
+        acquire_connection=lambda: connection,
+        release_connection=lambda conn, **_kwargs: conn.close(),
+        statement_config=AdbcConfig(connection_config={"driver_name": "sqlite"}).statement_config,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+    context.__enter__()
+    with pytest.raises(RuntimeError) as caught:
+        context.__exit__(None, None, None)
+    assert caught.value is cleanup_error
+    context.__exit__(None, None, None)
+    connection.close.assert_called_once_with()
 
 
 def test_resolve_driver_name_alias_to_connect_path() -> None:

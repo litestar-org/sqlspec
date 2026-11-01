@@ -1,5 +1,6 @@
 """ADBC database configuration."""
 
+import contextlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
@@ -206,29 +207,38 @@ class _AdbcSessionConnectionHandler(SyncPoolSessionFactory):
         return self._driver_features
 
     def acquire_connection(self) -> "AdbcConnection":
-        self._connection = self._config.create_connection()
-        if self._config._resolved_dialect == "duckdb" and bool(
-            self._driver_features.get("enable_statement_profiling", False)
-        ):
-            self._profile_path = create_duckdb_profile_path()
-            configure_adbc_duckdb_profiling(self._connection, self._profile_path)
-            self._driver_features["_duckdb_profile_path"] = str(self._profile_path)
-        return cast("AdbcConnection", self._connection)
+        connection: AdbcConnection = self._config.create_connection()
+        self._connection = connection
+        try:
+            if self._config._resolved_dialect == "duckdb" and bool(
+                self._driver_features.get("enable_statement_profiling", False)
+            ):
+                self._profile_path = create_duckdb_profile_path()
+                configure_adbc_duckdb_profiling(connection, self._profile_path)
+                self._driver_features["_duckdb_profile_path"] = str(self._profile_path)
+        except BaseException as exc:
+            with contextlib.suppress(BaseException):
+                self.release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            raise
+        return connection
 
     def release_connection(self, _conn: "AdbcConnection", **kwargs: Any) -> None:
         if self._connection is None:
             return
+        connection = self._connection
+        profile_path = self._profile_path
+        self._connection = None
+        self._profile_path = None
+        raw_path = self._driver_features.pop("_duckdb_profile_path", None)
         try:
-            if self._connection is not self._config.connection_instance:
-                self._connection.close()
+            if connection is not self._config.connection_instance:
+                connection.close()
         finally:
-            self._connection = None
-            if self._profile_path is not None:
-                cleanup_duckdb_profile_path(self._profile_path)
-                self._profile_path = None
-            raw_path = self._driver_features.pop("_duckdb_profile_path", None)
-            if isinstance(raw_path, str):
-                cleanup_duckdb_profile_path(Path(raw_path))
+            try:
+                cleanup_duckdb_profile_path(profile_path)
+            finally:
+                if isinstance(raw_path, str):
+                    cleanup_duckdb_profile_path(Path(raw_path))
 
 
 class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
@@ -348,6 +358,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         if self.connection_instance is not None:
             return self.connection_instance
 
+        connection: AdbcConnection | None = None
         try:
             driver_name = cast(
                 "str | None", self.connection_config.get("driver_name") or self.connection_config.get("driver")
@@ -361,7 +372,12 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             if self._user_connection_hook is not None:
                 self._user_connection_hook(cast("AdbcConnection", connection))
             return cast("AdbcConnection", connection)
-        except Exception as e:
+        except BaseException as e:
+            if connection is not None:
+                with contextlib.suppress(BaseException):
+                    connection.close()
+            if not isinstance(e, Exception):
+                raise
             err_driver_name = (
                 self.connection_config.get("driver_name") or self.connection_config.get("driver") or "Unknown"
             )
