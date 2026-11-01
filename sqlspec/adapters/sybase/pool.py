@@ -6,12 +6,11 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sybase._typing import PYMSSQL_MODULE, SybaseConnection
 from sqlspec.adapters.sybase.core import DEFAULT_SYBASE_CONN_PROPERTIES, DEFAULT_SYBASE_TDS_VERSION
-from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -22,7 +21,6 @@ __all__ = ("SybaseConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sybase"
-pymssql = PYMSSQL_MODULE
 
 
 class SybaseConnectionPool:
@@ -98,10 +96,7 @@ class SybaseConnectionPool:
         Returns:
             SybaseConnection: A newly opened, fully configured connection.
         """
-        global pymssql
-        if pymssql is None:
-            pymssql = _load_pymssql_module()
-        connection = pymssql.connect(**self._connection_parameters)
+        connection = PYMSSQL_MODULE.connect(**self._connection_parameters)
 
         if self._on_connection_create is not None:
             self._on_connection_create(connection)
@@ -265,11 +260,3 @@ class SybaseConnectionPool:
                 del self._thread_local.created_at
             if "last_used" in thread_state:
                 del self._thread_local.last_used
-
-
-def _load_pymssql_module() -> Any:
-    """Import ``pymssql`` lazily or raise ``MissingDependencyError``."""
-    try:
-        return import_module("pymssql")
-    except ImportError as exc:
-        raise MissingDependencyError(package="pymssql", install_package="sybase") from exc

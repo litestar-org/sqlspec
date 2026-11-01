@@ -9,10 +9,11 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.db2 import _typing as typing_module
+from sqlspec.adapters.db2._typing import ibm_db_dbi
 from sqlspec.adapters.db2.core import build_dsn_string
-from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, MissingDependencyError
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
-from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -23,7 +24,7 @@ __all__ = ("Db2AsyncConnectionPool", "Db2AsyncPoolConnectionContext", "Db2SyncCo
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "db2"
-_IBM_DB_DBI: "Any | None" = None
+_IBM_DB_DBI = ibm_db_dbi
 
 
 class Db2SyncConnectionPool:
@@ -91,9 +92,14 @@ class Db2SyncConnectionPool:
         Raises:
             MissingDependencyError: When ibm_db is not installed.
         """
-        ibm_db_dbi = _require_ibm_db_dbi()
-        autocommit_mode = ibm_db_dbi.SQL_AUTOCOMMIT_ON if self._autocommit else ibm_db_dbi.SQL_AUTOCOMMIT_OFF
-        connection = ibm_db_dbi.connect(self._dsn, "", "", "", "", {ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode})
+        autocommit_mode = (
+            typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_ON
+            if self._autocommit
+            else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
+        )
+        connection = typing_module.ibm_db_dbi.connect(
+            self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
+        )
 
         if self._on_connection_create is not None:
             try:
@@ -374,10 +380,13 @@ class Db2AsyncConnectionPool:
         Raises:
             MissingDependencyError: When ibm_db is not installed.
         """
-        ibm_db_dbi = _require_ibm_db_dbi()
-        autocommit_mode = ibm_db_dbi.SQL_AUTOCOMMIT_ON if self._autocommit else ibm_db_dbi.SQL_AUTOCOMMIT_OFF
-        connection = await ibm_db_dbi.AsyncConnection.connect(
-            self._dsn, "", "", "", "", {ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
+        autocommit_mode = (
+            typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_ON
+            if self._autocommit
+            else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
+        )
+        connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(
+            self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
         )
         if self._on_connection_create is not None:
             try:
@@ -550,20 +559,3 @@ class Db2AsyncConnectionPool:
         """Close a connection, suppressing driver errors."""
         with contextlib.suppress(Exception):
             await connection.close()
-
-
-def _require_ibm_db_dbi() -> Any:
-    """Return the ``ibm_db_dbi`` module, importing it on first use.
-
-    Returns:
-        Any: The ``ibm_db_dbi`` module.
-
-    Raises:
-        MissingDependencyError: When ibm_db is not installed.
-    """
-    global _IBM_DB_DBI
-    if _IBM_DB_DBI is None:
-        _IBM_DB_DBI = import_optional("ibm_db_dbi")
-        if _IBM_DB_DBI is None:
-            raise MissingDependencyError(package="ibm_db", install_package="db2")
-    return _IBM_DB_DBI

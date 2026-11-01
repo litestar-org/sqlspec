@@ -113,6 +113,7 @@ extras = [
   "adlfs",
   "gcsfs",
   "dishka",
+  "sqlanydb>=1.0.14",
 ]
 lint = [
   "mypy>=2.0.0",

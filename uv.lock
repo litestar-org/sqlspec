@@ -5945,6 +5945,7 @@ dev = [
     { name = "slotscheck" },
     { name = "sniffio" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "sqlanydb" },
     { name = "types-cffi" },
     { name = "types-colorama" },
     { name = "types-protobuf" },
@@ -5978,6 +5979,7 @@ extras = [
     { name = "pgvector" },
     { name = "polars" },
     { name = "pyarrow" },
+    { name = "sqlanydb" },
 ]
 lint = [
     { name = "asyncpg-stubs" },
@@ -6137,6 +6139,7 @@ dev = [
     { name = "slotscheck", specifier = ">=0.16.5" },
     { name = "sniffio" },
     { name = "sqlalchemy", extras = ["asyncio"] },
+    { name = "sqlanydb", specifier = ">=1.0.14" },
     { name = "types-cffi" },
     { name = "types-colorama" },
     { name = "types-protobuf" },
@@ -6170,6 +6173,7 @@ extras = [
     { name = "pgvector" },
     { name = "polars" },
     { name = "pyarrow" },
+    { name = "sqlanydb", specifier = ">=1.0.14" },
 ]
 lint = [
     { name = "asyncpg-stubs" },

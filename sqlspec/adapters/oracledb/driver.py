@@ -86,9 +86,10 @@ from sqlspec.driver import (
 )
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
+from sqlspec.storage._utils import import_pyarrow
 from sqlspec.utils.arrow_helpers import coerce_oracle_df_to_arrow_table
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
+from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 from sqlspec.utils.uuids import uuid4
@@ -115,7 +116,7 @@ __all__ = (
 
 
 logger = get_logger(__name__)
-pa: Any = import_optional("pyarrow")
+
 
 PLAN_STATEMENT_ID_MAX_LENGTH: Final[int] = 30
 """Width of the PLAN_TABLE STATEMENT_ID column."""
@@ -819,9 +820,11 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 try:
                     first_batch = next(batch_generator)
                 except StopIteration:
+                    pa = import_pyarrow()
                     empty_schema = arrow_schema if arrow_schema is not None else pa.schema([])
                     reader = pa.RecordBatchReader.from_batches(empty_schema, ())
                     return create_arrow_result(prepared_statement, reader, rows_affected=0)
+                pa = import_pyarrow()
                 schema = arrow_schema if arrow_schema is not None else first_batch.schema
                 lazy_reader = pa.RecordBatchReader.from_batches(schema, chain((first_batch,), batch_generator))
                 return create_arrow_result(prepared_statement, lazy_reader, rows_affected=-1)
@@ -859,7 +862,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             )
         self._check_pending_exception(exc_handler)
 
-        arrow_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
+        arrow_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
         column_names = normalize_column_names(arrow_table.column_names, self.driver_features)
         if column_names != arrow_table.column_names:
             arrow_table = arrow_table.rename_columns(column_names)
@@ -1242,7 +1245,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
             )
         for oracle_df in oracle_dfs:
-            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
+            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
             column_names = normalize_column_names(batch_table.column_names, self.driver_features)
             if column_names != batch_table.column_names:
                 batch_table = batch_table.rename_columns(column_names)
@@ -1273,7 +1276,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
             )
         for oracle_df in oracle_dfs:
-            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
+            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
             column_names = normalize_column_names(batch_table.column_names, self.driver_features)
             if column_names != batch_table.column_names:
                 batch_table = batch_table.rename_columns(column_names)
@@ -1749,6 +1752,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 )
                 record_batches, batch_schema = batches_result
                 rows_affected = sum(batch.num_rows for batch in record_batches)
+                pa = import_pyarrow()
                 if batch_schema is None:
                     batch_schema = pa.schema([])
                 arrow_data: object
@@ -1775,7 +1779,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             )
         self._check_pending_exception(exc_handler)
 
-        arrow_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
+        arrow_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
         column_names = normalize_column_names(arrow_table.column_names, self.driver_features)
         if column_names != arrow_table.column_names:
             arrow_table = arrow_table.rename_columns(column_names)
@@ -2173,7 +2177,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
             )
         async for oracle_df in oracle_dfs:
-            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
+            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
             column_names = normalize_column_names(batch_table.column_names, self.driver_features)
             if column_names != batch_table.column_names:
                 batch_table = batch_table.rename_columns(column_names)
@@ -2317,6 +2321,7 @@ def _arrow_schema_supports_direct_path(arrow_table: Any) -> bool:
         True when every column type is known to be convertible.
     """
     ensure_pyarrow()
+    pa = import_pyarrow()
 
     for field in arrow_table.schema:
         data_type = field.type

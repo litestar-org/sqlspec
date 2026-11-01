@@ -5,41 +5,29 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
+import importlib
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.utils.module_loader import import_optional, import_optional_attr
-
-
-class _MissingPymssqlDriverError(Exception):
-    """Placeholder base used only when pymssql is not installed."""
-
-
-_NATIVE_ERROR: Any = import_optional_attr("pymssql", "Error") or _MissingPymssqlDriverError
-PymssqlError: Any = _NATIVE_ERROR
-PYMSSQL_MODULE: Any = import_optional("pymssql")
-_PymssqlConnection: Any = getattr(PYMSSQL_MODULE, "Connection", Any) if PYMSSQL_MODULE is not None else Any
-_PymssqlRawCursor: Any = getattr(PYMSSQL_MODULE, "Cursor", Any) if PYMSSQL_MODULE is not None else Any
-_DRIVER_CLS: Any = None
+import pymssql as PYMSSQL_MODULE  # noqa: N812
+from pymssql import Connection, Cursor
+from pymssql import Error as PymssqlError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
 
-    from pymssql import Connection as _TypeCheckingConnection
-    from pymssql import Cursor as _TypeCheckingCursor
     from pymssql._pymssql import QueryParams as PymssqlQueryParams
 
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import StatementConfig
 
-    PymssqlConnection: TypeAlias = _TypeCheckingConnection
-    PymssqlRawCursor: TypeAlias = _TypeCheckingCursor
-
-if not TYPE_CHECKING:
+    PymssqlConnection: TypeAlias = Connection
+    PymssqlRawCursor: TypeAlias = Cursor
+else:
     PymssqlQueryParams = Any
-    PymssqlConnection = _PymssqlConnection
-    PymssqlRawCursor = _PymssqlRawCursor
+    PymssqlConnection = Connection
+    PymssqlRawCursor = Cursor
 
 __all__ = (
     "PYMSSQL_MODULE",
@@ -82,6 +70,9 @@ class PymssqlCursor:
                 self.cursor.close()
 
 
+_DRIVER_CLS: "type[PymssqlDriver] | None" = None
+
+
 class PymssqlSessionContext:
     """Sync context manager for pymssql sessions."""
 
@@ -118,8 +109,10 @@ class PymssqlSessionContext:
         global _DRIVER_CLS
         driver_cls = self._driver_cls or _DRIVER_CLS
         if driver_cls is None:
-            _DRIVER_CLS = import_optional_attr("sqlspec.adapters.pymssql.driver", "PymssqlDriver")
+            module = importlib.import_module("sqlspec.adapters.pymssql.driver")
+            _DRIVER_CLS = module.PymssqlDriver
             driver_cls = _DRIVER_CLS
+        assert driver_cls is not None
         self._connection = self._acquire_connection()
         self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features

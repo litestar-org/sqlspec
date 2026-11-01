@@ -167,7 +167,7 @@ def test_sybase_pool_requires_tdsver_or_server_alias(monkeypatch: pytest.MonkeyP
         def connect(self, **kwargs: Any) -> FakeConnection:
             return fake_conn
 
-    monkeypatch.setattr(pool_module, "pymssql", FakeModule())
+    monkeypatch.setattr(pool_module, "PYMSSQL_MODULE", FakeModule())
 
     monkeypatch.delenv("TDSVER", raising=False)
     cfg_invalid = build_connection_config({"server": "ase.example.test", "user": "sa", "database": "master"})
@@ -640,33 +640,6 @@ def test_sybase_has_schema_under_active_exception(monkeypatch: pytest.MonkeyPatc
     except RuntimeError:
         has_user = driver.has_schema("dbo")
         assert has_user is True
-
-
-def test_sybase_pool_new_connection_caches_pymssql_module(monkeypatch: pytest.MonkeyPatch) -> None:
-    """new_connection caches pymssql module reference at module level."""
-    from sqlspec.adapters.sybase import pool as sybase_pool
-
-    import_count = 0
-    real_import = sybase_pool._load_pymssql_module
-
-    def mock_load() -> Any:
-        nonlocal import_count
-        import_count += 1
-        return real_import()
-
-    monkeypatch.setattr(sybase_pool, "_load_pymssql_module", mock_load)
-    monkeypatch.setattr(sybase_pool, "pymssql", None)
-    monkeypatch.setenv("TDSVER", "5.0")
-
-    pool = sybase_pool.SybaseConnectionPool({"server": "localhost", "database": "demo"})
-    monkeypatch.setattr("pymssql.connect", lambda **_kw: FakeConnection(FakeCursor()))
-
-    _ = pool.new_connection()
-    assert sybase_pool.pymssql is not None
-    assert import_count == 1
-
-    _ = pool.new_connection()
-    assert import_count == 1
 
 
 def test_sybase_format_identifier_and_insert_statements() -> None:

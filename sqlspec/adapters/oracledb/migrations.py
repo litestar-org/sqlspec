@@ -5,9 +5,8 @@ to handle Oracle's unique SQL syntax requirements.
 """
 
 import getpass
-from typing import TYPE_CHECKING, cast
-
-from rich.console import Console
+import importlib
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.builder import CreateTable, Select, sql
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
@@ -24,7 +23,14 @@ if TYPE_CHECKING:
 __all__ = ("OracleAsyncMigrationTracker", "OracleSyncMigrationTracker")
 
 logger = get_logger("sqlspec.migrations.oracle")
-console = Console()
+_console: Any = None
+
+
+def _get_console() -> Any:
+    global _console
+    if _console is None:
+        _console = importlib.import_module("rich.console").Console()
+    return _console
 
 
 class OracleMigrationTrackerMixin:
@@ -367,7 +373,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, SyncMigrationTrack
                 return
 
             if self._should_echo():
-                console.print(
+                _get_console().print(
                     f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
                 )
 
@@ -376,7 +382,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, SyncMigrationTrack
 
             driver.commit()
             if self._should_echo():
-                console.print("[green]Migration tracking table schema updated successfully[/]")
+                _get_console().print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as e:
             logger.warning("Could not check or migrate tracking table schema: %s", e)
@@ -593,7 +599,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, AsyncMigrationTra
                 return
 
             if self._should_echo():
-                console.print(
+                _get_console().print(
                     f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
                 )
 
@@ -602,7 +608,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, AsyncMigrationTra
 
             await driver.commit()
             if self._should_echo():
-                console.print("[green]Migration tracking table schema updated successfully[/]")
+                _get_console().print("[green]Migration tracking table schema updated successfully[/]")
 
         except Exception as e:
             logger.warning("Could not check or migrate tracking table schema: %s", e)

@@ -23,7 +23,10 @@ __all__ = ("register_pgvector_async", "register_pgvector_sync")
 
 logger = get_logger(__name__)
 
-_pgvector_psycopg: Any | None = import_optional("pgvector.psycopg")
+
+def _pgvector_psycopg_module() -> Any:
+    """Return the ``pgvector.psycopg`` module when installed, otherwise ``None``."""
+    return import_optional("pgvector.psycopg")
 
 
 def register_pgvector_sync(connection: "Connection[Any]") -> None:
@@ -35,7 +38,7 @@ def register_pgvector_sync(connection: "Connection[Any]") -> None:
     Args:
         connection: Psycopg sync connection.
     """
-    pgvector_psycopg = _pgvector_psycopg
+    pgvector_psycopg = _pgvector_psycopg_module()
     if pgvector_psycopg is None:
         return
 
@@ -58,7 +61,7 @@ async def register_pgvector_async(connection: "AsyncConnection[Any]") -> None:
     Args:
         connection: Psycopg async connection.
     """
-    pgvector_psycopg = _pgvector_psycopg
+    pgvector_psycopg = _pgvector_psycopg_module()
     if pgvector_psycopg is None:
         return
 

@@ -13,9 +13,12 @@ from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.type_guards import is_async_readable, is_readable
 
-np: Any = import_optional("numpy")
-
 __all__ = ("OracleOutputConverter",)
+
+
+def _numpy_module() -> Any:
+    """Return the ``numpy`` module when installed, otherwise ``None``."""
+    return import_optional("numpy")
 
 
 class OracleOutputConverter:
@@ -77,7 +80,11 @@ class OracleOutputConverter:
             array.array compatible with Oracle VECTOR if value is ndarray,
             otherwise original value.
         """
-        if not NUMPY_INSTALLED or np is None:
+        if not NUMPY_INSTALLED:
+            return value
+
+        np = _numpy_module()
+        if np is None:
             return value
 
         if isinstance(value, np.ndarray):

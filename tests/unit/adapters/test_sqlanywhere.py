@@ -39,7 +39,6 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
-    MissingDependencyError,
     NotFoundError,
     NotNullViolationError,
     OperationalError,
@@ -176,7 +175,7 @@ def test_sqlanywhere_pool_checkout_release_and_close(monkeypatch: pytest.MonkeyP
             captured_kwargs.append(kwargs)
             return fake_conn
 
-    monkeypatch.setattr(pool_module, "_load_sqlanydb_module", lambda: FakeSqlanydbModule())
+    monkeypatch.setattr(pool_module, "SQLANYDB_MODULE", FakeSqlanydbModule())
 
     cfg = build_connection_config({"user": "dba", "password": "sql", "database": "demo", "host": "localhost"})
     pool = SqlanywhereConnectionPool(cfg, min_size=1, max_size=2)
@@ -191,21 +190,6 @@ def test_sqlanywhere_pool_checkout_release_and_close(monkeypatch: pytest.MonkeyP
     assert pool.size() == 1
     pool.close()
     assert fake_conn.closed is True
-
-
-def test_sqlanywhere_pool_raises_missing_dependency_when_sqlanydb_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SqlanywhereConnectionPool raises MissingDependencyError when sqlanydb is not installed."""
-    import sqlspec.adapters.sqlanywhere.pool as pool_module
-
-    def _raise_import_error() -> Any:
-        msg = "No module named 'sqlanydb'"
-        raise ImportError(msg)
-
-    monkeypatch.setattr(pool_module, "import_module", lambda name: _raise_import_error())
-
-    pool = SqlanywhereConnectionPool({"uid": "dba", "pwd": "sql"})
-    with pytest.raises(MissingDependencyError, match="sqlanydb"):
-        pool.acquire()
 
 
 @pytest.mark.parametrize(

@@ -5,43 +5,30 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
+import importlib
 from typing import TYPE_CHECKING, Any
 
+import pymssql as PYMSSQL_MODULE  # noqa: N812
 from mypy_extensions import mypyc_attr
-
-from sqlspec.utils.module_loader import import_optional_attr
-
-PYMSSQL_MODULE: Any = None
-_DRIVER_CLS: Any = None
-
-
-class _MissingSybaseDriverError(Exception):
-    """Placeholder base used only when pymssql is not installed."""
-
-
-_NATIVE_ERROR: Any = import_optional_attr("pymssql", "Error") or _MissingSybaseDriverError
-SybaseError: Any = _NATIVE_ERROR
-
+from pymssql import Connection, Cursor
+from pymssql import Error as SybaseError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
 
-    from pymssql import Connection as _SybaseConnection
-    from pymssql import Cursor as _SybaseRawCursor
     from pymssql._pymssql import QueryParams as SybaseQueryParams
 
     from sqlspec.adapters.sybase.driver import SybaseDriver
     from sqlspec.core import StatementConfig
 
-    SybaseConnection: TypeAlias = _SybaseConnection
-    SybaseRawCursor: TypeAlias = _SybaseRawCursor
-
-if not TYPE_CHECKING:
+    SybaseConnection: TypeAlias = Connection
+    SybaseRawCursor: TypeAlias = Cursor
+else:
     SybaseQueryParams = Any
-    SybaseConnection = Any
-    SybaseRawCursor = Any
+    SybaseConnection = Connection
+    SybaseRawCursor = Cursor
 
 __all__ = (
     "PYMSSQL_MODULE",
@@ -84,6 +71,9 @@ class SybaseCursor:
                 self.cursor.close()
 
 
+_DRIVER_CLS: "type[SybaseDriver] | None" = None
+
+
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SybaseSessionContext:
     """Sync context manager for Sybase ASE sessions."""
@@ -117,7 +107,9 @@ class SybaseSessionContext:
     def __enter__(self) -> "SybaseDriver":
         global _DRIVER_CLS
         if _DRIVER_CLS is None:
-            _DRIVER_CLS = import_optional_attr("sqlspec.adapters.sybase.driver", "SybaseDriver")
+            module = importlib.import_module("sqlspec.adapters.sybase.driver")
+            _DRIVER_CLS = module.SybaseDriver
+        assert _DRIVER_CLS is not None
         self._connection = self._acquire_connection()
         self._driver = _DRIVER_CLS(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features

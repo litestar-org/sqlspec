@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleSyncRawCursor as Cursor
 
 SPARSE_VECTOR_TYPE = OracleSparseVector
-np: Any = import_optional("numpy")
+
 
 __all__ = (
     "DTYPE_TO_ARRAY_CODE",
@@ -72,6 +72,11 @@ else:
     DTYPE_TO_ARRAY_CODE["float16"] = _TYPECODE_FLOAT16
 
 
+def _numpy_module() -> Any:
+    """Return the ``numpy`` module when installed, otherwise ``None``."""
+    return import_optional("numpy")
+
+
 def numpy_converter_in(value: Any) -> "array.array[Any]":
     """Convert NumPy array to Oracle array for VECTOR insertion.
 
@@ -112,6 +117,7 @@ def numpy_converter_out(value: "array.array[Any]") -> Any:
     if not NUMPY_INSTALLED:
         return value
 
+    np = _numpy_module()
     return np.array(value, copy=True, dtype=value.typecode)
 
 
@@ -161,7 +167,7 @@ def _is_vector_payload(value: Any) -> bool:
         return False
     if isinstance(value, array.array):
         return True
-    if NUMPY_INSTALLED and isinstance(value, np.ndarray):
+    if NUMPY_INSTALLED and isinstance(value, _numpy_module().ndarray):
         return True
     if isinstance(value, (list, tuple)) and value:
         return all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
@@ -202,7 +208,7 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
     if server_major is not None and server_major < _ORACLE_VECTOR_MIN_MAJOR:
         return None
 
-    if NUMPY_INSTALLED and isinstance(value, np.ndarray):
+    if NUMPY_INSTALLED and isinstance(value, _numpy_module().ndarray):
         return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize, inconverter=numpy_converter_in)
 
     if isinstance(value, array.array):

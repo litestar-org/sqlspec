@@ -38,8 +38,7 @@ if TYPE_CHECKING:
     PyMysqlConnect: TypeAlias = type["PyMysqlConnection"]
     PyMysqlFieldType: TypeAlias = PyMysqlFieldTypeProtocol
     PyMysqlServerStatus: TypeAlias = PyMysqlServerStatusProtocol
-
-if not TYPE_CHECKING:
+else:
     PyMysqlConnect = pymysql.connect
     PyMysqlFieldType = _PYMYSQL_FIELD_TYPE
     PyMysqlServerStatus = _PYMYSQL_SERVER_STATUS

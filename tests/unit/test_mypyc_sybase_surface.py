@@ -92,13 +92,13 @@ def test_mypyc_smoke_imports_include_sybase_and_sqlanywhere() -> None:
     assert smoke_by_name["sqlanywhere_pool"].require_compiled is True
 
 
-def test_importing_sybase_and_sqlanywhere_adapters_does_not_eagerly_import_driver_packages() -> None:
-    """Importing sqlspec.adapters.sybase and sqlspec.adapters.sqlanywhere defers sqlanydb."""
+def test_importing_sybase_and_sqlanywhere_adapters_does_not_import_rich() -> None:
+    """Importing sqlspec.adapters.sybase and sqlspec.adapters.sqlanywhere does not load rich."""
     script = (
         "import sys\n"
         "import sqlspec.adapters.sybase\n"
         "import sqlspec.adapters.sqlanywhere\n"
-        "leaked = [name for name in ('sqlanydb', 'rich') if name in sys.modules]\n"
+        "leaked = [name for name in ('rich',) if name in sys.modules]\n"
         "assert not leaked, f'Eagerly imported: {leaked}'\n"
     )
     subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)

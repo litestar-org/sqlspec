@@ -5,20 +5,24 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
+import importlib
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.typing import import_optional, import_optional_attr
+import mysql
+import mysql.connector as _mysql_connector
+from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
+from mysql.connector import aio as _mysql_connector_aio
+from mysql.connector import constants as _mysql_connector_constants
+from mysql.connector import cursor as _mysql_connector_cursor
+from mysql.connector import pooling as _mysql_connector_pooling
+from mysql.connector.aio import MySQLConnection as _MysqlConnectorAsyncConnection
+from mysql.connector.aio import cursor as _mysql_connector_aio_cursor
+from mysql.connector.aio.pooling import MySQLConnectionPool as MysqlConnectorAsyncPool
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import ClassVar, Protocol, TypeAlias
-
-    import mysql.connector as _mysql_connector
-    from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
-    from mysql.connector import pooling as _mysql_connector_pooling
-    from mysql.connector.aio.pooling import MySQLConnectionPool as MysqlConnectorAsyncPool
-    from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
 
     from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
     from sqlspec.core import StatementConfig
@@ -72,24 +76,22 @@ if TYPE_CHECKING:
     MysqlConnectorSyncConnection: TypeAlias = _MysqlConnectorSyncConnection
     MysqlConnectorAio: TypeAlias = MysqlConnectorAioModuleProtocol
     MysqlConnectorAsyncConnection: TypeAlias = MysqlConnectorAsyncConnectionProtocol
-    MysqlConnectorSyncRawCursor: TypeAlias = _MysqlConnectorSyncRawCursor
+    MysqlConnectorSyncRawCursor: TypeAlias = _mysql_connector_cursor.MySQLCursor
     MysqlConnectorConnectionPool: TypeAlias = _mysql_connector_pooling.MySQLConnectionPool
     MysqlConnectorError: TypeAlias = _mysql_connector.Error
     MysqlConnectorFieldType: TypeAlias = MysqlConnectorFieldTypeProtocol
     MysqlConnectorMysqlModule: TypeAlias = MysqlConnectorMysqlModuleProtocol
     MysqlConnectorAsyncRawCursor: TypeAlias = MysqlConnectorAsyncRawCursorProtocol
-
-if not TYPE_CHECKING:
-    MysqlConnectorAsyncPool = import_optional_attr("mysql.connector.aio.pooling", "MySQLConnectionPool")
-    MysqlConnectorAio = import_optional_attr("mysql.connector", "aio")
-    MysqlConnectorSyncConnection = import_optional_attr("mysql.connector", "MySQLConnection")
-    MysqlConnectorAsyncConnection = import_optional_attr("mysql.connector.aio", "MySQLConnection")
-    MysqlConnectorConnectionPool = import_optional_attr("mysql.connector.pooling", "MySQLConnectionPool")
-    MysqlConnectorError = import_optional_attr("mysql.connector", "Error")
-    MysqlConnectorFieldType = import_optional_attr("mysql.connector.constants", "FieldType")
-    MysqlConnectorMysqlModule = import_optional("mysql")
-    MysqlConnectorSyncRawCursor = import_optional_attr("mysql.connector.cursor", "MySQLCursor")
-    MysqlConnectorAsyncRawCursor = import_optional_attr("mysql.connector.aio.cursor", "MySQLCursor")
+else:
+    MysqlConnectorAio = _mysql_connector_aio
+    MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
+    MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection
+    MysqlConnectorConnectionPool = _mysql_connector_pooling.MySQLConnectionPool
+    MysqlConnectorError = _mysql_connector.Error
+    MysqlConnectorFieldType = _mysql_connector_constants.FieldType
+    MysqlConnectorMysqlModule = mysql
+    MysqlConnectorSyncRawCursor = _mysql_connector_cursor.MySQLCursor
+    MysqlConnectorAsyncRawCursor = _mysql_connector_aio_cursor.MySQLCursor
 
 __all__ = (
     "MysqlConnectorAio",
@@ -267,7 +269,8 @@ def _get_mysqlconnector_sync_driver_type() -> "type[MysqlConnectorSyncDriver]":
     global _resolved_sync_driver_type
     driver_cls = _resolved_sync_driver_type
     if driver_cls is None:
-        driver_cls = import_optional_attr("sqlspec.adapters.mysqlconnector.driver", "MysqlConnectorSyncDriver")
+        module = importlib.import_module("sqlspec.adapters.mysqlconnector.driver")
+        driver_cls = module.MysqlConnectorSyncDriver
         _resolved_sync_driver_type = driver_cls
     return driver_cls
 
@@ -277,6 +280,7 @@ def _get_mysqlconnector_async_driver_type() -> "type[MysqlConnectorAsyncDriver]"
     global _resolved_async_driver_type
     driver_cls = _resolved_async_driver_type
     if driver_cls is None:
-        driver_cls = import_optional_attr("sqlspec.adapters.mysqlconnector.driver", "MysqlConnectorAsyncDriver")
+        module = importlib.import_module("sqlspec.adapters.mysqlconnector.driver")
+        driver_cls = module.MysqlConnectorAsyncDriver
         _resolved_async_driver_type = driver_cls
     return driver_cls

@@ -4,37 +4,22 @@ import contextlib
 import importlib
 from typing import TYPE_CHECKING, Any, cast
 
+import ibm_db
+import ibm_db_dbi
+from ibm_db_dbi import AsyncConnection as Db2AsyncConnection
+from ibm_db_dbi import AsyncCursor as Db2AsyncRawCursor
+from ibm_db_dbi import Connection as Db2SyncConnection
+from ibm_db_dbi import Cursor as Db2RawCursor
+from ibm_db_dbi import Error as Db2Error
+
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.typing import import_optional_attr
-from sqlspec.utils.module_loader import import_optional
-
-
-class _Db2UnavailableError(Exception):
-    """Fallback Db2 exception base when ibm_db_dbi is not installed."""
-
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
 
-    from ibm_db_dbi import AsyncConnection as Db2AsyncConnection
-    from ibm_db_dbi import AsyncCursor as Db2AsyncRawCursor
-    from ibm_db_dbi import Connection as Db2SyncConnection
-    from ibm_db_dbi import Cursor as Db2RawCursor
-    from ibm_db_dbi import Error as Db2Error
-
     from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
     from sqlspec.core import StatementConfig
-
-if not TYPE_CHECKING:
-    Db2SyncConnection = import_optional_attr("ibm_db_dbi", "Connection") or Any
-    Db2RawCursor = import_optional_attr("ibm_db_dbi", "Cursor") or Any
-    Db2AsyncConnection = import_optional_attr("ibm_db_dbi", "AsyncConnection") or Any
-    Db2AsyncRawCursor = import_optional_attr("ibm_db_dbi", "AsyncCursor") or Any
-    Db2Error = import_optional_attr("ibm_db_dbi", "Error") or _Db2UnavailableError
-
-ibm_db = import_optional("ibm_db")
-ibm_db_dbi = import_optional("ibm_db_dbi")
 
 __all__ = (
     "Db2AsyncConnection",

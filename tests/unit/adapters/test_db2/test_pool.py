@@ -6,9 +6,7 @@ from typing import cast
 
 import pytest
 
-import sqlspec.adapters.db2.pool as pool_module
 from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
-from sqlspec.exceptions import MissingDependencyError
 from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor, FakeIbmDbDbiModule, FakeIbmDbModule
 
 FakeModules = tuple[FakeIbmDbModule, FakeIbmDbDbiModule]
@@ -65,19 +63,6 @@ def test_pool_renders_dsn_and_passes_empty_connect_arguments(fake_ibm_db: FakeMo
         "",
         "",
     )
-
-
-def test_pool_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """MissingDependencyError is raised when ibm_db_dbi is not available."""
-    monkeypatch.setattr(pool_module, "_IBM_DB_DBI", None)
-    monkeypatch.setattr(pool_module, "import_optional", lambda _name: None)
-
-    pool = Db2SyncConnectionPool({"database": "TESTDB"})
-
-    with pytest.raises(MissingDependencyError) as exc_info:
-        pool.acquire()
-
-    assert "ibm_db" in str(exc_info.value)
 
 
 def test_pool_recycles_failed_health_check(fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,23 +5,13 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
+import importlib
 from typing import TYPE_CHECKING, Any
 
+import sqlanydb as SQLANYDB_MODULE  # noqa: N812
 from mypy_extensions import mypyc_attr
-
-from sqlspec.utils.module_loader import import_optional_attr
-
-SQLANYDB_MODULE: Any = None
-_DRIVER_CLS: Any = None
-
-
-class _MissingSqlanywhereDriverError(Exception):
-    """Placeholder base used only when sqlanydb is not installed."""
-
-
-_NATIVE_ERROR: Any = import_optional_attr("sqlanydb", "Error") or _MissingSqlanywhereDriverError
-SqlanywhereError: Any = _NATIVE_ERROR
-
+from sqlanydb import Connection, Cursor
+from sqlanydb import Error as SqlanywhereError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -31,13 +21,12 @@ if TYPE_CHECKING:
     from sqlspec.adapters.sqlanywhere.driver import SqlanywhereDriver
     from sqlspec.core import StatementConfig
 
-    SqlanywhereConnection: TypeAlias = Any
-    SqlanywhereRawCursor: TypeAlias = Any
+    SqlanywhereConnection: TypeAlias = Connection
+    SqlanywhereRawCursor: TypeAlias = Cursor
     SqlanywhereQueryParams: TypeAlias = Any
-
-if not TYPE_CHECKING:
-    SqlanywhereConnection = Any
-    SqlanywhereRawCursor = Any
+else:
+    SqlanywhereConnection = Connection
+    SqlanywhereRawCursor = Cursor
     SqlanywhereQueryParams = Any
 
 __all__ = (
@@ -69,6 +58,9 @@ class SqlanywhereCursor:
         if self.cursor is not None and hasattr(self.cursor, "close"):
             with contextlib.suppress(Exception):
                 self.cursor.close()
+
+
+_DRIVER_CLS: "type[SqlanywhereDriver] | None" = None
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -104,7 +96,9 @@ class SqlanywhereSessionContext:
     def __enter__(self) -> "SqlanywhereDriver":
         global _DRIVER_CLS
         if _DRIVER_CLS is None:
-            _DRIVER_CLS = import_optional_attr("sqlspec.adapters.sqlanywhere.driver", "SqlanywhereDriver")
+            module = importlib.import_module("sqlspec.adapters.sqlanywhere.driver")
+            _DRIVER_CLS = module.SqlanywhereDriver
+        assert _DRIVER_CLS is not None
         self._connection = self._acquire_connection()
         self._driver = _DRIVER_CLS(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features

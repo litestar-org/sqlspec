@@ -8,54 +8,19 @@ import contextlib
 import os
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    import asyncmy as _asyncmy
-    from asyncmy import Connection
-    from asyncmy import errors as _asyncmy_errors
-    from asyncmy.connection import LoadLocalFile
-    from asyncmy.connection import MySQLResult as _AsyncmyResult
-    from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE
-    from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
-    from asyncmy.cursors import Cursor as _AsyncmyCursor
-    from asyncmy.cursors import DictCursor as _AsyncmyDictCursor
-    from asyncmy.cursors import SSCursor as AsyncmySSCursor
-    from asyncmy.errors import ProgrammingError as _AsyncmyProgrammingError
-    from asyncmy.pool import Pool as _AsyncmyPool
-    from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper
-else:
-    try:
-        import asyncmy as _asyncmy
-        from asyncmy import Connection
-        from asyncmy import errors as _asyncmy_errors
-        from asyncmy.connection import LoadLocalFile
-        from asyncmy.connection import MySQLResult as _AsyncmyResult
-        from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE
-        from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
-        from asyncmy.cursors import Cursor as _AsyncmyCursor
-        from asyncmy.cursors import DictCursor as _AsyncmyDictCursor
-        from asyncmy.cursors import SSCursor as AsyncmySSCursor
-        from asyncmy.errors import ProgrammingError as _AsyncmyProgrammingError
-        from asyncmy.pool import Pool as _AsyncmyPool
-        from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper
-    except ImportError:
-        import re
-
-        _asyncmy = None
-        Connection = None
-        _asyncmy_errors = None
-        LoadLocalFile = None
-        _AsyncmyResult = object
-        _ASYNCMY_FIELD_TYPE = None
-        ASYNCMY_INSERT_VALUES_PATTERN = re.compile(
-            r"(VALUES\s*\()((?:(?!\bVALUES\b).)*?)(\)(?:\s*(?:ON\s+DUPLICATE\s+KEY\s+UPDATE|RETURNING)\b.*)?\Z",
-            re.IGNORECASE | re.DOTALL,
-        )
-        _AsyncmyCursor = None
-        _AsyncmyDictCursor = None
-        AsyncmySSCursor = None
-        _AsyncmyProgrammingError = Exception
-        _AsyncmyPool = None
-        _LoadLocalPacketWrapper = None
+import asyncmy as _asyncmy
+from asyncmy import Connection
+from asyncmy import errors as _asyncmy_errors
+from asyncmy.connection import LoadLocalFile
+from asyncmy.connection import MySQLResult as _AsyncmyResult
+from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE
+from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
+from asyncmy.cursors import Cursor as _AsyncmyCursor
+from asyncmy.cursors import DictCursor as _AsyncmyDictCursor
+from asyncmy.cursors import SSCursor as AsyncmySSCursor
+from asyncmy.errors import ProgrammingError as _AsyncmyProgrammingError
+from asyncmy.pool import Pool as _AsyncmyPool
+from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper
 
 from sqlspec.exceptions import SQLSpecError
 
@@ -99,8 +64,7 @@ if TYPE_CHECKING:
     AsyncmyModule: TypeAlias = AsyncmyModuleProtocol
     AsyncmyPool: TypeAlias = _AsyncmyPool
     AsyncmyRawCursor: TypeAlias = _AsyncmyCursor
-
-if not TYPE_CHECKING:
+else:
     AsyncmyConnection = Connection
     AsyncmyDictCursor = _AsyncmyDictCursor
     AsyncmyError = _asyncmy_errors.Error
