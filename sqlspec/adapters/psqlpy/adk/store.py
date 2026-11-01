@@ -24,7 +24,6 @@ __all__ = ("PsqlpyADKConfig", "PsqlpyADKMemoryStore", "PsqlpyADKStore", "decode_
 
 logger = get_logger("sqlspec.adapters.psqlpy.adk.store")
 
-POSTGRES_TABLE_NOT_FOUND_SQLSTATE: Final = "42P01"
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 

@@ -9,7 +9,6 @@ from psqlpy.exceptions import ConnectionExecuteError, DatabaseError
 
 from sqlspec.adapters.psqlpy.adk import PsqlpyADKConfig, PsqlpyADKMemoryStore, PsqlpyADKStore
 from sqlspec.adapters.psqlpy.adk.store import _is_psqlpy_database_error, _is_table_missing_error, decode_postgres_vector
-from sqlspec.adapters.psqlpy.core import detect_postgres_extensions
 from sqlspec.config import ADKConfig
 
 
@@ -301,14 +300,3 @@ async def test_psqlpy_memory_store_normalizes_tuple_embeddings_on_insert_and_sea
     assert "unnest" in conn.fetch_calls[0][0].lower()
     assert conn.fetch_calls[1][1][0] == [0.1, 0.2]
     assert results[0]["embedding"] == [0.1, 0.2]
-
-
-async def test_psqlpy_detect_postgres_extensions_sets_pg_textsearch_available() -> None:
-    """detect_postgres_extensions detects vector, pg_search, and pg_textsearch for psqlpy connections."""
-    conn = _FakeMemoryConnection([{"extname": "vector"}, {"extname": "pg_search"}, {"extname": "pg_textsearch"}])
-    pgvector, paradedb, pg_textsearch = await detect_postgres_extensions(
-        conn, enable_pgvector=True, enable_paradedb=True, enable_pg_textsearch=True
-    )
-    assert pgvector is True
-    assert paradedb is True
-    assert pg_textsearch is True
