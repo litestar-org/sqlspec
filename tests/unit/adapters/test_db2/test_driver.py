@@ -3,10 +3,12 @@
 Every test runs in both driver modes through the ``db2_mode`` fixture.
 """
 
+import importlib
 from typing import Any
 
 import pytest
 
+import sqlspec.adapters.db2._typing as db2_typing
 from sqlspec.adapters.db2.core import create_mapped_exception, default_statement_config, resolve_column_names
 from sqlspec.adapters.db2.data_dictionary import Db2AsyncDataDictionary, Db2SyncDataDictionary
 from sqlspec.core import SQL
@@ -311,3 +313,43 @@ async def test_driver_exposes_matching_data_dictionary(db2_mode: DriverMode) -> 
 
     assert isinstance(dictionary, Db2AsyncDataDictionary if db2_mode.is_async else Db2SyncDataDictionary)
     assert driver.data_dictionary is dictionary
+
+
+async def test_select_stream_inside_active_exception_block(db2_mode: DriverMode) -> None:
+    """Consuming select_stream inside an active except block works cleanly without masking exceptions."""
+    cursor = FakeDb2Cursor(rows=[(1, "Ada"), (2, "Grace")], description=[("id",), ("name",)])
+    driver = db2_mode.driver(FakeDb2Connection(lambda: cursor))
+
+    try:
+        raise ValueError("ambient error")
+    except ValueError:
+        rows = await db2_mode.collect(driver.select_stream("SELECT id, name FROM users", chunk_size=1))
+        assert len(rows) == 2
+
+
+def test_session_driver_type_resolution_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Db2SyncSessionContext caches driver class resolution and does not re-import module."""
+    import_calls: list[str] = []
+    original_import = importlib.import_module
+
+    def _spy_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        import_calls.append(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib, "import_module", _spy_import)
+    db2_typing._SYNC_DRIVER_CLS = None
+
+    context = db2_typing.Db2SyncSessionContext(
+        acquire_connection=FakeDb2Connection,
+        release_connection=lambda *args, **kwargs: None,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    with context:
+        pass
+    with context:
+        pass
+
+    db2_driver_imports = [c for c in import_calls if c == "sqlspec.adapters.db2.driver"]
+    assert len(db2_driver_imports) == 1

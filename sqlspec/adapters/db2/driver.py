@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import sys
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.db2._typing import (
@@ -96,8 +97,13 @@ class Db2SyncStreamSource:
         try:
             cursor = cursor_manager.__enter__()
             handler = self._driver.handle_database_exceptions()
-            with handler:
-                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            if sys.exc_info()[1] is None:
+                with handler:
+                    cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            else:
+                self._driver._run_with_exception_handler(
+                    handler, cursor.execute, self._sql, normalize_execute_parameters(self._parameters)
+                )
             self._driver._check_pending_exception(handler)
         except BaseException:
             with contextlib.suppress(Exception):
@@ -112,8 +118,11 @@ class Db2SyncStreamSource:
         cursor = cursor_manager.cursor
         handler = self._driver.handle_database_exceptions()
         rows: Any = []
-        with handler:
-            rows = cursor.fetchmany(self._chunk_size)
+        if sys.exc_info()[1] is None:
+            with handler:
+                rows = cursor.fetchmany(self._chunk_size)
+        else:
+            rows = self._driver._run_with_exception_handler(handler, cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []

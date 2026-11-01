@@ -318,11 +318,27 @@ class Db2AsyncSessionContext:
         return None
 
 
+_SYNC_DRIVER_CLS: "Callable[..., Any] | None" = None
+_ASYNC_DRIVER_CLS: "Callable[..., Any] | None" = None
+
+
 def _resolve_sync_driver_type() -> "Callable[..., Any]":
     """Resolve Db2SyncDriver without a function-scoped import."""
-    return cast("Callable[..., Any]", importlib.import_module("sqlspec.adapters.db2.driver").Db2SyncDriver)
+    global _SYNC_DRIVER_CLS
+    if _SYNC_DRIVER_CLS is None:
+        _SYNC_DRIVER_CLS = cast(
+            "Callable[..., Any]", importlib.import_module("sqlspec.adapters.db2.driver").Db2SyncDriver
+        )
+    assert _SYNC_DRIVER_CLS is not None
+    return _SYNC_DRIVER_CLS
 
 
 def _resolve_async_driver_type() -> "Callable[..., Any]":
     """Resolve Db2AsyncDriver without a function-scoped import."""
-    return cast("Callable[..., Any]", importlib.import_module("sqlspec.adapters.db2.driver").Db2AsyncDriver)
+    global _ASYNC_DRIVER_CLS
+    if _ASYNC_DRIVER_CLS is None:
+        _ASYNC_DRIVER_CLS = cast(
+            "Callable[..., Any]", importlib.import_module("sqlspec.adapters.db2.driver").Db2AsyncDriver
+        )
+    assert _ASYNC_DRIVER_CLS is not None
+    return _ASYNC_DRIVER_CLS
