@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NotRequired, cast
 
-from sqlspec.adapters.bigquery.core import _bigquery_partition_clauses, _positive_int_or_none
+from sqlspec.adapters.bigquery.core import _bigquery_partition_clauses, _positive_int_or_none, resolve_dataset_id
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -346,20 +346,4 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
 
 def _resolve_litestar_dataset_id(config: "BigQueryConfig") -> "str | None":
-    dataset_id = config.connection_config.get("dataset_id")
-    if isinstance(dataset_id, str) and dataset_id:
-        return dataset_id
-    default_job_config = config.connection_config.get("default_query_job_config") or config.driver_features.get(
-        "default_query_job_config"
-    )
-    if default_job_config is None:
-        return None
-    default_dataset = getattr(default_job_config, "default_dataset", None)
-    if default_dataset is None:
-        return None
-    if isinstance(default_dataset, str):
-        return default_dataset or None
-    resolved_id = getattr(default_dataset, "dataset_id", None)
-    if resolved_id:
-        return str(resolved_id)
-    return str(default_dataset)
+    return resolve_dataset_id(config)

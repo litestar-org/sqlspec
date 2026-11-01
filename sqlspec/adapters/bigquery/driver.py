@@ -629,8 +629,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
 
         if arrow_result is None:
             msg = "Unreachable"
@@ -694,7 +693,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     raise
                 if handler.pending_exception is not None:
                     self.observability.end_storage_span(span, error=handler.pending_exception)
-                    raise handler.pending_exception from None
+                    self._check_pending_exception(handler)
                 native_telemetry = self.observability.annotate_storage_telemetry(native_telemetry)
                 self.observability.end_storage_span(span, telemetry=native_telemetry)
                 self._attach_partition_telemetry(native_telemetry, partitioner)
@@ -765,8 +764,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 rows, qualified_table, job_config=job_config, timeout=self._job_request_timeout()
             )
             job.result(timeout=self._job_request_timeout())
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
         telemetry_payload = build_load_job_telemetry(job, qualified_table, format_label="jsonl")
         return self._storage_job(telemetry_payload)
 
@@ -851,8 +849,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 buffer, qualified_table, job_config=job_config, timeout=self._job_request_timeout()
             )
             job.result(timeout=self._job_request_timeout())
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
         telemetry_payload = build_load_job_telemetry(job, qualified_table, format_label="parquet")
         if telemetry:
             telemetry_payload.setdefault("extra", {})
@@ -911,8 +908,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     buffer, qualified_table, job_config=job_config, timeout=self._job_request_timeout()
                 )
             job.result(timeout=self._job_request_timeout())
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
         telemetry_payload = build_load_job_telemetry(job, qualified_table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, source_telemetry)

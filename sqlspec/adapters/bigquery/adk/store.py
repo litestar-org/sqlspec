@@ -18,7 +18,7 @@ from typing_extensions import TypedDict
 from sqlspec.adapters.bigquery._typing import GoogleAPIError, GoogleCloudError
 from sqlspec.adapters.bigquery._typing import bigquery_module as bigquery
 from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.adapters.bigquery.core import build_dml_rowcount, create_mapped_exception
+from sqlspec.adapters.bigquery.core import build_dml_rowcount, create_mapped_exception, resolve_dataset_id
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk._config_utils import _adk_config_from_extension
@@ -672,23 +672,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
 
 def _resolve_config_dataset_id(config: BigQueryConfig) -> str | None:
-    dataset_id = config.connection_config.get("dataset_id")
-    if isinstance(dataset_id, str) and dataset_id:
-        return dataset_id
-    default_job_config = config.connection_config.get("default_query_job_config") or config.driver_features.get(
-        "default_query_job_config"
-    )
-    if default_job_config is None:
-        return None
-    default_dataset = getattr(default_job_config, "default_dataset", None)
-    if default_dataset is None:
-        return None
-    if isinstance(default_dataset, str):
-        return default_dataset or None
-    resolved_id = getattr(default_dataset, "dataset_id", None)
-    if resolved_id:
-        return str(resolved_id)
-    return str(default_dataset)
+    return resolve_dataset_id(config)
 
 
 def _session_record_from_row(

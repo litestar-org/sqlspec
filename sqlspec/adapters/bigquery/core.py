@@ -87,6 +87,7 @@ __all__ = (
     "is_simple_insert",
     "normalize_script_rowcount",
     "resolve_column_names",
+    "resolve_dataset_id",
     "resolve_export_format",
     "run_query_and_wait",
     "run_query_job",
@@ -1408,3 +1409,30 @@ def _bigquery_partition_clauses(
         options.append(f"partition_expiration_days = {expiration_days}")
     options_clause = f" OPTIONS({', '.join(options)})" if options else ""
     return f" PARTITION BY DATE({column})", options_clause
+
+
+def resolve_dataset_id(config: Any) -> "str | None":
+    """Resolve the dataset identifier from connection configuration or default job config."""
+    connection_config = getattr(config, "connection_config", None)
+    if isinstance(connection_config, dict):
+        dataset_id = connection_config.get("dataset_id")
+        if isinstance(dataset_id, str) and dataset_id:
+            return dataset_id
+    default_job_config = getattr(config, "_default_query_job_config", None)
+    if default_job_config is None and isinstance(connection_config, dict):
+        default_job_config = connection_config.get("default_query_job_config")
+    if default_job_config is None:
+        driver_features = getattr(config, "driver_features", None)
+        if isinstance(driver_features, dict):
+            default_job_config = driver_features.get("default_query_job_config")
+    if default_job_config is None:
+        return None
+    default_dataset = getattr(default_job_config, "default_dataset", None)
+    if default_dataset is None:
+        return None
+    if isinstance(default_dataset, str):
+        return default_dataset or None
+    resolved_id = getattr(default_dataset, "dataset_id", None)
+    if resolved_id:
+        return str(resolved_id)
+    return str(default_dataset)

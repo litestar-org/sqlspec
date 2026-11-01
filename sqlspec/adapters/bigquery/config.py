@@ -107,6 +107,8 @@ class BigQueryDriverFeatures(TypedDict):
     """Callback invoked with the ``bigquery.Client`` when instantiated by the config."""
     json_serializer: NotRequired["Callable[[Any], str]"]
     """Serializer converting dict/list parameters to JSON strings (defaults to ``sqlspec.utils.serializers.to_json``)."""
+    json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Deserializer converting JSON strings to native dict/list objects."""
     enable_uuid_conversion: NotRequired[bool]
     """Automatically coerce ``UUID`` strings and parameters (defaults to ``True``)."""
     enable_events: NotRequired[bool]
@@ -231,6 +233,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """
 
         self.connection_config = build_connection_config(connection_config)
+
+        if "json_deserializer" in kwargs:
+            driver_features = dict(driver_features) if driver_features else {}
+            driver_features["json_deserializer"] = kwargs.pop("json_deserializer")
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
