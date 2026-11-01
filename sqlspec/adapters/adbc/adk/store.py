@@ -2206,9 +2206,12 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                         self._execute(cursor, select_sql, tuple(event_ids))
                         existing_rows = cursor.fetchall()
                         existing_event_ids = {row[0] for row in existing_rows}
-                        entries_to_insert = [
-                            entry for entry in entries if entry.get("event_id") not in existing_event_ids
-                        ]
+                        entries_to_insert = []
+                        for entry in entries:
+                            event_id = entry["event_id"]
+                            if event_id not in existing_event_ids:
+                                entries_to_insert.append(entry)
+                                existing_event_ids.add(event_id)
 
                 for entry in entries_to_insert:
                     content_json = self._serialize_json_field(entry["content_json"])
@@ -2286,7 +2289,26 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                         if cursor.fetchone():
                             inserted_count += 1
                     else:
-                        self._execute(cursor, sql, params)
+                        try:
+                            self._execute(cursor, sql, params)
+                        except Exception as exc:
+                            error_message = str(exc).lower()
+                            if not (
+                                getattr(exc, "sqlstate", None) == "23505"
+                                or "unique" in error_message
+                                or "duplicate" in error_message
+                                or "ora-00001" in error_message
+                                or "sql0803n" in error_message
+                            ):
+                                raise
+                            self._execute(
+                                cursor,
+                                f"SELECT event_id FROM {self._memory_table} WHERE event_id = ?",
+                                (entry["event_id"],),
+                            )
+                            if cursor.fetchone() is None:
+                                raise
+                            continue
                         inserted_count += 1
                 conn.commit()
             except Exception:
