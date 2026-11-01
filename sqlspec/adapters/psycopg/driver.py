@@ -1,7 +1,7 @@
 """PostgreSQL psycopg driver implementation."""
 
 from collections.abc import Sized
-from contextlib import AsyncExitStack, ExitStack
+from contextlib import AsyncExitStack, ExitStack, suppress
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Literal, LiteralString, cast
 
@@ -380,17 +380,21 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
     def begin(self) -> None:
         """Begin a database transaction on the current connection."""
+        if getattr(getattr(self.connection, "info", None), "transaction_status", None) == TRANSACTION_STATUS_INERROR:
+            self.connection.rollback()
         if self._connection_in_transaction():
             return
+        restore_autocommit = False
         try:
-            if self.connection.info.transaction_status == TRANSACTION_STATUS_INERROR:
-                self.connection.rollback()
             restore_autocommit = self.connection.autocommit
             if restore_autocommit:
                 self.connection.autocommit = False
             if self._should_set_local_columnar():
                 self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
         except psycopg.Error as e:
+            if restore_autocommit:
+                with suppress(Exception):
+                    self.connection.autocommit = True
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
                 raise mapped from e
@@ -711,9 +715,12 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
-        return self._transaction_active or self.connection.info.transaction_status in {
+        info = getattr(self.connection, "info", None)
+        status = getattr(info, "transaction_status", None)
+        return self._transaction_active or status in {
             TRANSACTION_STATUS_ACTIVE,
             TRANSACTION_STATUS_INTRANS,
+            TRANSACTION_STATUS_INERROR,
         }
 
     def _restore_original_autocommit(self) -> None:
@@ -946,17 +953,21 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
     async def begin(self) -> None:
         """Begin a database transaction on the current connection."""
+        if getattr(getattr(self.connection, "info", None), "transaction_status", None) == TRANSACTION_STATUS_INERROR:
+            await self.connection.rollback()
         if self._connection_in_transaction():
             return
+        restore_autocommit = False
         try:
-            if self.connection.info.transaction_status == TRANSACTION_STATUS_INERROR:
-                await self.connection.rollback()
             restore_autocommit = self.connection.autocommit
             if restore_autocommit:
                 await self.connection.set_autocommit(False)
             if self._should_set_local_columnar():
                 await self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
         except psycopg.Error as e:
+            if restore_autocommit:
+                with suppress(Exception):
+                    await self.connection.set_autocommit(True)
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
                 raise mapped from e
@@ -1282,9 +1293,12 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
-        return self._transaction_active or self.connection.info.transaction_status in {
+        info = getattr(self.connection, "info", None)
+        status = getattr(info, "transaction_status", None)
+        return self._transaction_active or status in {
             TRANSACTION_STATUS_ACTIVE,
             TRANSACTION_STATUS_INTRANS,
+            TRANSACTION_STATUS_INERROR,
         }
 
     async def _restore_original_autocommit(self) -> None:

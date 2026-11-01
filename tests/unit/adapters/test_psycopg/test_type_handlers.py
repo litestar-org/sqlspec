@@ -93,3 +93,15 @@ def test_pgvector_module_reference_is_cached() -> None:
 
     assert not hasattr(type_converter, "importlib")
     assert hasattr(type_converter, "_pgvector_psycopg")
+
+
+def test_operational_error_with_none_sqlstate_maps_to_database_connection_error() -> None:
+    """OperationalError with sqlstate=None maps to DatabaseConnectionError."""
+    import psycopg
+
+    from sqlspec.adapters.psycopg.core import create_mapped_exception
+    from sqlspec.exceptions import DatabaseConnectionError
+
+    err = psycopg.OperationalError("connection failed")
+    mapped = create_mapped_exception(err)
+    assert type(mapped) is DatabaseConnectionError

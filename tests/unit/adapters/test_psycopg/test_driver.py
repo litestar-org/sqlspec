@@ -119,6 +119,7 @@ class _SyncTransactionConnection:
 
     def rollback(self) -> None:
         self.rollback_calls += 1
+        self.info.transaction_status = 0
         if self.rollback_error is not None:
             raise self.rollback_error
 
@@ -158,6 +159,7 @@ class _AsyncTransactionConnection:
 
     async def rollback(self) -> None:
         self.rollback_calls += 1
+        self.info.transaction_status = 0
         if self.rollback_error is not None:
             raise self.rollback_error
 
@@ -409,11 +411,11 @@ async def test_async_logical_transaction_is_reported_while_libpq_is_idle() -> No
 
 
 def test_sync_inerror_status_is_not_active_transaction_and_rolls_back_on_begin() -> None:
-    """TRANSACTION_STATUS_INERROR (3) should not report an active transaction and should roll back on begin()."""
+    """TRANSACTION_STATUS_INERROR (3) is reported in transaction state and rolls back on begin()."""
     connection = _SyncTransactionConnection(transaction_status=3)
     driver = _sync_driver(connection)
 
-    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
     driver.begin()
 
     assert connection.rollback_calls == 1
@@ -422,11 +424,11 @@ def test_sync_inerror_status_is_not_active_transaction_and_rolls_back_on_begin()
 
 
 async def test_async_inerror_status_is_not_active_transaction_and_rolls_back_on_begin() -> None:
-    """TRANSACTION_STATUS_INERROR (3) should not report an active transaction and should roll back on async begin()."""
+    """TRANSACTION_STATUS_INERROR (3) is reported in transaction state and rolls back on async begin()."""
     connection = _AsyncTransactionConnection(transaction_status=3)
     driver = _async_driver(connection)
 
-    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
     await driver.begin()
 
     assert connection.rollback_calls == 1
@@ -460,3 +462,51 @@ def test_sync_copy_to_stdout_decodes_memoryview_chunks_and_reports_rowcount() ->
     assert result is not None
     assert result.get_data() == [{"copy_output": "1\talice\n2\tbob\n"}]
     assert result.rows_affected == 2
+
+
+def test_sync_session_exit_rolls_back_uncommitted_implicit_transaction() -> None:
+    """Session exit rolls back uncommitted implicit autocommit=False transactions."""
+    connection = _SyncTransactionConnection(transaction_status=2)
+    config = PsycopgSyncConfig()
+    context = config.provide_session()
+    object.__setattr__(context, "_acquire_connection", lambda: connection)
+    with context:
+        pass
+    assert connection.rollback_calls == 1
+
+
+@pytest.mark.anyio
+async def test_async_session_exit_rolls_back_uncommitted_implicit_transaction() -> None:
+    """Async session exit rolls back uncommitted implicit autocommit=False transactions."""
+    connection = _AsyncTransactionConnection(transaction_status=2)
+    config = PsycopgAsyncConfig()
+    context = config.provide_session()
+    object.__setattr__(context, "_acquire_connection", AsyncMock(return_value=connection))
+    async with context:
+        pass
+    assert connection.rollback_calls == 1
+
+
+def test_sync_begin_restores_autocommit_on_set_local_failure() -> None:
+    """begin() restores autocommit=True if SET LOCAL columnar fails."""
+    connection = _SyncTransactionConnection(autocommit=True)
+    connection.execute = MagicMock(side_effect=psycopg.Error("columnar extension missing"))
+    driver = PsycopgSyncDriver(
+        connection=connection, driver_features={"enable_alloydb_columnar": True, "pooler_mode": "transaction"}
+    )
+    with pytest.raises(SQLSpecError):
+        driver.begin()
+    assert connection.autocommit is True
+
+
+@pytest.mark.anyio
+async def test_async_begin_restores_autocommit_on_set_local_failure() -> None:
+    """async begin() restores autocommit=True if SET LOCAL columnar fails."""
+    connection = _AsyncTransactionConnection(autocommit=True)
+    connection.execute = AsyncMock(side_effect=psycopg.Error("columnar extension missing"))
+    driver = PsycopgAsyncDriver(
+        connection=connection, driver_features={"enable_alloydb_columnar": True, "pooler_mode": "transaction"}
+    )
+    with pytest.raises(SQLSpecError):
+        await driver.begin()
+    assert connection.autocommit is True

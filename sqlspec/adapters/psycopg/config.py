@@ -1,6 +1,8 @@
 """Psycopg database configuration with direct field-based configuration."""
 
+import asyncio
 import inspect
+import threading
 from collections.abc import Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
@@ -347,8 +349,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.get(
-            "on_connection_create"
+        self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.pop(
+            "on_connection_create", None
         )
         features_dict.setdefault("enable_alloydb", False)
         features_dict.setdefault("enable_alloydb_iam_auth", False)
@@ -368,6 +370,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 connection_config["options"] = columnar_opt
             elif columnar_opt not in str(existing_options):
                 connection_config["options"] = f"{existing_options} {columnar_opt}"
+        self._probe_lock: threading.Lock = threading.Lock()
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
@@ -636,38 +639,43 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             set_json_loads(deserializer, conn)
 
         if self._pgvector_available is None:
-            detected_extensions: set[str] = set()
-            extensions = build_postgres_extension_probe_names(self.driver_features)
-            probe_succeeded = True
-            if extensions:
-                try:
-                    cursor = conn.execute(
-                        "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
-                    )
-                    results = cursor.fetchall()
-                    detected_extensions = {
-                        cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
-                    }
-                except Exception as exc:
-                    probe_succeeded = False
-                    self._pg_textsearch_probe_error = exc
+            with self._probe_lock:
+                if self._pgvector_available is None:
+                    detected_extensions: set[str] = set()
+                    extensions = build_postgres_extension_probe_names(self.driver_features)
+                    probe_succeeded = True
+                    if extensions:
+                        try:
+                            cursor = conn.execute(
+                                "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
+                            )
+                            results = cursor.fetchall()
+                            detected_extensions = {
+                                cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
+                            }
+                        except Exception as exc:
+                            probe_succeeded = False
+                            self._pg_textsearch_probe_error = exc
+                            if not conn.autocommit:
+                                with suppress(Exception):
+                                    conn.rollback()
+                    if probe_succeeded:
+                        self.statement_config, self._pgvector_available, self._paradedb_available = (
+                            resolve_postgres_extension_state(
+                                self.statement_config, self.driver_features, detected_extensions
+                            )
+                        )
+                        self._pg_textsearch_available = is_postgres_extension_active(
+                            self.driver_features, "pg_textsearch"
+                        )
                     if not conn.autocommit:
-                        with suppress(Exception):
-                            conn.rollback()
-            if probe_succeeded:
-                self.statement_config, self._pgvector_available, self._paradedb_available = (
-                    resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
-                )
-                self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
+                        conn.rollback()
 
         if self._pgvector_available:
             register_pgvector_sync(conn)
 
         if self._user_connection_hook is not None:
             self._user_connection_hook(conn)
-
-        if not conn.autocommit:
-            conn.rollback()
 
     def _ensure_pg_textsearch_available(self) -> None:
         if self._pg_textsearch_available:
@@ -811,8 +819,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if features_dict.get("enable_alloydb", False):
             msg = "Google AlloyDB connector integration (enable_alloydb) is only supported on PsycopgSyncConfig"
             raise ImproperConfigurationError(msg)
-        self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.get(
-            "on_connection_create"
+        self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.pop(
+            "on_connection_create", None
         )
         pooler_mode = features_dict.get("pooler_mode", "session")
         is_transaction_pooler = bool(
@@ -829,6 +837,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 connection_config["options"] = columnar_opt
             elif columnar_opt not in str(existing_options):
                 connection_config["options"] = f"{existing_options} {columnar_opt}"
+        self._probe_lock: asyncio.Lock | None = None
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
@@ -1045,38 +1054,47 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             set_json_loads(deserializer, conn)
 
         if self._pgvector_available is None:
-            detected_extensions: set[str] = set()
-            extensions = build_postgres_extension_probe_names(self.driver_features)
-            probe_succeeded = True
-            if extensions:
-                try:
-                    cursor = await conn.execute(
-                        "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
-                    )
-                    results = await cursor.fetchall()
-                    detected_extensions = {
-                        cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
-                    }
-                except Exception as exc:
-                    probe_succeeded = False
-                    self._pg_textsearch_probe_error = exc
+            if self._probe_lock is None:
+                self._probe_lock = asyncio.Lock()
+            async with self._probe_lock:
+                if self._pgvector_available is None:
+                    detected_extensions: set[str] = set()
+                    extensions = build_postgres_extension_probe_names(self.driver_features)
+                    probe_succeeded = True
+                    if extensions:
+                        try:
+                            cursor = await conn.execute(
+                                "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
+                            )
+                            results = await cursor.fetchall()
+                            detected_extensions = {
+                                cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
+                            }
+                        except Exception as exc:
+                            probe_succeeded = False
+                            self._pg_textsearch_probe_error = exc
+                            if not conn.autocommit:
+                                with suppress(Exception):
+                                    await conn.rollback()
+                    if probe_succeeded:
+                        self.statement_config, self._pgvector_available, self._paradedb_available = (
+                            resolve_postgres_extension_state(
+                                self.statement_config, self.driver_features, detected_extensions
+                            )
+                        )
+                        self._pg_textsearch_available = is_postgres_extension_active(
+                            self.driver_features, "pg_textsearch"
+                        )
                     if not conn.autocommit:
-                        with suppress(Exception):
-                            await conn.rollback()
-            if probe_succeeded:
-                self.statement_config, self._pgvector_available, self._paradedb_available = (
-                    resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
-                )
-                self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
+                        await conn.rollback()
 
         if self._pgvector_available:
             await register_pgvector_async(conn)
 
         if self._user_connection_hook is not None:
-            await self._user_connection_hook(conn)
-
-        if not conn.autocommit:
-            await conn.rollback()
+            hook_res = self._user_connection_hook(conn)
+            if inspect.isawaitable(hook_res):
+                await hook_res
 
     def _ensure_pg_textsearch_available(self) -> None:
         if self._pg_textsearch_available:

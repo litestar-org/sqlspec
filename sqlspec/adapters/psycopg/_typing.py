@@ -215,7 +215,10 @@ class PsycopgSyncSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         try:
-            if self._driver is not None and getattr(self._driver, "_transaction_active", False):
+            if self._driver is not None and (
+                getattr(self._driver, "_transaction_active", False)
+                or getattr(self._driver, "_connection_in_transaction", lambda: False)()
+            ):
                 with contextlib.suppress(Exception):
                     self._driver.rollback()
         finally:
@@ -276,7 +279,10 @@ class PsycopgAsyncSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         try:
-            if self._driver is not None and getattr(self._driver, "_transaction_active", False):
+            if self._driver is not None and (
+                getattr(self._driver, "_transaction_active", False)
+                or getattr(self._driver, "_connection_in_transaction", lambda: False)()
+            ):
                 with contextlib.suppress(Exception):
                     await self._driver.rollback()
         finally:

@@ -632,7 +632,7 @@ def test_async_config_normalizes_aliases() -> None:
 
 
 def test_psycopg_sync_configure_connection_supports_dict_row_and_rolls_back_after_hook() -> None:
-    """_configure_connection should handle dict_row probe results and roll back after user hooks when autocommit=False."""
+    """_configure_connection should handle dict_row probe results and roll back before user hooks when autocommit=False."""
     events: list[str] = []
     connection = MagicMock()
     connection.autocommit = False
@@ -652,12 +652,12 @@ def test_psycopg_sync_configure_connection_supports_dict_row_and_rolls_back_afte
 
     assert config.pg_textsearch_available is True
     assert config.statement_config.dialect == "pg_textsearch"
-    assert events == ["hook", "rollback"]
+    assert events == ["rollback", "hook"]
 
 
 @pytest.mark.anyio
 async def test_psycopg_async_configure_connection_supports_dict_row_and_rolls_back_after_hook() -> None:
-    """_configure_async_connection should handle dict_row probe results and roll back after user hooks when autocommit=False."""
+    """_configure_async_connection should handle dict_row probe results and roll back before user hooks when autocommit=False."""
     events: list[str] = []
     connection = AsyncMock()
     connection.autocommit = False
@@ -686,7 +686,7 @@ async def test_psycopg_async_configure_connection_supports_dict_row_and_rolls_ba
 
     assert config.pg_textsearch_available is True
     assert config.statement_config.dialect == "pg_textsearch"
-    assert events == ["hook", "rollback"]
+    assert events == ["rollback", "hook"]
 
 
 def test_psycopg_pooler_mode_transaction_sets_prepare_threshold_none_and_alloydb_class(

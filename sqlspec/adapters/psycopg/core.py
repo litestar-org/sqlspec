@@ -26,6 +26,8 @@ from sqlspec.driver import ExecutionResult, rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
+    DatabaseConnectionError,
+    DataError,
     DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
@@ -614,6 +616,12 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
 
 
 def _register_exception_mappings() -> None:
+    from sqlspec.typing import import_optional_attr
+
+    pool_timeout = import_optional_attr("psycopg_pool", "PoolTimeout")
+    if pool_timeout is not None:
+        _EXCEPTION_MAPPING[pool_timeout] = ("", ConnectionTimeoutError, "connection pool timeout")
+
     _EXCEPTION_MAPPING.update({
         pg_errors.UniqueViolation: ("23505", UniqueViolationError, "unique constraint violation"),
         pg_errors.ForeignKeyViolation: ("23503", ForeignKeyViolationError, "foreign key constraint violation"),
@@ -627,6 +635,10 @@ def _register_exception_mappings() -> None:
         pg_errors.AdminShutdown: ("57P01", ConnectionTimeoutError, "admin shutdown"),
         pg_errors.CannotConnectNow: ("57P03", ConnectionTimeoutError, "cannot connect now"),
         pg_errors.SyntaxError: ("42601", SQLParsingError, "SQL syntax error"),
+        psycopg.OperationalError: ("", DatabaseConnectionError, "operational error"),
+        psycopg.DataError: ("", DataError, "data error"),
+        psycopg.NotSupportedError: ("", SQLSpecError, "not supported"),
+        psycopg.InterfaceError: ("", DatabaseConnectionError, "interface error"),
     })
 
 
