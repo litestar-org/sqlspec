@@ -158,3 +158,17 @@ def test_pymssql_session_clean_exit_rolls_back_active_transaction() -> None:
 
     assert conn.rollbacks == 1
     assert calls == ["release"]
+
+
+def test_use_datetime2_default() -> None:
+    """PymssqlConfig connection_config supports use_datetime2."""
+    config = PymssqlConfig(connection_config={"server": "localhost", "use_datetime2": True})
+    assert config.connection_config.get("use_datetime2") is True
+
+
+def test_driver_features_mssql_parity() -> None:
+    """PymssqlConfig defaults use_pool to True and harmonizes driver features."""
+    config = PymssqlConfig()
+    assert config.driver_features.get("use_pool") is True
+    assert config.driver_features.get("events_backend") == "poll_queue"
+    assert config.driver_features.get("enable_uuid_conversion") is False

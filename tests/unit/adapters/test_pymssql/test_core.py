@@ -16,6 +16,7 @@ from sqlspec.adapters.pymssql.core import (
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
+    quote_bracket_identifier,
 )
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.exceptions import (
@@ -275,3 +276,13 @@ def test_percent_escaping_performance() -> None:
     sql = "SELECT [id] FROM [t] WHERE [name] LIKE '50%' AND [cat] = %s"
     escaped = escape_literal_percent(sql, ("books",), validator)
     assert escaped == "SELECT [id] FROM [t] WHERE [name] LIKE '50%%' AND [cat] = %s"
+
+
+def test_quote_bracket_identifier() -> None:
+    """quote_bracket_identifier cleanly handles nested quotes and brackets."""
+    assert quote_bracket_identifier("users") == "[users]"
+    assert quote_bracket_identifier("[users]") == "[users]"
+    assert quote_bracket_identifier('"users"') == "[users]"
+    assert quote_bracket_identifier('user"name') == '[user"name]'
+    assert quote_bracket_identifier("[user]]name]") == "[user]]name]"
+    assert quote_bracket_identifier("user]name") == "[user]]name]"

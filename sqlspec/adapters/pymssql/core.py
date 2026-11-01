@@ -95,8 +95,10 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 def quote_bracket_identifier(identifier: str) -> str:
     """Quote a T-SQL identifier with square brackets."""
     cleaned = identifier.strip()
-    if (cleaned.startswith("[") and cleaned.endswith("]")) or (cleaned.startswith('"') and cleaned.endswith('"')):
-        cleaned = cleaned[1:-1].replace("]]", "]").replace('""', '"')
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        cleaned = cleaned[1:-1].replace("]]", "]")
+    elif cleaned.startswith('"') and cleaned.endswith('"'):
+        cleaned = cleaned[1:-1].replace('""', '"')
     return f"[{cleaned.replace(']', ']]')}]"
 
 
@@ -202,6 +204,9 @@ def apply_driver_features(
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
+    features.setdefault("use_pool", True)
+    features.setdefault("events_backend", "poll_queue")
+    features.setdefault("enable_uuid_conversion", False)
 
     if json_serializer is not None and (
         json_serializer is not to_json

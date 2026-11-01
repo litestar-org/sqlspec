@@ -94,14 +94,18 @@ class PymssqlConnectionPool:
         Yields:
             A thread-local database connection.
         """
+        depth = getattr(self._thread_local, "depth", 0)
+        self._thread_local.depth = depth + 1
         connection = self.acquire()
         try:
             yield connection
         except Exception:
-            with contextlib.suppress(Exception):
-                self._close_thread_connection()
+            if getattr(self._thread_local, "depth", 1) <= 1:
+                with contextlib.suppress(Exception):
+                    self._close_thread_connection()
             raise
         finally:
+            self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
             self.release(connection)
 
     def close(self) -> None:

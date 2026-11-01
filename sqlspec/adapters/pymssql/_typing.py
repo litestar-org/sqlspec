@@ -7,14 +7,18 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import pymssql as _pymssql  # pyright: ignore[reportMissingTypeStubs]
-from pymssql import Connection as _PymssqlConnection  # pyright: ignore[reportMissingTypeStubs]
-from pymssql import Cursor as _PymssqlRawCursor  # pyright: ignore[reportMissingTypeStubs]
-from pymssql import Error as PymssqlError
+from sqlspec.utils.module_loader import import_optional, import_optional_attr
 
-from sqlspec.utils.module_loader import import_optional_attr
 
-PYMSSQL_MODULE = _pymssql
+class _MissingPymssqlDriverError(Exception):
+    """Placeholder base used only when pymssql is not installed."""
+
+
+_NATIVE_ERROR: Any = import_optional_attr("pymssql", "Error") or _MissingPymssqlDriverError
+PymssqlError: Any = _NATIVE_ERROR
+PYMSSQL_MODULE: Any = import_optional("pymssql")
+_PymssqlConnection: Any = getattr(PYMSSQL_MODULE, "Connection", Any) if PYMSSQL_MODULE is not None else Any
+_PymssqlRawCursor: Any = getattr(PYMSSQL_MODULE, "Cursor", Any) if PYMSSQL_MODULE is not None else Any
 _DRIVER_CLS: Any = None
 
 if TYPE_CHECKING:
@@ -22,13 +26,15 @@ if TYPE_CHECKING:
     from types import TracebackType
     from typing import TypeAlias
 
+    from pymssql import Connection as _TypeCheckingConnection
+    from pymssql import Cursor as _TypeCheckingCursor
     from pymssql._pymssql import QueryParams as PymssqlQueryParams
 
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import StatementConfig
 
-    PymssqlConnection: TypeAlias = _PymssqlConnection
-    PymssqlRawCursor: TypeAlias = _PymssqlRawCursor
+    PymssqlConnection: TypeAlias = _TypeCheckingConnection
+    PymssqlRawCursor: TypeAlias = _TypeCheckingCursor
 
 if not TYPE_CHECKING:
     PymssqlQueryParams = Any

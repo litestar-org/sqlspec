@@ -184,3 +184,29 @@ def test_pool_registry_does_not_grow_across_replacements(monkeypatch) -> None:
     pool.close()
 
     assert pool._connection_registry == set()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_pool_reentrant_thread_checkout(monkeypatch: Any) -> None:
+    """Re-entrant get_connection calls on the same thread do not close the connection on inner error."""
+    import sqlspec.adapters.pymssql.pool as pool_module
+    from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+
+    connection = FakeConnection()
+    fake_module = FakePymssqlModule(connection)
+    monkeypatch.setattr(pool_module, "pymssql", fake_module)
+
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0)
+
+    with pool.get_connection() as c1:
+        assert c1 is connection
+        try:
+            with pool.get_connection() as c2:
+                assert c2 is connection
+                raise ValueError("inner failure")
+        except ValueError:
+            pass
+        assert not connection.closed
+
+    assert not connection.closed
+    pool.close()
+    assert connection.closed
