@@ -721,17 +721,16 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 content_text, metadata_json, inserted_at, embedding
             )
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                owner_id, timestamp, content_json, content_text, metadata_json, inserted_at, embedding::vector
+                $14, timestamp, content_json, content_text, metadata_json, inserted_at, embedding::vector
             FROM unnest(
                 $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
-                $5::varchar[], $6::varchar[], $7::varchar[], $8::varchar[],
-                $9::timestamptz[], $10::jsonb[], $11::text[], $12::jsonb[], $13::timestamptz[], $14::text[]
+                $5::varchar[], $6::varchar[], $7::varchar[],
+                $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[], $13::text[]
             ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
-                owner_id, timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
+                timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
             ON CONFLICT (event_id) DO NOTHING
             RETURNING 1
             """
-            owner_ids = [owner_id for _ in entries]
             params = [
                 ids,
                 session_ids,
@@ -740,13 +739,13 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 scopes,
                 event_ids,
                 authors,
-                owner_ids,
                 timestamps,
                 content_jsons,
                 content_texts,
                 metadata_jsons,
                 inserted_ats,
                 embeddings,
+                owner_id,
             ]
         else:
             sql = f"""

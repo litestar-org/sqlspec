@@ -3,10 +3,12 @@
 from datetime import UTC, datetime
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 from psqlpy.exceptions import ConnectionExecuteError, DatabaseError
 
+from sqlspec.adapters.psqlpy import PsqlpyConfig
 from sqlspec.adapters.psqlpy.adk import PsqlpyADKConfig, PsqlpyADKMemoryStore, PsqlpyADKStore
 from sqlspec.adapters.psqlpy.adk.store import _is_psqlpy_database_error, _is_table_missing_error, decode_postgres_vector
 from sqlspec.config import ADKConfig
@@ -300,3 +302,21 @@ async def test_psqlpy_memory_store_normalizes_tuple_embeddings_on_insert_and_sea
     assert conn.fetch_calls[0][1][-1] == ["[0.1,0.2]"]
     assert conn.fetch_calls[1][1][0] == [0.1, 0.2]
     assert results[0]["embedding"] == [0.1, 0.2]
+
+
+@pytest.mark.parametrize(("owner_type", "owner_id"), [("INTEGER", 42), ("UUID", UUID(int=1))])
+async def test_psqlpy_memory_batch_preserves_owner_type(
+    owner_type: str, owner_id: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scalar owner bind lets the destination column infer its native type."""
+    conn = _FakeMemoryConnection([_sample_memory_row(None)])
+    monkeypatch.setattr(PsqlpyConfig, "provide_connection", lambda *_a, **_k: conn)
+    config = PsqlpyConfig(extension_config={"adk": {"owner_id_column": f"owner_id {owner_type}"}})
+    store = PsqlpyADKMemoryStore(config)
+
+    assert await store.insert_memory_entries([cast("Any", _sample_memory_row(None))], owner_id) == 1
+
+    sql, params = conn.fetch_calls[0]
+    assert "author, $14, timestamp" in _normalized(sql)
+    assert params[-1] == owner_id
+    assert len(params[0]) == 1
