@@ -10,6 +10,7 @@ pytest.importorskip("arrow_odbc")
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver
 from sqlspec.adapters.arrow_odbc.core import create_mapped_exception
 from sqlspec.adapters.arrow_odbc.type_converter import odbc_type_to_arrow
+from sqlspec.data_dictionary import MetadataSource, MetadataSupport
 from sqlspec.exceptions import CheckViolationError, DeadlockError, QueryTimeoutError
 from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
     DB2_CONNECTION_STRING,
@@ -133,3 +134,16 @@ def test_result_names_kept_when_lowercasing_is_off(driver_factory: Any) -> None:
     assert names == {
         key: ["ID", "CUSTOMER_NAME", "MixedCase"] for key in ("execute", "stream", "table", "reader", "reader_batches")
     }
+
+
+def test_db2_metadata_capabilities_reports_supported_for_catalog_domains() -> None:
+    """Capabilities for views and schemas report SUPPORTED on dialects with bundled SQL packs."""
+    connection = FakeArrowOdbcConnection()
+    driver = _db2_driver(connection)
+    caps = driver.data_dictionary.get_metadata_capabilities(driver)
+    schema_cap = caps.get("schemas")
+    views_cap = caps.get("views")
+
+    assert schema_cap is not None and schema_cap.support == MetadataSupport.SUPPORTED
+    assert views_cap is not None and views_cap.support == MetadataSupport.SUPPORTED
+    assert schema_cap.source == MetadataSource.CATALOG

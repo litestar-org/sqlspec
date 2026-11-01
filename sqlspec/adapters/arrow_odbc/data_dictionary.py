@@ -294,7 +294,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
                 source=MetadataSource.DRIVER_METADATA,
                 warnings=(_ODBC_COLUMN_PARTIAL_WARNING,),
             )
-        if domain in {"tables", "indexes", "foreign_keys"} and self._has_query(domain, "by_schema"):
+        if self._has_query(domain, "by_schema"):
             return MetadataCapability(
                 domain=domain,
                 support=MetadataSupport.SUPPORTED,
