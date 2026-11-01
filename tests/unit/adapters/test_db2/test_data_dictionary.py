@@ -493,3 +493,11 @@ async def test_get_columns_reports_unique_separately_from_primary(case: Dictiona
 
     assert columns[0]["is_primary"] is False
     assert columns[0]["is_unique"] is True
+
+
+def test_all_authored_db2_dialect_queries_are_wired() -> None:
+    """Every authored query in Db2 SQL template files is loaded and callable by the data dictionary."""
+    dictionary = Db2SyncDataDictionary()
+    assert dictionary.get_query("tables", "by_schema") is not None
+    assert dictionary.get_query("tables", "all_by_schema") is not None
+    assert dictionary.get_query("schemas", "by_schema") is not None
