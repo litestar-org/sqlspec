@@ -1,5 +1,6 @@
 """Oracle ADK store for Google Agent Development Kit session/event storage."""
 
+import array
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
@@ -57,6 +58,7 @@ ORACLE_DEFAULT_EVENTS_TABLE: Final = "adk_event"
 ORACLE_DEFAULT_APP_STATE_TABLE: Final = "adk_app_state"
 ORACLE_DEFAULT_USER_STATE_TABLE: Final = "adk_user_state"
 ORACLE_DEFAULT_METADATA_TABLE: Final = "adk_internal_metadata"
+_EMBEDDING_COLUMN_INDEX: Final = 12
 
 
 _ADK_METADATA_TABLE_DDL_TEMPLATE = (
@@ -245,6 +247,7 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "                event_id VARCHAR2(128) NOT NULL UNIQUE,\n"
     "                author VARCHAR2(256){1},\n"
     "                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,\n"
+    "                embedding VECTOR({11}, FLOAT32),\n"
     "                {2},\n"
     "                content_text CLOB NOT NULL,\n"
     "                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
@@ -345,6 +348,9 @@ class OracleADKPartitionConfig(TypedDict):
 
 class OracleADKConfig(ADKConfig):
     """Oracle ADK extension settings consumed by Oracle ADK stores."""
+
+    vector_dimensions: NotRequired[int]
+    """Dimensionality of embedding vectors (e.g. 768 for gemini-embedding-001 with MRL). Default: 768."""
 
     in_memory: NotRequired[bool]
     """Enable Oracle INMEMORY clauses on ADK tables."""
@@ -2436,10 +2442,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         sql = f"""
         INSERT INTO {self._memory_table} (
             id, session_id, app_name, user_id, scope, event_id, author{owner_column},
-            timestamp, content_json, content_text, metadata_json, inserted_at
+            timestamp, embedding, content_json, content_text, metadata_json, inserted_at
         ) VALUES (
             :id, :session_id, :app_name, :user_id, :scope, :event_id, :author{owner_param},
-            :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
+            :timestamp, :embedding, :content_json, :content_text, :metadata_json, :inserted_at
         )
         """
 
@@ -2449,6 +2455,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 for entry in entries:
                     content_json = await self._serialize_json_field(entry["content_json"])
                     metadata_json = await self._serialize_json_field(entry["metadata_json"])
+                    embedding_val = entry.get("embedding")
+                    bound_embedding = array.array("f", embedding_val) if embedding_val is not None else None
                     params: dict[str, Any] = {
                         "id": entry["id"],
                         "session_id": entry["session_id"],
@@ -2458,6 +2466,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                         "event_id": entry["event_id"],
                         "author": entry["author"],
                         "timestamp": entry["timestamp"],
+                        "embedding": bound_embedding,
                         "content_json": content_json,
                         "content_text": entry["content_text"],
                         "metadata_json": metadata_json,
@@ -2621,6 +2630,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             self._memory_table,
             self._memory_table,
             fts_index,
+            self._vector_dimensions,
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -2710,10 +2720,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at,
+                   timestamp, content_json, content_text, metadata_json, inserted_at, embedding,
                    SCORE(1) AS score
             FROM {self._memory_table}
             WHERE {where_scope}
@@ -2759,6 +2769,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             "content_text",
             "metadata_json",
             "inserted_at",
+            "embedding",
         )
         if not sanitized_query:
             sql = build_oracle_hnsw_subquery(
@@ -2806,10 +2817,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
+                   timestamp, content_json, content_text, metadata_json, inserted_at, embedding
             FROM {self._memory_table}
             WHERE {where_scope}
               AND LOWER(content_text) LIKE :pattern
@@ -2833,6 +2844,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             content_text = row[9]
             if is_async_readable(content_text) or is_readable(content_text):
                 content_text = await _read_lob_async(content_text)
+            embedding_val = row[_EMBEDDING_COLUMN_INDEX] if len(row) > _EMBEDDING_COLUMN_INDEX else None
+            embedding = [float(x) for x in embedding_val] if embedding_val is not None else None
             records.append({
                 "id": row[0],
                 "session_id": row[1],
@@ -2846,7 +2859,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 "content_text": str(content_text),
                 "metadata_json": metadata_json,
                 "inserted_at": row[11],
-                "embedding": None,
+                "embedding": embedding,
             })
         return records
 
@@ -2910,10 +2923,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         sql = f"""
         INSERT INTO {self._memory_table} (
             id, session_id, app_name, user_id, scope, event_id, author{owner_column},
-            timestamp, content_json, content_text, metadata_json, inserted_at
+            timestamp, embedding, content_json, content_text, metadata_json, inserted_at
         ) VALUES (
             :id, :session_id, :app_name, :user_id, :scope, :event_id, :author{owner_param},
-            :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
+            :timestamp, :embedding, :content_json, :content_text, :metadata_json, :inserted_at
         )
         """
 
@@ -2922,6 +2935,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             for entry in entries:
                 content_json = self._serialize_json_field(entry["content_json"])
                 metadata_json = self._serialize_json_field(entry["metadata_json"])
+                embedding_val = entry.get("embedding")
+                bound_embedding = array.array("f", embedding_val) if embedding_val is not None else None
                 params: dict[str, Any] = {
                     "id": entry["id"],
                     "session_id": entry["session_id"],
@@ -2931,6 +2946,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                     "event_id": entry["event_id"],
                     "author": entry["author"],
                     "timestamp": entry["timestamp"],
+                    "embedding": bound_embedding,
                     "content_json": content_json,
                     "content_text": entry["content_text"],
                     "metadata_json": metadata_json,
@@ -3093,6 +3109,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             self._memory_table,
             self._memory_table,
             fts_index,
+            self._vector_dimensions,
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -3182,10 +3199,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at,
+                   timestamp, content_json, content_text, metadata_json, inserted_at, embedding,
                    SCORE(1) AS score
             FROM {self._memory_table}
             WHERE {where_scope}
@@ -3230,6 +3247,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             "content_text",
             "metadata_json",
             "inserted_at",
+            "embedding",
         )
         if not sanitized_query:
             sql = build_oracle_hnsw_subquery(
@@ -3276,10 +3294,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
+                   timestamp, content_json, content_text, metadata_json, inserted_at, embedding
             FROM {self._memory_table}
             WHERE {where_scope}
               AND LOWER(content_text) LIKE :pattern
@@ -3302,6 +3320,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             content_text = row[9]
             if is_readable(content_text):
                 content_text = _read_lob_sync(content_text)
+            embedding_val = row[_EMBEDDING_COLUMN_INDEX] if len(row) > _EMBEDDING_COLUMN_INDEX else None
+            embedding = [float(x) for x in embedding_val] if embedding_val is not None else None
             records.append({
                 "id": row[0],
                 "session_id": row[1],
@@ -3315,7 +3335,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 "content_text": str(content_text),
                 "metadata_json": metadata_json,
                 "inserted_at": row[11],
-                "embedding": None,
+                "embedding": embedding,
             })
         return records
 

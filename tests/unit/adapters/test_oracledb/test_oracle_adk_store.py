@@ -53,6 +53,7 @@ def test_oracle_adk_config_types_adapter_local_optimizations() -> None:
     assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", OracleADKConfig).__optional_keys__
 
     expected_types: dict[str, object] = {
+        "vector_dimensions": int,
         "in_memory": bool,
         "compression": OracleADKCompressionConfig,
         "partitioning": OracleADKPartitionConfig,
@@ -299,6 +300,87 @@ def test_oracle_sync_adk_memory_rows_to_records_deserializes_json_fields() -> No
     assert records[0]["content_text"] == "sync"
     assert records[0]["scope"] == "user"
     assert records[0]["embedding"] is None
+
+
+def test_oracle_adk_memory_ddl_declares_embedding_vector() -> None:
+    """Memory table DDL declares an embedding VECTOR column with configured dimensions."""
+    config = _mock_config({})
+    store = OracleSyncADKMemoryStore(config)
+    sql = store._memory_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+    assert "embedding VECTOR(768, FLOAT32)" in sql
+
+    custom_config = _mock_config({"vector_dimensions": 1536})
+    custom_store = OracleAsyncADKMemoryStore(custom_config)
+    custom_sql = custom_store._memory_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+    assert "embedding VECTOR(1536, FLOAT32)" in custom_sql
+
+
+def test_oracle_adk_sync_insert_binds_embedding_array() -> None:
+    """Sync memory store binds embeddings as float arrays."""
+    import array
+
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config.extension_config = {"adk": {}}
+    store = OracleSyncADKMemoryStore(config)
+    conn = MagicMock()
+    cursor = MagicMock()
+    cursor.rowcount = 1
+    conn.cursor.return_value.__enter__.return_value = cursor
+    config.provide_connection.return_value.__enter__.return_value = conn
+
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    entries = [
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user",
+            "scope": "user",
+            "event_id": "ev-1",
+            "author": "user",
+            "timestamp": timestamp,
+            "content_json": {"k": "v"},
+            "content_text": "text",
+            "metadata_json": None,
+            "inserted_at": timestamp,
+            "embedding": [0.1, 0.2, 0.3],
+        }
+    ]
+    inserted = store.insert_memory_entries(entries)
+    assert inserted == 1
+    assert cursor.execute.called
+    _call_sql, call_params = cursor.execute.call_args[0]
+    assert "embedding" in call_params
+    assert isinstance(call_params["embedding"], array.array)
+    assert call_params["embedding"].typecode == "f"
+    assert list(call_params["embedding"]) == pytest.approx([0.1, 0.2, 0.3])
+
+
+def test_oracle_adk_memory_rows_to_records_decodes_embedding() -> None:
+    """Memory rows to records round-trips vector embeddings as float lists."""
+    import array
+
+    store = OracleSyncADKMemoryStore.__new__(OracleSyncADKMemoryStore)  # type: ignore[call-arg]
+    store._config = _config_for_storage(JSONStorageType.BLOB_JSON)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    row = (
+        "memory-vec",
+        "session-vec",
+        "app",
+        "user",
+        "user",
+        "event-vec",
+        "user",
+        timestamp,
+        b'{"text":"vec"}',
+        "vec",
+        b'{"source":"unit"}',
+        timestamp,
+        array.array("f", [0.1, 0.2, 0.3]),
+    )
+    records = store._rows_to_records([row])
+    assert len(records) == 1
+    assert records[0]["embedding"] == pytest.approx([0.1, 0.2, 0.3])
 
 
 def _sync_store_with_driver() -> "tuple[Any, MagicMock, MagicMock]":
