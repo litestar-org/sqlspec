@@ -1,8 +1,10 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for CockroachDB asyncpg ADK store extension configuration."""
 
+from datetime import UTC, datetime
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import pytest
 
@@ -209,8 +211,9 @@ def test_cockroach_asyncpg_adk_hash_shard_bucket_count_validation() -> None:
         _cockroach_hash_shard_clause(bad_config)
 
 
-async def test_cockroach_asyncpg_adk_memory_search_with_embedding() -> None:
-    """search_entries with embedding executes vector cosine search."""
+@pytest.mark.parametrize("use_fts", [False, True])
+async def test_cockroach_asyncpg_adk_memory_search_with_embedding(use_fts: bool) -> None:
+    """Embedding arguments retain text search against the canonical memory schema."""
     executed_sql: list[tuple[str, tuple[Any, ...]]] = []
 
     class _FakeConn:
@@ -225,14 +228,51 @@ async def test_cockroach_asyncpg_adk_memory_search_with_embedding() -> None:
         async def __aexit__(self, *_args: Any) -> None:
             return None
 
-    config = CockroachAsyncpgConfig(extension_config={"adk": {"enable_memory": True}})
+    config = CockroachAsyncpgConfig(extension_config={"adk": {"enable_memory": True, "memory_use_fts": use_fts}})
     object.__setattr__(config, "provide_connection", MagicMock(return_value=_FakeCtx()))
     store = CockroachAsyncpgADKMemoryStore(config)
 
     await store.search_entries(query="hello", app_name="app", user_id="u1", embedding=[0.1, 0.2, 0.3])
     assert len(executed_sql) == 1
     sql, params = executed_sql[0]
-    assert "embedding <=>" in sql
-    assert params[0] == "app"
-    assert params[1] == "u1"
-    assert params[2] == [0.1, 0.2, 0.3]
+    assert "plainto_tsquery" in sql if use_fts else "content_text ILIKE" in sql
+    assert params == ("app", "u1", "hello" if use_fts else "%hello%", 20)
+
+    assert await store.search_entries("", "app", "u1", embedding=[0.1]) == []
+    assert len(executed_sql) == 1
+
+
+@pytest.mark.parametrize(("owner_type", "owner_id"), [("INTEGER", 42), ("UUID", UUID(int=1))])
+async def test_cockroach_asyncpg_memory_batch_preserves_owner_type(
+    owner_type: str, owner_id: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scalar owner bind retains integer and UUID ownership contracts."""
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value="INSERT 0 1")
+    context = MagicMock()
+    context.__aenter__.return_value = conn
+    monkeypatch.setattr(CockroachAsyncpgConfig, "provide_connection", lambda *_a, **_k: context)
+    config = CockroachAsyncpgConfig(extension_config={"adk": {"owner_id_column": f"owner_id {owner_type}"}})
+    now = datetime.now(UTC)
+    entry = {
+        "id": "mem-1",
+        "session_id": "sess-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "evt-1",
+        "author": "user",
+        "timestamp": now,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": now,
+        "embedding": None,
+    }
+
+    assert await CockroachAsyncpgADKMemoryStore(config).insert_memory_entries([cast("Any", entry)], owner_id) == 1
+
+    sql, *params = conn.execute.call_args.args
+    assert "author, $13, timestamp" in _normalized(sql)
+    assert params[-1] == owner_id
+    assert params[0] == ["mem-1"]

@@ -632,14 +632,16 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             (id, session_id, app_name, user_id, scope, event_id, author,
              {self._owner_id_column_name}, timestamp, content_json,
              content_text, metadata_json, inserted_at)
-            SELECT * FROM unnest(
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
+                $13, timestamp, content_json, content_text, metadata_json, inserted_at
+            FROM unnest(
                 $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
-                $5::varchar[], $6::varchar[], $7::varchar[], $8::varchar[],
-                $9::timestamptz[], $10::jsonb[], $11::text[], $12::jsonb[], $13::timestamptz[]
-            )
+                $5::varchar[], $6::varchar[], $7::varchar[],
+                $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[]
+            ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at)
             ON CONFLICT (event_id) DO NOTHING
             """
-            owner_ids = [owner_id for _ in entries]
             params: tuple[Any, ...] = (
                 ids,
                 session_ids,
@@ -648,12 +650,12 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
                 scopes,
                 event_ids,
                 authors,
-                owner_ids,
                 timestamps,
                 content_jsons,
                 content_texts,
                 metadata_jsons,
                 inserted_ats,
+                owner_id,
             )
         else:
             sql = f"""
@@ -700,7 +702,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query and embedding is None:
+        if not query:
             return []
 
         effective_limit = limit if limit is not None else self._max_results
@@ -717,17 +719,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
 
         scope_count = len(scope_params)
 
-        if embedding is not None:
-            p_vec = f"${scope_count + 1}"
-            p_lim = f"${scope_count + 2}"
-            sql = f"""
-            SELECT * FROM {self._memory_table}
-            WHERE {where_scope} AND embedding IS NOT NULL
-            ORDER BY embedding <=> {p_vec}::float8[]::vector
-            LIMIT {p_lim}
-            """
-            params = (*scope_params, list(embedding), effective_limit)
-        elif self._use_fts:
+        if self._use_fts:
             p_pat = f"${scope_count + 1}"
             p_lim = f"${scope_count + 2}"
             sql = f"""

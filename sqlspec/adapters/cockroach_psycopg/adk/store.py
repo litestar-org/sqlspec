@@ -1263,15 +1263,18 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
                 {owner_id_col}, timestamp, content_json, content_text,
                 metadata_json, inserted_at
             )
-            SELECT * FROM unnest(
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
+                %s, timestamp, content_json, content_text, metadata_json, inserted_at
+            FROM unnest(
                 %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
-                %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::varchar[], %s::varchar[], %s::varchar[],
                 %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
-            )
+            ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at)
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=table_ident, owner_id_col=pg_sql.Identifier(self._owner_id_column_name))
-            owner_ids = [owner_id for _ in entries]
             params: tuple[Any, ...] = (
+                owner_id,
                 ids,
                 session_ids,
                 app_names,
@@ -1279,7 +1282,6 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
                 scopes,
                 event_ids,
                 authors,
-                owner_ids,
                 timestamps,
                 content_jsons,
                 content_texts,
@@ -1334,21 +1336,13 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query and embedding is None:
+        if not query:
             return []
 
         effective_limit = limit if limit is not None else self._max_results
 
         where_scope, scope_params = _build_cockroach_scope_where(app_name, user_id, scope_filter)
-        if embedding is not None:
-            sql = f"""
-            SELECT * FROM {self._memory_table}
-            WHERE {where_scope} AND embedding IS NOT NULL
-            ORDER BY embedding <=> %s::float8[]::vector
-            LIMIT %s
-            """
-            params = (*scope_params, list(embedding), effective_limit)
-        elif self._use_fts:
+        if self._use_fts:
             sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE {where_scope}
@@ -1504,15 +1498,18 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
                 {owner_id_col}, timestamp, content_json, content_text,
                 metadata_json, inserted_at
             )
-            SELECT * FROM unnest(
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
+                %s, timestamp, content_json, content_text, metadata_json, inserted_at
+            FROM unnest(
                 %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
-                %s::varchar[], %s::varchar[], %s::varchar[], %s::varchar[],
+                %s::varchar[], %s::varchar[], %s::varchar[],
                 %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
-            )
+            ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at)
             ON CONFLICT (event_id) DO NOTHING
             """).format(table=table_ident, owner_id_col=pg_sql.Identifier(self._owner_id_column_name))
-            owner_ids = [owner_id for _ in entries]
             params: tuple[Any, ...] = (
+                owner_id,
                 ids,
                 session_ids,
                 app_names,
@@ -1520,7 +1517,6 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
                 scopes,
                 event_ids,
                 authors,
-                owner_ids,
                 timestamps,
                 content_jsons,
                 content_texts,
@@ -1576,21 +1572,13 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query and embedding is None:
+        if not query:
             return []
 
         effective_limit = limit if limit is not None else self._max_results
 
         where_scope, scope_params = _build_cockroach_scope_where(app_name, user_id, scope_filter)
-        if embedding is not None:
-            sql = f"""
-            SELECT * FROM {self._memory_table}
-            WHERE {where_scope} AND embedding IS NOT NULL
-            ORDER BY embedding <=> %s::float8[]::vector
-            LIMIT %s
-            """
-            params = (*scope_params, list(embedding), effective_limit)
-        elif self._use_fts:
+        if self._use_fts:
             sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE {where_scope}
