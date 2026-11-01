@@ -9,7 +9,7 @@ Tests cover:
 """
 
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -889,3 +889,52 @@ def test_cockroach_psycopg_select_stream_follower_reads() -> None:
     assert rows == [{"id": 1}]
     assert any("AS OF SYSTEM TIME '-10s'" in s for s in executed_statements)
     conn.commit.assert_called()
+
+
+def test_cockroach_psycopg_sync_user_configure_runs_after_internal_setup() -> None:
+    """User-supplied configure callback runs after internal connection setup in sync config."""
+    call_order: list[str] = []
+    fake_conn = MagicMock()
+    fake_conn.autocommit = False
+
+    def user_cb(conn: Any) -> None:
+        assert conn.autocommit is True
+        call_order.append("user_cb")
+
+    config = CockroachPsycopgSyncConfig(connection_config={"autocommit": True, "configure": user_cb})
+
+    with patch("sqlspec.adapters.cockroach_psycopg.config.psycopg_crdb.CrdbConnection.connect", return_value=fake_conn):
+        conn = config.create_connection()
+        assert conn is fake_conn
+        assert call_order == ["user_cb"]
+
+    pool = config.create_pool()
+    assert pool is not None
+
+
+async def test_cockroach_psycopg_async_user_configure_runs_after_internal_setup() -> None:
+    """User-supplied async configure callback runs after internal connection setup in async config."""
+    call_order: list[str] = []
+    fake_conn = MagicMock()
+    autocommit_val = False
+
+    async def fake_set_autocommit(val: bool) -> None:
+        nonlocal autocommit_val
+        autocommit_val = val
+        call_order.append("internal_autocommit")
+
+    fake_conn.set_autocommit = AsyncMock(side_effect=fake_set_autocommit)
+
+    async def async_user_cb(conn: Any) -> None:
+        assert autocommit_val is True
+        call_order.append("user_cb")
+
+    config = CockroachPsycopgAsyncConfig(connection_config={"autocommit": True, "configure": async_user_cb})
+
+    with patch(
+        "sqlspec.adapters.cockroach_psycopg.config.psycopg_crdb.AsyncCrdbConnection.connect",
+        AsyncMock(return_value=fake_conn),
+    ):
+        conn = await config.create_connection()
+        assert conn is fake_conn
+        assert call_order == ["internal_autocommit", "user_cb"]

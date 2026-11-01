@@ -1,5 +1,6 @@
 """CockroachDB configuration using psycopg."""
 
+import inspect
 import re
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
@@ -279,6 +280,7 @@ class CockroachPsycopgSyncConfig(
         self._user_connection_hook: Callable[[CockroachSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._user_configure: Callable[[CockroachSyncConnection], Any] | None = connection_config.pop("configure", None)
 
         super().__init__(
             connection_config=connection_config,
@@ -302,9 +304,8 @@ class CockroachPsycopgSyncConfig(
         """
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = psycopg_crdb.CrdbConnection.connect(conninfo, **connection_kwargs)
-        configure = self.connection_config.get("configure", self._configure_connection)
         try:
-            configure(cast("CockroachSyncConnection", connection))
+            self._configure_connection(cast("CockroachSyncConnection", connection))
         except BaseException:
             with suppress(Exception):
                 connection.close()
@@ -380,7 +381,7 @@ class CockroachPsycopgSyncConfig(
             "close_returns": all_config.pop("close_returns", False),
         }
 
-        pool_parameters["configure"] = all_config.pop("configure", self._configure_connection)
+        pool_parameters["configure"] = self._configure_connection
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
         conninfo = all_config.pop("conninfo", None)
@@ -411,6 +412,12 @@ class CockroachPsycopgSyncConfig(
 
         if self._user_connection_hook is not None:
             self._user_connection_hook(conn)
+
+        if self._user_configure is not None:
+            result = self._user_configure(conn)
+            if inspect.isawaitable(result):
+                msg = "Async configure callback cannot be used with CockroachPsycopgSyncConfig"
+                raise ImproperConfigurationError(msg)
 
     def _close_pool(self) -> None:
         if not self.connection_instance:
@@ -515,6 +522,9 @@ class CockroachPsycopgAsyncConfig(
         self._user_connection_hook: Callable[[CockroachAsyncConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._user_configure: Callable[[CockroachAsyncConnection], Any] | None = connection_config.pop(
+            "configure", None
+        )
 
         super().__init__(
             connection_config=connection_config,
@@ -538,9 +548,8 @@ class CockroachPsycopgAsyncConfig(
         """
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = await psycopg_crdb.AsyncCrdbConnection.connect(conninfo, **connection_kwargs)
-        configure = self.connection_config.get("configure", self._configure_async_connection)
         try:
-            await configure(cast("CockroachAsyncConnection", connection))
+            await self._configure_async_connection(cast("CockroachAsyncConnection", connection))
         except BaseException:
             with suppress(Exception):
                 await connection.close()
@@ -617,7 +626,7 @@ class CockroachPsycopgAsyncConfig(
         open_pool = all_config.pop("open", True)
         pool_parameters["open"] = False if open_pool is True else open_pool
 
-        pool_parameters["configure"] = all_config.pop("configure", self._configure_async_connection)
+        pool_parameters["configure"] = self._configure_async_connection
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
         conninfo = all_config.pop("conninfo", None)
@@ -654,6 +663,11 @@ class CockroachPsycopgAsyncConfig(
 
         if self._user_connection_hook is not None:
             await self._user_connection_hook(conn)
+
+        if self._user_configure is not None:
+            result = self._user_configure(conn)
+            if inspect.isawaitable(result):
+                await result
 
     async def _close_pool(self) -> None:
         if not self.connection_instance:
