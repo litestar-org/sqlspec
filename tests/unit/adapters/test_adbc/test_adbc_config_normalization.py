@@ -1,9 +1,13 @@
 """Unit tests for ADBC config normalization helpers."""
 
+import gc
 import importlib.metadata
+import json
 import os
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, cast, get_type_hints
 from unittest.mock import MagicMock
@@ -18,10 +22,12 @@ from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.config import AdbcConnectionParams
 from sqlspec.adapters.adbc.core import (
     build_connection_config,
+    get_statement_config,
     resolve_driver_connect_func,
     resolve_driver_name_from_config,
 )
 from sqlspec.adapters.adbc.pool import AdbcConnectionPool
+from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
@@ -43,6 +49,71 @@ def test_adbc_config_runs_connection_create_callback(monkeypatch: Any) -> None:
     assert config.create_connection() is connection
     assert seen == [connection]
     assert "on_connection_create" not in config.driver_features
+
+
+def test_adbc_session_json_bind_accepts_unhashable_callable_serializer() -> None:
+    """A stateful callable serializer remains valid for public named parameter binding."""
+
+    @dataclass
+    class Serializer:
+        marker: str
+
+        def __call__(self, value: Any) -> str:
+            return json.dumps({self.marker: value}, separators=(",", ":"))
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite"},
+        statement_config=get_statement_config("postgres"),
+        driver_features={
+            "json_serializer": Serializer("custom"),
+            "enable_pgvector": False,
+            "enable_paradedb": False,
+            "enable_pg_textsearch": False,
+        },
+    )
+    with config.provide_session() as session:
+        assert session.select_value("SELECT :payload", payload={"answer": 42}) == '{"custom":{"answer":42}}'
+
+
+def test_adbc_converter_cache_preserves_distinct_equal_callable_identity() -> None:
+    """Equal hashable serializer objects retain their distinct conversion behavior."""
+
+    @dataclass(frozen=True)
+    class Serializer:
+        marker: str = field(compare=False)
+
+        def __call__(self, value: Any) -> str:
+            return json.dumps({self.marker: value}, separators=(",", ":"))
+
+    first_serializer = Serializer("first")
+    second_serializer = Serializer("second")
+    first = get_adbc_type_converter("postgres", json_serializer=first_serializer)
+    second = get_adbc_type_converter("postgres", json_serializer=second_serializer)
+    assert first.convert_dict({"answer": 42}) == '{"first":{"answer":42}}'
+    assert second.convert_dict({"answer": 42}) == '{"second":{"answer":42}}'
+
+
+def test_adbc_converter_cache_releases_unused_serializer_after_turnover() -> None:
+    """Live cache entries reuse converters without retaining discarded serializers indefinitely."""
+
+    @dataclass
+    class Serializer:
+        marker: str
+
+        def __call__(self, value: Any) -> str:
+            return json.dumps({self.marker: value}, separators=(",", ":"))
+
+    serializer = Serializer("original")
+    reference = weakref.ref(serializer)
+    retained = get_adbc_type_converter("postgres", json_serializer=serializer)
+    assert get_adbc_type_converter("postgres", json_serializer=serializer) is retained
+    del retained, serializer
+    gc.collect()
+    assert reference() is not None
+    for index in range(512):
+        get_adbc_type_converter("postgres", json_serializer=Serializer(str(index)))
+    gc.collect()
+    assert reference() is None
 
 
 def test_adbc_pool_option_enables_exclusive_reuse_without_changing_standalone_connections(
