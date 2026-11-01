@@ -8,6 +8,8 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.core import SQL
 from sqlspec.core.result import SQLResult
 
 __all__ = (
@@ -229,3 +231,30 @@ class _SpyDuckDBCursor:
 
     def fetchone(self) -> Any:
         return self._connection.fetchone()
+
+
+def test_select_stream_hugeint_interval_divergent_types() -> None:
+    """Stream selection falls back to fetchmany when divergent types like HUGEINT are present."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    stream = driver.select_stream("SELECT 170141183460469231731687303715884105727::HUGEINT as val", chunk_size=1)
+    assert stream is not None
+    chunks = list(stream)
+    assert len(chunks) == 1
+    assert chunks[0]["val"] == 170141183460469231731687303715884105727
+
+
+def test_concurrent_execute_many_ast_mutation() -> None:
+    """dispatch_execute_many does not mutate parsed_expression.meta."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    driver.execute("CREATE TABLE items (id INT, name VARCHAR)")
+
+    stmt = SQL("INSERT INTO items VALUES (?, ?)", statement_config=driver.statement_config)
+    stmt.compile()
+    expr = stmt._peek_expression()
+    assert expr is not None
+    meta_before = dict(expr.meta)
+
+    driver.execute_many(stmt, [[1, "a"], [2, "b"]])
+    assert expr.meta == meta_before

@@ -49,7 +49,7 @@ from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     import pyarrow as pa
 
@@ -202,8 +202,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if prepared_parameters:
             parsed_expression = cached_statement.expression or statement._peek_expression()
             if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
-                parsed_expression.meta["compiled_sql"] = sql
-                bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
+                try:
+                    bulk_result = self._execute_bulk_insert_many(
+                        parsed_expression, prepared_parameters, compiled_sql=sql
+                    )
+                except TypeError:
+                    bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
                 if bulk_result is not None:
                     return self.create_execution_result(
                         cursor,
@@ -951,20 +955,28 @@ class DuckDBDriver(SyncDriverAdapterBase):
         description: list[Any] | None = None
         reader: Any | None = None
         stream_cursor, close_cursor = self._acquire_stream_cursor()
+        close_cb = stream_cursor.close if close_cursor else None
         try:
             with handler:
                 sql_method = getattr(stream_cursor, "sql", None)
                 if callable(sql_method):
                     relation: Any = sql_method(sql, params=parameters or None)
                     description = relation.description if relation is not None else None
-                    reader = relation.to_arrow_reader(chunk_size) if relation is not None else None
+                    if description and description_has_arrow_divergent_types(description):
+                        cursor_result = stream_cursor.execute(sql, normalize_execute_parameters(parameters))
+                        reader = _DuckDBFetchManyReader(cursor_result, chunk_size, description, close_callback=close_cb)
+                    else:
+                        reader = relation.to_arrow_reader(chunk_size) if relation is not None else None
                 else:
                     result = stream_cursor.execute(sql, normalize_execute_parameters(parameters))
                     description = result.description
-                    reader = result.to_arrow_reader(chunk_size)
+                    if description and description_has_arrow_divergent_types(description):
+                        reader = _DuckDBFetchManyReader(result, chunk_size, description, close_callback=close_cb)
+                    else:
+                        reader = result.to_arrow_reader(chunk_size)
             self._check_pending_exception(handler)
             reader = _ensure_arrow_reader(reader)
-            if close_cursor:
+            if close_cursor and not isinstance(reader, _DuckDBFetchManyReader):
                 reader = arrow_reader_with_deferred_close(reader, stream_cursor.close)
         except BaseException:
             if close_cursor:
@@ -975,6 +987,46 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
 
 register_driver_profile("duckdb", driver_profile)
+
+
+class _DuckDBFetchManyBatch:
+    __slots__ = ("_rows",)
+
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+
+    def to_pylist(self) -> list[dict[str, Any]]:
+        return self._rows
+
+
+class _DuckDBFetchManyReader:
+    __slots__ = ("_chunk_size", "_close_callback", "_column_names", "_description", "_target")
+
+    def __init__(
+        self, target: Any, chunk_size: int, description: list[Any], close_callback: "Callable[[], None] | None" = None
+    ) -> None:
+        self._target = target
+        self._chunk_size = chunk_size
+        self._description = description
+        self._column_names = [col[0] for col in description]
+        self._close_callback = close_callback
+
+    def read_next_batch(self) -> _DuckDBFetchManyBatch:
+        rows = self._target.fetchmany(self._chunk_size)
+        if not rows:
+            self.close()
+            raise StopIteration
+        dict_rows = [dict(zip(self._column_names, row, strict=False)) for row in rows]
+        return _DuckDBFetchManyBatch(dict_rows)
+
+    def close(self) -> None:
+        close_method = getattr(self._target, "close", None)
+        if callable(close_method):
+            close_method()
+        if self._close_callback is not None:
+            callback = self._close_callback
+            self._close_callback = None
+            callback()
 
 
 def _ensure_arrow_reader(reader: Any) -> Any:

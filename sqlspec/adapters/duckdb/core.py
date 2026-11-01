@@ -16,18 +16,31 @@ from sqlglot.errors import ParseError
 from sqlspec.adapters.duckdb._typing import (
     DuckDBBinderException,
     DuckDBCatalogException,
+    DuckDBConnectionException,
     DuckDBConstraintException,
     DuckDBConversionException,
+    DuckDBDataError,
+    DuckDBInternalException,
     DuckDBInterruptException,
+    DuckDBInvalidInputException,
+    DuckDBInvalidTypeException,
     DuckDBIOException,
+    DuckDBNotImplementedException,
+    DuckDBOperationalError,
+    DuckDBOutOfMemoryException,
+    DuckDBOutOfRangeException,
     DuckDBParserException,
     DuckDBPermissionException,
+    DuckDBSerializationException,
+    DuckDBSyntaxException,
     DuckDBTransactionException,
+    DuckDBTypeMismatchException,
     duckdb_module,
 )
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
@@ -512,11 +525,23 @@ def configure_duckdb_statement_profiling(connection: Any, profile_path: Path) ->
 _EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {
     DuckDBCatalogException: (NotFoundError, "catalog error"),
     DuckDBParserException: (SQLParsingError, "SQL parsing error"),
+    DuckDBSyntaxException: (SQLParsingError, "SQL syntax error"),
     DuckDBBinderException: (SQLParsingError, "SQL parsing error"),
     DuckDBPermissionException: (PermissionDeniedError, "permission denied"),
     DuckDBInterruptException: (OperationCancelledError, "query interrupted"),
     DuckDBIOException: (OperationalError, "operational error"),
     DuckDBConversionException: (DataError, "data error"),
+    DuckDBOutOfRangeException: (DataError, "out of range error"),
+    DuckDBInvalidInputException: (DataError, "invalid input error"),
+    DuckDBTypeMismatchException: (DataError, "type mismatch error"),
+    DuckDBInvalidTypeException: (DataError, "invalid type error"),
+    DuckDBDataError: (DataError, "data error"),
+    DuckDBConnectionException: (DatabaseConnectionError, "connection error"),
+    DuckDBOperationalError: (OperationalError, "operational error"),
+    DuckDBOutOfMemoryException: (OperationalError, "out of memory error"),
+    DuckDBInternalException: (OperationalError, "internal error"),
+    DuckDBSerializationException: (SerializationConflictError, "serialization conflict"),
+    DuckDBNotImplementedException: (SQLSpecError, "not implemented"),
 }
 _EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
 
@@ -1022,7 +1047,14 @@ def _classify_duckdb_constraint(error: "BaseException") -> SQLSpecError:
 
 
 def _map_transaction_exception(error: "BaseException") -> SQLSpecError:
-    if "conflict on update" in str(error).lower():
+    lowered = str(error).lower()
+    if (
+        "conflict on update" in lowered
+        or "conflict on tuple deletion" in lowered
+        or "write-write conflict" in lowered
+        or "write conflict" in lowered
+        or "serialization" in lowered
+    ):
         return _create_duckdb_error(error, SerializationConflictError, "serialization conflict")
     return _create_duckdb_error(error, OperationalError, "transaction error")
 
