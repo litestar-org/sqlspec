@@ -7,7 +7,7 @@ import io
 import ipaddress
 from decimal import Decimal
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_args
 from urllib.parse import urlparse
 
 import sqlglot
@@ -102,6 +102,7 @@ HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
 _CONNECTION_NAME_PARTS = 3
+none_type: Final = type(None)
 
 
 DEFAULT_REQUEST_TIMEOUT = 120.0
@@ -691,7 +692,7 @@ def build_profile() -> "DriverParameterProfile":
             Decimal: _identity,
             dict: _identity,
             list: _identity,
-            type(None): _return_none,
+            none_type: _return_none,
             **build_uuid_coercions(),
         },
         default_ast_transformer=build_null_pruning_transform(dialect="bigquery"),

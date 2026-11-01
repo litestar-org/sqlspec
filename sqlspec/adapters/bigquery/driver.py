@@ -5,6 +5,7 @@ type coercion, error handling, and query job management.
 """
 
 import io
+import sys
 from collections.abc import Mapping
 from contextlib import suppress
 from itertools import chain
@@ -319,7 +320,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not hasattr(self.connection, "query"):
             return
         exc_handler = self.handle_database_exceptions()
-        with exc_handler:
+
+        def _begin_op() -> None:
             job_config = (
                 BigQueryQueryJobConfig(create_session=True)
                 if self._session_id is None
@@ -345,8 +347,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
             session_id = getattr(session_info, "session_id", None)
             if isinstance(session_id, str) and session_id:
                 self._session_id = session_id
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                _begin_op()
+        else:
+            self._run_with_exception_handler(exc_handler, _begin_op)
+        self._check_pending_exception(exc_handler)
 
     def commit(self) -> None:
         """Commit the active BigQuery session transaction."""
@@ -355,13 +362,19 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not was_in_tx or not hasattr(self.connection, "query"):
             return
         exc_handler = self.handle_database_exceptions()
-        with exc_handler:
+
+        def _commit_op() -> None:
             job = self._run_query_job(self.connection, "COMMIT TRANSACTION", None)
             result_fn = getattr(job, "result", None)
             if callable(result_fn):
                 result_fn(job_retry=self._job_retry, timeout=self._job_result_timeout)
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                _commit_op()
+        else:
+            self._run_with_exception_handler(exc_handler, _commit_op)
+        self._check_pending_exception(exc_handler)
 
     def rollback(self) -> None:
         """Rollback the active BigQuery session transaction."""
@@ -370,13 +383,19 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not was_in_tx or not hasattr(self.connection, "query"):
             return
         exc_handler = self.handle_database_exceptions()
-        with exc_handler:
+
+        def _rollback_op() -> None:
             job = self._run_query_job(self.connection, "ROLLBACK TRANSACTION", None)
             result_fn = getattr(job, "result", None)
             if callable(result_fn):
                 result_fn(job_retry=self._job_retry, timeout=self._job_result_timeout)
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                _rollback_op()
+        else:
+            self._run_with_exception_handler(exc_handler, _rollback_op)
+        self._check_pending_exception(exc_handler)
 
     def dry_run(
         self,
@@ -395,7 +414,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
             job_config.connection_properties = [BigQueryConnectionProperty("session_id", self._session_id)]
         exc_handler = self.handle_database_exceptions()
         total_bytes = 0
-        with exc_handler:
+
+        def _dry_run_op() -> int:
             job = run_query_job(
                 self.connection,
                 sql,
@@ -407,9 +427,16 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 timeout=self._job_request_timeout(),
                 job_retry=self._job_retry,
             )
-            total_bytes = int(getattr(job, "total_bytes_processed", 0) or 0)
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+            return int(getattr(job, "total_bytes_processed", 0) or 0)
+
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                total_bytes = _dry_run_op()
+        else:
+            res = self._run_with_exception_handler(exc_handler, _dry_run_op)
+            if res is not None:
+                total_bytes = res
+        self._check_pending_exception(exc_handler)
         return total_bytes
 
     def create_savepoint(self, name: str) -> None:
@@ -524,7 +551,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
             exc_handler = self.handle_database_exceptions()
             streaming_result: ArrowResult | None = None
-            with exc_handler:
+
+            def _streaming_op() -> Any:
                 query_job = self._run_query_job(self.connection, sql, driver_params)
                 row_iterator = query_job.result(
                     page_size=batch_size, job_retry=self._job_retry, timeout=self._job_result_timeout
@@ -536,7 +564,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     else (query_job.schema or getattr(row_iterator, "schema", None))
                 )
                 arrow_reader = _bigquery_arrow_reader_from_iterable(arrow_batches, schema=fallback_schema)
-                streaming_result = build_arrow_result_from_reader(
+                return build_arrow_result_from_reader(
                     prepared_statement,
                     arrow_reader,
                     return_format=return_format,
@@ -544,8 +572,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     arrow_schema=arrow_schema,
                 )
 
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    streaming_result = _streaming_op()
+            else:
+                streaming_result = self._run_with_exception_handler(exc_handler, _streaming_op)
+            self._check_pending_exception(exc_handler)
             if streaming_result is None:
                 msg = "Unreachable"
                 raise RuntimeError(msg)
