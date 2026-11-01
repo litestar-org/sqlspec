@@ -467,3 +467,74 @@ def test_sqlite_generated_column_memoization(monkeypatch: pytest.MonkeyPatch) ->
         assert gen_cols == {"c": "a + b", "d": "a * b"}
     finally:
         connection.close()
+
+
+def test_duckdb_metadata_capabilities_profile() -> None:
+    """DuckDBDataDictionary reports supported capabilities across metadata domains."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    try:
+        profile = driver.data_dictionary.get_metadata_capabilities(driver)
+        assert profile.dialect == "duckdb"
+        assert profile.get("tables").support == MetadataSupport.SUPPORTED
+        assert profile.get("columns").support == MetadataSupport.SUPPORTED
+        assert profile.get("schemas").support == MetadataSupport.SUPPORTED
+        assert profile.get("objects").support == MetadataSupport.SUPPORTED
+        assert profile.get("routines").support == MetadataSupport.SUPPORTED
+        assert profile.get("system").support == MetadataSupport.SUPPORTED
+        assert profile.get("databases").support == MetadataSupport.SUPPORTED
+        assert profile.get("extensions").support == MetadataSupport.SUPPORTED
+        assert profile.get("privileges").support == MetadataSupport.UNSUPPORTED
+    finally:
+        driver.connection.close()
+
+
+def test_duckdb_unwired_sql_domains() -> None:
+    """DuckDBDataDictionary wires schemas, objects, routines, databases, extensions, system, and table_details."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    try:
+        driver.execute("CREATE SCHEMA custom_schema")
+        driver.execute("CREATE TABLE custom_schema.test_unwired (id INT PRIMARY KEY, name VARCHAR)")
+
+        schemas = driver.data_dictionary.get_schemas(driver)
+        assert schemas.domain == "schemas"
+        assert len(schemas.items) > 0
+
+        objects = driver.data_dictionary.get_objects(driver, schema="custom_schema")
+        assert objects.domain == "objects"
+        assert any(obj.get("object_name") == "test_unwired" for obj in objects.items)
+
+        routines = driver.data_dictionary.get_routines(driver, schema="custom_schema")
+        assert routines.domain == "routines"
+
+        databases = driver.data_dictionary.get_databases(driver)
+        assert databases.domain == "databases"
+        assert len(databases.items) > 0
+
+        extensions = driver.data_dictionary.get_extensions(driver)
+        assert extensions.domain == "extensions"
+        assert len(extensions.items) > 0
+
+        table_details = driver.data_dictionary.get_table_details(driver, table="test_unwired", schema="custom_schema")
+        assert table_details.domain == "tables"
+        assert len(table_details.items) == 1
+        assert table_details.items[0]["table_name"] == "test_unwired"
+
+        system_settings = driver.data_dictionary.get_system_metadata(driver, "settings", include_system=True)
+        assert system_settings.request.domain == "settings"
+        assert len(system_settings.rows) > 0
+    finally:
+        driver.connection.close()
+
+
+def test_references_identifier() -> None:
+    """DuckDBDataDictionary._references_identifier matches whole identifiers inherited from base."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    try:
+        dd = driver.data_dictionary
+        assert dd._references_identifier("SELECT * FROM my_table", "my_table") is True
+        assert dd._references_identifier("SELECT * FROM my_table_extra", "my_table") is False
+    finally:
+        driver.connection.close()
