@@ -7,7 +7,7 @@ import adbc_driver_manager.dbapi
 import pytest
 from adbc_driver_bigquery import DatabaseOptions
 
-from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
+from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver, AdbcDriverFeatures
 from sqlspec.adapters.adbc.config import AdbcConnectionParams
 from sqlspec.adapters.adbc.core import (
     build_connection_config,
@@ -511,11 +511,11 @@ def test_adbc_config_skips_extension_connection_when_all_probes_disabled(monkeyp
 
 
 def test_adbc_driver_standalone_applies_features_and_enforces_strict_coercion() -> None:
-    """Standalone AdbcDriver populates default driver_features, aligns dialect, and honors strict_type_coercion."""
+    """Standalone AdbcDriver populates default driver_features, aligns dialect, and honors enable_strict_type_coercion."""
     conn = MagicMock()
     conn.adbc_get_info.return_value = {"vendor_name": "duckdb", "driver_name": "duckdb"}
 
-    driver = AdbcDriver(conn, driver_features={"strict_type_coercion": True})
+    driver = AdbcDriver(conn, driver_features={"enable_strict_type_coercion": True})
     assert driver.dialect == "duckdb"
     assert str(driver.statement_config.dialect) == "duckdb"
     assert "json_serializer" in driver.driver_features
@@ -806,13 +806,13 @@ def test_snowflake_lowercase_default() -> None:
     assert config.driver_features["enable_lowercase_column_names"] is True
 
 
-def test_driver_features_alias_consolidation() -> None:
-    """AdbcConfig consolidates legacy alias pairs to enable_*."""
+def test_driver_features_have_no_legacy_aliases() -> None:
+    """AdbcDriverFeatures declares only the enable_* keys, and legacy alias keys are not translated."""
+    assert "strict_type_coercion" not in AdbcDriverFeatures.__annotations__
+    assert "arrow_extension_types" not in AdbcDriverFeatures.__annotations__
     config = AdbcConfig(
         connection_config={"driver_name": "sqlite"},
-        driver_features={"strict_type_coercion": True, "arrow_extension_types": False},
+        driver_features={"enable_strict_type_coercion": True, "enable_arrow_extension_types": False},
     )
     assert config.driver_features["enable_strict_type_coercion"] is True
     assert config.driver_features["enable_arrow_extension_types"] is False
-    assert "strict_type_coercion" not in config.driver_features
-    assert "arrow_extension_types" not in config.driver_features

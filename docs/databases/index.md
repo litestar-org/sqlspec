@@ -27,7 +27,7 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 | [`bigquery`](bigquery.md) | `sqlspec[bigquery]` | Sync | `@name` (`named`) | Stateless HTTP/gRPC Client | Storage Read / Write API | Table Queue | Sessions + Memory (`SEARCH` / `LIKE`) |
 | [`spanner`](spanner.md) | `sqlspec[spanner]` | Sync + Async | `@name` (`named`) | `PingingPool` / `TransactionPingingPool` | Row / Batched | Lock-Free Snapshot + `run_in_transaction` | Sessions + Memory (`ARRAY<FLOAT32>`, FTS `SCORE`, RRF) + Artifacts |
 | [`adbc`](adbc.md) | `sqlspec[adbc]` | Sync | `?` / `$1` / `:1` | Driver-Managed (`NoPoolSyncConfig`) | Native C-Stream | Table Queue | Sessions + Memory (PostgreSQL `pgvector` RRF, DuckDB, Oracle, Db2) |
-| [`arrow_odbc`](arrow-odbc.md) | `sqlspec[arrow-odbc]` | Sync | `?` (`qmark`) | ODBC Driver Pool (`enable_driver_pooling`) | Native Rust ODBC Batch | Table Queue | Sessions + Memory (`LIKE` / `POSSTR`) |
+| [`arrow_odbc`](arrow-odbc.md) | `sqlspec[arrow-odbc]` | Sync | `?` (`qmark`) | ODBC Driver Pool (`enable_pooling`) | Native Rust ODBC Batch | Table Queue | Sessions + Memory (`LIKE` / `POSSTR`) |
 
 ## Database Setup Guides
 

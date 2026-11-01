@@ -4,6 +4,7 @@ import ast
 import importlib
 import inspect
 import operator
+import re
 import sqlite3
 import types
 from pathlib import Path
@@ -733,3 +734,27 @@ def test_litestar_session_migration_resolves_store_class(adapter: str, config_na
     store_module = importlib.import_module(f"sqlspec.adapters.{adapter}.litestar.store")
 
     assert hasattr(store_module, store_name), f"{adapter}: expected {store_name} in litestar/store.py"
+
+
+_DRIVER_FEATURE_READ_PATTERN = r'driver_features\s*(?:\.get\(|\.setdefault\(|\[)\s*"([A-Za-z]\w*)"'
+
+
+@pytest.mark.parametrize(
+    "adapter", sorted(path.name for path in Path("sqlspec/adapters").iterdir() if (path / "config.py").exists())
+)
+def test_driver_feature_keys_read_by_adapter_are_declared(adapter: str) -> None:
+    """Every literal driver_features key an adapter reads is annotated on its ``*DriverFeatures`` TypedDict."""
+    read_keys: dict[str, str] = {}
+    for py_file in sorted(Path("sqlspec/adapters", adapter).rglob("*.py")):
+        for match in re.finditer(_DRIVER_FEATURE_READ_PATTERN, py_file.read_text(encoding="utf-8")):
+            read_keys.setdefault(match.group(1), str(py_file))
+    config_module = importlib.import_module(f"sqlspec.adapters.{adapter}.config")
+    feature_types = [
+        value
+        for name, value in vars(config_module).items()
+        if name.endswith("DriverFeatures") and isinstance(value, type)
+    ]
+    assert feature_types, f"{adapter} declares no *DriverFeatures TypedDict"
+    declared = {key for feature_type in feature_types for key in feature_type.__annotations__}
+    undeclared = {key: path for key, path in read_keys.items() if key not in declared}
+    assert not undeclared, f"{adapter} reads undeclared driver_features keys: {undeclared}"

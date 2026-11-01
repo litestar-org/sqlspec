@@ -50,7 +50,7 @@ config = spec.add_config(
         },
         statement_config=StatementConfig(dialect="tsql"),
         driver_features={
-            "enable_driver_pooling": True,
+            "enable_pooling": True,
             "chunk_size": 65536,
             "fetch_concurrently": True,
         },
@@ -60,13 +60,13 @@ config = spec.add_config(
 
 ## Key Driver Features and Pool Tuning
 
-`ArrowOdbcConfig` subclasses `NoPoolSyncConfig` and delegates connection reuse to ODBC Driver Manager pooling when `enable_driver_pooling=True`:
+`ArrowOdbcConfig` subclasses `NoPoolSyncConfig` and delegates connection reuse to ODBC Driver Manager pooling when `enable_pooling=True`:
 
 | Setting | Location | Description |
 | --- | --- | --- |
 | `connection_string` | `connection_config` | Standard semicolon-delimited ODBC connection string (`Driver={...};Server=...;`). |
 | `user` / `password` | `connection_config` | Optional credentials passed alongside the ODBC connection string. |
-| `enable_driver_pooling` | `driver_features` | Enables process-wide ODBC Driver Manager connection pooling for low-latency session checkouts. |
+| `enable_pooling` | `driver_features` | Enables process-wide ODBC Driver Manager connection pooling for low-latency session checkouts. |
 | `chunk_size` / `max_bytes_per_batch` | `driver_features` | Maximum rows and memory bytes allocated per Arrow `RecordBatch` buffer during streaming reads. |
 | `fetch_concurrently` | `driver_features` | Allocates double-buffered background ODBC fetch threads in Rust while Python processes the current Arrow batch. |
 | `max_text_size` / `max_binary_size` | `driver_features` | Upper byte bounds for unbounded `VARCHAR(MAX)` / `NVARCHAR(MAX)` / `VARBINARY(MAX)` columns. |

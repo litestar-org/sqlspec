@@ -29,6 +29,9 @@ important operational fixes.
 * Removed the `pgbouncer` key from `AsyncpgConnectionConfig`; set `driver_features={"pooler_mode": "transaction"}` instead.
 * Removed the empty `SybaseADKConfig`, `SqlanywhereADKConfig`, `Db2LitestarConfig`, and `Db2EventsConfig` TypedDicts; use the base `ADKConfig`, `LitestarConfig`, and `EventsConfig`.
 * Renamed `use_pool` to `enable_pooling` (default `True`) across `mssql_python` and `pymssql` driver features.
+* Renamed `arrow_odbc` `enable_driver_pooling` to `enable_pooling` and BigQuery `use_query_and_wait` to `enable_query_and_wait`.
+* Removed the ADBC `strict_type_coercion` and `arrow_extension_types` driver feature aliases; use `enable_strict_type_coercion` and `enable_arrow_extension_types`.
+* Declared driver feature keys that adapters already read: `events_backend` on `ArrowOdbcDriverFeatures` and `default_query_job_config` on `BigQueryDriverFeatures`.
 * Replaced `null_pool` in `psycopg` connection configuration and driver features with canonical `enable_pooling=False`.
 * Replaced correlated per-column scalar subqueries in data dictionary `columns.sql` and `indexes.sql` catalog queries across `postgres`, `cockroach`, `mssql`, `mysql`, `oracle`, `db2`, and `duckdb` with pre-aggregated CTEs and joins, and reduced `ColumnMetadata` to its 18 core catalog fields.
   ([#866](https://github.com/litestar-org/sqlspec/pull/866))

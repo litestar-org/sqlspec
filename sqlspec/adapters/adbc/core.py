@@ -1028,16 +1028,11 @@ def apply_driver_features(
         Updated statement configuration and normalized driver features.
     """
     processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    processed_features = _normalize_adbc_driver_features(processed_features)
     resolved_dialect = resolve_dialect_name(statement_config.dialect).lower()
 
     json_serializer = cast("Callable[[Any], str] | None", processed_features.setdefault("json_serializer", to_json))
     processed_features.setdefault("enable_cast_detection", True)
-    if "strict_type_coercion" in processed_features:
-        processed_features.setdefault("enable_strict_type_coercion", processed_features.pop("strict_type_coercion"))
     processed_features.setdefault("enable_strict_type_coercion", False)
-    if "arrow_extension_types" in processed_features:
-        processed_features.setdefault("enable_arrow_extension_types", processed_features.pop("arrow_extension_types"))
     processed_features.setdefault("enable_arrow_extension_types", True)
     processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     processed_features.setdefault("enable_paradedb", True)
@@ -1795,20 +1790,6 @@ def _map_sqlstate_exception(error: Any, sqlstate: str) -> SQLSpecError:
         return _create_adbc_error(error, exc_class, description)
 
     return _create_adbc_error(error, SQLSpecError, "database error")
-
-
-def _normalize_adbc_driver_features(processed_features: "dict[str, Any]") -> "dict[str, Any]":
-    if "strict_type_coercion" in processed_features:
-        val = processed_features.pop("strict_type_coercion")
-        if "enable_strict_type_coercion" not in processed_features:
-            processed_features["enable_strict_type_coercion"] = val
-
-    if "arrow_extension_types" in processed_features:
-        val = processed_features.pop("arrow_extension_types")
-        if "enable_arrow_extension_types" not in processed_features:
-            processed_features["enable_arrow_extension_types"] = val
-
-    return processed_features
 
 
 def _validate_strict_parameter_value(value: Any) -> None:

@@ -117,6 +117,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_default_query_job_config",
+        "_enable_query_and_wait",
         "_enable_storage_write_api",
         "_in_transaction",
         "_job_result_kwargs_defaults",
@@ -127,7 +128,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_literal_inliner",
         "_request_timeout",
         "_session_id",
-        "_use_query_and_wait",
     )
     dialect = "bigquery"
 
@@ -165,7 +165,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._job_retry: Retry | None = build_retry(self._job_retry_deadline) if self._job_retry_deadline > 0 else None
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
         self._request_timeout = self._resolve_request_timeout(features)
-        self._use_query_and_wait = bool(features.get("use_query_and_wait", True))
+        self._enable_query_and_wait = bool(features.get("enable_query_and_wait", True))
         self._enable_storage_write_api = bool(features.get("enable_storage_write_api", False))
         self._in_transaction: bool = False
         self._session_id: str | None = None
@@ -952,7 +952,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     def _can_use_query_and_wait(self, statement: "SQL", sql: str) -> bool:
         """Use the interactive fast path only for compatible query jobs."""
-        if not self._use_query_and_wait or not hasattr(self.connection, "query_and_wait"):
+        if not self._enable_query_and_wait or not hasattr(self.connection, "query_and_wait"):
             return False
         if self._in_transaction or self._session_id is not None:
             return False

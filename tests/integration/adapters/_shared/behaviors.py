@@ -4936,14 +4936,14 @@ def _bigquery_job_controls(driver: object, case: DriverCase) -> None:
     assert not hasattr(driver, "export_table_to_storage")
 
     execute_parameters = inspect.signature(sync_driver.execute).parameters
-    for parameter_name in ("job_config", "job_retry", "job_result_timeout", "request_timeout", "use_query_and_wait"):
+    for parameter_name in ("job_config", "job_retry", "job_result_timeout", "request_timeout", "enable_query_and_wait"):
         assert parameter_name not in execute_parameters
 
     assert getattr(driver, "_job_result_timeout") == 30.0
     assert getattr(driver, "_job_retry_deadline") == 0.0
     assert getattr(driver, "_job_retry") is None
     assert getattr(driver, "_request_timeout") == 15.0
-    assert getattr(driver, "_use_query_and_wait") is True
+    assert getattr(driver, "_enable_query_and_wait") is True
 
 
 register_sync_extra_assertion("driver_features:bigquery_job_controls", DRIVER_FEATURES_SCOPE, _bigquery_job_controls)

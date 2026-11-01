@@ -698,12 +698,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
         result = await self._execute_cached_statement(normalized.statement)
-        stmt_cache_size = self.driver_features.get("statement_cache_size")
-        if stmt_cache_size is None and hasattr(self, "connection_config") and isinstance(self.connection_config, dict):
-            stmt_cache_size = self.connection_config.get("statement_cache_size")
-        if stmt_cache_size is None:
-            stmt_cache_size = 100
-        if not self._is_transaction_pooler_mode() and stmt_cache_size > 0:
+        if not self._is_transaction_pooler_mode():
             result.metadata["prepared_statement"] = True
         return StackResult.from_sql_result(result)
 

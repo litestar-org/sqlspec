@@ -103,6 +103,8 @@ class BigQueryDriverFeatures(TypedDict):
 
     connection_instance: NotRequired["BigQueryConnection"]
     """Pre-created ``google.cloud.bigquery.Client`` reused without transferring lifecycle ownership."""
+    default_query_job_config: NotRequired[QueryJobConfig]
+    """Default ``QueryJobConfig`` for a directly constructed driver; config-managed drivers use the client's default."""
     on_connection_create: NotRequired["Callable[[Any], None]"]
     """Callback invoked with the ``bigquery.Client`` when instantiated by the config."""
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -119,7 +121,7 @@ class BigQueryDriverFeatures(TypedDict):
     """Total seconds to retry transient query failures (defaults to ``60.0``; ``<= 0`` disables retries)."""
     job_result_timeout: NotRequired[float]
     """Maximum seconds to poll ``QueryJob.result()`` before raising a timeout error."""
-    use_query_and_wait: NotRequired[bool]
+    enable_query_and_wait: NotRequired[bool]
     """Execute single-statement queries via low-latency ``Client.query_and_wait()`` outside transactions (defaults to ``True``)."""
     request_timeout: NotRequired[float]
     """Per-request HTTP transport timeout in seconds for job submission calls (defaults to ``job_result_timeout`` or ``120.0``)."""
