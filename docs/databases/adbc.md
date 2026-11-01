@@ -118,6 +118,66 @@ with spec.provide_session(config) as session:
     )
 ```
 
+## PostgreSQL Connection Reuse
+
+ADBC opens and closes a connection for each session by default. For short
+PostgreSQL transactions, enable connection reuse with `pool_config={}` or supply
+explicit bounds:
+
+```python
+import os
+
+from sqlspec.adapters.adbc import AdbcConfig
+
+config = AdbcConfig(
+    connection_config={"uri": os.environ["DATABASE_URI"]},
+    pool_config={"max_size": 4, "timeout": 30.0},
+)
+try:
+    with config.provide_session() as session:
+        value = session.select_value("SELECT :value", value=42)
+        session.commit()
+finally:
+    config.close_pool()
+```
+
+`pool_config=None` keeps a fresh connection per session. An empty mapping gives
+four leases and a 30-second wait limit. Each lease gives one caller sole use of a
+connection. The pool holds one extra seed, for a total of `max_size + 1` native
+connections. Nested sessions need separate leases and can time out when the pool
+is full. Standalone connections do not count toward this limit.
+
+Both native packages, `adbc-driver-manager` and `adbc-driver-postgresql`, must be
+version 1.12.0 or newer. This pool supports only the native PostgreSQL driver
+with `autocommit=False`. It rejects supplied connections and
+`on_connection_create` hooks. Other backends keep a fresh connection per
+session. The `supports_connection_pooling` flag means the adapter offers a
+pool; the flag does not say whether a given config has enabled it.
+
+On clean exit, the pool rolls back unfinished work, runs `DISCARD ALL` outside
+a transaction, and turns native autocommit off. This clears committed session
+settings, temporary tables, prepared statements, listeners, and advisory locks.
+A failed session or reset drops that connection from reuse. Direct changes to
+native connection options fall outside this reset contract. Measure complete
+transactions, including reset, on your own workload before choosing a pool.
+
+Lazy row streams and Arrow readers belong to their session. On exit, the
+session closes their native readers and cursors, then drops the connection
+from reuse. This also applies to streams that were never read or fully read.
+Consume streams inside the session. Materialized tables and eagerly drained
+batch lists stay valid afterward and allow reuse.
+
+`close_pool()` blocks new checkouts and closes idle connections. Active leases
+finish first, then close; their work is not interrupted. If native cleanup
+fails, call `close_pool()` again to retry. The pool keeps ownership until every
+handle is closed. A later explicit session can then start a new generation.
+Create configs after forking: a pool from the parent process refuses use in a
+child. Pools do not refresh credentials on their own.
+
+`create_connection()` and `provide_connection()` remain separate from the pool.
+An unpooled `connection_instance` stays open when a session ends; the caller
+owns it.
+
 ## Key Driver Features and Pool Tuning
 
 | Setting | Location | Description |

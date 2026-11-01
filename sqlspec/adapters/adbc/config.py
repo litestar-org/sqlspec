@@ -53,7 +53,9 @@ class AdbcPoolConfig(TypedDict):
     """Optional PostgreSQL clone-pool bounds; an empty mapping enables defaults."""
 
     max_size: NotRequired[int]
+    """Maximum simultaneous clone leases, excluding the original seed (default 4)."""
     timeout: NotRequired[float]
+    """Maximum seconds to wait for a lease (default 30.0)."""
 
 
 class AdbcConnectionParams(TypedDict):

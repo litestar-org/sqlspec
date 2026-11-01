@@ -11,6 +11,8 @@ important operational fixes.
 
 **Added:**
 
+* Added a pool for the native PostgreSQL ADBC driver. Set `AdbcConfig(pool_config={})` to reuse connections. Each lease has a wait timeout; each return clears session state. Pooling is off by default. See the [ADBC guide](databases/adbc.md#postgresql-connection-reuse) for supported settings.
+
 * Added Sybase Adaptive Server Enterprise (`sqlspec.adapters.sybase` with `SybaseSyncConfig` and `SybaseSyncDriver`) and SAP SQL Anywhere (`sqlspec.adapters.sqlanywhere` with `SqlAnywhereSyncConfig` and `SqlAnywhereSyncDriver`) database adapters, custom SQLGlot dialects (`Sybase` and `SQLAnywhere` in `sqlspec.dialects.sybase`), data dictionaries (`SybaseSyncDataDictionary` and `SqlAnywhereSyncDataDictionary` with `SYBASE_CONFIG` and `SQLANYWHERE_CONFIG`), type converters (`SybaseOutputConverter` and `SqlAnywhereOutputConverter`), and extension stores for Litestar sessions (`SybaseStore`, `SqlAnywhereStore`), Event queues (`SybaseEventQueueStore`, `SqlAnywhereEventQueueStore`), and Google ADK sessions and memory (`SybaseADKStore`, `SybaseADKMemoryStore`, `SqlAnywhereADKStore`, `SqlAnywhereADKMemoryStore`).
   ([#870](https://github.com/litestar-org/sqlspec/pull/870))
 * Added `arrow_odbc` dialect auto-detection and `information_schema` / system catalog introspection for Sybase ASE (`Adaptive Server Enterprise` / `ASE`) and SAP SQL Anywhere (`SQL Anywhere` / `Sybase IQ`), routing detected connections to the `sybase` and `sqlanywhere` data dictionaries.
@@ -80,6 +82,8 @@ important operational fixes.
 
 **Fixed:**
 
+
+* ADBC now closes its own connections if a hook, profile setup, driver setup, or session setup fails. It keeps the first error and leaves supplied connections open.
 
 * Preserved supported Arrow conversion and mutation paths for Asyncmy and Spanner while reporting their native capabilities accurately; corrected ADBC lowercase readers, DuckDB stream ownership and table filtering, and SQL Server Arrow cursor lifetimes.
 
