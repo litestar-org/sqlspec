@@ -2,25 +2,23 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError
+from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError, spanner_param_types
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
-from sqlspec.adapters.spanner.adk.store import (
+from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
+from sqlspec.adapters.spanner.core import (
     _DDL_TIMEOUT_SECONDS,
-    SPANNER_PARAM_TYPES,
     _adk_config,
+    _convert_json_row_value,
     _extract_spanner_json_codecs,
     _is_spanner_table_missing,
     _json_param_type,
+    _run_read,
     _run_read_async,
     _spanner_row_deletion_policy,
     _SpannerAsyncUpdateJob,
     _SpannerReadProtocol,
     _SpannerSyncUpdateJob,
     _SpannerWriteTransactionProtocol,
-)
-from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
-from sqlspec.adapters.spanner.core import (
-    _convert_json_row_value,
     create_mapped_exception,
     execute_ddl_async,
     execute_ddl_sync,
@@ -43,6 +41,8 @@ if TYPE_CHECKING:
     )
 
 __all__ = ("USER_SCOPED_SESSION_ID", "SpannerAsyncADKArtifactStore", "SpannerSyncADKArtifactStore")
+
+SPANNER_PARAM_TYPES = spanner_param_types
 
 USER_SCOPED_SESSION_ID = ""
 
@@ -465,12 +465,7 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
-        try:
-            with self._config.provide_connection(transaction=False) as snapshot:
-                reader = cast("_SpannerReadProtocol", snapshot)
-                return list(reader.execute_sql(sql, params=params, param_types=types))
-        except SpannerGoogleAPICallError as exc:
-            raise create_mapped_exception(exc) from exc
+        return _run_read(self._config, sql, params, types)
 
 
 class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig], _SpannerADKArtifactStoreMixin):

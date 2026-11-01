@@ -300,3 +300,18 @@ async def test_async_artifact_store_operations(mocker: Any) -> None:
     swept = await store.delete_artifacts_older_than(now)
     assert len(swept) == 1
     tx.execute_update.assert_awaited_once()
+
+
+def test_artifact_store_imports_cleanly_without_adk_store() -> None:
+    """Verify artifact_store.py has no direct imports from sqlspec.adapters.spanner.adk.store."""
+    import ast
+    from pathlib import Path
+
+    import sqlspec.adapters.spanner.adk.artifact_store as art_mod
+
+    source = Path(art_mod.__file__).read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert "sqlspec.adapters.spanner.adk.store" not in node.module

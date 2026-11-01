@@ -341,22 +341,6 @@ _LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
 }
 
 
-class _SpannerStub:
-    """Fallback stub for uninstalled optional Spanner symbols."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        msg = "google-cloud-spanner is required to use Spanner features."
-        raise ImportError(msg)
-
-    def __getattr__(self, item: str) -> Any:
-        msg = "google-cloud-spanner is required to use Spanner features."
-        raise ImportError(msg)
-
-
-def _spanner_fallback_stub(name: str) -> Any:
-    return type(name, (_SpannerStub,), {"__module__": __name__})
-
-
 def __getattr__(name: str) -> Any:
     """Resolve optional driver symbols only when a consumer requests them."""
     target = _LAZY_DRIVER_EXPORTS.get(name)
@@ -364,13 +348,10 @@ def __getattr__(name: str) -> Any:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
     module_name, attribute = target
-    try:
-        mod = import_module(module_name)
-    except ModuleNotFoundError:
-        return _spanner_fallback_stub(name)
-    value = getattr(mod, attribute, None)
+    value = getattr(import_module(module_name), attribute, None)
     if value is None:
-        return _spanner_fallback_stub(name)
+        msg = f"Cannot import {attribute!r} from {module_name!r}"
+        raise ImportError(msg)
     return value
 
 

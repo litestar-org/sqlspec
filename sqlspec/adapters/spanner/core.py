@@ -2,9 +2,10 @@
 
 import contextlib
 import re
+from collections.abc import Callable, Iterable, Mapping
 from functools import partial
 from itertools import islice
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import sqlglot
 from sqlglot import exp
@@ -37,10 +38,11 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Generator, Sequence
 
     from sqlspec.adapters.spanner._typing import SpannerDirectedReadOptions as DirectedReadOptions
     from sqlspec.adapters.spanner._typing import SpannerExecuteSqlRequest as ExecuteSqlRequest
@@ -1011,3 +1013,111 @@ def _create_spanner_error(error: Any, error_class: type[SQLSpecError], descripti
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+_DDL_TIMEOUT_SECONDS: Final[float] = 300.0
+
+
+def _json_param_type() -> Any:
+    """Return the SPANNER_PARAM_TYPES JSON type or fallback to STRING."""
+    param_types_module = import_optional_attr("google.cloud.spanner_v1", "param_types")
+    if param_types_module is not None:
+        return getattr(param_types_module, "JSON", getattr(param_types_module, "STRING", None))
+    return None
+
+
+def _extract_spanner_json_codecs(config: Any) -> "tuple[Callable[[Any], str], Callable[[str], Any]]":
+    driver_features = getattr(config, "driver_features", None)
+    features = driver_features if isinstance(driver_features, Mapping) else {}
+    serializer = features.get("json_serializer")
+    deserializer = features.get("json_deserializer")
+    return (
+        cast("Callable[[Any], str]", serializer if callable(serializer) else to_json),
+        cast("Callable[[str], Any]", deserializer if callable(deserializer) else from_json),
+    )
+
+
+def _spanner_row_deletion_policy(adk_config: "Mapping[str, Any]", ttl_key: str, column: str) -> str:
+    retention = adk_config.get("retention")
+    if not isinstance(retention, dict):
+        return ""
+    ttl_seconds = retention.get(ttl_key)
+    if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+        return ""
+    ttl_days = max(1, (ttl_seconds + 86_399) // 86_400)
+    return f",\nROW DELETION POLICY (OLDER_THAN({column}, INTERVAL {ttl_days} DAY))"
+
+
+def _is_spanner_table_missing(exc: Exception, *table_names: str) -> bool:
+    message = str(exc).lower()
+    return "not found" in message and any(table_name.lower() in message for table_name in table_names)
+
+
+class _SpannerReadProtocol(Protocol):
+    def execute_sql(
+        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> "Iterable[Any]": ...
+
+
+class _SpannerWriteTransactionProtocol(Protocol):
+    def execute_update(
+        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> int: ...
+
+
+async def _run_read_async(
+    database: Any, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+) -> "list[Any]":
+    try:
+        async with cast("Any", database).snapshot() as snapshot:
+            result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
+            return [row async for row in result_set]
+    except api_exceptions.GoogleAPICallError as exc:
+        raise create_mapped_exception(exc) from exc
+
+
+def _adk_config(config: Any) -> "dict[str, Any]":
+    extension_config = getattr(config, "extension_config", None)
+    adk_config = extension_config.get("adk") if isinstance(extension_config, dict) else {}
+    if not isinstance(adk_config, dict):
+        return {}
+    return adk_config
+
+
+def _run_read(
+    config: Any, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+) -> "list[Any]":
+    try:
+        with config.provide_connection(transaction=False) as snapshot:
+            reader = cast("_SpannerReadProtocol", snapshot)
+            return list(reader.execute_sql(sql, params=params, param_types=types))
+    except api_exceptions.GoogleAPICallError as exc:
+        raise create_mapped_exception(exc) from exc
+
+
+class _SpannerSyncUpdateJob:
+    """Callable transaction work item for Spanner sync single DML updates."""
+
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    def __call__(self, transaction: Any) -> int:
+        writer = cast("_SpannerWriteTransactionProtocol", transaction)
+        return int(writer.execute_update(self._sql, params=self._params, param_types=self._types))
+
+
+class _SpannerAsyncUpdateJob:
+    """Callable async transaction work item for Spanner async single DML updates."""
+
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    async def __call__(self, transaction: Any) -> int:
+        return int(await transaction.execute_update(self._sql, params=self._params, param_types=self._types))

@@ -1,7 +1,7 @@
 """Spanner session store for Litestar integration."""
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, NotRequired, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, NotRequired, Protocol, cast
 
 from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
@@ -9,6 +9,8 @@ from sqlspec.adapters.spanner.core import (
     create_mapped_exception,
     execute_ddl_async,
     execute_ddl_sync,
+    execute_partitioned_dml_async,
+    execute_partitioned_dml_sync,
     list_existing_table_names_async,
     list_existing_table_names_sync,
 )
@@ -33,11 +35,24 @@ if TYPE_CHECKING:
 
 __all__ = ("SpannerAsyncStore", "SpannerLitestarConfig", "SpannerSyncStore")
 
+_PARAM_TYPES_SESSION_ONLY: Final[dict[str, Any]] = {"session_id": param_types.STRING}
+_PARAM_TYPES_EXPIRES_ONLY: Final[dict[str, Any]] = {"expires_at": param_types.TIMESTAMP}
+_PARAM_TYPES_SESSION_EXPIRES: Final[dict[str, Any]] = {
+    "session_id": param_types.STRING,
+    "expires_at": param_types.TIMESTAMP,
+}
+_PARAM_TYPES_UPSERT: Final[dict[str, Any]] = {
+    "session_id": param_types.STRING,
+    "data": param_types.BYTES,
+    "expires_at": param_types.TIMESTAMP,
+}
+
 
 class SpannerLitestarConfig(LitestarConfig):
     """Spanner-specific Litestar settings.
 
     Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    Note: Cloud Spanner Litestar store currently requires GoogleSQL dialect.
     """
 
     shard_count: NotRequired[int]
@@ -49,9 +64,15 @@ class SpannerLitestarConfig(LitestarConfig):
     index_options: NotRequired[str]
     """Index DDL options."""
 
+    enable_row_deletion_policy: NotRequired[bool]
+    """Whether to enable Spanner native ROW DELETION POLICY for session expiration."""
+
 
 class _SpannerLitestarStoreCommonMixin:
-    """Shared SQL, DDL, and parameter helpers for Spanner Litestar session stores."""
+    """Shared SQL, DDL, and parameter helpers for Spanner Litestar session stores.
+
+    Note: Cloud Spanner Litestar store currently requires GoogleSQL dialect.
+    """
 
     __slots__ = ()
 
@@ -59,6 +80,7 @@ class _SpannerLitestarStoreCommonMixin:
     _shard_count: int
     _table_options: "str | None"
     _index_options: "str | None"
+    _enable_row_deletion_policy: bool
 
     def _datetime_to_timestamp(self, dt: "datetime | None") -> "datetime | None":
         if dt is None:
@@ -86,6 +108,14 @@ class _SpannerLitestarStoreCommonMixin:
     def _get_param_types(
         self, session_id: bool = True, expires_at: bool = False, data: bool = False
     ) -> "dict[str, Any]":
+        if session_id and data and expires_at:
+            return _PARAM_TYPES_UPSERT
+        if session_id and expires_at and not data:
+            return _PARAM_TYPES_SESSION_EXPIRES
+        if session_id and not expires_at and not data:
+            return _PARAM_TYPES_SESSION_ONLY
+        if not session_id and expires_at and not data:
+            return _PARAM_TYPES_EXPIRES_ONLY
         types: dict[str, Any] = {}
         if session_id:
             types["session_id"] = param_types.STRING
@@ -121,21 +151,11 @@ class _SpannerLitestarStoreCommonMixin:
             update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
         return update_sql
 
-    def _build_upsert_sql(self) -> "tuple[str, str]":
-        update_sql = f"""
-        UPDATE {self._table_name}
-        SET data = @data,
-            expires_at = @expires_at,
-            updated_at = PENDING_COMMIT_TIMESTAMP()
-        WHERE session_id = @session_id
-        """
-        if self._shard_count > 1:
-            update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
-        insert_sql = f"""
-        INSERT {self._table_name} (session_id, data, expires_at, created_at, updated_at)
+    def _build_upsert_sql(self) -> str:
+        return f"""
+        INSERT OR UPDATE INTO {self._table_name} (session_id, data, expires_at, created_at, updated_at)
         VALUES (@session_id, @data, @expires_at, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP())
         """
-        return update_sql, insert_sql
 
     def _build_delete_sql(self) -> str:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = @session_id"
@@ -186,14 +206,17 @@ class _SpannerLitestarStoreCommonMixin:
         options = ""
         if self._table_options:
             options = f"\nOPTIONS ({self._table_options})"
+        policy = ""
+        if self._enable_row_deletion_policy:
+            policy = ",\nROW DELETION POLICY (OLDER_THAN(expires_at, INTERVAL 0 DAY))"
         return f"""
-CREATE TABLE {self._table_name} (
+CREATE TABLE IF NOT EXISTS {self._table_name} (
   session_id STRING(128) NOT NULL,
   data BYTES(MAX) NOT NULL,
   expires_at TIMESTAMP,
   created_at TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
   updated_at TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true){shard_column}
-) {pk}{options}
+) {pk}{options}{policy}
 """
 
     def _index_ddl(self) -> str:
@@ -203,25 +226,32 @@ CREATE TABLE {self._table_name} (
         opts = ""
         if self._index_options:
             opts = f" OPTIONS ({self._index_options})"
-        return f"CREATE INDEX idx_{self._table_name}_expires_at ON {self._table_name}({leading}){opts}"
+        return f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at ON {self._table_name}({leading}){opts}"
 
     def _drop_table_sql(self) -> "list[str]":
         return [f"DROP INDEX idx_{self._table_name}_expires_at", f"DROP TABLE {self._table_name}"]
 
 
 class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["SpannerSyncConfig"]):
-    """Spanner-backed Litestar session store using sync driver wrapped as async."""
+    """Spanner-backed Litestar session store using sync driver wrapped as async.
 
-    __slots__ = ("_index_options", "_shard_count", "_table_options")
+    Note: Cloud Spanner Litestar store currently requires GoogleSQL dialect.
+    """
+
+    __slots__ = ("_enable_row_deletion_policy", "_index_options", "_shard_count", "_table_options")
     extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "enable_row_deletion_policy",
         "index_options",
+        "row_deletion_policy",
         "shard_count",
         "table_options",
     })
 
     def __init__(self, config: "SpannerSyncConfig") -> None:
         super().__init__(config)
-        self._shard_count, self._table_options, self._index_options = _extract_spanner_litestar_options(config)
+        (self._shard_count, self._table_options, self._index_options, self._enable_row_deletion_policy) = (
+            _extract_spanner_litestar_options(config)
+        )
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         return await async_(self._get)(key, renew_for)
@@ -285,8 +315,8 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
         expires_at = self._calculate_expires_at(expires_in)
         params = self._build_params(key, expires_at, data)
         types = self._get_param_types(session_id=True, expires_at=True, data=True)
-        update_sql, insert_sql = self._build_upsert_sql()
-        self._run_in_transaction(_SpannerSyncUpsertJob(update_sql, insert_sql, params, types))
+        sql = self._build_upsert_sql()
+        self._run_in_transaction(_SpannerSyncUpsertJob(sql, params, types))
 
     def _delete(self, key: str) -> None:
         sql = self._build_delete_sql()
@@ -295,8 +325,8 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
         self._run_in_transaction(_SpannerSyncExecuteUpdateJob(sql, params, types))
 
     def _delete_all(self) -> None:
-        sql = self._build_delete_all_sql()
-        self._run_in_transaction(_SpannerSyncExecuteUpdateJob(sql))
+        database = self._config.get_database()
+        execute_partitioned_dml_sync(database, self._build_delete_all_sql())
 
     def _exists(self, key: str) -> bool:
         sql = self._build_exists_sql()
@@ -317,9 +347,8 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
             return max(int(delta.total_seconds()), 0)
 
     def _delete_expired(self) -> int:
-        sql = self._build_delete_expired_sql()
-        result = self._run_in_transaction(_SpannerSyncExecuteUpdateCountJob(sql))
-        return cast("int", result)
+        database = self._config.get_database()
+        return execute_partitioned_dml_sync(database, self._build_delete_expired_sql())
 
     def _create_table(self) -> None:
         try:
@@ -333,16 +362,20 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
 class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["SpannerAsyncConfig"]):
     """Spanner-backed Litestar session store using native async Spanner client."""
 
-    __slots__ = ("_index_options", "_shard_count", "_table_options")
+    __slots__ = ("_enable_row_deletion_policy", "_index_options", "_shard_count", "_table_options")
     extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
+        "enable_row_deletion_policy",
         "index_options",
+        "row_deletion_policy",
         "shard_count",
         "table_options",
     })
 
     def __init__(self, config: "SpannerAsyncConfig") -> None:
         super().__init__(config)
-        self._shard_count, self._table_options, self._index_options = _extract_spanner_litestar_options(config)
+        (self._shard_count, self._table_options, self._index_options, self._enable_row_deletion_policy) = (
+            _extract_spanner_litestar_options(config)
+        )
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = self._build_select_session_sql()
@@ -369,8 +402,8 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
         expires_at = self._calculate_expires_at(expires_in)
         params = self._build_params(key, expires_at, data)
         types = self._get_param_types(session_id=True, expires_at=True, data=True)
-        update_sql, insert_sql = self._build_upsert_sql()
-        await self._run_in_transaction(_SpannerAsyncUpsertJob(update_sql, insert_sql, params, types))
+        sql = self._build_upsert_sql()
+        await self._run_in_transaction(_SpannerAsyncUpsertJob(sql, params, types))
 
     async def delete(self, key: str) -> None:
         sql = self._build_delete_sql()
@@ -379,8 +412,8 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
         await self._run_in_transaction(_SpannerAsyncExecuteUpdateJob(sql, params, types))
 
     async def delete_all(self) -> None:
-        sql = self._build_delete_all_sql()
-        await self._run_in_transaction(_SpannerAsyncExecuteUpdateJob(sql))
+        database = await self._database()
+        await execute_partitioned_dml_async(database, self._build_delete_all_sql())
 
     async def exists(self, key: str) -> bool:
         sql = self._build_exists_sql()
@@ -401,9 +434,8 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
             return max(int(delta.total_seconds()), 0)
 
     async def delete_expired(self) -> int:
-        sql = self._build_delete_expired_sql()
-        result = await self._run_in_transaction(_SpannerAsyncExecuteUpdateCountJob(sql))
-        return int(result)
+        database = await self._database()
+        return await execute_partitioned_dml_async(database, self._build_delete_expired_sql())
 
     async def create_table(self) -> None:
         if not self.create_schema_enabled:
@@ -469,34 +501,28 @@ class _SpannerAsyncExecuteUpdateJob:
 
 
 class _SpannerSyncUpsertJob:
-    __slots__ = ("_insert_sql", "_params", "_types", "_update_sql")
+    __slots__ = ("_params", "_sql", "_types")
 
-    def __init__(self, update_sql: str, insert_sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
-        self._update_sql = update_sql
-        self._insert_sql = insert_sql
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
         self._params = params
         self._types = types
 
     def __call__(self, transaction: "Transaction") -> None:
         writer = cast("_SpannerSyncTransactionProtocol", transaction)
-        row_ct = writer.execute_update(self._update_sql, params=self._params, param_types=self._types)
-        if row_ct == 0:
-            writer.execute_update(self._insert_sql, params=self._params, param_types=self._types)
+        writer.execute_update(self._sql, params=self._params, param_types=self._types)
 
 
 class _SpannerAsyncUpsertJob:
-    __slots__ = ("_insert_sql", "_params", "_types", "_update_sql")
+    __slots__ = ("_params", "_sql", "_types")
 
-    def __init__(self, update_sql: str, insert_sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
-        self._update_sql = update_sql
-        self._insert_sql = insert_sql
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
         self._params = params
         self._types = types
 
     async def __call__(self, transaction: "AsyncTransaction") -> None:
-        row_ct = await transaction.execute_update(self._update_sql, params=self._params, param_types=self._types)
-        if row_ct == 0:
-            await transaction.execute_update(self._insert_sql, params=self._params, param_types=self._types)
+        await transaction.execute_update(self._sql, params=self._params, param_types=self._types)
 
 
 class _SpannerSyncExecuteUpdateCountJob:
@@ -520,9 +546,12 @@ class _SpannerAsyncExecuteUpdateCountJob:
         return int(await transaction.execute_update(self._sql))
 
 
-def _extract_spanner_litestar_options(config: Any) -> "tuple[int, str | None, str | None]":
+def _extract_spanner_litestar_options(config: Any) -> "tuple[int, str | None, str | None, bool]":
     litestar_cfg = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
     shard_count = int(litestar_cfg.get("shard_count", 0)) if litestar_cfg.get("shard_count") else 0
     table_options = cast("str | None", litestar_cfg.get("table_options"))
     index_options = cast("str | None", litestar_cfg.get("index_options"))
-    return shard_count, table_options, index_options
+    enable_row_deletion_policy = bool(
+        litestar_cfg.get("enable_row_deletion_policy", False) or litestar_cfg.get("row_deletion_policy", False)
+    )
+    return shard_count, table_options, index_options, enable_row_deletion_policy

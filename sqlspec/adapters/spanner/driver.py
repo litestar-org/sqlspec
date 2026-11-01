@@ -1297,9 +1297,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                         else:
                             writer.insert_or_update(table, columns, chunk)
                         if self._owns_transaction and idx < len(chunks) - 1 and hasattr(writer, "commit"):
-                            commit_res = writer.commit()
-                            if hasattr(commit_res, "__await__"):
-                                await commit_res
+                            await writer.commit()
                             self._renew_finished_transaction()
                             writer = cast("_SpannerAsyncWriteProtocol", self.connection)
         self._check_pending_exception(exc_handler)
