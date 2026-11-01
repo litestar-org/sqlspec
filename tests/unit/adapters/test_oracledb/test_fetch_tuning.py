@@ -178,3 +178,23 @@ def test_resolve_rowcount_negative_rowcount_returns_zero() -> None:
     cursor = Mock()
     cursor.rowcount = -1
     assert resolve_rowcount(cursor) == 0
+
+
+def test_build_fetch_kwargs_returns_cached_instance_when_features_unchanged() -> None:
+    """build_fetch_kwargs returns the identical cached dict when features are unchanged."""
+    features = {"fetch_lobs": False, "fetch_decimals": True}
+    res1 = build_fetch_kwargs(features)
+    res2 = build_fetch_kwargs(features)
+    assert res1 is res2
+
+
+def test_fetch_kwargs_precomputed_on_driver_instance() -> None:
+    """_fetch_kwargs is precomputed and cached on the driver instance."""
+    raw_cursor = _RawCursor()
+    driver = OracleSyncDriver(
+        cast("OracleSyncConnection", _SyncConnection(raw_cursor)),
+        driver_features={"fetch_lobs": False, "fetch_decimals": True},
+    )
+    assert hasattr(driver, "_fetch_kwargs")
+    assert driver._fetch_kwargs == {"fetch_lobs": False, "fetch_decimals": True}
+    assert driver._fetch_kwargs is build_fetch_kwargs({"fetch_lobs": False, "fetch_decimals": True})

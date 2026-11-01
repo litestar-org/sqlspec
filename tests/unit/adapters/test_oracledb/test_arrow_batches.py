@@ -212,3 +212,32 @@ def test_select_to_arrow_maps_native_database_error() -> None:
     driver = OracleSyncDriver(cast("OracleSyncConnection", _FailingOracleConn()))
     with pytest.raises(SQLSpecError):
         driver.select_to_arrow("SELECT * FROM non_existent", return_format="table")
+
+
+def test_sync_select_to_arrow_reader_yields_lazily() -> None:
+    """return_format=reader yields record batches lazily from the underlying stream."""
+    yielded: list[int] = []
+
+    def _generate_tables() -> Iterator[pa.Table]:
+        yielded.append(1)
+        yield pa.table({"ID": [1, 2], "VALUE": [10, 20]})
+        yielded.append(2)
+        yield pa.table({"ID": [3], "VALUE": [30]})
+
+    class _LazyBatchConnection:
+        def fetch_df_batches(self, **_kwargs: object) -> Iterator[pa.Table]:
+            return _generate_tables()
+
+    driver = OracleSyncDriver(
+        cast("OracleSyncConnection", _LazyBatchConnection()), driver_features={"enable_lowercase_column_names": True}
+    )
+
+    result = driver.select_to_arrow("SELECT id, value FROM example", return_format="reader", batch_size=2)
+    reader = result.get_data()
+    assert yielded == [1]
+    first_batch = reader.read_next_batch()
+    assert first_batch.num_rows == 2
+    assert yielded == [1]
+    second_batch = reader.read_next_batch()
+    assert second_batch.num_rows == 1
+    assert yielded == [1, 2]

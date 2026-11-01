@@ -131,12 +131,18 @@ def test_resolve_row_metadata_single_pass_unknown_type_code_shape_is_conservativ
 
 def test_resolve_row_metadata_cache_contract_still_holds_after_single_pass_rewrite() -> None:
     description = [("ID", _TypeCode("DB_TYPE_NUMBER"))]
-    cache: dict[int, tuple[object, list[str], bool]] = {}
+    cache: dict[object, object] = {}
     (first_names, first_requires_lob) = resolve_row_metadata(description, {}, cache)
     (second_names, second_requires_lob) = resolve_row_metadata(description, {}, cache)
     assert second_names is first_names
     assert first_requires_lob is second_requires_lob
-    assert cache[id(description)][0] is description
+    cache_key = (("ID", "DB_TYPE_NUMBER"),)
+    assert cache_key in cache
+    assert cache[cache_key][0] is description
+    description2 = [("ID", _TypeCode("DB_TYPE_NUMBER"))]
+    (third_names, third_requires_lob) = resolve_row_metadata(description2, {}, cache)
+    assert third_names is first_names
+    assert third_requires_lob is first_requires_lob
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

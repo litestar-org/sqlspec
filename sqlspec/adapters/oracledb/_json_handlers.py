@@ -38,57 +38,7 @@ even when this module is compiled with mypyc.
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-
-def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an input type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
-        return fallback
-    return partial(_chained_input_handler, inner, fallback)
-
-
-def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an output type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
-        return fallback
-    return partial(_chained_output_handler, inner, fallback)
-
-
-def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
-    current = handler
-    while current is not None:
-        if current is target_inner:
-            return True
-        if not isinstance(current, partial) or current.func is not chain_function:
-            return False
-        inner, current = current.args
-        if inner is target_inner:
-            return True
-    return False
-
-
-def _chained_input_handler(
-    inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int
-) -> Any:
-    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, value, arraysize)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, value, arraysize)
-    return None
-
-
-def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
-    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, metadata)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, metadata)
-    return None
-
-
-from sqlspec.adapters.oracledb._param_types import OracleJson
+from sqlspec.adapters.oracledb._param_types import OracleJson, is_json_payload
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
     DB_TYPE_CHAR,
@@ -101,7 +51,8 @@ from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_VARCHAR,
 )
 from sqlspec.adapters.oracledb.core import (
-    is_json_payload,
+    chain_input_handler,
+    chain_output_handler,
     resolve_oracle_connection_compatible_major,
     resolve_oracle_connection_major,
 )
@@ -124,7 +75,6 @@ __all__ = (
     "is_json_payload",
     "json_converter_in_blob",
     "json_converter_in_clob",
-    "json_converter_in_native",
     "json_converter_out_blob",
     "json_converter_out_clob",
     "json_converter_out_oson",
@@ -132,6 +82,7 @@ __all__ = (
     "json_output_type_handler",
     "register_json_handlers",
 )
+
 
 _JSON_STRING_TYPE_CODES = (DB_TYPE_VARCHAR, DB_TYPE_CHAR, DB_TYPE_NVARCHAR, DB_TYPE_NCHAR)
 

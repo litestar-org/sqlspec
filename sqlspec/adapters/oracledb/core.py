@@ -13,12 +13,53 @@ import tempfile
 import threading
 import zipfile
 from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson, is_json_payload
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
-from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components
+from sqlspec.core import (
+    DriverParameterProfile,
+    ParameterStyle,
+    StackResult,
+    StatementConfig,
+    build_statement_config_from_profile,
+    create_sql_result,
+)
+from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.data_dictionary.dialects.oracle import (
+    ORACLE_JSON_STORAGE_NATIVE,
+    parse_oracle_version_components,
+    resolve_oracle_json_storage,
+)
+from sqlspec.driver import rows_to_dicts
+from sqlspec.exceptions import (
+    CheckViolationError,
+    ConnectionTimeoutError,
+    DatabaseConnectionError,
+    DataError,
+    DeadlockError,
+    ForeignKeyViolationError,
+    ImproperConfigurationError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    OperationCancelledError,
+    PermissionDeniedError,
+    SQLParsingError,
+    SQLSpecError,
+    TransactionError,
+    UniqueViolationError,
+)
+from sqlspec.observability import get_trace_context
+from sqlspec.typing import NUMPY_INSTALLED
+from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.module_loader import import_optional
+from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.type_converters import build_uuid_coercions
+from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
 
 
 class OracleVersionCache:
@@ -76,48 +117,52 @@ def resolve_oracle_connection_compatible_major(
     return None
 
 
-from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
-from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
-    StackResult,
-    StatementConfig,
-    build_statement_config_from_profile,
-    create_sql_result,
-)
-from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.data_dictionary.dialects.oracle import (
-    ORACLE_JSON_STORAGE_NATIVE,
-    parse_oracle_version_components,
-    resolve_oracle_json_storage,
-)
-from sqlspec.driver import rows_to_dicts
-from sqlspec.exceptions import (
-    CheckViolationError,
-    ConnectionTimeoutError,
-    DatabaseConnectionError,
-    DataError,
-    DeadlockError,
-    ForeignKeyViolationError,
-    ImproperConfigurationError,
-    IntegrityError,
-    NotNullViolationError,
-    OperationalError,
-    OperationCancelledError,
-    PermissionDeniedError,
-    SQLParsingError,
-    SQLSpecError,
-    TransactionError,
-    UniqueViolationError,
-)
-from sqlspec.observability import get_trace_context
-from sqlspec.typing import NUMPY_INSTALLED
-from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.module_loader import import_optional
-from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.text import quote_identifier
-from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
+def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an input type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
+        return fallback
+    return partial(_chained_input_handler, inner, fallback)
+
+
+def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an output type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
+        return fallback
+    return partial(_chained_output_handler, inner, fallback)
+
+
+def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
+    current = handler
+    while current is not None:
+        if current is target_inner:
+            return True
+        if not isinstance(current, partial) or current.func is not chain_function:
+            return False
+        inner, current = current.args
+        if inner is target_inner:
+            return True
+    return False
+
+
+def _chained_input_handler(inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int) -> Any:
+    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, value, arraysize)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, value, arraysize)
+    return None
+
+
+def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
+    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, metadata)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, metadata)
+    return None
+
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -172,6 +217,8 @@ __all__ = (
     "build_tns_description",
     "build_truncate_statement",
     "build_wallet_ssl_context_if_needed",
+    "chain_input_handler",
+    "chain_output_handler",
     "coerce_large_parameters_async",
     "coerce_large_parameters_sync",
     "coerce_many_parameters_async",
@@ -324,7 +371,6 @@ _ORACLE_RESERVED_COLUMN_NAMES: "frozenset[str]" = frozenset({
     "WITH",
 })
 _VERSION_COMPONENTS: int = 3
-TYPE_CONVERTER = OracleOutputConverter()
 _LOB_TYPE_NAME_MARKERS: "tuple[str, ...]" = ("LOB", "BFILE")
 _SCALAR_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, str, bytes, bytearray, type(None))
 _BIND_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, type(None))
@@ -843,15 +889,24 @@ def supports_df_batches(connection: object) -> bool:
     return hasattr(connection, "fetch_df_batches")
 
 
+_FETCH_KWARGS_CACHE: dict[tuple[object, object], dict[str, object]] = {}
+
+
 def build_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]":
     """Build per-statement Oracle fetch keyword arguments."""
-    fetch_kwargs: dict[str, object] = {}
     fetch_lobs = driver_features.get("fetch_lobs")
+    fetch_decimals = driver_features.get("fetch_decimals")
+    cache_key = (fetch_lobs, fetch_decimals)
+    cached = _FETCH_KWARGS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    fetch_kwargs: dict[str, object] = {}
     if fetch_lobs is not None:
         fetch_kwargs["fetch_lobs"] = fetch_lobs
-    fetch_decimals = driver_features.get("fetch_decimals")
     if fetch_decimals is not None:
         fetch_kwargs["fetch_decimals"] = fetch_decimals
+    _FETCH_KWARGS_CACHE[cache_key] = fetch_kwargs
     return fetch_kwargs
 
 
@@ -1308,6 +1363,20 @@ def apply_driver_features(
     return statement_config, features
 
 
+def _extract_column_cache_key(description: "list[Any]") -> "tuple[tuple[object, object], ...]":
+    key_items: list[tuple[object, object]] = []
+    for column in description:
+        try:
+            col_name = column[0]
+            type_code = column[1]
+        except (TypeError, IndexError, KeyError):
+            col_name = getattr(column, "name", None)
+            type_code = getattr(column, "type_code", None)
+        type_identifier = getattr(type_code, "name", None) or type_code
+        key_items.append((col_name, type_identifier))
+    return tuple(key_items)
+
+
 def resolve_row_metadata(
     description: "list[Any] | None", driver_features: "dict[str, Any]", cache: "dict[Any, tuple[Any, list[str], bool]]"
 ) -> "tuple[list[str], bool]":
@@ -1324,9 +1393,9 @@ def resolve_row_metadata(
     if not description:
         return [], False
 
-    cache_key = id(description)
+    cache_key = _extract_column_cache_key(description)
     cached = cache.get(cache_key)
-    if cached is not None and cached[0] is description:
+    if cached is not None:
         return cached[1], cached[2]
 
     column_names: list[str] = []
@@ -1408,9 +1477,11 @@ class OracleSyncStreamSource:
             self._cursor = cursor
             cursor.arraysize = self._chunk_size
             cursor.prefetchrows = self._chunk_size
-            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+            fetch_kwargs = getattr(self._driver, "_fetch_kwargs", None) or build_fetch_kwargs(
+                self._driver.driver_features
+            )
             if self._fetch_lobs is not None:
-                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+                fetch_kwargs = {**fetch_kwargs, "fetch_lobs": self._fetch_lobs}
             parameters = coerce_large_parameters_sync(
                 self._driver.connection,
                 self._parameters,
@@ -1545,9 +1616,11 @@ class OracleAsyncStreamSource:
             self._cursor = cursor
             cursor.arraysize = self._chunk_size
             cursor.prefetchrows = self._chunk_size
-            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+            fetch_kwargs = getattr(self._driver, "_fetch_kwargs", None) or build_fetch_kwargs(
+                self._driver.driver_features
+            )
             if self._fetch_lobs is not None:
-                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+                fetch_kwargs = {**fetch_kwargs, "fetch_lobs": self._fetch_lobs}
             parameters = await coerce_large_parameters_async(
                 self._driver.connection,
                 self._parameters,
@@ -3213,6 +3286,16 @@ def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
 ORACLEDB_VERSION: "tuple[int, int, int]" = _parse_version_tuple(oracledb_module.__version__)
 
 
+def _string_exceeds_byte_limit(value: str, limit: int) -> bool:
+    """Return whether a string's UTF-8 byte length exceeds the given limit."""
+    char_len = len(value)
+    if char_len > limit:
+        return True
+    if value.isascii():
+        return False
+    return len(value.encode("utf-8")) > limit
+
+
 def _parameter_values_need_coercion(
     values: "Iterable[Any]",
     *,
@@ -3226,7 +3309,7 @@ def _parameter_values_need_coercion(
         if value_type in _BIND_PASSTHROUGH_TYPES:
             continue
         if value_type is str:
-            if len(value.encode("utf-8")) > varchar2_byte_limit:
+            if _string_exceeds_byte_limit(value, varchar2_byte_limit):
                 return True
             continue
         if value_type is bytes or value_type is bytearray:
@@ -3244,7 +3327,7 @@ def _parameter_values_need_coercion(
                 return True
             continue
         if isinstance(value, str):
-            if len(value.encode("utf-8")) > varchar2_byte_limit:
+            if _string_exceeds_byte_limit(value, varchar2_byte_limit):
                 return True
             continue
         if isinstance(value, (bytes, bytearray)):
@@ -3397,7 +3480,7 @@ def _coerce_value_sync(
     if value_type in _BIND_PASSTHROUGH_TYPES:
         return value
     if value_type is str:
-        if len(value.encode("utf-8")) > varchar2_byte_limit:
+        if _string_exceeds_byte_limit(value, varchar2_byte_limit):
             return connection.createlob(clob_type, value)
         return value
     if value_type is bytes:
@@ -3426,7 +3509,7 @@ def _coerce_value_sync(
         if json_binding_state.uses_blob():
             return connection.createlob(blob_type, to_json(value.value, as_bytes=True))
         return value
-    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
+    if isinstance(value, str) and _string_exceeds_byte_limit(value, varchar2_byte_limit):
         return connection.createlob(clob_type, value)
     if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
         return connection.createlob(blob_type, bytes(value))
@@ -3450,7 +3533,7 @@ async def _coerce_value_async(
     if value_type in _BIND_PASSTHROUGH_TYPES:
         return value
     if value_type is str:
-        if len(value.encode("utf-8")) > varchar2_byte_limit:
+        if _string_exceeds_byte_limit(value, varchar2_byte_limit):
             return await connection.createlob(clob_type, value)
         return value
     if value_type is bytes:
@@ -3479,7 +3562,7 @@ async def _coerce_value_async(
         if json_binding_state.uses_blob():
             return await connection.createlob(blob_type, to_json(value.value, as_bytes=True))
         return value
-    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
+    if isinstance(value, str) and _string_exceeds_byte_limit(value, varchar2_byte_limit):
         return await connection.createlob(clob_type, value)
     if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
         return await connection.createlob(blob_type, bytes(value))
@@ -3588,7 +3671,7 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
             continue
 
         if is_readable(value) or is_async_readable(value):
-            processed_value = await TYPE_CONVERTER.process_lob(value)
+            processed_value = await read_oracle_lob_async(value)
             if coerced_values is None:
                 if processed_value is value:
                     continue

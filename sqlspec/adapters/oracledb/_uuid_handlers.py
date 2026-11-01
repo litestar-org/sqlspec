@@ -7,8 +7,8 @@ via connection type handlers. Uses stdlib uuid (no external dependencies).
 import uuid
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_RAW
+from sqlspec.adapters.oracledb.core import chain_input_handler, chain_output_handler
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid_from_bytes
 

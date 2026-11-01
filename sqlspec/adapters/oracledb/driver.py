@@ -1,6 +1,7 @@
 """Oracle Database driver implementation."""
 
 import logging
+from itertools import chain
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, cast, overload
@@ -92,7 +93,7 @@ from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterator, Mapping, Sequence
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
@@ -160,14 +161,8 @@ class OraclePipelineMixin:
 
     __slots__ = ()
 
-    def _session_tracing_enabled(self) -> bool:
-        driver = cast("OraclePipelineDriver", self)
-        return bool(
-            driver.driver_features.get("enable_session_tracing", False) or driver.statement_config.enable_sqlcommenter
-        )
-
     def _apply_session_tracing(self, connection: Any = None) -> None:
-        if not self._session_tracing_enabled():
+        if not getattr(self, "_session_tracing_enabled", False):
             return
         driver = cast("OraclePipelineDriver", self)
         target_conn = connection if connection is not None else getattr(self, "connection", None)
@@ -190,7 +185,7 @@ class OraclePipelineMixin:
     def _format_wire_sql(self, sql: str, config: "StatementConfig | None" = None) -> str:
         driver = cast("OraclePipelineDriver", self)
         effective_config = config or driver.statement_config
-        if self._session_tracing_enabled():
+        if getattr(self, "_session_tracing_enabled", False):
             return strip_sqlcomment(sql)
         if not effective_config.enable_sqlcommenter:
             return sql
@@ -202,7 +197,7 @@ class OraclePipelineMixin:
         compiled_sql, prepared_parameters = super()._compiled_sql(  # type: ignore[misc]
             statement, statement_config, flatten_single_parameters=flatten_single_parameters
         )
-        if self._session_tracing_enabled():
+        if getattr(self, "_session_tracing_enabled", False):
             return strip_sqlcomment(compiled_sql), prepared_parameters
         return compiled_sql, prepared_parameters
 
@@ -382,10 +377,12 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
     __slots__ = (
         "_data_dictionary",
+        "_fetch_kwargs",
         "_oracle_version_cache",
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
+        "_session_tracing_enabled",
         "_transaction_active",
     )
     dialect = "oracle"
@@ -408,6 +405,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
+        self._fetch_kwargs = build_fetch_kwargs(self.driver_features)
+        self._session_tracing_enabled = bool(
+            self.driver_features.get("enable_session_tracing", False) or self.statement_config.enable_sqlcommenter
+        )
 
     @property
     def data_dictionary(self) -> "OracledbSyncDataDictionary":
@@ -455,7 +456,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 cursor, explained_sql, prepared_parameters, display_cursor=display_cursor, xplan_format=xplan_format
             )
 
-        cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
+        cursor.execute(sql, prepared_parameters or {}, **self._fetch_kwargs)
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
@@ -489,7 +490,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         with self.with_cursor(self.connection) as cursor:
             wire_sql = self._format_wire_sql(cached.compiled_sql)
             returns_rows = cached.operation_profile.returns_rows
-            fetch_kwargs = build_fetch_kwargs(self.driver_features)
+            fetch_kwargs = self._fetch_kwargs
             parameters = coerce_large_parameters_sync(
                 self.connection,
                 params,
@@ -688,7 +689,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             connection,
             arraysize=self.driver_features.get("arraysize"),
             prefetchrows=self.driver_features.get("prefetchrows"),
-            on_enter=self._apply_session_tracing if self._session_tracing_enabled() else None,
+            on_enter=self._apply_session_tracing if self._session_tracing_enabled else None,
         )
 
     @overload
@@ -812,7 +813,19 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         exc_handler = self.handle_database_exceptions()
         try:
             self._apply_session_tracing(self.connection)
-            if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
+            if return_format == "reader" and supports_df_batches(self.connection):
+                batch_generator = self._iter_arrow_record_batches(sql, prepared_parameters, batch_size, arrow_schema)
+                try:
+                    first_batch = next(batch_generator)
+                except StopIteration:
+                    empty_schema = arrow_schema if arrow_schema is not None else pa.schema([])
+                    reader = pa.RecordBatchReader.from_batches(empty_schema, ())
+                    return create_arrow_result(prepared_statement, reader, rows_affected=0)
+                schema = arrow_schema if arrow_schema is not None else first_batch.schema
+                lazy_reader = pa.RecordBatchReader.from_batches(schema, chain((first_batch,), batch_generator))
+                return create_arrow_result(prepared_statement, lazy_reader, rows_affected=-1)
+
+            if return_format == "batches" and supports_df_batches(self.connection):
                 batches_result = cast(
                     "tuple[list[ArrowRecordBatch], ArrowSchema | None]",
                     self._run_with_exception_handler(
@@ -824,16 +837,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                         arrow_schema,
                     ),
                 )
-                record_batches, batch_schema = batches_result
+                record_batches, _ = batches_result
                 rows_affected = sum(batch.num_rows for batch in record_batches)
-                if batch_schema is None:
-                    batch_schema = pa.schema([])
-                arrow_data: object
-                if return_format == "reader":
-                    arrow_data = pa.RecordBatchReader.from_batches(batch_schema, record_batches)
-                else:
-                    arrow_data = record_batches
-                return create_arrow_result(prepared_statement, arrow_data, rows_affected=rows_affected)
+                return create_arrow_result(prepared_statement, record_batches, rows_affected=rows_affected)
 
             oracle_df = self._run_with_exception_handler(
                 exc_handler, self._execute_arrow_dataframe, sql, prepared_parameters, batch_size
@@ -994,7 +1000,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 def _insert_batches() -> None:
                     with self.with_cursor(self.connection) as cursor:
                         for batch in arrow_table.to_batches(max_chunksize=5000):
-                            batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
+                            batch_rows = self._arrow_batch_to_rows(batch, columns)
                             coerced_rows = coerce_many_parameters_sync(
                                 self.connection,
                                 batch_rows,
@@ -1142,10 +1148,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             Execution result carrying the formatted plan rows.
         """
         if display_cursor:
-            cursor.execute(explained_sql, parameters or {}, **build_fetch_kwargs(self.driver_features))
+            cursor.execute(explained_sql, parameters or {}, **self._fetch_kwargs)
             if cursor.description is not None:
                 cursor.fetchall()
-            cursor.execute(_format_display_cursor_sql(xplan_format), {}, **build_fetch_kwargs(self.driver_features))
+            cursor.execute(_format_display_cursor_sql(xplan_format), {}, **self._fetch_kwargs)
             fetched_data = cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = collect_sync_rows(
@@ -1169,7 +1175,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         display_sql = PLAN_DISPLAY_SQL if xplan_format == "TYPICAL" else _format_plan_display_sql(xplan_format)
 
         try:
-            cursor.execute(display_sql, {"statement_id": statement_id}, **build_fetch_kwargs(self.driver_features))
+            cursor.execute(display_sql, {"statement_id": statement_id}, **self._fetch_kwargs)
             fetched_data = cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = collect_sync_rows(
@@ -1222,6 +1228,35 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 statement=sql, parameters=params, arraysize=batch_size or 1000, **retry_kwargs
             )
 
+    def _iter_arrow_record_batches(
+        self,
+        sql: str,
+        parameters: "StatementParameters | None",
+        batch_size: int | None,
+        arrow_schema: "ArrowSchema | None",
+    ) -> "Iterator[ArrowRecordBatch]":
+        params = parameters if parameters is not None else []
+        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features, arrow_schema=arrow_schema)
+        try:
+            oracle_dfs = self.connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
+            )
+        except TypeError as exc:
+            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
+            if retry_kwargs is None:
+                raise
+            oracle_dfs = self.connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
+            )
+        for oracle_df in oracle_dfs:
+            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
+            column_names = normalize_column_names(batch_table.column_names, self.driver_features)
+            if column_names != batch_table.column_names:
+                batch_table = batch_table.rename_columns(column_names)
+            if arrow_schema is not None:
+                batch_table = batch_table.cast(arrow_schema)
+            yield from batch_table.to_batches()
+
     def _fetch_arrow_record_batches(
         self,
         sql: str,
@@ -1232,7 +1267,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         params = parameters if parameters is not None else []
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
-        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features)
+        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features, arrow_schema=arrow_schema)
         try:
             oracle_dfs = self.connection.fetch_df_batches(
                 statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
@@ -1279,10 +1314,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
     __slots__ = (
         "_data_dictionary",
+        "_fetch_kwargs",
         "_oracle_version_cache",
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
+        "_session_tracing_enabled",
         "_transaction_active",
     )
     dialect = "oracle"
@@ -1305,6 +1342,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
+        self._fetch_kwargs = build_fetch_kwargs(self.driver_features)
+        self._session_tracing_enabled = bool(
+            self.driver_features.get("enable_session_tracing", False) or self.statement_config.enable_sqlcommenter
+        )
 
     @property
     def data_dictionary(self) -> "OracledbAsyncDataDictionary":
@@ -1352,7 +1393,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 cursor, explained_sql, prepared_parameters, display_cursor=display_cursor, xplan_format=xplan_format
             )
 
-        await cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
+        await cursor.execute(sql, prepared_parameters or {}, **self._fetch_kwargs)
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
@@ -1386,7 +1427,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         async with self.with_cursor(self.connection) as cursor:
             wire_sql = self._format_wire_sql(cached.compiled_sql)
             returns_rows = cached.operation_profile.returns_rows
-            fetch_kwargs = build_fetch_kwargs(self.driver_features)
+            fetch_kwargs = self._fetch_kwargs
             parameters = await coerce_large_parameters_async(
                 self.connection,
                 params,
@@ -1590,7 +1631,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             connection,
             arraysize=self.driver_features.get("arraysize"),
             prefetchrows=self.driver_features.get("prefetchrows"),
-            on_enter=self._apply_session_tracing if self._session_tracing_enabled() else None,
+            on_enter=self._apply_session_tracing if self._session_tracing_enabled else None,
         )
 
     @overload
@@ -1892,7 +1933,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 async def _insert_batches() -> None:
                     async with self.with_cursor(self.connection) as cursor:
                         for batch in arrow_table.to_batches(max_chunksize=5000):
-                            batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
+                            batch_rows = self._arrow_batch_to_rows(batch, columns)
                             coerced_rows = await coerce_many_parameters_async(
                                 self.connection,
                                 batch_rows,
@@ -2049,12 +2090,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             Execution result carrying the formatted plan rows.
         """
         if display_cursor:
-            await cursor.execute(explained_sql, parameters or {}, **build_fetch_kwargs(self.driver_features))
+            await cursor.execute(explained_sql, parameters or {}, **self._fetch_kwargs)
             if cursor.description is not None:
                 await cursor.fetchall()
-            await cursor.execute(
-                _format_display_cursor_sql(xplan_format), {}, **build_fetch_kwargs(self.driver_features)
-            )
+            await cursor.execute(_format_display_cursor_sql(xplan_format), {}, **self._fetch_kwargs)
             fetched_data = await cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = await collect_async_rows(
@@ -2078,9 +2117,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         display_sql = PLAN_DISPLAY_SQL if xplan_format == "TYPICAL" else _format_plan_display_sql(xplan_format)
 
         try:
-            await cursor.execute(
-                display_sql, {"statement_id": statement_id}, **build_fetch_kwargs(self.driver_features)
-            )
+            await cursor.execute(display_sql, {"statement_id": statement_id}, **self._fetch_kwargs)
             fetched_data = await cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = await collect_async_rows(
@@ -2143,7 +2180,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         params = parameters if parameters is not None else []
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
-        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features)
+        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features, arrow_schema=arrow_schema)
         try:
             oracle_dfs = self.connection.fetch_df_batches(
                 statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs

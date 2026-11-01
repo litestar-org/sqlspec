@@ -13,9 +13,8 @@ as a follow-up.
 import array
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR, OracleSparseVector
-from sqlspec.adapters.oracledb.core import resolve_oracle_connection_major
+from sqlspec.adapters.oracledb.core import chain_input_handler, chain_output_handler, resolve_oracle_connection_major
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional
