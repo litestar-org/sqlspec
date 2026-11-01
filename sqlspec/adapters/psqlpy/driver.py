@@ -34,7 +34,7 @@ from sqlspec.adapters.psqlpy.core import (
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
-from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
+from sqlspec.core import SQL, DMLResult, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.core.sqlcommenter import split_sqlcomment
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
@@ -80,7 +80,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     and transaction management.
     """
 
-    __slots__ = ("_data_dictionary", "_transaction_active")
+    __slots__ = ("_data_dictionary", "_pooler_unprepared", "_transaction_active")
     dialect = "postgres"
 
     def __init__(
@@ -97,6 +97,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsqlpyDataDictionary | None = None
         self._transaction_active = False
+        pooler_mode = self.driver_features.get("pooler_mode", "session")
+        self._pooler_unprepared = pooler_mode in {"transaction", "statement"} or bool(
+            self.driver_features.get("pgbouncer") or self.driver_features.get("pgbouncer_mode")
+        )
 
     @property
     def data_dictionary(self) -> "PsqlpyDataDictionary":
@@ -396,9 +400,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             qualified = format_table_identifier(table)
             exc_handler = self.handle_database_exceptions()
             async with exc_handler, self.with_cursor(self.connection) as cursor:
-                await cursor.execute(f"TRUNCATE TABLE {qualified}")
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+                await self._run_with_exception_handler(exc_handler, cursor.execute, f"TRUNCATE TABLE {qualified}")
+            self._check_pending_exception(exc_handler)
 
         columns, batch_iter = self._coerce_arrow_batches(source)
         first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
@@ -419,7 +422,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                         payload = self._encode_arrow_batch_pg_binary(
                             batch, columns=columns, include_header=True, include_trailer=True
                         )
-                        await cursor.binary_copy_to_table(payload, table_name, **copy_kwargs)
+                        await self._run_with_exception_handler(
+                            exc_handler, cursor.binary_copy_to_table, payload, table_name, **copy_kwargs
+                        )
                 else:
                     json_columns = await self._resolve_json_columns(schema_name, table_name)
                     deserializer = cast(
@@ -430,13 +435,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                         metrics["bytes_processed"] += int(batch.nbytes)
                         records = self._arrow_batch_to_rows(batch, columns)
                         if records:
-                            await cursor.copy_records_to_table(
+                            await self._run_with_exception_handler(
+                                exc_handler,
+                                cursor.copy_records_to_table,
                                 table_name,
                                 coerce_json_columns(records, columns, json_columns, deserializer=deserializer),
                                 **copy_kwargs,
                             )
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
         telemetry_payload["destination"] = table
@@ -554,15 +560,38 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     ) -> "SQLResult":
         """Execute cached psqlpy queries with cast-aware parameter preparation."""
         prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
-        direct_statement = self._cached_statement(
-            sql,
-            params,
-            cached,
-            cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
-            params_are_simple=True,
-            compiled_sql=cached.compiled_sql,
+        args = (
+            prepared_params
+            if isinstance(prepared_params, (tuple, list))
+            else tuple(prepared_params.values())
+            if isinstance(prepared_params, dict)
+            else ()
         )
-        return await self._execute_cached_statement(direct_statement)
+        wire_sql = self._format_wire_sql(cached.compiled_sql)
+        if cached.operation_profile.returns_rows:
+            query_result = (
+                await self.connection.fetch(wire_sql, args, prepared=False)
+                if self._pooler_unprepared
+                else await self.connection.fetch(wire_sql, args)
+            )
+            dict_rows, column_names = collect_rows(query_result)
+            return self.build_cached_select_result(
+                sql,
+                params,
+                cached,
+                selected_data=dict_rows,
+                column_names=column_names,
+                data_row_count=len(dict_rows),
+                row_format="dict",
+                compiled_sql=wire_sql,
+            )
+        result = (
+            await self.connection.execute(wire_sql, args, prepared=False)
+            if self._pooler_unprepared
+            else await self.connection.execute(wire_sql, args)
+        )
+        affected_rows = extract_rows_affected(result)
+        return DMLResult(cached.operation_type, affected_rows)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
@@ -573,10 +602,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self._transaction_active
 
     def _is_transaction_pooler_mode(self) -> bool:
-        pooler_mode = self.driver_features.get("pooler_mode", "session")
-        return pooler_mode in {"transaction", "statement"} or bool(
-            self.driver_features.get("pgbouncer") or self.driver_features.get("pgbouncer_mode")
-        )
+        return self._pooler_unprepared
 
     def _should_set_local_columnar(self) -> bool:
         return bool(self.driver_features.get("enable_alloydb_columnar", False)) and self._is_transaction_pooler_mode()

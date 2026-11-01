@@ -5,7 +5,9 @@ import datetime as dt
 import decimal
 import re
 import uuid
+from collections.abc import Mapping
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import sqlglot
@@ -33,7 +35,7 @@ from sqlspec.core.config_runtime import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.core.parameters import type_coercion_dispatcher
+from sqlspec.core.parameters import type_coercion_dispatcher, type_coercion_fallbacks
 from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -62,7 +64,7 @@ from sqlspec.utils.type_guards import has_query_result_metadata
 from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
     from sqlspec.core import SQL
 
@@ -449,23 +451,28 @@ def extract_rows_affected(result: Any) -> int:
     return 0
 
 
-def get_parameter_casts(statement: "SQL | CachedQuery") -> "dict[int, str]":
+_EMPTY_PARAMETER_CASTS: Final[Mapping[int, str]] = MappingProxyType({})
+
+
+def get_parameter_casts(statement: "SQL | CachedQuery") -> "Mapping[int, str]":
     """Get parameter cast metadata from a SQLSpec statement."""
     if isinstance(statement, CachedQuery):
         return statement.parameter_casts
     state = statement.get_processed_state()
-    return {} if state is Empty else state.parameter_casts or {}
+    return _EMPTY_PARAMETER_CASTS if state is Empty or not state.parameter_casts else state.parameter_casts
 
 
 def prepare_parameters_with_casts(
-    parameters: Any, parameter_casts: "dict[int, str]", statement_config: "StatementConfig"
+    parameters: Any, parameter_casts: "Mapping[int, str]", statement_config: "StatementConfig"
 ) -> Any:
     """Prepare parameters with cast-aware type coercion."""
     if isinstance(parameters, (list, tuple)):
-        result: list[Any] = []
         serializer = statement_config.parameter_config.json_serializer or to_json
         type_map = statement_config.parameter_config.type_coercion_map
-        dispatcher = type_coercion_dispatcher(tuple(type_map.items())) if type_map else None
+        fallbacks = type_coercion_fallbacks(type_map) if type_map else ()
+        dispatcher = type_coercion_dispatcher(fallbacks) if fallbacks else None
+        coerced: list[Any] | None = None
+
         for idx, param in enumerate(parameters, start=1):
             cast_type = parameter_casts.get(idx, "")
             prepared_value = param
@@ -479,8 +486,14 @@ def prepare_parameters_with_casts(
                         prepared_value = fallback_converter(prepared_value)
             if cast_type:
                 prepared_value = _coerce_parameter_for_cast(prepared_value, cast_type, serializer)
-            result.append(prepared_value)
-        return tuple(result) if isinstance(parameters, tuple) else result
+            if prepared_value is not param and coerced is None:
+                coerced = list(parameters[: idx - 1])
+            if coerced is not None:
+                coerced.append(prepared_value)
+
+        if coerced is not None:
+            return tuple(coerced) if isinstance(parameters, tuple) else coerced
+        return parameters
     return parameters
 
 

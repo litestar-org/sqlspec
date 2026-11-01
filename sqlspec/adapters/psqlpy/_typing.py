@@ -171,6 +171,12 @@ class PsqlpySessionContext:
         return None
 
 
+_CACHED_PSQLPY_DRIVER_CLS: "type[PsqlpyDriver] | None" = None
+
+
 def _resolve_psqlpy_driver() -> "type[PsqlpyDriver]":
-    module = importlib.import_module("sqlspec.adapters.psqlpy.driver")
-    return module.PsqlpyDriver  # type: ignore[no-any-return]
+    global _CACHED_PSQLPY_DRIVER_CLS
+    if _CACHED_PSQLPY_DRIVER_CLS is None:
+        module = importlib.import_module("sqlspec.adapters.psqlpy.driver")
+        _CACHED_PSQLPY_DRIVER_CLS = module.PsqlpyDriver
+    return _CACHED_PSQLPY_DRIVER_CLS

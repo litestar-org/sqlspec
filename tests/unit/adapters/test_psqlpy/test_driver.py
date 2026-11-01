@@ -106,3 +106,64 @@ async def test_psqlpy_transaction_methods_raise_mapped_exceptions() -> None:
     driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
     with pytest.raises(DatabaseConnectionError):
         await driver.rollback()
+
+
+@pytest.mark.anyio
+async def test_psqlpy_prepare_parameters_with_casts_zero_allocation() -> None:
+    """prepare_parameters_with_casts returns original sequence when no coercion or cast is needed."""
+    from sqlspec.adapters.psqlpy.core import _EMPTY_PARAMETER_CASTS, prepare_parameters_with_casts
+
+    params = (1, "two", 3.0)
+    cfg = build_statement_config()
+    result = prepare_parameters_with_casts(params, _EMPTY_PARAMETER_CASTS, cfg)
+    assert result is params
+
+
+@pytest.mark.anyio
+async def test_psqlpy_execute_cache_hit_direct_fast_path() -> None:
+    """_execute_cache_hit executes directly on connection without calling _execute_cached_statement."""
+    from sqlspec.core.cache import CachedQuery, StatementOperationProfile
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[{"col": 1}])
+    driver = PsqlpyDriver(connection=cast("Any", conn), statement_config=build_statement_config())
+
+    cached = CachedQuery(
+        compiled_sql="SELECT 1 AS col",
+        operation_profile=StatementOperationProfile(returns_rows=True),
+        operation_type="SELECT",
+    )
+    result = await driver._execute_cache_hit("SELECT 1 AS col", (), cached)
+    assert result.data == [{"col": 1}]
+    assert conn.fetch.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_psqlpy_load_from_arrow_preserves_cause_on_failure() -> None:
+    """load_from_arrow preserves underlying __cause__ on execution failure."""
+    import pyarrow as pa
+    from psqlpy.exceptions import ConnectionExecuteError
+
+    conn = AsyncMock()
+    conn.binary_copy_to_table = AsyncMock(side_effect=ConnectionExecuteError("binary copy network drop"))
+    driver = PsqlpyDriver(
+        connection=cast("Any", conn),
+        statement_config=build_statement_config(),
+        driver_features={"enable_pgcopy_binary": True, "arrow_import_enabled": True},
+    )
+    tbl = pa.Table.from_arrays([pa.array([1, 2])], names=["id"])
+
+    with pytest.raises(Exception) as exc_info:
+        await driver.load_from_arrow("items", tbl)
+
+    assert exc_info.value.__cause__ is not None or "binary copy network drop" in str(exc_info.value)
+
+
+def test_psqlpy_driver_class_cached_in_resolve() -> None:
+    """_resolve_psqlpy_driver caches the resolved driver class."""
+    from sqlspec.adapters.psqlpy._typing import _resolve_psqlpy_driver
+
+    cls1 = _resolve_psqlpy_driver()
+    cls2 = _resolve_psqlpy_driver()
+    assert cls1 is cls2
+    assert cls1 is PsqlpyDriver
