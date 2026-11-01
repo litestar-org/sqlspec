@@ -428,3 +428,23 @@ def test_asyncpg_events_resolve_listener_config_allows_mapping_direct_dsn() -> N
     hub = AsyncpgListenerHub(config)
     resolved = hub._resolve_listener_config()
     assert resolved is not None
+
+
+async def test_asyncpg_get_indexes_with_none_schema_resolves_via_search_path() -> None:
+    """get_indexes passes schema_name=None when schema is None to resolve table on search_path."""
+    from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
+
+    calls: list[dict[str, Any]] = []
+    driver = MagicMock()
+
+    async def fake_select(query: Any, **kwargs: Any) -> list[Any]:
+        calls.append(kwargs)
+        return []
+
+    driver.select = AsyncMock(side_effect=fake_select)
+
+    dd = AsyncpgDataDictionary()
+    await dd.get_indexes(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0]["schema_name"] is None
+    assert calls[0]["table_name"] == "users"

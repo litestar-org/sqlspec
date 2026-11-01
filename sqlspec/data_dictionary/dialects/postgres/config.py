@@ -8,10 +8,43 @@ __all__ = (
     "POSTGRES_CONFIG",
     "POSTGRES_FEATURE_FLAGS",
     "POSTGRES_FEATURE_VERSIONS",
+    "POSTGRES_METADATA_DOMAINS",
+    "POSTGRES_SUPPORTED_DOMAINS",
+    "POSTGRES_SYSTEM_METADATA_QUERIES",
     "POSTGRES_TYPE_MAPPINGS",
     "POSTGRES_VERSION_PATTERN",
     "resolve_postgres_json_type",
 )
+
+POSTGRES_METADATA_DOMAINS: tuple[str, ...] = (
+    "schemas",
+    "objects",
+    "tables",
+    "columns",
+    "constraints",
+    "indexes",
+    "views",
+    "materialized_views",
+    "sequences",
+    "types",
+    "routines",
+    "triggers",
+    "comments",
+    "privileges",
+    "dependencies",
+    "extensions",
+    "partitions",
+    "ddl",
+    "system",
+)
+POSTGRES_SUPPORTED_DOMAINS: frozenset[str] = frozenset(d for d in POSTGRES_METADATA_DOMAINS if d != "system")
+POSTGRES_SYSTEM_METADATA_QUERIES: dict[str, str] = {
+    "settings": "settings",
+    "statement_history": "pg_stat_statements",
+    "pg_stat_statements": "pg_stat_statements",
+    "table_statistics": "table_stats",
+    "table_stats": "table_stats",
+}
 
 
 POSTGRES_VERSION_PATTERN = re.compile(r"PostgreSQL (\d+)\.(\d+)(?:\.(\d+))?")

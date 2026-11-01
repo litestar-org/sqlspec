@@ -9,7 +9,7 @@ SELECT
     total_exec_time,
     mean_exec_time,
     rows
-FROM pg_catalog.pg_stat_statements
+FROM pg_stat_statements
 ORDER BY total_exec_time DESC
 LIMIT :limit;
 
