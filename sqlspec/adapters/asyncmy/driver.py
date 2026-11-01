@@ -426,14 +426,38 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     async def _load_from_arrow_via_local_infile(
         self, table: str, columns: "list[str]", records: "list[tuple[Any, ...]]"
     ) -> None:
-        directory, filename = await asyncio.to_thread(_write_asyncmy_local_infile_payload, records)
+        writer = asyncio.create_task(asyncio.to_thread(_write_asyncmy_local_infile_payload, records))
+        pending_cancellation: asyncio.CancelledError | None = None
+        while not writer.done():
+            try:
+                await asyncio.shield(writer)
+            except asyncio.CancelledError as exc:
+                pending_cancellation = exc
+            except BaseException:
+                break
         try:
+            directory, filename = writer.result()
+        except BaseException:
+            if pending_cancellation is not None:
+                raise pending_cancellation
+            raise
+        try:
+            if pending_cancellation is not None:
+                raise pending_cancellation
             statement = build_load_data_statement(table, columns)
             exc_handler = self.handle_database_exceptions()
             await self._run_with_exception_handler(exc_handler, self._execute_local_infile_cursor, statement, filename)
             self._check_pending_exception(exc_handler)
         finally:
-            await asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True)
+            cleanup = asyncio.create_task(asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True))
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError as exc:
+                    pending_cancellation = exc
+            cleanup.result()
+            if pending_cancellation is not None:
+                raise pending_cancellation
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

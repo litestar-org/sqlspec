@@ -1,8 +1,13 @@
 """Asyncmy load_from_arrow ingest paths."""
 
 import asyncio
+import tempfile
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pyarrow as pa
@@ -152,6 +157,66 @@ async def test_local_infile_failure_discards_connection_and_payload(failure: Bas
     assert conn.closed
     assert conn._cursor.payload_path is not None
     assert not conn._cursor.payload_path.parent.exists()
+
+
+@pytest.mark.parametrize("cancel_count", [1, 2])
+@pytest.mark.parametrize("write_fails", [False, True])
+async def test_local_infile_cancelled_writer_removes_payload_after_thread_finishes(
+    cancel_count: int, write_fails: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation preserves ownership until the real file writer stops using the payload."""
+    started = Event()
+    release = Event()
+    finished = Event()
+    original = tempfile.NamedTemporaryFile
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+    @contextmanager
+    def blocking_payload(*args: Any, **kwargs: Any) -> Generator[SimpleNamespace, None, None]:
+        try:
+            with original(*args, **kwargs) as payload:
+
+                def write(data: bytes) -> int:
+                    written = payload.write(data)
+                    payload.flush()
+                    started.set()
+                    if not release.wait(timeout=5):
+                        msg = "The payload writer was never released."
+                        raise TimeoutError(msg)
+                    if write_fails:
+                        msg = "Payload write failed after cancellation."
+                        raise OSError(msg)
+                    return written
+
+                yield SimpleNamespace(write=write, name=payload.name)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", blocking_payload)
+    conn = _FakeConnection()
+    driver = AsyncmyDriver(
+        connection=cast("Any", conn),
+        driver_features={"storage_capabilities": _CAPS, "enable_local_infile_bulk_load": True},
+    )
+    task = asyncio.create_task(driver.load_from_arrow("orders", pa.table({"id": [1]})))
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        for _ in range(cancel_count):
+            task.cancel()
+            await asyncio.sleep(0)
+        paths = await asyncio.to_thread(lambda: list(tmp_path.rglob("*.tsv")))
+        assert len(paths) == 1
+        assert await asyncio.to_thread(paths[0].read_bytes) == b"1\n"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert await asyncio.to_thread(finished.wait, 5)
+        assert await asyncio.to_thread(lambda: list(tmp_path.iterdir())) == []
+        assert conn._cursor.execute_calls == []
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.to_thread(finished.wait, 5)
 
 
 async def test_local_infile_empty_table_does_not_send_payload() -> None:
