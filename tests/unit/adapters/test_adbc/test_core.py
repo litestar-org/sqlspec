@@ -2,16 +2,17 @@
 
 from collections.abc import Sequence
 from decimal import Decimal
+from pathlib import Path
 from types import NoneType, SimpleNamespace
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 from uuid import UUID
 
 import pyarrow as pa
 import pytest
-from adbc_driver_manager import AdbcStatusCode, DatabaseError
+from adbc_driver_manager import AdbcStatusCode, DatabaseError, NotSupportedError
 
-from sqlspec.adapters.adbc import AdbcDriver
+from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc import driver as adbc_driver_mod
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
@@ -650,42 +651,170 @@ def test_adbc_driver_dispatch_execute_lowercases_oracle_columns() -> None:
     assert result.selected_data == [{"user_id": 1, "MixedCase": "a"}]
 
 
-def test_adbc_begin_with_autocommit() -> None:
-    """AdbcDriver.begin disables autocommit and commit/rollback restores it."""
+@pytest.mark.parametrize("autocommit", [False, True])
+def test_adbc_begin_with_native_autocommit(autocommit: bool) -> None:
+    """Real explicit transactions commit/roll back and restore the native autocommit mode."""
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "autocommit": autocommit})
+    expected_mode = "true" if autocommit else "false"
+    with config.provide_session() as session:
+        native = session.connection.adbc_connection
+        session.execute("CREATE TABLE transaction_values (value INTEGER)")
+        session.commit()
+        session.begin()
+        begun_mode = native.get_option("adbc.connection.autocommit")
+        session.execute("INSERT INTO transaction_values (value) VALUES (:value)", value=1)
+        session.rollback()
+        assert session.select_value("SELECT COUNT(*) FROM transaction_values") == 0
+        assert begun_mode == "false"
+        assert native.get_option("adbc.connection.autocommit") == expected_mode
+        session.begin()
+        session.execute("INSERT INTO transaction_values (value) VALUES (:value)", value=2)
+        session.commit()
+        assert session.select_value("SELECT value FROM transaction_values") == 2
+        assert native.get_option("adbc.connection.autocommit") == expected_mode
 
-    class MockConn:
-        def __init__(self) -> None:
-            self.autocommit = True
-            self.committed = False
-            self.rolled_back = False
 
-        def adbc_get_info(self) -> dict[str, str]:
-            return {"driver_name": "sqlite"}
+@pytest.mark.parametrize("capability", ["missing", "unsupported"])
+def test_adbc_begin_preserves_wrapper_transactions_without_native_getter(capability: str) -> None:
+    """Older/unsupported getters retain ordinary DB-API transaction capability behavior."""
+    native = SimpleNamespace()
+    if capability == "unsupported":
+        native.get_option = Mock(side_effect=NotSupportedError("getter unsupported"))
+    committed, rolled_back = Mock(), Mock()
+    connection = SimpleNamespace(
+        adbc_get_info=lambda: {"driver_name": "sqlite"}, adbc_connection=native, commit=committed, rollback=rolled_back
+    )
+    driver = AdbcDriver(cast("Any", connection), dialect="sqlite")
+    driver.begin()
+    driver.commit()
+    driver.begin()
+    driver.rollback()
+    committed.assert_called_once_with()
+    rolled_back.assert_called_once_with()
+
+
+@pytest.mark.parametrize("operation", ["commit", "rollback"])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_adbc_native_transaction_preserves_primary_on_restoration_failure(operation: str, interrupted: bool) -> None:
+    """Explicitly switched native transactions preserve primary errors while attempting restoration."""
+    connection = Mock()
+    connection.adbc_get_info.return_value = {"driver_name": "sqlite"}
+    native = connection.adbc_connection
+    native.get_option.return_value = "true"
+    native.set_autocommit.side_effect = [None, RuntimeError("restore failed")]
+    primary = (
+        KeyboardInterrupt("transaction interrupted")
+        if interrupted
+        else DatabaseError("transaction failed", status_code=AdbcStatusCode.UNKNOWN)
+    )
+    getattr(native, operation).side_effect = [primary, None] if operation == "rollback" else primary
+    driver = AdbcDriver(connection, dialect="sqlite")
+    driver.begin()
+    expected = KeyboardInterrupt if interrupted else SQLSpecError
+    with pytest.raises(expected) as caught:
+        getattr(driver, operation)()
+    if interrupted:
+        assert caught.value is primary
+    else:
+        assert caught.value.__cause__ is primary
+    assert native.set_autocommit.call_args_list == [call(False), call(True)]
+    connection.commit.assert_not_called()
+    connection.rollback.assert_not_called()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize("operation", ["commit", "rollback"])
+def test_adbc_failed_native_rollback_never_commits_pending_rows(
+    tmp_path: Path, interrupted: bool, operation: str
+) -> None:
+    """A failed rollback and cleanup leave real work uncommitted until an explicit retry."""
+    path = str(tmp_path / "rollback.sqlite")
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": path, "autocommit": True})
+    primary = (
+        KeyboardInterrupt(f"{operation} interrupted")
+        if interrupted
+        else DatabaseError(f"{operation} failed", status_code=AdbcStatusCode.UNKNOWN)
+    )
+
+    class NativeBoundary:
+        def __init__(self, native: Any) -> None:
+            self.native = native
+            self.remaining = 2
+
+        def get_option(self, key: str) -> str:
+            return cast("str", self.native.get_option(key))
+
+        def set_autocommit(self, value: bool) -> None:
+            self.native.set_autocommit(value)
 
         def commit(self) -> None:
-            self.committed = True
+            if operation == "commit" and self.remaining:
+                self.remaining -= 1
+                raise primary
+            self.native.commit()
 
         def rollback(self) -> None:
-            self.rolled_back = True
+            if self.remaining:
+                self.remaining -= 1
+                if self.remaining == 1:
+                    raise primary
+                raise RuntimeError("cleanup rollback failed")
+            self.native.rollback()
 
-    conn = MockConn()
-    driver = AdbcDriver(cast("Any", conn))
-    assert conn.autocommit is True
-    driver.begin()
-    assert conn.autocommit is False
-    assert driver._transaction_active is True
-    driver.commit()
-    assert conn.autocommit is True
-    assert driver._transaction_active is False
-    assert conn.committed is True
+    class ConnectionBoundary:
+        def __init__(self, connection: Any) -> None:
+            self.connection = connection
+            self.adbc_connection = NativeBoundary(connection.adbc_connection)
 
-    conn.autocommit = True
-    driver.begin()
-    assert conn.autocommit is False
+        def adbc_get_info(self) -> Any:
+            return self.connection.adbc_get_info()
+
+        def cursor(self) -> Any:
+            return self.connection.cursor()
+
+        def commit(self) -> None:
+            self.connection.commit()
+
+        def rollback(self) -> None:
+            self.connection.rollback()
+
+    with config.provide_connection() as connection:
+        driver = AdbcDriver(cast("Any", ConnectionBoundary(connection)), dialect="sqlite")
+        driver.execute("CREATE TABLE pending_values (value INTEGER)")
+        driver.begin()
+        driver.execute("INSERT INTO pending_values (value) VALUES (:value)", value=1)
+        expected = KeyboardInterrupt if interrupted else SQLSpecError
+        with pytest.raises(expected) as caught:
+            getattr(driver, operation)()
+        if interrupted:
+            assert caught.value is primary
+        else:
+            assert caught.value.__cause__ is primary
+        observer = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": path, "autocommit": True})
+        with observer.provide_session() as session:
+            assert session.select_value("SELECT COUNT(*) FROM pending_values") == 0
+        assert connection.adbc_connection.get_option("adbc.connection.autocommit") == "false"
+        driver.begin()
+        driver.rollback()
+        assert connection.adbc_connection.get_option("adbc.connection.autocommit") == "true"
+        assert driver.select_value("SELECT COUNT(*) FROM pending_values") == 0
+
+
+def test_adbc_native_begin_failure_restores_mode_and_preserves_native_cause() -> None:
+    """A failed native mode switch does not start a logical transaction or hide its error."""
+    connection = Mock()
+    connection.adbc_get_info.return_value = {"driver_name": "sqlite"}
+    native = connection.adbc_connection
+    primary = DatabaseError("begin failed", status_code=AdbcStatusCode.UNKNOWN)
+    native.get_option.return_value = "true"
+    native.set_autocommit.side_effect = [primary, RuntimeError("restore failed")]
+    driver = AdbcDriver(connection, dialect="sqlite")
+    with pytest.raises(SQLSpecError) as caught:
+        driver.begin()
+    assert caught.value.__cause__ is primary
+    assert native.set_autocommit.call_args_list == [call(False), call(True)]
     driver.rollback()
-    assert conn.autocommit is True
-    assert driver._transaction_active is False
-    assert conn.rolled_back is True
+    connection.rollback.assert_called_once_with()
 
 
 def test_pending_exception_preserves_cause() -> None:
@@ -807,11 +936,6 @@ def test_bytearray_memoryview_coercion() -> None:
     coercion = adbc_core._BASE_TYPE_COERCION_MAP
     assert coercion[bytearray] is bytes
     assert coercion[memoryview] is bytes
-
-
-def test_core_unused_symbols() -> None:
-    """Dead alias _prepare_batch_with_casts is removed from adbc.core."""
-    assert not hasattr(adbc_core, "_prepare_batch_with_casts")
 
 
 def test_session_context_driver() -> None:

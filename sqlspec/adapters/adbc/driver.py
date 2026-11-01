@@ -10,7 +10,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast, final
 
-from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcNativeError, AdbcSessionContext
+from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcNativeError, AdbcNotSupportedError, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     _transform_duckdb_copy_parameters,
     apply_driver_features,
@@ -502,43 +502,38 @@ class AdbcDriver(SyncDriverAdapterBase):
         return stream
 
     def begin(self) -> None:
-        """Begin database transaction.
-
-        ADBC connections operate with autocommit disabled and manage the
-        active transaction internally, so no explicit statement is issued.
-        """
-        if hasattr(self.connection, "autocommit"):
-            if self._previous_autocommit is None:
-                self._previous_autocommit = bool(self.connection.autocommit)
-            if self.connection.autocommit:
-                self.connection.autocommit = False
+        """Begin a transaction, disabling native autocommit when its state is available."""
+        if self._transaction_active:
+            return
+        native = getattr(self.connection, "adbc_connection", None)
+        get_option = getattr(native, "get_option", None)
+        mode = None
+        if callable(get_option):
+            try:
+                mode = get_option("adbc.connection.autocommit")
+            except (AdbcNotSupportedError, NotImplementedError):
+                pass
+            except AdbcNativeError as exc:
+                raise create_mapped_exception(exc) from exc
+        if mode == "true" and native is not None:
+            try:
+                native.set_autocommit(False)
+            except BaseException as exc:
+                with contextlib.suppress(BaseException):
+                    native.set_autocommit(True)
+                if isinstance(exc, AdbcNativeError):
+                    raise create_mapped_exception(exc) from exc
+                raise
+            self._previous_autocommit = True
         self._transaction_active = True
 
     def commit(self) -> None:
         """Commit database transaction."""
-        try:
-            self.connection.commit()
-        except AdbcNativeError as e:
-            raise create_mapped_exception(e) from e
-        finally:
-            self._transaction_active = False
-            if self._previous_autocommit is not None:
-                if hasattr(self.connection, "autocommit"):
-                    self.connection.autocommit = self._previous_autocommit
-                self._previous_autocommit = None
+        self._finish_transaction(commit=True)
 
     def rollback(self) -> None:
         """Rollback database transaction."""
-        try:
-            self.connection.rollback()
-        except AdbcNativeError as e:
-            raise create_mapped_exception(e) from e
-        finally:
-            self._transaction_active = False
-            if self._previous_autocommit is not None:
-                if hasattr(self.connection, "autocommit"):
-                    self.connection.autocommit = self._previous_autocommit
-                self._previous_autocommit = None
+        self._finish_transaction(commit=False)
 
     def create_savepoint(self, name: str) -> None:
         """Create a savepoint within the current transaction.
@@ -995,6 +990,42 @@ class AdbcDriver(SyncDriverAdapterBase):
         return prepare_postgres_uuid_bindings(
             compiled_sql, prepared_parameters, is_many=statement.is_many, dialect=self._dialect_name
         )
+
+    def _finish_transaction(self, *, commit: bool) -> None:
+        restore = self._previous_autocommit
+        primary: BaseException | None = None
+        try:
+            connection = self.connection.adbc_connection if restore is True else self.connection
+            if commit:
+                connection.commit()
+            else:
+                connection.rollback()
+        except BaseException as exc:
+            primary = exc
+        completed = primary is None
+        if restore is True and not completed:
+            with contextlib.suppress(BaseException):
+                self.connection.adbc_connection.rollback()
+                completed = True
+        if restore is True:
+            self._previous_autocommit = True
+            self._transaction_active = True
+            if completed:
+                try:
+                    self.connection.adbc_connection.set_autocommit(True)
+                except BaseException as exc:
+                    if primary is None:
+                        primary = exc
+                else:
+                    self._previous_autocommit = None
+                    self._transaction_active = False
+        else:
+            self._previous_autocommit = None
+            self._transaction_active = False
+        if isinstance(primary, AdbcNativeError):
+            raise create_mapped_exception(primary) from primary
+        if primary is not None:
+            raise primary
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

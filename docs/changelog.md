@@ -85,6 +85,8 @@ important operational fixes.
 
 * ADBC now closes its own connections if a hook, profile setup, driver setup, or session setup fails. It keeps the first error and leaves supplied connections open.
 
+* Explicit ADBC transactions now honor native `autocommit=True` on supported drivers. If rollback cleanup fails, autocommit stays off so mode restoration cannot commit pending writes.
+
 * Preserved supported Arrow conversion and mutation paths for Asyncmy and Spanner while reporting their native capabilities accurately; corrected ADBC lowercase readers, DuckDB stream ownership and table filtering, and SQL Server Arrow cursor lifetimes.
 
 * Corrected Oracle session-renewal bindings, pipeline error conversion, ADK batch-error handling, standalone connection setup, and deferred Arrow failures. Text-only Oracle memory stores remain available on servers without native vector support.

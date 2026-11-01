@@ -427,6 +427,26 @@ def test_postgresql_pool_eager_arrow_results_survive_session_and_allow_reuse(
         assert rows == [{"value": 1}, {"value": 2}, {"value": 3}]
 
 
+@pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
+def test_postgresql_autocommit_transaction_boundaries(adbc_postgres_connection_config: dict[str, str]) -> None:
+    """Explicit transactions commit or roll back native work and restore autocommit."""
+    config = AdbcConfig(connection_config={**adbc_postgres_connection_config, "autocommit": True})
+    with config.provide_session() as session:
+        session.execute("CREATE TEMP TABLE sqlspec_adbc_autocommit_transactions (value INTEGER)")
+        session.begin()
+        session.execute("INSERT INTO sqlspec_adbc_autocommit_transactions (value) VALUES (?)", 41)
+        session.rollback()
+        assert session.select_value("SELECT COUNT(*) FROM sqlspec_adbc_autocommit_transactions") == 0
+        assert session.connection.adbc_connection.get_option("adbc.connection.autocommit") == "true"
+
+        session.begin()
+        session.execute("INSERT INTO sqlspec_adbc_autocommit_transactions (value) VALUES (?)", 42)
+        session.commit()
+        assert session.select_value("SELECT value FROM sqlspec_adbc_autocommit_transactions") == 42
+        assert session.connection.adbc_connection.get_option("adbc.connection.autocommit") == "true"
+
+
 @contextmanager
 def _pooled_postgresql_config(
     connection_config: dict[str, str], *, max_size: int = 1, conn_kwargs: dict[str, str] | None = None
