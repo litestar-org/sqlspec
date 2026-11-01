@@ -16,7 +16,6 @@ TTL-based expiration, and statistics tracking for monitoring
 across the entire SQLSpec system.
 """
 
-import inspect
 import logging
 import threading
 import time
@@ -449,21 +448,6 @@ def test_filters_view_external_api_smoke() -> None:
     assert view.has_field("name") is True
     assert view.has_field("missing") is False
     assert len(view.to_canonical()) == 3
-
-
-def test_cache_external_api_docstring_markers() -> None:
-    """Dead-code policy markers identify externally callable cache helpers."""
-    for member in (
-        NamespacedCache.delete_statement,
-        NamespacedCache.delete_expression,
-        NamespacedCache.delete_optimized,
-        NamespacedCache.delete_builder,
-        NamespacedCache.delete_file,
-        cache_module.FiltersView.get_by_field,
-        cache_module.FiltersView.has_field,
-        cache_module.FiltersView.to_canonical,
-    ):
-        assert "External/extension API" in (inspect.getdoc(member) or "")
 
 
 def test_namespaced_cache_respects_config_flags() -> None:

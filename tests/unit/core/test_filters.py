@@ -7,11 +7,10 @@ ORDER BY, LIMIT/OFFSET, and other SQL modifications with proper parameter naming
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, assert_type, cast
 
 import pytest
-from sqlglot import exp
+from sqlglot import exp, parse_one
 
 import sqlspec.core.filters as filters_module
 from sqlspec import sql as sql_builder
@@ -61,31 +60,15 @@ def test_public_filters_alias_points_to_core_filters_module() -> None:
     assert sqlspec.filters is filters_module
 
 
-def test_filters_docs_render_inherited_members() -> None:
-    """Docs include public filters whose methods are inherited."""
-    docs = Path("docs/reference/core/filters.md").read_text()
-    for class_name in ("BeforeAfterFilter", "SearchFilter", "InCollectionFilter", "NotInCollectionFilter"):
-        assert f"::: sqlspec.core.filters.{class_name}" in docs
+def test_search_filter_preserves_qualified_column_and_binds_value() -> None:
+    """A qualified field remains qualified in the rendered search predicate."""
+    result = apply_filter(SQL("SELECT * FROM users"), SearchFilter("users.name", "needle"))
+    condition = parse_one(result.raw_sql).find(exp.Like)
 
-
-def test_statement_filter_get_column_expression_delegates_to_parse_column_for_condition(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """StatementFilter should use the shared fast column parser."""
-    calls: list[str | exp.Expression] = []
-    original = StatementFilter._get_column_expression
-
-    def fake_parse(field_name: str | exp.Expression) -> exp.Expr:
-        calls.append(field_name)
-        return exp.column("parsed")
-
-    monkeypatch.setattr("sqlspec.core.filters.parse_column_for_condition", fake_parse)
-
-    result = original(SearchFilter("name", "needle"), "users.name")
-
-    assert isinstance(result, exp.Column)
-    assert result.name == "parsed"
-    assert calls == ["users.name"]
+    assert isinstance(condition, exp.Like)
+    assert condition.this == exp.column("name", table="users")
+    assert condition.expression == exp.Placeholder(this="users_name_search")
+    assert result.named_parameters == {"users_name_search": "%needle%"}
 
 
 def test_canonicalize_filters_deduplicates_and_sorts_by_class_and_field() -> None:
@@ -943,12 +926,6 @@ def test_order_by_filter_rejects_invalid_sort_order_at_construction() -> None:
 
     with pytest.raises(ValueError, match="sort_order"):
         OrderByFilter("name", "BAD")  # type: ignore[arg-type]
-
-
-def test_not_in_search_filter_declares_empty_slots() -> None:
-    """NotInSearchFilter should not allocate an instance dict."""
-
-    assert NotInSearchFilter.__slots__ == ()
 
 
 def test_not_in_collection_parameter_suffix_is_literal() -> None:

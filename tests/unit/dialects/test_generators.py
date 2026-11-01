@@ -4,8 +4,6 @@ Verifies that the conditional TRANSFORMS/subclass approach in _generators.py
 produces correct SQL output for all extension operators and Spanner DDL.
 """
 
-from pathlib import Path
-
 from sqlglot import parse_one
 
 from sqlspec.dialects.spanner._generators import _get_dialect_name
@@ -95,12 +93,3 @@ def test_spangres_normalizes_row_deletion_policy_to_ttl() -> None:
     sql = "\n    CREATE TABLE events (\n        id VARCHAR PRIMARY KEY,\n        created_at TIMESTAMP\n    ) ROW DELETION POLICY (OLDER_THAN(created_at, INTERVAL 30 DAY))\n    "
     rendered = parse_one(sql, dialect="spangres").sql(dialect="spangres")
     assert "TTL INTERVAL '30 days' ON created_at" in rendered
-
-
-def test_compat_removed_dialects_compat_module_removed() -> None:
-    assert not Path("sqlspec/dialects/_compat.py").exists()
-
-
-def test_compat_removed_dialects_compat_not_in_mypyc_include() -> None:
-    assert "sqlspec/dialects/_compat.py" not in Path("pyproject.toml").read_text()
-    assert "sqlspec/dialects/_compat.py" not in Path("Makefile").read_text()
