@@ -1,5 +1,6 @@
 """Oracle-specific data dictionary for metadata queries."""
 
+from collections import defaultdict
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -226,6 +227,33 @@ def resolve_oracle_connection_compatible_major(
     if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
         return cached_compatible
     return None
+
+
+def _merge_index_expressions(
+    indexes: "list[IndexMetadata]", expr_rows: "list[dict[str, Any]]", schema_name: "str | None" = None
+) -> "list[IndexMetadata]":
+    """Merge expression-based index columns into index metadata records."""
+    if not expr_rows:
+        return indexes
+
+    exprs_by_index: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for row in expr_rows:
+        owner = str(row.get("schema_name") or row.get("index_owner") or schema_name or "").upper()
+        idx_name = str(row.get("index_name") or "").upper()
+        expr = row.get("column_expression")
+        if expr is not None:
+            exprs_by_index[(owner, idx_name)].append(str(expr))
+
+    for idx in indexes:
+        owner = str(idx.get("schema_name") or schema_name or "").upper()
+        idx_name = str(idx.get("index_name") or "").upper()
+        matching_exprs = exprs_by_index.get((owner, idx_name))
+        if matching_exprs:
+            expr_str = ",".join(matching_exprs)
+            idx["expressions"] = expr_str
+            idx["expression"] = expr_str
+
+    return indexes
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -473,17 +501,25 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         schema_name = self.resolve_schema(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
-            return driver.select(
+            indexes: list[IndexMetadata] = driver.select(
                 self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
-        table_name = self.resolve_identifier(table)
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
-        return driver.select(
-            self.get_query("indexes", "by_table"),
-            schema_name=schema_name,
-            table_name=table_name,
-            schema_type=IndexMetadata,
-        )
+            expr_rows: list[dict[str, Any]] = driver.select(
+                self.get_query("indexes", "expressions"), schema_name=schema_name, table_name=None
+            )
+        else:
+            table_name = self.resolve_identifier(table)
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
+            indexes = driver.select(
+                self.get_query("indexes", "by_table"),
+                schema_name=schema_name,
+                table_name=table_name,
+                schema_type=IndexMetadata,
+            )
+            expr_rows = driver.select(
+                self.get_query("indexes", "expressions"), schema_name=schema_name, table_name=table_name
+            )
+        return _merge_index_expressions(indexes, expr_rows, schema_name=schema_name)
 
     def get_foreign_keys(
         self, driver: "OracleSyncDriver", table: "str | None" = None, schema: "str | None" = None
@@ -890,17 +926,25 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         schema_name = self.resolve_schema(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
-            return await driver.select(
+            indexes: list[IndexMetadata] = await driver.select(
                 self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
             )
-        table_name = self.resolve_identifier(table)
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
-        return await driver.select(
-            self.get_query("indexes", "by_table"),
-            schema_name=schema_name,
-            table_name=table_name,
-            schema_type=IndexMetadata,
-        )
+            expr_rows: list[dict[str, Any]] = await driver.select(
+                self.get_query("indexes", "expressions"), schema_name=schema_name, table_name=None
+            )
+        else:
+            table_name = self.resolve_identifier(table)
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
+            indexes = await driver.select(
+                self.get_query("indexes", "by_table"),
+                schema_name=schema_name,
+                table_name=table_name,
+                schema_type=IndexMetadata,
+            )
+            expr_rows = await driver.select(
+                self.get_query("indexes", "expressions"), schema_name=schema_name, table_name=table_name
+            )
+        return _merge_index_expressions(indexes, expr_rows, schema_name=schema_name)
 
     async def get_foreign_keys(
         self, driver: "OracleAsyncDriver", table: "str | None" = None, schema: "str | None" = None

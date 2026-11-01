@@ -226,3 +226,28 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_exception_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
+
+
+def test_oracle_get_indexes_function_based_index(oracle_sync_session: OracleSyncDriver) -> None:
+    """Test get_indexes returns index and expression for function-based indexes."""
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_fn_idx_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    oracle_sync_session.execute_script("""
+        CREATE TABLE test_fn_idx_table (
+            id NUMBER(10) PRIMARY KEY,
+            email VARCHAR2(255)
+        )
+    """)
+    oracle_sync_session.execute_script("""
+        CREATE INDEX idx_test_fn_email ON test_fn_idx_table (UPPER(email))
+    """)
+
+    indexes = oracle_sync_session.data_dictionary.get_indexes(oracle_sync_session, table="test_fn_idx_table")
+    fn_indexes = [idx for idx in indexes if idx.get("index_name") == "IDX_TEST_FN_EMAIL"]
+    assert len(fn_indexes) == 1
+    assert fn_indexes[0].get("expressions") is not None or fn_indexes[0].get("expression") is not None
+
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_fn_idx_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )

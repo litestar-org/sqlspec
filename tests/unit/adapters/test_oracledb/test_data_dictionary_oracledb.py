@@ -298,7 +298,7 @@ def test_oracle_domain_query_packs_cover_c5_sources() -> None:
         "tables": ("by_schema", "ALL_TABLES"),
         "columns": ("by_schema", "ALL_TAB_COLS"),
         "constraints": ("by_schema", "ALL_CONSTRAINTS"),
-        "indexes": ("by_schema", "ALL_IND_EXPRESSIONS"),
+        "indexes": ("by_schema", "ALL_INDEXES"),
         "views": ("by_schema", "ALL_VIEWS"),
         "materialized_views": ("by_schema", "ALL_MVIEWS"),
         "sequences": ("by_schema", "ALL_SEQUENCES"),
@@ -526,3 +526,95 @@ async def test_oracle_26ai_async_data_dictionary_introspection_methods() -> None
 
     dviews = await data_dictionary.get_json_duality_views(async_driver, schema="app")
     assert isinstance(dviews, list)
+
+
+def test_oracle_indexes_sql_does_not_listagg_column_expression() -> None:
+    """Oracle indexes SQL text must not aggregate column_expression via LISTAGG."""
+    data_dictionary = OracledbSyncDataDictionary()
+    by_schema_sql = str(data_dictionary.get_query("indexes", "by_schema")).upper()
+    by_table_sql = str(data_dictionary.get_query("indexes", "by_table")).upper()
+
+    assert "LISTAGG(IE.COLUMN_EXPRESSION" not in by_schema_sql
+    assert "COLUMN_EXPRESSION" not in by_schema_sql
+    assert "LISTAGG(IE.COLUMN_EXPRESSION" not in by_table_sql
+
+
+def test_oracle_sync_get_indexes_merges_expressions() -> None:
+    """get_indexes must query expressions and merge them into index records."""
+    data_dictionary = OracledbSyncDataDictionary()
+
+    class _StubSyncDriver:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def select(self, query: Any, **kwargs: Any) -> list[dict[str, Any]]:
+            sql_text = str(query)
+            self.queries.append(sql_text)
+            if "all_ind_expressions" in sql_text:
+                return [
+                    {
+                        "schema_name": "HR",
+                        "table_name": "EMPLOYEES",
+                        "index_name": "IDX_EMP_UPPER_EMAIL",
+                        "column_position": 1,
+                        "column_expression": "UPPER(EMAIL)",
+                    }
+                ]
+            return [
+                {
+                    "schema_name": "HR",
+                    "table_name": "EMPLOYEES",
+                    "index_name": "IDX_EMP_UPPER_EMAIL",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": None,
+                }
+            ]
+
+    driver = cast("OracleSyncDriver", _StubSyncDriver())
+    indexes = data_dictionary.get_indexes(driver, schema="HR")
+    assert len(indexes) == 1
+    assert indexes[0]["index_name"] == "IDX_EMP_UPPER_EMAIL"
+    assert indexes[0]["expressions"] == "UPPER(EMAIL)"
+    assert indexes[0]["expression"] == "UPPER(EMAIL)"
+
+
+@pytest.mark.anyio
+async def test_oracle_async_get_indexes_merges_expressions() -> None:
+    """Async get_indexes must query expressions and merge them into index records."""
+    data_dictionary = OracledbAsyncDataDictionary()
+
+    class _StubAsyncDriver:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        async def select(self, query: Any, **kwargs: Any) -> list[dict[str, Any]]:
+            sql_text = str(query)
+            self.queries.append(sql_text)
+            if "all_ind_expressions" in sql_text:
+                return [
+                    {
+                        "schema_name": "HR",
+                        "table_name": "EMPLOYEES",
+                        "index_name": "IDX_EMP_UPPER_EMAIL",
+                        "column_position": 1,
+                        "column_expression": "UPPER(EMAIL)",
+                    }
+                ]
+            return [
+                {
+                    "schema_name": "HR",
+                    "table_name": "EMPLOYEES",
+                    "index_name": "IDX_EMP_UPPER_EMAIL",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": None,
+                }
+            ]
+
+    driver = cast("OracleAsyncDriver", _StubAsyncDriver())
+    indexes = await data_dictionary.get_indexes(driver, schema="HR")
+    assert len(indexes) == 1
+    assert indexes[0]["index_name"] == "IDX_EMP_UPPER_EMAIL"
+    assert indexes[0]["expressions"] == "UPPER(EMAIL)"
+    assert indexes[0]["expression"] == "UPPER(EMAIL)"
