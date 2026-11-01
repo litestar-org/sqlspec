@@ -11,6 +11,7 @@ from sqlspec.adapters.spanner._typing import (
     SpannerAsyncSessionContext,
     SpannerAsyncTransaction,
     SpannerGoogleAPICallError,
+    SpannerGoogleAPIError,
     SpannerSyncCursor,
     SpannerSyncSessionContext,
     SpannerTransaction,
@@ -113,7 +114,7 @@ class SpannerSyncExceptionHandler(BaseSyncExceptionHandler):
         if exc_type is None:
             return False
 
-        if isinstance(exc_val, SpannerGoogleAPICallError):
+        if isinstance(exc_val, (SpannerGoogleAPICallError, SpannerGoogleAPIError)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -128,7 +129,7 @@ class SpannerAsyncExceptionHandler(BaseAsyncExceptionHandler):
         if exc_type is None:
             return False
 
-        if isinstance(exc_val, SpannerGoogleAPICallError):
+        if isinstance(exc_val, (SpannerGoogleAPICallError, SpannerGoogleAPIError)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -262,7 +263,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             append_batch_arg((sql, coerced_params, param_types))
 
         writer = cast("_SpannerWriteProtocol", cursor)
-        _status, row_counts = writer.batch_update(batch_args, **execute_kwargs)
+        status, row_counts = writer.batch_update(batch_args, **execute_kwargs)
+        if status is not None and getattr(status, "code", 0) != 0:
+            raise create_mapped_exception(status)
         total_rows = sum(row_counts) if row_counts else 0
 
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
@@ -324,6 +327,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def commit(self) -> None:
         """Commit the active transaction when it has work to commit."""
+        if not self._owns_transaction:
+            return
         if isinstance(self.connection, SpannerTransaction):
             exc_handler = self.handle_database_exceptions()
             with exc_handler:
@@ -334,6 +339,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def rollback(self) -> None:
         """Roll back the active transaction when it has begun."""
+        if not self._owns_transaction:
+            return
         if isinstance(self.connection, SpannerTransaction):
             exc_handler = self.handle_database_exceptions()
             with exc_handler:
@@ -598,11 +605,15 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                         msg = "Arrow import requires a Transaction context."
                         raise SQLConversionError(msg)
                     writer = cast("_SpannerWriteProtocol", conn)
-                    for chunk in chunks:
+                    for idx, chunk in enumerate(chunks):
                         if conflict_keys and on_conflict == "nothing" and hasattr(writer, "insert_or_ignore"):
                             writer.insert_or_ignore(table, columns, chunk)
                         else:
                             writer.insert_or_update(table, columns, chunk)
+                        if self._owns_transaction and idx < len(chunks) - 1 and hasattr(writer, "commit"):
+                            writer.commit()
+                            self._renew_finished_transaction()
+                            writer = cast("_SpannerWriteProtocol", self.connection)
         self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -717,8 +728,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         mutation_fn = getattr(self.connection, method_name)
         exc_handler = self.handle_database_exceptions()
         with exc_handler:
-            for chunk in chunks:
+            for idx, chunk in enumerate(chunks):
+                mutation_fn = getattr(self.connection, method_name)
                 mutation_fn(table, column_list, chunk)
+                if self._owns_transaction and idx < len(chunks) - 1 and isinstance(self.connection, SpannerTransaction):
+                    cast("_SpannerWriteProtocol", self.connection).commit()
+                    self._renew_finished_transaction()
         self._check_pending_exception(exc_handler)
 
     def _execute_kwargs(self, *, for_read: bool = False, for_batch: bool = False) -> dict[str, Any]:
@@ -767,7 +782,15 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
-        return False
+        if not self._owns_transaction:
+            return True
+        conn = self.connection
+        return bool(
+            isinstance(conn, (SpannerTransaction, SpannerAsyncTransaction))
+            and (conn._transaction_id is not None or bool(conn._mutations))
+            and getattr(conn, "committed", None) is None
+            and not getattr(conn, "rolled_back", False)
+        )
 
     def _coerce_params(self, params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None") -> "dict[str, Any] | None":
         return coerce_params(
@@ -919,7 +942,9 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             append_batch_arg((sql, coerced_params, param_types))
 
         writer = cast("_SpannerAsyncWriteProtocol", cursor)
-        _status, row_counts = await writer.batch_update(batch_args, **execute_kwargs)
+        status, row_counts = await writer.batch_update(batch_args, **execute_kwargs)
+        if status is not None and getattr(status, "code", 0) != 0:
+            raise create_mapped_exception(status)
         total_rows = sum(row_counts) if row_counts else 0
 
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
@@ -984,6 +1009,8 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
 
     async def commit(self) -> None:
         """Commit the active transaction when it has work to commit."""
+        if not self._owns_transaction:
+            return
         if isinstance(self.connection, SpannerAsyncTransaction):
             exc_handler = self.handle_database_exceptions()
             async with exc_handler:
@@ -994,6 +1021,8 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
 
     async def rollback(self) -> None:
         """Roll back the active transaction when it has begun."""
+        if not self._owns_transaction:
+            return
         if isinstance(self.connection, SpannerAsyncTransaction):
             exc_handler = self.handle_database_exceptions()
             async with exc_handler:
@@ -1262,11 +1291,17 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                         msg = "Arrow import requires a Transaction context."
                         raise SQLConversionError(msg)
                     writer = cast("_SpannerAsyncWriteProtocol", conn)
-                    for chunk in chunks:
+                    for idx, chunk in enumerate(chunks):
                         if conflict_keys and on_conflict == "nothing" and hasattr(writer, "insert_or_ignore"):
                             writer.insert_or_ignore(table, columns, chunk)
                         else:
                             writer.insert_or_update(table, columns, chunk)
+                        if self._owns_transaction and idx < len(chunks) - 1 and hasattr(writer, "commit"):
+                            commit_res = writer.commit()
+                            if hasattr(commit_res, "__await__"):
+                                await commit_res
+                            self._renew_finished_transaction()
+                            writer = cast("_SpannerAsyncWriteProtocol", self.connection)
         self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -1435,7 +1470,15 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
-        return False
+        if not self._owns_transaction:
+            return True
+        conn = self.connection
+        return bool(
+            isinstance(conn, (SpannerTransaction, SpannerAsyncTransaction))
+            and (conn._transaction_id is not None or bool(conn._mutations))
+            and getattr(conn, "committed", None) is None
+            and not getattr(conn, "rolled_back", False)
+        )
 
     def _coerce_params(self, params: "dict[str, Any] | list[Any] | tuple[Any, ...] | None") -> "dict[str, Any] | None":
         return coerce_params(

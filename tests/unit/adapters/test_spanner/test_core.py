@@ -39,8 +39,10 @@ from sqlspec.adapters.spanner.litestar.store import SpannerSyncStore
 from sqlspec.adapters.spanner.type_converter import spanner_json, spanner_to_uuid
 from sqlspec.core import SQL, TypedParameter
 from sqlspec.exceptions import (
+    DataError,
     DeadlockError,
     ImproperConfigurationError,
+    IntegrityError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
@@ -282,6 +284,22 @@ def test_exception_mapping_permission_denied_unauthenticated_and_timeout() -> No
     assert isinstance(create_mapped_exception(aborted), DeadlockError)
     assert isinstance(create_mapped_exception(too_many), OperationalError)
     assert isinstance(create_mapped_exception(already_exists), UniqueViolationError)
+
+    failed_precondition = cast("Any", api_exceptions.FailedPrecondition)("fk violation")
+    out_of_range = cast("Any", api_exceptions.OutOfRange)("out of range")
+    resource_exhausted = cast("Any", api_exceptions.ResourceExhausted)("quota exceeded")
+
+    assert isinstance(create_mapped_exception(failed_precondition), IntegrityError)
+    assert isinstance(create_mapped_exception(out_of_range), DataError)
+    assert isinstance(create_mapped_exception(resource_exhausted), OperationalError)
+
+    class _MockStatus:
+        def __init__(self, code: int, message: str) -> None:
+            self.code = code
+            self.message = message
+
+    status_err = create_mapped_exception(_MockStatus(9, "constraint failed"))
+    assert isinstance(status_err, IntegrityError)
 
 
 def test_connection_context_maps_implicit_commit_and_suppresses_rollback_errors() -> None:

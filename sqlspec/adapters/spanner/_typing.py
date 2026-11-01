@@ -337,7 +337,24 @@ _LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
     "SpannerDatabase": ("google.cloud.spanner_v1.database", "Database"),
     "SpannerAbstractSessionPool": ("google.cloud.spanner_v1.pool", "AbstractSessionPool"),
     "SpannerDefaultTransactionOptions": ("google.cloud.spanner_v1.transaction", "DefaultTransactionOptions"),
+    "SpannerGoogleAPIError": ("google.api_core.exceptions", "GoogleAPIError"),
 }
+
+
+class _SpannerStub:
+    """Fallback stub for uninstalled optional Spanner symbols."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        msg = "google-cloud-spanner is required to use Spanner features."
+        raise ImportError(msg)
+
+    def __getattr__(self, item: str) -> Any:
+        msg = "google-cloud-spanner is required to use Spanner features."
+        raise ImportError(msg)
+
+
+def _spanner_fallback_stub(name: str) -> Any:
+    return type(name, (_SpannerStub,), {"__module__": __name__})
 
 
 def __getattr__(name: str) -> Any:
@@ -347,10 +364,13 @@ def __getattr__(name: str) -> Any:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
     module_name, attribute = target
-    value = getattr(import_module(module_name), attribute, None)
+    try:
+        mod = import_module(module_name)
+    except ModuleNotFoundError:
+        return _spanner_fallback_stub(name)
+    value = getattr(mod, attribute, None)
     if value is None:
-        msg = f"Cannot import {attribute!r} from {module_name!r}"
-        raise ImportError(msg)
+        return _spanner_fallback_stub(name)
     return value
 
 

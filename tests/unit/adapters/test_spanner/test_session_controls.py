@@ -146,3 +146,19 @@ def test_write_transactions_reuse_pooled_sessions() -> None:
     assert database.sessions_manager.returned == 2
     assert database.sessions_manager.session.create_calls == 0
     assert database.sessions_manager.session.delete_calls == 0
+
+
+def test_driver_nested_in_transaction_guard() -> None:
+    """_connection_in_transaction returns True when _owns_transaction is False, preventing commit."""
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.spanner.driver import SpannerSyncDriver
+
+    mock_conn = Mock()
+    driver = SpannerSyncDriver(connection=mock_conn)
+    driver.bind_external_transaction()
+    assert driver._connection_in_transaction() is True
+    driver.commit()
+    assert mock_conn.commit.call_count == 0
+    driver.rollback()
+    assert mock_conn.rollback.call_count == 0

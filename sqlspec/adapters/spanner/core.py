@@ -23,7 +23,9 @@ from sqlspec.core import (
 )
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
+    DataError,
     DeadlockError,
+    IntegrityError,
     NotFoundError,
     OperationalError,
     OperationCancelledError,
@@ -397,6 +399,21 @@ def create_arrow_data(
     return convert_dict_to_arrow(data, return_format=return_format)
 
 
+_GRPC_STATUS_CODE_MAP: Final[dict[int, type[SQLSpecError]]] = {
+    3: SQLParsingError,
+    4: QueryTimeoutError,
+    5: NotFoundError,
+    6: UniqueViolationError,
+    7: PermissionDeniedError,
+    8: OperationalError,
+    9: IntegrityError,
+    10: DeadlockError,
+    11: DataError,
+    14: OperationalError,
+    16: PermissionDeniedError,
+}
+
+
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map Spanner exceptions to SQLSpec exceptions.
 
@@ -416,6 +433,12 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         A SQLSpec exception that wraps the original error
     """
     del logger
+    if hasattr(error, "code") and not isinstance(error, BaseException):
+        status_code = error.code
+        if isinstance(status_code, int) and status_code in _GRPC_STATUS_CODE_MAP:
+            msg = str(getattr(error, "message", "batch DML failure") or "batch DML failure")
+            return _GRPC_STATUS_CODE_MAP[status_code](msg)
+
     if isinstance(error, api_exceptions.AlreadyExists):
         return _create_spanner_error(error, UniqueViolationError, "resource already exists")
 
@@ -433,12 +456,20 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if isinstance(error, api_exceptions.Aborted):
         return _create_spanner_error(error, DeadlockError, "transaction aborted")
 
+    if isinstance(error, api_exceptions.FailedPrecondition):
+        return _create_spanner_error(error, IntegrityError, "constraint violation or precondition failed")
+
+    if isinstance(error, api_exceptions.OutOfRange):
+        return _create_spanner_error(error, DataError, "out of range")
+
     if isinstance(error, api_exceptions.Cancelled):
         return _create_spanner_error(error, OperationCancelledError, "operation cancelled")
     if isinstance(error, api_exceptions.DeadlineExceeded):
         return _create_spanner_error(error, QueryTimeoutError, "deadline exceeded")
 
-    if isinstance(error, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests)):
+    if isinstance(
+        error, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests, api_exceptions.ResourceExhausted)
+    ):
         return _create_spanner_error(error, OperationalError, "service unavailable or rate limited")
 
     return _create_spanner_error(error, SQLSpecError, "error")
