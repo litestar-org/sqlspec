@@ -449,8 +449,9 @@ def _match_dialect_from_dbms_name(dbms_name: str | None) -> str | None:
         return None
     lowered = driver_name.lower()
     for dialect, patterns in _DIALECT_PATTERNS:
-        if any(pattern in lowered for pattern in patterns):
-            return dialect
+        for pattern in patterns:
+            if pattern in lowered:
+                return dialect
     return None
 
 

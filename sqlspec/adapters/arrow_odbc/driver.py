@@ -611,20 +611,53 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         *,
         fetch_concurrently: bool | None = None,
     ) -> Any:
-        kwargs: dict[str, Any] = {
-            "query": sql,
-            "batch_size": batch_size,
-            "parameters": parameters,
-            "max_bytes_per_batch": self._max_batch_bytes,
-            "max_text_size": self._max_text_size_val,
-            "max_binary_size": self._max_binary_size_val,
-            "fetch_concurrently": self._use_concurrent_fetch if fetch_concurrently is None else fetch_concurrently,
-        }
-        if self._query_timeout_sec_val is not None:
-            kwargs["query_timeout_sec"] = self._query_timeout_sec_val
-        if self._payload_text_encoding is not None:
-            kwargs["payload_text_encoding"] = self._payload_text_encoding
-        return self.connection.read_arrow_batches(**kwargs)
+        use_concurrent = self._use_concurrent_fetch if fetch_concurrently is None else fetch_concurrently
+        timeout = self._query_timeout_sec_val
+        encoding = self._payload_text_encoding
+
+        if timeout is not None and encoding is not None:
+            return self.connection.read_arrow_batches(
+                query=sql,
+                batch_size=batch_size,
+                parameters=parameters,
+                max_bytes_per_batch=self._max_batch_bytes,
+                max_text_size=self._max_text_size_val,
+                max_binary_size=self._max_binary_size_val,
+                fetch_concurrently=use_concurrent,
+                query_timeout_sec=timeout,
+                payload_text_encoding=encoding,
+            )
+        if timeout is not None:
+            return self.connection.read_arrow_batches(
+                query=sql,
+                batch_size=batch_size,
+                parameters=parameters,
+                max_bytes_per_batch=self._max_batch_bytes,
+                max_text_size=self._max_text_size_val,
+                max_binary_size=self._max_binary_size_val,
+                fetch_concurrently=use_concurrent,
+                query_timeout_sec=timeout,
+            )
+        if encoding is not None:
+            return self.connection.read_arrow_batches(
+                query=sql,
+                batch_size=batch_size,
+                parameters=parameters,
+                max_bytes_per_batch=self._max_batch_bytes,
+                max_text_size=self._max_text_size_val,
+                max_binary_size=self._max_binary_size_val,
+                fetch_concurrently=use_concurrent,
+                payload_text_encoding=encoding,
+            )
+        return self.connection.read_arrow_batches(
+            query=sql,
+            batch_size=batch_size,
+            parameters=parameters,
+            max_bytes_per_batch=self._max_batch_bytes,
+            max_text_size=self._max_text_size_val,
+            max_binary_size=self._max_binary_size_val,
+            fetch_concurrently=use_concurrent,
+        )
 
     def _chunk_size(self) -> int:
         return self._chunk_size_val
