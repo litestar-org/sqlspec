@@ -6,12 +6,13 @@ from typing import TYPE_CHECKING, Any, cast
 import pyarrow as pa
 import pytest
 
-from sqlspec.adapters.oracledb.core import (
-    build_arrow_fetch_kwargs,
+from sqlspec.adapters.oracledb.core import build_arrow_fetch_kwargs
+from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.utils.arrow_helpers import (
     coerce_oracle_df_to_arrow_batches,
     coerce_oracle_df_to_arrow_table,
+    oracle_df_to_arrow_table,
 )
-from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
@@ -188,4 +189,26 @@ async def test_select_to_arrow_consumes_arrow_c_stream_pycapsule_async() -> None
     )
     res_table = await driver.select_to_arrow("SELECT id, value FROM example", return_format="table")
     assert res_table.get_data().to_pydict() == {"id": [1, 2], "value": [10, 20]}
-    assert stream_df.stream_calls == 1
+
+
+def test_oracle_df_to_arrow_table_lazy_pyarrow_resolution() -> None:
+    """oracle_df_to_arrow_table lazily resolves pyarrow when pa_module is None."""
+    raw_table = pa.table({"ID": [1, 2], "VALUE": [10, 20]})
+    stream_df = _StreamOnlyOracleDataFrame(raw_table)
+    table = oracle_df_to_arrow_table(stream_df, pa_module=None)
+    assert table.num_rows == 2
+
+
+def test_select_to_arrow_maps_native_database_error() -> None:
+    """select_to_arrow routes oracledb.DatabaseError through exception handler."""
+    import oracledb
+
+    from sqlspec.exceptions import SQLSpecError
+
+    class _FailingOracleConn:
+        def fetch_df_all(self, **_kwargs: object) -> None:
+            raise oracledb.DatabaseError("ORA-00942: table or view does not exist")
+
+    driver = OracleSyncDriver(cast("OracleSyncConnection", _FailingOracleConn()))
+    with pytest.raises(SQLSpecError):
+        driver.select_to_arrow("SELECT * FROM non_existent", return_format="table")

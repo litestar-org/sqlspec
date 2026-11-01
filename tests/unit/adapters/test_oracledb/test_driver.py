@@ -8,11 +8,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from sqlspec.adapters.oracledb import build_dbms_cloud_copy_data_sql as exported_build_dbms_cloud_copy_data_sql
+from sqlspec.adapters.oracledb._typing import OracleSyncConnection
 from sqlspec.adapters.oracledb.core import (
     ORACLE_ACTION_MAX_BYTES,
     ORACLE_CLIENT_IDENTIFIER_MAX_BYTES,
     ORACLE_ECID_MAX_BYTES,
     ORACLE_MODULE_MAX_BYTES,
+    OracleSyncStreamSource,
     apply_driver_features,
     apply_oracle_session_trace_attributes,
     build_dbms_cloud_copy_data_sql,
@@ -537,3 +539,59 @@ async def test_oracle_load_from_storage_falls_back_to_arrow_when_local_or_no_cre
     assert len(async_executed) == 1
     assert "DBMS_CLOUD.COPY_DATA" not in async_executed[0][0]
     assert "INSERT INTO" in async_executed[0][0]
+
+
+def test_oracle_sync_stream_source_runs_with_exception_handler() -> None:
+    """Sync stream source start and fetch_chunk route execution through _run_with_exception_handler."""
+    cursor = MagicMock()
+    cursor.description = [("id", int, None, None, None, None, None)]
+    cursor.fetchmany.return_value = [(1,)]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", conn))
+
+    source = OracleSyncStreamSource(driver, "SELECT 1 FROM dual", None, 100)
+    source.start()
+    rows = source.fetch_chunk()
+    assert len(rows) == 1
+    assert rows[0] == {"id": 1}
+
+
+def test_oracle_statement_cache_hit_executes_with_fetch_kwargs_and_coercion() -> None:
+    """Fast-path statement cache hit passes fetch kwargs and coerces parameters."""
+    cursor = MagicMock()
+    cursor.description = [("content", "CLOB", None, None, None, None, None)]
+    cursor.fetchall.return_value = [("clob text",)]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", conn))
+
+    res1 = driver.execute("SELECT content FROM articles WHERE id = :id", {"id": "1"})
+    assert res1.get_data() == [{"content": "clob text"}]
+
+    res2 = driver.execute("SELECT content FROM articles WHERE id = :id", {"id": "1"})
+    assert res2.get_data() == [{"content": "clob text"}]
+
+
+def test_oracle_dispatch_execute_script_ignores_colons_in_literals_and_slices_positional() -> None:
+    """dispatch_execute_script ignores colons in literals and slices positional parameters."""
+    from sqlspec import SQL
+
+    executed_statements: list[tuple[str, Any]] = []
+
+    class _MockCursor:
+        def execute(self, stmt: str, params: Any = None) -> None:
+            executed_statements.append((stmt, params))
+
+    conn = MagicMock()
+    cursor = _MockCursor()
+    conn.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", conn), default_statement_config)
+
+    script_sql = "INSERT INTO t (url) VALUES ('http://example.com:8080'); INSERT INTO t (id, name) VALUES (:1, :2)"
+    stmt = SQL(script_sql, [101, "Alice"], statement_config=default_statement_config)
+    res = driver.dispatch_execute_script(cursor, stmt)
+    assert res.statement_count == 2
+    assert len(executed_statements) == 2
+    assert executed_statements[0][1] == []
+    assert executed_statements[1][1] == [101, "Alice"]

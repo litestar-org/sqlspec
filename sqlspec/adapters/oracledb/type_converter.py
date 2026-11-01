@@ -12,13 +12,11 @@ from sqlspec.adapters.oracledb._vector_handlers import (
     numpy_converter_out,  # pyright: ignore[reportPrivateUsage]
 )
 from sqlspec.typing import NUMPY_INSTALLED
+from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.type_guards import is_async_readable, is_readable
 
-try:
-    import numpy as np
-except ImportError:
-    np = None  # type: ignore[assignment]
+np: Any = import_optional("numpy")
 
 __all__ = ("OracleOutputConverter",)
 

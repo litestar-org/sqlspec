@@ -2,6 +2,7 @@
 
 import logging
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, cast, overload
 
 from sqlspec.adapters.oracledb._typing import (
@@ -32,7 +33,6 @@ from sqlspec.adapters.oracledb.core import (
     coerce_large_parameters_sync,
     coerce_many_parameters_async,
     coerce_many_parameters_sync,
-    coerce_oracle_df_to_arrow_table,
     collect_async_rows,
     collect_sync_rows,
     connection_is_thin,
@@ -54,6 +54,8 @@ from sqlspec.adapters.oracledb.data_dictionary import (
 )
 from sqlspec.core import (
     SQL,
+    DMLResult,
+    SQLResult,
     StackResult,
     StatementConfig,
     StatementStack,
@@ -82,6 +84,7 @@ from sqlspec.driver import (
     validate_savepoint_name,
 )
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
+from sqlspec.utils.arrow_helpers import coerce_oracle_df_to_arrow_table
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
@@ -93,6 +96,7 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.stack import StackOperation
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
@@ -295,10 +299,11 @@ class OraclePipelineMixin:
             except AttributeError:
                 error = None
             if error is not None:
+                mapped_error = create_mapped_exception(error) if not isinstance(error, SQLSpecError) else error
                 stack_error = StackExecutionError(
                     index,
                     compiled.summary,
-                    error,
+                    mapped_error,
                     adapter=type(self).__name__,
                     mode="continue-on-error" if continue_on_error else "fail-fast",
                 )
@@ -324,8 +329,9 @@ class OraclePipelineMixin:
         self, error: Exception, stack: "StatementStack", continue_on_error: bool
     ) -> StackExecutionError:
         mode = "continue-on-error" if continue_on_error else "fail-fast"
+        mapped_error = create_mapped_exception(error) if not isinstance(error, SQLSpecError) else error
         return StackExecutionError(
-            -1, "Oracle pipeline execution failed", error, adapter=type(self).__name__, mode=mode
+            -1, "Oracle pipeline execution failed", mapped_error, adapter=type(self).__name__, mode=mode
         )
 
 
@@ -476,6 +482,47 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute a cached query while owning only the cursor context."""
+        with self.with_cursor(self.connection) as cursor:
+            wire_sql = self._format_wire_sql(cached.compiled_sql)
+            returns_rows = cached.operation_profile.returns_rows
+            fetch_kwargs = build_fetch_kwargs(self.driver_features)
+            parameters = coerce_large_parameters_sync(
+                self.connection,
+                params,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=self._oracle_version_cache,
+            )
+            cast("Any", cursor).execute(wire_sql, parameters or {}, **fetch_kwargs)
+            if returns_rows and cursor.description is not None:
+                fetched_data = cursor.fetchall()
+                column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+                data, column_names = collect_sync_rows(
+                    cast("list[Any] | None", fetched_data),
+                    cursor.description,
+                    self.driver_features,
+                    column_names=column_names,
+                    requires_lob_coercion=requires_lob_coercion,
+                )
+                return self.build_cached_select_result(
+                    sql,
+                    params,
+                    cached,
+                    selected_data=data,
+                    column_names=column_names,
+                    data_row_count=len(data),
+                    row_format="tuple",
+                    compiled_sql=wire_sql,
+                )
+            affected_rows = resolve_rowcount(cursor)
+            return cast("SQLResult", DMLResult(cached.operation_type, affected_rows))
+
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
 
@@ -525,17 +572,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         )
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Parameters are embedded as static values for script execution compatibility.
-
-        Args:
-            cursor: Oracle cursor object
-            statement: SQL script statement to execute
-
-        Returns:
-            Execution result containing statement count and success information
-        """
+        """Execute SQL script with statement splitting and parameter handling."""
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = coerce_large_parameters_sync(
             self.connection,
@@ -546,18 +583,42 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
             version_cache=self._oracle_version_cache,
         )
-        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
         last_cursor = cursor
+        pos_offset = 0
+        total_statements = len(statements)
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
 
-        for stmt in statements:
-            cursor.execute(stmt, _filter_script_parameters(stmt, prepared_parameters))
+        for idx, stmt in enumerate(statements):
+            stmt_params, pos_offset = _slice_script_parameters(stmt, prepared_parameters, pos_offset)
+            stmt_started = perf_counter() if has_observers else 0.0
+            cursor.execute(stmt, stmt_params)
             successful_count += 1
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                single_stmt = self._sub_statement(stmt, stmt_params)
+                try:
+                    stmt_operation = single_stmt.operation_type
+                finally:
+                    self._release_pooled_statement(single_stmt)
+                self._emit_script_statement_event(
+                    sql=stmt,
+                    parameters=stmt_params,
+                    operation=stmt_operation,
+                    rows_affected=resolve_rowcount(cursor),
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=None,
+                    script_ordinal=idx,
+                    script_statement_count=total_statements,
+                )
 
+        self._pending_statement_profile = None
         return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+            last_cursor, statement_count=total_statements, successful_statements=successful_count, is_script_result=True
         )
 
     def begin(self) -> None:
@@ -579,7 +640,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             self.connection.commit()
         except OracleError as e:
             raise create_mapped_exception(e) from e
-        self._transaction_active = False
+        finally:
+            self._transaction_active = False
 
     def rollback(self) -> None:
         """Rollback the current transaction.
@@ -747,12 +809,22 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
+        exc_handler = self.handle_database_exceptions()
         try:
             self._apply_session_tracing(self.connection)
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
-                record_batches, batch_schema = self._fetch_arrow_record_batches(
-                    sql, prepared_parameters, batch_size, arrow_schema
+                batches_result = cast(
+                    "tuple[list[ArrowRecordBatch], ArrowSchema | None]",
+                    self._run_with_exception_handler(
+                        exc_handler,
+                        self._fetch_arrow_record_batches,
+                        sql,
+                        prepared_parameters,
+                        batch_size,
+                        arrow_schema,
+                    ),
                 )
+                record_batches, batch_schema = batches_result
                 rows_affected = sum(batch.num_rows for batch in record_batches)
                 if batch_schema is None:
                     batch_schema = pa.schema([])
@@ -763,7 +835,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                     arrow_data = record_batches
                 return create_arrow_result(prepared_statement, arrow_data, rows_affected=rows_affected)
 
-            oracle_df = self._execute_arrow_dataframe(sql, prepared_parameters, batch_size)
+            oracle_df = self._run_with_exception_handler(
+                exc_handler, self._execute_arrow_dataframe, sql, prepared_parameters, batch_size
+            )
         except AttributeError as exc:
             if native_only:
                 msg = "Oracle native Arrow support is not available for this connection."
@@ -776,6 +850,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 batch_size=batch_size,
                 arrow_schema=arrow_schema,
             )
+        self._check_pending_exception(exc_handler)
 
         arrow_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
         column_names = normalize_column_names(arrow_table.column_names, self.driver_features)
@@ -883,14 +958,16 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if overwrite:
             statement = build_truncate_statement(table)
             exc_handler = self.handle_database_exceptions()
-            with exc_handler:
+
+            def _truncate() -> None:
                 cursor = self.connection.cursor()
                 try:
                     cursor.execute(statement)
                 finally:
                     cursor.close()
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+
+            self._run_with_exception_handler(exc_handler, _truncate)
+            self._check_pending_exception(exc_handler)
         use_direct_path = (
             self.driver_features.get("enable_direct_path_load", True) is not False
             and supports_direct_path_load(self.connection)
@@ -900,34 +977,37 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             if use_direct_path:
                 schema_name, table_name = _resolve_direct_path_target(self.connection, table)
                 exc_handler = self.handle_database_exceptions()
-                with exc_handler:
-                    self.connection.direct_path_load(
-                        schema_name=schema_name,
-                        table_name=table_name,
-                        column_names=list(arrow_table.column_names),
-                        data=arrow_table,
-                    )
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+                self._run_with_exception_handler(
+                    exc_handler,
+                    self.connection.direct_path_load,
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_names=list(arrow_table.column_names),
+                    data=arrow_table,
+                )
+                self._check_pending_exception(exc_handler)
             else:
                 columns = list(arrow_table.column_names)
                 statement = build_insert_statement(table, columns)
                 exc_handler = self.handle_database_exceptions()
-                with self.with_cursor(self.connection) as cursor, exc_handler:
-                    for batch in arrow_table.to_batches(max_chunksize=5000):
-                        batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
-                        coerced_rows = coerce_many_parameters_sync(
-                            self.connection,
-                            batch_rows,
-                            clob_type=DB_TYPE_CLOB,
-                            blob_type=DB_TYPE_BLOB,
-                            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
-                            version_cache=self._oracle_version_cache,
-                        )
-                        cursor.executemany(statement, coerced_rows)
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+
+                def _insert_batches() -> None:
+                    with self.with_cursor(self.connection) as cursor:
+                        for batch in arrow_table.to_batches(max_chunksize=5000):
+                            batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
+                            coerced_rows = coerce_many_parameters_sync(
+                                self.connection,
+                                batch_rows,
+                                clob_type=DB_TYPE_CLOB,
+                                blob_type=DB_TYPE_BLOB,
+                                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+                                version_cache=self._oracle_version_cache,
+                            )
+                            cursor.executemany(statement, coerced_rows)
+
+                self._run_with_exception_handler(exc_handler, _insert_batches)
+                self._check_pending_exception(exc_handler)
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -974,13 +1054,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 truncate_sql = build_truncate_statement(table) if overwrite else None
                 rows_processed = 0
                 exc_handler = self.handle_database_exceptions()
-                with self.with_cursor(self.connection) as cursor, exc_handler:
-                    if truncate_sql is not None:
-                        cursor.execute(truncate_sql)
-                    cursor.execute(plsql, binds)
-                    rows_processed = resolve_rowcount(cursor)
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+
+                def _run_dbms_cloud() -> None:
+                    nonlocal rows_processed
+                    with self.with_cursor(self.connection) as cursor:
+                        if truncate_sql is not None:
+                            cursor.execute(truncate_sql)
+                        cursor.execute(plsql, binds)
+                        rows_processed = resolve_rowcount(cursor)
+
+                self._run_with_exception_handler(exc_handler, _run_dbms_cloud)
+                self._check_pending_exception(exc_handler)
                 telemetry_payload: StorageTelemetry = {
                     "destination": table,
                     "backend": "dbms_cloud",
@@ -1295,6 +1379,47 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
+    async def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute an async cached query while owning only the cursor context."""
+        async with self.with_cursor(self.connection) as cursor:
+            wire_sql = self._format_wire_sql(cached.compiled_sql)
+            returns_rows = cached.operation_profile.returns_rows
+            fetch_kwargs = build_fetch_kwargs(self.driver_features)
+            parameters = await coerce_large_parameters_async(
+                self.connection,
+                params,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=self._oracle_version_cache,
+            )
+            await cast("Any", cursor).execute(wire_sql, parameters or {}, **fetch_kwargs)
+            if returns_rows and cursor.description is not None:
+                fetched_data = await cursor.fetchall()
+                column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+                data, column_names = await collect_async_rows(
+                    cast("list[Any] | None", fetched_data),
+                    cursor.description,
+                    self.driver_features,
+                    column_names=column_names,
+                    requires_lob_coercion=requires_lob_coercion,
+                )
+                return self.build_cached_select_result(
+                    sql,
+                    params,
+                    cached,
+                    selected_data=data,
+                    column_names=column_names,
+                    data_row_count=len(data),
+                    row_format="tuple",
+                    compiled_sql=wire_sql,
+                )
+            affected_rows = resolve_rowcount(cursor)
+            return cast("SQLResult", DMLResult(cached.operation_type, affected_rows))
+
     async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
 
@@ -1346,17 +1471,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         )
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Parameters are embedded as static values for script execution compatibility.
-
-        Args:
-            cursor: Oracle cursor object
-            statement: SQL script statement to execute
-
-        Returns:
-            Execution result containing statement count and success information
-        """
+        """Execute async SQL script with statement splitting and parameter handling."""
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = await coerce_large_parameters_async(
             self.connection,
@@ -1367,18 +1482,42 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
             version_cache=self._oracle_version_cache,
         )
-        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
         last_cursor = cursor
+        pos_offset = 0
+        total_statements = len(statements)
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
 
-        for stmt in statements:
-            await cursor.execute(stmt, _filter_script_parameters(stmt, prepared_parameters))
+        for idx, stmt in enumerate(statements):
+            stmt_params, pos_offset = _slice_script_parameters(stmt, prepared_parameters, pos_offset)
+            stmt_started = perf_counter() if has_observers else 0.0
+            await cursor.execute(stmt, stmt_params)
             successful_count += 1
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                single_stmt = self._sub_statement(stmt, stmt_params)
+                try:
+                    stmt_operation = single_stmt.operation_type
+                finally:
+                    self._release_pooled_statement(single_stmt)
+                self._emit_script_statement_event(
+                    sql=stmt,
+                    parameters=stmt_params,
+                    operation=stmt_operation,
+                    rows_affected=resolve_rowcount(cursor),
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=None,
+                    script_ordinal=idx,
+                    script_statement_count=total_statements,
+                )
 
+        self._pending_statement_profile = None
         return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+            last_cursor, statement_count=total_statements, successful_statements=successful_count, is_script_result=True
         )
 
     async def begin(self) -> None:
@@ -1400,7 +1539,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             await self.connection.commit()
         except OracleError as e:
             raise create_mapped_exception(e) from e
-        self._transaction_active = False
+        finally:
+            self._transaction_active = False
 
     async def rollback(self) -> None:
         """Rollback the current transaction.
@@ -1571,12 +1711,22 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
+        exc_handler = self.handle_database_exceptions()
         try:
             self._apply_session_tracing(self.connection)
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
-                record_batches, batch_schema = await self._fetch_arrow_record_batches(
-                    sql, prepared_parameters, batch_size, arrow_schema
+                batches_result = cast(
+                    "tuple[list[ArrowRecordBatch], ArrowSchema | None]",
+                    await self._run_with_exception_handler(
+                        exc_handler,
+                        self._fetch_arrow_record_batches,
+                        sql,
+                        prepared_parameters,
+                        batch_size,
+                        arrow_schema,
+                    ),
                 )
+                record_batches, batch_schema = batches_result
                 rows_affected = sum(batch.num_rows for batch in record_batches)
                 if batch_schema is None:
                     batch_schema = pa.schema([])
@@ -1587,7 +1737,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                     arrow_data = record_batches
                 return create_arrow_result(prepared_statement, arrow_data, rows_affected=rows_affected)
 
-            oracle_df = await self._execute_arrow_dataframe(sql, prepared_parameters, batch_size)
+            oracle_df = await self._run_with_exception_handler(
+                exc_handler, self._execute_arrow_dataframe, sql, prepared_parameters, batch_size
+            )
         except AttributeError as exc:
             if native_only:
                 msg = "Oracle native Arrow support is not available for this connection."
@@ -1600,6 +1752,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 batch_size=batch_size,
                 arrow_schema=arrow_schema,
             )
+        self._check_pending_exception(exc_handler)
 
         arrow_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
         column_names = normalize_column_names(arrow_table.column_names, self.driver_features)
@@ -1711,10 +1864,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if overwrite:
             statement = build_truncate_statement(table)
             exc_handler = self.handle_database_exceptions()
-            async with exc_handler:
-                await self.connection.execute(statement)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            await self._run_with_exception_handler(exc_handler, self.connection.execute, statement)
+            self._check_pending_exception(exc_handler)
         use_direct_path = (
             self.driver_features.get("enable_direct_path_load", True) is not False
             and supports_direct_path_load(self.connection)
@@ -1724,34 +1875,37 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             if use_direct_path:
                 schema_name, table_name = _resolve_direct_path_target(self.connection, table)
                 exc_handler = self.handle_database_exceptions()
-                async with exc_handler:
-                    await self.connection.direct_path_load(
-                        schema_name=schema_name,
-                        table_name=table_name,
-                        column_names=list(arrow_table.column_names),
-                        data=arrow_table,
-                    )
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+                await self._run_with_exception_handler(
+                    exc_handler,
+                    self.connection.direct_path_load,
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_names=list(arrow_table.column_names),
+                    data=arrow_table,
+                )
+                self._check_pending_exception(exc_handler)
             else:
                 columns = list(arrow_table.column_names)
                 statement = build_insert_statement(table, columns)
                 exc_handler = self.handle_database_exceptions()
-                async with self.with_cursor(self.connection) as cursor, exc_handler:
-                    for batch in arrow_table.to_batches(max_chunksize=5000):
-                        batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
-                        coerced_rows = await coerce_many_parameters_async(
-                            self.connection,
-                            batch_rows,
-                            clob_type=DB_TYPE_CLOB,
-                            blob_type=DB_TYPE_BLOB,
-                            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
-                            version_cache=self._oracle_version_cache,
-                        )
-                        await cursor.executemany(statement, coerced_rows)
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+
+                async def _insert_batches() -> None:
+                    async with self.with_cursor(self.connection) as cursor:
+                        for batch in arrow_table.to_batches(max_chunksize=5000):
+                            batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
+                            coerced_rows = await coerce_many_parameters_async(
+                                self.connection,
+                                batch_rows,
+                                clob_type=DB_TYPE_CLOB,
+                                blob_type=DB_TYPE_BLOB,
+                                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+                                version_cache=self._oracle_version_cache,
+                            )
+                            await cursor.executemany(statement, coerced_rows)
+
+                await self._run_with_exception_handler(exc_handler, _insert_batches)
+                self._check_pending_exception(exc_handler)
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -1798,13 +1952,17 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 truncate_sql = build_truncate_statement(table) if overwrite else None
                 rows_processed = 0
                 exc_handler = self.handle_database_exceptions()
-                async with self.with_cursor(self.connection) as cursor, exc_handler:
-                    if truncate_sql is not None:
-                        await cursor.execute(truncate_sql)
-                    await cursor.execute(plsql, binds)
-                    rows_processed = resolve_rowcount(cursor)
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+
+                async def _run_dbms_cloud_async() -> None:
+                    nonlocal rows_processed
+                    async with self.with_cursor(self.connection) as cursor:
+                        if truncate_sql is not None:
+                            await cursor.execute(truncate_sql)
+                        await cursor.execute(plsql, binds)
+                        rows_processed = resolve_rowcount(cursor)
+
+                await self._run_with_exception_handler(exc_handler, _run_dbms_cloud_async)
+                self._check_pending_exception(exc_handler)
                 telemetry_payload: StorageTelemetry = {
                     "destination": table,
                     "backend": "dbms_cloud",
@@ -2267,28 +2425,75 @@ def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, obj
     return retry_kwargs
 
 
-def _statement_contains_bind(statement: str, name: str) -> bool:
-    """Return whether a SQL statement references a named Oracle bind placeholder."""
-    lowered_sql = statement.lower()
-    target = f":{name.lower()}"
-    start = 0
-    while True:
-        idx = lowered_sql.find(target, start)
-        if idx == -1:
-            return False
-        prev_ok = idx == 0 or lowered_sql[idx - 1] != ":"
-        end_idx = idx + len(target)
-        next_ch = lowered_sql[end_idx] if end_idx < len(lowered_sql) else ""
-        next_ok = not (next_ch.isalnum() or next_ch in {"_", "$", "#"})
-        if prev_ok and next_ok:
-            return True
-        start = idx + 1
+def _extract_statement_binds(statement: str) -> "tuple[set[str], int]":
+    """Extract named bind names (lowercased) and count of positional binds outside quotes and comments."""
+    named_binds: set[str] = set()
+    positional_count = 0
+    n = len(statement)
+    i = 0
+    while i < n:
+        ch = statement[i]
+        if ch == "-" and i + 1 < n and statement[i + 1] == "-":
+            end = statement.find("\n", i + 2)
+            i = n if end == -1 else end + 1
+            continue
+        if ch == "/" and i + 1 < n and statement[i + 1] == "*":
+            end = statement.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        if ch == "'":
+            end = i + 1
+            while end < n:
+                if statement[end] == "'":
+                    if end + 1 < n and statement[end + 1] == "'":
+                        end += 2
+                        continue
+                    end += 1
+                    break
+                end += 1
+            i = end
+            continue
+        if ch == '"':
+            end = i + 1
+            while end < n:
+                if statement[end] == '"':
+                    if end + 1 < n and statement[end + 1] == '"':
+                        end += 2
+                        continue
+                    end += 1
+                    break
+                end += 1
+            i = end
+            continue
+        if ch == ":" and (i == 0 or statement[i - 1] != ":"):
+            start = i + 1
+            if start < n and statement[start] != ":":
+                end = start
+                while end < n and (statement[end].isalnum() or statement[end] in {"_", "$", "#"}):
+                    end += 1
+                if end > start:
+                    token = statement[start:end]
+                    if token.isdigit():
+                        positional_count += 1
+                    else:
+                        named_binds.add(token.lower())
+                    i = end
+                    continue
+        i += 1
+    return named_binds, positional_count
 
 
-def _filter_script_parameters(statement: str, parameters: Any) -> Any:
-    """Filter dictionary script parameters to the bind placeholders present in statement."""
+def _slice_script_parameters(statement: str, parameters: Any, pos_offset: int) -> "tuple[Any, int]":
+    """Filter dictionary binds or slice positional binds for a single statement."""
     if not parameters:
-        return {}
+        return {}, pos_offset
+    named_binds, pos_count = _extract_statement_binds(statement)
     if isinstance(parameters, dict):
-        return {key: val for key, val in parameters.items() if _statement_contains_bind(statement, str(key))}
-    return parameters
+        filtered = {k: v for k, v in parameters.items() if str(k).lower() in named_binds}
+        return filtered, pos_offset
+    if isinstance(parameters, (list, tuple)):
+        if pos_count > 0:
+            sliced = list(parameters[pos_offset : pos_offset + pos_count])
+            return sliced, pos_offset + pos_count
+        return [], pos_offset
+    return parameters, pos_offset

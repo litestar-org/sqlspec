@@ -114,3 +114,63 @@ def test_execute_stack_does_not_commit_after_begin_without_dml() -> None:
     driver.commit()
 
     assert driver._connection_in_transaction() is False
+
+
+def test_failed_commit_resets_transaction_active() -> None:
+    """A failed commit must reset _transaction_active in finally."""
+    import oracledb
+
+    from sqlspec.exceptions import SQLSpecError
+
+    class _FailingCommitConn(_FakeSyncConnection):
+        def commit(self) -> None:
+            raise oracledb.DatabaseError("ORA-02091: transaction rolled back")
+
+    driver = OracleSyncDriver(cast("Any", _FailingCommitConn()))
+    driver.begin()
+    assert driver._connection_in_transaction() is True
+    with pytest.raises(SQLSpecError):
+        driver.commit()
+    assert driver._connection_in_transaction() is False
+
+
+def test_connection_context_rolls_back_on_block_exception() -> None:
+    """Connection context rolls back on unhandled block exceptions."""
+    from unittest.mock import MagicMock
+
+    from sqlspec.adapters.oracledb.config import OracleSyncConnectionContext
+
+    conn = MagicMock()
+    config = MagicMock()
+    config.driver_features = {}
+    config.connection_instance.acquire.return_value = conn
+    ctx = OracleSyncConnectionContext(config)
+
+    with pytest.raises(RuntimeError):
+        with ctx:
+            raise RuntimeError("boom")
+
+    conn.rollback.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_async_connection_context_rolls_back_on_block_exception() -> None:
+    """Async connection context rolls back on unhandled block exceptions."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlspec.adapters.oracledb.config import OracleAsyncConnectionContext
+
+    conn = AsyncMock()
+    pool = MagicMock()
+    pool.acquire = AsyncMock(return_value=conn)
+    pool.release = AsyncMock()
+    config = MagicMock()
+    config.driver_features = {}
+    config.provide_pool = AsyncMock(return_value=pool)
+    ctx = OracleAsyncConnectionContext(config)
+
+    with pytest.raises(RuntimeError):
+        async with ctx:
+            raise RuntimeError("boom")
+
+    conn.rollback.assert_called_once()

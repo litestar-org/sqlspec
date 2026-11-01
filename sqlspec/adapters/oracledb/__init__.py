@@ -24,8 +24,6 @@ from sqlspec.adapters.oracledb.core import (
     build_session_release_plsql,
     build_session_reset_plsql,
     build_tns_description,
-    coerce_oracle_df_to_arrow_batches,
-    coerce_oracle_df_to_arrow_table,
     default_statement_config,
     execute_session_checkout_async,
     execute_session_checkout_sync,
@@ -35,8 +33,6 @@ from sqlspec.adapters.oracledb.core import (
     extract_duality_view_etag,
     extract_oracle_wallet_zip,
     inject_duality_view_etag,
-    oracle_df_batches_to_arrow_reader,
-    oracle_df_to_arrow_table,
     parse_sqlnet_ora,
     parse_tnsnames_ora,
     sanitize_oracle_text_query,
@@ -53,6 +49,12 @@ from sqlspec.adapters.oracledb.driver import (
     OracleSyncExceptionHandler,
 )
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
+from sqlspec.utils.arrow_helpers import (
+    coerce_oracle_df_to_arrow_batches,
+    coerce_oracle_df_to_arrow_table,
+    oracle_df_batches_to_arrow_reader,
+    oracle_df_to_arrow_table,
+)
 
 __all__ = (
     "VALID_ORACLE_DRIVER_FEATURE_KEYS",

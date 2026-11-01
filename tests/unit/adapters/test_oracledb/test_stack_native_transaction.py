@@ -108,3 +108,21 @@ async def test_native_stack_inside_an_implicit_transaction_does_not_commit() -> 
 
     assert connection.commit_count == 0
     assert connection.rollback_count == 0
+
+
+@pytest.mark.anyio
+async def test_native_stack_wraps_mapped_error() -> None:
+    """Stack execution errors wrap mapped SQLSpec exceptions, not raw driver errors."""
+    import oracledb
+
+    from sqlspec.exceptions import SQLSpecError
+
+    native_err = oracledb.DatabaseError("ORA-00001: unique constraint violated")
+    results = [_FakeOpResult(native_err)]
+    connection = _FakePipelineConnection(results)
+    driver = OracleAsyncDriver(cast("Any", connection))
+
+    stack_results = await driver._execute_stack_native(_stack(), continue_on_error=True)
+    assert len(stack_results) == 1
+    assert stack_results[0].error is not None
+    assert isinstance(stack_results[0].error.original_error, SQLSpecError)

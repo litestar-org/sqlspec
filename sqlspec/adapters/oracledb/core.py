@@ -56,7 +56,7 @@ from sqlspec.exceptions import (
 from sqlspec.observability import get_trace_context
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
+from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
@@ -73,7 +73,6 @@ if TYPE_CHECKING:
     )
     from sqlspec.core import SQL
     from sqlspec.driver import AsyncExceptionHandler, SyncExceptionHandler
-    from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable
 
 
 __all__ = (
@@ -119,8 +118,6 @@ __all__ = (
     "coerce_large_parameters_sync",
     "coerce_many_parameters_async",
     "coerce_many_parameters_sync",
-    "coerce_oracle_df_to_arrow_batches",
-    "coerce_oracle_df_to_arrow_table",
     "collect_async_rows",
     "collect_sync_rows",
     "connection_is_thin",
@@ -138,8 +135,6 @@ __all__ = (
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
-    "oracle_df_batches_to_arrow_reader",
-    "oracle_df_to_arrow_table",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
     "release_extracted_wallet_dir",
@@ -268,7 +263,6 @@ _ORACLE_RESERVED_COLUMN_NAMES: "frozenset[str]" = frozenset({
 })
 _VERSION_COMPONENTS: int = 3
 TYPE_CONVERTER = OracleOutputConverter()
-_pa: Any = import_optional("pyarrow")
 _LOB_TYPE_NAME_MARKERS: "tuple[str, ...]" = ("LOB", "BFILE")
 _SCALAR_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, str, bytes, bytearray, type(None))
 _BIND_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, type(None))
@@ -834,71 +828,6 @@ def build_arrow_fetch_kwargs(
     return fetch_kwargs
 
 
-def oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None) -> "ArrowTable":
-    """Convert an Oracle DataFrame to a PyArrow Table using zero-copy PyCapsule when supported."""
-    if pa_module is None:
-        ensure_pyarrow()
-        pa_module = _pa
-
-    if hasattr(oracle_df, "__arrow_c_stream__"):
-        reader = (
-            pa_module.RecordBatchReader.from_stream(oracle_df, schema=arrow_schema)
-            if arrow_schema is not None
-            else pa_module.RecordBatchReader.from_stream(oracle_df)
-        )
-        return cast("ArrowTable", reader.read_all())
-    table = pa_module.table(oracle_df)
-    if arrow_schema is not None:
-        table = table.cast(arrow_schema)
-    return cast("ArrowTable", table)
-
-
-def coerce_oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None) -> "ArrowTable":
-    """Alias for :func:`oracle_df_to_arrow_table`."""
-    return oracle_df_to_arrow_table(oracle_df, pa_module=pa_module, arrow_schema=arrow_schema)
-
-
-def coerce_oracle_df_to_arrow_batches(
-    oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None
-) -> "list[ArrowRecordBatch]":
-    """Convert an Oracle DataFrame batch into PyArrow RecordBatches via PyCapsule when supported."""
-    if pa_module is None:
-        ensure_pyarrow()
-        pa_module = _pa
-
-    if hasattr(oracle_df, "__arrow_c_stream__"):
-        reader = (
-            pa_module.RecordBatchReader.from_stream(oracle_df, schema=arrow_schema)
-            if arrow_schema is not None
-            else pa_module.RecordBatchReader.from_stream(oracle_df)
-        )
-        return cast("list[ArrowRecordBatch]", list(reader))
-    table = pa_module.table(oracle_df)
-    if arrow_schema is not None:
-        table = table.cast(arrow_schema)
-    return cast("list[ArrowRecordBatch]", table.to_batches())
-
-
-def oracle_df_batches_to_arrow_reader(
-    batches: "Iterable[Any]", schema: Any = None, pa_module: Any = None
-) -> "ArrowRecordBatchReader":
-    """Convert an iterable of Oracle DataFrame batches into a PyArrow RecordBatchReader."""
-    if pa_module is None:
-        ensure_pyarrow()
-        pa_module = _pa
-
-    collected_batches: list[Any] = []
-    for df_batch in batches:
-        collected_batches.extend(coerce_oracle_df_to_arrow_batches(df_batch, pa_module=pa_module, arrow_schema=schema))
-    if collected_batches:
-        resolved_schema = schema if schema is not None else collected_batches[0].schema
-        return cast(
-            "ArrowRecordBatchReader", pa_module.RecordBatchReader.from_batches(resolved_schema, collected_batches)
-        )
-    resolved_schema = schema if schema is not None else pa_module.schema([])
-    return cast("ArrowRecordBatchReader", pa_module.RecordBatchReader.from_batches(resolved_schema, []))
-
-
 def normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":
     should_lowercase = driver_features.get("enable_lowercase_column_names", False)
     if not should_lowercase:
@@ -1196,7 +1125,7 @@ def resolve_rowcount(cursor: Any) -> int:
     if not has_rowcount(cursor):
         return 0
     rowcount = cursor.rowcount
-    if isinstance(rowcount, int):
+    if isinstance(rowcount, int) and rowcount >= 0:
         return rowcount
     return 0
 
@@ -1408,41 +1337,42 @@ class OracleSyncStreamSource:
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            try:
-                cursor = self._driver.connection.cursor()
-                self._cursor = cursor
-                cursor.arraysize = self._chunk_size
-                cursor.prefetchrows = self._chunk_size
-                fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
-                if self._fetch_lobs is not None:
-                    fetch_kwargs["fetch_lobs"] = self._fetch_lobs
-                parameters = coerce_large_parameters_sync(
-                    self._driver.connection,
-                    self._parameters,
-                    clob_type=DB_TYPE_CLOB,
-                    blob_type=DB_TYPE_BLOB,
-                    varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                    raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
-                    version_cache=getattr(self._driver, "_oracle_version_cache", None),
-                )
-                cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
-            except BaseException:
-                self.close(error=True)
-                raise
+        self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor()
+            self._cursor = cursor
+            cursor.arraysize = self._chunk_size
+            cursor.prefetchrows = self._chunk_size
+            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+            if self._fetch_lobs is not None:
+                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+            parameters = coerce_large_parameters_sync(
+                self._driver.connection,
+                self._parameters,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=getattr(self._driver, "_oracle_version_cache", None),
+            )
+            cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+        except BaseException:
+            self.close(error=True)
+            raise
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         cursor = self._cursor
         if cursor is None:
             return []
-        rows: list[Any] = []
-        with handler:
-            rows = cursor.fetchmany(self._chunk_size)
+        fetched = self._driver._run_with_exception_handler(handler, cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
-        if not rows:
+        if not fetched:
             return []
+        rows: list[Any] = list(fetched)
         column_names = self._column_names
         if column_names is None:
             column_names, requires_lob_coercion = self._driver._resolve_row_metadata(cursor.description)
@@ -1619,6 +1549,9 @@ def collect_sync_rows(
     if not fetched_data:
         return [], resolved_column_names
 
+    if driver_features.get("fetch_lobs"):
+        return [row if isinstance(row, tuple) else tuple(row) for row in fetched_data], resolved_column_names
+
     if requires_lob_coercion is None:
         requires_lob_coercion = _description_requires_lob_coercion(description)
     if not requires_lob_coercion:
@@ -1669,6 +1602,9 @@ async def collect_async_rows(
     )
     if not fetched_data:
         return [], resolved_column_names
+
+    if driver_features.get("fetch_lobs"):
+        return [row if isinstance(row, tuple) else tuple(row) for row in fetched_data], resolved_column_names
 
     if requires_lob_coercion is None:
         requires_lob_coercion = _description_requires_lob_coercion(description)
@@ -3136,6 +3072,10 @@ class _OracleSyncStreamDriver(Protocol):
     def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
 
     def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
+
+    def _run_with_exception_handler(
+        self, exc_handler: "SyncExceptionHandler", operation: "Callable[..., Any]", *args: Any, **kwargs: Any
+    ) -> "Any | None": ...
 
     def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
 

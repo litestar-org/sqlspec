@@ -50,8 +50,6 @@ _TYPECODE_INT8 = "b"
 _TYPECODE_INT16 = "h"
 _TYPECODE_INT32 = "i"
 
-_INT8_MIN = -128
-_INT8_MAX = 127
 _ORACLE_VECTOR_MIN_MAJOR = 23
 
 _VECTOR_RETURN_NUMPY = "numpy"
@@ -174,12 +172,8 @@ def _is_vector_payload(value: Any) -> bool:
 def _pack_python_sequence(value: "list[Any] | tuple[Any, ...]") -> "array.array[Any]":
     """Pack a Python sequence into an ``array.array`` for VECTOR binding.
 
-    Integer sequences entirely within ``[-128, 127]`` use the int8 typecode for
-    a cheaper bind; everything else falls back to float32 (the 23ai default and
-    the most common LLM embedding dtype).
+    Always packs as float32, the standard 23ai default for embedding vectors.
     """
-    if all(isinstance(v, int) and not isinstance(v, bool) and _INT8_MIN <= v <= _INT8_MAX for v in value):
-        return array.array(_TYPECODE_INT8, value)
     return array.array(_TYPECODE_FLOAT32, [float(v) for v in value])
 
 

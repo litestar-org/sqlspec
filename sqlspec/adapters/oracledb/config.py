@@ -332,6 +332,9 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         if self._conn is not None:
             conn = self._conn
             self._conn = None
+            if exc_type is not None:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
             session_hook = self._config.driver_features.get("session_context_hook")
             try:
                 if session_hook is not None:
@@ -669,6 +672,9 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         conn = self._connection
+        if conn is not None and exc_type is not None:
+            with contextlib.suppress(Exception):
+                await conn.rollback()
         session_hook = self._config.driver_features.get("session_context_hook") if conn is not None else None
         try:
             if conn is not None and session_hook is not None:

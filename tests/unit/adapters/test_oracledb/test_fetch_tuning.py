@@ -167,3 +167,14 @@ async def test_oracle_async_stream_fetch_lobs_call_option_overrides_default() ->
     rows: list[dict[str, Any]] = [row async for row in stream]
     assert rows == []
     assert raw_cursor.execute_kwargs["fetch_lobs"] is True
+
+
+def test_resolve_rowcount_negative_rowcount_returns_zero() -> None:
+    """resolve_rowcount returns 0 when cursor.rowcount is negative."""
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.oracledb.core import resolve_rowcount
+
+    cursor = Mock()
+    cursor.rowcount = -1
+    assert resolve_rowcount(cursor) == 0
