@@ -573,7 +573,12 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         _initialize_oracle_client(self.connection_config)
         config = _build_standalone_connection_params(self.connection_config)
         conn = oracledb.connect(**config)
-        self._init_connection(conn, "")
+        try:
+            self._init_connection(conn, "")
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                conn.close()
+            raise
         return conn
 
     def provide_pool(self) -> "OracleSyncConnectionPool":
@@ -870,7 +875,12 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         _validate_async_oracle_mode(self.connection_config)
         config = _build_standalone_connection_params(self.connection_config)
         conn = await oracledb.connect_async(**config)
-        await self._init_connection(conn, "")
+        try:
+            await self._init_connection(conn, "")
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                await conn.close()
+            raise
         return cast("OracleAsyncConnection", conn)
 
     async def provide_pool(self) -> "OracleAsyncConnectionPool":

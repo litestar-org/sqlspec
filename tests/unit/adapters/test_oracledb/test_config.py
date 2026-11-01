@@ -1,5 +1,6 @@
 """OracleDB configuration tests covering driver kwargs and typed options."""
 
+import asyncio
 import io
 import os
 import ssl
@@ -9,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from inspect import isawaitable
 from pathlib import Path
 from ssl import TLSVersion
+from types import SimpleNamespace
 from typing import Any, NotRequired, cast, get_args, get_origin, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, Mock, call
 
@@ -65,6 +67,11 @@ def _stub_sync_connection_setup(monkeypatch: pytest.MonkeyPatch, calls: list[str
     monkeypatch.setattr(oracle_config_module, "register_numpy_handlers", lambda _connection: calls.append("numpy"))
     monkeypatch.setattr(oracle_config_module, "register_json_handlers", lambda _connection: calls.append("json"))
     monkeypatch.setattr(oracle_config_module, "register_uuid_handlers", lambda _connection: calls.append("uuid"))
+
+
+async def _create_standalone_oracle_connection(config: OracleSyncConfig | OracleAsyncConfig) -> object:
+    result = config.create_connection()
+    return await result if isawaitable(result) else result
 
 
 def test_oracle_connection_params_expose_current_driver_options() -> None:
@@ -370,6 +377,7 @@ def test_sync_create_connection_unpooled(monkeypatch: pytest.MonkeyPatch) -> Non
     config = OracleSyncConfig(connection_config={"user": "scott", "password": "tiger", "dsn": "localhost/xe"})
     conn = config.create_connection()
     assert conn is connect_mock.return_value
+    connect_mock.return_value.close.assert_not_called()
     create_pool_mock.assert_not_called()
     assert config.connection_instance is None
 
@@ -384,7 +392,59 @@ async def test_async_create_connection_unpooled(monkeypatch: pytest.MonkeyPatch)
     config = OracleAsyncConfig(connection_config={"user": "scott", "password": "tiger", "dsn": "localhost/xe"})
     conn = await config.create_connection()
     assert conn is connect_mock.return_value
+    connect_mock.return_value.close.assert_not_called()
     create_pool_mock.assert_not_called()
+    assert config.connection_instance is None
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("hook_kind", ["on_connection_create", "session_callback"])
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("cleanup_failure", [None, OSError("close failed"), asyncio.CancelledError("close cancelled")])
+async def test_standalone_connection_setup_failure_closes_owned_connection(
+    is_async: bool,
+    hook_kind: str,
+    cancelled: bool,
+    cleanup_failure: BaseException | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configured setup failures close new SDK connections without replacing the primary error."""
+    failure = asyncio.CancelledError("setup cancelled") if cancelled else RuntimeError("setup failed")
+    close = AsyncMock(side_effect=cleanup_failure) if is_async else Mock(side_effect=cleanup_failure)
+    connection = SimpleNamespace(version="23.5.0.0.0", inputtypehandler=None, outputtypehandler=None, close=close)
+    connect = AsyncMock(return_value=connection) if is_async else Mock(return_value=connection)
+    monkeypatch.setattr(oracle_config_module.oracledb, "connect_async" if is_async else "connect", connect)
+
+    async def fail_async_setup() -> None:
+        await asyncio.sleep(0)
+        raise failure
+
+    def setup_hook(acquired: object, tag: str) -> Awaitable[None]:
+        assert acquired is connection
+        assert tag == ""
+        assert callable(connection.inputtypehandler)
+        assert callable(connection.outputtypehandler)
+        if is_async:
+            return fail_async_setup()
+        raise failure
+
+    connection_options: dict[str, Any] = {"dsn": "localhost/xe"}
+    driver_features: dict[str, Any] = {}
+    if hook_kind == "session_callback":
+        connection_options[hook_kind] = setup_hook
+    else:
+        driver_features[hook_kind] = setup_hook
+    config_type = OracleAsyncConfig if is_async else OracleSyncConfig
+    config = config_type(connection_config=connection_options, driver_features=driver_features)
+
+    with pytest.raises(type(failure)) as caught:
+        await _create_standalone_oracle_connection(config)
+
+    assert caught.value is failure
+    if is_async:
+        cast("AsyncMock", close).assert_awaited_once_with()
+    else:
+        close.assert_called_once_with()
     assert config.connection_instance is None
 
 
@@ -428,8 +488,13 @@ def test_standalone_sync_connection_initializes_thick_mode(
     options: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[str] = []
+
+    def fake_connect(**_kwargs: object) -> _StubConnection:
+        calls.append("connect")
+        return _StubConnection()
+
     initialize = Mock(side_effect=lambda **_kwargs: calls.append("initialize"))
-    connect = Mock(side_effect=lambda **_kwargs: calls.append("connect") or _StubConnection())
+    connect = Mock(side_effect=fake_connect)
     monkeypatch.setattr(oracle_config_module.oracledb, "is_thin_mode", lambda: True)
     monkeypatch.setattr(oracle_config_module.oracledb, "init_oracle_client", initialize)
     monkeypatch.setattr(oracle_config_module.oracledb, "connect", connect)
