@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.observability import ObservabilityConfig, StatementEvent
 
 
@@ -157,6 +158,24 @@ def test_adbc_duckdb_enable_statement_profiling_and_execute_script_events() -> N
     assert outer_event.operation == "SCRIPT"
     assert outer_event.is_script is True
     assert outer_event.script_ordinal is None
+
+
+def test_adbc_duckdb_profiles_remain_scoped_after_execution_error() -> None:
+    """Each successful statement consumes its own profile without leaking a failed query's state."""
+    events: list[StatementEvent] = []
+    config = AdbcConfig(
+        connection_config={"driver_name": "duckdb"},
+        driver_features={"enable_statement_profiling": True},
+        observability_config=ObservabilityConfig(statement_observers=(events.append,)),
+    )
+    with config.provide_session() as session:
+        assert session.select_value("SELECT 1 AS value") == 1
+        with pytest.raises(SQLSpecError):
+            session.execute("SELECT missing_column FROM missing_table")
+        session.rollback()
+        assert session.select_value("SELECT 2 AS value") == 2
+    assert [event.sql for event in events] == ["SELECT 1 AS value", "SELECT 2 AS value"]
+    assert all(isinstance(event.profile, dict) for event in events)
 
 
 def test_adbc_duckdb_statement_profiling_without_duckdb_package() -> None:

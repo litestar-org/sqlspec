@@ -304,8 +304,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 self._release_pooled_statement(single_stmt)
             if has_observers:
                 stmt_duration = perf_counter() - stmt_started
-                stmt_profile: dict[str, Any] | None = self._pending_statement_profile
-                self._pending_statement_profile = None
+                stmt_profile = self._consume_statement_profile()
                 self._emit_script_statement_event(
                     sql=stmt,
                     parameters=prepared_parameters,
@@ -1640,8 +1639,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             runtime.span_manager.end_span(span, error=exc)
             runtime.emit_error_sync(exc, **query_context)
             raise
-        profile: dict[str, Any] | None = self._pending_statement_profile
-        self._pending_statement_profile = None
+        profile = self._consume_statement_profile()
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
         runtime.emit_query_complete_sync(**{**query_context, "rows_affected": result.rows_affected})

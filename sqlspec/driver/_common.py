@@ -1819,6 +1819,12 @@ class CommonDriverAttributesMixin:
         self._observability = runtime
         self._refresh_statement_cache_state()
 
+    def _consume_statement_profile(self) -> "dict[str, Any] | None":
+        """Take the profile produced by an execution callback and clear pending ownership."""
+        profile = self._pending_statement_profile
+        self._pending_statement_profile = None
+        return profile
+
     def storage_capabilities(self) -> "StorageCapabilities":
         """Return cached storage capabilities for the active driver.
 
