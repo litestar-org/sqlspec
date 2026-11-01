@@ -1,11 +1,12 @@
 """pymssql extension package tests."""
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sqlspec.adapters.pymssql.config import PymssqlConfig
+from sqlspec.adapters.pymssql.litestar.store import PymssqlStore
 
 
 def test_event_store_uses_tsql_column_types_and_idempotent_wrappers() -> None:
@@ -126,3 +127,19 @@ def test_adk_store_can_force_fallback_json_column_type() -> None:
     store = PymssqlADKStore(PymssqlConfig(extension_config={"adk": {"native_json": False}}))
 
     assert "state NVARCHAR(MAX) NOT NULL" in store._sessions_table_ddl()
+
+
+def test_litestar_merge_holdlock() -> None:
+    """Litestar session store MERGE statement uses WITH (HOLDLOCK)."""
+    store = PymssqlStore(
+        PymssqlConfig(extension_config={"litestar": {"session_table": "litestar_session", "manage_schema": False}})
+    )
+    mock_cursor = MagicMock()
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    store._config = MagicMock()
+    store._config.provide_connection.return_value.__enter__.return_value = mock_conn
+
+    store._set("sess-1", b"data", 60)
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert "MERGE INTO [dbo].[litestar_session] WITH (HOLDLOCK) AS target" in executed_sql
