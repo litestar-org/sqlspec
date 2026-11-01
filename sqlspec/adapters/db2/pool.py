@@ -146,7 +146,7 @@ class Db2SyncConnectionPool:
 
     def checked_out(self) -> int:
         """Return the number of checked out connections from the perspective of this thread."""
-        return 0
+        return 1 if getattr(self._thread_local, "connection", None) is not None else 0
 
     def _create_connection(self) -> Any:
         """Open a new connection and register it in the shutdown registry."""

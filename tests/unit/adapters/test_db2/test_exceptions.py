@@ -52,6 +52,9 @@ from tests.unit.adapters.test_db2._fakes import (
         ("22003", DataError),
         ("22007", DataError),
         ("22012", DataError),
+        ("42703", SQLParsingError),
+        ("42710", SQLParsingError),
+        ("42884", SQLParsingError),
     ],
 )
 def test_sqlstate_attribute_mapping(sqlstate: str, expected_type: type[SQLSpecError]) -> None:
@@ -94,6 +97,11 @@ def test_sqlstate_embedded_in_message(sqlstate_str: str, expected_type: type[SQL
         ("SQL30081N", DatabaseConnectionError),
         ("SQL0104N", SQLParsingError),
         ("SQL0204N", SQLParsingError),
+        ("SQL0206N", SQLParsingError),
+        ("SQL0440N", SQLParsingError),
+        ("SQL0601N", SQLParsingError),
+        ("SQL30082N", PermissionDeniedError),
+        ("30082", PermissionDeniedError),
         ("-803", UniqueViolationError),
     ],
 )

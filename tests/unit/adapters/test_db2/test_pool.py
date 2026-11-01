@@ -38,7 +38,10 @@ def test_pool_connects_with_config_and_runs_hook(fake_ibm_db: FakeModules) -> No
     assert "PORT=50000" in dsn_called
     assert seen == [connection]
     assert pool.size() == 1
-    assert pool.checked_out() == 0
+    assert pool.checked_out() == 1
+
+    with pool.get_connection():
+        assert pool.checked_out() == 1
 
 
 def test_pool_renders_dsn_and_passes_empty_connect_arguments(fake_ibm_db: FakeModules) -> None:
