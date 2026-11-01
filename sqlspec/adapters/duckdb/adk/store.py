@@ -10,15 +10,14 @@ DuckDB is an OLAP database optimized for analytical queries. This adapter provid
 import contextlib
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
-
-from typing_extensions import TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -81,6 +80,27 @@ class DuckDBADKConfig(ADKConfig):
 
     memory_fts_options: NotRequired[DuckDBADKFTSOptions]
     """DuckDB FTS ``PRAGMA create_fts_index`` options for ADK memory search."""
+
+
+def _duckdb_index_name(table_name: str, suffix: str) -> str:
+    """Generate a valid DuckDB index name for an optionally schema-qualified table."""
+    parts = split_qualified_identifier(table_name.strip(), quote_chars='"')
+    bare_name = parts[-1]
+    if len(parts) > 1 and parts[0].lower() != "main":
+        return f"idx_{parts[0]}_{bare_name}_{suffix}"
+    return f"idx_{bare_name}_{suffix}"
+
+
+def _split_duckdb_table_name(table_name: str) -> tuple[str, str]:
+    """Split an optionally schema-qualified table name into schema and bare table name.
+
+    Returns:
+        Tuple of (schema, bare_table_name). If unqualified, schema defaults to 'main'.
+    """
+    parts = split_qualified_identifier(table_name.strip(), quote_chars='"')
+    if len(parts) > 1:
+        return parts[0], parts[1]
+    return "main", parts[0]
 
 
 class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
@@ -314,8 +334,8 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id);
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC);
+        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, "app_user")} ON {self._session_table}(app_name, user_id);
+        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, "update_time")} ON {self._session_table}(update_time DESC);
         """
 
     def _events_table_ddl(self) -> str:
@@ -337,8 +357,8 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             event_data JSON NOT NULL{generated_columns},
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
         );
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC);
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp ON {self._events_table}(app_name, timestamp ASC);
+        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, "session")} ON {self._events_table}(session_id, timestamp ASC);
+        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, "app_timestamp")} ON {self._events_table}(app_name, timestamp ASC);
         {generated_indexes}
         """
 
@@ -362,10 +382,10 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             return ""
 
         return f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_author_gc
+        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, "author_gc")}
             ON {self._events_table}(session_id, author_gc, timestamp ASC);
 
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_node_path_gc
+        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, "node_path_gc")}
             ON {self._events_table}(session_id, node_path_gc, timestamp ASC);
         """
 
@@ -931,6 +951,9 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         When FTS is enabled, uses ``match_bm25()`` for BM25-ranked results.
         Falls back to ILIKE for simple substring matching.
         """
+        if embedding is not None:
+            msg = "DuckDB ADK memory store does not support embedding-based search."
+            raise NotImplementedError(msg)
         return self._search_entries(query, app_name, user_id, limit, scope_filter)
 
     def delete_entries_by_session(self, session_id: str) -> int:
@@ -1016,6 +1039,10 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
+        idx_app_scope_user_time = _duckdb_index_name(self._memory_table, "app_scope_user_time")
+        idx_scope = _duckdb_index_name(self._memory_table, "scope")
+        idx_session = _duckdb_index_name(self._memory_table, "session")
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -1032,13 +1059,13 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time
+        CREATE INDEX IF NOT EXISTS {idx_app_scope_user_time}
             ON {self._memory_table}(app_name, scope, user_id, timestamp DESC);
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope
+        CREATE INDEX IF NOT EXISTS {idx_scope}
             ON {self._memory_table}(app_name, scope);
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+        CREATE INDEX IF NOT EXISTS {idx_session}
             ON {self._memory_table}(session_id);
         """
 
@@ -1162,12 +1189,14 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                 use_fts = False
 
             if use_fts:
+                schema, bare_table = _split_duckdb_table_name(self._memory_table)
+                fts_macro = f"fts_{schema}_{bare_table}"
                 where_scope, scope_params = _build_duckdb_scope_where(app_name, user_id, scope_filter, prefix="m")
                 fts_sql = f"""
             SELECT m.*
             FROM {self._memory_table} m
             JOIN (
-                SELECT id, fts_main_{self._memory_table}.match_bm25(id, ?, fields := 'content_text') AS score
+                SELECT id, {fts_macro}.match_bm25(id, ?, fields := 'content_text') AS score
                 FROM {self._memory_table}
             ) fts ON m.id = fts.id
             WHERE {where_scope} AND fts.score IS NOT NULL

@@ -305,3 +305,55 @@ def test_duckdb_litestar_store_uses_timestamptz_and_normalizes_utc() -> None:
     converted = store._timestamp_to_datetime(naive)
     assert converted is not None
     assert converted.tzinfo == UTC
+
+
+def test_typing_import() -> None:
+    """DuckDB ADK store imports TypedDict from standard typing."""
+    import sqlspec.adapters.duckdb.adk.store as store_mod
+
+    assert store_mod.TypedDict.__module__ == "typing"
+
+
+def test_search_entries_embedding_warning() -> None:
+    """DuckDBADKMemoryStore.search_entries raises NotImplementedError if embedding is passed."""
+    store = DuckDBADKMemoryStore(_mock_config())
+    with pytest.raises(NotImplementedError, match="does not support embedding-based search"):
+        store.search_entries("query", "app", "user", embedding=[0.1, 0.2, 0.3])
+
+
+def test_schema_qualified_fts_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Schema-qualified memory tables format indexes without dots and macro as fts_{schema}_{table}."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_table": "custom.my_memories"}))
+    ddl = store._memory_table_ddl()
+    assert "CREATE INDEX IF NOT EXISTS idx_custom_my_memories_app_scope_user_time" in ddl
+    assert "CREATE INDEX IF NOT EXISTS idx_custom_my_memories_scope" in ddl
+    assert "CREATE INDEX IF NOT EXISTS idx_custom_my_memories_session" in ddl
+
+    class _CaptureConn:
+        def __init__(self) -> None:
+            self.sql: str = ""
+
+        def execute(self, sql: str, params: Any = None) -> "_CaptureConn":
+            self.sql = sql
+            return self
+
+        def fetchall(self) -> list[Any]:
+            return []
+
+        @property
+        def description(self) -> list[Any]:
+            return []
+
+        def __enter__(self) -> "Self":
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+    conn = _CaptureConn()
+    config = _mock_config({"memory_table": "custom.my_memories", "memory_use_fts": True})
+    config.provide_connection = lambda *_a, **_k: conn
+    store_fts = DuckDBADKMemoryStore(config)
+    monkeypatch.setattr(DuckDBADKMemoryStore, "_ensure_fts_extension", lambda _s, _c: True)
+    store_fts.search_entries("test", "app", "user")
+    assert "fts_custom_my_memories.match_bm25" in conn.sql

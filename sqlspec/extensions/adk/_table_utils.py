@@ -6,7 +6,7 @@ from typing import Final
 
 __all__ = ("ensure_table_name", "owner_id_column_name", "reset_drop_sql", "unique_statements")
 
-_VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+_VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$")
 _COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
 _MAX_TABLE_NAME_LENGTH: Final = 63
 
@@ -46,9 +46,11 @@ def ensure_table_name(table_name: str) -> None:
         msg = "Table name cannot be empty"
         raise ValueError(msg)
 
-    if len(table_name) > _MAX_TABLE_NAME_LENGTH:
-        msg = f"Table name too long: {len(table_name)} chars (max {_MAX_TABLE_NAME_LENGTH})"
-        raise ValueError(msg)
+    parts = table_name.split(".")
+    for part in parts:
+        if len(part) > _MAX_TABLE_NAME_LENGTH:
+            msg = f"Table name too long: {len(part)} chars (max {_MAX_TABLE_NAME_LENGTH})"
+            raise ValueError(msg)
 
     if not _VALID_TABLE_NAME_PATTERN.match(table_name):
         msg = (
