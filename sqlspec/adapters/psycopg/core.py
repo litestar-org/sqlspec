@@ -16,12 +16,6 @@ from sqlspec.core import (
     StatementConfig,
     build_statement_config_from_profile,
 )
-from sqlspec.core.config_runtime import (
-    build_postgres_extension_probe_names,
-    is_postgres_extension_active,
-    resolve_postgres_extension_state,
-    resolve_runtime_statement_config,
-)
 from sqlspec.driver import ExecutionResult, rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -36,9 +30,11 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    QueryTimeoutError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
+    TransactionError,
     UniqueViolationError,
     _classify_timeout_or_cancellation,
     map_sqlstate_to_exception,
@@ -70,24 +66,19 @@ __all__ = (
     "build_async_pipeline_execution_result",
     "build_copy_from_command",
     "build_pipeline_execution_result",
-    "build_postgres_extension_probe_names",
     "build_postgres_storage_params_sql",
     "build_profile",
     "build_statement_config",
     "build_truncate_command",
-    "collect_rows",
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
     "escape_literal_percent",
     "execute_with_optional_parameters",
     "execute_with_optional_parameters_async",
-    "is_postgres_extension_active",
     "pipeline_supported",
     "resolve_many_rowcount",
-    "resolve_postgres_extension_state",
     "resolve_rowcount",
-    "resolve_runtime_statement_config",
 )
 
 TRANSACTION_STATUS_IDLE = 0
@@ -223,6 +214,7 @@ def apply_driver_features(
     features.setdefault("enable_paradedb", True)
     features.setdefault("enable_pg_textsearch", True)
     features.setdefault("enable_alloydb_columnar", False)
+    features.setdefault("enable_pgcopy_binary", False)
     pgbouncer_enabled = bool(features.get("pgbouncer") or features.get("pgbouncer_mode"))
     features["pgbouncer"] = pgbouncer_enabled
     features["pgbouncer_mode"] = pgbouncer_enabled
@@ -619,10 +611,15 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         mapped_error = _resolve_exception_mapping(error_type)
     if mapped_error is not None:
         mapped_error_code, error_class, description = mapped_error
-        if mapped_error_code == "57014":
+        sqlstate_code = getattr(error, "sqlstate", None) or mapped_error_code
+        if sqlstate_code == "57014":
             termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
-            return _create_postgres_error(error, mapped_error_code, termination_class, description)
-        return _create_postgres_error(error, mapped_error_code, error_class, description)
+            return _create_postgres_error(error, sqlstate_code, termination_class, description)
+        if sqlstate_code == "55P03":
+            return _create_postgres_error(error, sqlstate_code, QueryTimeoutError, description)
+        if sqlstate_code.startswith("25"):
+            return _create_postgres_error(error, sqlstate_code, TransactionError, description)
+        return _create_postgres_error(error, sqlstate_code, error_class, description)
 
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
     error_code = sqlstate_attr if sqlstate_attr is not None else None
@@ -630,6 +627,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         if error_code == "57014":
             termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
             return _create_postgres_error(error, error_code, termination_class, "query terminated")
+        if error_code == "55P03":
+            return _create_postgres_error(error, error_code, QueryTimeoutError, "lock timeout")
+        if error_code.startswith("25"):
+            return _create_postgres_error(error, error_code, TransactionError, "invalid transaction state")
         exc_class = map_sqlstate_to_exception(error_code)
         if exc_class:
             return _create_postgres_error(error, error_code, exc_class, "database error")
@@ -663,6 +664,7 @@ def _register_exception_mappings() -> None:
         _EXCEPTION_MAPPING[pool_timeout] = ("", ConnectionTimeoutError, "connection pool timeout")
 
     _EXCEPTION_MAPPING.update({
+        pg_errors.LockNotAvailable: ("55P03", QueryTimeoutError, "lock not available"),
         pg_errors.UniqueViolation: ("23505", UniqueViolationError, "unique constraint violation"),
         pg_errors.ForeignKeyViolation: ("23503", ForeignKeyViolationError, "foreign key constraint violation"),
         pg_errors.NotNullViolation: ("23502", NotNullViolationError, "not-null constraint violation"),

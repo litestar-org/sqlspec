@@ -17,14 +17,10 @@ from sqlspec.adapters.psycopg.config import (
     PsycopgSyncConfig,
     build_connection_config,
 )
-from sqlspec.adapters.psycopg.core import (
-    build_postgres_extension_probe_names,
-    build_statement_config,
-    default_statement_config,
-    resolve_postgres_extension_state,
-)
+from sqlspec.adapters.psycopg.core import build_statement_config, default_statement_config
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.core.config_runtime import build_postgres_extension_probe_names, resolve_postgres_extension_state
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -828,3 +824,23 @@ async def test_psycopg_enable_alloydb_columnar_and_derive_direct_config() -> Non
     )
     await async_driver.begin()
     async_conn.execute.assert_awaited_once_with("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
+
+
+def test_psycopg_driver_features_enable_pgcopy_binary() -> None:
+    """PsycopgDriverFeatures accepts enable_pgcopy_binary and apply_driver_features provides default."""
+    from sqlspec.adapters.psycopg.config import PsycopgDriverFeatures
+    from sqlspec.adapters.psycopg.core import apply_driver_features
+
+    features: PsycopgDriverFeatures = {"enable_pgcopy_binary": True}
+    assert features["enable_pgcopy_binary"] is True
+
+    _, resolved = apply_driver_features(StatementConfig(), {})
+    assert resolved["enable_pgcopy_binary"] is False
+
+
+def test_psycopg_connection_type_aliases() -> None:
+    """PsycopgSyncConnection and PsycopgAsyncConnection type aliases allow generic connections."""
+    from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
+
+    assert PsycopgSyncConnection is not None
+    assert PsycopgAsyncConnection is not None

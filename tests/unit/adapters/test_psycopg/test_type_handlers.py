@@ -105,3 +105,42 @@ def test_operational_error_with_none_sqlstate_maps_to_database_connection_error(
     err = psycopg.OperationalError("connection failed")
     mapped = create_mapped_exception(err)
     assert type(mapped) is DatabaseConnectionError
+
+
+def test_lock_not_available_maps_to_query_timeout_error() -> None:
+    """pg_errors.LockNotAvailable (55P03) maps to QueryTimeoutError."""
+    from psycopg import errors as pg_errors
+
+    from sqlspec.adapters.psycopg.core import create_mapped_exception
+    from sqlspec.exceptions import QueryTimeoutError
+
+    err = pg_errors.LockNotAvailable("could not obtain lock on relation")
+    mapped = create_mapped_exception(err)
+    assert type(mapped) is QueryTimeoutError
+
+
+def test_sqlstate_class_25_maps_to_transaction_error() -> None:
+    """Class 25 SQLSTATE maps to TransactionError."""
+    from psycopg import OperationalError
+
+    from sqlspec.adapters.psycopg.core import create_mapped_exception
+    from sqlspec.exceptions import TransactionError
+
+    err = OperationalError("active sql transaction")
+    err.sqlstate = "25000"
+    mapped = create_mapped_exception(err)
+    assert type(mapped) is TransactionError
+
+
+def test_exclusion_violation_23p01_preserves_sqlstate() -> None:
+    """ExclusionViolation (23P01) preserves its exact SQLSTATE code in error message."""
+    from psycopg import errors as pg_errors
+
+    from sqlspec.adapters.psycopg.core import create_mapped_exception
+    from sqlspec.exceptions import IntegrityError
+
+    err = pg_errors.ExclusionViolation("conflicting key value violates exclusion constraint")
+    err.sqlstate = "23P01"
+    mapped = create_mapped_exception(err)
+    assert isinstance(mapped, IntegrityError)
+    assert "[23P01]" in str(mapped)

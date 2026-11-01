@@ -3,7 +3,7 @@
 from asyncio import CancelledError
 from contextlib import nullcontext
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import psycopg
@@ -597,3 +597,71 @@ async def test_psycopg_async_load_from_arrow_runs_with_exception_handler() -> No
         job = await driver.load_from_arrow("test_table", table, overwrite=True)
 
     assert job.telemetry["rows_processed"] == 2
+
+
+def test_sync_dispatch_execute_script_emits_statement_observer_events() -> None:
+    """PsycopgSyncDriver.dispatch_execute_script emits script statement events to observers."""
+    from sqlspec.core import SQL
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    events: list[Any] = []
+    connection = MagicMock()
+    cursor = MagicMock()
+    connection.cursor.return_value = cursor
+
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=(events.append,)))
+    driver = PsycopgSyncDriver(connection=connection)
+    driver._observability = runtime
+
+    stmt = SQL("SELECT 1; SELECT 2;")
+    result = driver.dispatch_execute_script(cursor, stmt)
+
+    assert result.statement_count == 2
+    assert len(events) == 2
+    assert events[0].script_ordinal == 0
+    assert events[1].script_ordinal == 1
+
+
+@pytest.mark.anyio
+async def test_async_dispatch_execute_script_emits_statement_observer_events() -> None:
+    """PsycopgAsyncDriver.dispatch_execute_script emits script statement events to observers."""
+    from sqlspec.core import SQL
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    events: list[Any] = []
+    connection = MagicMock()
+    cursor = AsyncMock()
+    connection.cursor.return_value = cursor
+
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=(events.append,)))
+    driver = PsycopgAsyncDriver(connection=connection)
+    driver._observability = runtime
+
+    stmt = SQL("SELECT 1; SELECT 2;")
+    result = await driver.dispatch_execute_script(cursor, stmt)
+
+    assert result.statement_count == 2
+    assert len(events) == 2
+    assert events[0].script_ordinal == 0
+    assert events[1].script_ordinal == 1
+
+
+def test_sync_load_from_arrow_preserves_cause_on_failure() -> None:
+    """PsycopgSyncDriver.load_from_arrow preserves underlying __cause__ on execution failure."""
+    import psycopg
+    import pyarrow as pa
+
+    connection = MagicMock()
+    cursor_mock = MagicMock()
+    cursor_mock.execute.side_effect = psycopg.OperationalError("db error")
+    connection.cursor.return_value = cursor_mock
+
+    driver = PsycopgSyncDriver(
+        connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
+    )
+    table = pa.table({"id": [1, 2]})
+
+    with pytest.raises(Exception) as exc_info:
+        driver.load_from_arrow("test_table", table, overwrite=True)
+
+    assert exc_info.value.__cause__ is not None

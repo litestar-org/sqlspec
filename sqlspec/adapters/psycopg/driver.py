@@ -3,6 +3,7 @@
 from collections.abc import Sized
 from contextlib import AsyncExitStack, ExitStack, suppress
 from itertools import chain
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, LiteralString, cast
 
 from sqlspec.adapters.psycopg._typing import (
@@ -303,16 +304,37 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
+        statement_count = len(statements)
         successful_count = 0
         last_cursor = cursor
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
 
-        for stmt in statements:
+        for idx, stmt in enumerate(statements):
             stmt_sql = escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
+            stmt_started = perf_counter() if has_observers else 0.0
+            self._pending_statement_profile = None
             execute_with_optional_parameters(cursor, stmt_sql, prepared_parameters)
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                stmt_profile = self._pending_statement_profile
+                self._pending_statement_profile = None
+                self._emit_script_statement_event(
+                    sql=stmt,
+                    parameters=prepared_parameters,
+                    operation="SCRIPT",
+                    rows_affected=resolve_rowcount(cursor),
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=stmt_profile,
+                    script_ordinal=idx,
+                    script_statement_count=statement_count,
+                )
             successful_count += 1
 
+        self._pending_statement_profile = None
         return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+            last_cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
         )
 
     def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
@@ -434,7 +456,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Set the PostgreSQL search path for migration SQL."""
         normalized_schema = normalize_identifier(schema, "postgres")
         quoted_schema = quote_identifier(normalized_schema)
-        sql = cast("LiteralString", f'SET LOCAL search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        sql = f'SET LOCAL search_path TO {quoted_schema}, "$user", public'
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(sql)
 
@@ -442,13 +464,13 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Set the PostgreSQL search path for non-transactional migration SQL."""
         normalized_schema = normalize_identifier(schema, "postgres")
         quoted_schema = quote_identifier(normalized_schema)
-        sql = cast("LiteralString", f'SET search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        sql = f'SET search_path TO {quoted_schema}, "$user", public'
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(sql)
 
     def reset_migration_session_schema(self) -> None:
         """Reset the PostgreSQL search path after non-transactional migration SQL."""
-        sql = cast("LiteralString", "RESET search_path")  # type: ignore[redundant-cast]
+        sql = "RESET search_path"
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(sql)
 
@@ -556,10 +578,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         if overwrite:
             truncate_sql = build_truncate_command(table)
             exc_handler = self.handle_database_exceptions()
-            with self.with_cursor(self.connection) as cursor, exc_handler:
-                cursor.execute(truncate_sql)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            with self.with_cursor(self.connection) as cursor:
+                self._run_with_exception_handler(exc_handler, cursor.execute, truncate_sql)
+            self._check_pending_exception(exc_handler)
         columns, batch_iter = self._coerce_arrow_batches(source)
         first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
         metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
@@ -569,12 +590,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             exc_handler = self.handle_database_exceptions()
             with ExitStack() as stack:
-                stack.enter_context(exc_handler)
                 cursor = stack.enter_context(self.with_cursor(self.connection))
                 copy_ctx = stack.enter_context(cursor.copy(copy_sql))
                 if use_binary:
                     for chunk in self._iter_pgcopy_binary_chunks(all_batches, columns=columns, metrics=metrics):
-                        copy_ctx.write(chunk)
+                        self._run_with_exception_handler(exc_handler, copy_ctx.write, chunk)
                 else:
                     for batch in all_batches:
                         metrics["rows_processed"] += int(batch.num_rows)
@@ -586,29 +606,12 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                                 self.prepare_driver_parameters(records, self.statement_config, is_many=True),
                             )
                         for record in records:
-                            copy_ctx.write_row(record)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+                            self._run_with_exception_handler(exc_handler, copy_ctx.write_row, record)
+            self._check_pending_exception(exc_handler)
         telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
-
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts into PostgreSQL via COPY."""
-
-        return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psycopg sync rows for the direct execution path."""
@@ -654,7 +657,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                         cursor = resource_stack.enter_context(self.with_cursor(self.connection))
 
                         try:
-                            sql = cast("LiteralString | PsycopgSQL | PsycopgComposed", prepared.sql)  # type: ignore[redundant-cast]
+                            sql = prepared.sql
                             if prepared.parameters:
                                 cursor.execute(sql, prepared.parameters)
                             else:
@@ -731,6 +734,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         try:
             self.connection.autocommit = True
         except psycopg.Error as e:
+            mapped = create_mapped_exception(e)
+            if type(mapped) is not SQLSpecError:
+                raise mapped from e
             msg = f"Failed to restore autocommit: {e}"
             raise SQLSpecError(msg) from e
 
@@ -874,16 +880,37 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
+        statement_count = len(statements)
         successful_count = 0
         last_cursor = cursor
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
 
-        for stmt in statements:
+        for idx, stmt in enumerate(statements):
             stmt_sql = escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
+            stmt_started = perf_counter() if has_observers else 0.0
+            self._pending_statement_profile = None
             await execute_with_optional_parameters_async(cursor, stmt_sql, prepared_parameters)
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                stmt_profile = self._pending_statement_profile
+                self._pending_statement_profile = None
+                self._emit_script_statement_event(
+                    sql=stmt,
+                    parameters=prepared_parameters,
+                    operation="SCRIPT",
+                    rows_affected=resolve_rowcount(cursor),
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=stmt_profile,
+                    script_ordinal=idx,
+                    script_statement_count=statement_count,
+                )
             successful_count += 1
 
+        self._pending_statement_profile = None
         return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+            last_cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
         )
 
     async def dispatch_special_handling(self, cursor: Any, statement: "SQL") -> "SQLResult | None":
@@ -1006,7 +1033,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Set the PostgreSQL search path for migration SQL."""
         normalized_schema = normalize_identifier(schema, "postgres")
         quoted_schema = quote_identifier(normalized_schema)
-        sql = cast("LiteralString", f'SET LOCAL search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        sql = f'SET LOCAL search_path TO {quoted_schema}, "$user", public'
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(sql)
 
@@ -1014,13 +1041,13 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Set the PostgreSQL search path for non-transactional migration SQL."""
         normalized_schema = normalize_identifier(schema, "postgres")
         quoted_schema = quote_identifier(normalized_schema)
-        sql = cast("LiteralString", f'SET search_path TO {quoted_schema}, "$user", public')  # type: ignore[redundant-cast]
+        sql = f'SET search_path TO {quoted_schema}, "$user", public'
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(sql)
 
     async def reset_migration_session_schema(self) -> None:
         """Reset the PostgreSQL search path after non-transactional migration SQL."""
-        sql = cast("LiteralString", "RESET search_path")  # type: ignore[redundant-cast]
+        sql = "RESET search_path"
         async with self.with_cursor(self.connection) as cursor:
             await cursor.execute(sql)
 
@@ -1168,22 +1195,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    async def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts asynchronously."""
-
-        return await super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psycopg async rows for the direct execution path."""
         data = cast("list[Any] | None", fetched) or []
@@ -1228,7 +1239,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                         cursor = await resource_stack.enter_async_context(self.with_cursor(self.connection))
 
                         try:
-                            sql = cast("LiteralString | PsycopgSQL | PsycopgComposed", prepared.sql)  # type: ignore[redundant-cast]
+                            sql = prepared.sql
                             if prepared.parameters:
                                 await cursor.execute(sql, prepared.parameters)
                             else:
@@ -1305,6 +1316,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         try:
             await self.connection.set_autocommit(True)
         except psycopg.Error as e:
+            mapped = create_mapped_exception(e)
+            if type(mapped) is not SQLSpecError:
+                raise mapped from e
             msg = f"Failed to restore autocommit: {e}"
             raise SQLSpecError(msg) from e
 

@@ -223,6 +223,8 @@ class PsycopgDriverFeatures(TypedDict):
     """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb_columnar: NotRequired[bool]
     """Enable ``google_columnar_engine.enable_columnar_scan=on`` via startup ``options`` or per-transaction ``SET LOCAL``."""
+    enable_pgcopy_binary: NotRequired[bool]
+    """Enable binary streaming format for Arrow ingestion via PGCOPY binary protocol."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"]]
     """External pooler compatibility mode; sets ``prepare_threshold=None`` in ``transaction`` or ``statement`` mode."""
     pgbouncer: NotRequired[bool]
@@ -890,7 +892,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             extension_config=dict(self.extension_config) if self.extension_config else None,
         )
 
-    async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore
+    async def create_connection(self) -> "PsycopgAsyncConnection":
         """Open a standalone connection owned by the caller.
 
         The connection is not bound to the pool, so closing it actually closes

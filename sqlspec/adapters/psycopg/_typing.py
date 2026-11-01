@@ -46,10 +46,10 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, Statement, StatementConfig
 
-    PsycopgSyncConnection: TypeAlias = PsycopgConnection[PsycopgDictRow]
-    PsycopgAsyncConnection: TypeAlias = PsycopgNativeAsyncConnection[PsycopgDictRow]
-    PsycopgSyncRawCursor: TypeAlias = PsycopgCursor[PsycopgDictRow]
-    PsycopgAsyncRawCursor: TypeAlias = PsycopgNativeAsyncCursor[PsycopgDictRow]
+    PsycopgSyncConnection: TypeAlias = PsycopgConnection[Any]
+    PsycopgAsyncConnection: TypeAlias = PsycopgNativeAsyncConnection[Any]
+    PsycopgSyncRawCursor: TypeAlias = PsycopgCursor[Any]
+    PsycopgAsyncRawCursor: TypeAlias = PsycopgNativeAsyncCursor[Any]
 else:
     PsycopgSyncConnection = PsycopgConnection
     PsycopgAsyncConnection = PsycopgNativeAsyncConnection
