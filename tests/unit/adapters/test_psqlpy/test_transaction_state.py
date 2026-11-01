@@ -292,3 +292,25 @@ async def test_psqlpy_litestar_store_operations_handle_none_query_result() -> No
     assert await store.exists("sess_1") is False
     assert await store.expires_in("sess_1") is None
     assert await store.delete_expired() == 0
+
+
+async def test_psqlpy_get_indexes_with_none_schema_resolves_via_search_path() -> None:
+    """get_indexes passes schema_name=None when schema is None to resolve table on search_path."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
+
+    calls: list[dict[str, Any]] = []
+    driver = MagicMock()
+
+    async def fake_select(query: Any, **kwargs: Any) -> list[Any]:
+        calls.append(kwargs)
+        return []
+
+    driver.select = AsyncMock(side_effect=fake_select)
+
+    dd = PsqlpyDataDictionary()
+    await dd.get_indexes(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0]["schema_name"] is None
+    assert calls[0]["table_name"] == "users"
