@@ -86,7 +86,7 @@ class ArrowOdbcDriverFeatures(TypedDict):
     """``arrow-odbc`` driver feature flags controlling Arrow batch sizing, dialect hints, and codecs."""
 
     chunk_size: NotRequired[int]
-    """Maximum rows per Arrow ``RecordBatch`` fetched from ODBC cursors (defaults to ``65535``)."""
+    """Maximum rows per Arrow ``RecordBatch`` fetched from ODBC cursors (defaults to ``65536``)."""
     max_bytes_per_batch: NotRequired[int]
     """Upper memory budget in bytes per Arrow ``RecordBatch`` buffer."""
     max_text_size: NotRequired[int]

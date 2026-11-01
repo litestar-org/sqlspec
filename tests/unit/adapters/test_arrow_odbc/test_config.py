@@ -319,3 +319,9 @@ def test_create_connection_wraps_driver_pooling_failure_in_improper_configuratio
 
     with pytest.raises(ImproperConfigurationError, match="Could not configure arrow-odbc connection"):
         config.create_connection()
+
+
+def test_driver_features_chunk_size_default() -> None:
+    """ArrowOdbcConfig defaults chunk_size to 65536 matching documentation."""
+    config = ArrowOdbcConfig()
+    assert config.driver_features["chunk_size"] == 65_536
