@@ -603,3 +603,14 @@ def test_reentrant_get_connection_preserves_outer_checkout() -> None:
             assert outer_conn.execute("SELECT COUNT(*) FROM nested_test").fetchone() == (0,)
     finally:
         pool.close()
+
+
+def test_pool_thread_connection_checkout() -> None:
+    """DuckDBConnectionPool precomputes _has_dynamic_secrets boolean on initialization."""
+    pool_static = DuckDBConnectionPool({"database": ":memory:"}, secrets=[{"name": "s1"}])
+    assert pool_static._has_dynamic_secrets is False
+
+    pool_dynamic = DuckDBConnectionPool(
+        {"database": ":memory:"}, secrets=[{"name": "s2", "value_provider": lambda: {}}]
+    )
+    assert pool_dynamic._has_dynamic_secrets is True

@@ -258,3 +258,22 @@ def test_concurrent_execute_many_ast_mutation() -> None:
 
     driver.execute_many(stmt, [[1, "a"], [2, "b"]])
     assert expr.meta == meta_before
+
+
+def test_select_column_name_cache_concurrency() -> None:
+    """_materialize_select_rows avoids redundant double-locking when row count hint matches."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    driver.execute("CREATE TABLE test_cache_hits (id INT)")
+    driver.execute("INSERT INTO test_cache_hits VALUES (1), (2)")
+
+    sql = "SELECT * FROM test_cache_hits"
+    res1 = driver.execute(sql)
+    assert len(res1.data) == 2
+    hint1 = driver._cache_holder.get_row_count_hint(sql)
+    assert hint1 == 2
+
+    res2 = driver.execute(sql)
+    assert len(res2.data) == 2
+    hint2 = driver._cache_holder.get_row_count_hint(sql)
+    assert hint2 == 2

@@ -227,3 +227,13 @@ def test_resolve_rowcount_falls_back_to_cursor_rowcount_when_fetchone_returns_no
             return None
 
     assert resolve_rowcount(_NoneFetchCursor()) == 4
+
+
+def test_provide_session_storage_settings_caching() -> None:
+    """DuckDBConnectionPool caches _storage_settings on thread-local state."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    pool = config.create_pool()
+    with pool.get_connection() as conn:
+        settings1 = pool._storage_settings(conn)
+        settings2 = pool._storage_settings(conn)
+        assert settings1 is settings2

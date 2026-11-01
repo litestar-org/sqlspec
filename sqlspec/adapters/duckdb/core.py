@@ -827,6 +827,11 @@ def _resolve_native_storage_target(
     return target
 
 
+def _secret_scope_len(secret: "Mapping[str, Any]") -> int:
+    """Return the length of the secret scope string for sorting."""
+    return len(secret.get("scope") or "")
+
+
 def _native_storage_eligible(
     uri: str,
     protocol: str,
@@ -866,9 +871,9 @@ def _native_storage_eligible(
     ]
     if not matching:
         return False
-    matching.sort(key=lambda secret: len(secret.get("scope") or ""), reverse=True)
+    matching.sort(key=_secret_scope_len, reverse=True)
     selected = matching[0]
-    if len(matching) > 1 and len(selected.get("scope") or "") == len(matching[1].get("scope") or ""):
+    if len(matching) > 1 and _secret_scope_len(selected) == _secret_scope_len(matching[1]):
         return False
     provider = selected.get("provider", "config").lower()
     native = {key.lower(): value for key, value in selected.get("value", {}).items()}

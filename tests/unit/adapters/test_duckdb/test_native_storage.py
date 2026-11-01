@@ -375,3 +375,15 @@ def test_default_s3_endpoint_still_preserves_explicit_addressing_style() -> None
     }
     options = {"access_key_id": "id", "secret_access_key": "key", "virtual_hosted_style_request": True}
     assert not _native_storage_eligible("s3://bucket/file.parquet", "s3", options, settings, write=True)
+
+
+def test_secret_resolution_sorting() -> None:
+    """_native_storage_eligible sorts matching secrets by scope length via _secret_scope_len."""
+    features = {
+        "_duckdb_storage_extensions": ("httpfs",),
+        "_duckdb_storage_secrets": (
+            {"secret_type": "s3", "scope": "s3://bucket/", "provider": "config", "value": {}},
+            {"secret_type": "s3", "scope": "s3://bucket/deep/path/", "provider": "config", "value": {}},
+        ),
+    }
+    assert _native_storage_eligible("s3://bucket/deep/path/file.parquet", "s3", {}, features, write=False) is True

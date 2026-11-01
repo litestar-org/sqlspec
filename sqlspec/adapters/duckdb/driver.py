@@ -752,7 +752,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
         ):
             relation: Any = sql_method(wire_sql, params=parameters or None)
             if relation is None:
-                self._cache_holder.set_row_count_hint(cache_key, 0)
+                if hint != 0:
+                    self._cache_holder.set_row_count_hint(cache_key, 0)
                 return [], [], 0, "tuple"
             try:
                 description = relation.description
@@ -760,14 +761,16 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     fetched_data = relation.fetchall()
                     data, column_names = collect_rows(fetched_data, description)
                     row_count = len(data)
-                    self._cache_holder.set_row_count_hint(cache_key, row_count)
+                    if hint != row_count:
+                        self._cache_holder.set_row_count_hint(cache_key, row_count)
                     return data, column_names, row_count, "tuple"
                 arrow_table = relation.to_arrow_table()
                 data = arrow_table.to_pylist()
                 _restore_uuid_columns(data, description)
                 column_names = list(arrow_table.column_names)
                 row_count = len(data)
-                self._cache_holder.set_row_count_hint(cache_key, row_count)
+                if hint != row_count:
+                    self._cache_holder.set_row_count_hint(cache_key, row_count)
                 return data, column_names, row_count, "dict"
             finally:
                 close_method = getattr(relation, "close", None)
@@ -783,10 +786,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def _materialize_fetched_rows(self, cursor: Any, cache_key: str) -> "tuple[list[Any], list[str], int, RowFormat]":
         """Materialize already-executed cursor rows via fetchall."""
         description = cursor.description
+        hint = self._cache_holder.get_row_count_hint(cache_key)
         fetched_data = cursor.fetchall()
         data, column_names = collect_rows(fetched_data, description)
         row_count = len(data)
-        self._cache_holder.set_row_count_hint(cache_key, row_count)
+        if hint != row_count:
+            self._cache_holder.set_row_count_hint(cache_key, row_count)
         return data, column_names, row_count, "tuple"
 
     def _materialize_select_rows(self, cursor: Any, compiled_sql: str) -> "tuple[list[Any], list[str], int, RowFormat]":
@@ -807,7 +812,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
         _restore_uuid_columns(data, description)
         column_names = list(arrow_table.column_names)
         row_count = len(data)
-        self._cache_holder.set_row_count_hint(compiled_sql, row_count)
+        if hint != row_count:
+            self._cache_holder.set_row_count_hint(compiled_sql, row_count)
         return data, column_names, row_count, "dict"
 
     def _native_storage_job(
