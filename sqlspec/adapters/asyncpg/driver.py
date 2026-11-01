@@ -25,6 +25,7 @@ from sqlspec.adapters.asyncpg.core import (
 from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.core import (
     SQL,
+    DMLResult,
     StackResult,
     StatementStack,
     get_cache_config,
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig
-    from sqlspec.driver import ExecutionResult
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 
@@ -137,8 +138,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
 
+        timeout = self._timeout_value(statement.statement_config)
         if statement.returns_rows():
-            records = await cursor.fetch(sql, *params, **self._timeout_arguments(statement.statement_config))
+            records = (
+                await cursor.fetch(sql, *params, timeout=timeout)
+                if timeout is not None
+                else await cursor.fetch(sql, *params)
+            )
             data, column_names = collect_rows(records)
 
             return self.create_execution_result(
@@ -150,8 +156,11 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 row_format="record",
             )
 
-        result = await cursor.execute(sql, *params, **self._timeout_arguments(statement.statement_config))
-
+        result = (
+            await cursor.execute(sql, *params, timeout=timeout)
+            if timeout is not None
+            else await cursor.execute(sql, *params)
+        )
         affected_rows = parse_status(result)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
@@ -167,15 +176,52 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        timeout = self._timeout_value(statement.statement_config)
 
         if prepared_parameters:
             parameter_sets = cast("list[Sequence[object]]", prepared_parameters)
-            await cursor.executemany(sql, parameter_sets, **self._timeout_arguments(statement.statement_config))
+            if timeout is not None:
+                await cursor.executemany(sql, parameter_sets, timeout=timeout)
+            else:
+                await cursor.executemany(sql, parameter_sets)
             affected_rows = resolve_many_rowcount(parameter_sets)
         else:
             affected_rows = 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    async def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        wire_sql = self._format_wire_sql(cached.compiled_sql)
+        timeout = self._timeout_value(self.statement_config)
+        args = (
+            params if isinstance(params, (tuple, list)) else tuple(params.values()) if isinstance(params, dict) else ()
+        )
+        if cached.operation_profile.returns_rows:
+            records = (
+                await self.connection.fetch(wire_sql, *args, timeout=timeout)
+                if timeout is not None
+                else await self.connection.fetch(wire_sql, *args)
+            )
+            data, column_names = collect_rows(records)
+            return self.build_cached_select_result(
+                sql,
+                params,
+                cached,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                row_format="record",
+                compiled_sql=wire_sql,
+            )
+        status = (
+            await self.connection.execute(wire_sql, *args, timeout=timeout)
+            if timeout is not None
+            else await self.connection.execute(wire_sql, *args)
+        )
+        affected_rows = parse_status(status)
+        return DMLResult(cached.operation_type, affected_rows)
 
     async def dispatch_execute_script(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -296,9 +342,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
-        return AsyncRowStream(
-            AsyncpgStreamSource(self, sql, params, chunk_size, self._timeout_arguments(statement.statement_config))
-        )
+        timeout = self._timeout_value(statement.statement_config)
+        return AsyncRowStream(AsyncpgStreamSource(self, sql, params, chunk_size, timeout))
 
     def handle_database_exceptions(self) -> "AsyncpgExceptionHandler":
         """Handle database exceptions with PostgreSQL error codes."""
@@ -519,13 +564,18 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
-    def _timeout_arguments(self, config: "StatementConfig") -> "dict[str, Any]":
+    def _timeout_value(self, config: "StatementConfig") -> float | None:
         for options in (config.execution_args, self.statement_config.execution_args):
             if options:
                 for key in ("timeout", "command_timeout"):
                     if key in options:
-                        return {"timeout": options[key]}
-        return {}
+                        val = options[key]
+                        return float(val) if val is not None else None
+        return None
+
+    def _timeout_arguments(self, config: "StatementConfig") -> "dict[str, Any]":
+        timeout = self._timeout_value(config)
+        return {"timeout": timeout} if timeout is not None else {}
 
     def _release_failed_transaction_claim(self, transaction: Any) -> None:
         """Clear the connection's transaction claim left by a failed start."""

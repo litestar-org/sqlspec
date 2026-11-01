@@ -448,3 +448,25 @@ async def test_asyncpg_get_indexes_with_none_schema_resolves_via_search_path() -
     assert len(calls) == 1
     assert calls[0]["schema_name"] is None
     assert calls[0]["table_name"] == "users"
+
+
+async def test_asyncpg_cache_hit_with_cursor() -> None:
+    """AsyncpgDriver executes cached queries directly on connection via _execute_cache_hit_with_cursor."""
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[{"val": 42}])
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    driver = AsyncpgDriver(cast("Any", conn))
+    res1 = await driver.execute("SELECT 42")
+    assert res1.data == [{"val": 42}]
+
+    res2 = await driver.execute("SELECT 42")
+    assert res2.data == [{"val": 42}]
+    assert conn.fetch.call_count == 2
+
+    upd1 = await driver.execute("UPDATE t SET x = 1")
+    assert upd1.rows_affected == 1
+
+    upd2 = await driver.execute("UPDATE t SET x = 1")
+    assert upd2.rows_affected == 1
+    assert conn.execute.call_count == 2

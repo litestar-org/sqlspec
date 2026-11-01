@@ -4,8 +4,9 @@ import asyncio
 import contextlib
 import datetime as dt
 import re
+import sys
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, Final, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -89,7 +90,6 @@ class NormalizedStackOperation(NamedTuple):
     parameters: "tuple[Any, ...] | dict[str, Any] | None"
 
 
-PREPARED_STATEMENT_CACHE_SIZE: Final[int] = 32
 _EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()
 
 
@@ -263,20 +263,56 @@ def build_statement_config(
     return base_config.replace(parameter_config=parameter_config)
 
 
+class _JsonEncoder:
+    __slots__ = ("_encoder",)
+
+    def __init__(self, encoder: "Callable[[Any], str]") -> None:
+        self._encoder = encoder
+
+    def __call__(self, value: Any) -> bytes:
+        return _encode_json_payload(value, self._encoder)
+
+
+class _JsonDecoder:
+    __slots__ = ("_decoder",)
+
+    def __init__(self, decoder: "Callable[[str], Any]") -> None:
+        self._decoder = decoder
+
+    def __call__(self, value: Any) -> Any:
+        return _decode_json_payload(value, self._decoder)
+
+
+class _JsonbEncoder:
+    __slots__ = ("_encoder",)
+
+    def __init__(self, encoder: "Callable[[Any], str]") -> None:
+        self._encoder = encoder
+
+    def __call__(self, value: Any) -> bytes:
+        return _encode_jsonb_payload(value, self._encoder)
+
+
+class _JsonbDecoder:
+    __slots__ = ("_decoder",)
+
+    def __init__(self, decoder: "Callable[[str], Any]") -> None:
+        self._decoder = decoder
+
+    def __call__(self, value: Any) -> Any:
+        return _decode_jsonb_payload(value, self._decoder)
+
+
 async def register_json_codecs(connection: Any, encoder: Any, decoder: Any) -> None:
     """Register JSON type codecs on asyncpg connection."""
     try:
         await connection.set_type_codec(
-            "json",
-            encoder=lambda value: _encode_json_payload(value, encoder),
-            decoder=lambda value: _decode_json_payload(value, decoder),
-            schema="pg_catalog",
-            format="binary",
+            "json", encoder=_JsonEncoder(encoder), decoder=_JsonDecoder(decoder), schema="pg_catalog", format="binary"
         )
         await connection.set_type_codec(
             "jsonb",
-            encoder=lambda value: _encode_jsonb_payload(value, encoder),
-            decoder=lambda value: _decode_jsonb_payload(value, decoder),
+            encoder=_JsonbEncoder(encoder),
+            decoder=_JsonbDecoder(decoder),
             schema="pg_catalog",
             format="binary",
         )
@@ -447,7 +483,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
         return QueryTimeoutError(str(error))
     if isinstance(error, OSError) or (
@@ -497,7 +533,7 @@ def collect_rows(records: "list[Any] | None") -> "tuple[list[Any], list[str]]":
 class AsyncpgStreamSource:
     """Compiled async chunk source streaming dict rows from an asyncpg cursor in a stream-owned transaction."""
 
-    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_timeout_args", "_transaction")
+    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_timeout", "_transaction")
 
     def __init__(
         self,
@@ -505,9 +541,14 @@ class AsyncpgStreamSource:
         sql: str,
         parameters: "tuple[Any, ...]",
         chunk_size: int,
-        timeout_args: "dict[str, Any] | None" = None,
+        timeout: "float | dict[str, Any] | None" = None,
     ) -> None:
-        self._timeout_args = timeout_args or {}
+        if isinstance(timeout, dict):
+            self._timeout: float | None = (
+                float(timeout["timeout"]) if "timeout" in timeout and timeout["timeout"] is not None else None
+            )
+        else:
+            self._timeout = float(timeout) if timeout is not None else None
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
@@ -517,14 +558,28 @@ class AsyncpgStreamSource:
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        await self._driver._run_with_exception_handler(handler, self._start)
+        if sys.exc_info()[1] is None:
+            async with handler:
+                await self._start()
+        else:
+            await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        records = await self._driver._run_with_exception_handler(
-            handler, self._cursor.fetch, self._chunk_size, **self._timeout_args
-        )
+        if sys.exc_info()[1] is None:
+            async with handler:
+                records = (
+                    await self._cursor.fetch(self._chunk_size, timeout=self._timeout)
+                    if self._timeout is not None
+                    else await self._cursor.fetch(self._chunk_size)
+                )
+        elif self._timeout is not None:
+            records = await self._driver._run_with_exception_handler(
+                handler, self._cursor.fetch, self._chunk_size, timeout=self._timeout
+            )
+        else:
+            records = await self._driver._run_with_exception_handler(handler, self._cursor.fetch, self._chunk_size)
         self._driver._check_pending_exception(handler)
         assert records is not None
         return [dict(record) for record in records]
@@ -544,14 +599,16 @@ class AsyncpgStreamSource:
                     await transaction.rollback()
 
     async def _start(self) -> None:
-        in_tx_fn = getattr(self._driver, "_connection_in_transaction", None)
-        already_in_tx = bool(in_tx_fn()) if callable(in_tx_fn) else False
+        already_in_tx = self._driver._connection_in_transaction()
         if not already_in_tx:
             transaction = self._driver.connection.transaction()
             await transaction.start()
             self._transaction = transaction
         try:
-            self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters, **self._timeout_args)
+            if self._timeout is not None:
+                self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters, timeout=self._timeout)
+            else:
+                self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters)
         except BaseException:
             transaction = self._transaction
             self._transaction = None
