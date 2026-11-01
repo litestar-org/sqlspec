@@ -1,5 +1,5 @@
 """Sybase ASE ADK extension."""
 
-from sqlspec.adapters.sybase.adk.store import SybaseADKConfig, SybaseADKMemoryStore, SybaseADKStore
+from sqlspec.adapters.sybase.adk.store import SybaseADKMemoryStore, SybaseADKStore
 
-__all__ = ("SybaseADKConfig", "SybaseADKMemoryStore", "SybaseADKStore")
+__all__ = ("SybaseADKMemoryStore", "SybaseADKStore")

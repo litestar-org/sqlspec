@@ -72,12 +72,6 @@ Synchronous SAP SQL Anywhere 12+ adapter built on `sqlanydb` (`dbcapi` C library
     options:
       heading_level: 4
 
-::: sqlspec.adapters.sqlanywhere.adk.SqlanywhereADKConfig
-    options:
-      heading_level: 4
-      separate_signature: false
-      show_signature_annotations: true
-
 ::: sqlspec.adapters.sqlanywhere.adk.SqlanywhereADKStore
     options:
       heading_level: 4

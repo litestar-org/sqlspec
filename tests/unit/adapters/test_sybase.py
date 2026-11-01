@@ -28,7 +28,7 @@ from sqlspec.adapters.sybase import (
     driver_profile,
 )
 from sqlspec.adapters.sybase._typing import SybaseRawCursor
-from sqlspec.adapters.sybase.adk import SybaseADKConfig, SybaseADKMemoryStore, SybaseADKStore
+from sqlspec.adapters.sybase.adk import SybaseADKMemoryStore, SybaseADKStore
 from sqlspec.adapters.sybase.core import (
     _ERROR_CODE_MAPPING,
     build_insert_statement,
@@ -472,7 +472,6 @@ def test_sybase_migration_tracker_and_extension_stores() -> None:
 
     assert SybaseCursor.__slots__ == ("_as_dict", "connection", "cursor")
     assert SybaseExceptionHandler.__slots__ == ()
-    assert isinstance(SybaseADKConfig(), dict)
 
 
 @pytest.mark.anyio

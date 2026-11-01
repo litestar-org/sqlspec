@@ -13,7 +13,6 @@ from sqlspec.adapters.sybase.core import (
     resolve_rowcount,
     split_schema_and_table,
 )
-from sqlspec.config import ADKConfig
 from sqlspec.exceptions import NotFoundError, SQLSpecError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -28,15 +27,11 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk import SessionOrderBy
     from sqlspec.extensions.adk.memory._types import StoredMemory
 
-__all__ = ("SybaseADKConfig", "SybaseADKMemoryStore", "SybaseADKStore")
+__all__ = ("SybaseADKMemoryStore", "SybaseADKStore")
 
 SYBASE_TABLE_NOT_FOUND_ERROR: Final[int] = 208
 SYBASE_SCHEMA: Final[str] = "dbo"
 JSON_COLUMN_TYPE: Final[str] = "TEXT"
-
-
-class SybaseADKConfig(ADKConfig):
-    """Sybase ASE ADK extension settings."""
 
 
 class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):

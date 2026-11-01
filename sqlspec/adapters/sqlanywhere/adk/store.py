@@ -10,7 +10,6 @@ from sqlspec.adapters.sqlanywhere.core import (
     resolve_rowcount,
     split_schema_and_table,
 )
-from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -23,14 +22,10 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk import SessionOrderBy
     from sqlspec.extensions.adk.memory._types import StoredMemory
 
-__all__ = ("SqlanywhereADKConfig", "SqlanywhereADKMemoryStore", "SqlanywhereADKStore")
+__all__ = ("SqlanywhereADKMemoryStore", "SqlanywhereADKStore")
 
 SQLANYWHERE_TABLE_NOT_FOUND_SQLCODE: Final[int] = -141
 JSON_COLUMN_TYPE: Final[str] = "LONG VARCHAR"
-
-
-class SqlanywhereADKConfig(ADKConfig):
-    """SAP SQL Anywhere ADK extension settings."""
 
 
 class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):

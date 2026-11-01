@@ -24,7 +24,7 @@ from sqlspec.adapters.sqlanywhere import (
     driver_profile,
 )
 from sqlspec.adapters.sqlanywhere._typing import SqlanywhereError, SqlanywhereSessionContext
-from sqlspec.adapters.sqlanywhere.adk import SqlanywhereADKConfig, SqlanywhereADKMemoryStore, SqlanywhereADKStore
+from sqlspec.adapters.sqlanywhere.adk import SqlanywhereADKMemoryStore, SqlanywhereADKStore
 from sqlspec.adapters.sqlanywhere.core import build_insert_statement, format_identifier
 from sqlspec.adapters.sqlanywhere.data_dictionary import build_column_metadata, build_foreign_key_metadata
 from sqlspec.adapters.sqlanywhere.events import SqlanywhereEventQueueStore
@@ -439,7 +439,6 @@ def test_sqlanywhere_migration_tracker_and_extension_stores() -> None:
     assert "CREATE TABLE IF NOT EXISTS" in memory_ddl
     assert "LONG VARCHAR" in memory_ddl
     assert "TIMESTAMP" in memory_ddl
-    assert isinstance(SqlanywhereADKConfig(), dict)
 
 
 @pytest.mark.anyio
