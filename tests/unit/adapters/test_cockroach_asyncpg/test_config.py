@@ -549,3 +549,74 @@ async def test_cockroach_asyncpg_adk_locality_validation_and_schema_qualified_dd
     litestar_store = CockroachAsyncpgStore(good_config)
     litestar_store._table_name = "tenant_a.litestar_sessions"
     assert "idx_tenant_a_litestar_sessions_expires_at" in litestar_store._table_ddl()
+
+
+async def test_cockroach_asyncpg_follower_read_only_for_readonly_statements() -> None:
+    """CockroachAsyncpgDriver should not begin follower-read transactions for modifying operations."""
+    in_tx = False
+
+    async def _in_tx() -> bool:
+        return in_tx
+
+    async def _begin(self: Any) -> None:
+        nonlocal in_tx
+        in_tx = True
+
+    with (
+        patch.object(CockroachAsyncpgDriver, "_connection_in_transaction", _in_tx),
+        patch.object(CockroachAsyncpgDriver, "begin", _begin),
+    ):
+        conn = MagicMock()
+        conn.fetch = AsyncMock(return_value=[])
+        driver = CockroachAsyncpgDriver(
+            connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+        )
+        modifying_stmt = SQL("INSERT INTO users (name) VALUES ('alice') RETURNING id")
+        await driver.dispatch_execute(conn, modifying_stmt)
+        assert in_tx is False
+
+
+async def test_cockroach_asyncpg_begin_follower_read_failure_handling() -> None:
+    """Failing SET TRANSACTION in begin() must rollback and raise mapped exception."""
+    conn = MagicMock()
+    conn.is_in_transaction.return_value = False
+    tx = AsyncMock()
+    conn.transaction.return_value = tx
+    conn.execute = AsyncMock(side_effect=RuntimeError("syntax error in staleness"))
+
+    driver = CockroachAsyncpgDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    with pytest.raises(Exception):
+        await driver.begin()
+    assert driver._transaction is None
+    tx.rollback.assert_awaited_once()
+
+
+async def test_cockroach_asyncpg_select_stream_follower_reads() -> None:
+    """select_stream on a SELECT query with follower reads emits the staleness clause and closes."""
+    executed_statements: list[str] = []
+    conn = MagicMock()
+    conn.is_in_transaction.return_value = False
+    tx = AsyncMock()
+    conn.transaction.return_value = tx
+
+    async def fake_execute(query: str, *args: Any, **kwargs: Any) -> str:
+        executed_statements.append(query)
+        return "OK"
+
+    conn.execute = AsyncMock(side_effect=fake_execute)
+
+    cursor_mock = AsyncMock()
+    cursor_mock.fetch = AsyncMock(side_effect=[[{"id": 1}], []])
+    conn.cursor = AsyncMock(return_value=cursor_mock)
+
+    driver = CockroachAsyncpgDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    stream = driver.dispatch_select_stream(SQL("SELECT id FROM users"), chunk_size=10)
+    assert stream is not None
+    rows = [row async for row in stream]
+    assert rows == [{"id": 1}]
+    assert any("AS OF SYSTEM TIME '-10s'" in s for s in executed_statements)
+    tx.commit.assert_awaited()

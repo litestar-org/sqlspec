@@ -29,6 +29,7 @@ from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
     CockroachPsycopgAsyncDataDictionary,
     CockroachPsycopgSyncDataDictionary,
 )
+from sqlspec.adapters.psycopg.core import create_mapped_exception
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncDriver,
     PsycopgAsyncExceptionHandler,
@@ -36,12 +37,14 @@ from sqlspec.adapters.psycopg.driver import (
     PsycopgSyncExceptionHandler,
 )
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
+from sqlspec.driver import AsyncRowStream, SyncRowStream
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from sqlspec.adapters.cockroach_psycopg._typing import CockroachAsyncCursor, CockroachSyncCursor
+    from sqlspec.adapters.psycopg.core import PsycopgAsyncStreamSource, PsycopgSyncStreamSource
     from sqlspec.core import SQLResult
     from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
@@ -50,13 +53,90 @@ __all__ = (
     "CockroachPsycopgAsyncDriver",
     "CockroachPsycopgAsyncExceptionHandler",
     "CockroachPsycopgAsyncSessionContext",
+    "CockroachPsycopgAsyncStreamSource",
     "CockroachPsycopgSyncDriver",
     "CockroachPsycopgSyncExceptionHandler",
     "CockroachPsycopgSyncSessionContext",
+    "CockroachPsycopgSyncStreamSource",
 )
 
 logger = get_logger("sqlspec.adapters.cockroach_psycopg")
 _T = TypeVar("_T")
+
+
+class CockroachPsycopgSyncStreamSource:
+    """Sync chunk source for CockroachDB Psycopg with follower read support."""
+
+    __slots__ = ("_auto_started", "_driver", "_underlying")
+
+    def __init__(
+        self, driver: "CockroachPsycopgSyncDriver", underlying: "PsycopgSyncStreamSource", auto_started: bool
+    ) -> None:
+        self._driver = driver
+        self._underlying = underlying
+        self._auto_started = auto_started
+
+    def start(self) -> None:
+        try:
+            self._underlying.start()
+        except BaseException:
+            if self._auto_started and self._driver._connection_in_transaction():
+                with suppress(Exception):
+                    self._driver.rollback()
+            raise
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        return self._underlying.fetch_chunk()
+
+    def close(self, error: bool = False) -> None:
+        try:
+            self._underlying.close(error=error)
+        finally:
+            if self._auto_started and self._driver._connection_in_transaction():
+                if error:
+                    with suppress(Exception):
+                        self._driver.rollback()
+                else:
+                    self._driver.commit()
+
+
+class CockroachPsycopgAsyncStreamSource:
+    """Async chunk source for CockroachDB Psycopg with follower read support."""
+
+    __slots__ = ("_auto_started", "_driver", "_statement", "_underlying")
+
+    def __init__(
+        self, driver: "CockroachPsycopgAsyncDriver", statement: "SQL", underlying: "PsycopgAsyncStreamSource"
+    ) -> None:
+        self._driver = driver
+        self._statement = statement
+        self._underlying = underlying
+        self._auto_started = False
+
+    async def start(self) -> None:
+        if self._driver._wants_follower_read(self._statement):
+            self._auto_started = await self._driver._begin_follower_read_transaction()
+        try:
+            await self._underlying.start()
+        except BaseException:
+            if self._auto_started and self._driver._connection_in_transaction():
+                with suppress(Exception):
+                    await self._driver.rollback()
+            raise
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        return await self._underlying.fetch_chunk()
+
+    async def close(self, error: bool = False) -> None:
+        try:
+            await self._underlying.close(error=error)
+        finally:
+            if self._auto_started and self._driver._connection_in_transaction():
+                if error:
+                    with suppress(Exception):
+                        await self._driver.rollback()
+                else:
+                    await self._driver.commit()
 
 
 class CockroachPsycopgSyncExceptionHandler(PsycopgSyncExceptionHandler):
@@ -191,6 +271,10 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
+    def _wants_follower_read(self, statement: "SQL") -> bool:
+        """Return True when a statement may run under a follower-read transaction."""
+        return statement.returns_rows() and not statement.is_modifying_operation()
+
     def begin(self) -> None:
         """Begin a transaction and apply follower-read staleness to it.
 
@@ -203,7 +287,13 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             super().begin()
             return
         super().begin()
-        self._apply_follower_reads()
+        try:
+            self._apply_follower_reads()
+        except Exception as exc:
+            with suppress(Exception):
+                self.rollback()
+            self._transaction_active = False
+            raise create_mapped_exception(exc) from exc
 
     def run_transaction_with_retry(self, operation: "Callable[[], _T]") -> _T:
         """Execute a full CockroachDB transaction callback with serialization retries.
@@ -238,7 +328,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             attempt += 1
 
     def dispatch_execute(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
-        auto_started = self._begin_follower_read_transaction() if statement.returns_rows() else False
+        auto_started = self._begin_follower_read_transaction() if self._wants_follower_read(statement) else False
         try:
             result = super().dispatch_execute(cursor, statement)
         except BaseException:
@@ -250,13 +340,36 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             self.commit()
         return result
 
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native psycopg row stream wrapped for follower reads."""
+        auto_started = self._begin_follower_read_transaction() if self._wants_follower_read(statement) else False
+        try:
+            stream = super().dispatch_select_stream(statement, chunk_size)
+            if stream is None:
+                if auto_started and self._connection_in_transaction():
+                    self.commit()
+                return None
+            source = CockroachPsycopgSyncStreamSource(
+                self, cast("PsycopgSyncStreamSource", stream._source), auto_started
+            )
+            return SyncRowStream(source)
+        except BaseException:
+            if auto_started and self._connection_in_transaction():
+                with suppress(Exception):
+                    self.rollback()
+            raise
+
     def handle_database_exceptions(self) -> "CockroachPsycopgSyncExceptionHandler":
         return CockroachPsycopgSyncExceptionHandler()
 
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        auto_started = self._begin_follower_read_transaction() if cached.operation_profile.returns_rows else False
+        auto_started = (
+            self._begin_follower_read_transaction()
+            if (cached.operation_profile.returns_rows and not cached.operation_profile.modifies_rows)
+            else False
+        )
         try:
             result = super()._execute_cache_hit(sql, params, cached)
         except BaseException:
@@ -431,6 +544,10 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
+    def _wants_follower_read(self, statement: "SQL") -> bool:
+        """Return True when a statement may run under a follower-read transaction."""
+        return statement.returns_rows() and not statement.is_modifying_operation()
+
     async def begin(self) -> None:
         """Begin a transaction and apply follower-read staleness to it.
 
@@ -443,7 +560,13 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             await super().begin()
             return
         await super().begin()
-        await self._apply_follower_reads()
+        try:
+            await self._apply_follower_reads()
+        except Exception as exc:
+            with suppress(Exception):
+                await self.rollback()
+            self._transaction_active = False
+            raise create_mapped_exception(exc) from exc
 
     async def run_transaction_with_retry(self, operation: "Callable[[], Awaitable[_T]]") -> _T:
         """Execute a full CockroachDB transaction callback with serialization retries.
@@ -478,7 +601,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             attempt += 1
 
     async def dispatch_execute(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
-        auto_started = await self._begin_follower_read_transaction() if statement.returns_rows() else False
+        auto_started = await self._begin_follower_read_transaction() if self._wants_follower_read(statement) else False
         try:
             result = await super().dispatch_execute(cursor, statement)
         except BaseException:
@@ -490,13 +613,25 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             await self.commit()
         return result
 
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native psycopg row stream wrapped for follower reads."""
+        stream = super().dispatch_select_stream(statement, chunk_size)
+        if stream is None:
+            return None
+        source = CockroachPsycopgAsyncStreamSource(self, statement, cast("PsycopgAsyncStreamSource", stream._source))
+        return AsyncRowStream(source)
+
     def handle_database_exceptions(self) -> "CockroachPsycopgAsyncExceptionHandler":
         return CockroachPsycopgAsyncExceptionHandler()
 
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        auto_started = await self._begin_follower_read_transaction() if cached.operation_profile.returns_rows else False
+        auto_started = (
+            await self._begin_follower_read_transaction()
+            if (cached.operation_profile.returns_rows and not cached.operation_profile.modifies_rows)
+            else False
+        )
         try:
             result = await super()._execute_cache_hit(sql, params, cached)
         except BaseException:

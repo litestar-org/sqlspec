@@ -810,3 +810,82 @@ async def test_cockroach_psycopg_adk_stores_commit_ddl_and_validate_locality() -
     litestar_store = CockroachPsycopgSyncStore(good_cfg)
     litestar_store._table_name = "tenant_a.litestar_sessions"
     assert "idx_tenant_a_litestar_sessions_expires_at" in litestar_store._table_ddl()
+
+
+def test_cockroach_psycopg_follower_read_only_for_readonly_statements(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CockroachPsycopgSyncDriver should not begin follower-read transactions for modifying operations."""
+    in_tx = False
+
+    def _in_tx(_self: Any) -> bool:
+        return in_tx
+
+    def _begin(_self: Any) -> None:
+        nonlocal in_tx
+        in_tx = True
+
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "_connection_in_transaction", _in_tx)
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "begin", _begin)
+
+    conn = MagicMock()
+    cursor = MagicMock()
+    col = MagicMock()
+    col.name = "id"
+    col.type_code = 23
+    cursor.description = [col]
+    cursor.fetchall.return_value = [{"id": 1}]
+    driver = CockroachPsycopgSyncDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    modifying_stmt = SQL("INSERT INTO users (name) VALUES ('alice') RETURNING id")
+    driver.dispatch_execute(cursor, modifying_stmt)
+    assert in_tx is False
+
+
+def test_cockroach_psycopg_begin_follower_read_failure_handling() -> None:
+    """Failing SET TRANSACTION in begin() must rollback, reset transaction active, and raise mapped exception."""
+    conn = MagicMock()
+    conn.autocommit = True
+    conn.info.transaction_status = 0
+    conn.execute.side_effect = RuntimeError("syntax error in staleness")
+
+    driver = CockroachPsycopgSyncDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    with pytest.raises(Exception):
+        driver.begin()
+    assert driver._transaction_active is False
+    conn.rollback.assert_called_once()
+
+
+def test_cockroach_psycopg_select_stream_follower_reads() -> None:
+    """select_stream on a SELECT query with follower reads emits the staleness clause and closes."""
+    executed_statements: list[str] = []
+    conn = MagicMock()
+    conn.autocommit = True
+    conn.info.transaction_status = 0
+
+    def fake_conn_execute(query: str, *args: Any, **kwargs: Any) -> Any:
+        executed_statements.append(query)
+        return MagicMock()
+
+    conn.execute.side_effect = fake_conn_execute
+
+    tx = MagicMock()
+    conn.transaction.return_value = tx
+
+    stream_cursor = MagicMock()
+    col = MagicMock()
+    col.name = "id"
+    stream_cursor.description = [col]
+    stream_cursor.fetchmany.side_effect = [[(1,)], []]
+    conn.cursor.return_value = stream_cursor
+
+    driver = CockroachPsycopgSyncDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    stream = driver.dispatch_select_stream(SQL("SELECT id FROM users"), chunk_size=10)
+    assert stream is not None
+    rows = list(stream)
+    assert rows == [{"id": 1}]
+    assert any("AS OF SYSTEM TIME '-10s'" in s for s in executed_statements)
+    conn.commit.assert_called()
