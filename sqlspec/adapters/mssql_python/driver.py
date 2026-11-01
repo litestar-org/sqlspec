@@ -140,6 +140,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
     __slots__ = (
         "_column_name_cache",
         "_data_dictionary",
+        "_implicit_transaction",
         "_migration_schema_restore",
         "_restore_autocommit",
         "_transaction_active",
@@ -162,6 +163,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         self._migration_schema_restore: tuple[str, str] | None = None
         self._restore_autocommit = False
         self._transaction_active = False
+        self._implicit_transaction = False
 
     @property
     def data_dictionary(self) -> "MssqlPythonSyncDataDictionary":
@@ -170,6 +172,8 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return self._data_dictionary
 
     def dispatch_execute(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
+        if not self._transaction_active and not bool(getattr(self.connection, "autocommit", True)):
+            self._implicit_transaction = True
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         _execute_cursor(cursor, sql, prepared_parameters)
 
@@ -189,6 +193,8 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
 
     def dispatch_execute_many(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
+        if not self._transaction_active and not bool(getattr(self.connection, "autocommit", True)):
+            self._implicit_transaction = True
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
         cursor.executemany(sql, cast("Any", prepared_parameters))
@@ -196,6 +202,8 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
+        if not self._transaction_active and not bool(getattr(self.connection, "autocommit", True)):
+            self._implicit_transaction = True
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         successful_count = 0
@@ -234,6 +242,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {exc}"
             raise SQLSpecError(msg) from exc
         self._transaction_active = False
+        self._implicit_transaction = False
         self._restore_connection_autocommit()
 
     def rollback(self) -> None:
@@ -244,6 +253,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from exc
         finally:
             self._transaction_active = False
+            self._implicit_transaction = False
             self._restore_connection_autocommit()
 
     def with_cursor(self, connection: "MssqlPythonConnection") -> "MssqlPythonCursor":
@@ -612,7 +622,8 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return super()._execute_cache_hit(sql, params, cached)
 
     def _connection_in_transaction(self) -> bool:
-        return self._transaction_active
+        """Return True for explicit transactions and for open implicit transactions."""
+        return self._transaction_active or self._implicit_transaction
 
     def _restore_connection_autocommit(self) -> None:
         restore_autocommit = self._restore_autocommit
