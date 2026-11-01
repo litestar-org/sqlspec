@@ -27,6 +27,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_many_rowcount,
 )
 from sqlspec.core import SQL, ParameterStyle
+from sqlspec.core.compiler import SQLProcessor
 from sqlspec.dialects import PGTextSearch
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -35,6 +36,7 @@ from sqlspec.exceptions import (
     DeadlockError,
     ForeignKeyViolationError,
     IntegrityError,
+    NotFoundError,
     NotNullViolationError,
     OperationalError,
     OperationCancelledError,
@@ -642,3 +644,100 @@ def test_adbc_driver_dispatch_execute_lowercases_oracle_columns() -> None:
 
     assert result.column_names == ["user_id", "MixedCase"]
     assert result.selected_data == [{"user_id": 1, "MixedCase": "a"}]
+
+
+def test_adbc_begin_with_autocommit() -> None:
+    """AdbcDriver.begin disables autocommit and commit/rollback restores it."""
+
+    class MockConn:
+        def __init__(self) -> None:
+            self.autocommit = True
+            self.committed = False
+            self.rolled_back = False
+
+        def adbc_get_info(self) -> dict[str, str]:
+            return {"driver_name": "sqlite"}
+
+        def commit(self) -> None:
+            self.committed = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+    conn = MockConn()
+    driver = AdbcDriver(cast("Any", conn))
+    assert conn.autocommit is True
+    driver.begin()
+    assert conn.autocommit is False
+    assert driver._transaction_active is True
+    driver.commit()
+    assert conn.autocommit is True
+    assert driver._transaction_active is False
+    assert conn.committed is True
+
+    conn.autocommit = True
+    driver.begin()
+    assert conn.autocommit is False
+    driver.rollback()
+    assert conn.autocommit is True
+    assert driver._transaction_active is False
+    assert conn.rolled_back is True
+
+
+def test_pending_exception_preserves_cause() -> None:
+    """_check_pending_exception preserves original exception cause."""
+
+    class MockConn:
+        def adbc_get_info(self) -> dict[str, str]:
+            return {"driver_name": "sqlite"}
+
+    driver = AdbcDriver(cast("Any", MockConn()))
+    orig_exc = DatabaseError("query failed", status_code=AdbcStatusCode.INTERNAL)
+    mapped_exc = adbc_core.create_mapped_exception(orig_exc)
+    handler = driver.handle_database_exceptions()
+    handler.pending_exception = mapped_exc
+
+    with pytest.raises(OperationalError) as exc_info:
+        driver._check_pending_exception(handler)
+
+    assert exc_info.value is mapped_exc
+    assert exc_info.value.__cause__ is orig_exc
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_cls"),
+    [
+        (AdbcStatusCode.TIMEOUT, QueryTimeoutError),
+        (AdbcStatusCode.CANCELLED, OperationCancelledError),
+        (AdbcStatusCode.UNAUTHENTICATED, PermissionDeniedError),
+        (AdbcStatusCode.UNAUTHORIZED, PermissionDeniedError),
+        (AdbcStatusCode.NOT_FOUND, NotFoundError),
+        (AdbcStatusCode.ALREADY_EXISTS, IntegrityError),
+        (AdbcStatusCode.INVALID_ARGUMENT, DataError),
+        (AdbcStatusCode.IO, DatabaseConnectionError),
+        (AdbcStatusCode.INTEGRITY, IntegrityError),
+        (AdbcStatusCode.INVALID_STATE, OperationalError),
+        (AdbcStatusCode.INTERNAL, OperationalError),
+        (AdbcStatusCode.NOT_IMPLEMENTED, SQLSpecError),
+    ],
+)
+def test_adbc_status_code_mappings(status_code: AdbcStatusCode, expected_cls: type[SQLSpecError]) -> None:
+    """_map_adbc_status_exception maps ADBC status codes to SQLSpecError classes."""
+    error = DatabaseError("adbc error", status_code=status_code)
+    mapped = adbc_core.create_mapped_exception(error)
+    assert isinstance(mapped, expected_cls)
+
+
+def test_duckdb_copy_ast_transformer_caching() -> None:
+    """DuckDB statement config omits ast_transformer so compiled SQL can be cached."""
+    config = get_statement_config("duckdb").replace(enable_caching=True)
+    assert config.parameter_config.ast_transformer is None
+
+    stmt = SQL("SELECT 1 WHERE x = :val", {"val": 42}, statement_config=config)
+    compiled_sql, _ = stmt.compile()
+    assert compiled_sql
+
+    processor = SQLProcessor(config)
+    processor.compile("SELECT 1 WHERE x = :val", {"val": 42})
+    processor.compile("SELECT 1 WHERE x = :val", {"val": 99})
+    assert processor._cache_hits == 1

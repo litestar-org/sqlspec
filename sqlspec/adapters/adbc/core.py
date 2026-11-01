@@ -32,6 +32,7 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     ImproperConfigurationError,
     IntegrityError,
+    NotFoundError,
     NotNullViolationError,
     OperationalError,
     OperationCancelledError,
@@ -50,6 +51,8 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 from sqlspec.utils.uuids import uuid4, uuid_from_string
+
+AdbcStatusCode: Any = import_optional_attr("adbc_driver_manager", "AdbcStatusCode")
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -834,6 +837,39 @@ def prepare_postgres_parameters(
     )
 
 
+_ADBC_STATUS_CODE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "TIMEOUT": (QueryTimeoutError, "query timeout"),
+    "CANCELLED": (OperationCancelledError, "operation cancelled"),
+    "UNAUTHENTICATED": (PermissionDeniedError, "unauthenticated"),
+    "UNAUTHORIZED": (PermissionDeniedError, "unauthorized"),
+    "NOT_FOUND": (NotFoundError, "not found"),
+    "ALREADY_EXISTS": (IntegrityError, "already exists"),
+    "INVALID_ARGUMENT": (DataError, "invalid argument"),
+    "INVALID_DATA": (DataError, "invalid data"),
+    "INTEGRITY": (IntegrityError, "integrity violation"),
+    "IO": (DatabaseConnectionError, "I/O error"),
+    "INVALID_STATE": (OperationalError, "invalid state"),
+    "INTERNAL": (OperationalError, "internal error"),
+    "NOT_IMPLEMENTED": (SQLSpecError, "not implemented"),
+}
+
+
+def _map_adbc_status_exception(error: Any) -> "SQLSpecError | None":
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        return None
+    status_name: str | None = getattr(status_code, "name", None)
+    if status_name is None and isinstance(status_code, int) and AdbcStatusCode is not None:
+        with contextlib.suppress(ValueError):
+            status_name = AdbcStatusCode(status_code).name
+    if status_name is None:
+        status_name = str(status_code).upper()
+    if status_name in _ADBC_STATUS_CODE_MAP:
+        exc_cls, desc = _ADBC_STATUS_CODE_MAP[status_name]
+        return _create_adbc_error(error, exc_cls, desc)
+    return None
+
+
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map ADBC errors to SQLSpec exceptions.
 
@@ -853,13 +889,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
-    status_code = getattr(error, "status_code", None)
-    status_name = getattr(status_code, "name", str(status_code)).upper()
-    if status_name == "TIMEOUT":
-        return _create_adbc_error(error, QueryTimeoutError, "query timeout")
-    if status_name == "CANCELLED":
-        return _create_adbc_error(error, OperationCancelledError, "operation cancelled")
+    _ = logger
+    if status_mapped := _map_adbc_status_exception(error):
+        return status_mapped
 
     raw_message = str(error)
     error_msg = raw_message.lower()
@@ -961,10 +993,11 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         "type_coercion_map": _BASE_TYPE_COERCION_MAP,
     }
 
+    statement_overrides: dict[str, Any] = {"dialect": sqlglot_dialect}
     if detected_dialect == "duckdb":
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK, ParameterStyle.NUMERIC}
-        parameter_overrides["ast_transformer"] = _transform_duckdb_copy_parameters
+        statement_overrides["statement_transformers"] = (_transform_duckdb_copy_parameters,)
     elif detected_dialect == "oracle":
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.POSITIONAL_COLON}
@@ -976,7 +1009,7 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
 
     return build_statement_config_from_profile(
-        profile, parameter_overrides=parameter_overrides, statement_overrides={"dialect": sqlglot_dialect}
+        profile, parameter_overrides=parameter_overrides, statement_overrides=statement_overrides
     )
 
 

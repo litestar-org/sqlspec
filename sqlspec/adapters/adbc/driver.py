@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast, final
 
 from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcNativeError, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
+    _transform_duckdb_copy_parameters,
     apply_driver_features,
     cleanup_duckdb_profile_path,
     collect_rows,
@@ -178,6 +179,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         "_is_flightsql",
         "_is_postgres",
         "_json_serializer",
+        "_previous_autocommit",
         "_transaction_active",
         "dialect",
     )
@@ -219,6 +221,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._data_dictionary: AdbcDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._transaction_active = False
+        self._previous_autocommit: bool | None = None
 
     @property
     def data_dictionary(self) -> "AdbcDataDictionary":
@@ -435,6 +438,11 @@ class AdbcDriver(SyncDriverAdapterBase):
         ADBC connections operate with autocommit disabled and manage the
         active transaction internally, so no explicit statement is issued.
         """
+        if hasattr(self.connection, "autocommit"):
+            if self._previous_autocommit is None:
+                self._previous_autocommit = bool(self.connection.autocommit)
+            if self.connection.autocommit:
+                self.connection.autocommit = False
         self._transaction_active = True
 
     def commit(self) -> None:
@@ -445,6 +453,10 @@ class AdbcDriver(SyncDriverAdapterBase):
             raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
+            if self._previous_autocommit is not None:
+                if hasattr(self.connection, "autocommit"):
+                    self.connection.autocommit = self._previous_autocommit
+                self._previous_autocommit = None
 
     def rollback(self) -> None:
         """Rollback database transaction."""
@@ -454,6 +466,10 @@ class AdbcDriver(SyncDriverAdapterBase):
             raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
+            if self._previous_autocommit is not None:
+                if hasattr(self.connection, "autocommit"):
+                    self.connection.autocommit = self._previous_autocommit
+                self._previous_autocommit = None
 
     def create_savepoint(self, name: str) -> None:
         """Create a savepoint within the current transaction.
@@ -622,7 +638,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 if cursor is not None:
                     with contextlib.suppress(Exception):
                         cursor_manager.__exit__(None, None, None)
-                raise exc_handler.pending_exception from None
+                self._check_pending_exception(exc_handler)
             if arrow_result is not None:
                 return arrow_result
             if cursor is None or reader is None:
@@ -674,8 +690,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
 
         if arrow_result is None:
             msg = "Unreachable"
@@ -762,8 +777,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 if isinstance(ingest_result, int) and ingest_result > 0:
                     row_count = ingest_result
 
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            self._check_pending_exception(exc_handler)
             telemetry_payload: StorageTelemetry = {
                 "rows_processed": row_count,
                 "bytes_processed": 0,
@@ -782,8 +796,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 handle_postgres_rollback(self._dialect_name, cursor, logger)
                 raise
 
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -874,6 +887,13 @@ class AdbcDriver(SyncDriverAdapterBase):
     def _compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> "tuple[str, object]":
+        if (
+            self._dialect_name == "duckdb"
+            and statement_config.parameter_config.ast_transformer is None
+            and statement.raw_sql.lstrip().upper().startswith(("COPY", "INSERT"))
+        ):
+            param_config = statement_config.parameter_config.replace(ast_transformer=_transform_duckdb_copy_parameters)
+            statement_config = statement_config.replace(parameter_config=param_config)
         compiled_sql, prepared_parameters = super()._compiled_sql(
             statement, statement_config, flatten_single_parameters=flatten_single_parameters
         )
