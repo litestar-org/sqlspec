@@ -5,6 +5,7 @@ database dialects, parameter style conversion, and transaction management.
 """
 
 import contextlib
+import sys
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast, final
@@ -98,14 +99,16 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
 class AdbcSelectStreamSource:
     """Native ADBC chunk source backed by a ``RecordBatchReader``."""
 
-    __slots__ = ("_cursor_manager", "_driver", "_parameters", "_reader", "_sql")
+    __slots__ = ("_chunk_size", "_cursor_manager", "_driver", "_parameters", "_reader", "_remainder", "_sql")
 
-    def __init__(self, driver: "AdbcDriver", sql: str, parameters: Any) -> None:
+    def __init__(self, driver: "AdbcDriver", sql: str, parameters: Any, chunk_size: int = 1000) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
+        self._chunk_size = chunk_size
         self._cursor_manager: AdbcCursor | None = None
         self._reader: Any = None
+        self._remainder: list[dict[str, Any]] = []
 
     def start(self) -> None:
         cursor_manager = self._driver.with_cursor(self._driver.connection)
@@ -114,10 +117,23 @@ class AdbcSelectStreamSource:
         try:
             cursor = cursor_manager.__enter__()
             handler = self._driver.handle_database_exceptions()
-            with handler:
-                execute_parameters = normalize_postgres_empty_parameters(self._driver._dialect_name, self._parameters)
-                cursor.execute(self._sql, parameters=execute_parameters)
-                reader = _fetch_record_batch(cursor)
+            if sys.exc_info()[1] is None:
+                with handler:
+                    execute_parameters = normalize_postgres_empty_parameters(
+                        self._driver._dialect_name, self._parameters
+                    )
+                    cursor.execute(self._sql, parameters=execute_parameters)
+                    reader = _fetch_record_batch(cursor)
+            else:
+
+                def _stream_op() -> Any:
+                    execute_parameters = normalize_postgres_empty_parameters(
+                        self._driver._dialect_name, self._parameters
+                    )
+                    cursor.execute(self._sql, parameters=execute_parameters)
+                    return _fetch_record_batch(cursor)
+
+                reader = self._driver._run_with_exception_handler(handler, _stream_op)
             self._driver._check_pending_exception(handler)
         except BaseException:
             if cursor is not None:
@@ -130,14 +146,27 @@ class AdbcSelectStreamSource:
         self._reader = iter(reader)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
+        chunk_size = self._chunk_size
+        results: list[dict[str, Any]] = []
+        if self._remainder:
+            if len(self._remainder) >= chunk_size:
+                chunk = self._remainder[:chunk_size]
+                self._remainder = self._remainder[chunk_size:]
+                return chunk
+            results.extend(self._remainder)
+            self._remainder = []
+
         reader = self._reader
         if reader is None:
-            return []
-        while True:
+            return results
+
+        while len(results) < chunk_size:
             try:
                 batch = next(reader)
             except StopIteration:
-                return []
+                self._reader = None
+                break
+
             if bool(self._driver.driver_features.get("enable_lowercase_column_names", False)) and hasattr(
                 batch, "schema"
             ):
@@ -145,14 +174,22 @@ class AdbcSelectStreamSource:
                 normalized_names = normalize_column_names(batch_names, self._driver.driver_features)
                 if normalized_names != batch_names and hasattr(batch, "rename_columns"):
                     batch = batch.rename_columns(normalized_names)
+
             rows = arrow_table_to_pylist(
                 batch,
                 decode_arrow_extension_types=bool(
                     self._driver.driver_features.get("enable_arrow_extension_types", True)
                 ),
             )
-            if rows:
-                return rows
+            needed = chunk_size - len(results)
+            if len(rows) <= needed:
+                results.extend(rows)
+            else:
+                results.extend(rows[:needed])
+                self._remainder = rows[needed:]
+                break
+
+        return results
 
     def close(self, error: bool = False) -> None:
         self._reader = None
@@ -211,7 +248,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
         statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
-        if not explicit_lowercase and (dialect or self._detected_dialect) in {"oracle", "db2"}:
+        if not explicit_lowercase and (dialect or self._detected_dialect) in {"oracle", "db2", "snowflake"}:
             normalized_features["enable_lowercase_column_names"] = True
         super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
         self.dialect = statement_config.dialect
@@ -426,11 +463,10 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
         """Return a native ADBC stream backed by ``fetch_record_batch()``."""
-        _ = chunk_size
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        return SyncRowStream(AdbcSelectStreamSource(self, sql, prepared_parameters))
+        return SyncRowStream(AdbcSelectStreamSource(self, sql, prepared_parameters, chunk_size=chunk_size))
 
     def begin(self) -> None:
         """Begin database transaction.
@@ -607,7 +643,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         if return_format in {"reader", "batches"}:
             cursor_manager = self.with_cursor(self.connection)
             cursor = None
-            reader: object | None = None
+            reader: Any = None
             with exc_handler:
                 cursor = cursor_manager.__enter__()
                 try:
@@ -647,6 +683,19 @@ class AdbcDriver(SyncDriverAdapterBase):
                         cursor_manager.__exit__(None, None, None)
                 msg = "ADBC did not return an Arrow reader."
                 raise SQLSpecError(msg)
+            if bool(self.driver_features.get("enable_lowercase_column_names", False)) and hasattr(reader, "schema"):
+                raw_names = list(reader.schema.names)
+                normalized_names = normalize_column_names(raw_names, self.driver_features)
+                if normalized_names != raw_names and _pa is not None:
+                    new_schema = _pa.schema([
+                        field.with_name(name) for field, name in zip(reader.schema, normalized_names, strict=True)
+                    ])
+
+                    def _lower_batches() -> Any:
+                        for batch in reader:
+                            yield batch.rename_columns(normalized_names)
+
+                    reader = _pa.RecordBatchReader.from_batches(new_schema, _lower_batches())
             try:
                 return build_arrow_result_from_reader(
                     prepared_statement,

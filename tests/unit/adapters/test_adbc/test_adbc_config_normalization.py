@@ -798,3 +798,21 @@ def _resolve_driver_name(config: AdbcConfig) -> str:
 def _get_connection_config_dict(config: AdbcConfig) -> dict[str, Any]:
     """Build the normalized connection configuration."""
     return build_connection_config(config.connection_config)
+
+
+def test_snowflake_lowercase_default() -> None:
+    """Snowflake dialect defaults enable_lowercase_column_names to True."""
+    config = AdbcConfig(connection_config={"driver_name": "snowflake"})
+    assert config.driver_features["enable_lowercase_column_names"] is True
+
+
+def test_driver_features_alias_consolidation() -> None:
+    """AdbcConfig consolidates legacy alias pairs to enable_*."""
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite"},
+        driver_features={"strict_type_coercion": True, "arrow_extension_types": False},
+    )
+    assert config.driver_features["enable_strict_type_coercion"] is True
+    assert config.driver_features["enable_arrow_extension_types"] is False
+    assert "strict_type_coercion" not in config.driver_features
+    assert "arrow_extension_types" not in config.driver_features

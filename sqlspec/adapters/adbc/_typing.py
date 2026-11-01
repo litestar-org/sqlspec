@@ -75,6 +75,7 @@ class AdbcSessionContext:
         "_acquire_connection",
         "_connection",
         "_driver",
+        "_driver_class",
         "_driver_features",
         "_prepare_driver",
         "_release_connection",
@@ -88,21 +89,27 @@ class AdbcSessionContext:
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AdbcDriver], AdbcDriver]",
+        driver_class: "type[AdbcDriver] | None" = None,
     ) -> None:
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
+        self._driver_class = driver_class
         self._connection: Any = None
         self._driver: AdbcDriver | None = None
 
     def __enter__(self) -> "AdbcDriver":
-        from sqlspec.adapters.adbc.driver import AdbcDriver
+        driver_class = self._driver_class
+        if driver_class is None:
+            from sqlspec.adapters.adbc.driver import AdbcDriver
+
+            driver_class = AdbcDriver
 
         self._connection = self._acquire_connection()
         resolved_dialect = resolve_dialect_name(self._statement_config.dialect) or None
-        self._driver = AdbcDriver(
+        self._driver = driver_class(
             connection=self._connection,
             statement_config=self._statement_config,
             driver_features=self._driver_features,

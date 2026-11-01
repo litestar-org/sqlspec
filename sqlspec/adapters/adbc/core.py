@@ -1034,14 +1034,16 @@ def apply_driver_features(
 
     json_serializer = cast("Callable[[Any], str] | None", processed_features.setdefault("json_serializer", to_json))
     processed_features.setdefault("enable_cast_detection", True)
-    processed_features.setdefault("strict_type_coercion", False)
-    processed_features.setdefault("enable_strict_type_coercion", processed_features["strict_type_coercion"])
-    processed_features.setdefault("arrow_extension_types", True)
-    processed_features.setdefault("enable_arrow_extension_types", processed_features["arrow_extension_types"])
+    if "strict_type_coercion" in processed_features:
+        processed_features.setdefault("enable_strict_type_coercion", processed_features.pop("strict_type_coercion"))
+    processed_features.setdefault("enable_strict_type_coercion", False)
+    if "arrow_extension_types" in processed_features:
+        processed_features.setdefault("enable_arrow_extension_types", processed_features.pop("arrow_extension_types"))
+    processed_features.setdefault("enable_arrow_extension_types", True)
     processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     processed_features.setdefault("enable_paradedb", True)
     processed_features.setdefault("enable_pg_textsearch", True)
-    processed_features.setdefault("enable_lowercase_column_names", resolved_dialect in {"oracle", "db2"})
+    processed_features.setdefault("enable_lowercase_column_names", resolved_dialect in {"oracle", "db2", "snowflake"})
     processed_features.setdefault("enable_statement_profiling", False)
 
     if json_serializer is not None:
@@ -1399,6 +1401,8 @@ _BASE_TYPE_COERCION_MAP: Final[dict[type, Any]] = {
     int: _identity,
     float: _identity,
     bytes: _identity,
+    bytearray: bytes,
+    memoryview: bytes,
     tuple: _convert_array_for_postgres_adbc,
     list: _convert_array_for_postgres_adbc,
     dict: _identity,
@@ -1795,15 +1799,15 @@ def _map_sqlstate_exception(error: Any, sqlstate: str) -> SQLSpecError:
 
 
 def _normalize_adbc_driver_features(processed_features: "dict[str, Any]") -> "dict[str, Any]":
-    if "strict_type_coercion" in processed_features and "enable_strict_type_coercion" not in processed_features:
-        processed_features["enable_strict_type_coercion"] = processed_features["strict_type_coercion"]
-    if "enable_strict_type_coercion" in processed_features and "strict_type_coercion" not in processed_features:
-        processed_features["strict_type_coercion"] = processed_features["enable_strict_type_coercion"]
+    if "strict_type_coercion" in processed_features:
+        val = processed_features.pop("strict_type_coercion")
+        if "enable_strict_type_coercion" not in processed_features:
+            processed_features["enable_strict_type_coercion"] = val
 
-    if "arrow_extension_types" in processed_features and "enable_arrow_extension_types" not in processed_features:
-        processed_features["enable_arrow_extension_types"] = processed_features["arrow_extension_types"]
-    if "enable_arrow_extension_types" in processed_features and "arrow_extension_types" not in processed_features:
-        processed_features["arrow_extension_types"] = processed_features["enable_arrow_extension_types"]
+    if "arrow_extension_types" in processed_features:
+        val = processed_features.pop("arrow_extension_types")
+        if "enable_arrow_extension_types" not in processed_features:
+            processed_features["enable_arrow_extension_types"] = val
 
     return processed_features
 
@@ -1970,9 +1974,6 @@ def _prepare_parameter_sequence_with_casts(
                         param = converter_func(param)
             result.append(param)
     return tuple(result) if isinstance(parameters, tuple) else result
-
-
-_prepare_batch_with_casts = prepare_batch_with_casts
 
 
 def _resolve_gizmosql_driver_connect() -> str:

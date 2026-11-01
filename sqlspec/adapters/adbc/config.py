@@ -149,12 +149,8 @@ class AdbcDriverFeatures(TypedDict):
     """Detect explicit SQL casts such as ``::jsonb`` or ``::vector`` during parameter preparation (defaults to ``True``)."""
     enable_strict_type_coercion: NotRequired[bool]
     """Raise an error on unsupported parameter types instead of best-effort conversion (defaults to ``False``)."""
-    strict_type_coercion: NotRequired[bool]
-    """Alias normalized to ``enable_strict_type_coercion``."""
     enable_arrow_extension_types: NotRequired[bool]
     """Preserve PyArrow extension type metadata when materializing Arrow results (defaults to ``True``)."""
-    arrow_extension_types: NotRequired[bool]
-    """Alias normalized to ``enable_arrow_extension_types``."""
     enable_pgvector: NotRequired[bool]
     """Probe ``pg_extension`` for ``vector`` on PostgreSQL ADBC connections (defaults to ``True`` when ``pgvector`` is installed)."""
     enable_paradedb: NotRequired[bool]
@@ -162,7 +158,7 @@ class AdbcDriverFeatures(TypedDict):
     enable_pg_textsearch: NotRequired[bool]
     """Probe ``pg_extension`` for ``pg_textsearch`` BM25 support on PostgreSQL ADBC connections (defaults to ``True``)."""
     enable_lowercase_column_names: NotRequired[bool]
-    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Oracle and Db2 ADBC backends)."""
+    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Oracle, Db2, and Snowflake ADBC backends)."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec table-backed event channel support."""
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
@@ -311,7 +307,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features) if driver_features else {}
-        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2"}:
+        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2", "snowflake"}:
             features_dict["enable_lowercase_column_names"] = True
         self._user_connection_hook = cast(
             "Callable[[AdbcConnection], None] | None", features_dict.pop("on_connection_create", None)
@@ -412,6 +408,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             statement_config=statement_config,
             driver_features=handler.driver_features,
             prepare_driver=self._prepare_driver,
+            driver_class=AdbcDriver,
         )
 
     def get_signature_namespace(self) -> "dict[str, Any]":

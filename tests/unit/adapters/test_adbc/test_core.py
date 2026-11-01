@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 from types import NoneType, SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 from uuid import UUID
 
 import pyarrow as pa
@@ -12,6 +13,8 @@ from adbc_driver_manager import AdbcStatusCode, DatabaseError
 
 from sqlspec.adapters.adbc import AdbcDriver
 from sqlspec.adapters.adbc import core as adbc_core
+from sqlspec.adapters.adbc import driver as adbc_driver_mod
+from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     build_connection_config,
     collect_rows,
@@ -774,3 +777,98 @@ def test_type_converter_caching() -> None:
     conv1 = get_adbc_type_converter("postgres")
     conv2 = get_adbc_type_converter("postgres")
     assert conv1 is conv2
+
+
+def test_bytearray_memoryview_coercion() -> None:
+    """_BASE_TYPE_COERCION_MAP coerces bytearray and memoryview to bytes."""
+    coercion = adbc_core._BASE_TYPE_COERCION_MAP
+    assert coercion[bytearray] is bytes
+    assert coercion[memoryview] is bytes
+
+
+def test_core_unused_symbols() -> None:
+    """Dead alias _prepare_batch_with_casts is removed from adbc.core."""
+    assert not hasattr(adbc_core, "_prepare_batch_with_casts")
+
+
+def test_session_context_driver() -> None:
+    """AdbcSessionContext uses provided driver_class without lazy import."""
+    driver_instance = Mock()
+    mock_driver_cls = Mock(return_value=driver_instance)
+    mock_conn = Mock()
+    ctx = AdbcSessionContext(
+        acquire_connection=lambda: mock_conn,
+        release_connection=lambda _conn, **_kw: None,
+        statement_config=get_statement_config("postgres"),
+        driver_features={},
+        prepare_driver=lambda d: d,
+        driver_class=mock_driver_cls,
+    )
+    with ctx as driver:
+        assert driver is driver_instance
+    mock_driver_cls.assert_called_once()
+
+
+def test_select_stream_chunk_size() -> None:
+    """AdbcSelectStreamSource buffers and returns chunks of specified chunk_size."""
+    batch = pa.record_batch([pa.array([1, 2, 3, 4, 5])], names=["id"])
+    reader = iter([batch])
+
+    class _MockDriver:
+        driver_features: dict[str, Any] = {}
+        _dialect_name = "sqlite"
+
+        def with_cursor(self, _conn: Any) -> Any:
+            return Mock()
+
+        def handle_database_exceptions(self) -> Any:
+            return Mock()
+
+        def _check_pending_exception(self, _handler: Any) -> None:
+            pass
+
+    source = adbc_driver_mod.AdbcSelectStreamSource(cast("Any", _MockDriver()), "SELECT 1", (), chunk_size=2)
+    source._reader = reader
+    chunk1 = source.fetch_chunk()
+    assert len(chunk1) == 2
+    chunk2 = source.fetch_chunk()
+    assert len(chunk2) == 2
+    chunk3 = source.fetch_chunk()
+    assert len(chunk3) == 1
+    assert source.fetch_chunk() == []
+
+
+def test_select_to_arrow_lowercase_columns() -> None:
+    """select_to_arrow normalizes reader schema to lowercase when enable_lowercase_column_names is set."""
+    table = pa.table({"UPPER_COL": [1, 2]})
+    mock_cursor = Mock()
+    mock_cursor.execute.return_value = None
+    mock_cursor.fetch_record_batch.return_value = table.to_reader()
+    mock_conn = Mock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    driver = AdbcDriver(
+        mock_conn,
+        statement_config=get_statement_config("oracle"),
+        driver_features={"enable_lowercase_column_names": True},
+    )
+    result = driver.select_to_arrow("SELECT UPPER_COL FROM t", return_format="reader")
+    reader = result.data
+    assert reader.schema.names == ["upper_col"]
+
+
+def test_adbc_exception_isolation() -> None:
+    """AdbcSelectStreamSource routes execution through exception handler with isolation check."""
+    mock_conn = Mock()
+    mock_cursor = Mock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_cursor.execute.return_value = None
+    batch = pa.record_batch([pa.array([1])], names=["id"])
+
+    driver = AdbcDriver(mock_conn, statement_config=get_statement_config("sqlite"))
+
+    source = adbc_driver_mod.AdbcSelectStreamSource(driver, "SELECT 1", ())
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(adbc_driver_mod, "_fetch_record_batch", lambda _c: iter([batch]))
+        source.start()
+        assert source._reader is not None
