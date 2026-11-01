@@ -324,7 +324,12 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         self._check_pending_exception(handler)
 
     def reset_migration_session_schema(self) -> None:
-        """Restore the current schema captured by ``set_migration_session_schema``."""
+        """Restore the current schema captured by ``set_migration_session_schema``.
+
+        The captured schema is quoted before passing to ``build_set_schema_sql``
+        to preserve lowercase or mixed-case catalog schema names from being folded
+        to uppercase.
+        """
         previous_schema = self._migration_schema_restore
         if previous_schema is None:
             return
@@ -663,7 +668,12 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             self._check_pending_exception(handler)
 
     async def reset_migration_session_schema(self) -> None:
-        """Restore the current schema captured by ``set_migration_session_schema``."""
+        """Restore the current schema captured by ``set_migration_session_schema``.
+
+        The captured schema is quoted before passing to ``build_set_schema_sql``
+        to preserve lowercase or mixed-case catalog schema names from being folded
+        to uppercase.
+        """
         previous_schema = self._migration_schema_restore
         if previous_schema is None:
             return
