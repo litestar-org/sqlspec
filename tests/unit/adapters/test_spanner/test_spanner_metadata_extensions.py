@@ -27,7 +27,8 @@ def test_get_constraints_by_table() -> None:
     results = dictionary.get_constraints(cast(Any, driver), table="Albums")
 
     assert len(results) == 1
-    assert driver.last_params.get("table_name") == "Albums"
+    table_param = driver.last_params.get("table_name")
+    assert getattr(table_param, "value", table_param) == "Albums"
     assert "TABLE_CONSTRAINTS" in str(driver.last_query)
 
 
@@ -38,8 +39,10 @@ def test_get_constraints_by_schema() -> None:
     results = dictionary.get_constraints(cast(Any, driver), schema="catalog")
 
     assert len(results) == 1
-    assert driver.last_params.get("schema_name") == "catalog"
-    assert driver.last_params.get("table_name") is None
+    schema_param = driver.last_params.get("schema_name")
+    assert getattr(schema_param, "value", schema_param) == "catalog"
+    table_param = driver.last_params.get("table_name")
+    assert getattr(table_param, "value", table_param) is None
 
 
 def test_get_sequences() -> None:
@@ -133,3 +136,26 @@ def test_postgresql_mode_data_dictionary_routing() -> None:
 
     dictionary.get_change_streams(cast(Any, driver))
     assert "information_schema.change_streams" in str(driver.last_query)
+
+
+def test_untyped_none_filter_parameters_wrapped() -> None:
+    """get_constraints wraps None filter parameters in TypedParameter with str type."""
+    from sqlspec.core import TypedParameter
+
+    dictionary = SpannerSyncDataDictionary()
+    driver = MockSpannerDriver()
+
+    dictionary.get_constraints(cast(Any, driver), schema=None, table=None)
+    table_param = driver.last_params.get("table_name")
+    assert isinstance(table_param, TypedParameter)
+    assert table_param.value is None
+    assert table_param.original_type is str
+
+
+def test_spanner_unsupported_domains_reported() -> None:
+    """get_metadata_capabilities reports UNSUPPORTED for schemas and dependencies."""
+    dictionary = SpannerSyncDataDictionary()
+    driver = MockSpannerDriver()
+    profile = dictionary.get_metadata_capabilities(driver)
+    assert profile.get("schemas").support == MetadataSupport.UNSUPPORTED
+    assert profile.get("dependencies").support == MetadataSupport.UNSUPPORTED

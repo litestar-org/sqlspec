@@ -52,6 +52,7 @@ SPANNER_CONFIG = DialectConfig(
     feature_flags=SPANNER_FEATURE_FLAGS,
     type_mappings=SPANNER_TYPE_MAPPINGS,
     version_pattern=SPANNER_VERSION_PATTERN,
+    default_schema="",
 )
 
 register_dialect(SPANNER_CONFIG)
