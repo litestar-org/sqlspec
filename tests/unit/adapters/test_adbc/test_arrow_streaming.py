@@ -1,11 +1,14 @@
 """Unit tests for ADBC Arrow streaming paths."""
 
+from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pytest
 from adbc_driver_manager import AdbcStatusCode, DatabaseError
 
+from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import get_statement_config
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcSelectStreamSource
@@ -153,6 +156,52 @@ def test_lazy_fallback_stream_taints_session_before_execution() -> None:
         stream = driver.select_stream("UPDATE items SET x = 1")
     assert released == [driver]
     stream.close()
+
+
+@pytest.mark.parametrize("kind,consume", [("row", False), ("reader", False), ("reader", True)])
+def test_pooled_lazy_stream_closes_native_owners_then_evicts_origin(
+    monkeypatch: pytest.MonkeyPatch, kind: str, consume: bool
+) -> None:
+    """Stream cleanup precedes native connection disposal and the next session gets another clone."""
+
+    class _PooledStreamingConnection(_AdbcStreamingConnection):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_count = 0
+            self.rollback_count = 0
+
+        def rollback(self) -> None:
+            self.rollback_count += 1
+
+        def close(self) -> None:
+            expected = 0 if kind == "row" else 1
+            assert self.cursor_obj.close_count == expected
+            assert self.cursor_obj.reader_obj.close_count == expected
+            self.close_count += 1
+
+    seed, replacement = MagicMock(), MagicMock()
+    lease = _PooledStreamingConnection()
+    seed.adbc_clone.side_effect = [lease, replacement]
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed)
+    config = AdbcConfig(
+        connection_config={"driver_name": "postgres"},
+        pool_config={"max_size": 1, "timeout": 0},
+        driver_features={"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False},
+    )
+    with config.provide_session() as session:
+        assert session.connection is lease
+        if kind == "row":
+            session.select_stream("SELECT 1 AS x", native_only=True)
+        else:
+            reader = session.select_to_arrow("SELECT 1 AS x", return_format="reader").data
+            if consume:
+                assert reader.read_all().to_pydict() == {"x": [1, 2, 3]}
+    assert lease.close_count == 1
+    assert lease.rollback_count == 1
+    with config.provide_session() as session:
+        assert session.connection is replacement
+    config.close_pool()
+    seed.close.assert_called_once_with()
 
 
 @pytest.mark.parametrize("stage", ["exit", "body", "setup"])

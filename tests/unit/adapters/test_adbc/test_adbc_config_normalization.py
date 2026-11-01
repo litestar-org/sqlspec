@@ -1,5 +1,10 @@
 """Unit tests for ADBC config normalization helpers."""
 
+import importlib.metadata
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from importlib import import_module
 from typing import Any, cast, get_type_hints
 from unittest.mock import MagicMock
 
@@ -16,6 +21,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_driver_connect_func,
     resolve_driver_name_from_config,
 )
+from sqlspec.adapters.adbc.pool import AdbcConnectionPool
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
@@ -37,6 +43,352 @@ def test_adbc_config_runs_connection_create_callback(monkeypatch: Any) -> None:
     assert config.create_connection() is connection
     assert seen == [connection]
     assert "on_connection_create" not in config.driver_features
+
+
+def test_adbc_pool_option_enables_exclusive_reuse_without_changing_standalone_connections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only explicit pool settings enable reuse, while direct connections stay caller-owned."""
+    seed, lease, standalone = MagicMock(), MagicMock(), MagicMock()
+    seed.adbc_clone.return_value = lease
+    create = MagicMock(side_effect=[seed, standalone])
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", create)
+    config = AdbcConfig(
+        connection_config={"driver_name": "postgres"},
+        pool_config={},
+        driver_features={"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False},
+    )
+    pool = config.provide_pool()
+    create.assert_not_called()
+    with config.provide_session() as first:
+        assert first.connection is lease
+    with config.provide_session() as second:
+        assert second.connection is lease
+    assert config.create_pool() is pool
+    assert config.create_connection() is standalone
+    standalone.close.assert_not_called()
+    config.close_pool()
+    seed.close.assert_called_once_with()
+    lease.close.assert_called_once_with()
+
+
+def test_adbc_disabled_pool_methods_preserve_borrowed_connection() -> None:
+    """All disabled pool hooks are inert even when a legacy raw connection is supplied."""
+    borrowed = MagicMock()
+    events: list[Any] = []
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite"},
+        connection_instance=borrowed,
+        pool_config=None,
+        driver_features={"on_pool_create": events.append, "on_pool_destroy": events.append},
+    )
+    assert config.create_pool() is None
+    assert config.provide_pool() is None
+    assert config._create_pool() is None
+    config._close_pool()
+    config.close_pool()
+    assert config.create_connection() is borrowed
+    borrowed.close.assert_not_called()
+    assert events == []
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "driver",
+        "autocommit",
+        "native_autocommit",
+        "injected",
+        "hook",
+        "size_zero",
+        "size_bool",
+        "size_float",
+        "timeout",
+    ],
+)
+def test_adbc_pool_rejects_unsupported_settings_before_native_io(monkeypatch: pytest.MonkeyPatch, invalid: str) -> None:
+    """Unsupported pooling settings fail before opening a native resource."""
+    create = MagicMock()
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", create)
+    options: dict[str, Any] = {"connection_config": {"driver_name": "postgres"}, "pool_config": {}}
+    if invalid == "driver":
+        options["connection_config"]["driver_name"] = "sqlite"
+    elif invalid == "autocommit":
+        options["connection_config"]["autocommit"] = True
+    elif invalid == "native_autocommit":
+        options["connection_config"]["conn_kwargs"] = {"adbc.connection.autocommit": "true"}
+    elif invalid == "injected":
+        options["connection_instance"] = MagicMock()
+    elif invalid == "hook":
+        options["driver_features"] = {"on_connection_create": lambda _connection: None}
+    elif invalid.startswith("size"):
+        options["pool_config"]["max_size"] = {"size_zero": 0, "size_bool": True, "size_float": 1.5}[invalid]
+    else:
+        options["pool_config"]["timeout"] = float("nan")
+    with pytest.raises(ImproperConfigurationError):
+        AdbcConfig(**options)
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("distribution", ["adbc-driver-manager", "adbc-driver-postgresql"])
+@pytest.mark.parametrize("installed", ["1.11.0", "1.12.0rc1", "1.12.0.dev0", None])
+def test_adbc_pool_requires_supported_native_versions_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, distribution: str, installed: str | None
+) -> None:
+    """Unsupported or absent optional packages do not affect the unpooled default."""
+    original_version = importlib.metadata.version
+
+    def version(name: str) -> str:
+        if name != distribution:
+            return original_version(name)
+        if installed is None:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return installed
+
+    monkeypatch.setattr(importlib.metadata, "version", version)
+    assert AdbcConfig(connection_config={"driver_name": "postgres"}).create_pool() is None
+    with pytest.raises(ImproperConfigurationError, match=r"1\.12\.0"):
+        _postgres_pool_config()
+
+
+def test_adbc_pool_requires_public_native_clone_capability(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sufficient package version without public cloning fails before opening a connection."""
+    monkeypatch.setattr(adbc_driver_manager.dbapi.Connection, "adbc_clone", None)
+    with pytest.raises(ImproperConfigurationError, match="adbc_clone"):
+        _postgres_pool_config()
+
+
+def test_adbc_pool_atomic_first_publication_and_callbacks_outside_config_lock() -> None:
+    """Concurrent first requests observe one generation and one outside-lock create callback."""
+    events: list[Any] = []
+    start = threading.Barrier(5, timeout=3)
+
+    def created(pool: Any) -> None:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            assert executor.submit(config.provide_pool).result(timeout=2) is pool
+        events.append(pool)
+
+    config = _postgres_pool_config(driver_features={"on_pool_create": created})
+
+    def acquire_pool() -> Any:
+        start.wait()
+        return config.provide_pool()
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(acquire_pool) for _ in range(4)]
+        start.wait()
+        pools = [future.result(timeout=3) for future in futures]
+    assert all(pool is pools[0] for pool in pools)
+    assert events == [pools[0]]
+    config.close_pool()
+
+
+def test_adbc_pool_drain_retains_origin_and_restarts_after_final_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pending drain keeps ownership and retires exactly once before a new generation."""
+    seed, lease = MagicMock(), MagicMock()
+    seed.adbc_clone.return_value = lease
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed)
+    events: list[tuple[str, Any]] = []
+    config = _postgres_pool_config(
+        driver_features={
+            "on_pool_create": lambda pool: events.append(("create", pool)),
+            "on_pool_destroying": lambda pool: events.append(("destroying", pool)),
+            "on_pool_destroy": lambda pool: events.append(("destroy", pool)),
+        }
+    )
+    context = config.provide_session()
+    context.__enter__()
+    origin = config.provide_pool()
+    config.close_pool()
+    assert config.connection_instance is origin
+    with pytest.raises(SQLSpecError, match="drain"):
+        config.provide_session()
+    seed.close.assert_not_called()
+    context.__exit__(None, None, None)
+    replacement = config.provide_pool()
+    assert replacement is not origin
+    assert events == [("create", origin), ("destroying", origin), ("destroy", origin), ("create", replacement)]
+    lease.close.assert_called_once_with()
+    seed.close.assert_called_once_with()
+    config.close_pool()
+    config.close_pool()
+    assert events[-2:] == [("destroying", replacement), ("destroy", replacement)]
+
+
+def test_adbc_pool_cleanup_failure_retains_generation_for_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A native-close failure never permits a new generation before cleanup succeeds."""
+    seed, lease = MagicMock(), MagicMock()
+    seed.adbc_clone.return_value = lease
+    lease.close.side_effect = [RuntimeError("native close failed"), None]
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed)
+    config = _postgres_pool_config()
+    with config.provide_session():
+        pass
+    origin = config.provide_pool()
+    with pytest.raises(RuntimeError, match="native close failed"):
+        config.close_pool()
+    assert config.connection_instance is origin
+    with pytest.raises(SQLSpecError, match="drain"):
+        config.create_pool()
+    seed.close.assert_not_called()
+    config.close_pool()
+    assert config.connection_instance is None
+    assert lease.close.call_count == 2
+    seed.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_adbc_pool_body_error_evicts_and_preserves_primary(monkeypatch: pytest.MonkeyPatch, close_fails: bool) -> None:
+    """Failed session bodies discard their exact lease without masking the application error."""
+    seed, lease = MagicMock(), MagicMock()
+    primary = ValueError("application failed")
+    seed.adbc_clone.return_value = lease
+    if close_fails:
+        lease.close.side_effect = [KeyboardInterrupt("native close interrupted"), None]
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed)
+    config = _postgres_pool_config(pool_config={"max_size": 1, "timeout": 0})
+    with pytest.raises(ValueError) as caught, config.provide_session() as session:
+        assert session.connection is lease
+        raise primary
+    assert caught.value is primary
+    lease.rollback.assert_called_once_with()
+    lease.adbc_connection.set_autocommit.assert_not_called()
+    if close_fails:
+        with pytest.raises(SQLSpecError, match="Timed out"):
+            with config.provide_session():
+                pass
+    config.close_pool()
+    assert lease.close.call_count == (2 if close_fails else 1)
+    seed.close.assert_called_once_with()
+
+
+def test_adbc_pool_destroying_reentry_cannot_close_replacement_generation() -> None:
+    """Reentrant callbacks cannot redirect a shutdown onto a newly published generation."""
+    replacements: list[Any] = []
+    events: list[tuple[str, Any]] = []
+
+    def destroying(pool: Any) -> None:
+        events.append(("destroying", pool))
+        if not replacements:
+            pool.close()
+            replacements.append(config.provide_pool())
+
+    config = _postgres_pool_config(
+        driver_features={
+            "on_pool_create": lambda pool: events.append(("create", pool)),
+            "on_pool_destroying": destroying,
+            "on_pool_destroy": lambda pool: events.append(("destroy", pool)),
+        }
+    )
+    origin = config.provide_pool()
+    config.close_pool()
+    replacement = replacements[0]
+    assert config.provide_pool() is replacement
+    assert events == [("create", origin), ("destroying", origin), ("destroy", origin), ("create", replacement)]
+    config.close_pool()
+
+
+def test_adbc_pool_session_releases_exact_acquired_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A handler returns its lease to the captured generation even if the config reference changes."""
+    seed, lease = MagicMock(), MagicMock()
+    seed.adbc_clone.return_value = lease
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed)
+    config = _postgres_pool_config()
+    context = config.provide_session()
+    context.__enter__()
+    origin = cast("AdbcConnectionPool", config.provide_pool())
+    replacement = AdbcConnectionPool(MagicMock())
+    config.connection_instance = replacement
+    context.__exit__(None, None, None)
+    lease.rollback.assert_called_once_with()
+    lease.cursor.return_value.execute.assert_called_once_with("DISCARD ALL")
+    assert origin.close() is True
+    seed.close.assert_called_once_with()
+    config.close_pool()
+
+
+@pytest.mark.parametrize("event", ["create", "destroying"])
+def test_adbc_pool_callback_failure_retains_owned_generation(monkeypatch: pytest.MonkeyPatch, event: str) -> None:
+    """Lifecycle failures retain ownership and emit each lifecycle callback at most once."""
+    seed, lease = MagicMock(), MagicMock()
+    seed.adbc_clone.return_value = lease
+    create = MagicMock(return_value=seed)
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", create)
+    seen: list[Any] = []
+
+    def failure(pool: Any) -> None:
+        seen.append(pool)
+        raise KeyboardInterrupt("lifecycle callback failed")
+
+    config = _postgres_pool_config(driver_features={f"on_pool_{event}": failure})
+    if event == "create":
+        with pytest.raises(KeyboardInterrupt, match="lifecycle callback failed"):
+            config.create_pool()
+        assert config.provide_pool() is seen[0]
+        create.assert_not_called()
+    with config.provide_session():
+        pass
+    if event == "destroying":
+        with pytest.raises(KeyboardInterrupt, match="lifecycle callback failed"):
+            config.close_pool()
+        assert config.connection_instance is seen[0]
+        seed.close.assert_not_called()
+        with pytest.raises(SQLSpecError, match="drain"):
+            config.create_pool()
+    config.close_pool()
+    assert len(seen) == 1
+    assert config.connection_instance is None
+    seed.close.assert_called_once_with()
+
+
+def test_adbc_pool_rejects_inherited_generation_before_config_lock_and_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All pool entrypoints reject inherited ownership before a poisoned config lock."""
+
+    class _LockProbeConfig(AdbcConfig):
+        def replace_lock(self, lock: Any) -> None:
+            self._pool_lock = lock
+
+        def close_protected(self) -> None:
+            self._close_pool()
+
+    events: list[Any] = []
+    config = _LockProbeConfig(
+        connection_config={"driver_name": "postgres"},
+        pool_config={},
+        driver_features={"on_pool_create": events.append, "on_pool_destroying": events.append},
+    )
+    config.provide_pool()
+    events.clear()
+    poison = MagicMock()
+    poison.__enter__.side_effect = AssertionError("inherited config lock acquired")
+    config.replace_lock(poison)
+    child_pid = os.getpid() + 1
+    monkeypatch.setattr(os, "getpid", lambda: child_pid)
+    for operation in (
+        config.create_pool,
+        config.provide_pool,
+        config.provide_session,
+        config.close_pool,
+        config.close_protected,
+    ):
+        with pytest.raises(SQLSpecError, match="fork"):
+            operation()
+    poison.__enter__.assert_not_called()
+    assert events == []
+
+
+def test_adbc_pool_derive_preserves_settings_and_validates_overrides() -> None:
+    """Derivation retains opt-in bounds and starts independent native ownership."""
+    config = _postgres_pool_config(pool_config={"max_size": 1, "timeout": 0})
+    derived = config.derive_pool()
+    assert derived.provide_pool() is not config.provide_pool()
+    assert derived.derive_pool(pool_config=None).provide_pool() is None
+    with pytest.raises(ImproperConfigurationError, match="PostgreSQL"):
+        config.derive_pool(connection_config_overrides={"driver_name": "sqlite"})
+    derived.close_pool()
+    config.close_pool()
 
 
 @pytest.mark.parametrize("primary", [ValueError("hook failed"), KeyboardInterrupt("hook interrupted")])
@@ -879,6 +1231,18 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
     AdbcDriver._execute_db2_non_query(cursor, "INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
     assert cursor.executemany.call_count == 6
     assert cursor.executemany.call_args_list[5].args == ("INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
+
+
+def _postgres_pool_config(**overrides: Any) -> AdbcConfig:
+    """Construct a pooled config without unrelated native extension probes."""
+    features: dict[str, Any] = {"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False}
+    features.update(overrides.pop("driver_features", {}))
+    return AdbcConfig(
+        connection_config=overrides.pop("connection_config", {"driver_name": "postgres"}),
+        pool_config=overrides.pop("pool_config", {}),
+        driver_features=features,
+        **overrides,
+    )
 
 
 def _resolve_driver_name(config: AdbcConfig) -> str:
