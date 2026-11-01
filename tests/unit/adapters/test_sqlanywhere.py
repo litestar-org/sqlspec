@@ -20,6 +20,7 @@ from sqlspec.adapters.sqlanywhere import (
     default_statement_config,
     driver_profile,
 )
+from sqlspec.adapters.sqlanywhere._typing import SqlanywhereError
 from sqlspec.adapters.sqlanywhere.adk import SqlanywhereADKConfig, SqlanywhereADKMemoryStore, SqlanywhereADKStore
 from sqlspec.adapters.sqlanywhere.events import SqlanywhereEventQueueStore
 from sqlspec.adapters.sqlanywhere.litestar import SqlanywhereStore
@@ -487,3 +488,21 @@ def test_sqlanywhere_cursor_handles_cursor_without_close() -> None:
 
     with SqlanywhereCursor(cast("SqlanywhereConnection", ConnWithBareCursor())) as cursor:
         assert isinstance(cursor, CursorWithoutClose)
+
+
+def test_sqlanywhere_adk_store_handles_native_missing_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SqlanywhereADKStore.get_session returns None when native driver signals table missing."""
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKStore(config)
+
+    class FakeSqlanydbError(SqlanywhereError):
+        def __init__(self, sqlstate: str, sqlcode: int, message: str) -> None:
+            super().__init__(message)
+            self.sqlstate = sqlstate
+            self.sqlcode = sqlcode
+
+    def _table_missing(_self: Any, *_args: Any, **_kwargs: Any) -> None:
+        raise FakeSqlanydbError("42S02", -141, "Table 'adk_session' not found")
+
+    monkeypatch.setattr(SqlanywhereADKStore, "_execute_fetchone", _table_missing)
+    assert store.get_session("app", "user", "sess") is None

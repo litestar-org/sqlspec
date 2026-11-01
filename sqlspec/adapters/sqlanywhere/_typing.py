@@ -15,8 +15,12 @@ SQLANYDB_MODULE: Any = None
 _DRIVER_CLS: Any = None
 
 
-class SqlanywhereError(Exception):
-    """SAP SQL Anywhere driver exception base."""
+class _MissingSqlanywhereDriverError(Exception):
+    """Placeholder base used only when sqlanydb is not installed."""
+
+
+_NATIVE_ERROR: Any = import_optional_attr("sqlanydb", "Error") or _MissingSqlanywhereDriverError
+SqlanywhereError: Any = _NATIVE_ERROR
 
 
 if TYPE_CHECKING:

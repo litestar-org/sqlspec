@@ -15,8 +15,12 @@ PYMSSQL_MODULE: Any = None
 _DRIVER_CLS: Any = None
 
 
-class SybaseError(Exception):
-    """Sybase ASE driver exception base."""
+class _MissingSybaseDriverError(Exception):
+    """Placeholder base used only when pymssql is not installed."""
+
+
+_NATIVE_ERROR: Any = import_optional_attr("pymssql", "Error") or _MissingSybaseDriverError
+SybaseError: Any = _NATIVE_ERROR
 
 
 if TYPE_CHECKING:

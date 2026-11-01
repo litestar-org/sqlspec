@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import pymssql
 import pytest
 
 from sqlspec.adapters.sybase import (
@@ -45,6 +46,7 @@ from sqlspec.exceptions import (
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
+    SQLSpecError,
     TransactionError,
     UniqueViolationError,
 )
@@ -519,3 +521,27 @@ def test_sybase_adk_store_session_list_and_memory_operations(monkeypatch: pytest
     )
     inserted = mem_store.insert_memory_entries([entry])
     assert inserted == 1
+
+
+def test_sybase_native_error_handling_and_missing_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native pymssql errors in commit() are caught and ADK get_session() returns None on table missing."""
+    cursor = FakeCursor()
+    conn = FakeConnection(cursor)
+    driver = SybaseDriver(cast("SybaseConnection", conn))
+
+    def _fail_commit() -> None:
+        raise pymssql.OperationalError("Native pymssql commit failure")
+
+    conn.commit = _fail_commit
+    with pytest.raises(SQLSpecError, match="Failed to commit Sybase ASE transaction"):
+        driver.commit()
+
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    store = SybaseADKStore(cast("Any", config))
+
+    def _table_missing(_self: Any, *_args: Any, **_kwargs: Any) -> None:
+        raise pymssql.DatabaseError(208, "Invalid object name 'adk_session'")
+
+    monkeypatch.setattr(SybaseADKStore, "_execute_fetchone", _table_missing)
+    assert store.get_session("app", "user", "sess") is None
