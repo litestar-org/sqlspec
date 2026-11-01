@@ -5067,7 +5067,7 @@ wheels = [
 [[package]]
 name = "pytest-databases"
 version = "0.19.0"
-source = { git = "https://github.com/litestar-org/pytest-databases.git?branch=test%2Fclientless-all#9f6fc17c5703f618b5895fa43ce62e736e44c28b" }
+source = { git = "https://github.com/litestar-org/pytest-databases.git?branch=test%2Fclientless-all#b758d5ef5967b8fa912753ce4b695d2758f87537" }
 dependencies = [
     { name = "docker" },
     { name = "filelock" },

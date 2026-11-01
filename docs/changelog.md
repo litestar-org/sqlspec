@@ -33,6 +33,10 @@ important operational fixes.
 * Removed the ADBC `strict_type_coercion` and `arrow_extension_types` driver feature aliases; use `enable_strict_type_coercion` and `enable_arrow_extension_types`.
 * Declared driver feature keys that adapters already read: `events_backend` on `ArrowOdbcDriverFeatures` and `default_query_job_config` on `BigQueryDriverFeatures`.
 * Replaced `null_pool` in `psycopg` connection configuration and driver features with canonical `enable_pooling=False`.
+* Defaulted `enable_correlation_middleware` to `True` across all web framework extensions (`Litestar`, `FastAPI`, `Starlette`, `Sanic`, `Flask`).
+* Standardized adapter driver imports: importing `sqlspec.adapters.<name>` eagerly imports that adapter's driver, raising the native `ModuleNotFoundError` when the driver is not installed, while non-driver optional dependencies load on first use.
+* Documented Oracle AQ dequeue commit behavior as at-most-once delivery.
+* Added SAP SQL Anywhere integration driver test suite with hermetic in-container client runtime extraction.
 * Replaced correlated per-column scalar subqueries in data dictionary `columns.sql` and `indexes.sql` catalog queries across `postgres`, `cockroach`, `mssql`, `mysql`, `oracle`, `db2`, and `duckdb` with pre-aggregated CTEs and joins, and reduced `ColumnMetadata` to its 18 core catalog fields.
   ([#866](https://github.com/litestar-org/sqlspec/pull/866))
 * Redesigned the documentation site architecture around Zensical and `mkdocstrings-python` with Diataxis-aligned navigation (`Getting Started`, `Learn`, `Adapters`, `Extensions`, `Examples`, `Reference`), interactive WebAssembly SQL playground, runnable `docs/examples/` snippets, conceptual Mermaid diagrams, and tabbed package manager and `SQLFileLoader` examples.

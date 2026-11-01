@@ -17,6 +17,7 @@ _FAMILY_ADAPTERS = {
     "oracle": frozenset({"oracledb"}),
     "postgres": frozenset({"asyncpg", "psqlpy", "psycopg"}),
     "spanner": frozenset({"spanner"}),
+    "sqlanywhere": frozenset({"sqlanywhere"}),
     "sqlite": frozenset({"aiosqlite", "sqlite"}),
 }
 _SHARED_TEST_FAMILIES = frozenset((*_FAMILY_ADAPTERS, "gizmosql", "snowflake"))
