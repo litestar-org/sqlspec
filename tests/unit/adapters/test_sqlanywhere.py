@@ -1,6 +1,8 @@
 """Unit tests for the SAP SQL Anywhere (sqlanydb) adapter."""
 
 import threading
+from contextlib import nullcontext
+from datetime import UTC, datetime
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -16,15 +18,15 @@ from sqlspec.adapters.sqlanywhere import (
     SqlanywhereDriver,
     SqlanywhereExceptionHandler,
     SqlanywhereSyncDataDictionary,
-    build_column_metadata,
     build_connection_config,
-    build_foreign_key_metadata,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
 )
-from sqlspec.adapters.sqlanywhere._typing import SqlanywhereError
+from sqlspec.adapters.sqlanywhere._typing import SqlanywhereError, SqlanywhereSessionContext
 from sqlspec.adapters.sqlanywhere.adk import SqlanywhereADKConfig, SqlanywhereADKMemoryStore, SqlanywhereADKStore
+from sqlspec.adapters.sqlanywhere.core import build_insert_statement, format_identifier
+from sqlspec.adapters.sqlanywhere.data_dictionary import build_column_metadata, build_foreign_key_metadata
 from sqlspec.adapters.sqlanywhere.events import SqlanywhereEventQueueStore
 from sqlspec.adapters.sqlanywhere.litestar import SqlanywhereLitestarConfig, SqlanywhereStore
 from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTracker
@@ -538,7 +540,7 @@ def test_sqlanywhere_adk_memory_store_insert_sql_contains_from_sys_dummy(monkeyp
         def rollback(self) -> None:
             pass
 
-    monkeypatch.setattr(config, "provide_connection", lambda: DummyConnection())
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(DummyConnection()))
 
     entry = {
         "id": "mem-1",
@@ -599,7 +601,7 @@ def test_sqlanywhere_litestar_config_and_delete_expired(monkeypatch: pytest.Monk
         def commit(self) -> None:
             pass
 
-    monkeypatch.setattr(adapter_config, "provide_connection", lambda: DummyConnection())
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(DummyConnection()))
     assert litestar_store._delete_expired() == 4
 
 
@@ -614,8 +616,8 @@ def test_sqlanywhere_build_column_metadata_is_nullable() -> None:
         {"column_name": "id", "is_nullable": "NO"},
         {"column_name": "val", "is_nullable": "YES"},
     ])
-    assert cols[0].is_nullable is False
-    assert cols[1].is_nullable is True
+    assert cols[0]["is_nullable"] is False
+    assert cols[1]["is_nullable"] is True
 
 
 def test_sqlanywhere_build_foreign_key_metadata_names() -> None:
@@ -728,7 +730,9 @@ def test_sqlanywhere_connection_pool_bounds_max_size(monkeypatch: pytest.MonkeyP
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(pool, "new_connection", lambda: cast("SqlanywhereConnection", DummyConn()))
+    monkeypatch.setattr(
+        SqlanywhereConnectionPool, "new_connection", lambda _self: cast("SqlanywhereConnection", DummyConn())
+    )
 
     errors: list[Exception] = []
     conns: list[Any] = []

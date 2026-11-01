@@ -5,13 +5,7 @@ import sys
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from sqlspec.adapters.sybase._typing import (
-    SybaseConnection,
-    SybaseCursor,
-    SybaseError,
-    SybaseRawCursor,
-    SybaseSessionContext,
-)
+from sqlspec.adapters.sybase._typing import SybaseConnection, SybaseCursor, SybaseRawCursor, SybaseSessionContext
 from sqlspec.adapters.sybase.core import (
     build_insert_statement,
     collect_rows,
@@ -282,6 +276,7 @@ class SybaseDriver(SyncDriverAdapterBase):
                     cursor.execute("SELECT 1 FROM dbo.sysusers WHERE name = %s", (schema,))
                     result = cursor.fetchone() is not None
             else:
+
                 def _fetch() -> None:
                     nonlocal result
                     cursor.execute("SELECT 1 FROM dbo.sysusers WHERE name = %s", (schema,))

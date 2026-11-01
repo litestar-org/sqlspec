@@ -31,11 +31,7 @@ class AdditiveSqliteADKMemoryStore(SqliteADKMemoryStore):
     """ADK memory target with one additive column."""
 
     def _memory_table_ddl(self) -> str:
-        return (
-            super()
-            ._memory_table_ddl()
-            .replace("embedding BLOB\n", "embedding BLOB,\n            schema_tag TEXT\n")
-        )
+        return super()._memory_table_ddl().replace("embedding BLOB\n", "embedding BLOB,\n            schema_tag TEXT\n")
 
 
 class AdditiveSqliteEventQueueStore(SqliteEventQueueStore):

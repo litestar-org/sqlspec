@@ -149,6 +149,10 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     8115: (DataError, "arithmetic overflow error"),
     8152: (DataError, "string or binary data would be truncated"),
     1105: (OperationalError, "operational error"),
+    20003: (QueryTimeoutError, "query timeout expired (FreeTDS)"),
+    20002: (DatabaseConnectionError, "adaptive Server connection failed (FreeTDS)"),
+    20009: (DatabaseConnectionError, "unable to connect: host unreachable or server down (FreeTDS)"),
+    20047: (DatabaseConnectionError, "connection closed or broken (FreeTDS)"),
 }
 
 
@@ -355,6 +359,8 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
         return constraint_exception
 
     exc_name = type(error).__name__
+    if exc_name == "InterfaceError":
+        return DatabaseConnectionError(f"SQL Server interface error. Original error: {error}")
     if exc_name == "IntegrityError":
         return IntegrityError(f"SQL Server integrity error. Original error: {error}")
     if exc_name == "OperationalError":

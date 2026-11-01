@@ -218,11 +218,11 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
                 cursor.execute(sql)
                 count = resolve_rowcount(cursor)
                 conn.commit()
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
         except Exception as exc:
             raise create_mapped_exception(exc) from exc
+        if count > 0:
+            self._log_delete_expired(count)
+        return count
 
 
 def _table_ref(table_name: str) -> str:

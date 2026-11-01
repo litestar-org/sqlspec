@@ -417,12 +417,12 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 row = cursor.fetchone()
                 if commit:
                     conn.commit()
-                return row
             except Exception as exc:
                 if commit:
                     with contextlib.suppress(Exception):
                         conn.rollback()
                 raise create_mapped_exception(exc) from exc
+            return row
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
@@ -439,12 +439,12 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 rowcount = resolve_rowcount(cursor)
                 if commit:
                     conn.commit()
-                return rowcount
             except Exception as exc:
                 if commit:
                     with contextlib.suppress(Exception):
                         conn.rollback()
                 raise create_mapped_exception(exc) from exc
+            return rowcount
 
 
 class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
@@ -626,12 +626,12 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
                 rowcount = resolve_rowcount(cursor)
                 if commit:
                     conn.commit()
-                return rowcount
             except Exception as exc:
                 if commit:
                     with contextlib.suppress(Exception):
                         conn.rollback()
                 raise create_mapped_exception(exc) from exc
+            return rowcount
 
 
 def _existing_index_names(driver: "SybaseDriver", index_specs: "list[tuple[str, str, str]]") -> "set[str]":

@@ -73,11 +73,7 @@ class SybaseMigrationTrackerMixin:
         """Return Sybase ASE catalog query text for migration tracking table columns."""
         has_schema = "." in self.version_table
         schema_name, table_name = split_schema_and_table(self.version_table)
-        schema_condition = (
-            f"u.name = '{escape_sql_literal(schema_name)}'"
-            if has_schema
-            else "u.name = USER_NAME()"
-        )
+        schema_condition = f"u.name = '{escape_sql_literal(schema_name)}'" if has_schema else "u.name = USER_NAME()"
         return f"""
             SELECT c.name AS column_name
             FROM dbo.syscolumns c

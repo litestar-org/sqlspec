@@ -269,6 +269,7 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
                     cursor.execute("SELECT 1 FROM SYS.SYSUSER WHERE user_name = ?", (schema,))
                     result = cursor.fetchone() is not None
             else:
+
                 def _fetch() -> None:
                     nonlocal result
                     cursor.execute("SELECT 1 FROM SYS.SYSUSER WHERE user_name = ?", (schema,))

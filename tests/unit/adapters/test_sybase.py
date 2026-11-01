@@ -3,6 +3,7 @@
 import os
 import socket
 import threading
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -21,17 +22,19 @@ from sqlspec.adapters.sybase import (
     SybaseDriver,
     SybaseExceptionHandler,
     SybaseSyncDataDictionary,
-    _ERROR_CODE_MAPPING,
     build_connection_config,
-    build_insert_statement,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
-    escape_literal_percent,
-    format_identifier,
 )
 from sqlspec.adapters.sybase._typing import SybaseRawCursor
 from sqlspec.adapters.sybase.adk import SybaseADKConfig, SybaseADKMemoryStore, SybaseADKStore
+from sqlspec.adapters.sybase.core import (
+    _ERROR_CODE_MAPPING,
+    build_insert_statement,
+    escape_literal_percent,
+    format_identifier,
+)
 from sqlspec.adapters.sybase.events import SybaseEventQueueStore
 from sqlspec.adapters.sybase.litestar import SybaseStore
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
@@ -52,7 +55,6 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     TransactionError,
-    UniqueViolationError,
     UniqueViolationError,
 )
 
@@ -586,7 +588,7 @@ def test_sybase_adk_store_maps_unique_violation(monkeypatch: pytest.MonkeyPatch)
         def rollback(self) -> None:
             pass
 
-    monkeypatch.setattr(config, "provide_connection", lambda: DummyConnection())
+    monkeypatch.setattr(config, "provide_connection", lambda: nullcontext(DummyConnection()))
     with pytest.raises(UniqueViolationError):
         store._execute("INSERT INTO dummy VALUES (1)")
 
@@ -594,6 +596,7 @@ def test_sybase_adk_store_maps_unique_violation(monkeypatch: pytest.MonkeyPatch)
 def test_sybase_litestar_store_get_raises_sqlspec_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """SybaseStore._get() maps raw database errors to SQLSpecError."""
     config = MagicMock()
+    config.extension_config = {"litestar": {}}
     store = SybaseStore(cast("Any", config))
 
     class FailingCursor:
@@ -607,7 +610,7 @@ def test_sybase_litestar_store_get_raises_sqlspec_error(monkeypatch: pytest.Monk
         def cursor(self) -> FailingCursor:
             return FailingCursor()
 
-    monkeypatch.setattr(config, "provide_connection", lambda: FailingConnection())
+    monkeypatch.setattr(config, "provide_connection", lambda: nullcontext(FailingConnection()))
     with pytest.raises(SQLSpecError):
         store._get("session-1")
 
@@ -654,6 +657,7 @@ def test_sybase_pool_new_connection_caches_pymssql_module(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(sybase_pool, "_load_pymssql_module", mock_load)
     monkeypatch.setattr(sybase_pool, "pymssql", None)
+    monkeypatch.setenv("TDSVER", "5.0")
 
     pool = sybase_pool.SybaseConnectionPool({"server": "localhost", "database": "demo"})
     monkeypatch.setattr("pymssql.connect", lambda **_kw: FakeConnection(FakeCursor()))
@@ -671,18 +675,20 @@ def test_sybase_format_identifier_and_insert_statements() -> None:
     assert format_identifier("dbo.my_table") == "[dbo].[my_table]"
     sql = build_insert_statement("my_table", ["col1", "col2"])
     assert sql == "INSERT INTO [my_table] ([col1], [col2]) VALUES (%s, %s)"
-    escaped = escape_literal_percent("SELECT * FROM t WHERE val LIKE '100%' AND id = %s", ("1",), default_statement_config.parameter_validator)
+    escaped = escape_literal_percent(
+        "SELECT * FROM t WHERE val LIKE '100%' AND id = %s", ("1",), default_statement_config.parameter_validator
+    )
     assert "100%%" in escaped
 
 
 def test_sybase_migration_tracker_existing_columns_query() -> None:
     """_existing_columns_query resolves USER_NAME() when schema is unqualified."""
-    tracker_unqualified = SybaseSyncMigrationTracker(version_table="my_versions")
+    tracker_unqualified = SybaseSyncMigrationTracker(version_table_name="my_versions")
     query_unqualified = tracker_unqualified._existing_columns_query()
     assert "u.name = USER_NAME()" in query_unqualified
     assert "o.name = 'my_versions'" in query_unqualified
 
-    tracker_qualified = SybaseSyncMigrationTracker(version_table="custom_schema.my_versions")
+    tracker_qualified = SybaseSyncMigrationTracker(version_table_name="custom_schema.my_versions")
     query_qualified = tracker_qualified._existing_columns_query()
     assert "u.name = 'custom_schema'" in query_qualified
     assert "o.name = 'my_versions'" in query_qualified
