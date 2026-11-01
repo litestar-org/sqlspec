@@ -291,22 +291,29 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
             try:
                 txn = self._session.transaction()
                 txn.__enter__()
-            except Exception:
-                manager.put_session(self._session)
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    manager.put_session(self._session)
                 self._session = None
                 raise
             self._connection = cast("SpannerSyncConnection", txn)
-            return self._connection
-
-        self._session = cast("Any", database).snapshot(multi_use=True)
-        self._connection = cast("SpannerSyncConnection", self._session.__enter__())
-        hook = getattr(self._config, "_user_connection_hook", None) or getattr(
-            self._config, "on_connection_create", None
-        )
-        if hook:
-            modified = hook(self._connection)
-            if modified is not None:
-                self._connection = cast("SpannerSyncConnection", modified)
+        else:
+            self._session = cast("Any", database).snapshot(multi_use=True)
+            self._connection = cast("SpannerSyncConnection", self._session.__enter__())
+        try:
+            hook = getattr(self._config, "_user_connection_hook", None) or getattr(
+                self._config, "on_connection_create", None
+            )
+            if hook:
+                modified = hook(self._connection)
+                if modified is not None:
+                    self._connection = cast("SpannerSyncConnection", modified)
+        except BaseException as exc:
+            with contextlib.suppress(BaseException):
+                self.__exit__(type(exc), exc, exc.__traceback__)
+            self._connection = None
+            self._session = None
+            raise
         return self._connection
 
     def __exit__(
@@ -702,22 +709,29 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
             try:
                 txn = self._session.transaction()
                 await txn.__aenter__()
-            except Exception:
-                await manager.put_session(self._session)
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    await manager.put_session(self._session)
                 self._session = None
                 raise
             self._connection = cast("SpannerAsyncConnection", txn)
-            return self._connection
-
-        self._session = cast("Any", database).snapshot(multi_use=True)
-        self._connection = cast("SpannerAsyncConnection", await self._session.__aenter__())
-        hook = getattr(self._config, "_user_connection_hook", None) or getattr(
-            self._config, "on_connection_create", None
-        )
-        if hook:
-            modified = hook(self._connection)
-            if modified is not None:
-                self._connection = cast("SpannerAsyncConnection", modified)
+        else:
+            self._session = cast("Any", database).snapshot(multi_use=True)
+            self._connection = cast("SpannerAsyncConnection", await self._session.__aenter__())
+        try:
+            hook = getattr(self._config, "_user_connection_hook", None) or getattr(
+                self._config, "on_connection_create", None
+            )
+            if hook:
+                modified = hook(self._connection)
+                if modified is not None:
+                    self._connection = cast("SpannerAsyncConnection", modified)
+        except BaseException as exc:
+            with contextlib.suppress(BaseException):
+                await self.__aexit__(type(exc), exc, exc.__traceback__)
+            self._connection = None
+            self._session = None
+            raise
         return self._connection
 
     async def __aexit__(

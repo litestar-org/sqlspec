@@ -2,7 +2,6 @@
 
 import contextlib
 import re
-import sys
 from collections.abc import Callable, Iterable, Mapping
 from functools import partial
 from itertools import islice
@@ -25,6 +24,7 @@ from sqlspec.core import (
     build_statement_config_from_profile,
 )
 from sqlspec.driver import rows_to_dicts
+from sqlspec.driver._exception_handler import _run_with_async_exception_handler, _run_with_sync_exception_handler
 from sqlspec.exceptions import (
     DataError,
     DeadlockError,
@@ -915,33 +915,23 @@ class SpannerSyncStreamSource(_SpannerStreamSourceBase):
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        if sys.exc_info()[1] is None:
-            with handler:
-                result_set = self._driver.connection.execute_sql(
-                    self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-                )
-                self._result_set = result_set
-                self._row_iterator = cast("Generator[Any, None, None]", iter(result_set))
-            self._driver._check_pending_exception(handler)
-        else:
-            result_set = self._driver.connection.execute_sql(
-                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-            )
-            self._result_set = result_set
-            self._row_iterator = cast("Generator[Any, None, None]", iter(result_set))
+        _run_with_sync_exception_handler(handler, self._start_query)
+        self._driver._check_pending_exception(handler)
+
+    def _start_query(self) -> None:
+        result_set = self._driver.connection.execute_sql(
+            self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+        )
+        self._result_set = result_set
+        self._row_iterator = cast("Generator[Any, None, None]", iter(result_set))
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         row_iterator = self._row_iterator
         if self._result_set is None or row_iterator is None:
             return []
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        if sys.exc_info()[1] is None:
-            with handler:
-                rows = list(islice(row_iterator, self._chunk_size))
-            self._driver._check_pending_exception(handler)
-        else:
-            rows = list(islice(row_iterator, self._chunk_size))
+        rows: list[Any] | None = _run_with_sync_exception_handler(handler, list, islice(row_iterator, self._chunk_size))
+        self._driver._check_pending_exception(handler)
         if not rows:
             return []
         return self._rows_to_chunk(rows)
@@ -973,40 +963,33 @@ class SpannerAsyncStreamSource(_SpannerStreamSourceBase):
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        if sys.exc_info()[1] is None:
-            async with handler:
-                result_set = await self._driver.connection.execute_sql(
-                    self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-                )
-                self._result_set = result_set
-                self._row_iterator = cast("AsyncGenerator[Any, None]", result_set.__aiter__())
-            self._driver._check_pending_exception(handler)
-        else:
-            result_set = await self._driver.connection.execute_sql(
-                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-            )
-            self._result_set = result_set
-            self._row_iterator = cast("AsyncGenerator[Any, None]", result_set.__aiter__())
+        await _run_with_async_exception_handler(handler, self._start_query)
+        self._driver._check_pending_exception(handler)
+
+    async def _start_query(self) -> None:
+        result_set = await self._driver.connection.execute_sql(
+            self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+        )
+        self._result_set = result_set
+        self._row_iterator = cast("AsyncGenerator[Any, None]", result_set.__aiter__())
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         row_iterator = self._row_iterator
         if self._result_set is None or row_iterator is None:
             return []
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        if sys.exc_info()[1] is None:
-            async with handler:
-                with contextlib.suppress(StopAsyncIteration):
-                    while len(rows) < self._chunk_size:
-                        rows.append(await row_iterator.__anext__())
-            self._driver._check_pending_exception(handler)
-        else:
-            with contextlib.suppress(StopAsyncIteration):
-                while len(rows) < self._chunk_size:
-                    rows.append(await row_iterator.__anext__())
+        rows = await _run_with_async_exception_handler(handler, self._fetch_rows, row_iterator)
+        self._driver._check_pending_exception(handler)
         if not rows:
             return []
         return self._rows_to_chunk(rows)
+
+    async def _fetch_rows(self, row_iterator: "AsyncGenerator[Any, None]") -> "list[Any]":
+        rows: list[Any] = []
+        with contextlib.suppress(StopAsyncIteration):
+            while len(rows) < self._chunk_size:
+                rows.append(await row_iterator.__anext__())
+        return rows
 
     async def close(self, error: bool = False) -> None:
         row_iterator = self._row_iterator

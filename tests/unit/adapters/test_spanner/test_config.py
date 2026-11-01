@@ -1,7 +1,10 @@
+from asyncio import CancelledError
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Self, cast
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock, MagicMock, Mock
 
 import pytest
 from google.api_core import exceptions as api_exceptions
@@ -41,6 +44,119 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1.transaction import DefaultTransactionOptions
 
 pytestmark = requires_interpreted
+
+
+def _assert_sdk_call(mock: Mock, *args: object) -> None:
+    mock.assert_called_once_with(*args)
+    if isinstance(mock, AsyncMock):
+        mock.assert_awaited_once_with(*args)
+
+
+def _hook_checkout(is_async: bool, hook: Callable[[Any], Any]) -> SimpleNamespace:
+    connection = MagicMock(committed=None, rolled_back=False, _transaction_id=b"txn", _mutations=[])
+    snapshot = MagicMock()
+    if is_async:
+        connection.__aenter__ = AsyncMock(return_value=connection)
+        connection.commit = AsyncMock()
+        connection.rollback = AsyncMock()
+        snapshot.__aenter__ = AsyncMock(return_value=connection)
+        snapshot.__aexit__ = AsyncMock(return_value=False)
+        config_type = SpannerAsyncConfig
+        mock_type = AsyncMock
+    else:
+        connection.__enter__.return_value = connection
+        snapshot.__enter__.return_value = connection
+        snapshot.__exit__.return_value = False
+        config_type = SpannerSyncConfig
+        mock_type = Mock
+    session = SimpleNamespace(transaction=Mock(return_value=connection))
+    manager = SimpleNamespace(get_session=mock_type(return_value=session), put_session=mock_type())
+    database = SimpleNamespace(snapshot=Mock(return_value=snapshot), sessions_manager=manager)
+    config = config_type(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        connection_instance=cast("Any", object()),
+        on_connection_create=hook,
+    )
+    config._database = cast("Any", database)
+    return SimpleNamespace(config=config, connection=connection, snapshot=snapshot, manager=manager, session=session)
+
+
+@asynccontextmanager
+async def _hook_session(config: Any, **kwargs: Any) -> AsyncIterator[Any]:
+    if isinstance(config, SpannerAsyncConfig):
+        async with config.provide_session(**kwargs) as session:
+            yield session
+    else:
+        with config.provide_session(**kwargs) as session:
+            yield session
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("transaction", [False, True], ids=["snapshot", "default-transaction"])
+async def test_connection_hook_runs_for_session_checkout(is_async: bool, transaction: bool) -> None:
+    hook = Mock(return_value=None)
+    checkout = _hook_checkout(is_async, hook)
+    kwargs = {} if transaction else {"transaction": False}
+
+    async with _hook_session(checkout.config, **kwargs) as session:
+        assert session.connection is checkout.connection
+        hook.assert_called_once_with(checkout.connection)
+
+    if transaction:
+        _assert_sdk_call(checkout.connection.commit)
+        _assert_sdk_call(checkout.manager.put_session, checkout.session)
+    else:
+        snapshot_exit = checkout.snapshot.__aexit__ if is_async else checkout.snapshot.__exit__
+        _assert_sdk_call(snapshot_exit, None, None, None)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("transaction", [False, True], ids=["snapshot", "transaction"])
+@pytest.mark.parametrize("error_type", [ValueError, CancelledError])
+@pytest.mark.parametrize("cleanup_fails", [False, True], ids=["cleanup-ok", "cleanup-fails"])
+async def test_connection_hook_failure_releases_checkout_and_preserves_error(
+    is_async: bool, transaction: bool, error_type: type[BaseException], cleanup_fails: bool
+) -> None:
+    error = error_type("hook failed")
+    hook = Mock(side_effect=error)
+    checkout = _hook_checkout(is_async, hook)
+    snapshot_exit = checkout.snapshot.__aexit__ if is_async else checkout.snapshot.__exit__
+    if cleanup_fails:
+        cleanup = checkout.connection.rollback if transaction else snapshot_exit
+        cleanup.side_effect = RuntimeError("cleanup failed")
+
+    with pytest.raises(error_type) as caught:
+        async with _hook_session(checkout.config, transaction=transaction):
+            pytest.fail("A failing connection hook must prevent the session from opening")
+
+    assert caught.value is error
+    hook.assert_called_once_with(checkout.connection)
+    if transaction:
+        _assert_sdk_call(checkout.connection.rollback)
+        checkout.connection.commit.assert_not_called()
+        _assert_sdk_call(checkout.manager.put_session, checkout.session)
+    else:
+        _assert_sdk_call(snapshot_exit, error_type, error, ANY)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("cleanup_fails", [False, True], ids=["cleanup-ok", "cleanup-fails"])
+async def test_transaction_enter_cancellation_returns_checkout(is_async: bool, cleanup_fails: bool) -> None:
+    hook = Mock(return_value=None)
+    checkout = _hook_checkout(is_async, hook)
+    error = CancelledError("checkout cancelled")
+    enter = checkout.connection.__aenter__ if is_async else checkout.connection.__enter__
+    enter.side_effect = error
+    if cleanup_fails:
+        checkout.manager.put_session.side_effect = RuntimeError("release failed")
+
+    with pytest.raises(CancelledError) as caught:
+        async with _hook_session(checkout.config):
+            pytest.fail("A cancelled checkout must prevent the session from opening")
+
+    assert caught.value is error
+    hook.assert_not_called()
+    _assert_sdk_call(checkout.manager.put_session, checkout.session)
 
 
 class _DummyDriver(SyncDriverAdapterBase):
