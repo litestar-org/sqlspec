@@ -3,7 +3,6 @@
 import contextlib
 import datetime as dt
 import decimal
-import inspect
 import re
 import uuid
 from functools import lru_cache
@@ -14,7 +13,12 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_TYPE
-from sqlspec.adapters.psqlpy._typing import PsqlpyDataError, PsqlpyIntegrityError, PsqlpyOperationalError
+from sqlspec.adapters.psqlpy._typing import (
+    PsqlpyConnectionExecuteError,
+    PsqlpyDataError,
+    PsqlpyIntegrityError,
+    PsqlpyOperationalError,
+)
 from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
 from sqlspec.core import (
     DriverParameterProfile,
@@ -169,13 +173,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     username = config.pop("username", None) or config.pop("user", None)
     if username is not None:
         config["username"] = username
-    auth_token_provider = config.get("auth_token_provider")
-    if callable(auth_token_provider) and not inspect.iscoroutinefunction(auth_token_provider):
-        config.pop("auth_token_provider", None)
-        token_result = auth_token_provider()
-        if not inspect.isawaitable(token_result):
-            config["password"] = str(token_result)
-    elif auth_token_provider is None:
+    if "auth_token_provider" in config and config["auth_token_provider"] is None:
         config.pop("auth_token_provider", None)
     return config
 
@@ -478,14 +476,28 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     error_msg = str(error).lower()
 
-    if "unique" in error_msg or "duplicate key" in error_msg:
+    if isinstance(error, PsqlpyDataError):
+        return _create_postgres_error(error, DataError, "data error")
+
+    if "syntax error" in error_msg or "parse error" in error_msg:
+        return _create_postgres_error(error, SQLParsingError, "SQL syntax error")
+
+    if (
+        "unique constraint" in error_msg
+        or "duplicate key value" in error_msg
+        or "violates unique constraint" in error_msg
+    ):
         return _create_postgres_error(error, UniqueViolationError, "unique constraint violation")
-    if "foreign key" in error_msg or "violates foreign key" in error_msg:
+    if "foreign key constraint" in error_msg or "violates foreign key constraint" in error_msg:
         return _create_postgres_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-    if "not null" in error_msg or ("null value" in error_msg and "violates not-null" in error_msg):
+    if (
+        "not-null constraint" in error_msg
+        or "violates not-null constraint" in error_msg
+        or ("null value in column" in error_msg and "violates not-null" in error_msg)
+    ):
         return _create_postgres_error(error, NotNullViolationError, "not-null constraint violation")
     if "check constraint" in error_msg or "violates check constraint" in error_msg:
         return _create_postgres_error(error, CheckViolationError, "check constraint violation")
@@ -497,13 +509,18 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if "serialization failure" in error_msg or "could not serialize" in error_msg:
         return _create_postgres_error(error, SerializationConflictError, "serialization failure")
 
+    if "connection" in error_msg:
+        if "timeout" in error_msg or "timed out" in error_msg:
+            return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
+        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
+
     if (
-        "connection" in error_msg
-        or "could not connect" in error_msg
-        or "connection refused" in error_msg
+        "connection refused" in error_msg
         or "connection reset" in error_msg
-        or "broken pipe" in error_msg
+        or "could not connect to server" in error_msg
         or "server closed the connection" in error_msg
+        or "broken pipe" in error_msg
+        or "failed to connect" in error_msg
     ):
         if "timeout" in error_msg or "timed out" in error_msg:
             return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
@@ -521,16 +538,17 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     ):
         return _create_postgres_error(error, PermissionDeniedError, "authentication error")
 
-    if isinstance(error, PsqlpyDataError):
-        return _create_postgres_error(error, DataError, "data error")
-
-    if "syntax error" in error_msg or "parse" in error_msg:
-        return _create_postgres_error(error, SQLParsingError, "SQL syntax error")
-
     if isinstance(error, PsqlpyOperationalError):
         return _create_postgres_error(error, OperationalError, "operational error")
     if isinstance(error, PsqlpyIntegrityError):
         return _create_postgres_error(error, IntegrityError, "integrity constraint violation")
+    if isinstance(error, (PsqlpyConnectionExecuteError,)):
+        return _create_postgres_error(error, DatabaseConnectionError, "connection execute error")
+
+    if "connection" in error_msg:
+        if "timeout" in error_msg or "timed out" in error_msg:
+            return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
+        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
 
     return _create_postgres_error(error, SQLSpecError, "database error")
 

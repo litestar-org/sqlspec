@@ -456,7 +456,9 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         conn_id = id(connection)
         if conn_id not in self._initialized_connection_ids:
             if self._user_connection_hook is not None:
-                await self._user_connection_hook(connection)
+                hook_res = self._user_connection_hook(connection)
+                if inspect.isawaitable(hook_res):
+                    await hook_res
             if len(self._initialized_connection_ids) >= _MAX_INITIALIZED_CONNECTION_IDS:
                 self._initialized_connection_ids.clear()
             self._initialized_connection_ids.add(conn_id)

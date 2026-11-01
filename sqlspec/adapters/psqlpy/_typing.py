@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     PsqlpyListener: TypeAlias = _PsqlpyListener
     PsqlpyNotSupportedError: TypeAlias = _PsqlpyNotSupportedError
     PsqlpyOperationalError: TypeAlias = _PsqlpyOperationalError
+    RustPSQLDriverPyBaseError: TypeAlias = Any
 
 
 else:
@@ -60,6 +61,7 @@ else:
     PsqlpyListener = import_optional_attr("psqlpy", "Listener") or Any
     PsqlpyNotSupportedError = import_optional_attr("psqlpy.exceptions", "NotSupportedError") or _PsqlpyUnavailableError
     PsqlpyOperationalError = import_optional_attr("psqlpy.exceptions", "OperationalError") or _PsqlpyUnavailableError
+    RustPSQLDriverPyBaseError = import_optional_attr("psqlpy.exceptions", "RustPSQLDriverPyBaseError") or PsqlpyError
 
 
 __all__ = (
@@ -76,6 +78,7 @@ __all__ = (
     "PsqlpyNotSupportedError",
     "PsqlpyOperationalError",
     "PsqlpySessionContext",
+    "RustPSQLDriverPyBaseError",
 )
 
 

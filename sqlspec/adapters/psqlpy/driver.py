@@ -4,7 +4,9 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
+from contextlib import suppress
 from itertools import chain
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.psqlpy._typing import (
@@ -207,18 +209,39 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         statement_config = statement.statement_config
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
+        statement_count = len(statements)
         successful_count = 0
-        last_result = None
         params = prepared_parameters or []
         is_single = len(statements) == 1
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
+        use_prepared = not self._is_transaction_pooler_mode()
 
-        for stmt in statements:
+        for idx, stmt in enumerate(statements):
             stmt_params = params if (is_single or "$" in stmt) else []
-            last_result = await cursor.execute(stmt, stmt_params)
+            stmt_started = perf_counter() if has_observers else 0.0
+            self._pending_statement_profile = None
+            await cursor.execute(stmt, stmt_params, prepared=use_prepared)
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                stmt_profile = self._pending_statement_profile
+                self._pending_statement_profile = None
+                self._emit_script_statement_event(
+                    sql=stmt,
+                    parameters=stmt_params,
+                    operation="SCRIPT",
+                    rows_affected=None,
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=stmt_profile,
+                    script_ordinal=idx,
+                    script_statement_count=statement_count,
+                )
             successful_count += 1
 
+        self._pending_statement_profile = None
         return self.create_execution_result(
-            last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+            cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
         )
 
     async def begin(self) -> None:
@@ -228,32 +251,32 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         try:
             await self.connection.execute("BEGIN")
+        except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, Exception) as e:
+            raise create_mapped_exception(e) from e
+        try:
             if self._should_set_local_columnar():
                 await self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
-        except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as e:
-            msg = f"Failed to begin psqlpy transaction: {e}"
-            raise SQLSpecError(msg) from e
+        except Exception as e:
+            with suppress(Exception):
+                await self.connection.execute("ROLLBACK")
+            raise create_mapped_exception(e) from e
         self._transaction_active = True
 
     async def commit(self) -> None:
         """Commit the current transaction."""
-
         try:
             await self.connection.execute("COMMIT")
-        except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as e:
-            msg = f"Failed to commit psqlpy transaction: {e}"
-            raise SQLSpecError(msg) from e
+        except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, Exception) as e:
+            raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
-
         try:
             await self.connection.execute("ROLLBACK")
-        except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as e:
-            msg = f"Failed to rollback psqlpy transaction: {e}"
-            raise SQLSpecError(msg) from e
+        except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, Exception) as e:
+            raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
 
