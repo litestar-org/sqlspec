@@ -1,6 +1,7 @@
 """Unit tests for mssql_python adapter core helpers."""
 
 import pytest
+from mssql_python import Error as MssqlPythonError
 
 from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE
 from sqlspec.adapters.mssql_python.core import (
@@ -348,3 +349,14 @@ def test_format_identifier_and_build_insert_statement() -> None:
     assert (
         build_insert_statement("dbo.users", ["id", "name"]) == "INSERT INTO [dbo].[users] ([id], [name]) VALUES (?, ?)"
     )
+
+
+def test_create_mapped_exception_maps_odbc_sqlstate() -> None:
+    """ODBC SQLSTATEs map to appropriate SQLSpec exception types."""
+    err = MssqlPythonError("Communication link failure", "08S01")
+    mapped = create_mapped_exception(err)
+    assert isinstance(mapped, DatabaseConnectionError)
+
+    err_timeout = MssqlPythonError("Query timeout expired", "HYT00")
+    mapped_timeout = create_mapped_exception(err_timeout)
+    assert isinstance(mapped_timeout, QueryTimeoutError)

@@ -611,7 +611,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                     msg = "This mssql-python version does not support native Arrow stream bulk copy"
                     raise SQLSpecError(msg)
                 if overwrite:
-                    cursor.execute(f"DELETE FROM {_quote_mssql_table(table)}")
+                    cursor.execute(f"DELETE FROM {format_identifier(table)}")
                 if has_rows:
                     if callable(native_bulkcopy):
                         return native_bulkcopy(table, arrow_source, **options)
@@ -687,16 +687,6 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             mapped = create_mapped_exception(exc)
             msg = f"Failed to restore autocommit: {mapped}"
             raise type(mapped)(msg) from exc
-
-
-def _quote_mssql_table(table: str) -> str:
-    """Bracket-quote each part of a qualified table name.
-
-    Bracket quoting stays valid whatever the session's ``QUOTED_IDENTIFIER``
-    setting is, unlike double quotes which parse as a string literal when it is
-    off.
-    """
-    return format_identifier(table)
 
 
 def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:

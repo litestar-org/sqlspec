@@ -22,6 +22,7 @@ from sqlspec.exceptions import (
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
+    TransactionError,
     UniqueViolationError,
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
@@ -49,6 +50,7 @@ __all__ = (
     "driver_profile",
     "escape_sql_literal",
     "extract_error_number",
+    "extract_sqlstate",
     "format_identifier",
     "materialize_tuple_rows",
     "normalize_execute_parameters",
@@ -93,7 +95,16 @@ _CANONICAL_KEY_LOOKUP: Final[dict[str, str]] = {
 }
 _CONNECT_KWARG_KEYS: Final[set[str]] = {"autocommit", "attrs_before", "native_uuid", "token_provider"}
 _CONNECT_TIMEOUT_KEYS: Final[tuple[str, ...]] = ("timeout", "connection_timeout", "login_timeout", "command_timeout")
-_POOL_CONFIG_KEYS: Final[set[str]] = {"pool_size", "pool_idle_timeout", "pool_enabled"}
+_POOL_CONFIG_KEYS: Final[set[str]] = {
+    "pool_size",
+    "pool_idle_timeout",
+    "pool_enabled",
+    "pool_min_size",
+    "pool_max_size",
+    "min_size",
+    "max_size",
+    "pool_timeout",
+}
 _IGNORED_CONNECTION_CONFIG_KEYS: Final[set[str]] = {
     "application_name",
     "app",
@@ -101,9 +112,19 @@ _IGNORED_CONNECTION_CONFIG_KEYS: Final[set[str]] = {
     "multiple_active_result_sets",
     "workstation_id",
 }
+_ODBC_SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "08S01": (DatabaseConnectionError, "communication link failure"),
+    "08001": (DatabaseConnectionError, "unable to connect to data source"),
+    "HYT00": (QueryTimeoutError, "query timeout expired"),
+    "HY008": (QueryTimeoutError, "operation canceled"),
+}
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    220: (DataError, "arithmetic overflow error"),
+    258: (QueryTimeoutError, "timeout waiting for latch"),
     2601: (UniqueViolationError, "unique constraint violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
+    3617: (QueryTimeoutError, "query canceled by user or attention event"),
+    3930: (TransactionError, "current transaction cannot be committed"),
     515: (NotNullViolationError, "not-null constraint violation"),
     18456: (PermissionDeniedError, "permission denied"),
     229: (PermissionDeniedError, "permission denied"),
@@ -286,8 +307,32 @@ def extract_error_number(exc: BaseException | None) -> int | None:
     return int(last_match[0] or last_match[1])
 
 
+_SQLSTATE_LENGTH: Final[int] = 5
+
+
+def extract_sqlstate(error: BaseException) -> str | None:
+    """Extract an ODBC SQLSTATE code from a driver error."""
+    val = getattr(error, "sqlstate", None)
+    if isinstance(val, str) and val:
+        return val.strip().upper()
+    if hasattr(error, "args") and len(error.args) > 1:
+        second = error.args[1]
+        if isinstance(second, str) and len(second.strip()) == _SQLSTATE_LENGTH:
+            return second.strip().upper()
+    message = str(error).upper()
+    for code in _ODBC_SQLSTATE_MAP:
+        if code in message:
+            return code
+    return None
+
+
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a SQL Server exception to SQLSpec's exception hierarchy."""
+    sqlstate = extract_sqlstate(error)
+    if sqlstate is not None and sqlstate in _ODBC_SQLSTATE_MAP:
+        error_class, description = _ODBC_SQLSTATE_MAP[sqlstate]
+        return error_class(f"SQL Server SQLSTATE {sqlstate}: {description}. Original error: {error}")
+
     error_number = extract_error_number(error)
 
     if error_number == _MSSQL_CONSTRAINT_547:

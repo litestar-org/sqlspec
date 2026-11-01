@@ -239,6 +239,44 @@ def test_config_connection_hook_runs_for_session_connections(monkeypatch: pytest
     assert seen == [connection]
 
 
+def test_on_connection_create_runs_once_per_physical_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """on_connection_create hook runs once per physical connection, not on every warm pool checkout."""
+    connection = DummyConnection()
+    seen: list[DummyConnection] = []
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr(
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: connection
+    )
+
+    config = MssqlPythonConfig(
+        connection_config={"server": "localhost"}, driver_features={"on_connection_create": seen.append}
+    )
+
+    pool = config.create_pool()
+    c1 = pool.acquire()
+    pool.release(c1)
+    c2 = pool.acquire()
+    pool.release(c2)
+
+    assert len(seen) == 1
+    assert seen == [connection]
+
+
+def test_pool_min_size_not_in_connection_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pool_min_size, pool_max_size, and pool_size are stripped from the raw ODBC connection string."""
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+
+    config = MssqlPythonConfig(
+        connection_config={"server": "localhost", "pool_min_size": 5, "pool_max_size": 20, "pool_size": 15}
+    )
+    pool = config.create_pool()
+    assert "pool_min_size" not in pool.connection_string
+    assert "pool_max_size" not in pool.connection_string
+    assert "pool_size" not in pool.connection_string
+
+
 def test_second_pool_warns_on_different_params(monkeypatch: pytest.MonkeyPatch) -> None:
     """A second pool with different process-wide pooling params emits one warning."""
     monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
