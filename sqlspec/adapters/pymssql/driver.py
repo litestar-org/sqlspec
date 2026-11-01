@@ -215,6 +215,8 @@ class PymssqlDriver(SyncDriverAdapterBase):
         ``BEGIN TRANSACTION``, and the matching ``commit()`` or ``rollback()`` ends it
         with T-SQL because pymssql ignores those calls under autocommit.
         """
+        if self._transaction_active:
+            return
         try:
             explicit = bool(self.connection.autocommit_state)
             if explicit:
@@ -451,13 +453,16 @@ class PymssqlDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         normalized_params = normalize_execute_parameters(params) if isinstance(params, list) else params
-        if not normalized_params or (
+        param_count = len(normalized_params) if isinstance(normalized_params, (list, tuple)) else -1
+        has_literal_percent = (
             "%" in cached.compiled_sql
+            and (param_count < 0 or cached.compiled_sql.count("%") != param_count)
             and escape_literal_percent(
                 cached.compiled_sql, normalized_params, self.statement_config.parameter_validator
             )
             != cached.compiled_sql
-        ):
+        )
+        if not normalized_params or has_literal_percent:
             statement = self._cached_statement(
                 sql,
                 normalized_params,

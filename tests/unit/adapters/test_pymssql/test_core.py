@@ -252,3 +252,18 @@ def test_build_connection_config_merges_extra_mapping() -> None:
     assert cfg["appname"] == "analytics"
     assert "extra" not in cfg
     assert "ignored" not in cfg
+
+
+def test_freetds_error_code_mapping() -> None:
+    """FreeTDS 20000-series codes and InterfaceError map to appropriate SQLSpec errors."""
+
+    class InterfaceError(Exception):
+        pass
+
+    assert isinstance(create_mapped_exception(Exception(20003, "DBPROCESS is dead")), QueryTimeoutError)
+    assert isinstance(
+        create_mapped_exception(Exception(20002, "Adaptive Server connection failed")), DatabaseConnectionError
+    )
+    assert isinstance(create_mapped_exception(Exception(20009, "Server is unavailable")), DatabaseConnectionError)
+    assert isinstance(create_mapped_exception(Exception(20047, "Connection closed")), DatabaseConnectionError)
+    assert isinstance(create_mapped_exception(InterfaceError("Connection broken")), DatabaseConnectionError)
