@@ -4,12 +4,178 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
 from sqlspec.adapters.adbc.pool import AdbcConnectionPool
 from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
+
+
+def test_adbc_pool_reuses_only_after_full_native_session_reset() -> None:
+    """A clean lease resets native session state before another borrower can reuse it."""
+    seed, lease, replacement = MagicMock(), MagicMock(), MagicMock()
+    lease.autocommit = False
+    seed.adbc_clone.side_effect = [lease, replacement]
+    pool = AdbcConnectionPool(lambda: seed, max_size=1, timeout=0)
+    assert pool.acquire() is lease
+    pool.release(lease)
+    assert lease.mock_calls == [
+        call.rollback(),
+        call.adbc_connection.set_autocommit(True),
+        call.cursor(),
+        call.cursor().execute("DISCARD ALL"),
+        call.cursor().close(),
+        call.adbc_connection.set_autocommit(False),
+    ]
+    assert lease.autocommit is False
+    assert pool.acquire() is lease
+    pool.release(lease, discard=True)
+    assert pool.acquire() is replacement
+    pool.release(replacement)
+    assert pool.close() is True
+
+
+@pytest.mark.parametrize("stage", ["rollback", "enable", "cursor", "discard", "cursor_close", "restore"])
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_adbc_pool_failed_reset_evicts_and_preserves_primary(stage: str, close_fails: bool) -> None:
+    """Each reset failure evicts; a secondary native-close failure stays retryable."""
+    seed, lease, replacement = MagicMock(), MagicMock(), MagicMock()
+    primary = RuntimeError(f"reset {stage} failed")
+    seed.adbc_clone.side_effect = [lease, replacement]
+    cursor = lease.cursor.return_value
+    handle = lease.adbc_connection
+    if stage == "rollback":
+        lease.rollback.side_effect = primary
+    elif stage == "enable":
+        handle.set_autocommit.side_effect = [primary, None]
+    elif stage == "cursor":
+        lease.cursor.side_effect = primary
+    elif stage == "discard":
+        cursor.execute.side_effect = primary
+    elif stage == "cursor_close":
+        cursor.close.side_effect = primary
+    else:
+        handle.set_autocommit.side_effect = [None, primary]
+    if close_fails:
+        lease.close.side_effect = [KeyboardInterrupt("close interrupted"), None]
+    pool = AdbcConnectionPool(lambda: seed, max_size=1, timeout=0)
+    assert pool.acquire() is lease
+    with pytest.raises(RuntimeError) as caught:
+        pool.release(lease)
+    assert caught.value is primary
+    assert handle.set_autocommit.call_args == call(False)
+    if stage in {"discard", "cursor_close", "restore"}:
+        cursor.close.assert_called_once_with()
+    if close_fails:
+        with pytest.raises(ConnectionTimeoutError):
+            pool.acquire()
+        seed.close.assert_not_called()
+    else:
+        assert pool.acquire() is replacement
+        pool.release(replacement)
+    assert pool.close() is True
+    assert lease.close.call_count == (2 if close_fails else 1)
+
+
+def test_adbc_pool_reset_primary_survives_all_secondary_cleanup_failures() -> None:
+    """Cursor, autocommit and native-close cleanup cannot replace a reset exception."""
+    seed, lease = MagicMock(), MagicMock()
+    primary = KeyboardInterrupt("DISCARD interrupted")
+    cleanup = RuntimeError("cleanup failed")
+    seed.adbc_clone.return_value = lease
+    lease.cursor.return_value.execute.side_effect = primary
+    lease.cursor.return_value.close.side_effect = cleanup
+    lease.adbc_connection.set_autocommit.side_effect = [None, cleanup]
+    lease.close.side_effect = [cleanup, None]
+    pool = AdbcConnectionPool(lambda: seed, max_size=1, timeout=0)
+    assert pool.acquire() is lease
+    with pytest.raises(KeyboardInterrupt) as caught:
+        pool.release(lease)
+    assert caught.value is primary
+    lease.cursor.return_value.close.assert_called_once_with()
+    assert lease.adbc_connection.set_autocommit.call_args == call(False)
+    seed.close.assert_not_called()
+    assert pool.close() is True
+
+
+@pytest.mark.parametrize("rollback_fails", [False, True])
+def test_adbc_pool_discard_rolls_back_and_closes_without_reset(rollback_fails: bool) -> None:
+    """Body-failure disposal attempts rollback and close without DISCARD ALL or reuse."""
+    seed, lease, replacement = MagicMock(), MagicMock(), MagicMock()
+    primary = RuntimeError("rollback failed")
+    seed.adbc_clone.side_effect = [lease, replacement]
+    if rollback_fails:
+        lease.rollback.side_effect = primary
+        lease.close.side_effect = [KeyboardInterrupt("close interrupted"), None]
+    pool = AdbcConnectionPool(lambda: seed, max_size=1, timeout=0)
+    assert pool.acquire() is lease
+    if rollback_fails:
+        with pytest.raises(RuntimeError) as caught:
+            pool.release(lease, discard=True)
+        assert caught.value is primary
+        with pytest.raises(ConnectionTimeoutError):
+            pool.acquire()
+    else:
+        pool.release(lease, discard=True)
+        assert pool.acquire() is replacement
+        pool.release(replacement)
+    lease.rollback.assert_called_once_with()
+    lease.cursor.assert_not_called()
+    lease.adbc_connection.set_autocommit.assert_not_called()
+    assert pool.close() is True
+
+
+@pytest.mark.parametrize("mode", ["reuse", "shutdown", "shutdown_close_failure"])
+def test_adbc_pool_reset_retains_capacity_and_obeys_shutdown(mode: str) -> None:
+    """A resetting lease stays owned until completion and never becomes idle after shutdown."""
+    seed, lease = MagicMock(), MagicMock()
+    entered, proceed = threading.Event(), threading.Event()
+    cleanup_error = RuntimeError("shutdown close failed")
+    shutdown = mode != "reuse"
+    close_fails = mode == "shutdown_close_failure"
+
+    def discard(_sql: str) -> None:
+        entered.set()
+        assert proceed.wait(3)
+
+    seed.adbc_clone.return_value = lease
+    lease.cursor.return_value.execute.side_effect = discard
+    if close_fails:
+        lease.close.side_effect = [cleanup_error, None]
+    pool = AdbcConnectionPool(lambda: seed, max_size=1, timeout=0)
+    assert pool.acquire() is lease
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        resetting = executor.submit(pool.release, lease)
+        assert entered.wait(3)
+        try:
+            with pytest.raises(ConnectionTimeoutError):
+                pool.acquire()
+            if shutdown:
+                assert pool.close() is False
+                seed.close.assert_not_called()
+        finally:
+            proceed.set()
+        if close_fails:
+            with pytest.raises(RuntimeError) as caught:
+                resetting.result(timeout=3)
+            assert caught.value is cleanup_error
+            assert pool.is_closed is False
+            seed.close.assert_not_called()
+            assert pool.close() is True
+        else:
+            resetting.result(timeout=3)
+    if shutdown:
+        assert pool.is_closed is True
+        with pytest.raises(DatabaseConnectionError):
+            pool.acquire()
+    else:
+        assert pool.acquire() is lease
+        pool.release(lease)
+        assert pool.close() is True
+    seed.adbc_clone.assert_called_once_with()
+    assert lease.close.call_count == (2 if close_fails else 1)
+    seed.close.assert_called_once_with()
 
 
 def test_adbc_pool_exclusive_original_seed_leases_and_nested_timeout() -> None:
@@ -23,10 +189,10 @@ def test_adbc_pool_exclusive_original_seed_leases_and_nested_timeout() -> None:
     assert pool.acquire() is second
     with pytest.raises(ConnectionTimeoutError):
         pool.acquire()
-    pool.release(first)
+    pool.release(first, discard=True)
     assert pool.acquire() is third
     for connection in (second, third):
-        pool.release(connection)
+        pool.release(connection, discard=True)
     create.assert_called_once_with()
     assert seed.adbc_clone.call_count == 3
     first.close.assert_called_once_with()
@@ -83,8 +249,8 @@ def test_adbc_pool_rejects_foreign_and_duplicate_release() -> None:
     pool.release(lease)
     with pytest.raises(DatabaseConnectionError):
         pool.release(lease)
-    lease.close.assert_called_once_with()
     assert pool.close() is True
+    lease.close.assert_called_once_with()
 
 
 def test_adbc_pool_shutdown_drains_active_lease_without_forcing_close() -> None:
@@ -115,7 +281,7 @@ def test_adbc_pool_quarantined_close_retains_capacity_and_retries_seed_last() ->
     pool = AdbcConnectionPool(lambda: seed, max_size=1, timeout=0)
     assert pool.acquire() is lease
     with pytest.raises(RuntimeError) as caught:
-        pool.release(lease)
+        pool.release(lease, discard=True)
     assert caught.value is failure
     with pytest.raises(ConnectionTimeoutError):
         pool.acquire()
@@ -190,6 +356,10 @@ def test_adbc_pool_native_io_does_not_hold_bookkeeping_lock() -> None:
         seed.adbc_clone.side_effect = clone
         seed.close.side_effect = inspect_pool
         lease.close.side_effect = inspect_pool
+        lease.rollback.side_effect = inspect_pool
+        lease.adbc_connection.set_autocommit.side_effect = lambda _enabled: inspect_pool()
+        lease.cursor.return_value.execute.side_effect = lambda _sql: inspect_pool()
+        lease.cursor.return_value.close.side_effect = inspect_pool
         pool = AdbcConnectionPool(create)
         assert pool.acquire() is lease
         pool.release(lease)
@@ -249,7 +419,7 @@ def test_adbc_pool_closing_lease_retains_capacity_until_native_close_finishes() 
     pool = AdbcConnectionPool(lambda: seed, max_size=1, timeout=0)
     assert pool.acquire() is lease
     with ThreadPoolExecutor(max_workers=1) as executor:
-        releasing = executor.submit(pool.release, lease)
+        releasing = executor.submit(pool.release, lease, discard=True)
         assert entered.wait(3)
         try:
             with pytest.raises(ConnectionTimeoutError):

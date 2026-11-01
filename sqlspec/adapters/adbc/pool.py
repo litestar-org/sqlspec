@@ -12,7 +12,7 @@ from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlspec.adapters.adbc._typing import AdbcConnection
+    from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcRawCursor
 
 __all__ = ("AdbcConnectionPool",)
 
@@ -67,6 +67,10 @@ class AdbcConnectionPool:
                 if self._state != "OPEN":
                     msg = "ADBC pool is closed to new acquisitions."
                     raise DatabaseConnectionError(msg)
+                for key, (connection, state) in self._clones.items():
+                    if state == "idle":
+                        self._clones[key] = (connection, "active")
+                        return connection
                 if len(self._clones) + self._reservations < self._max_size:
                     self._reservations += 1
                     break
@@ -100,13 +104,32 @@ class AdbcConnectionPool:
         return connection
 
     def release(self, connection: "AdbcConnection", *, discard: bool = False) -> None:
-        """Release exactly one active lease, retaining any failed native close."""
+        """Reset a successful lease for reuse, or evict it after failure/shutdown."""
         self.check_pid()
         with self._condition:
             entry = self._clones.get(id(connection))
             if entry is None or entry[0] is not connection or entry[1] != "active":
                 msg = "Connection is not an active lease of this ADBC pool."
                 raise DatabaseConnectionError(msg)
+            reset = self._state == "OPEN" and not discard
+            self._clones[id(connection)] = (connection, "resetting" if reset else "closing")
+        try:
+            if reset:
+                self._reset_connection(connection)
+            elif discard:
+                connection.rollback()
+        except BaseException:
+            with self._condition:
+                self._clones[id(connection)] = (connection, "closing")
+            with contextlib.suppress(BaseException):
+                self._close_clone(connection)
+                self._finish_close()
+            raise
+        with self._condition:
+            if reset and self._state == "OPEN":
+                self._clones[id(connection)] = (connection, "idle")
+                self._condition.notify_all()
+                return
             self._clones[id(connection)] = (connection, "closing")
         self._close_clone(connection)
         self._finish_close()
@@ -157,6 +180,31 @@ class AdbcConnectionPool:
         if os.getpid() != self._pid:
             msg = "ADBC pools cannot be used after fork; create a new configuration in the child."
             raise DatabaseConnectionError(msg)
+
+    def _reset_connection(self, connection: "AdbcConnection") -> None:
+        cursor: AdbcRawCursor | None = None
+        first_error: BaseException | None = None
+        try:
+            connection.rollback()
+            connection.adbc_connection.set_autocommit(True)
+            cursor = connection.cursor()
+            cursor.execute("DISCARD ALL")
+        except BaseException as exc:
+            first_error = exc
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except BaseException as exc:
+                    if first_error is None:
+                        first_error = exc
+            try:
+                connection.adbc_connection.set_autocommit(False)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     def _close_clone(self, connection: "AdbcConnection") -> None:
         try:
