@@ -38,9 +38,12 @@ class AdbcConnectionPool:
     )
 
     def __init__(
-        self, create_connection: "Callable[[], AdbcConnection]", *, max_size: int = 4, timeout: float = 30.0
+        self, create_connection: "Callable[[], AdbcConnection]", *, max_size: object = 4, timeout: float = 30.0
     ) -> None:
-        """Configure a lazy pool without opening any native connections."""
+        """Configure a lazy pool without opening any native connections.
+
+        Raw capacity validation runs before compiled integer argument coercion.
+        """
         if isinstance(max_size, bool) or not isinstance(max_size, int) or max_size <= 0:
             msg = "ADBC pool max_size must be a positive integer."
             raise ImproperConfigurationError(msg)

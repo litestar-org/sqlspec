@@ -202,7 +202,7 @@ def test_adbc_pool_exclusive_original_seed_leases_and_nested_timeout() -> None:
 
 
 @pytest.mark.parametrize("max_size", [0, -1, True, 1.5])
-def test_adbc_pool_rejects_invalid_capacity(max_size: int) -> None:
+def test_adbc_pool_rejects_invalid_capacity(max_size: object) -> None:
     """Capacity is a positive integer and rejects bool before native acquisition."""
     create = MagicMock()
     with pytest.raises(ImproperConfigurationError):
