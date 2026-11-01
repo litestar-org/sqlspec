@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig
 from sqlspec.adapters.cockroach_asyncpg.adk import (
     CockroachAsyncpgADKConfig,
     CockroachAsyncpgADKMemoryStore,
@@ -197,3 +198,41 @@ async def test_cockroach_asyncpg_list_sessions_rejects_invalid_options_before_co
         await store.list_sessions("app", **options)
 
     assert conn.calls == []
+
+
+def test_cockroach_asyncpg_adk_hash_shard_bucket_count_validation() -> None:
+    """Invalid hash_shard_bucket_count must raise ValueError matching litestar store."""
+    from sqlspec.adapters.cockroach_asyncpg.adk.store import _cockroach_hash_shard_clause
+
+    bad_config = CockroachAsyncpgADKConfig(enable_hash_sharded_indexes=True, hash_shard_bucket_count=-1)
+    with pytest.raises(ValueError, match="hash_shard_bucket_count"):
+        _cockroach_hash_shard_clause(bad_config)
+
+
+async def test_cockroach_asyncpg_adk_memory_search_with_embedding() -> None:
+    """search_entries with embedding executes vector cosine search."""
+    executed_sql: list[tuple[str, tuple[Any, ...]]] = []
+
+    class _FakeConn:
+        async def fetch(self, sql: str, *params: Any) -> list[Any]:
+            executed_sql.append((sql, params))
+            return []
+
+    class _FakeCtx:
+        async def __aenter__(self) -> _FakeConn:
+            return _FakeConn()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    config = CockroachAsyncpgConfig(extension_config={"adk": {"enable_memory": True}})
+    object.__setattr__(config, "provide_connection", MagicMock(return_value=_FakeCtx()))
+    store = CockroachAsyncpgADKMemoryStore(config)
+
+    await store.search_entries(query="hello", app_name="app", user_id="u1", embedding=[0.1, 0.2, 0.3])
+    assert len(executed_sql) == 1
+    sql, params = executed_sql[0]
+    assert "embedding <=>" in sql
+    assert params[0] == "app"
+    assert params[1] == "u1"
+    assert params[2] == [0.1, 0.2, 0.3]

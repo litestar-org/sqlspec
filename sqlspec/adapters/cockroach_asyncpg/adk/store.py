@@ -609,66 +609,79 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
         if not entries:
             return 0
 
+        ids = [entry["id"] for entry in entries]
+        session_ids = [entry["session_id"] for entry in entries]
+        app_names = [entry["app_name"] for entry in entries]
+        user_ids = [entry["user_id"] for entry in entries]
+        scopes = [entry.get("scope", "user") for entry in entries]
+        event_ids = [entry["event_id"] for entry in entries]
+        authors = [entry["author"] for entry in entries]
+        timestamps = [entry["timestamp"] for entry in entries]
+        content_jsons = [entry["content_json"] for entry in entries]
+        content_texts = [entry["content_text"] for entry in entries]
+        metadata_jsons = [entry["metadata_json"] for entry in entries]
+        inserted_ats = [entry["inserted_at"] for entry in entries]
+
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._memory_table}
             (id, session_id, app_name, user_id, scope, event_id, author,
              {self._owner_id_column_name}, timestamp, content_json,
              content_text, metadata_json, inserted_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            SELECT * FROM unnest(
+                $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
+                $5::varchar[], $6::varchar[], $7::varchar[], $8::varchar[],
+                $9::timestamptz[], $10::jsonb[], $11::text[], $12::jsonb[], $13::timestamptz[]
+            )
             ON CONFLICT (event_id) DO NOTHING
             """
+            owner_ids = [owner_id for _ in entries]
+            params: tuple[Any, ...] = (
+                ids,
+                session_ids,
+                app_names,
+                user_ids,
+                scopes,
+                event_ids,
+                authors,
+                owner_ids,
+                timestamps,
+                content_jsons,
+                content_texts,
+                metadata_jsons,
+                inserted_ats,
+            )
         else:
             sql = f"""
             INSERT INTO {self._memory_table}
             (id, session_id, app_name, user_id, scope, event_id, author,
              timestamp, content_json, content_text, metadata_json, inserted_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            SELECT * FROM unnest(
+                $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
+                $5::varchar[], $6::varchar[], $7::varchar[],
+                $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[]
+            )
             ON CONFLICT (event_id) DO NOTHING
             """
+            params = (
+                ids,
+                session_ids,
+                app_names,
+                user_ids,
+                scopes,
+                event_ids,
+                authors,
+                timestamps,
+                content_jsons,
+                content_texts,
+                metadata_jsons,
+                inserted_ats,
+            )
 
-        inserted_count = 0
         async with self._config.provide_connection() as conn, conn.transaction():
-            for entry in entries:
-                if self._owner_id_column_name:
-                    result = await conn.execute(
-                        sql,
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        entry.get("scope", "user"),
-                        entry["event_id"],
-                        entry["author"],
-                        owner_id,
-                        entry["timestamp"],
-                        entry["content_json"],
-                        entry["content_text"],
-                        entry["metadata_json"],
-                        entry["inserted_at"],
-                    )
-                else:
-                    result = await conn.execute(
-                        sql,
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        entry.get("scope", "user"),
-                        entry["event_id"],
-                        entry["author"],
-                        entry["timestamp"],
-                        entry["content_json"],
-                        entry["content_text"],
-                        entry["metadata_json"],
-                        entry["inserted_at"],
-                    )
-
-                parts = result.split() if result else []
-                if parts and parts[-1].isdigit() and int(parts[-1]) > 0:
-                    inserted_count += 1
-
-        return inserted_count
+            result = await conn.execute(sql, *params)
+            parts = result.split() if result else []
+            return int(parts[-1]) if parts and parts[-1].isdigit() else 0
 
     async def search_entries(
         self,
@@ -683,7 +696,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query:
+        if not query and embedding is None:
             return []
 
         effective_limit = limit if limit is not None else self._max_results
@@ -691,20 +704,28 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
         if scope_filter == "all":
             where_scope = "app_name = $1 AND ((scope = 'user' AND user_id = $2) OR scope = 'app')"
             scope_params: tuple[Any, ...] = (app_name, user_id)
-            p_lim = "$4"
-            p_pat = "$3"
         elif scope_filter == "user":
             where_scope = "app_name = $1 AND scope = 'user' AND user_id = $2"
             scope_params = (app_name, user_id)
-            p_lim = "$4"
-            p_pat = "$3"
         else:
             where_scope = "app_name = $1 AND scope = 'app'"
             scope_params = (app_name,)
-            p_lim = "$3"
-            p_pat = "$2"
 
-        if self._use_fts:
+        scope_count = len(scope_params)
+
+        if embedding is not None:
+            p_vec = f"${scope_count + 1}"
+            p_lim = f"${scope_count + 2}"
+            sql = f"""
+            SELECT * FROM {self._memory_table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            ORDER BY embedding <=> {p_vec}::float8[]::vector
+            LIMIT {p_lim}
+            """
+            params = (*scope_params, list(embedding), effective_limit)
+        elif self._use_fts:
+            p_pat = f"${scope_count + 1}"
+            p_lim = f"${scope_count + 2}"
             sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE {where_scope}
@@ -712,17 +733,17 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             ORDER BY timestamp DESC
             LIMIT {p_lim}
             """
-            search_param = query
+            params = (*scope_params, query, effective_limit)
         else:
+            p_pat = f"${scope_count + 1}"
+            p_lim = f"${scope_count + 2}"
             sql = f"""
             SELECT * FROM {self._memory_table}
             WHERE {where_scope} AND content_text ILIKE {p_pat}
             ORDER BY timestamp DESC
             LIMIT {p_lim}
             """
-            search_param = f"%{query}%"
-
-        params = (*scope_params, search_param, effective_limit)
+            params = (*scope_params, f"%{query}%", effective_limit)
 
         try:
             async with self._config.provide_connection() as conn:
@@ -857,9 +878,12 @@ def _cockroach_hash_shard_clause(adk_config: CockroachAsyncpgADKConfig) -> str:
     if not adk_config.get("enable_hash_sharded_indexes", False):
         return ""
     bucket_count = adk_config.get("hash_shard_bucket_count")
-    if isinstance(bucket_count, int) and not isinstance(bucket_count, bool) and bucket_count > 0:
-        return f" USING HASH WITH (bucket_count = {bucket_count})"
-    return " USING HASH"
+    if bucket_count is None:
+        return " USING HASH"
+    if not isinstance(bucket_count, int) or isinstance(bucket_count, bool) or bucket_count <= 0:
+        msg = "extension_config['adk']['hash_shard_bucket_count'] must be a positive integer"
+        raise ValueError(msg)
+    return f" USING HASH WITH (bucket_count = {bucket_count})"
 
 
 def _cockroach_storing_clause(adk_config: CockroachAsyncpgADKConfig, columns: tuple[str, ...]) -> str:
