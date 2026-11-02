@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver, OracleVersionInfo
 from sqlspec.core import SQL, SQLResult, StatementConfig
+from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components
 
 
 def _lower_keys(row: dict[str, object]) -> dict[str, object]:
@@ -14,6 +15,24 @@ def _lower_keys(row: dict[str, object]) -> dict[str, object]:
 
 
 pytestmark = pytest.mark.xdist_group("oracle")
+
+
+def test_oracle_release_metadata_matches_native_vector_capable_server(oracle_sync_session: OracleSyncDriver) -> None:
+    """The 23ai fixture reports its release update and actual vector-compatible level."""
+    native_version = str(
+        oracle_sync_session.select_value(
+            "SELECT COALESCE(version_full, version) FROM product_component_version "
+            "WHERE product LIKE 'Oracle%' FETCH FIRST 1 ROWS ONLY"
+        )
+    )
+    native_compatible = str(oracle_sync_session.select_value("SELECT value FROM v$parameter WHERE name = 'compatible'"))
+    version = oracle_sync_session.data_dictionary.get_version(oracle_sync_session)
+    assert isinstance(version, OracleVersionInfo)
+    assert (version.major, version.minor, version.patch) == parse_oracle_version_components(native_version)
+    assert version.compatible == native_compatible
+    compatible = parse_oracle_version_components(native_compatible)
+    assert isinstance(compatible, tuple), f"Invalid native COMPATIBLE: {native_compatible!r}"
+    assert compatible >= (23, 4, 0), f"Vector fixture COMPATIBLE: {native_compatible!r}"
 
 
 def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:

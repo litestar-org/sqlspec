@@ -878,7 +878,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack sequentially on the sync driver."""
-        self._require_capability("stack_execution")
         self._log_pipeline_skip("asyncio_thin_required", stack)
         return super().execute_stack(stack, continue_on_error=continue_on_error)
 

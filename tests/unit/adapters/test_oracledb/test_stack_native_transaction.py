@@ -163,3 +163,46 @@ async def test_stack_maps_native_pipeline_error_records(continue_on_error: bool)
     cause = error.original_error.__cause__
     assert isinstance(cause, oracledb.DatabaseError)
     assert cause.args[0] is native_error
+
+
+def test_sync_stack_executes_and_commits_without_a_storage_capability_flag() -> None:
+    from sqlspec.adapters.oracledb._typing import OracleSyncConnection
+    from sqlspec.adapters.oracledb.driver import OracleSyncDriver
+
+    class _Cursor:
+        description = None
+        rowcount = 1
+
+        def __init__(self, connection: "_Connection") -> None:
+            self.connection = connection
+
+        def execute(self, statement: str, parameters: object = None, **kwargs: object) -> None:
+            self.connection.executed.append((statement, parameters))
+
+        def close(self) -> None:
+            return None
+
+    class _Connection:
+        transaction_in_progress = False
+
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, object]] = []
+            self.commits = 0
+
+        def cursor(self) -> _Cursor:
+            return _Cursor(self)
+
+        def commit(self) -> None:
+            self.commits += 1
+
+    connection = _Connection()
+    driver = OracleSyncDriver(cast("OracleSyncConnection", connection))
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO items VALUES (:1)", (1,))
+        .push_execute("INSERT INTO items VALUES (:1)", (2,))
+    )
+    results = driver.execute_stack(stack)
+    assert [result.rows_affected for result in results] == [1, 1]
+    assert connection.executed == [("INSERT INTO items VALUES (:1)", [1]), ("INSERT INTO items VALUES (:1)", [2])]
+    assert connection.commits == 1

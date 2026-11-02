@@ -52,6 +52,7 @@ ORDER BY i.owner, i.table_name, i.index_name;
 -- name: by_table
 -- dialect: oracle
 SELECT
+    i.owner AS schema_name,
     i.index_name,
     i.table_name AS table_name,
     CASE WHEN i.uniqueness = 'UNIQUE' THEN 1 ELSE 0 END AS is_unique,
@@ -70,7 +71,7 @@ LEFT JOIN all_constraints c
   AND c.constraint_type = 'P'
 WHERE i.table_name = :table_name
   AND i.owner = COALESCE(:schema_name, USER)
-GROUP BY i.index_name, i.table_name, i.uniqueness;
+GROUP BY i.owner, i.index_name, i.table_name, i.uniqueness;
 
 -- name: expressions
 -- dialect: oracle

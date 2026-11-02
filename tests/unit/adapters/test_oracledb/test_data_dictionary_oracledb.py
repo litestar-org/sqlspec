@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
+from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.data_dictionary import (
     DDLResult,
     MetadataFidelity,
@@ -32,7 +33,7 @@ from sqlspec.data_dictionary.dialects.oracle import (
 )
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+    from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 
 ORACLE_AI_COMPONENT_ROW = {
     "product": "Oracle AI Database 26ai Free",
@@ -220,6 +221,8 @@ def test_oracle_dialect_helpers_resolve_shared_version_rules() -> None:
     config = get_dialect_config("oracle")
 
     assert extract_oracle_version_value({"VERSION": "23.26.0.0.0"}) == "23.26.0.0.0"
+    assert extract_oracle_version_value({"VERSION": "23.0.0.0.0", "VERSION_FULL": "23.26.0.0.0"}) == "23.26.0.0.0"
+    assert extract_oracle_version_value({"version": "19.0.0.0.0", "version_full": None}) == "19.0.0.0.0"
     assert extract_oracle_version_value(("19.20.0.0.0",)) == "19.20.0.0.0"
     assert parse_oracle_version_components("23.26.0.0.0") == (23, 26, 0)
     assert parse_oracle_compatible_major("23.20.0.0.0") == 23
@@ -657,3 +660,150 @@ def test_oracle_get_tables_single_query() -> None:
     assert len(tables) == 1
     assert len(queries) == 1
     assert "names_by_schema" not in queries[0]
+
+
+class _CatalogCursor:
+    def __init__(self, connection: "_CatalogConnection") -> None:
+        self.connection = connection
+        self.description: list[tuple[str, object]] = []
+        self.rows: list[tuple[object, ...]] = []
+        self.rowcount = 0
+
+    def execute(self, statement: str, parameters: object = None, **kwargs: object) -> None:
+        import oracledb
+
+        self.connection.statements.append(statement)
+        if "product_component_version" in statement:
+            columns = ["PRODUCT", "VERSION", "STATUS"]
+            self.rows = [("Oracle Database", self.connection.catalog_version, "Production")]
+            if int(self.connection.catalog_version.split(".", 1)[0]) >= 18:
+                columns.insert(2, "VERSION_FULL")
+                self.rows = [
+                    ("Oracle Database", self.connection.catalog_version, self.connection.full_version, "Production")
+                ]
+        elif "v$parameter" in statement:
+            columns = ["COMPATIBLE"]
+            self.rows = [("23.4.0.0.0",)]
+        elif "sys_context" in statement:
+            columns = ["SERVICE"]
+            self.rows = [(None,)]
+        elif "all_ind_expressions" in statement:
+            columns = ["SCHEMA_NAME", "TABLE_NAME", "INDEX_NAME", "COLUMN_EXPRESSION"]
+            self.rows = [("HR", "EMPLOYEES", "IDX_EMAIL", 'UPPER("EMAIL")')]
+        elif "all_indexes" in statement:
+            columns = ["INDEX_NAME", "TABLE_NAME", "IS_UNIQUE", "IS_PRIMARY", "COLUMNS"]
+            self.rows = [("IDX_EMAIL", "EMPLOYEES", 0, 0, "SYS_NC00003$")]
+            if "i.owner AS schema_name" in statement:
+                columns.insert(0, "SCHEMA_NAME")
+                self.rows = [("HR", *row) for row in self.rows]
+        else:
+            raise ValueError(statement)
+        self.description = [(name, oracledb.DB_TYPE_VARCHAR) for name in columns]
+        self.rowcount = len(self.rows)
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        rows, self.rows = self.rows, []
+        return rows
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self.rows.pop(0) if self.rows else None
+
+    def close(self) -> None:
+        return None
+
+
+class _AsyncCatalogCursor:
+    def __init__(self, connection: "_CatalogConnection") -> None:
+        self.cursor = _CatalogCursor(connection)
+
+    @property
+    def description(self) -> list[tuple[str, object]]:
+        return self.cursor.description
+
+    @property
+    def rowcount(self) -> int:
+        return self.cursor.rowcount
+
+    async def execute(self, statement: str, parameters: object = None, **kwargs: object) -> None:
+        self.cursor.execute(statement, parameters, **kwargs)
+
+    async def fetchall(self) -> list[tuple[object, ...]]:
+        return self.cursor.fetchall()
+
+    async def fetchone(self) -> tuple[object, ...] | None:
+        return self.cursor.fetchone()
+
+    def close(self) -> None:
+        self.cursor.close()
+
+
+class _CatalogConnection:
+    def __init__(
+        self,
+        *,
+        is_async: bool,
+        version: str = "23.0.0.0.0",
+        full_version: str = "23.26.0.0.0",
+        sdk_version_present: bool = True,
+    ) -> None:
+        self.is_async = is_async
+        self.version = version if sdk_version_present else None
+        self.catalog_version = version
+        self.full_version = full_version
+        self.statements: list[str] = []
+
+    def cursor(self) -> _CatalogCursor | _AsyncCatalogCursor:
+        return _AsyncCatalogCursor(self) if self.is_async else _CatalogCursor(self)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_default_schema_index_expression_uses_native_catalog_owner(is_async: bool) -> None:
+    connection = _CatalogConnection(is_async=is_async)
+    if is_async:
+        driver = OracleAsyncDriver(
+            cast("OracleAsyncConnection", connection), driver_features={"enable_lowercase_column_names": True}
+        )
+        indexes = await driver.data_dictionary.get_indexes(driver, table="employees")
+    else:
+        sync_driver = OracleSyncDriver(
+            cast("OracleSyncConnection", connection), driver_features={"enable_lowercase_column_names": True}
+        )
+        indexes = sync_driver.data_dictionary.get_indexes(sync_driver, table="employees")
+    assert len(indexes) == 1
+    assert indexes[0]["index_name"] == "IDX_EMAIL"
+    assert indexes[0]["expression"] == 'UPPER("EMAIL")'
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    ("major", "sdk_version_present", "lowercase_columns"),
+    [(12, True, True), (18, True, False), (23, True, True), (23, False, False)],
+)
+async def test_oracle_version_preserves_release_update_and_legacy_query(
+    is_async: bool, major: int, sdk_version_present: bool, lowercase_columns: bool
+) -> None:
+    base_version = f"{major}.0.0.0.0"
+    full_version = f"{major}.26.0.0.0"
+    connection = _CatalogConnection(
+        is_async=is_async, version=base_version, full_version=full_version, sdk_version_present=sdk_version_present
+    )
+    if is_async:
+        driver = OracleAsyncDriver(
+            cast("OracleAsyncConnection", connection),
+            driver_features={"enable_lowercase_column_names": lowercase_columns},
+        )
+        version = await driver.data_dictionary.get_version(driver)
+        cached_version = await driver.data_dictionary.get_version(driver)
+    else:
+        sync_driver = OracleSyncDriver(
+            cast("OracleSyncConnection", connection),
+            driver_features={"enable_lowercase_column_names": lowercase_columns},
+        )
+        version = sync_driver.data_dictionary.get_version(sync_driver)
+        cached_version = sync_driver.data_dictionary.get_version(sync_driver)
+    assert version == VersionInfo(major, 26 if major >= 18 else 0, 0)
+    assert cached_version is version
+    version_statements = [query for query in connection.statements if "product_component_version" in query]
+    assert len(version_statements) == 1
