@@ -354,9 +354,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         telemetry: "StorageTelemetry | None" = None,
         **kwargs: Any,
     ) -> "StorageBridgeJob":
-        """Execute a query and stream Arrow results to a storage backend."""
+        """Execute a query and write client-converted Arrow results to storage."""
 
-        self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_storage_result(

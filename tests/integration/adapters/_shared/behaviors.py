@@ -6951,7 +6951,8 @@ async def assert_async_load_from_records_contract(driver: object, case: DriverCa
     assert await async_driver.select_value(table.select_count_sql) == 5
 
     with pytest.raises(ImproperConfigurationError):
-        await async_driver.load_from_records(table.name, [], overwrite=True)
+        await async_driver.load_from_records(table.name, [])
+    assert await async_driver.select_value(table.select_count_sql) == 5
 
 
 def _storage_bridge_export_sql(table: ContractTable) -> str:

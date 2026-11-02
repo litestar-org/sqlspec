@@ -4,6 +4,7 @@ import inspect
 from asyncio import CancelledError
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -19,6 +20,22 @@ from sqlspec.core import SQL, StatementConfig, StatementStack
 from sqlspec.exceptions import DatabaseConnectionError, DeadlockError, QueryTimeoutError
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_storage_bridge_writes_client_converted_rows_without_native_export(tmp_path: Path) -> None:
+    """Client-side storage export works without claiming native Arrow export."""
+    parquet = pytest.importorskip("pyarrow.parquet")
+    connection = AsyncMock()
+    connection.fetch.return_value = [{"name": "Ada", "value": 1}]
+    config = AsyncpgConfig()
+    driver = AsyncpgDriver(cast("Any", connection), driver_features=config.driver_features)
+    target = tmp_path / "asyncpg.parquet"
+
+    job = await driver.select_to_storage("SELECT name, value FROM storage_rows", target, format_hint="parquet")
+
+    assert config.storage_capabilities()["arrow_export_enabled"] is False
+    assert job.telemetry["rows_processed"] == 1
+    assert parquet.read_table(target).to_pylist() == [{"name": "Ada", "value": 1}]
 
 
 class _FakeTransaction:
@@ -498,26 +515,6 @@ def test_asyncpg_events_resolve_listener_config_allows_mapping_direct_dsn() -> N
     hub = AsyncpgListenerHub(config)
     resolved = hub._resolve_listener_config()
     assert resolved is not None
-
-
-async def test_asyncpg_get_indexes_with_none_schema_resolves_via_search_path() -> None:
-    """get_indexes passes schema_name=None when schema is None to resolve table on search_path."""
-    from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
-
-    calls: list[dict[str, Any]] = []
-    driver = MagicMock()
-
-    async def fake_select(query: Any, **kwargs: Any) -> list[Any]:
-        calls.append(kwargs)
-        return []
-
-    driver.select = AsyncMock(side_effect=fake_select)
-
-    dd = AsyncpgDataDictionary()
-    await dd.get_indexes(driver, table="users", schema=None)
-    assert len(calls) == 1
-    assert calls[0]["schema_name"] is None
-    assert calls[0]["table_name"] == "users"
 
 
 async def test_asyncpg_cache_hit_with_cursor() -> None:

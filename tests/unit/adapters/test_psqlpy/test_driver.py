@@ -1,17 +1,36 @@
 """Unit tests for PsqlpyDriver wire-level sqlcommenter and _dml_count_query cache preservation."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from sqlspec.adapters.psqlpy import PsqlpyConfig
 from sqlspec.adapters.psqlpy import core as psqlpy_core
 from sqlspec.adapters.psqlpy.core import build_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import UniqueViolationError
+
+
+@pytest.mark.anyio
+async def test_storage_bridge_writes_client_converted_rows_without_native_export(tmp_path: Path) -> None:
+    """Client-side storage export works without claiming native Arrow export."""
+    parquet = pytest.importorskip("pyarrow.parquet")
+    connection = AsyncMock()
+    connection.fetch.return_value = SimpleNamespace(result=lambda: [{"name": "Ada", "value": 1}])
+    config = PsqlpyConfig()
+    driver = PsqlpyDriver(cast("Any", connection), driver_features=config.driver_features)
+    target = tmp_path / "psqlpy.parquet"
+
+    job = await driver.select_to_storage("SELECT name, value FROM storage_rows", target, format_hint="parquet")
+
+    assert config.storage_capabilities()["arrow_export_enabled"] is False
+    assert job.telemetry["rows_processed"] == 1
+    assert parquet.read_table(target).to_pylist() == [{"name": "Ada", "value": 1}]
 
 
 @pytest.mark.anyio

@@ -70,6 +70,28 @@ async def test_unqualified_columns_resolve_through_search_path(asyncpg_async_dri
         await driver.execute_script(f"RESET search_path; {TEARDOWN_SQL}")
 
 
+async def test_unqualified_indexes_resolve_through_search_path(asyncpg_async_driver: "AsyncpgDriver") -> None:
+    """Index lookup resolves the table on search_path and honors an explicit schema."""
+    driver = asyncpg_async_driver
+    await driver.execute_script(SETUP_SQL)
+    try:
+        await driver.execute_script(
+            'CREATE INDEX "MixedLookup" ON column_metadata."MixedItems" ("userName"); '
+            "SET search_path TO public, column_metadata"
+        )
+
+        indexes = await driver.data_dictionary.get_indexes(driver, table='"MixedItems"')
+        explicit_public = await driver.data_dictionary.get_indexes(driver, table='"MixedItems"', schema="public")
+
+        lookup = next(index for index in indexes if index["index_name"] == "MixedLookup")
+        assert lookup["schema_name"] == "column_metadata"
+        assert lookup["table_name"] == "MixedItems"
+        assert lookup["columns"] == ["userName"]
+        assert explicit_public == []
+    finally:
+        await driver.execute_script(f"RESET search_path; {TEARDOWN_SQL}")
+
+
 def test_columns_report_keys_identity_and_sequences_sync(psycopg_sync_config: "PsycopgSyncConfig") -> None:
     """The sync dictionary reports the same column metadata."""
     with psycopg_sync_config.provide_session() as driver:
