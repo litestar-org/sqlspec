@@ -48,7 +48,7 @@ config = spec.add_config(
             "maximum_bytes_billed": 10 * 1024**3,
         },
         driver_features={
-            "use_query_and_wait": True,
+            "enable_query_and_wait": True,
             "enable_storage_write_api": True,
             "storage_write_stream_type": "PENDING",
         },
@@ -64,7 +64,7 @@ config = spec.add_config(
 | `credentials` / `credentials_path` | `connection_config` | Explicit `google.auth.credentials.Credentials` instance or service-account JSON path (uses ADC when omitted). |
 | `maximum_bytes_billed` / `priority` / `reservation` | `connection_config` | Cost guardrails (`INTERACTIVE` vs `BATCH` priority and BigQuery Editions reservation assignment). |
 | `labels` | `connection_config` | Billing and observability key-value labels attached to submitted jobs. |
-| `use_query_and_wait` | `driver_features` | Uses low-latency `client.query_and_wait()` for interactive queries and falls back to `QueryJob` when destination tables, transactions, or `EXPORT DATA` require job handles. |
+| `enable_query_and_wait` | `driver_features` | Uses low-latency `client.query_and_wait()` for interactive queries and falls back to `QueryJob` when destination tables, transactions, or `EXPORT DATA` require job handles. |
 | `enable_storage_write_api` / `storage_write_stream_type` | `driver_features` | Streams `load_from_arrow` batches via BigQuery Storage Write API (`"PENDING"` atomic commit default or `"COMMITTED"` immediate visibility). |
 | `enable_native_storage` | `driver_features` | Accelerates GCS `gs://` Parquet/CSV/JSON exports and loads using server-side BigQuery jobs. |
 | `request_timeout` / `job_result_timeout` | `driver_features` | Per-RPC and overall job completion timeout bounds in seconds. |

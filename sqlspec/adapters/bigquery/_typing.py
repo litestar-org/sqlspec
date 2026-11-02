@@ -12,6 +12,7 @@ import google.cloud.bigquery as bigquery_module
 from google.api_core import exceptions as bigquery_exceptions
 from google.api_core.client_info import ClientInfo as BigQueryClientInfo
 from google.api_core.client_options import ClientOptions as BigQueryClientOptions
+from google.api_core.exceptions import GoogleAPIError
 from google.api_core.retry import Retry as BigQueryRetry
 from google.auth.credentials import Credentials as BigQueryCredentials
 from google.cloud.bigquery import ArrayQueryParameter, Client, ScalarQueryParameter, StructQueryParameter
@@ -27,19 +28,17 @@ from sqlspec.typing import import_optional
 
 BigQueryConnection: TypeAlias = Client
 BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter | StructQueryParameter
-BigQueryStorageWriteModule: Any = import_optional("google.cloud.bigquery_storage_v1")
-BigQueryStorageWriteTypes: Any = import_optional("google.cloud.bigquery_storage_v1.types")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
 
     import google.cloud.bigquery_storage as bigquery_storage_read_module
+    import google.cloud.bigquery_storage_v1 as BigQueryStorageWriteModule  # noqa: N812
+    import google.cloud.bigquery_storage_v1.types as BigQueryStorageWriteTypes  # noqa: N812
 
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
     from sqlspec.core import StatementConfig
-else:
-    bigquery_storage_read_module = import_optional("google.cloud.bigquery_storage")
 
 __all__ = (
     "BIGQUERY_DEFAULT_RETRY",
@@ -58,6 +57,7 @@ __all__ = (
     "BigQuerySessionContext",
     "BigQueryStorageWriteModule",
     "BigQueryStorageWriteTypes",
+    "GoogleAPIError",
     "GoogleCloudError",
     "bigquery_exceptions",
     "bigquery_module",
@@ -65,6 +65,17 @@ __all__ = (
 )
 
 _DRIVER_TYPE: "type[BigQueryDriver] | None" = None
+
+
+def __getattr__(name: str) -> Any:
+    if name == "BigQueryStorageWriteModule":
+        return import_optional("google.cloud.bigquery_storage_v1")
+    if name == "BigQueryStorageWriteTypes":
+        return import_optional("google.cloud.bigquery_storage_v1.types")
+    if name == "bigquery_storage_read_module":
+        return import_optional("google.cloud.bigquery_storage")
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
 
 
 class BigQueryCursor:

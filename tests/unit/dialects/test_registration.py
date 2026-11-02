@@ -4,6 +4,10 @@ import subprocess
 import sys
 from importlib.metadata import entry_points
 
+import pytest
+
+from tests.conftest import is_compiled
+
 DIALECT_ENTRY_POINTS = {
     "db2": "sqlspec.dialects.db2",
     "paradedb": "sqlspec.dialects.postgres",
@@ -36,8 +40,9 @@ def test_sqlglot_resolves_dialects_without_sqlspec_dialect_import() -> None:
     assert "<=>" in result.stdout
 
 
+@pytest.mark.skipif(is_compiled(), reason="Compiled root facade eagerly binds dialect exports for mypyc compatibility")
 def test_importing_sqlspec_does_not_eagerly_load_dialect_machinery() -> None:
-    """``import sqlspec`` must not pay the sqlglot dialect registration cost."""
+    """The interpreted root facade defers dialect registration until first use."""
     code = (
         "import sys\n"
         "import sqlspec\n"

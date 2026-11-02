@@ -8,16 +8,13 @@ caller did not ask for. An unavailable option surfaces as the database's own
 error instead.
 """
 
+import re
 from collections.abc import Mapping
-from typing import Any
-
-from typing_extensions import TypedDict
-
-from sqlspec.utils.logging import get_logger
-
-logger = get_logger("sqlspec.adapters.oracledb.storage")
+from typing import Any, TypedDict
 
 __all__ = ("oracle_table_feature_report", "validate_oracle_identifier")
+
+_UNQUOTED_ORACLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Za-z][A-Za-z0-9_$#]*$")
 
 ORACLE_DEFAULT_HASH_PARTITIONS = 16
 ORACLE_MIN_HASH_PARTITIONS = 2
@@ -43,6 +40,7 @@ class _OracleStorageFeatureReport(TypedDict):
 
     applied: tuple[str, ...]
     clause: str
+    plsql_clause: str
 
 
 def oracle_table_feature_report(
@@ -92,13 +90,16 @@ def oracle_table_feature_report(
             applied.append("partitioning")
 
     clause = ""
+    plsql_clause = ""
     if clauses:
-        clause = " " + " ".join(clauses).replace("'", "''")
-    return {"applied": tuple(applied), "clause": clause}
+        clause = " " + " ".join(clauses)
+        plsql_clause = " " + " ".join(clauses).replace("'", "''")
+    return {"applied": tuple(applied), "clause": clause, "plsql_clause": plsql_clause}
 
 
 def validate_oracle_identifier(value: str, field_name: str) -> str:
-    if not value or not value.replace("_", "").isalnum() or value[0].isdigit():
+    """Validate that a string is a valid unquoted Oracle SQL identifier."""
+    if not value or not _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.fullmatch(value):
         msg = f"Oracle {field_name} must be a simple SQL identifier"
         raise ValueError(msg)
     return value

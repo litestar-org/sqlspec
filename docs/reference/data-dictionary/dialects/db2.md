@@ -16,7 +16,7 @@ Introspects IBM Db2 `SYSCAT` views (`SYSCAT.TABLES`, `SYSCAT.COLUMNS`, `SYSCAT.I
 | **Default Schema** | `None` |
 | **Version Pattern** | `(?:v|V)?(\d+)\.(\d+)(?:\.(\d+))?` |
 | **DDL Strategy** | AST synthesis + `SYSCAT` catalog text definitions |
-| **Catalog `.sql` Files** | `9` files (`16` named queries) |
+| **Catalog `.sql` Files** | `9` files (`14` named queries) |
 
 ### Capabilities & Type Mappings
 
@@ -48,7 +48,7 @@ Introspects IBM Db2 `SYSCAT` views (`SYSCAT.TABLES`, `SYSCAT.COLUMNS`, `SYSCAT.I
 
 ## Catalog SQL Queries
 
-The `db2` dialect pack defines `16` named queries across `9` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/db2/`):
+The `db2` dialect pack defines `14` named queries across `9` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/db2/`):
 
 | Domain Pack | Named Queries | Bind Parameters |
 | --- | --- | --- |
@@ -57,8 +57,8 @@ The `db2` dialect pack defines `16` named queries across `9` domain `.sql` files
 | `foreign_keys.sql` | `by_schema`, `by_table` | `:schema_name`, `:table_name` |
 | `indexes.sql` | `by_schema`, `by_table` | `:schema_name`, `:table_name` |
 | `objects.sql` | `by_schema` | `:object_name`, `:schema_name` |
-| `schemas.sql` | `by_schema`, `current` | `:schema_name` |
-| `tables.sql` | `by_schema`, `all_by_schema`, `names_by_schema` | `:schema_name`, `:table_name` |
+| `schemas.sql` | `by_schema` | `:schema_name` |
+| `tables.sql` | `by_schema`, `all_by_schema` | `:schema_name`, `:table_name` |
 | `version.sql` | `current` | *none* |
 | `views.sql` | `by_schema` | `:schema_name`, `:view_name` |
 
@@ -369,7 +369,7 @@ The `db2` dialect pack defines `16` named queries across `9` domain `.sql` files
     ORDER BY schema_name, object_type, object_name;
     ```
 
-??? code "`schemas.sql` (2 named queries)"
+??? code "`schemas.sql` (1 named queries)"
 
     ```sql
     -- name: by_schema
@@ -385,13 +385,9 @@ The `db2` dialect pack defines `16` named queries across `9` domain `.sql` files
       AND s.SCHEMANAME NOT LIKE 'SQLJ%'
       AND (:schema_name IS NULL OR s.SCHEMANAME = :schema_name)
     ORDER BY s.SCHEMANAME;
-
-    -- name: current
-    -- dialect: db2
-    VALUES CURRENT SCHEMA;
     ```
 
-??? code "`tables.sql` (3 named queries)"
+??? code "`tables.sql` (2 named queries)"
 
     ```sql
     -- name: by_schema
@@ -471,18 +467,6 @@ The `db2` dialect pack defines `16` named queries across `9` domain `.sql` files
       AND t.TABSCHEMA = COALESCE(CAST(:schema_name AS VARCHAR(128)), CURRENT SCHEMA)
       AND (CAST(:table_name AS VARCHAR(128)) IS NULL OR t.TABNAME = :table_name)
     ORDER BY t.TABSCHEMA, t.TABNAME;
-
-    -- name: names_by_schema
-    -- dialect: db2
-    SELECT
-        RTRIM(t.TABNAME) AS table_name
-    FROM SYSCAT.TABLES t
-    WHERE t.TYPE = 'T'
-      AND t.TABSCHEMA NOT LIKE 'SYS%'
-      AND t.TABSCHEMA NOT LIKE 'NULLID%'
-      AND t.TABSCHEMA NOT LIKE 'SQLJ%'
-      AND t.TABSCHEMA = COALESCE(CAST(:schema_name AS VARCHAR(128)), CURRENT SCHEMA)
-    ORDER BY t.TABNAME;
     ```
 
 ??? code "`version.sql` (1 named queries)"

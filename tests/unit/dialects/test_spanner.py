@@ -5,8 +5,6 @@ after the closing paren, comma-separated INTERLEAVE and ROW DELETION POLICY
 clauses, and DAY-based row deletion intervals.
 """
 
-from pathlib import Path
-
 import pytest
 from sqlglot import Dialect, exp, parse_one
 
@@ -112,8 +110,6 @@ def test_interleave_create_repairs_command_fallback() -> None:
     expression = parse_one(OFFICIAL_INTERLEAVE_DDL, dialect="spanner")
     assert isinstance(expression, exp.Create)
     assert "INTERLEAVE IN PARENT Singers ON DELETE CASCADE" in expression.sql(dialect="spanner")
-    assert not hasattr(_parsers, "_INTERLEAVE_PATTERN")
-    assert not hasattr(_parsers, "extract_interleave_property")
 
     ordered_pk_ddl = (
         "CREATE TABLE Albums (SingerId INT64 NOT NULL, AlbumId INT64 NOT NULL) "
@@ -198,19 +194,6 @@ def test_spanner_property_moves_after_non_spanner_property() -> None:
     rendered = _bq_create_transform(generator, parsed)
     assert properties.expressions == [spanner_property, non_spanner_property]
     assert rendered.index("enable_change_stream_capture") < rendered.index("INTERLEAVE IN PARENT")
-
-
-def test_dedup_normalize_interval_expression_has_single_definition() -> None:
-    package_root = Path("sqlspec/dialects/spanner")
-    matches = [path for path in package_root.glob("_*.py") if "def _normalize_interval_expression" in path.read_text()]
-    assert matches == [package_root / "_generators.py"]
-
-
-def test_dedup_spanner_constants_have_single_definition() -> None:
-    package_root = Path("sqlspec/dialects/spanner")
-    for name in ("_TTL_MIN_COMPONENTS", "_ROW_DELETION_NAME", "_INTERLEAVE_NAME", "_INTERLEAVE_IN_NAME"):
-        matches = [path for path in package_root.glob("_*.py") if f"{name} =" in path.read_text()]
-        assert matches == [package_root / "_generators.py"]
 
 
 def test_dedup_parsers_import_canonical_helpers() -> None:

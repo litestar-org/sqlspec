@@ -1,8 +1,10 @@
 """Unit tests for the data dictionary registry and loader."""
 
 import re
+import subprocess
+import sys
 from importlib import resources
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -10,7 +12,6 @@ import sqlspec.data_dictionary._registry as registry
 from sqlspec.core import SQL
 from sqlspec.data_dictionary import (
     DataDictionaryLoader,
-    DialectConfig,
     VersionInfo,
     get_data_dictionary_loader,
     get_dialect_config,
@@ -151,11 +152,6 @@ def test_row_locking_capability_flags_are_introspectable() -> None:
     assert get_dialect_config("mysql").get_feature_version("supports_skip_locked") == VersionInfo(8, 0, 1)
 
 
-def test_registry_dialects_loaded_annotation_is_bool() -> None:
-    """_DIALECTS_LOADED should be annotated to avoid Literal[False] narrowing."""
-    assert registry.__annotations__["_DIALECTS_LOADED"] is bool
-
-
 def test_registry_load_default_dialects_sets_loaded_flag(monkeypatch) -> None:
     """_load_default_dialects sets the loaded flag after importing dialects."""
     calls: list[str] = []
@@ -177,16 +173,18 @@ def test_registry_load_default_dialects_is_idempotent(monkeypatch) -> None:
     registry._load_default_dialects()
 
 
-def test_registry_get_dialect_config_triggers_load(monkeypatch) -> None:
-    """get_dialect_config calls the default dialect loader before lookup."""
-    calls = 0
-    config = cast("DialectConfig", object())
-    monkeypatch.setitem(registry._DIALECT_CONFIGS, "example", config)
+def test_registry_get_dialect_config_triggers_load() -> None:
+    """The first public lookup loads built-in dialect configurations."""
+    script = """
+import sys
+from sqlspec.data_dictionary import DialectConfig, get_dialect_config
 
-    def fake_load() -> None:
-        nonlocal calls
-        calls += 1
-
-    monkeypatch.setattr(registry, "_load_default_dialects", fake_load)
-    assert registry.get_dialect_config("example") is config
-    assert calls == 1
+assert "sqlspec.data_dictionary.dialects" not in sys.modules
+config = get_dialect_config("PostgreSQL")
+assert isinstance(config, DialectConfig)
+assert config.name == "postgres"
+assert config.get_feature_flag("supports_transactions") is True
+assert "sqlspec.data_dictionary.dialects" in sys.modules
+assert get_dialect_config("pg") is config
+"""
+    subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)

@@ -1,5 +1,6 @@
 """mssql-python pool facade."""
 
+import contextlib
 import threading
 import warnings
 from typing import TYPE_CHECKING, Any, cast
@@ -67,8 +68,10 @@ class MssqlPythonConnectionPool:
         connection = cast(
             "MssqlPythonConnection", MSSQL_PYTHON_MODULE.connect(self.connection_string, **self.connect_kwargs)
         )
-        if self.on_connection_create is not None:
+        if self.on_connection_create is not None and not getattr(connection, "_sqlspec_initialized", False):
             self.on_connection_create(connection)
+            with contextlib.suppress(AttributeError):
+                setattr(connection, "_sqlspec_initialized", True)
         return connection
 
     def release(self, connection: "MssqlPythonConnection") -> None:

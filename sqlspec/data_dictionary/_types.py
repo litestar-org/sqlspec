@@ -1260,6 +1260,10 @@ class IndexMetadata(TypedDict, total=False):
     """Whether the index enforces uniqueness."""
     is_primary: bool | int
     """Whether the index backs the primary key constraint."""
+    expression: str | None
+    """Single expression for expression-based indexes."""
+    expressions: str | None
+    """Comma-separated expressions for expression-based indexes."""
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

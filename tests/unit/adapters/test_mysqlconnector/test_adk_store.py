@@ -2,7 +2,7 @@
 """Unit tests for mysql-connector ADK store extension configuration."""
 
 import asyncio
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
@@ -16,6 +16,7 @@ from sqlspec.adapters.mysqlconnector.adk import (
     MysqlConnectorSyncADKStore,
 )
 from sqlspec.config import ADKConfig
+from sqlspec.extensions.adk import StoredEvent
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -473,3 +474,80 @@ async def test_mysqlconnector_async_adk_memory_store_insert_and_search_json_hand
     assert len(records) == 1
     assert records[0]["content_json"] == {"text": "hello"}
     assert records[0]["metadata_json"] == {"source": "unit"}
+
+
+def test_mysqlconnector_sync_append_event_rolls_back_if_commit_fails() -> None:
+    """MysqlConnectorSyncADKStore rolls back when conn.commit() fails."""
+    from unittest.mock import MagicMock
+
+    from sqlspec.adapters.mysqlconnector.adk.store import MysqlConnectorSyncADKStore
+
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+    cursor.fetchone.return_value = ("sess-1", "app", "u1", "{}", None, None)
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.__exit__.return_value = None
+    conn.cursor.return_value = cursor
+    conn.commit.side_effect = RuntimeError("commit failed")
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+
+    store = MysqlConnectorSyncADKStore(config)
+    event: StoredEvent = {
+        "id": "e-1",
+        "session_id": "sess-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "event_data": {"msg": "hi"},
+        "timestamp": datetime.now(UTC),
+        "invocation_id": "inv-1",
+    }
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        store.append_event_and_update_state(event, "app", "u1", "sess-1", {"state": "active"})
+
+    assert conn.rollback.called
+
+
+async def test_mysqlconnector_memory_store_missing_table_handling() -> None:
+    """search_entries and deletes return empty/0 when table is missing."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
+    from sqlspec.adapters.mysqlconnector.adk.store import (
+        MysqlConnectorAsyncADKMemoryStore,
+        MysqlConnectorSyncADKMemoryStore,
+    )
+
+    missing_err = MysqlConnectorError(errno=1146, msg="Table 'test.mem' doesn't exist")
+
+    sync_cursor = MagicMock()
+    sync_cursor.rowcount = 0
+    sync_cursor.execute.side_effect = missing_err
+    sync_conn = MagicMock()
+    sync_conn.__enter__.return_value = sync_conn
+    sync_conn.__exit__.return_value = None
+    sync_conn.cursor.return_value = sync_cursor
+    sync_config = _mock_config()
+    sync_config.provide_connection = lambda *_a, **_k: sync_conn
+
+    sync_store = MysqlConnectorSyncADKMemoryStore(sync_config)
+    assert sync_store.search_entries("test", "app", "u1") == []
+    assert sync_store.delete_entries_by_session("sess-1") == 0
+    assert sync_store.delete_entries_older_than(30) == 0
+
+    async_cursor = MagicMock()
+    async_cursor.execute = AsyncMock(side_effect=missing_err)
+    async_cursor.close = AsyncMock()
+    async_conn = MagicMock()
+    async_conn.cursor = AsyncMock(return_value=async_cursor)
+    async_conn.__aenter__ = AsyncMock(return_value=async_conn)
+    async_conn.__aexit__ = AsyncMock(return_value=None)
+    async_config = _mock_config()
+    async_config.provide_connection = lambda *_a, **_k: async_conn
+
+    async_store = MysqlConnectorAsyncADKMemoryStore(async_config)
+    assert await async_store.search_entries("test", "app", "u1") == []
+    assert await async_store.delete_entries_by_session("sess-1") == 0
+    assert await async_store.delete_entries_older_than(30) == 0

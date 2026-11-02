@@ -6,7 +6,7 @@ import decimal
 import re
 import tempfile
 from collections.abc import Sized
-from functools import lru_cache, partial
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
@@ -15,6 +15,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from sqlspec.adapters.adbc._typing import AdbcStatusCode
 from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter, get_adbc_type_converter
 from sqlspec.core import (
     DriverParameterProfile,
@@ -32,6 +33,7 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     ImproperConfigurationError,
     IntegrityError,
+    NotFoundError,
     NotNullViolationError,
     OperationalError,
     OperationCancelledError,
@@ -47,6 +49,7 @@ from sqlspec.exceptions import (
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
 from sqlspec.utils.module_loader import import_optional, import_string
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 from sqlspec.utils.uuids import uuid4, uuid_from_string
@@ -102,8 +105,9 @@ __all__ = (
 COLUMN_CACHE_MAX_SIZE: int = 256
 _IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _UUID_TYPES: Final[tuple[type[Any], ...]] = tuple(build_uuid_coercions())
+NoneType: Final = type(None)
 _STRICT_COERCION_ALLOWED_TYPES: Final[tuple[type[Any], ...]] = (
-    type(None),
+    NoneType,
     bool,
     int,
     float,
@@ -834,6 +838,39 @@ def prepare_postgres_parameters(
     )
 
 
+_ADBC_STATUS_CODE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "TIMEOUT": (QueryTimeoutError, "query timeout"),
+    "CANCELLED": (OperationCancelledError, "operation cancelled"),
+    "UNAUTHENTICATED": (PermissionDeniedError, "unauthenticated"),
+    "UNAUTHORIZED": (PermissionDeniedError, "unauthorized"),
+    "NOT_FOUND": (NotFoundError, "not found"),
+    "ALREADY_EXISTS": (IntegrityError, "already exists"),
+    "INVALID_ARGUMENT": (DataError, "invalid argument"),
+    "INVALID_DATA": (DataError, "invalid data"),
+    "INTEGRITY": (IntegrityError, "integrity violation"),
+    "IO": (DatabaseConnectionError, "I/O error"),
+    "INVALID_STATE": (OperationalError, "invalid state"),
+    "INTERNAL": (OperationalError, "internal error"),
+    "NOT_IMPLEMENTED": (SQLSpecError, "not implemented"),
+}
+
+
+def _map_adbc_status_exception(error: Any) -> "SQLSpecError | None":
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        return None
+    status_name: str | None = getattr(status_code, "name", None)
+    if status_name is None and isinstance(status_code, int) and AdbcStatusCode is not None:
+        with contextlib.suppress(ValueError):
+            status_name = AdbcStatusCode(status_code).name
+    if status_name is None:
+        status_name = str(status_code).upper()
+    if status_name in _ADBC_STATUS_CODE_MAP:
+        exc_cls, desc = _ADBC_STATUS_CODE_MAP[status_name]
+        return _create_adbc_error(error, exc_cls, desc)
+    return None
+
+
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map ADBC errors to SQLSpec exceptions.
 
@@ -842,9 +879,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     avoids issues with exception control flow in different Python versions.
 
     Mapping priority:
-        1. SQLSTATE codes (most reliable for ADBC drivers)
-        2. Error message patterns
-        3. Default SQLSpecError fallback
+        1. Cancellation and timeout status codes
+        2. SQLSTATE codes and vendor-specific diagnostics
+        3. Error message patterns
+        4. Generic ADBC status codes or SQLSpecError fallback
 
     Args:
         error: The ADBC exception to map
@@ -853,13 +891,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
-    status_code = getattr(error, "status_code", None)
-    status_name = getattr(status_code, "name", str(status_code)).upper()
-    if status_name == "TIMEOUT":
-        return _create_adbc_error(error, QueryTimeoutError, "query timeout")
-    if status_name == "CANCELLED":
-        return _create_adbc_error(error, OperationCancelledError, "operation cancelled")
+    _ = logger
+    status_mapped = _map_adbc_status_exception(error)
+    if isinstance(status_mapped, (QueryTimeoutError, OperationCancelledError)):
+        return status_mapped
 
     raw_message = str(error)
     error_msg = raw_message.lower()
@@ -899,6 +934,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     if "connection" in error_msg or "connect" in error_msg:
         return _create_adbc_error(error, DatabaseConnectionError, "connection error")
+
+    if status_mapped is not None:
+        return status_mapped
 
     return _create_adbc_error(error, SQLSpecError, "database error")
 
@@ -961,10 +999,11 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         "type_coercion_map": _BASE_TYPE_COERCION_MAP,
     }
 
+    statement_overrides: dict[str, Any] = {"dialect": sqlglot_dialect}
     if detected_dialect == "duckdb":
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK, ParameterStyle.NUMERIC}
-        parameter_overrides["ast_transformer"] = _transform_duckdb_copy_parameters
+        statement_overrides["statement_transformers"] = (_transform_duckdb_copy_parameters,)
     elif detected_dialect == "oracle":
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.POSITIONAL_COLON}
@@ -976,7 +1015,7 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
 
     return build_statement_config_from_profile(
-        profile, parameter_overrides=parameter_overrides, statement_overrides={"dialect": sqlglot_dialect}
+        profile, parameter_overrides=parameter_overrides, statement_overrides=statement_overrides
     )
 
 
@@ -993,19 +1032,16 @@ def apply_driver_features(
         Updated statement configuration and normalized driver features.
     """
     processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    processed_features = _normalize_adbc_driver_features(processed_features)
     resolved_dialect = resolve_dialect_name(statement_config.dialect).lower()
 
     json_serializer = cast("Callable[[Any], str] | None", processed_features.setdefault("json_serializer", to_json))
     processed_features.setdefault("enable_cast_detection", True)
-    processed_features.setdefault("strict_type_coercion", False)
-    processed_features.setdefault("enable_strict_type_coercion", processed_features["strict_type_coercion"])
-    processed_features.setdefault("arrow_extension_types", True)
-    processed_features.setdefault("enable_arrow_extension_types", processed_features["arrow_extension_types"])
+    processed_features.setdefault("enable_strict_type_coercion", False)
+    processed_features.setdefault("enable_arrow_extension_types", True)
     processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     processed_features.setdefault("enable_paradedb", True)
     processed_features.setdefault("enable_pg_textsearch", True)
-    processed_features.setdefault("enable_lowercase_column_names", resolved_dialect in {"oracle", "db2"})
+    processed_features.setdefault("enable_lowercase_column_names", resolved_dialect in {"oracle", "db2", "snowflake"})
     processed_features.setdefault("enable_statement_profiling", False)
 
     if json_serializer is not None:
@@ -1363,6 +1399,8 @@ _BASE_TYPE_COERCION_MAP: Final[dict[type, Any]] = {
     int: _identity,
     float: _identity,
     bytes: _identity,
+    bytearray: bytes,
+    memoryview: bytes,
     tuple: _convert_array_for_postgres_adbc,
     list: _convert_array_for_postgres_adbc,
     dict: _identity,
@@ -1416,7 +1454,29 @@ def _is_uuid_array_data_type(target: Any) -> bool:
     return len(element_types) == 1 and _is_uuid_data_type(element_types[0])
 
 
-@lru_cache(maxsize=256)
+class _RewriteCacheState:
+    __slots__ = ("cache", "hits", "maxsize", "misses")
+
+    def __init__(self, maxsize: int = 256) -> None:
+        self.maxsize = maxsize
+        self.hits = 0
+        self.misses = 0
+        self.cache: dict[
+            tuple[str, tuple[int, ...], tuple[int, ...], str], tuple[str, tuple[int, ...], tuple[int, ...]]
+        ] = {}
+
+    def clear(self) -> None:
+        self.hits = 0
+        self.misses = 0
+        self.cache.clear()
+
+
+_REWRITE_CACHE_STATE: Final[_RewriteCacheState] = _RewriteCacheState(256)
+_REWRITE_UUID_CACHE: Final[
+    dict[tuple[str, tuple[int, ...], tuple[int, ...], str], tuple[str, tuple[int, ...], tuple[int, ...]]]
+] = _REWRITE_CACHE_STATE.cache
+
+
 def _rewrite_postgres_uuid_placeholders(
     sql: str, scalar_ordinals: "tuple[int, ...]", array_ordinals: "tuple[int, ...]", dialect: str
 ) -> "tuple[str, tuple[int, ...], tuple[int, ...]]":
@@ -1429,6 +1489,13 @@ def _rewrite_postgres_uuid_placeholders(
     repeated executions of the same statement shape reuse the rewrite without
     parsing again.
     """
+    cache_key = (sql, scalar_ordinals, array_ordinals, dialect)
+    cached = _REWRITE_CACHE_STATE.cache.get(cache_key)
+    if cached is not None:
+        _REWRITE_CACHE_STATE.hits += 1
+        return cached
+
+    _REWRITE_CACHE_STATE.misses += 1
     try:
         expressions = cast(
             "list[exp.Expression]",
@@ -1463,21 +1530,22 @@ def _rewrite_postgres_uuid_placeholders(
     effective_array_set = set(effective_arrays)
     effective_set = set(effective_scalars) | effective_array_set
 
-    def wrap_parameter(node: exp.Expression) -> exp.Expression:
-        if not isinstance(node, exp.Parameter):
-            return node
-        ordinal = _parameter_ordinal(node)
-        if ordinal is None or ordinal not in effective_set:
-            return node
-        if _direct_parameter_cast(node) is not None:
-            return node
-        target_type = "UUID[]" if ordinal in effective_array_set else "UUID"
-        return exp.Cast(this=node.copy(), to=exp.DataType.build(target_type, dialect=dialect))
-
     for expression in expressions:
-        expression.transform(wrap_parameter, copy=False)
+        for node in list(expression.find_all(exp.Parameter)):
+            ordinal = _parameter_ordinal(node)
+            if ordinal is None or ordinal not in effective_set:
+                continue
+            if _direct_parameter_cast(node) is not None:
+                continue
+            target_type = "UUID[]" if ordinal in effective_array_set else "UUID"
+            node.replace(exp.Cast(this=node.copy(), to=exp.DataType.build(target_type, dialect=dialect)))
+
     rewritten = "; ".join(expression.sql(dialect=dialect, copy=False) for expression in expressions)
-    return rewritten, effective_scalars, effective_arrays
+    result = (rewritten, effective_scalars, effective_arrays)
+    if len(_REWRITE_CACHE_STATE.cache) >= _REWRITE_CACHE_STATE.maxsize:
+        _REWRITE_CACHE_STATE.cache.pop(next(iter(_REWRITE_CACHE_STATE.cache)))
+    _REWRITE_CACHE_STATE.cache[cache_key] = result
+    return result
 
 
 def _sequence_holds_uuid(values: "list[Any] | tuple[Any, ...]") -> bool:
@@ -1721,20 +1789,6 @@ def _map_sqlstate_exception(error: Any, sqlstate: str) -> SQLSpecError:
     return _create_adbc_error(error, SQLSpecError, "database error")
 
 
-def _normalize_adbc_driver_features(processed_features: "dict[str, Any]") -> "dict[str, Any]":
-    if "strict_type_coercion" in processed_features and "enable_strict_type_coercion" not in processed_features:
-        processed_features["enable_strict_type_coercion"] = processed_features["strict_type_coercion"]
-    if "enable_strict_type_coercion" in processed_features and "strict_type_coercion" not in processed_features:
-        processed_features["strict_type_coercion"] = processed_features["enable_strict_type_coercion"]
-
-    if "arrow_extension_types" in processed_features and "enable_arrow_extension_types" not in processed_features:
-        processed_features["enable_arrow_extension_types"] = processed_features["arrow_extension_types"]
-    if "enable_arrow_extension_types" in processed_features and "arrow_extension_types" not in processed_features:
-        processed_features["arrow_extension_types"] = processed_features["enable_arrow_extension_types"]
-
-    return processed_features
-
-
 def _validate_strict_parameter_value(value: Any) -> None:
     if isinstance(value, (list, tuple)):
         for item in value:
@@ -1897,9 +1951,6 @@ def _prepare_parameter_sequence_with_casts(
                         param = converter_func(param)
             result.append(param)
     return tuple(result) if isinstance(parameters, tuple) else result
-
-
-_prepare_batch_with_casts = prepare_batch_with_casts
 
 
 def _resolve_gizmosql_driver_connect() -> str:
@@ -2129,3 +2180,19 @@ def _apply_driver_manager_config(config: "dict[str, Any]", driver_kind: "str | N
 
 
 driver_profile: Final[DriverParameterProfile] = build_profile()
+
+_DB2_TABLE_EXISTS_SQL: Final = (
+    "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
+)
+_DB2_INDEX_EXISTS_SQL: Final = (
+    "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
+)
+_MIN_QUALIFIED_PARTS: Final = 2
+
+
+def split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
+    """Split qualified DB2 table name into schema and table components."""
+    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
+    if len(parts) >= _MIN_QUALIFIED_PARTS:
+        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
+    return None, normalize_identifier(parts[0] if parts else table_name, "db2")

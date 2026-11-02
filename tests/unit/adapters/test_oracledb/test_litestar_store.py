@@ -2,10 +2,13 @@
 
 from datetime import UTC, datetime, timedelta
 from typing import Any, Self, cast
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
-from sqlspec.adapters.oracledb.litestar import OracleSyncStore
+from sqlspec.adapters.oracledb.litestar import OracleAsyncStore, OracleSyncStore
 
 
 class _FakeCursor:
@@ -13,7 +16,7 @@ class _FakeCursor:
 
     def __init__(self, rows: "list[tuple[Any, ...]] | None" = None) -> None:
         self.rows = list(rows or [])
-        self.executed: list[tuple[str, dict[str, Any] | None]] = []
+        self.executed: list[tuple[str, dict[str, Any] | tuple[object, ...] | None]] = []
         self.rowcount = 0
         self.closed = False
 
@@ -26,7 +29,7 @@ class _FakeCursor:
     def close(self) -> None:
         self.closed = True
 
-    def execute(self, sql: str, parameters: "dict[str, Any] | None" = None) -> None:
+    def execute(self, sql: str, parameters: "dict[str, Any] | tuple[object, ...] | None" = None) -> None:
         self.executed.append((sql, parameters))
 
     def fetchone(self) -> "tuple[Any, ...] | None":
@@ -113,7 +116,7 @@ def test_oracle_sync_store_expires_in_uses_database_clock() -> None:
 
     sql, parameters = cursor.executed[0]
     assert "SELECT expires_at, SYSTIMESTAMP" in sql
-    assert parameters == {"session_id": "session-1"}
+    assert parameters == ("session-1",)
 
 
 def test_oracle_litestar_store_interval_partition_on_expires_at() -> None:
@@ -146,6 +149,7 @@ def test_oracle_sync_store_set_large_blob_single_statement() -> None:
     sql, parameters = cursor.executed[0]
     assert "MERGE INTO oracle_sessions t" in sql
     assert parameters is not None
+    parameters = cast("dict[str, object]", parameters)
     assert parameters["session_id"] == "session-large"
     assert connection.created_lobs == [(DB_TYPE_BLOB, large_payload)]
     assert parameters["data"] == (DB_TYPE_BLOB, large_payload)
@@ -163,3 +167,51 @@ def test_oracle_litestar_store_table_ddl_sanitizes_and_truncates_index_name() ->
 
     assert "CREATE INDEX idx_my_very_long_schema_oracle" in ddl
     assert "idx_my_very_long_schema.oracle" not in ddl
+
+
+def test_oracle_store_set_rolls_back_on_execute_failure() -> None:
+    """Store mutations roll back connection on execution failure."""
+    from unittest.mock import MagicMock
+
+    cursor = MagicMock()
+    cursor.execute.side_effect = RuntimeError("execute failed")
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    config = MagicMock()
+    config.provide_connection.return_value = context
+    config.extension_config = {}
+
+    store = OracleSyncStore(config)
+    with pytest.raises(RuntimeError, match="execute failed"):
+        store._set("fail-key", b"data")
+
+    connection.rollback.assert_called_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_session_renewal_binds_each_sql_placeholder(is_async: bool) -> None:
+    config = MagicMock()
+    config.extension_config = {}
+    cursor = MagicMock()
+    cursor.fetchone.return_value = (b"payload", datetime(2026, 5, 10, tzinfo=UTC))
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    if is_async:
+        cursor.execute = AsyncMock()
+        cursor.fetchone = AsyncMock(return_value=cursor.fetchone.return_value)
+        connection.commit = AsyncMock()
+        config.provide_connection.return_value.__aenter__.return_value = connection
+        store = OracleAsyncStore(config)
+    else:
+        config.provide_connection.return_value.__enter__.return_value = connection
+        store = OracleSyncStore(config)
+
+    result = await store.get("session-1", renew_for=60)
+
+    assert result == b"payload"
+    assert cursor.execute.call_count == 2
+    assert cursor.execute.call_args.args[1] == (60, 60, "session-1")
+    connection.commit.assert_called_once()

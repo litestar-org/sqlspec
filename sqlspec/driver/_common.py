@@ -128,7 +128,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, FilterTypeT, OperationType, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
-    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.data_dictionary import DialectConfig
     from sqlspec.storage import (
         AsyncStoragePipeline,
         StorageBridgeJob,
@@ -768,9 +768,11 @@ class DataDictionaryMixin:
             return (None, None)
         if _ddl_dialect_or_none(type(self).dialect) is not None and isinstance(self, DataDictionaryDialectMixin):
             with contextlib.suppress(ValueError):
-                _, exact_schema = self.resolve_ddl_object_name(driver, "_", schema)
+                _, exact_schema = type(self).resolve_ddl_object_name(self, driver, "_", schema)
                 getter_schema = (
-                    self.exact_catalog_identifier(driver, exact_schema) if exact_schema is not None else None
+                    type(self).exact_catalog_identifier(self, driver, exact_schema)
+                    if exact_schema is not None
+                    else None
                 )
                 return (exact_schema, getter_schema)
         stripped = schema.strip()
@@ -1818,6 +1820,12 @@ class CommonDriverAttributesMixin:
         """Attach or replace the observability runtime."""
         self._observability = runtime
         self._refresh_statement_cache_state()
+
+    def _consume_statement_profile(self) -> "dict[str, Any] | None":
+        """Take the profile produced by an execution callback and clear pending ownership."""
+        profile = self._pending_statement_profile
+        self._pending_statement_profile = None
+        return profile
 
     def storage_capabilities(self) -> "StorageCapabilities":
         """Return cached storage capabilities for the active driver.

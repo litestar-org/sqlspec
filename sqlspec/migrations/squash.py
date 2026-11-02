@@ -25,7 +25,7 @@ from sqlglot.dialects.dialect import Dialect
 from sqlglot.errors import ErrorLevel, ParseError, TokenError, UnsupportedError
 from sqlglot.tokenizer_core import Token, TokenType
 
-from sqlspec.data_dictionary._types import DDLResult
+from sqlspec.data_dictionary import DDLResult
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SquashValidationError
 from sqlspec.migrations._backup import create_backup, remove_backup, restore_backup

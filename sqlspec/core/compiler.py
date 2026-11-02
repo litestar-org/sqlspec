@@ -1057,7 +1057,8 @@ class SQLProcessor:
             returns_rows = True
         elif isinstance(expr, (exp.Insert, exp.Update, exp.Delete, exp.Merge)):
             modifies_rows = True
-            returns_rows = bool(expr.args.get("returning"))
+            returning = expr.args.get("returning")
+            returns_rows = bool(returning) and not (isinstance(returning, exp.Returning) and returning.args.get("into"))
         elif isinstance(expr, exp.TruncateTable):
             modifies_rows = True
         elif isinstance(expr, exp.Copy):

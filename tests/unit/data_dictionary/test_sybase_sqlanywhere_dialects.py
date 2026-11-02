@@ -50,7 +50,7 @@ def test_sybase_and_sqlanywhere_dialect_configs_registered() -> None:
     assert SQLANYWHERE_CONFIG.get_feature_flag("supports_merge") is True
     assert SQLANYWHERE_CONFIG.get_feature_flag("supports_for_update") is True
     assert SQLANYWHERE_CONFIG.get_feature_flag("supports_skip_locked") is True
-    assert SQLANYWHERE_CONFIG.get_feature_flag("supports_transactional_ddl") is True
+    assert SQLANYWHERE_CONFIG.get_feature_flag("supports_transactional_ddl") is False
     assert SQLANYWHERE_CONFIG.get_optimal_type("uuid") == "UNIQUEIDENTIFIER"
     assert SQLANYWHERE_CONFIG.get_optimal_type("text") == "LONG VARCHAR"
     assert SQLANYWHERE_CONFIG.get_optimal_type("blob") == "LONG BINARY"

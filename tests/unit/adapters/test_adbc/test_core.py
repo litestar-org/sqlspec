@@ -1,17 +1,22 @@
 """Unit tests for ADBC core execute-many helpers."""
 
+import json
 from collections.abc import Sequence
 from decimal import Decimal
-from types import SimpleNamespace
+from pathlib import Path
+from types import NoneType, SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock, call
 from uuid import UUID
 
 import pyarrow as pa
 import pytest
-from adbc_driver_manager import AdbcStatusCode, DatabaseError
+from adbc_driver_manager import AdbcStatusCode, DatabaseError, NotSupportedError
 
-from sqlspec.adapters.adbc import AdbcDriver
+from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.adapters.adbc import core as adbc_core
+from sqlspec.adapters.adbc import driver as adbc_driver_mod
+from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     build_connection_config,
     collect_rows,
@@ -26,7 +31,9 @@ from sqlspec.adapters.adbc.core import (
     resolve_dialect_from_config,
     resolve_many_rowcount,
 )
+from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import SQL, ParameterStyle
+from sqlspec.core.compiler import SQLProcessor
 from sqlspec.dialects import PGTextSearch
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -35,6 +42,7 @@ from sqlspec.exceptions import (
     DeadlockError,
     ForeignKeyViolationError,
     IntegrityError,
+    NotFoundError,
     NotNullViolationError,
     OperationalError,
     OperationCancelledError,
@@ -156,56 +164,40 @@ def test_collect_rows_uses_precomputed_column_names() -> None:
     assert column_names == ["id", "name"]
 
 
-def test_prepare_parameters_with_casts_uses_type_converter_factory(monkeypatch: Any) -> None:
+def test_prepare_parameters_with_casts_uses_custom_json_serializer() -> None:
     statement_config = get_statement_config("postgres")
-    factory_calls: list[tuple[str, int]] = []
-
-    class FakeConverter:
-        def convert_dict(self, value: dict[str, Any]) -> str:
-            return f"factory:{sorted(value.items())!r}"
-
-    def fake_factory(dialect: str, cache_size: int = 5000) -> FakeConverter:
-        factory_calls.append((dialect, cache_size))
-        return FakeConverter()
-
-    monkeypatch.setattr(adbc_core, "get_adbc_type_converter", fake_factory)
-
-    prepared = prepare_parameters_with_casts(
-        [{"id": 1}], {}, statement_config, dialect="postgres", json_serializer=lambda value: str(value)
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(
+            json_serializer=lambda value: json.dumps({"custom": value}, separators=(",", ":"))
+        )
     )
 
-    assert prepared == ["factory:[('id', 1)]"]
-    assert factory_calls == [("postgres", 5000)]
+    prepared = prepare_parameters_with_casts([{"id": 1}], {}, statement_config, dialect="postgres", json_serializer=str)
+
+    assert prepared == ['{"custom":{"id":1}}']
 
 
-def test_prepare_batch_with_casts_creates_converter_once(monkeypatch: Any) -> None:
+def test_prepare_batch_with_casts_uses_custom_json_serializer_for_each_row() -> None:
     statement_config = get_statement_config("postgres")
-    factory_calls: list[tuple[str, int]] = []
-
-    class FakeConverter:
-        def convert_dict(self, value: dict[str, Any]) -> str:
-            return f"factory:{sorted(value.items())!r}"
-
-    def fake_factory(dialect: str, cache_size: int = 5000) -> FakeConverter:
-        factory_calls.append((dialect, cache_size))
-        return FakeConverter()
-
-    monkeypatch.setattr(adbc_core, "get_adbc_type_converter", fake_factory)
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(
+            json_serializer=lambda value: json.dumps({"custom": value}, separators=(",", ":"))
+        )
+    )
 
     prepared = prepare_batch_with_casts(
         [(1, {"name": "alice"}), (2, {"name": "bob"}), (3, {"name": "carol"})],
         {1: "INT"},
         statement_config,
         dialect="postgres",
-        json_serializer=lambda value: str(value),
+        json_serializer=str,
     )
 
     assert prepared == [
-        (1, "factory:[('name', 'alice')]"),
-        (2, "factory:[('name', 'bob')]"),
-        (3, "factory:[('name', 'carol')]"),
+        (1, '{"custom":{"name":"alice"}}'),
+        (2, '{"custom":{"name":"bob"}}'),
+        (3, '{"custom":{"name":"carol"}}'),
     ]
-    assert factory_calls == [("postgres", 5000)]
 
 
 def test_prepare_parameters_with_casts_supports_subclass_type_dispatch() -> None:
@@ -642,3 +634,375 @@ def test_adbc_driver_dispatch_execute_lowercases_oracle_columns() -> None:
 
     assert result.column_names == ["user_id", "MixedCase"]
     assert result.selected_data == [{"user_id": 1, "MixedCase": "a"}]
+
+
+@pytest.mark.parametrize("autocommit", [False, True])
+def test_adbc_begin_with_native_autocommit(autocommit: bool) -> None:
+    """Real explicit transactions commit/roll back and restore the native autocommit mode."""
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "autocommit": autocommit})
+    expected_mode = "true" if autocommit else "false"
+    with config.provide_session() as session:
+        native = session.connection.adbc_connection
+        session.execute("CREATE TABLE transaction_values (value INTEGER)")
+        session.commit()
+        session.begin()
+        begun_mode = native.get_option("adbc.connection.autocommit")
+        session.execute("INSERT INTO transaction_values (value) VALUES (:value)", value=1)
+        session.rollback()
+        assert session.select_value("SELECT COUNT(*) FROM transaction_values") == 0
+        assert begun_mode == "false"
+        assert native.get_option("adbc.connection.autocommit") == expected_mode
+        session.begin()
+        session.execute("INSERT INTO transaction_values (value) VALUES (:value)", value=2)
+        session.commit()
+        assert session.select_value("SELECT value FROM transaction_values") == 2
+        assert native.get_option("adbc.connection.autocommit") == expected_mode
+
+
+@pytest.mark.parametrize("capability", ["missing", "unsupported"])
+def test_adbc_begin_preserves_wrapper_transactions_without_native_getter(capability: str) -> None:
+    """Older/unsupported getters retain ordinary DB-API transaction capability behavior."""
+    native = SimpleNamespace()
+    if capability == "unsupported":
+        native.get_option = Mock(side_effect=NotSupportedError("getter unsupported"))
+    committed, rolled_back = Mock(), Mock()
+    connection = SimpleNamespace(
+        adbc_get_info=lambda: {"driver_name": "sqlite"}, adbc_connection=native, commit=committed, rollback=rolled_back
+    )
+    driver = AdbcDriver(cast("Any", connection), dialect="sqlite")
+    driver.begin()
+    driver.commit()
+    driver.begin()
+    driver.rollback()
+    committed.assert_called_once_with()
+    rolled_back.assert_called_once_with()
+
+
+@pytest.mark.parametrize("operation", ["commit", "rollback"])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_adbc_native_transaction_preserves_primary_on_restoration_failure(operation: str, interrupted: bool) -> None:
+    """Explicitly switched native transactions preserve primary errors while attempting restoration."""
+    connection = Mock()
+    connection.adbc_get_info.return_value = {"driver_name": "sqlite"}
+    native = connection.adbc_connection
+    native.get_option.return_value = "true"
+    native.set_autocommit.side_effect = [None, RuntimeError("restore failed")]
+    primary = (
+        KeyboardInterrupt("transaction interrupted")
+        if interrupted
+        else DatabaseError("transaction failed", status_code=AdbcStatusCode.UNKNOWN)
+    )
+    getattr(native, operation).side_effect = [primary, None] if operation == "rollback" else primary
+    driver = AdbcDriver(connection, dialect="sqlite")
+    driver.begin()
+    expected = KeyboardInterrupt if interrupted else SQLSpecError
+    with pytest.raises(expected) as caught:
+        getattr(driver, operation)()
+    if interrupted:
+        assert caught.value is primary
+    else:
+        assert caught.value.__cause__ is primary
+    assert native.set_autocommit.call_args_list == [call(False), call(True)]
+    connection.commit.assert_not_called()
+    connection.rollback.assert_not_called()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize("operation", ["commit", "rollback"])
+def test_adbc_failed_native_rollback_never_commits_pending_rows(
+    tmp_path: Path, interrupted: bool, operation: str
+) -> None:
+    """A failed rollback and cleanup leave real work uncommitted until an explicit retry."""
+    path = str(tmp_path / "rollback.sqlite")
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": path, "autocommit": True})
+    primary = (
+        KeyboardInterrupt(f"{operation} interrupted")
+        if interrupted
+        else DatabaseError(f"{operation} failed", status_code=AdbcStatusCode.UNKNOWN)
+    )
+
+    class NativeBoundary:
+        def __init__(self, native: Any) -> None:
+            self.native = native
+            self.remaining = 2
+
+        def get_option(self, key: str) -> str:
+            return cast("str", self.native.get_option(key))
+
+        def set_autocommit(self, value: bool) -> None:
+            self.native.set_autocommit(value)
+
+        def commit(self) -> None:
+            if operation == "commit" and self.remaining:
+                self.remaining -= 1
+                raise primary
+            self.native.commit()
+
+        def rollback(self) -> None:
+            if self.remaining:
+                self.remaining -= 1
+                if self.remaining == 1:
+                    raise primary
+                raise RuntimeError("cleanup rollback failed")
+            self.native.rollback()
+
+    class ConnectionBoundary:
+        def __init__(self, connection: Any) -> None:
+            self.connection = connection
+            self.adbc_connection = NativeBoundary(connection.adbc_connection)
+
+        def adbc_get_info(self) -> Any:
+            return self.connection.adbc_get_info()
+
+        def cursor(self) -> Any:
+            return self.connection.cursor()
+
+        def commit(self) -> None:
+            self.connection.commit()
+
+        def rollback(self) -> None:
+            self.connection.rollback()
+
+    with config.provide_connection() as connection:
+        driver = AdbcDriver(cast("Any", ConnectionBoundary(connection)), dialect="sqlite")
+        driver.execute("CREATE TABLE pending_values (value INTEGER)")
+        driver.begin()
+        driver.execute("INSERT INTO pending_values (value) VALUES (:value)", value=1)
+        expected = KeyboardInterrupt if interrupted else SQLSpecError
+        with pytest.raises(expected) as caught:
+            getattr(driver, operation)()
+        if interrupted:
+            assert caught.value is primary
+        else:
+            assert caught.value.__cause__ is primary
+        observer = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": path, "autocommit": True})
+        with observer.provide_session() as session:
+            assert session.select_value("SELECT COUNT(*) FROM pending_values") == 0
+        assert connection.adbc_connection.get_option("adbc.connection.autocommit") == "false"
+        driver.begin()
+        driver.rollback()
+        assert connection.adbc_connection.get_option("adbc.connection.autocommit") == "true"
+        assert driver.select_value("SELECT COUNT(*) FROM pending_values") == 0
+
+
+def test_adbc_native_begin_failure_restores_mode_and_preserves_native_cause() -> None:
+    """A failed native mode switch does not start a logical transaction or hide its error."""
+    connection = Mock()
+    connection.adbc_get_info.return_value = {"driver_name": "sqlite"}
+    native = connection.adbc_connection
+    primary = DatabaseError("begin failed", status_code=AdbcStatusCode.UNKNOWN)
+    native.get_option.return_value = "true"
+    native.set_autocommit.side_effect = [primary, RuntimeError("restore failed")]
+    driver = AdbcDriver(connection, dialect="sqlite")
+    with pytest.raises(SQLSpecError) as caught:
+        driver.begin()
+    assert caught.value.__cause__ is primary
+    assert native.set_autocommit.call_args_list == [call(False), call(True)]
+    driver.rollback()
+    connection.rollback.assert_called_once_with()
+
+
+def test_pending_exception_preserves_cause() -> None:
+    """_check_pending_exception preserves original exception cause."""
+
+    class MockConn:
+        def adbc_get_info(self) -> dict[str, str]:
+            return {"driver_name": "sqlite"}
+
+    driver = AdbcDriver(cast("Any", MockConn()))
+    orig_exc = DatabaseError("query failed", status_code=AdbcStatusCode.INTERNAL)
+    mapped_exc = adbc_core.create_mapped_exception(orig_exc)
+    handler = driver.handle_database_exceptions()
+    handler.pending_exception = mapped_exc
+
+    with pytest.raises(OperationalError) as exc_info:
+        driver._check_pending_exception(handler)
+
+    assert exc_info.value is mapped_exc
+    assert exc_info.value.__cause__ is orig_exc
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_cls"),
+    [
+        (AdbcStatusCode.TIMEOUT, QueryTimeoutError),
+        (AdbcStatusCode.CANCELLED, OperationCancelledError),
+        (AdbcStatusCode.UNAUTHENTICATED, PermissionDeniedError),
+        (AdbcStatusCode.UNAUTHORIZED, PermissionDeniedError),
+        (AdbcStatusCode.NOT_FOUND, NotFoundError),
+        (AdbcStatusCode.ALREADY_EXISTS, IntegrityError),
+        (AdbcStatusCode.INVALID_ARGUMENT, DataError),
+        (AdbcStatusCode.IO, DatabaseConnectionError),
+        (AdbcStatusCode.INTEGRITY, IntegrityError),
+        (AdbcStatusCode.INVALID_STATE, OperationalError),
+        (AdbcStatusCode.INTERNAL, OperationalError),
+        (AdbcStatusCode.NOT_IMPLEMENTED, SQLSpecError),
+    ],
+)
+def test_adbc_status_code_mappings(status_code: AdbcStatusCode, expected_cls: type[SQLSpecError]) -> None:
+    """_map_adbc_status_exception maps ADBC status codes to SQLSpecError classes."""
+    error = DatabaseError("adbc error", status_code=status_code)
+    mapped = adbc_core.create_mapped_exception(error)
+    assert isinstance(mapped, expected_cls)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "sqlstate", "message", "expected_cls"),
+    [
+        (AdbcStatusCode.INVALID_ARGUMENT, "23505", "duplicate key", UniqueViolationError),
+        (AdbcStatusCode.INVALID_ARGUMENT, "23502", "null value", NotNullViolationError),
+        (AdbcStatusCode.INVALID_ARGUMENT, "23514", "check constraint", CheckViolationError),
+        (AdbcStatusCode.INTEGRITY, "23503", "foreign key constraint", ForeignKeyViolationError),
+        (AdbcStatusCode.INVALID_ARGUMENT, "42601", "invalid SQL", SQLParsingError),
+        (AdbcStatusCode.INVALID_ARGUMENT, None, "syntax error near SELEC", SQLParsingError),
+        (AdbcStatusCode.INTERNAL, None, "ORA-00001: unique constraint violated", UniqueViolationError),
+    ],
+)
+def test_adbc_specific_diagnostics_override_generic_status(
+    status_code: AdbcStatusCode, sqlstate: str | None, message: str, expected_cls: type[SQLSpecError]
+) -> None:
+    error = DatabaseError(message, status_code=status_code, sqlstate=sqlstate)
+
+    mapped = adbc_core.create_mapped_exception(error)
+
+    assert type(mapped) is expected_cls
+    assert mapped.__cause__ is error
+
+
+def test_duckdb_copy_ast_transformer_caching() -> None:
+    """DuckDB statement config omits ast_transformer so compiled SQL can be cached."""
+    config = get_statement_config("duckdb").replace(enable_caching=True)
+    assert config.parameter_config.ast_transformer is None
+
+    stmt = SQL("SELECT 1 WHERE x = :val", {"val": 42}, statement_config=config)
+    compiled_sql, _ = stmt.compile()
+    assert compiled_sql
+
+    processor = SQLProcessor(config)
+    processor.compile("SELECT 1 WHERE x = :val", {"val": 42})
+    processor.compile("SELECT 1 WHERE x = :val", {"val": 99})
+    assert processor._cache_hits == 1
+
+
+def test_rewrite_postgres_uuid_placeholders() -> None:
+    """_rewrite_postgres_uuid_placeholders rewrites positional parameters to explicit UUID casts."""
+    sql = "SELECT $1, $2"
+    rewritten, scalars, arrays = adbc_core._rewrite_postgres_uuid_placeholders(sql, (1,), (2,), "postgres")
+    assert "UUID[]" in rewritten
+    assert scalars == (1,)
+    assert arrays == (2,)
+
+
+def test_repeated_uuid_bindings_preserve_sql_and_current_parameter_values() -> None:
+    """Repeated statement rewrites retain each call's current UUID binding."""
+    sql = "SELECT $1 WHERE id = $2"
+    first = UUID("12345678-1234-5678-1234-567812345678")
+    second = UUID("87654321-4321-8765-4321-876543218765")
+    first_sql, first_parameters = prepare_postgres_uuid_bindings(sql, [first, 1], is_many=False, dialect="postgres")
+    second_sql, second_parameters = prepare_postgres_uuid_bindings(sql, [second, 2], is_many=False, dialect="postgres")
+    assert first_sql == second_sql == "SELECT CAST($1 AS UUID) WHERE id = $2"
+    assert first_parameters == [str(first), 1]
+    assert second_parameters == [str(second), 2]
+
+
+def test_strict_coercion_types() -> None:
+    """_STRICT_COERCION_ALLOWED_TYPES contains NoneType bound once at module top level."""
+    assert NoneType in adbc_core._STRICT_COERCION_ALLOWED_TYPES
+
+
+def test_type_converter_caching() -> None:
+    """get_adbc_type_converter caches output converter instances."""
+    conv1 = get_adbc_type_converter("postgres")
+    conv2 = get_adbc_type_converter("postgres")
+    assert conv1 is conv2
+
+
+def test_bytearray_memoryview_coercion() -> None:
+    """_BASE_TYPE_COERCION_MAP coerces bytearray and memoryview to bytes."""
+    coercion = adbc_core._BASE_TYPE_COERCION_MAP
+    assert coercion[bytearray] is bytes
+    assert coercion[memoryview] is bytes
+
+
+def test_session_context_driver() -> None:
+    """AdbcSessionContext uses provided driver_class without lazy import."""
+    driver_instance = Mock()
+    mock_driver_cls = Mock(return_value=driver_instance)
+    mock_conn = Mock()
+    ctx = AdbcSessionContext(
+        acquire_connection=lambda: mock_conn,
+        release_connection=lambda _conn, **_kw: None,
+        statement_config=get_statement_config("postgres"),
+        driver_features={},
+        prepare_driver=lambda d: d,
+        driver_class=cast("type[AdbcDriver]", mock_driver_cls),
+    )
+    with ctx as driver:
+        assert driver is driver_instance
+    mock_driver_cls.assert_called_once()
+
+
+def test_select_stream_chunk_size() -> None:
+    """AdbcSelectStreamSource buffers and returns chunks of specified chunk_size."""
+    batch = pa.record_batch([pa.array([1, 2, 3, 4, 5])], names=["id"])
+    reader = iter([batch])
+
+    class _MockDriver:
+        driver_features: dict[str, Any] = {}
+        _dialect_name = "sqlite"
+
+        def with_cursor(self, _conn: Any) -> Any:
+            return Mock()
+
+        def handle_database_exceptions(self) -> Any:
+            return Mock()
+
+        def _check_pending_exception(self, _handler: Any) -> None:
+            pass
+
+    source = adbc_driver_mod.AdbcSelectStreamSource(cast("Any", _MockDriver()), "SELECT 1", (), chunk_size=2)
+    source._reader = reader
+    chunk1 = source.fetch_chunk()
+    assert len(chunk1) == 2
+    chunk2 = source.fetch_chunk()
+    assert len(chunk2) == 2
+    chunk3 = source.fetch_chunk()
+    assert len(chunk3) == 1
+    assert source.fetch_chunk() == []
+
+
+def test_select_to_arrow_lowercase_columns() -> None:
+    """select_to_arrow normalizes reader schema to lowercase when enable_lowercase_column_names is set."""
+    table = pa.table({"UPPER_COL": [1, 2]})
+    mock_cursor = Mock()
+    mock_cursor.execute.return_value = None
+    mock_cursor.fetch_record_batch.return_value = table.to_reader()
+    mock_conn = Mock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    driver = AdbcDriver(
+        mock_conn,
+        statement_config=get_statement_config("oracle"),
+        driver_features={"enable_lowercase_column_names": True},
+    )
+    result = driver.select_to_arrow("SELECT UPPER_COL FROM t", return_format="reader")
+    reader = result.data
+    assert reader.schema.names == ["upper_col"]
+    assert reader.read_all().to_pylist() == [{"upper_col": 1}, {"upper_col": 2}]
+
+
+def test_adbc_exception_isolation() -> None:
+    """AdbcSelectStreamSource routes execution through exception handler with isolation check."""
+    mock_conn = Mock()
+    mock_cursor = Mock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_cursor.execute.return_value = None
+    batch = pa.record_batch([pa.array([1])], names=["id"])
+
+    driver = AdbcDriver(mock_conn, statement_config=get_statement_config("sqlite"))
+
+    source = adbc_driver_mod.AdbcSelectStreamSource(driver, "SELECT 1", ())
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(adbc_driver_mod, "_fetch_record_batch", lambda _c: iter([batch]))
+        source.start()
+        assert source._reader is not None

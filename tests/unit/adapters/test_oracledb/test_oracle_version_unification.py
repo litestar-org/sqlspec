@@ -242,3 +242,19 @@ def test_oracle_events_store_compression_partitioning_config() -> None:
     assert "TABLESPACE event_data" in sql
     assert "PARTITION BY RANGE (available_at)" in sql
     assert "NUMTODSINTERVAL(1, ''DAY'')" in sql
+
+
+def test_resolve_oracle_connection_major_from_core() -> None:
+    """resolve_oracle_connection_major and cache are importable and callable directly from core."""
+    from sqlspec.adapters.oracledb.core import (
+        OracleVersionCache,
+        resolve_oracle_connection_compatible_major,
+        resolve_oracle_connection_major,
+    )
+
+    conn = MagicMock()
+    conn._sqlspec_oracle_major = 23
+    conn._sqlspec_oracle_compatible_major = 23
+    cache = OracleVersionCache()
+    assert resolve_oracle_connection_major(conn, cache) == 23
+    assert resolve_oracle_connection_compatible_major(conn, cache) == 23

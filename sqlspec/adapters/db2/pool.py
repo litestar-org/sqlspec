@@ -9,10 +9,11 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.db2 import _typing as typing_module
+from sqlspec.adapters.db2._typing import ibm_db_dbi
 from sqlspec.adapters.db2.core import build_dsn_string
-from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, MissingDependencyError
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
-from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -23,7 +24,43 @@ __all__ = ("Db2AsyncConnectionPool", "Db2AsyncPoolConnectionContext", "Db2SyncCo
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "db2"
-_IBM_DB_DBI: "Any | None" = None
+_IBM_DB_DBI = ibm_db_dbi
+
+
+def _set_current_schema(connection: Any, schema: str) -> None:
+    """Set the SQL register and SDK catalog schema without CLI keyword quoting."""
+    cursor = connection.cursor()
+    pending_exception: BaseException | None = None
+    try:
+        cursor.execute("SET CURRENT SCHEMA = ?", (schema,))
+    except BaseException as exc:
+        pending_exception = exc
+    try:
+        cursor.close()
+    except BaseException as exc:
+        if pending_exception is None:
+            pending_exception = exc
+    if pending_exception is not None:
+        raise pending_exception
+    connection.set_current_schema(schema)
+
+
+async def _set_current_schema_async(connection: Any, schema: str) -> None:
+    """Set both schema states, closing the cursor outside the query's exception handler."""
+    cursor = await connection.cursor()
+    pending_exception: BaseException | None = None
+    try:
+        await cursor.execute("SET CURRENT SCHEMA = ?", (schema,))
+    except BaseException as exc:
+        pending_exception = exc
+    try:
+        await cursor.close()
+    except BaseException as exc:
+        if pending_exception is None:
+            pending_exception = exc
+    if pending_exception is not None:
+        raise pending_exception
+    await connection.set_current_schema(schema)
 
 
 class Db2SyncConnectionPool:
@@ -61,7 +98,9 @@ class Db2SyncConnectionPool:
             on_connection_create: Callback executed when connection is created.
         """
         self._connection_parameters = connection_parameters
-        self._dsn = build_dsn_string(connection_parameters)
+        native_parameters = dict(connection_parameters)
+        native_parameters.pop("current_schema", None)
+        self._dsn = build_dsn_string(native_parameters)
         self._autocommit = bool(connection_parameters.get("autocommit", True))
         self._thread_local = threading.local()
         self._connection_registry: set[Any] = set()
@@ -82,6 +121,9 @@ class Db2SyncConnectionPool:
 
         The connection opens in the pool's autocommit mode.
 
+        The schema is applied with a bound statement because CLI keyword parsing cannot preserve
+        semicolon-bearing schema values. The SDK catalog schema is synchronized before the hook.
+
         The result is owned by the caller: it is not thread-local and is not
         tracked for pool shutdown.
 
@@ -91,17 +133,25 @@ class Db2SyncConnectionPool:
         Raises:
             MissingDependencyError: When ibm_db is not installed.
         """
-        ibm_db_dbi = _require_ibm_db_dbi()
-        autocommit_mode = ibm_db_dbi.SQL_AUTOCOMMIT_ON if self._autocommit else ibm_db_dbi.SQL_AUTOCOMMIT_OFF
-        connection = ibm_db_dbi.connect(self._dsn, "", "", "", "", {ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode})
+        autocommit_mode = (
+            typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_ON
+            if self._autocommit
+            else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
+        )
+        connection = typing_module.ibm_db_dbi.connect(
+            self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
+        )
 
-        if self._on_connection_create is not None:
-            try:
+        try:
+            schema = self._connection_parameters.get("current_schema")
+            if schema is not None:
+                _set_current_schema(connection, schema)
+            if self._on_connection_create is not None:
                 self._on_connection_create(connection)
-            except BaseException:
-                with contextlib.suppress(Exception):
-                    connection.close()
-                raise
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                connection.close()
+            raise
 
         return connection
 
@@ -146,7 +196,7 @@ class Db2SyncConnectionPool:
 
     def checked_out(self) -> int:
         """Return the number of checked out connections from the perspective of this thread."""
-        return 0
+        return 1 if getattr(self._thread_local, "connection", None) is not None else 0
 
     def _create_connection(self) -> Any:
         """Open a new connection and register it in the shutdown registry."""
@@ -337,7 +387,9 @@ class Db2AsyncConnectionPool:
                 an awaitable.
         """
         self._connection_parameters = connection_parameters
-        self._dsn = build_dsn_string(connection_parameters)
+        native_parameters = dict(connection_parameters)
+        native_parameters.pop("current_schema", None)
+        self._dsn = build_dsn_string(native_parameters)
         self._autocommit = bool(connection_parameters.get("autocommit", True))
         self._max_size = max_size
         self._acquire_timeout = acquire_timeout
@@ -368,25 +420,35 @@ class Db2AsyncConnectionPool:
         The connection opens in the pool's autocommit mode and the creation hook runs on it. The
         result is owned by the caller and is not tracked by the pool.
 
+        The schema is applied with a bound statement and synchronized with the SDK catalog schema
+        before the hook, avoiding the CLI keyword parser's treatment of semicolons.
+
         Returns:
             Any: A newly opened ``ibm_db_dbi.AsyncConnection``.
 
         Raises:
             MissingDependencyError: When ibm_db is not installed.
         """
-        ibm_db_dbi = _require_ibm_db_dbi()
-        autocommit_mode = ibm_db_dbi.SQL_AUTOCOMMIT_ON if self._autocommit else ibm_db_dbi.SQL_AUTOCOMMIT_OFF
-        connection = await ibm_db_dbi.AsyncConnection.connect(
-            self._dsn, "", "", "", "", {ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
+        autocommit_mode = (
+            typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_ON
+            if self._autocommit
+            else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
         )
-        if self._on_connection_create is not None:
-            try:
+        connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(
+            self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
+        )
+        try:
+            schema = self._connection_parameters.get("current_schema")
+            if schema is not None:
+                await _set_current_schema_async(connection, schema)
+            if self._on_connection_create is not None:
                 result = self._on_connection_create(connection)
                 if inspect.isawaitable(result):
                     await result
-            except BaseException:
-                await self._close_connection(connection)
-                raise
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                await connection.close()
+            raise
         return connection
 
     async def acquire(self) -> Any:
@@ -534,36 +596,30 @@ class Db2AsyncConnectionPool:
         return True
 
     async def _is_connection_alive(self, connection: Any) -> bool:
-        """Ping the connection with ``SELECT 1 FROM SYSIBM.SYSDUMMY1``."""
+        """Ping the connection with ``SELECT 1 FROM SYSIBM.SYSDUMMY1``.
+
+        Close the cursor outside exception handling so compiled coroutine cleanup
+        does not retain the failed query as its caller's ambient exception.
+        """
+        cursor: Any = None
+        pending_error: BaseException | None = None
         try:
             cursor = await connection.cursor()
+            await cursor.execute("SELECT 1 FROM SYSIBM.SYSDUMMY1")
+            await cursor.fetchone()
+        except BaseException as exc:
+            pending_error = exc
+        if cursor is not None:
             try:
-                await cursor.execute("SELECT 1 FROM SYSIBM.SYSDUMMY1")
-                await cursor.fetchone()
-            finally:
                 await cursor.close()
-        except Exception:
-            return False
-        return True
+            except BaseException as exc:
+                if pending_error is None or isinstance(pending_error, Exception):
+                    pending_error = exc
+        if pending_error is not None and not isinstance(pending_error, Exception):
+            raise pending_error
+        return pending_error is None
 
     async def _close_connection(self, connection: Any) -> None:
         """Close a connection, suppressing driver errors."""
         with contextlib.suppress(Exception):
             await connection.close()
-
-
-def _require_ibm_db_dbi() -> Any:
-    """Return the ``ibm_db_dbi`` module, importing it on first use.
-
-    Returns:
-        Any: The ``ibm_db_dbi`` module.
-
-    Raises:
-        MissingDependencyError: When ibm_db is not installed.
-    """
-    global _IBM_DB_DBI
-    if _IBM_DB_DBI is None:
-        _IBM_DB_DBI = import_optional("ibm_db_dbi")
-        if _IBM_DB_DBI is None:
-            raise MissingDependencyError(package="ibm_db", install_package="db2")
-    return _IBM_DB_DBI

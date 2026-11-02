@@ -419,8 +419,7 @@ class AiosqliteConnectionPool:
         try:
             raw_conn = connection.connection
             if getattr(raw_conn, "in_transaction", False):
-                with suppress(Exception):
-                    await end_transaction(raw_conn, commit=False)
+                await end_transaction(raw_conn, commit=False)
             connection.idle_since = time.time()
             self._queue.put_nowait(connection)
         except Exception as e:

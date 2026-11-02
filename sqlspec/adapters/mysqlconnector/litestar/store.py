@@ -103,10 +103,10 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
 
         sql = f"""
         INSERT INTO {self._table_name} (session_id, data, expires_at)
-        VALUES (%s, %s, %s) AS new
+        VALUES (%s, %s, %s)
         ON DUPLICATE KEY UPDATE
-            data = new.data,
-            expires_at = new.expires_at,
+            data = VALUES(data),
+            expires_at = VALUES(expires_at),
             updated_at = UTC_TIMESTAMP(6)
         """
 
@@ -237,11 +237,7 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
         """
 
     def _drop_table_sql(self) -> "list[str]":
-        safe_index_table = self._table_name.replace(".", "_")
-        return [
-            f"DROP INDEX idx_{safe_index_table}_expires_at ON {self._table_name}",
-            f"DROP TABLE IF EXISTS {self._table_name}",
-        ]
+        return [f"DROP TABLE IF EXISTS {self._table_name}"]
 
 
 class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
@@ -298,17 +294,12 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         """
 
     def _drop_table_sql(self) -> "list[str]":
-        safe_index_table = self._table_name.replace(".", "_")
-        return [
-            f"DROP INDEX idx_{safe_index_table}_expires_at ON {self._table_name}",
-            f"DROP TABLE IF EXISTS {self._table_name}",
-        ]
+        return [f"DROP TABLE IF EXISTS {self._table_name}"]
 
     def _create_table(self) -> None:
         sql = self._table_ddl()
         with self._config.provide_session() as driver:
             driver.execute_script(sql)
-            driver.commit()
         self._log_table_created()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -358,10 +349,10 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
 
         sql = f"""
         INSERT INTO {self._table_name} (session_id, data, expires_at)
-        VALUES (%s, %s, %s) AS new
+        VALUES (%s, %s, %s)
         ON DUPLICATE KEY UPDATE
-            data = new.data,
-            expires_at = new.expires_at,
+            data = VALUES(data),
+            expires_at = VALUES(expires_at),
             updated_at = UTC_TIMESTAMP(6)
         """
 

@@ -11,9 +11,9 @@ import pytest
 from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.core import TABLE_EXISTS_SQL, build_set_schema_sql, split_db2_table_name
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, PermissionDeniedError
 from sqlspec.observability import resolve_db_system
-from tests.unit.adapters.test_db2._fakes import DriverMode, FakeDb2Connection, FakeDb2Cursor
+from tests.unit.adapters.test_db2._fakes import DriverMode, FakeDb2Connection, FakeDb2Cursor, db2_error
 
 pytestmark = pytest.mark.anyio
 
@@ -276,6 +276,19 @@ async def test_has_schema(db2_mode: DriverMode, rows: "list[Any]", expected: boo
 
     assert await db2_mode.call(driver.has_schema, "app") is expected
     assert connection.cursors[0].executed == [("SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = ?", ("APP",))]
+
+
+async def test_migration_schema_operations_translate_exceptions(db2_mode: DriverMode) -> None:
+    """Migration schema operations map native driver errors to SQLSpec exceptions."""
+    error = db2_error(sqlcode=-551, sqlstate="42501", text="permission denied")
+    connection = FakeDb2Connection(cursors=lambda: FakeDb2Cursor(error=error))
+    driver = db2_mode.driver(connection)
+
+    with pytest.raises(PermissionDeniedError):
+        await db2_mode.call(driver.has_schema, "app")
+
+    with pytest.raises(PermissionDeniedError):
+        await db2_mode.call(driver.set_migration_session_schema, "app")
 
 
 def test_configs_use_db2_trackers() -> None:

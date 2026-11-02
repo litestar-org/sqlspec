@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from pandas import DataFrame as PandasDataFrame
     from polars import DataFrame as PolarsDataFrame
     from prometheus_client import Counter, Gauge, Histogram
+    from pyarrow import ArrowException
     from pyarrow import RecordBatch as ArrowRecordBatch
     from pyarrow import RecordBatchReader as ArrowRecordBatchReader
     from pyarrow import Schema as ArrowSchema
@@ -67,6 +68,7 @@ __all__ = (
     "UNSET",
     "UNSET_STUB",
     "UUID_UTILS_INSTALLED",
+    "ArrowException",
     "ArrowRecordBatch",
     "ArrowRecordBatchReader",
     "ArrowRecordBatchReaderProtocol",
@@ -472,6 +474,13 @@ _ARROW_SCHEMA_SHIM = ArrowSchemaProtocol
 _ARROW_RECORD_BATCH_READER_SHIM = ArrowRecordBatchReaderProtocol
 
 
+class ArrowExceptionStubError(Exception):
+    """Placeholder for ``pyarrow.ArrowException`` that no runtime error is an instance of."""
+
+
+_ARROW_EXCEPTION_SHIM = ArrowExceptionStubError
+
+
 @runtime_checkable
 class PandasDataFrameProtocol(Protocol):
     """Typed shim for pandas.DataFrame."""
@@ -711,6 +720,7 @@ _CATTRS_UNSTRUCTURE_SHIM = cattrs_unstructure_stub
 _CATTRS_UNSTRUCTURE_SHIM.__name__ = "cattrs_unstructure"
 _CATTRS_UNSTRUCTURE_SHIM.__qualname__ = "cattrs_unstructure"
 _LAZY_EXPORTS: "dict[str, tuple[str, str | None, Any]]" = {
+    "ArrowException": ("pyarrow", "ArrowException", _ARROW_EXCEPTION_SHIM),
     "ArrowRecordBatch": ("pyarrow", "RecordBatch", _ARROW_RECORD_BATCH_SHIM),
     "ArrowRecordBatchReader": ("pyarrow", "RecordBatchReader", _ARROW_RECORD_BATCH_READER_SHIM),
     "ArrowSchema": ("pyarrow", "Schema", _ARROW_SCHEMA_SHIM),

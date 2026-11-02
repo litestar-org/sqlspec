@@ -24,6 +24,7 @@ from sqlspec.extensions.adk import (
 )
 from sqlspec.extensions.adk.memory import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
@@ -38,6 +39,8 @@ class _Db2ADKStoreMixin:
     """Table layout, index, drop, upsert and event-query builders shared by the Db2 ADK session stores."""
 
     __slots__ = ()
+
+    _max_table_name_parts: ClassVar[int] = 2
 
     if TYPE_CHECKING:
         _session_table: str
@@ -115,7 +118,11 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                 _create_missing(driver, TABLE_EXISTS_SQL, table, ddl)
             for index_name, index_table, columns in self._index_specs():
                 _create_missing(
-                    driver, INDEX_EXISTS_SQL, index_name, _create_index_sql(index_table, index_name, columns)
+                    driver,
+                    INDEX_EXISTS_SQL,
+                    index_name,
+                    _create_index_sql(index_table, index_name, columns),
+                    table=index_table,
                 )
             driver.commit()
 
@@ -356,7 +363,11 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                 await _create_missing_async(driver, TABLE_EXISTS_SQL, table, ddl)
             for index_name, index_table, columns in self._index_specs():
                 await _create_missing_async(
-                    driver, INDEX_EXISTS_SQL, index_name, _create_index_sql(index_table, index_name, columns)
+                    driver,
+                    INDEX_EXISTS_SQL,
+                    index_name,
+                    _create_index_sql(index_table, index_name, columns),
+                    table=index_table,
                 )
             await driver.commit()
 
@@ -588,6 +599,8 @@ class _Db2ADKMemoryStoreMixin:
 
     __slots__ = ()
 
+    _max_table_name_parts: ClassVar[int] = 2
+
     if TYPE_CHECKING:
         _memory_table: str
 
@@ -615,7 +628,11 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             _create_missing(driver, TABLE_EXISTS_SQL, self._memory_table, self._memory_table_ddl())
             for index_name, index_table, columns in self._memory_index_specs():
                 _create_missing(
-                    driver, INDEX_EXISTS_SQL, index_name, _create_index_sql(index_table, index_name, columns)
+                    driver,
+                    INDEX_EXISTS_SQL,
+                    index_name,
+                    _create_index_sql(index_table, index_name, columns),
+                    table=index_table,
                 )
             driver.commit()
 
@@ -625,13 +642,29 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
         if not entries:
             return 0
 
+        unique_entries: list[StoredMemory] = []
+        seen_batch: set[str] = set()
+        for entry in entries:
+            eid = entry["event_id"]
+            if eid not in seen_batch:
+                seen_batch.add(eid)
+                unique_entries.append(entry)
+
         inserted_count = 0
         insert_sql = _memory_insert_sql(self._memory_table, self._owner_id_column_name)
+        has_owner = self._owner_id_column_name is not None
+        placeholders = ", ".join("?" for _ in unique_entries)
+        existing_rows = self._execute_fetchall(
+            f"SELECT id, event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})",
+            tuple(e["event_id"] for e in unique_entries),
+        )
+        existing_ids = {str(row["event_id"] if "event_id" in row else row["EVENT_ID"]) for row in existing_rows}
+
         with self._config.provide_session() as driver:
-            for entry in entries:
-                if driver.select_one_or_none(_memory_exists_sql(self._memory_table), (entry["event_id"],)) is not None:
+            for entry in unique_entries:
+                if entry["event_id"] in existing_ids:
                     continue
-                driver.execute(insert_sql, _memory_insert_row(entry, self._owner_id_column_name is not None, owner_id))
+                driver.execute(insert_sql, _memory_insert_row(entry, has_owner, owner_id))
                 inserted_count += 1
             driver.commit()
         return inserted_count
@@ -715,7 +748,11 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
             await _create_missing_async(driver, TABLE_EXISTS_SQL, self._memory_table, await self._memory_table_ddl())
             for index_name, index_table, columns in self._memory_index_specs():
                 await _create_missing_async(
-                    driver, INDEX_EXISTS_SQL, index_name, _create_index_sql(index_table, index_name, columns)
+                    driver,
+                    INDEX_EXISTS_SQL,
+                    index_name,
+                    _create_index_sql(index_table, index_name, columns),
+                    table=index_table,
                 )
             await driver.commit()
 
@@ -725,16 +762,29 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
         if not entries:
             return 0
 
+        unique_entries: list[StoredMemory] = []
+        seen_batch: set[str] = set()
+        for entry in entries:
+            eid = entry["event_id"]
+            if eid not in seen_batch:
+                seen_batch.add(eid)
+                unique_entries.append(entry)
+
         inserted_count = 0
         insert_sql = _memory_insert_sql(self._memory_table, self._owner_id_column_name)
+        has_owner = self._owner_id_column_name is not None
+        placeholders = ", ".join("?" for _ in unique_entries)
+        existing_rows = await self._execute_fetchall(
+            f"SELECT id, event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})",
+            tuple(e["event_id"] for e in unique_entries),
+        )
+        existing_ids = {str(row["event_id"] if "event_id" in row else row["EVENT_ID"]) for row in existing_rows}
+
         async with self._config.provide_session() as driver:
-            for entry in entries:
-                existing = await driver.select_one_or_none(_memory_exists_sql(self._memory_table), (entry["event_id"],))
-                if existing is not None:
+            for entry in unique_entries:
+                if entry["event_id"] in existing_ids:
                     continue
-                await driver.execute(
-                    insert_sql, _memory_insert_row(entry, self._owner_id_column_name is not None, owner_id)
-                )
+                await driver.execute(insert_sql, _memory_insert_row(entry, has_owner, owner_id))
                 inserted_count += 1
             await driver.commit()
         return inserted_count
@@ -893,6 +943,9 @@ CREATE TABLE {table} (
 
 
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:
+    schema, _ = split_db2_table_name(table)
+    if schema is not None:
+        return f"CREATE INDEX {quote_identifier(schema)}.{quote_identifier(index_name.upper())} ON {table} ({columns})"
     return f"CREATE INDEX {index_name} ON {table} ({columns})"
 
 
@@ -1139,7 +1192,7 @@ def _catalog_names(name: str) -> "tuple[str | None, str]":
     return split_db2_table_name(name)
 
 
-def _create_missing(driver: "Db2SyncDriver", probe_sql: str, name: str, ddl: str) -> None:
+def _create_missing(driver: "Db2SyncDriver", probe_sql: str, name: str, ddl: str, table: "str | None" = None) -> None:
     """Run ``ddl`` unless the catalog probe finds the object.
 
     Object names are written unquoted in the DDL, so they are probed by their upper-folded
@@ -1150,12 +1203,20 @@ def _create_missing(driver: "Db2SyncDriver", probe_sql: str, name: str, ddl: str
         probe_sql: ``TABLE_EXISTS_SQL`` or ``INDEX_EXISTS_SQL``.
         name: Unquoted table or index name.
         ddl: Statement creating the object.
+        table: Optional owning table name to derive index schema qualification.
     """
-    if driver.select_one_or_none(probe_sql, _catalog_names(name)) is None:
+    schema, object_name = _catalog_names(name)
+    if table is not None:
+        table_schema, _ = split_db2_table_name(table)
+        if table_schema is not None:
+            schema = table_schema
+    if driver.select_one_or_none(probe_sql, (schema, object_name)) is None:
         driver.execute(ddl)
 
 
-async def _create_missing_async(driver: "Db2AsyncDriver", probe_sql: str, name: str, ddl: str) -> None:
+async def _create_missing_async(
+    driver: "Db2AsyncDriver", probe_sql: str, name: str, ddl: str, table: "str | None" = None
+) -> None:
     """Run ``ddl`` unless the catalog probe finds the object, on an async driver.
 
     Args:
@@ -1163,8 +1224,14 @@ async def _create_missing_async(driver: "Db2AsyncDriver", probe_sql: str, name: 
         probe_sql: ``TABLE_EXISTS_SQL`` or ``INDEX_EXISTS_SQL``.
         name: Unquoted table or index name.
         ddl: Statement creating the object.
+        table: Optional owning table name to derive index schema qualification.
     """
-    if await driver.select_one_or_none(probe_sql, _catalog_names(name)) is None:
+    schema, object_name = _catalog_names(name)
+    if table is not None:
+        table_schema, _ = split_db2_table_name(table)
+        if table_schema is not None:
+            schema = table_schema
+    if await driver.select_one_or_none(probe_sql, (schema, object_name)) is None:
         await driver.execute(ddl)
 
 

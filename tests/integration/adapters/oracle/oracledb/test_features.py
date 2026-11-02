@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver, OracleVersionInfo
 from sqlspec.core import SQL, SQLResult, StatementConfig
+from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components
 
 
 def _lower_keys(row: dict[str, object]) -> dict[str, object]:
@@ -14,6 +15,24 @@ def _lower_keys(row: dict[str, object]) -> dict[str, object]:
 
 
 pytestmark = pytest.mark.xdist_group("oracle")
+
+
+def test_oracle_release_metadata_matches_native_vector_capable_server(oracle_sync_session: OracleSyncDriver) -> None:
+    """The 23ai fixture reports its release update and actual vector-compatible level."""
+    native_version = str(
+        oracle_sync_session.select_value(
+            "SELECT COALESCE(version_full, version) FROM product_component_version "
+            "WHERE product LIKE 'Oracle%' FETCH FIRST 1 ROWS ONLY"
+        )
+    )
+    native_compatible = str(oracle_sync_session.select_value("SELECT value FROM v$parameter WHERE name = 'compatible'"))
+    version = oracle_sync_session.data_dictionary.get_version(oracle_sync_session)
+    assert isinstance(version, OracleVersionInfo)
+    assert (version.major, version.minor, version.patch) == parse_oracle_version_components(native_version)
+    assert version.compatible == native_compatible
+    compatible = parse_oracle_version_components(native_compatible)
+    assert isinstance(compatible, tuple), f"Invalid native COMPATIBLE: {native_compatible!r}"
+    assert compatible >= (23, 4, 0), f"Vector fixture COMPATIBLE: {native_compatible!r}"
 
 
 def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
@@ -225,4 +244,29 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
 
     await oracle_async_session.execute_script(
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_exception_table_oracledb_async'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+
+
+def test_oracle_get_indexes_function_based_index(oracle_sync_session: OracleSyncDriver) -> None:
+    """Test get_indexes returns index and expression for function-based indexes."""
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_fn_idx_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+    oracle_sync_session.execute_script("""
+        CREATE TABLE test_fn_idx_table (
+            id NUMBER(10) PRIMARY KEY,
+            email VARCHAR2(255)
+        )
+    """)
+    oracle_sync_session.execute_script("""
+        CREATE INDEX idx_test_fn_email ON test_fn_idx_table (UPPER(email))
+    """)
+
+    indexes = oracle_sync_session.data_dictionary.get_indexes(oracle_sync_session, table="test_fn_idx_table")
+    fn_indexes = [idx for idx in indexes if idx.get("index_name") == "IDX_TEST_FN_EMAIL"]
+    assert len(fn_indexes) == 1
+    assert fn_indexes[0].get("expressions") is not None or fn_indexes[0].get("expression") is not None
+
+    oracle_sync_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_fn_idx_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )

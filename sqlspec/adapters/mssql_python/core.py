@@ -22,6 +22,7 @@ from sqlspec.exceptions import (
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
+    TransactionError,
     UniqueViolationError,
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
@@ -49,8 +50,10 @@ __all__ = (
     "driver_profile",
     "escape_sql_literal",
     "extract_error_number",
+    "extract_sqlstate",
     "format_identifier",
     "materialize_tuple_rows",
+    "normalize_execute_parameters",
     "quote_bracket_identifier",
     "resolve_column_names",
     "resolve_many_rowcount",
@@ -92,7 +95,16 @@ _CANONICAL_KEY_LOOKUP: Final[dict[str, str]] = {
 }
 _CONNECT_KWARG_KEYS: Final[set[str]] = {"autocommit", "attrs_before", "native_uuid", "token_provider"}
 _CONNECT_TIMEOUT_KEYS: Final[tuple[str, ...]] = ("timeout", "connection_timeout", "login_timeout", "command_timeout")
-_POOL_CONFIG_KEYS: Final[set[str]] = {"pool_size", "pool_idle_timeout", "pool_enabled"}
+_POOL_CONFIG_KEYS: Final[set[str]] = {
+    "pool_size",
+    "pool_idle_timeout",
+    "pool_enabled",
+    "pool_min_size",
+    "pool_max_size",
+    "min_size",
+    "max_size",
+    "pool_timeout",
+}
 _IGNORED_CONNECTION_CONFIG_KEYS: Final[set[str]] = {
     "application_name",
     "app",
@@ -100,9 +112,19 @@ _IGNORED_CONNECTION_CONFIG_KEYS: Final[set[str]] = {
     "multiple_active_result_sets",
     "workstation_id",
 }
+_ODBC_SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "08S01": (DatabaseConnectionError, "communication link failure"),
+    "08001": (DatabaseConnectionError, "unable to connect to data source"),
+    "HYT00": (QueryTimeoutError, "query timeout expired"),
+    "HY008": (QueryTimeoutError, "operation canceled"),
+}
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    220: (DataError, "arithmetic overflow error"),
+    258: (QueryTimeoutError, "timeout waiting for latch"),
     2601: (UniqueViolationError, "unique constraint violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
+    3617: (QueryTimeoutError, "query canceled by user or attention event"),
+    3930: (TransactionError, "current transaction cannot be committed"),
     515: (NotNullViolationError, "not-null constraint violation"),
     18456: (PermissionDeniedError, "permission denied"),
     229: (PermissionDeniedError, "permission denied"),
@@ -127,6 +149,10 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     8115: (DataError, "arithmetic overflow error"),
     8152: (DataError, "string or binary data would be truncated"),
     1105: (OperationalError, "operational error"),
+    20003: (QueryTimeoutError, "query timeout expired (FreeTDS)"),
+    20002: (DatabaseConnectionError, "adaptive Server connection failed (FreeTDS)"),
+    20009: (DatabaseConnectionError, "unable to connect: host unreachable or server down (FreeTDS)"),
+    20047: (DatabaseConnectionError, "connection closed or broken (FreeTDS)"),
 }
 
 
@@ -157,6 +183,15 @@ def split_schema_and_table(identifier: str, *, default_schema: str = "dbo") -> t
     return parts[-2], parts[-1]
 
 
+def normalize_execute_parameters(parameters: Any) -> Any:
+    """Normalize parameters for mssql-python execute calls."""
+    if parameters is None:
+        return None
+    if isinstance(parameters, list):
+        return tuple(parameters)
+    return parameters
+
+
 def format_identifier(identifier: str) -> str:
     """Format a T-SQL identifier with bracket quoting."""
     cleaned = identifier.strip()
@@ -164,13 +199,13 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=True)
-    return ".".join(quote_bracket_identifier(part) for part in parts)
+    return ".".join([quote_bracket_identifier(part) for part in parts])
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
     """Build an mssql-python INSERT statement with positional qmark placeholders."""
-    column_clause = ", ".join(quote_bracket_identifier(column) for column in columns)
-    placeholders = ", ".join("?" for _ in columns)
+    column_clause = ", ".join([quote_bracket_identifier(column) for column in columns])
+    placeholders = ", ".join(["?"] * len(columns))
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
@@ -276,8 +311,32 @@ def extract_error_number(exc: BaseException | None) -> int | None:
     return int(last_match[0] or last_match[1])
 
 
+_SQLSTATE_LENGTH: Final[int] = 5
+
+
+def extract_sqlstate(error: BaseException) -> str | None:
+    """Extract an ODBC SQLSTATE code from a driver error."""
+    val = getattr(error, "sqlstate", None)
+    if isinstance(val, str) and val:
+        return val.strip().upper()
+    if hasattr(error, "args") and len(error.args) > 1:
+        second = error.args[1]
+        if isinstance(second, str) and len(second.strip()) == _SQLSTATE_LENGTH:
+            return second.strip().upper()
+    message = str(error).upper()
+    for code in _ODBC_SQLSTATE_MAP:
+        if code in message:
+            return code
+    return None
+
+
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a SQL Server exception to SQLSpec's exception hierarchy."""
+    sqlstate = extract_sqlstate(error)
+    if sqlstate is not None and sqlstate in _ODBC_SQLSTATE_MAP:
+        error_class, description = _ODBC_SQLSTATE_MAP[sqlstate]
+        return error_class(f"SQL Server SQLSTATE {sqlstate}: {description}. Original error: {error}")
+
     error_number = extract_error_number(error)
 
     if error_number == _MSSQL_CONSTRAINT_547:
@@ -300,6 +359,8 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
         return constraint_exception
 
     exc_name = type(error).__name__
+    if exc_name == "InterfaceError":
+        return DatabaseConnectionError(f"SQL Server interface error. Original error: {error}")
     if exc_name == "IntegrityError":
         return IntegrityError(f"SQL Server integrity error. Original error: {error}")
     if exc_name == "OperationalError":
@@ -329,7 +390,7 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Merge mssql-python driver-feature defaults with caller overrides."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    features.setdefault("use_pool", True)
+    features.setdefault("enable_pooling", True)
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
 
@@ -430,7 +491,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
     extra = config.pop("extra", None)
     if isinstance(extra, dict):
-        parts.extend(f"{key}={_format_connection_value(value)}" for key, value in extra.items() if value is not None)
+        parts.extend([f"{key}={_format_connection_value(value)}" for key, value in extra.items() if value is not None])
 
     for remaining_key, remaining_value in list(config.items()):
         if remaining_value is not None:

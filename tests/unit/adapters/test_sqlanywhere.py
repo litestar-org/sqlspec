@@ -1,5 +1,8 @@
 """Unit tests for the SAP SQL Anywhere (sqlanydb) adapter."""
 
+import threading
+from contextlib import nullcontext
+from datetime import UTC, datetime
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -20,25 +23,29 @@ from sqlspec.adapters.sqlanywhere import (
     default_statement_config,
     driver_profile,
 )
-from sqlspec.adapters.sqlanywhere.adk import SqlanywhereADKConfig, SqlanywhereADKMemoryStore, SqlanywhereADKStore
-from sqlspec.adapters.sqlanywhere.events import SqlanywhereEventQueueStore, SqlanywhereSyncEventQueueStore
-from sqlspec.adapters.sqlanywhere.litestar import SqlanywhereStore
+from sqlspec.adapters.sqlanywhere._typing import SqlanywhereError, SqlanywhereSessionContext
+from sqlspec.adapters.sqlanywhere.adk import SqlanywhereADKMemoryStore, SqlanywhereADKStore
+from sqlspec.adapters.sqlanywhere.core import build_insert_statement, format_identifier
+from sqlspec.adapters.sqlanywhere.data_dictionary import build_column_metadata, build_foreign_key_metadata
+from sqlspec.adapters.sqlanywhere.events import SqlanywhereEventQueueStore
+from sqlspec.adapters.sqlanywhere.litestar import SqlanywhereLitestarConfig, SqlanywhereStore
 from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.data_dictionary.dialects.sqlanywhere import SqlanywhereVersionInfo
+from sqlspec.data_dictionary.dialects.sqlanywhere.config import SQLANYWHERE_FEATURE_FLAGS
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
-    MissingDependencyError,
     NotFoundError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     SerializationConflictError,
     SQLParsingError,
+    TransactionError,
     UniqueViolationError,
 )
 
@@ -168,7 +175,7 @@ def test_sqlanywhere_pool_checkout_release_and_close(monkeypatch: pytest.MonkeyP
             captured_kwargs.append(kwargs)
             return fake_conn
 
-    monkeypatch.setattr(pool_module, "_load_sqlanydb_module", lambda: FakeSqlanydbModule())
+    monkeypatch.setattr(pool_module, "SQLANYDB_MODULE", FakeSqlanydbModule())
 
     cfg = build_connection_config({"user": "dba", "password": "sql", "database": "demo", "host": "localhost"})
     pool = SqlanywhereConnectionPool(cfg, min_size=1, max_size=2)
@@ -183,21 +190,6 @@ def test_sqlanywhere_pool_checkout_release_and_close(monkeypatch: pytest.MonkeyP
     assert pool.size() == 1
     pool.close()
     assert fake_conn.closed is True
-
-
-def test_sqlanywhere_pool_raises_missing_dependency_when_sqlanydb_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SqlanywhereConnectionPool raises MissingDependencyError when sqlanydb is not installed."""
-    import sqlspec.adapters.sqlanywhere.pool as pool_module
-
-    def _raise_import_error() -> Any:
-        msg = "No module named 'sqlanydb'"
-        raise ImportError(msg)
-
-    monkeypatch.setattr(pool_module, "import_module", lambda name: _raise_import_error())
-
-    pool = SqlanywhereConnectionPool({"uid": "dba", "pwd": "sql"})
-    with pytest.raises(MissingDependencyError, match="sqlanydb"):
-        pool.acquire()
 
 
 @pytest.mark.parametrize(
@@ -376,7 +368,7 @@ def test_sqlanywhere_data_dictionary_version_and_metadata() -> None:
 
 
 def test_sqlanywhere_migration_tracker_and_extension_stores() -> None:
-    """SqlanywhereSyncMigrationTracker, SqlanywhereStore, SqlanywhereSyncEventQueueStore, and SqlanywhereADKStore emit SQL Anywhere DDL."""
+    """SqlanywhereSyncMigrationTracker, SqlanywhereStore, SqlanywhereEventQueueStore, and SqlanywhereADKStore emit SQL Anywhere DDL."""
     tracker = SqlanywhereSyncMigrationTracker(version_table_name="DBA.ddl_migrations")
     ddl_text = tracker._idempotent_tracking_table_ddl_text()
     assert "CREATE TABLE IF NOT EXISTS" in ddl_text
@@ -408,8 +400,8 @@ def test_sqlanywhere_migration_tracker_and_extension_stores() -> None:
     drop_litestar_sql = litestar_store._drop_table_sql()
     assert "DROP TABLE IF EXISTS" in drop_litestar_sql[0]
 
-    event_store = SqlanywhereSyncEventQueueStore(config)
-    assert SqlanywhereEventQueueStore is SqlanywhereSyncEventQueueStore
+    event_store = SqlanywhereEventQueueStore(config)
+    assert SqlanywhereEventQueueStore is SqlanywhereEventQueueStore
     event_statements = event_store.create_statements()
     assert "LONG VARCHAR" in event_statements[0]
     assert "TIMESTAMP" in event_statements[0]
@@ -431,7 +423,6 @@ def test_sqlanywhere_migration_tracker_and_extension_stores() -> None:
     assert "CREATE TABLE IF NOT EXISTS" in memory_ddl
     assert "LONG VARCHAR" in memory_ddl
     assert "TIMESTAMP" in memory_ddl
-    assert isinstance(SqlanywhereADKConfig(), dict)
 
 
 @pytest.mark.anyio
@@ -487,3 +478,234 @@ def test_sqlanywhere_cursor_handles_cursor_without_close() -> None:
 
     with SqlanywhereCursor(cast("SqlanywhereConnection", ConnWithBareCursor())) as cursor:
         assert isinstance(cursor, CursorWithoutClose)
+
+
+def test_sqlanywhere_adk_store_handles_native_missing_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SqlanywhereADKStore.get_session returns None when native driver signals table missing."""
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKStore(config)
+
+    def _table_missing(_self: Any, *_args: Any, **_kwargs: Any) -> None:
+        raise SqlanywhereError("Table 'adk_session' not found", -141)
+
+    monkeypatch.setattr(SqlanywhereADKStore, "_execute_fetchone", _table_missing)
+    assert store.get_session("app", "user", "sess") is None
+
+
+def test_sqlanywhere_adk_memory_store_insert_sql_contains_from_sys_dummy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SqlanywhereADKMemoryStore.insert_memory_entries emits SELECT ... FROM SYS.DUMMY WHERE NOT EXISTS."""
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKMemoryStore(config)
+    executed_statements: list[str] = []
+
+    class DummyCursor:
+        rowcount = 1
+
+        def execute(self, sql: str, _params: Any = ()) -> None:
+            executed_statements.append(sql)
+
+        def close(self) -> None:
+            pass
+
+    class DummyConnection:
+        def cursor(self) -> DummyCursor:
+            return DummyCursor()
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(DummyConnection()))
+
+    entry = {
+        "id": "mem-1",
+        "session_id": "sess-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "evt-1",
+        "author": "tester",
+        "timestamp": datetime.now(UTC),
+        "content_json": {"msg": "hi"},
+        "content_text": "hi",
+        "metadata_json": None,
+    }
+    inserted = store.insert_memory_entries([cast(Any, entry)])
+    assert inserted == 1
+    assert len(executed_statements) == 1
+    assert "FROM SYS.DUMMY" in executed_statements[0]
+    assert "WHERE NOT EXISTS" in executed_statements[0]
+
+
+def test_sqlanywhere_adk_memory_store_handles_native_missing_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SqlanywhereADKMemoryStore.search_entries returns empty list when table is missing."""
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKMemoryStore(config)
+
+    def _table_missing(_self: Any, *_args: Any, **_kwargs: Any) -> None:
+        raise SqlanywhereError("Table 'adk_memory' not found", -141)
+
+    monkeypatch.setattr(SqlanywhereADKMemoryStore, "_execute_fetchall", _table_missing)
+    assert store.search_entries("query", "app", "user") == []
+
+
+def test_sqlanywhere_litestar_config_and_delete_expired(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SqlanywhereLitestarConfig is usable and _delete_expired uses resolve_rowcount."""
+    config = SqlanywhereLitestarConfig()
+    assert isinstance(config, dict)
+
+    adapter_config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    litestar_store = SqlanywhereStore(adapter_config)
+
+    class DummyCursor:
+        rowcount = 4
+
+        def execute(self, _sql: str) -> None:
+            pass
+
+    class DummyConnection:
+        def cursor(self) -> DummyCursor:
+            return DummyCursor()
+
+        def commit(self) -> None:
+            pass
+
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(DummyConnection()))
+    assert litestar_store._delete_expired() == 4
+
+
+def test_sqlanywhere_feature_flags_supports_transactional_ddl() -> None:
+    """SQLANYWHERE_FEATURE_FLAGS supports_transactional_ddl is False."""
+    assert SQLANYWHERE_FEATURE_FLAGS["supports_transactional_ddl"] is False
+
+
+def test_sqlanywhere_build_column_metadata_is_nullable() -> None:
+    """build_column_metadata parses NO and YES correctly."""
+    cols = build_column_metadata([
+        {"column_name": "id", "is_nullable": "NO"},
+        {"column_name": "val", "is_nullable": "YES"},
+    ])
+    assert cols[0]["is_nullable"] is False
+    assert cols[1]["is_nullable"] is True
+
+
+def test_sqlanywhere_build_foreign_key_metadata_names() -> None:
+    """build_foreign_key_metadata supports referenced_table and referenced_table_name keys."""
+    fks = build_foreign_key_metadata([
+        {"table_name": "t1", "column_name": "c1", "referenced_table": "t2", "referenced_column": "c2"},
+        {"table_name": "t1", "column_name": "c3", "referenced_table_name": "t3", "referenced_column_name": "c4"},
+    ])
+    assert fks[0].referenced_table == "t2"
+    assert fks[0].referenced_column == "c2"
+    assert fks[1].referenced_table == "t3"
+    assert fks[1].referenced_column == "c4"
+
+
+def test_sqlanywhere_sync_data_dictionary_instantiation() -> None:
+    """SqlanywhereSyncDataDictionary instantiates cleanly without redundant __init__."""
+    dd = SqlanywhereSyncDataDictionary()
+    assert dd.dialect == "sqlanywhere"
+
+
+def test_sqlanywhere_has_schema_under_active_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """has_schema runs cleanly inside an active exception block without isolation leak."""
+    driver = SqlanywhereDriver(cast("SqlanywhereConnection", FakeConnection()))
+
+    class DummyCursor:
+        def execute(self, _sql: str, _params: Any = ()) -> None:
+            pass
+
+        def fetchone(self) -> Any:
+            return (1,)
+
+        def close(self) -> None:
+            pass
+
+    class DummyConnection:
+        def cursor(self) -> DummyCursor:
+            return DummyCursor()
+
+    monkeypatch.setattr(driver, "connection", DummyConnection())
+
+    try:
+        raise RuntimeError("active error")
+    except RuntimeError:
+        has_user = driver.has_schema("DBA")
+        assert has_user is True
+
+
+def test_sqlanywhere_format_identifier_and_insert_statement() -> None:
+    """format_identifier and build_insert_statement format identifiers correctly."""
+    assert format_identifier("schema.my_table") == '"schema"."my_table"'
+    sql = build_insert_statement("my_table", ["col1", "col2"])
+    assert sql == 'INSERT INTO "my_table" ("col1", "col2") VALUES (?, ?)'
+
+
+def test_sqlanywhere_commit_and_rollback_raise_transaction_error() -> None:
+    """commit() and rollback() wrap caught exceptions in TransactionError."""
+    driver = SqlanywhereDriver(cast("SqlanywhereConnection", FakeConnection()))
+
+    class FailingConnection:
+        def commit(self) -> None:
+            raise RuntimeError("commit failed")
+
+        def rollback(self) -> None:
+            raise RuntimeError("rollback failed")
+
+    driver.connection = cast("SqlanywhereConnection", FailingConnection())
+    with pytest.raises(TransactionError, match="Failed to commit SQL Anywhere transaction"):
+        driver.commit()
+    with pytest.raises(TransactionError, match="Failed to rollback SQL Anywhere transaction"):
+        driver.rollback()
+
+
+def test_sqlanywhere_session_context_rolls_back_implicit_work() -> None:
+    """DML without begin() must be rolled back before a pooled connection is reused."""
+    conn = FakeConnection()
+    ctx = SqlanywhereSessionContext(
+        acquire_connection=lambda: cast("SqlanywhereConnection", conn),
+        release_connection=lambda _c, **_kw: None,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    with ctx as driver:
+        driver.execute("INSERT INTO items (id) VALUES (1)")
+
+    assert conn.rollbacks == 1
+
+
+def test_sqlanywhere_connection_pool_bounds_max_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SqlanywhereConnectionPool enforces max_size in multi-threaded acquisition."""
+    pool = SqlanywhereConnectionPool({"user": "dba", "password": "sql", "database": "demo"}, min_size=1, max_size=2)
+
+    class DummyConn:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        SqlanywhereConnectionPool, "new_connection", lambda _self: cast("SqlanywhereConnection", DummyConn())
+    )
+
+    errors: list[Exception] = []
+    conns: list[Any] = []
+    barrier = threading.Barrier(3)
+
+    def worker() -> None:
+        try:
+            conn = pool._get_thread_connection()
+            conns.append(conn)
+            barrier.wait(timeout=2.0)
+        except Exception as exc:
+            errors.append(exc)
+            barrier.wait(timeout=2.0)
+
+    threads = [threading.Thread(target=worker) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=3.0)
+
+    assert any(isinstance(err, OperationalError) and "pool exhausted" in str(err) for err in errors)

@@ -7,7 +7,7 @@ import io
 import ipaddress
 from decimal import Decimal
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_args
 from urllib.parse import urlparse
 
 import sqlglot
@@ -37,6 +37,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
     StorageCapabilityError,
@@ -44,8 +45,9 @@ from sqlspec.exceptions import (
     UniqueViolationError,
     _classify_timeout_or_cancellation,
 )
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
+from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_errors
@@ -59,9 +61,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
     BigQueryLoadFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv", "avro", "orc"]
-
-_pa: Any = import_optional("pyarrow")
-_pq: Any = import_optional("pyarrow.parquet")
 
 __all__ = (
     "BigQueryStreamSource",
@@ -86,6 +85,7 @@ __all__ = (
     "is_simple_insert",
     "normalize_script_rowcount",
     "resolve_column_names",
+    "resolve_dataset_id",
     "resolve_export_format",
     "run_query_and_wait",
     "run_query_job",
@@ -101,6 +101,7 @@ HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
 _CONNECTION_NAME_PARTS = 3
+none_type: Final = type(None)
 
 
 DEFAULT_REQUEST_TIMEOUT = 120.0
@@ -181,21 +182,23 @@ def try_bulk_insert(
     if _has_synthetic_positional_keys(remapped_parameters):
         return None
 
+    if not PYARROW_INSTALLED:
+        logger.debug("pyarrow not available, falling back to literal inlining")
+        return None
+
     try:
-        ensure_pyarrow()
-        arrow_table = _pa.Table.from_pylist(remapped_parameters)
+        pa = import_pyarrow()
+        pq = import_pyarrow_parquet()
+        arrow_table = pa.Table.from_pylist(remapped_parameters)
 
         buffer = io.BytesIO()
-        _pq.write_table(arrow_table, buffer)
+        pq.write_table(arrow_table, buffer)
         buffer.seek(0)
 
         job_config = build_load_job_config("parquet", overwrite=False)
         job = connection.load_table_from_file(buffer, table_name, job_config=job_config, timeout=result_timeout)
         job.result(timeout=result_timeout)
         return len(remapped_parameters)
-    except ImportError:
-        logger.debug("pyarrow not available, falling back to literal inlining")
-        return None
     except Exception as exc:
         logger.debug("Bulk insert failed, falling back to literal inlining: %s", exc)
         return None
@@ -690,7 +693,7 @@ def build_profile() -> "DriverParameterProfile":
             Decimal: _identity,
             dict: _identity,
             list: _identity,
-            type(None): _return_none,
+            none_type: _return_none,
             **build_uuid_coercions(),
         },
         default_ast_transformer=build_null_pruning_transform(dialect="bigquery"),
@@ -751,7 +754,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     try:
         status_code = error.code
     except AttributeError:
@@ -766,6 +769,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     if isinstance(error, api_exceptions.Cancelled):
         return _create_bigquery_error(error, status_code, OperationCancelledError, "query cancelled")
+
+    if isinstance(error, api_exceptions.RetryError):
+        return _create_bigquery_error(error, status_code, QueryTimeoutError, "query retry timeout expired")
 
     if error_class := _classify_timeout_or_cancellation(error_msg):
         return _create_bigquery_error(error, status_code, error_class, "query terminated")
@@ -1378,3 +1384,55 @@ def _create_bigquery_error(
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+
+def _positive_int_or_none(value: object, key: str) -> "int | None":
+    """Validate that an extension config setting is a positive integer or None."""
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        msg = f"'{key}' must be a positive integer"
+        raise ValueError(msg)
+    return value
+
+
+def _bigquery_partition_clauses(
+    column: str, *, enabled: bool, expiration_days: "int | None", require_filter: bool
+) -> "tuple[str, str]":
+    """Build BigQuery PARTITION BY and OPTIONS clauses for table DDL."""
+    if not enabled:
+        return "", ""
+    options: list[str] = []
+    if require_filter:
+        options.append("require_partition_filter = TRUE")
+    if expiration_days is not None:
+        options.append(f"partition_expiration_days = {expiration_days}")
+    options_clause = f" OPTIONS({', '.join(options)})" if options else ""
+    return f" PARTITION BY DATE({column})", options_clause
+
+
+def resolve_dataset_id(config: Any) -> "str | None":
+    """Resolve the dataset identifier from connection configuration or default job config."""
+    connection_config = getattr(config, "connection_config", None)
+    if isinstance(connection_config, dict):
+        dataset_id = connection_config.get("dataset_id")
+        if isinstance(dataset_id, str) and dataset_id:
+            return dataset_id
+    default_job_config = getattr(config, "_default_query_job_config", None)
+    if default_job_config is None and isinstance(connection_config, dict):
+        default_job_config = connection_config.get("default_query_job_config")
+    if default_job_config is None:
+        driver_features = getattr(config, "driver_features", None)
+        if isinstance(driver_features, dict):
+            default_job_config = driver_features.get("default_query_job_config")
+    if default_job_config is None:
+        return None
+    default_dataset = getattr(default_job_config, "default_dataset", None)
+    if default_dataset is None:
+        return None
+    if isinstance(default_dataset, str):
+        return default_dataset or None
+    resolved_id = getattr(default_dataset, "dataset_id", None)
+    if resolved_id:
+        return str(resolved_id)
+    return str(default_dataset)

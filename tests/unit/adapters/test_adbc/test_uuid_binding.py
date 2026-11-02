@@ -401,8 +401,9 @@ def test_batch_with_inconsistent_row_shapes_is_left_unchanged() -> None:
 
 
 def test_structural_rewrite_cache_is_bounded_and_keyed_by_dialect_and_ordinals() -> None:
-    rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
-    rewrite.cache_clear()
+    rewrite = adbc_core._rewrite_postgres_uuid_placeholders
+    cache_state = adbc_core._REWRITE_CACHE_STATE
+    cache_state.clear()
 
     first = rewrite("SELECT $1, $2", (1,), (), "postgres")
     second = rewrite("SELECT $1, $2", (1,), (), "postgres")
@@ -412,27 +413,28 @@ def test_structural_rewrite_cache_is_bounded_and_keyed_by_dialect_and_ordinals()
     assert first == second == ("SELECT CAST($1 AS UUID), $2", (1,), ())
     assert third == ("SELECT $1, CAST($2 AS UUID)", (2,), ())
     assert fourth == first
-    assert rewrite.cache_info().hits == 1
-    assert rewrite.cache_info().misses == 3
-    assert rewrite.cache_info().maxsize == 256
+    assert cache_state.hits == 1
+    assert cache_state.misses == 3
+    assert cache_state.maxsize == 256
 
 
 def test_structural_rewrite_cache_distinguishes_scalar_from_array_ordinals() -> None:
     """The same SQL and ordinal produce different rewrites depending on the ordinal's kind."""
-    rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
-    rewrite.cache_clear()
+    rewrite = adbc_core._rewrite_postgres_uuid_placeholders
+    cache_state = adbc_core._REWRITE_CACHE_STATE
+    cache_state.clear()
 
     scalar_only = rewrite("SELECT $1", (1,), (), "postgres")
     array_only = rewrite("SELECT $1", (), (1,), "postgres")
 
     assert scalar_only == ("SELECT CAST($1 AS UUID)", (1,), ())
     assert array_only == ("SELECT CAST($1 AS UUID[])", (), (1,))
-    assert rewrite.cache_info().misses == 2
-    assert rewrite.cache_info().hits == 0
+    assert cache_state.misses == 2
+    assert cache_state.hits == 0
 
 
 def test_structural_rewrite_uses_ast_and_ignores_literal_and_comment_placeholders() -> None:
-    rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
+    rewrite = adbc_core._rewrite_postgres_uuid_placeholders
 
     rewritten, effective, effective_arrays = rewrite("SELECT '$1' AS literal, $1 -- $1\n", (1,), (), "postgres")
 
@@ -465,7 +467,7 @@ def test_extension_dialect_operators_survive_uuid_ast_rewrite(dialect: str, sql:
 
 
 def test_structural_rewrite_reports_sqlglot_parse_errors() -> None:
-    rewrite = cast("Any", adbc_core)._rewrite_postgres_uuid_placeholders
+    rewrite = adbc_core._rewrite_postgres_uuid_placeholders
 
     with pytest.raises(SQLSpecError, match="Failed to parse PostgreSQL ADBC SQL for UUID parameter binding"):
         rewrite("SELECT (", (1,), (), "postgres")

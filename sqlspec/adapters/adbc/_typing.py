@@ -7,6 +7,7 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from adbc_driver_manager import AdbcStatusCode
 from adbc_driver_manager import Error as _AdbcNativeError
 from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
 from adbc_driver_manager import OperationalError as AdbcOperationalError
@@ -38,6 +39,7 @@ __all__ = (
     "AdbcOperationalError",
     "AdbcRawCursor",
     "AdbcSessionContext",
+    "AdbcStatusCode",
 )
 
 
@@ -75,6 +77,7 @@ class AdbcSessionContext:
         "_acquire_connection",
         "_connection",
         "_driver",
+        "_driver_class",
         "_driver_features",
         "_prepare_driver",
         "_release_connection",
@@ -88,34 +91,69 @@ class AdbcSessionContext:
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AdbcDriver], AdbcDriver]",
+        driver_class: "type[AdbcDriver] | None" = None,
     ) -> None:
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
+        self._driver_class = driver_class
         self._connection: Any = None
         self._driver: AdbcDriver | None = None
 
     def __enter__(self) -> "AdbcDriver":
-        from sqlspec.adapters.adbc.driver import AdbcDriver
+        driver_class = self._driver_class
+        if driver_class is None:
+            from sqlspec.adapters.adbc.driver import AdbcDriver
+
+            driver_class = AdbcDriver
 
         self._connection = self._acquire_connection()
-        resolved_dialect = resolve_dialect_name(self._statement_config.dialect) or None
-        self._driver = AdbcDriver(
-            connection=self._connection,
-            statement_config=self._statement_config,
-            driver_features=self._driver_features,
-            dialect=resolved_dialect,
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            resolved_dialect = resolve_dialect_name(self._statement_config.dialect) or None
+            self._driver = driver_class(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+                dialect=resolved_dialect,
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            connection = self._connection
+            driver = self._driver
+            self._connection = None
+            self._driver = None
+            if driver is not None:
+                with contextlib.suppress(BaseException):
+                    driver.close_streams()
+            with contextlib.suppress(BaseException):
+                self._release_connection(
+                    connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__, driver=driver
+                )
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            connection = self._connection
+            driver = self._driver
             self._connection = None
+            self._driver = None
+            first_error: BaseException | None = None
+            if driver is not None:
+                try:
+                    driver.close_streams()
+                except BaseException as exc:
+                    first_error = exc
+            try:
+                self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb, driver=driver)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+            if exc_type is None and first_error is not None:
+                raise first_error
         return None
 
 

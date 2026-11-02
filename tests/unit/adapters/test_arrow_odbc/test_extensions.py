@@ -3,6 +3,8 @@
 import ast
 from pathlib import Path
 
+from sqlspec.adapters.arrow_odbc.core import quote_bracket_identifier, strip_bracket_quotes
+
 
 def test_arrow_odbc_extensions_do_not_import_other_adapters() -> None:
     """Extension modules should stay inside the arrow-odbc adapter boundary."""
@@ -28,3 +30,14 @@ def test_arrow_odbc_extensions_do_not_import_other_adapters() -> None:
                         violations.append((str(path.relative_to(adapter_root.parents[2])), module))
 
     assert violations == []
+
+
+def test_bracket_quoting_and_stripping() -> None:
+    """Bracket identifier quoting and quote stripping round-trips correctly."""
+    assert quote_bracket_identifier("users") == "[users]"
+    assert quote_bracket_identifier("user]name") == "[user]]name]"
+    assert strip_bracket_quotes("[users]") == "users"
+    assert strip_bracket_quotes("[user]]name]") == "user]name"
+    assert strip_bracket_quotes('"users"') == "users"
+    assert strip_bracket_quotes('""users""') == '"users"'
+    assert strip_bracket_quotes("plain") == "plain"

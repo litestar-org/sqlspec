@@ -252,3 +252,25 @@ def test_uuid_handlers_use_generic_chained_wrappers() -> None:
     assert callable(connection.outputtypehandler)
     assert len(inspect.signature(connection.outputtypehandler).parameters) == 2
     assert len(inspect.signature(connection.inputtypehandler).parameters) == 3
+
+
+def test_output_type_handler_with_fetch_info_object() -> None:
+    """_output_type_handler handles FetchInfo objects with attributes."""
+    import oracledb
+
+    from sqlspec.adapters.oracledb._uuid_handlers import _output_type_handler
+
+    cursor = Mock()
+    cursor.arraysize = 32
+    cursor_var = Mock()
+    cursor.var = Mock(return_value=cursor_var)
+
+    class _FetchInfoStub:
+        def __init__(self) -> None:
+            self.name = "ID"
+            self.type_code = oracledb.DB_TYPE_RAW
+            self.internal_size = 16
+
+    result = _output_type_handler(cursor, _FetchInfoStub())
+    assert result is cursor_var
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_RAW, arraysize=32, outconverter=uuid_converter_out)

@@ -76,7 +76,7 @@ class SqliteConnectionParams(TypedDict):
     enable_optimizations: NotRequired[bool]
     """Apply recommended SQLite ``PRAGMA`` settings (WAL journal mode, synchronous=NORMAL, busy_timeout) on connect."""
     enable_foreign_keys: NotRequired[bool]
-    """Execute ``PRAGMA foreign_keys = ON`` when initializing each connection (defaults to ``True``)."""
+    """Execute ``PRAGMA foreign_keys = ON`` when initializing each connection (defaults to ``False``)."""
     extra: NotRequired[dict[str, Any]]
     """Additional keyword arguments forwarded to ``sqlite3.connect``."""
 
@@ -251,7 +251,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         if database is not None:
             config_dict["database"] = database
         if "database" not in config_dict or config_dict["database"] == ":memory:":
-            config_dict["database"] = f"file:memory_{uuid4().hex}?mode=memory&cache=private"
+            config_dict["database"] = f"file:memory_{uuid4().hex}?mode=memory&cache=shared"
             config_dict["uri"] = True
         elif "database" in config_dict:
             database_path = str(config_dict["database"])

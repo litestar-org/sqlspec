@@ -3,10 +3,12 @@
 import os
 import socket
 import threading
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import pymssql
 import pytest
 
 from sqlspec.adapters.sybase import (
@@ -26,8 +28,14 @@ from sqlspec.adapters.sybase import (
     driver_profile,
 )
 from sqlspec.adapters.sybase._typing import SybaseRawCursor
-from sqlspec.adapters.sybase.adk import SybaseADKConfig, SybaseADKMemoryStore, SybaseADKStore
-from sqlspec.adapters.sybase.events import SybaseEventQueueStore, SybaseSyncEventQueueStore
+from sqlspec.adapters.sybase.adk import SybaseADKMemoryStore, SybaseADKStore
+from sqlspec.adapters.sybase.core import (
+    _ERROR_CODE_MAPPING,
+    build_insert_statement,
+    escape_literal_percent,
+    format_identifier,
+)
+from sqlspec.adapters.sybase.events import SybaseEventQueueStore
 from sqlspec.adapters.sybase.litestar import SybaseStore
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
@@ -45,6 +53,7 @@ from sqlspec.exceptions import (
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
+    SQLSpecError,
     TransactionError,
     UniqueViolationError,
 )
@@ -158,7 +167,7 @@ def test_sybase_pool_requires_tdsver_or_server_alias(monkeypatch: pytest.MonkeyP
         def connect(self, **kwargs: Any) -> FakeConnection:
             return fake_conn
 
-    monkeypatch.setattr(pool_module, "pymssql", FakeModule())
+    monkeypatch.setattr(pool_module, "PYMSSQL_MODULE", FakeModule())
 
     monkeypatch.delenv("TDSVER", raising=False)
     cfg_invalid = build_connection_config({"server": "ase.example.test", "user": "sa", "database": "master"})
@@ -411,7 +420,7 @@ def test_sybase_data_dictionary_reflection() -> None:
 
 
 def test_sybase_migration_tracker_and_extension_stores() -> None:
-    """SybaseSyncMigrationTracker, SybaseStore, SybaseSyncEventQueueStore, and SybaseADKStore emit ASE-safe SQL."""
+    """SybaseSyncMigrationTracker, SybaseStore, SybaseEventQueueStore, and SybaseADKStore emit ASE-safe SQL."""
     tracker = SybaseSyncMigrationTracker(version_table_name="dbo.ddl_migrations")
     ddl_text = tracker._idempotent_tracking_table_ddl_text()
     assert "IF OBJECT_ID(" in ddl_text
@@ -437,8 +446,8 @@ def test_sybase_migration_tracker_and_extension_stores() -> None:
     assert "BIGDATETIME" in litestar_ddl
     assert "GETUTCDATE()" in litestar_ddl
 
-    assert SybaseEventQueueStore is SybaseSyncEventQueueStore
-    event_store = SybaseSyncEventQueueStore(config)
+    assert SybaseEventQueueStore is SybaseEventQueueStore
+    event_store = SybaseEventQueueStore(config)
     event_stmts = event_store.create_statements()
     assert "TEXT" in event_stmts[0]
     assert "BIGDATETIME" in event_stmts[0]
@@ -463,7 +472,6 @@ def test_sybase_migration_tracker_and_extension_stores() -> None:
 
     assert SybaseCursor.__slots__ == ("_as_dict", "connection", "cursor")
     assert SybaseExceptionHandler.__slots__ == ()
-    assert isinstance(SybaseADKConfig(), dict)
 
 
 @pytest.mark.anyio
@@ -519,3 +527,145 @@ def test_sybase_adk_store_session_list_and_memory_operations(monkeypatch: pytest
     )
     inserted = mem_store.insert_memory_entries([entry])
     assert inserted == 1
+
+
+def test_sybase_native_error_handling_and_missing_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native pymssql errors in commit() are caught and ADK get_session() returns None on table missing."""
+    cursor = FakeCursor()
+    conn = FakeConnection(cursor)
+    driver = SybaseDriver(cast("SybaseConnection", conn))
+
+    def _fail_commit() -> None:
+        raise pymssql.OperationalError("Native pymssql commit failure")
+
+    conn.commit = _fail_commit
+    with pytest.raises(SQLSpecError, match="Failed to commit Sybase ASE transaction"):
+        driver.commit()
+
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    store = SybaseADKStore(cast("Any", config))
+
+    def _table_missing(_self: Any, *_args: Any, **_kwargs: Any) -> None:
+        raise pymssql.DatabaseError(208, "Invalid object name 'adk_session'")
+
+    monkeypatch.setattr(SybaseADKStore, "_execute_fetchone", _table_missing)
+    assert store.get_session("app", "user", "sess") is None
+
+
+def test_sybase_commit_maps_deadlock_error_1205() -> None:
+    """Simulate error 1205 during driver.commit(); assert DeadlockError is raised."""
+    cursor = FakeCursor()
+    conn = FakeConnection(cursor)
+    driver = SybaseDriver(cast("SybaseConnection", conn))
+
+    def _fail_commit() -> None:
+        raise pymssql.OperationalError(1205, "Your transaction was deadlock victim (1205)")
+
+    conn.commit = _fail_commit
+    with pytest.raises(DeadlockError, match="Failed to commit Sybase ASE transaction"):
+        driver.commit()
+
+
+def test_sybase_adk_store_maps_unique_violation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SybaseADKStore raises UniqueViolationError on duplicate key violation."""
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    store = SybaseADKStore(cast("Any", config))
+
+    class DummyCursor:
+        def execute(self, _sql: str, _params: Any = ()) -> None:
+            raise pymssql.IntegrityError(2601, "Attempt to insert duplicate key row with unique index")
+
+        def close(self) -> None:
+            pass
+
+    class DummyConnection:
+        def cursor(self, as_dict: bool = False) -> DummyCursor:
+            return DummyCursor()
+
+        def rollback(self) -> None:
+            pass
+
+    monkeypatch.setattr(config, "provide_connection", lambda: nullcontext(DummyConnection()))
+    with pytest.raises(UniqueViolationError):
+        store._execute("INSERT INTO dummy VALUES (1)")
+
+
+def test_sybase_litestar_store_get_raises_sqlspec_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SybaseStore._get() maps raw database errors to SQLSpecError."""
+    config = MagicMock()
+    config.extension_config = {"litestar": {}}
+    store = SybaseStore(cast("Any", config))
+
+    class FailingCursor:
+        def execute(self, _sql: str, _params: Any = ()) -> None:
+            raise pymssql.OperationalError("Connection lost")
+
+        def close(self) -> None:
+            pass
+
+    class FailingConnection:
+        def cursor(self) -> FailingCursor:
+            return FailingCursor()
+
+    monkeypatch.setattr(config, "provide_connection", lambda: nullcontext(FailingConnection()))
+    with pytest.raises(SQLSpecError):
+        store._get("session-1")
+
+
+def test_sybase_has_schema_under_active_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """has_schema runs cleanly inside an active exception block without isolation leak."""
+    config = MagicMock()
+    driver = SybaseDriver(config)
+
+    class DummyCursor:
+        def execute(self, _sql: str, _params: Any = ()) -> None:
+            pass
+
+        def fetchone(self) -> Any:
+            return (1,)
+
+        def close(self) -> None:
+            pass
+
+    class DummyConnection:
+        def cursor(self) -> DummyCursor:
+            return DummyCursor()
+
+    monkeypatch.setattr(driver, "connection", DummyConnection())
+
+    try:
+        raise RuntimeError("active error")
+    except RuntimeError:
+        has_user = driver.has_schema("dbo")
+        assert has_user is True
+
+
+def test_sybase_format_identifier_and_insert_statements() -> None:
+    """format_identifier, build_insert_statement, and escape_literal_percent format queries correctly."""
+    assert format_identifier("dbo.my_table") == "[dbo].[my_table]"
+    sql = build_insert_statement("my_table", ["col1", "col2"])
+    assert sql == "INSERT INTO [my_table] ([col1], [col2]) VALUES (%s, %s)"
+    escaped = escape_literal_percent(
+        "SELECT * FROM t WHERE val LIKE '100%' AND id = %s", ("1",), default_statement_config.parameter_validator
+    )
+    assert "100%%" in escaped
+
+
+def test_sybase_migration_tracker_existing_columns_query() -> None:
+    """_existing_columns_query resolves USER_NAME() when schema is unqualified."""
+    tracker_unqualified = SybaseSyncMigrationTracker(version_table_name="my_versions")
+    query_unqualified = tracker_unqualified._existing_columns_query()
+    assert "u.name = USER_NAME()" in query_unqualified
+    assert "o.name = 'my_versions'" in query_unqualified
+
+    tracker_qualified = SybaseSyncMigrationTracker(version_table_name="custom_schema.my_versions")
+    query_qualified = tracker_qualified._existing_columns_query()
+    assert "u.name = 'custom_schema'" in query_qualified
+    assert "o.name = 'my_versions'" in query_qualified
+
+
+def test_sybase_error_code_mapping_count() -> None:
+    """_ERROR_CODE_MAPPING contains 38 error codes."""
+    assert len(_ERROR_CODE_MAPPING) == 38

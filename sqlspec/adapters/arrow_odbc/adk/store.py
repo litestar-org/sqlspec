@@ -1,6 +1,5 @@
 """arrow-odbc ADK stores for Google Agent Development Kit session storage."""
 
-import contextlib
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
 
@@ -11,15 +10,18 @@ from sqlspec.adapters.arrow_odbc.core import (
     extract_native_error_number,
     split_db2_name,
 )
+from sqlspec.adapters.arrow_odbc.core import atomic_store_write as _atomic_write
+from sqlspec.adapters.arrow_odbc.core import quote_bracket_identifier as _quote_identifier
+from sqlspec.adapters.arrow_odbc.core import strip_bracket_quotes as _strip_tsql_quotes
 from sqlspec.config import ADKConfig
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory import BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Callable, Sequence
     from datetime import timedelta
 
     from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
@@ -53,6 +55,8 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
 
     connector_name: ClassVar[str] = "arrow_odbc"
     __slots__ = ("_sql",)
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "ArrowOdbcConfig") -> None:
         super().__init__(config)
@@ -432,6 +436,8 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
 
     __slots__ = ("_sql",)
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "ArrowOdbcConfig") -> None:
         super().__init__(config)
         self._sql = _adk_sql_for(config)
@@ -501,10 +507,17 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries with LIKE matching."""
+        """Search memory entries with LIKE matching.
+
+        Vector embeddings are not supported in ArrowOdbcADKMemoryStore; passing
+        an embedding raises NotImplementedError.
+        """
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
+        if embedding is not None:
+            msg = "Vector embeddings are not supported in ArrowOdbcADKMemoryStore; only LIKE search is supported."
+            raise NotImplementedError(msg)
         if not query or not query.strip():
             return []
         effective_limit = max(0, int(limit if limit is not None else self._max_results))
@@ -945,19 +958,6 @@ def _is_table_missing(exc: BaseException) -> bool:
     return "invalid object name" in text or "42s02" in text or "(208)" in text
 
 
-def _quote_identifier(identifier: str) -> str:
-    return f"[{identifier.replace(']', ']]')}]"
-
-
-def _strip_tsql_quotes(part: str) -> str:
-    stripped = part.strip()
-    if len(stripped) >= _QUALIFIED_PARTS_MIN and stripped[0] == "[" and stripped[-1] == "]":
-        return stripped[1:-1].replace("]]", "]")
-    if len(stripped) >= _QUALIFIED_PARTS_MIN and stripped[0] == '"' and stripped[-1] == '"':
-        return stripped[1:-1].replace('""', '"')
-    return stripped
-
-
 def _split_tsql_table(table: str) -> "tuple[str, str]":
     parts = split_qualified_identifier(table.strip())
     if len(parts) >= _QUALIFIED_PARTS_MIN:
@@ -975,12 +975,6 @@ def _table_ref(table: str) -> str:
 def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
     _, bare_table = _split_tsql_table(table)
     return _quote_identifier(f"{prefix}_{bare_table}_{suffix}")
-
-
-def _bare_db2_table(table: str) -> str:
-    parts = split_qualified_identifier(table.strip())
-    raw = parts[-1] if parts else table
-    return _strip_tsql_quotes(raw)
 
 
 def _raise_session_not_found(session_id: str) -> None:
@@ -1025,29 +1019,6 @@ def _session_list_query(
     ORDER BY {column} {direction}, id {direction}{page_clause}
     """
     return sql, tuple(params)
-
-
-@contextlib.contextmanager
-def _atomic_write(driver: Any) -> "Iterator[None]":
-    """Wrap multi-statement store mutations in an explicit transaction when supported.
-
-    Yields:
-        None while the atomic write block executes.
-    """
-    in_tx = getattr(driver, "_connection_in_transaction", None)
-    if callable(in_tx) and in_tx() is True:
-        yield
-        return
-    if getattr(driver, "_connection_autocommit", True) is False:
-        driver.begin()
-    try:
-        yield
-    except BaseException:
-        with contextlib.suppress(Exception):
-            driver.rollback()
-        raise
-    else:
-        driver.commit()
 
 
 class _TsqlAdkSql:
@@ -1275,8 +1246,8 @@ class _Db2AdkSql:
         return sql, tuple(params)
 
     def session_index_specs(self, session_table: str, events_table: str) -> "list[tuple[str, str, str]]":
-        bare_session = _bare_db2_table(session_table)
-        bare_events = _bare_db2_table(events_table)
+        bare_session = split_db2_name(session_table)[1].lower()
+        bare_events = split_db2_name(events_table)[1].lower()
         return [
             (f"idx_{bare_session}_app_user", session_table, "app_name, user_id"),
             (f"idx_{bare_session}_update_time", session_table, "update_time"),
@@ -1289,7 +1260,7 @@ class _Db2AdkSql:
 
     def sessions_table_ddl(self, table: str, owner_id_column_ddl: "str | None") -> str:
         owner_line = f", {owner_id_column_ddl}" if owner_id_column_ddl else ""
-        bare_table = _bare_db2_table(table)
+        bare_table = split_db2_name(table)[1].lower()
         return (
             f"CREATE TABLE {table} (id VARCHAR(128) NOT NULL, app_name VARCHAR(128) NOT NULL, "
             f"user_id VARCHAR(128) NOT NULL{owner_line}, state {DB2_JSON_COLUMN_TYPE} NOT NULL, "
@@ -1299,7 +1270,7 @@ class _Db2AdkSql:
         )
 
     def events_table_ddl(self, table: str, session_table: str) -> str:
-        bare_table = _bare_db2_table(table)
+        bare_table = split_db2_name(table)[1].lower()
         return (
             f"CREATE TABLE {table} (id VARCHAR(128) NOT NULL, app_name VARCHAR(128) NOT NULL, "
             "user_id VARCHAR(128) NOT NULL, session_id VARCHAR(128) NOT NULL, "
@@ -1309,7 +1280,7 @@ class _Db2AdkSql:
         )
 
     def app_states_table_ddl(self, table: str) -> str:
-        bare_table = _bare_db2_table(table)
+        bare_table = split_db2_name(table)[1].lower()
         return (
             f"CREATE TABLE {table} (app_name VARCHAR(128) NOT NULL, state {DB2_JSON_COLUMN_TYPE} NOT NULL, "
             "update_time TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP, "
@@ -1317,7 +1288,7 @@ class _Db2AdkSql:
         )
 
     def user_states_table_ddl(self, table: str) -> str:
-        bare_table = _bare_db2_table(table)
+        bare_table = split_db2_name(table)[1].lower()
         return (
             f"CREATE TABLE {table} (app_name VARCHAR(128) NOT NULL, user_id VARCHAR(128) NOT NULL, "
             f"state {DB2_JSON_COLUMN_TYPE} NOT NULL, update_time TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP, "
@@ -1325,7 +1296,7 @@ class _Db2AdkSql:
         )
 
     def metadata_table_ddl(self, table: str) -> str:
-        bare_table = _bare_db2_table(table)
+        bare_table = split_db2_name(table)[1].lower()
         return (
             f'CREATE TABLE {table} ("KEY" VARCHAR(128) NOT NULL, value VARCHAR(512) NOT NULL, '
             f'CONSTRAINT pk_{bare_table}_key PRIMARY KEY ("KEY"))'
@@ -1336,7 +1307,7 @@ class _Db2AdkSql:
 
     def memory_table_ddl(self, table: str, owner_id_column_ddl: "str | None") -> str:
         owner_line = f", {owner_id_column_ddl}" if owner_id_column_ddl else ""
-        bare_table = _bare_db2_table(table)
+        bare_table = split_db2_name(table)[1].lower()
         return (
             f"CREATE TABLE {table} (id VARCHAR(128) NOT NULL, session_id VARCHAR(128) NOT NULL, "
             "app_name VARCHAR(128) NOT NULL, user_id VARCHAR(128) NOT NULL, "
@@ -1348,7 +1319,7 @@ class _Db2AdkSql:
         )
 
     def memory_index_specs(self, table: str) -> "list[tuple[str, str, str]]":
-        bare_table = _bare_db2_table(table)
+        bare_table = split_db2_name(table)[1].lower()
         return [
             (f"idx_{bare_table}_scope", table, "app_name, user_id, scope, timestamp"),
             (f"idx_{bare_table}_session", table, "session_id, timestamp"),
@@ -1374,6 +1345,11 @@ class _Db2AdkSql:
 
 def _adk_sql_for(config: "ArrowOdbcConfig") -> "_TsqlAdkSql | _Db2AdkSql":
     """Return the statement provider for the config's resolved dialect."""
-    if str(config.statement_config.dialect).lower() == "db2":
+    dialect_attr = getattr(config.statement_config, "dialect", None)
+    dialect = str(dialect_attr).lower() if isinstance(dialect_attr, str) else "mssql"
+    if dialect == "db2":
         return _Db2AdkSql()
-    return _TsqlAdkSql()
+    if dialect in {"mssql", "tsql"}:
+        return _TsqlAdkSql()
+    msg = f"ArrowOdbcADKStore requires dialect 'mssql' or 'db2' (received {dialect!r})."
+    raise ImproperConfigurationError(msg)

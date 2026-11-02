@@ -52,6 +52,7 @@ from sqlspec.utils.module_loader import import_optional, import_optional_attr, m
 
 if TYPE_CHECKING:
     from sqlspec._typing import (
+        ArrowException,
         ArrowRecordBatch,
         ArrowRecordBatchReader,
         ArrowRecordBatchReaderProtocol,
@@ -106,6 +107,7 @@ __all__ = (
     "PYDANTIC_USE_FAILFAST",
     "UNSET",
     "UUID_UTILS_INSTALLED",
+    "ArrowException",
     "ArrowRecordBatch",
     "ArrowRecordBatchReader",
     "ArrowRecordBatchReaderProtocol",

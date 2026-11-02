@@ -6,7 +6,7 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
 
 from sqlglot import exp
 
@@ -47,6 +47,7 @@ __all__ = (
     "SECONDS_PER_DAY",
     "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "AiosqliteStreamSource",
+    "_filter_connection_params",
     "apply_driver_features",
     "apply_extension_pragmas",
     "build_connection_config",
@@ -95,8 +96,8 @@ SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
 SQLITE_CONSTRAINT_ROWID_CODE = 2579
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
-SQLITE_CONSTRAINT_NOTNULL_CODE = 1811
-SQLITE_CONSTRAINT_CHECK_CODE = 531
+SQLITE_CONSTRAINT_NOTNULL_CODE = 1299
+SQLITE_CONSTRAINT_CHECK_CODE = 275
 SQLITE_CONSTRAINT_DATATYPE_CODE = 3091
 SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
@@ -108,6 +109,10 @@ SQLITE_LOCKED_CODE = 6
 SQLITE_INTERRUPT_CODE = 9
 SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
+SQLITE_TOOBIG_CODE = 18
+SQLITE_AUTH_CODE = 23
+SQLITE_RANGE_CODE = 25
+SQLITE_NOTADB_CODE = 26
 SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT = sys.version_info >= (3, 12)
 SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
@@ -154,8 +159,8 @@ async def end_transaction(
     raw_conn = getattr(connection, "_conn", None)
     if isinstance(raw_conn, sqlite3.Connection) and callable(getattr(connection, "_execute", None)):
         conn_dict = getattr(connection, "__dict__", None)
-        has_method_override = isinstance(conn_dict, dict) and any(
-            key in conn_dict for key in ("commit", "rollback", "execute")
+        has_method_override = isinstance(conn_dict, dict) and (
+            "commit" in conn_dict or "rollback" in conn_dict or "execute" in conn_dict
         )
         if not has_method_override:
             await run_on_worker_thread(
@@ -392,6 +397,37 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
+_EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
+    "enable_foreign_keys",
+    "enable_optimizations",
+    "pool_size",
+    "min_size",
+    "connect_timeout",
+    "idle_timeout",
+    "operation_timeout",
+    "health_check_interval",
+    "extra",
+    "pool_min_size",
+    "pool_max_size",
+    "pool_timeout",
+    "pool_recycle_seconds",
+    "db",
+    "path",
+    "file",
+})
+
+
+def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Filter connection parameters to only those accepted by SQLite/aiosqlite."""
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in _EXCLUDED_CONNECTION_KEYS
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build connection configuration for pool creation.
 
@@ -401,35 +437,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     Returns:
         Dictionary with connection parameters.
     """
-    excluded_keys = {
-        "enable_foreign_keys",
-        "enable_optimizations",
-        "pool_size",
-        "min_size",
-        "connect_timeout",
-        "idle_timeout",
-        "operation_timeout",
-        "health_check_interval",
-        "extra",
-        "pool_min_size",
-        "pool_max_size",
-        "pool_timeout",
-        "pool_recycle_seconds",
-        "db",
-        "path",
-        "file",
-    }
-
-    def _filter_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in mapping.items()
-            if key not in excluded_keys
-            and (value is not None or key == "isolation_level")
-            and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-        }
-
-    connection_parameters = _filter_params(connection_config)
+    connection_parameters = _filter_connection_params(connection_config)
     if "database" not in connection_parameters:
         database = (
             connection_config.get("database")
@@ -441,7 +449,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
             connection_parameters["database"] = database
     extra = connection_config.get("extra")
     if isinstance(extra, Mapping):
-        connection_parameters.update(_filter_params(extra))
+        connection_parameters.update(_filter_connection_params(extra))
     return connection_parameters
 
 
@@ -459,7 +467,7 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     if has_sqlite_error(error):
         error_code = error.sqlite_errorcode
         error_name = error.sqlite_errorname
@@ -477,13 +485,19 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         return _create_aiosqlite_error(error, error_code, DeadlockError, "database busy")
     if primary_code == SQLITE_LOCKED_CODE or (isinstance(error_name, str) and error_name.startswith("SQLITE_LOCKED")):
         return _create_aiosqlite_error(error, error_code, DeadlockError, "database locked")
-    if "locked" in error_msg or "busy" in error_msg:
-        return _create_aiosqlite_error(error, error_code or 0, DeadlockError, "database locked")
+    if error_code is None and (
+        "database is locked" in error_msg
+        or "database table is locked" in error_msg
+        or "database locked" in error_msg
+        or "database is busy" in error_msg
+        or "database busy" in error_msg
+    ):
+        return _create_aiosqlite_error(error, 0, DeadlockError, "database locked")
 
     if primary_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
         return _create_aiosqlite_error(error, error_code, OperationCancelledError, "query interrupted")
-    if "interrupt" in error_msg:
-        return _create_aiosqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
+    if error_code is None and ("query was interrupted" in error_msg or "interrupted" in error_msg):
+        return _create_aiosqlite_error(error, 0, OperationCancelledError, "query interrupted")
 
     if primary_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
         return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "permission denied")
@@ -491,11 +505,20 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         isinstance(error_name, str) and error_name.startswith("SQLITE_READONLY")
     ):
         return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "database is read-only")
-    if "permission denied" in error_msg or "readonly" in error_msg:
-        return _create_aiosqlite_error(error, error_code or 0, PermissionDeniedError, "permission denied")
+    if error_code is None and (
+        "attempt to write a readonly database" in error_msg
+        or "readonly database" in error_msg
+        or "permission denied" in error_msg
+        or "access permission denied" in error_msg
+    ):
+        return _create_aiosqlite_error(error, 0, PermissionDeniedError, "permission denied")
 
-    if primary_code == SQLITE_CANTOPEN_CODE or (
-        isinstance(error_name, str) and error_name.startswith("SQLITE_CANTOPEN")
+    if primary_code == SQLITE_AUTH_CODE or error_name == "SQLITE_AUTH":
+        return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "authorization denied")
+    if primary_code in (SQLITE_RANGE_CODE, SQLITE_TOOBIG_CODE) or error_name in ("SQLITE_RANGE", "SQLITE_TOOBIG"):
+        return _create_aiosqlite_error(error, error_code, DataError, "data range or size exceeded")
+    if primary_code in (SQLITE_CANTOPEN_CODE, SQLITE_NOTADB_CODE) or (
+        isinstance(error_name, str) and error_name.startswith(("SQLITE_CANTOPEN", "SQLITE_NOTADB"))
     ):
         return _create_aiosqlite_error(error, error_code, DatabaseConnectionError, "connection error")
     if primary_code in (SQLITE_IOERR_CODE, SQLITE_CORRUPT_CODE) or (
@@ -506,6 +529,10 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         return _create_aiosqlite_error(error, error_code, DataError, "data error")
     if "syntax" in error_msg:
         return _create_aiosqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
+    if isinstance(error, sqlite3.ProgrammingError):
+        return _create_aiosqlite_error(error, error_code, DataError, "programming error")
+    if isinstance(error, sqlite3.InterfaceError):
+        return _create_aiosqlite_error(error, error_code, OperationalError, "interface error")
     if primary_code == 1 or isinstance(error, sqlite3.OperationalError):
         return _create_aiosqlite_error(error, error_code, OperationalError, "operational error")
     if isinstance(error, sqlite3.DataError):

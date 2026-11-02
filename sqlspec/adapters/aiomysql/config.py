@@ -171,6 +171,13 @@ def build_connection_config(
 
 
 class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
+    """Session factory for aiomysql connections.
+
+    The ``_contexts`` dictionary maps connection IDs to pool acquire contexts
+    to track and release connections safely across concurrent session checkouts
+    from the same factory instance.
+    """
+
     __slots__ = ("_contexts",)
 
     def __init__(self, config: "AiomysqlConfig") -> None:
@@ -328,7 +335,11 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             An aiomysql connection instance.
         """
         connection = await aiomysql.connect(**self._connection_kwargs())
-        await self._ensure_connection(connection)
+        try:
+            await self._ensure_connection(connection)
+        except BaseException:
+            connection.close()
+            raise
         return connection
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AiomysqlPool":

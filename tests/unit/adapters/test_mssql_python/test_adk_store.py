@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for mssql-python ADK store wiring and T-SQL generation."""
 
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
@@ -9,6 +9,7 @@ import pytest
 
 from sqlspec.adapters.mssql_python.adk import MssqlPythonADKConfig, MssqlPythonADKMemoryStore, MssqlPythonADKStore
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 
@@ -247,8 +248,6 @@ def test_sync_store_can_force_fallback_json_from_extension_config() -> None:
 
 def test_mssql_python_adk_memory_store_insert_handles_none_metadata_and_missing_author() -> None:
     """insert_memory_entries binds None for metadata_json=None and missing author."""
-    from datetime import datetime
-
     config = _mock_config()
     conn = config.provide_connection.return_value.__enter__.return_value
     cursor = conn.cursor.return_value
@@ -274,7 +273,7 @@ def test_mssql_python_adk_memory_store_insert_handles_none_metadata_and_missing_
     inserted = store.insert_memory_entries([entry])
 
     assert inserted == 1
-    params = cursor.execute.call_args.args[1]
+    params = cursor.executemany.call_args.args[1][0]
     assert params[6] is None
     assert params[10] is None
 
@@ -361,6 +360,7 @@ def test_mssql_python_adk_create_tables_reconciles_schema_and_memory_insert_roll
     conn = mem_config.provide_connection.return_value.__enter__.return_value
     cursor = conn.cursor.return_value
     cursor.execute.side_effect = RuntimeError("db failure")
+    cursor.executemany.side_effect = RuntimeError("db failure")
     mem_store = MssqlPythonADKMemoryStore(mem_config)
     now = datetime.now(tz=UTC)
     entry = cast(
@@ -404,3 +404,43 @@ def _session_store_with_capture(
 
     monkeypatch.setattr(MssqlPythonADKStore, "_execute_fetchall", capture)
     return MssqlPythonADKStore(_mock_config()), calls
+
+
+def test_insert_memory_entries_batches_with_executemany() -> None:
+    """insert_memory_entries batches rows into cursor.executemany."""
+    mem_config = _mock_config({"native_json": False})
+    conn = mem_config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.rowcount = 2
+    mem_store = MssqlPythonADKMemoryStore(mem_config)
+    now = datetime.now(tz=UTC)
+    entries = [
+        cast(
+            "Any",
+            {
+                "id": f"mem-{i}",
+                "session_id": "sess-1",
+                "app_name": "app",
+                "user_id": "user-1",
+                "event_id": f"evt-{i}",
+                "timestamp": now,
+                "content_json": {"text": "hello"},
+                "content_text": "hello",
+                "metadata_json": None,
+                "inserted_at": now,
+            },
+        )
+        for i in range(2)
+    ]
+    inserted = mem_store.insert_memory_entries(entries)
+    assert inserted == 2
+    cursor.executemany.assert_called_once()
+    assert len(cursor.executemany.call_args[0][1]) == 2
+
+
+def test_search_entries_raises_improper_configuration_on_embedding() -> None:
+    """search_entries raises ImproperConfigurationError when embedding is passed."""
+    mem_config = _mock_config()
+    mem_store = MssqlPythonADKMemoryStore(mem_config)
+    with pytest.raises(ImproperConfigurationError, match="Vector embeddings are not configured"):
+        mem_store.search_entries("test", "app", "user", embedding=[0.1, 0.2])

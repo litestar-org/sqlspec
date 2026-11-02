@@ -212,6 +212,7 @@ class FakeDb2Connection:
         self.dbms_name = "DB2/LINUXX8664"
         self.autocommit = autocommit
         self.dsn: str | None = None
+        self.current_schema: str | None = None
         self.pending: list[tuple[str, object]] = []
         self.committed: list[tuple[str, object]] = []
         self.rollbacks = 0
@@ -240,6 +241,11 @@ class FakeDb2Connection:
     def set_autocommit(self, is_on: bool) -> None:
         """Switch the connection's autocommit mode."""
         self.autocommit = bool(is_on)
+
+    def set_current_schema(self, schema: str) -> bool:
+        """Update the schema used by SDK catalog operations."""
+        self.current_schema = schema
+        return True
 
     def commit(self) -> None:
         """Make pending writes durable."""
@@ -380,6 +386,10 @@ class FakeDb2AsyncConnection:
         """Switch the wrapped connection's autocommit mode."""
         self.sync_connection.set_autocommit(is_on)
 
+    async def set_current_schema(self, schema: str) -> bool:
+        """Update the schema used by SDK catalog operations."""
+        return self.sync_connection.set_current_schema(schema)
+
 
 class FakeAsyncConnectionFactory:
     """Stand-in for the ``ibm_db_dbi.AsyncConnection`` class and its ``connect`` factory."""
@@ -475,6 +485,7 @@ class _FakeDb2SessionState:
         self.connection = FakeDb2Connection(list(cursors), autocommit=True)
         self.extension_config: dict[str, Any] = extension_config or {}
         self.statement_config = default_statement_config
+        self.driver_features: dict[str, Any] = {}
 
     @property
     def executed(self) -> "list[tuple[str, Any]]":
@@ -488,7 +499,9 @@ class FakeDb2SessionConfig(_FakeDb2SessionState):
     @contextmanager
     def provide_session(self, **_: Any) -> "Iterator[Db2SyncDriver]":
         """Yield a driver bound to the shared fake connection."""
-        yield Db2SyncDriver(self.connection, statement_config=default_statement_config)
+        yield Db2SyncDriver(
+            self.connection, statement_config=default_statement_config, driver_features=self.driver_features
+        )
 
 
 class FakeDb2AsyncSessionConfig(_FakeDb2SessionState):
@@ -502,7 +515,9 @@ class FakeDb2AsyncSessionConfig(_FakeDb2SessionState):
     async def provide_session(self, **_: Any) -> "AsyncIterator[Any]":
         """Yield an async driver bound to the shared fake connection."""
         yield db2_driver.Db2AsyncDriver(
-            FakeDb2AsyncConnection(self.connection), statement_config=default_statement_config
+            FakeDb2AsyncConnection(self.connection),
+            statement_config=default_statement_config,
+            driver_features=self.driver_features,
         )
 
 

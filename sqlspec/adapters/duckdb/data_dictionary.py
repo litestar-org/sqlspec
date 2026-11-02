@@ -1,6 +1,6 @@
 """DuckDB-specific data dictionary for metadata queries."""
 
-import re
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from mypy_extensions import mypyc_attr
@@ -14,23 +14,75 @@ from sqlspec.data_dictionary import (
     DependencyMetadata,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataCapability,
+    MetadataCapabilityProfile,
     MetadataFidelity,
     MetadataResult,
     MetadataSource,
     MetadataSupport,
     ObjectIdentity,
+    SystemMetadataCapability,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableMetadata,
     VersionInfo,
+    ensure_system_metadata_request,
     get_data_dictionary_loader,
+    system_metadata_gated_result,
+    unsupported_system_metadata_capability,
 )
 from sqlspec.driver import SyncDataDictionaryBase
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
 
 __all__ = ("DuckDBDataDictionary",)
+
+_DUCKDB_METADATA_DOMAINS: Final[tuple[str, ...]] = (
+    "schemas",
+    "objects",
+    "tables",
+    "columns",
+    "constraints",
+    "indexes",
+    "views",
+    "routines",
+    "databases",
+    "extensions",
+    "system",
+    "dependencies",
+    "types",
+    "sequences",
+    "ddl",
+    "privileges",
+)
+
+_DUCKDB_SUPPORTED_DOMAINS: Final[frozenset[str]] = frozenset(d for d in _DUCKDB_METADATA_DOMAINS if d != "privileges")
+
+_DUCKDB_SYSTEM_METADATA_QUERIES: Final[dict[str, str]] = {"logs": "logs", "memory": "memory", "settings": "settings"}
+
+
+def _duckdb_capability_for_domain(domain: str) -> MetadataCapability:
+    if domain in _DUCKDB_SUPPORTED_DOMAINS:
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+        )
+    return MetadataCapability.unsupported(domain)
+
+
+def _duckdb_system_metadata_capability(domain: str) -> SystemMetadataCapability:
+    if domain not in _DUCKDB_SYSTEM_METADATA_QUERIES:
+        return unsupported_system_metadata_capability(domain)
+    return SystemMetadataCapability(
+        domain, MetadataSupport.SUPPORTED, fidelity=MetadataFidelity.NATIVE, source=MetadataSource.SYSTEM_VIEW
+    )
+
+
+def _rows_as_mappings(rows: "list[Any] | tuple[Any, ...]") -> "tuple[Mapping[str, object], ...]":
+    return tuple(dict(row) if not isinstance(row, Mapping) else row for row in rows)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -41,6 +93,81 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_metadata_capabilities(
+        self, driver: "DuckDBDriver", domains: "Sequence[str] | None" = None
+    ) -> MetadataCapabilityProfile:
+        """Report DuckDB data-dictionary capability profile."""
+        _ = driver
+        requested_domains = tuple(domains) if domains is not None else _DUCKDB_METADATA_DOMAINS
+        capabilities = tuple(_duckdb_capability_for_domain(domain) for domain in requested_domains)
+        return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
+
+    def get_system_metadata_capabilities(
+        self, driver: "DuckDBDriver", domains: "Sequence[str] | None" = None
+    ) -> "tuple[SystemMetadataCapability, ...]":
+        """Get DuckDB system metadata capability disclosures."""
+        _ = driver
+        requested_domains = tuple(_DUCKDB_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
+        return tuple(_duckdb_system_metadata_capability(domain) for domain in requested_domains)
+
+    def get_schemas(self, driver: "DuckDBDriver") -> MetadataResult:
+        """Get DuckDB schema metadata."""
+        query = self.get_query("schemas", "list")
+        rows = driver.select(query)
+        return MetadataResult("schemas", capability=_duckdb_capability_for_domain("schemas"), items=tuple(rows))
+
+    def get_objects(self, driver: "DuckDBDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get database object metadata."""
+        query = self.get_query("objects", "by_schema")
+        schema_name = self.resolve_schema(schema)
+        rows = driver.select(query, schema_name=schema_name)
+        return MetadataResult("objects", capability=_duckdb_capability_for_domain("objects"), items=tuple(rows))
+
+    def get_routines(self, driver: "DuckDBDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get routine and function metadata."""
+        query = self.get_query("functions", "by_schema")
+        schema_name = self.resolve_schema(schema)
+        rows = driver.select(query, schema_name=schema_name)
+        return MetadataResult("routines", capability=_duckdb_capability_for_domain("routines"), items=tuple(rows))
+
+    def get_databases(self, driver: "DuckDBDriver") -> MetadataResult:
+        """Get DuckDB databases metadata."""
+        query = self.get_query("databases", "list")
+        rows = driver.select(query)
+        return MetadataResult("databases", capability=_duckdb_capability_for_domain("databases"), items=tuple(rows))
+
+    def get_extensions(self, driver: "DuckDBDriver") -> MetadataResult:
+        """Get DuckDB extensions metadata."""
+        query = self.get_query("extensions", "list")
+        rows = driver.select(query)
+        return MetadataResult("extensions", capability=_duckdb_capability_for_domain("extensions"), items=tuple(rows))
+
+    def get_table_details(self, driver: "DuckDBDriver", table: str, schema: "str | None" = None) -> MetadataResult:
+        """Get rich table metadata."""
+        query = self.get_query("tables", "by_schema")
+        schema_name = self.resolve_schema(schema)
+        rows = driver.select(query, schema_name=schema_name, table_name=table)
+        return MetadataResult("tables", capability=_duckdb_capability_for_domain("tables"), items=tuple(rows))
+
+    def get_system_metadata(
+        self, driver: "DuckDBDriver", request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
+    ) -> SystemMetadataResult:
+        """Get opt-in DuckDB system metadata."""
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = _duckdb_system_metadata_capability(metadata_request.domain)
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
+
+        query_name = _DUCKDB_SYSTEM_METADATA_QUERIES.get(metadata_request.domain)
+        if query_name is None:
+            return gate_result
+        query = self.get_query("system", query_name)
+        rows = driver.select(query)
+        return SystemMetadataResult.from_rows(
+            metadata_request, capability, rows=_rows_as_mappings(rows), source=MetadataSource.SYSTEM_VIEW
+        )
 
     def get_version(self, driver: "DuckDBDriver") -> "VersionInfo | None":
         """Get DuckDB database version information.
@@ -101,7 +228,9 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
         """Get tables sorted by topological dependency order using DuckDB catalog."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
-        return driver.select(self.get_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata)
+        return driver.select(
+            self.get_query("tables", "by_schema"), schema_name=schema_name, table_name=None, schema_type=TableMetadata
+        )
 
     def get_columns(
         self, driver: "DuckDBDriver", table: "str | None" = None, schema: "str | None" = None
@@ -300,7 +429,8 @@ class DuckDBDataDictionary(SyncDataDictionaryBase):
                         source=MetadataSource.CATALOG,
                     )
                     for ref_key, ref_identity in candidates.items()
-                    if ref_key != item.identity.name.lower() and _references_identifier(ddl_text, ref_identity.name)
+                    if ref_key != item.identity.name.lower()
+                    and self._references_identifier(ddl_text, ref_identity.name)
                 )
             linked.append(
                 DDLResult(
@@ -421,8 +551,3 @@ _DUCKDB_REFERENCE_EDGE_KINDS: Final = {
     "sequence": DependencyEdgeKind.SEQUENCE_USE,
     "type": DependencyEdgeKind.DEFAULT_EXPRESSION,
 }
-
-
-def _references_identifier(sql_text: str, name: str) -> bool:
-    """Return True when ``name`` appears in ``sql_text`` as a whole identifier."""
-    return re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", sql_text, re.IGNORECASE) is not None

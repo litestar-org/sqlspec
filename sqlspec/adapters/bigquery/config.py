@@ -103,10 +103,14 @@ class BigQueryDriverFeatures(TypedDict):
 
     connection_instance: NotRequired["BigQueryConnection"]
     """Pre-created ``google.cloud.bigquery.Client`` reused without transferring lifecycle ownership."""
+    default_query_job_config: NotRequired[QueryJobConfig]
+    """Default ``QueryJobConfig`` for a directly constructed driver; config-managed drivers use the client's default."""
     on_connection_create: NotRequired["Callable[[Any], None]"]
     """Callback invoked with the ``bigquery.Client`` when instantiated by the config."""
     json_serializer: NotRequired["Callable[[Any], str]"]
     """Serializer converting dict/list parameters to JSON strings (defaults to ``sqlspec.utils.serializers.to_json``)."""
+    json_deserializer: NotRequired["Callable[[str], Any]"]
+    """Deserializer converting JSON strings to native dict/list objects."""
     enable_uuid_conversion: NotRequired[bool]
     """Automatically coerce ``UUID`` strings and parameters (defaults to ``True``)."""
     enable_events: NotRequired[bool]
@@ -117,7 +121,7 @@ class BigQueryDriverFeatures(TypedDict):
     """Total seconds to retry transient query failures (defaults to ``60.0``; ``<= 0`` disables retries)."""
     job_result_timeout: NotRequired[float]
     """Maximum seconds to poll ``QueryJob.result()`` before raising a timeout error."""
-    use_query_and_wait: NotRequired[bool]
+    enable_query_and_wait: NotRequired[bool]
     """Execute single-statement queries via low-latency ``Client.query_and_wait()`` outside transactions (defaults to ``True``)."""
     request_timeout: NotRequired[float]
     """Per-request HTTP transport timeout in seconds for job submission calls (defaults to ``job_result_timeout`` or ``120.0``)."""
@@ -231,6 +235,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """
 
         self.connection_config = build_connection_config(connection_config)
+
+        if "json_deserializer" in kwargs:
+            driver_features = dict(driver_features) if driver_features else {}
+            driver_features["json_deserializer"] = kwargs.pop("json_deserializer")
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -435,7 +443,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             client_options = self.connection_config.get("client_options")
             if client_options is not None and client_options is not Empty:
                 client_kwargs["client_options"] = client_options
-            self._storage_write_client = BigQueryStorageWriteModule.BigQueryWriteClient(**client_kwargs)
+            write_client_cls = cast("Any", BigQueryStorageWriteModule).BigQueryWriteClient
+            self._storage_write_client = write_client_cls(**client_kwargs)
         return self._storage_write_client
 
     def _resolve_default_dataset(self) -> "str | None":

@@ -162,7 +162,9 @@ def _make_config(
 ) -> MagicMock:
     config = MagicMock()
     config.supports_connection_pooling = supports_connection_pooling
-    config.extension_config = {"sanic": {"commit_mode": commit_mode, "disable_di": disable_di}}
+    config.extension_config = {
+        "sanic": {"commit_mode": commit_mode, "disable_di": disable_di, "enable_correlation_middleware": False}
+    }
     config.provide_connection = MagicMock(return_value=_AsyncConnectionManager(connection))
     config.create_connection = AsyncMock(return_value=connection)
     config.statement_config = {}
@@ -174,7 +176,9 @@ def _make_request(*, pool: object | None) -> SimpleNamespace:
     app_ctx = SimpleNamespace()
     if pool is not None:
         app_ctx.db_pool = pool
-    return SimpleNamespace(app=SimpleNamespace(ctx=app_ctx), ctx=SimpleNamespace(db_session_instance=object()))
+    return SimpleNamespace(
+        app=SimpleNamespace(ctx=app_ctx), ctx=SimpleNamespace(db_session_instance=object()), headers={}
+    )
 
 
 class _AsyncConnectionManager:

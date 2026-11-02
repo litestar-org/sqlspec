@@ -1,8 +1,12 @@
 """ADBC database configuration."""
 
+import contextlib
+import importlib.metadata
+import math
+import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
 
 from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcCursor, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
@@ -18,9 +22,11 @@ from sqlspec.adapters.adbc.core import (
     resolve_dialect_from_config,
     resolve_dialect_name,
     resolve_driver_connect_func,
+    resolve_driver_name_from_config,
 )
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
-from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
+from sqlspec.adapters.adbc.pool import AdbcConnectionPool
+from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import StatementConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import (
@@ -30,7 +36,7 @@ from sqlspec.core.config_runtime import (
     resolve_runtime_statement_config,
 )
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -40,7 +46,16 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityConfig
 
 
-__all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures")
+__all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures", "AdbcPoolConfig")
+
+
+class AdbcPoolConfig(TypedDict):
+    """Optional PostgreSQL clone-pool bounds; an empty mapping enables defaults."""
+
+    max_size: NotRequired[int]
+    """Maximum simultaneous clone leases, excluding the original seed (default 4)."""
+    timeout: NotRequired[float]
+    """Maximum seconds to wait for a lease (default 30.0)."""
 
 
 class AdbcConnectionParams(TypedDict):
@@ -149,12 +164,8 @@ class AdbcDriverFeatures(TypedDict):
     """Detect explicit SQL casts such as ``::jsonb`` or ``::vector`` during parameter preparation (defaults to ``True``)."""
     enable_strict_type_coercion: NotRequired[bool]
     """Raise an error on unsupported parameter types instead of best-effort conversion (defaults to ``False``)."""
-    strict_type_coercion: NotRequired[bool]
-    """Alias normalized to ``enable_strict_type_coercion``."""
     enable_arrow_extension_types: NotRequired[bool]
     """Preserve PyArrow extension type metadata when materializing Arrow results (defaults to ``True``)."""
-    arrow_extension_types: NotRequired[bool]
-    """Alias normalized to ``enable_arrow_extension_types``."""
     enable_pgvector: NotRequired[bool]
     """Probe ``pg_extension`` for ``vector`` on PostgreSQL ADBC connections (defaults to ``True`` when ``pgvector`` is installed)."""
     enable_paradedb: NotRequired[bool]
@@ -162,7 +173,7 @@ class AdbcDriverFeatures(TypedDict):
     enable_pg_textsearch: NotRequired[bool]
     """Probe ``pg_extension`` for ``pg_textsearch`` BM25 support on PostgreSQL ADBC connections (defaults to ``True``)."""
     enable_lowercase_column_names: NotRequired[bool]
-    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Oracle and Db2 ADBC backends)."""
+    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Oracle, Db2, and Snowflake ADBC backends)."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec table-backed event channel support."""
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
@@ -197,45 +208,63 @@ class AdbcConnectionContext(SyncPoolConnectionContext):
 
 
 class _AdbcSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ("_connection", "_driver_features", "_profile_path")
+    __slots__ = ("_connection", "_driver_features", "_origin_pool", "_profile_path")
 
     def __init__(self, config: "AdbcConfig") -> None:
         super().__init__(config)
         self._connection: AdbcConnection | None = None
         self._driver_features: dict[str, Any] = dict(config.driver_features)
         self._profile_path: Path | None = None
+        self._origin_pool: AdbcConnectionPool | None = None
 
     @property
     def driver_features(self) -> "dict[str, Any]":
         return self._driver_features
 
     def acquire_connection(self) -> "AdbcConnection":
-        self._connection = self._config.create_connection()
-        if self._config._resolved_dialect == "duckdb" and bool(
-            self._driver_features.get("enable_statement_profiling", False)
-        ):
-            self._profile_path = create_duckdb_profile_path()
-            configure_adbc_duckdb_profiling(self._connection, self._profile_path)
-            self._driver_features["_duckdb_profile_path"] = str(self._profile_path)
-        return cast("AdbcConnection", self._connection)
+        self._origin_pool = self._config.provide_pool()
+        connection: AdbcConnection = (
+            self._origin_pool.acquire() if self._origin_pool is not None else self._config.create_connection()
+        )
+        self._connection = connection
+        try:
+            if self._config._resolved_dialect == "duckdb" and bool(
+                self._driver_features.get("enable_statement_profiling", False)
+            ):
+                self._profile_path = create_duckdb_profile_path()
+                configure_adbc_duckdb_profiling(connection, self._profile_path)
+                self._driver_features["_duckdb_profile_path"] = str(self._profile_path)
+        except BaseException as exc:
+            with contextlib.suppress(BaseException):
+                self.release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            raise
+        return connection
 
     def release_connection(self, _conn: "AdbcConnection", **kwargs: Any) -> None:
         if self._connection is None:
             return
+        connection = self._connection
+        pool, self._origin_pool = self._origin_pool, None
+        profile_path = self._profile_path
+        self._connection = None
+        self._profile_path = None
+        raw_path = self._driver_features.pop("_duckdb_profile_path", None)
         try:
-            if self._connection is not self._config.connection_instance:
-                self._connection.close()
+            if pool is not None:
+                driver = kwargs.get("driver")
+                discard = kwargs.get("exc_type") is not None or bool(driver is not None and driver.has_streams)
+                pool.release(connection, discard=discard)
+            elif connection is not self._config.connection_instance:
+                connection.close()
         finally:
-            self._connection = None
-            if self._profile_path is not None:
-                cleanup_duckdb_profile_path(self._profile_path)
-                self._profile_path = None
-            raw_path = self._driver_features.pop("_duckdb_profile_path", None)
-            if isinstance(raw_path, str):
-                cleanup_duckdb_profile_path(Path(raw_path))
+            try:
+                cleanup_duckdb_profile_path(profile_path)
+            finally:
+                if isinstance(raw_path, str):
+                    cleanup_duckdb_profile_path(Path(raw_path))
 
 
-class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
+class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcConnection | None, AdbcDriver]):
     """ADBC configuration for Arrow Database Connectivity.
 
     ADBC provides an interface for connecting to multiple database systems
@@ -268,6 +297,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         "_paradedb_available",
         "_pg_textsearch_available",
         "_pgvector_available",
+        "_pool_close_started",
+        "_pool_config",
         "_resolved_dialect",
         "_user_connection_hook",
     )
@@ -277,6 +308,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         *,
         connection_config: "AdbcConnectionParams | dict[str, Any] | None" = None,
         connection_instance: "AdbcConnection | None" = None,
+        pool_config: "AdbcPoolConfig | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: StatementConfig | None = None,
         driver_features: "AdbcDriverFeatures | dict[str, Any] | None" = None,
@@ -290,6 +322,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Args:
             connection_config: Connection configuration parameters
             connection_instance: Pre-created connection instance to use instead of creating new one
+            pool_config: Optional PostgreSQL clone pooling; None preserves unpooled ownership.
             migration_config: Migration configuration
             statement_config: Default SQL statement configuration
             driver_features: Driver feature configuration (AdbcDriverFeatures)
@@ -311,12 +344,15 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features) if driver_features else {}
-        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2"}:
+        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2", "snowflake"}:
             features_dict["enable_lowercase_column_names"] = True
         self._user_connection_hook = cast(
             "Callable[[AdbcConnection], None] | None", features_dict.pop("on_connection_create", None)
         )
         self._default_session_config = get_statement_config(self._resolved_dialect)
+        self._pool_config = cast("AdbcPoolConfig", dict(pool_config)) if pool_config is not None else None
+        self._pool_close_started = False
+        self._validate_pool_settings(connection_instance)
 
         super().__init__(
             connection_config=self.connection_config,
@@ -329,6 +365,135 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             observability_config=observability_config,
             **kwargs,
         )
+
+    def create_pool(self) -> "AdbcConnectionPool | None":
+        """Publish one lazy generation, rejecting a drain until every native owner closes."""
+        if self._pool_config is None:
+            return None
+        while True:
+            existing = self.connection_instance
+            if isinstance(existing, AdbcConnectionPool):
+                existing.check_pid()
+            with self._pool_lock:
+                if self.connection_instance is not existing:
+                    continue
+                if existing is not None and not isinstance(existing, AdbcConnectionPool):
+                    msg = "A pooled ADBC configuration cannot own an injected raw connection."
+                    raise ImproperConfigurationError(msg)
+                if existing is not None and not existing.is_closed:
+                    if self._pool_close_started:
+                        msg = "ADBC pool is draining; retry shutdown before starting another generation."
+                        raise DatabaseConnectionError(msg)
+                    return existing
+                if existing is not None:
+                    self.connection_instance = None
+                    self._pool_close_started = False
+                    created = None
+                else:
+                    created = self._create_pool()
+                    self.connection_instance = created
+                    self._pool_close_started = False
+            runtime = self.get_observability_runtime()
+            if existing is not None:
+                runtime.emit_pool_destroy_sync(existing)
+                continue
+            runtime.emit_pool_create_sync(created)
+            return created
+
+    def provide_pool(self, *args: Any, **kwargs: Any) -> "AdbcConnectionPool | None":
+        """Return the current enabled pool generation, or None when pooling is disabled."""
+        return self.create_pool()
+
+    def close_pool(self) -> None:
+        """Drain an owned generation, retaining native cleanup failures for retry."""
+        self._shutdown_pool(retire=True)
+
+    def derive_pool(self, **overrides: Any) -> Self:
+        """Derive independent ownership while preserving explicit pool settings."""
+        pool_config = overrides.pop("pool_config", self._pool_config)
+        derived = super().derive_pool(**overrides)
+        derived._pool_config = cast("AdbcPoolConfig", dict(pool_config)) if pool_config is not None else None
+        derived._validate_pool_settings(None)
+        return derived
+
+    def _create_pool(self) -> "AdbcConnectionPool | None":
+        if self._pool_config is None:
+            return None
+        return AdbcConnectionPool(self.create_connection, **self._pool_config)
+
+    def _close_pool(self) -> None:
+        self._shutdown_pool(retire=False)
+
+    def _shutdown_pool(self, *, retire: bool) -> None:
+        if self._pool_config is None:
+            return
+        while True:
+            pool = self.connection_instance
+            if pool is None:
+                return
+            if not isinstance(pool, AdbcConnectionPool):
+                msg = "Pooled ADBC shutdown requires an owned pool generation."
+                raise ImproperConfigurationError(msg)
+            pool.check_pid()
+            with self._pool_lock:
+                if self.connection_instance is not pool:
+                    continue
+                first_close = not self._pool_close_started
+                self._pool_close_started = True
+                break
+        runtime = self.get_observability_runtime()
+        if first_close:
+            runtime.emit_pool_destroying_sync(pool)
+        pool.close()
+        if retire and pool.is_closed:
+            with self._pool_lock:
+                retired = self.connection_instance is pool
+                if retired:
+                    self.connection_instance = None
+                    self._pool_close_started = False
+            if retired:
+                runtime.emit_pool_destroy_sync(pool)
+
+    def _validate_pool_settings(self, connection_instance: "AdbcConnection | None") -> None:
+        if self._pool_config is None:
+            return
+        max_size = self._pool_config.get("max_size", 4)
+        timeout = self._pool_config.get("timeout", 30.0)
+        if isinstance(max_size, bool) or not isinstance(max_size, int) or max_size <= 0:
+            msg = "ADBC pool max_size must be a positive integer."
+            raise ImproperConfigurationError(msg)
+        if not math.isfinite(timeout) or timeout < 0:
+            msg = "ADBC pool timeout must be finite and nonnegative."
+            raise ImproperConfigurationError(msg)
+        if resolve_driver_name_from_config(self.connection_config) != "adbc_driver_postgresql.dbapi.connect":
+            msg = "ADBC pooling supports only the native PostgreSQL driver."
+            raise ImproperConfigurationError(msg)
+        conn_kwargs = self.connection_config.get("conn_kwargs") or {}
+        native_autocommit = conn_kwargs.get("adbc.connection.autocommit", False)
+        if self.connection_config.get("autocommit", False) or native_autocommit not in (False, "false", "0", 0):
+            msg = "ADBC pooling requires autocommit=False."
+            raise ImproperConfigurationError(msg)
+        if connection_instance is not None or self._user_connection_hook is not None:
+            msg = "ADBC pooling does not support injected connections or connection initialization hooks."
+            raise ImproperConfigurationError(msg)
+        for distribution in ("adbc-driver-manager", "adbc-driver-postgresql"):
+            try:
+                installed = importlib.metadata.version(distribution)
+            except importlib.metadata.PackageNotFoundError as exc:
+                msg = f"ADBC pooling requires {distribution}>=1.12.0."
+                raise ImproperConfigurationError(msg) from exc
+            match = re.fullmatch(
+                r"(\d+)\.(\d+)(?:\.(\d+))?((?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?(?:\+[a-zA-Z0-9.-]+)?)",
+                installed,
+            )
+            release = tuple(int(part or 0) for part in match.groups()[:3]) if match is not None else (0, 0, 0)
+            suffix = match.group(4) if match is not None else ""
+            if release < (1, 12, 0) or (release == (1, 12, 0) and suffix.startswith(("a", "b", "rc", ".dev"))):
+                msg = f"ADBC pooling requires {distribution}>=1.12.0; installed version is {installed}."
+                raise ImproperConfigurationError(msg)
+        if not callable(getattr(AdbcConnection, "adbc_clone", None)):
+            msg = "ADBC pooling requires the public Connection.adbc_clone capability."
+            raise ImproperConfigurationError(msg)
 
     @property
     def supports_migration_schemas(self) -> bool:  # type: ignore[override]
@@ -349,9 +514,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Raises:
             ImproperConfigurationError: If the connection could not be established.
         """
-        if self.connection_instance is not None:
-            return self.connection_instance
+        if self._pool_config is None and self.connection_instance is not None:
+            return cast("AdbcConnection", self.connection_instance)
 
+        connection: AdbcConnection | None = None
         try:
             driver_name = cast(
                 "str | None", self.connection_config.get("driver_name") or self.connection_config.get("driver")
@@ -365,7 +531,12 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             if self._user_connection_hook is not None:
                 self._user_connection_hook(cast("AdbcConnection", connection))
             return cast("AdbcConnection", connection)
-        except Exception as e:
+        except BaseException as e:
+            if connection is not None:
+                with contextlib.suppress(BaseException):
+                    connection.close()
+            if not isinstance(e, Exception):
+                raise
             err_driver_name = (
                 self.connection_config.get("driver_name") or self.connection_config.get("driver") or "Unknown"
             )
@@ -400,6 +571,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Returns:
             A context manager that yields an AdbcDriver instance.
         """
+        if self._pool_config is not None:
+            self.create_pool()
         self._detect_extensions_if_needed()
         statement_config = resolve_runtime_statement_config(
             statement_config, self.statement_config, self._default_session_config
@@ -412,6 +585,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             statement_config=statement_config,
             driver_features=handler.driver_features,
             prepare_driver=self._prepare_driver,
+            driver_class=AdbcDriver,
         )
 
     def get_signature_namespace(self) -> "dict[str, Any]":

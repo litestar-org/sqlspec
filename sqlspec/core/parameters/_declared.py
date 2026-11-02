@@ -58,6 +58,10 @@ class ParameterDeclaration:
             f"description={self.description!r}, required={self.required!r})"
         )
 
+    def __reduce__(self) -> "tuple[Callable[..., ParameterDeclaration], tuple[str, str, str | None, bool]]":
+        """Preserve declaration metadata through constructor-based reconstruction."""
+        return (_rebuild_parameter_declaration, (self.name, self.type_str, self.description, self.required))
+
 
 def register_param_type(name: str, py_type: ParamTypeMatcher) -> None:
     """Register or override a declared-type-string matcher.
@@ -99,6 +103,13 @@ def matches_param_type(type_str: str, value: object) -> bool:
     if isinstance(resolved, type):
         return isinstance(value, resolved)
     return resolved(value)
+
+
+def _rebuild_parameter_declaration(
+    name: str, type_str: str, description: str | None, required: bool
+) -> ParameterDeclaration:
+    """Restore metadata while retaining the constructor's keyword-only required flag."""
+    return ParameterDeclaration(name, type_str, description, required=required)
 
 
 def _is_json_value(value: object) -> bool:

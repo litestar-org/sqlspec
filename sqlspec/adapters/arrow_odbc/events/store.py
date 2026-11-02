@@ -3,7 +3,8 @@
 from typing import Final
 
 from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
-from sqlspec.adapters.arrow_odbc.core import split_db2_name
+from sqlspec.adapters.arrow_odbc.core import quote_bracket_identifier, split_db2_name, strip_bracket_quotes
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -33,7 +34,14 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
 
     def __init__(self, config: ArrowOdbcConfig) -> None:
         super().__init__(config)
-        self._db2 = str(config.statement_config.dialect).lower() == "db2"
+        dialect = str(config.statement_config.dialect).lower()
+        if dialect == "db2":
+            self._db2 = True
+        elif dialect in {"mssql", "tsql"}:
+            self._db2 = False
+        else:
+            msg = f"ArrowOdbcEventQueueStore requires dialect 'mssql' or 'db2' (received {dialect!r})."
+            raise ImproperConfigurationError(msg)
 
     def _column_types(self) -> tuple[str, str, str]:
         return "NVARCHAR(MAX)", "NVARCHAR(MAX)", "DATETIME2(6)"
@@ -57,9 +65,7 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
     def _index_name(self) -> str:
         if self._db2:
             return super()._index_name()
-        parts = [
-            _strip_identifier_quotes(part) for part in split_qualified_identifier(self.table_name, quote_chars='"')
-        ]
+        parts = [strip_bracket_quotes(part) for part in split_qualified_identifier(self.table_name, quote_chars='"')]
         flat = "_".join(part for part in parts if part)
         return f"idx_{flat}_channel_status"
 
@@ -87,17 +93,8 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
         return f"IF OBJECT_ID(N'{_object_name(self.table_name)}', N'U') IS NOT NULL {statement};"
 
 
-def _strip_identifier_quotes(part: str) -> str:
-    stripped = part.strip()
-    if len(stripped) >= _QUALIFIED_IDENTIFIER_MIN_PARTS and stripped.startswith("[") and stripped.endswith("]"):
-        return stripped[1:-1].replace("]]", "]")
-    if len(stripped) >= _QUALIFIED_IDENTIFIER_MIN_PARTS and stripped.startswith('"') and stripped.endswith('"'):
-        return stripped[1:-1].replace('""', '"')
-    return stripped
-
-
 def _split_table_name(table_name: str) -> tuple[str, str]:
-    parts = [_strip_identifier_quotes(part) for part in split_qualified_identifier(table_name, quote_chars='"')]
+    parts = [strip_bracket_quotes(part) for part in split_qualified_identifier(table_name, quote_chars='"')]
     if len(parts) < _QUALIFIED_IDENTIFIER_MIN_PARTS:
         return "dbo", parts[0] if parts else table_name
     schema_name = ".".join(parts[:-1])
@@ -106,8 +103,4 @@ def _split_table_name(table_name: str) -> tuple[str, str]:
 
 def _object_name(table_name: str) -> str:
     schema_name, bare_table_name = _split_table_name(table_name)
-    return f"{_quote_bracket_identifier(schema_name)}.{_quote_bracket_identifier(bare_table_name)}"
-
-
-def _quote_bracket_identifier(identifier: str) -> str:
-    return f"[{identifier.replace(']', ']]')}]"
+    return f"{quote_bracket_identifier(schema_name)}.{quote_bracket_identifier(bare_table_name)}"

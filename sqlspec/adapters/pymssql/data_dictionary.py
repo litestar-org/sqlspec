@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import SQL
-    from sqlspec.data_dictionary._types import DialectConfig, MetadataCapabilityProfile
+    from sqlspec.data_dictionary import DialectConfig, MetadataCapabilityProfile
 
 __all__ = ("MssqlVersionInfo", "PymssqlSyncDataDictionary")
 
@@ -277,6 +277,51 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
             )
         return MetadataResult("constraints", capability=capability, items=tuple(rows))
 
+    def get_schemas(self, driver: "PymssqlDriver") -> MetadataResult:
+        """Get schema metadata."""
+        capability = self.get_metadata_capabilities(driver, ("schemas",)).get("schemas")
+        self._log_schema_introspect(driver, schema_name=None, table_name=None, operation="schemas")
+        rows = driver.select(self.get_domain_query("schemas", "list"))
+        return MetadataResult("schemas", capability=capability, items=tuple(rows))
+
+    def get_objects(self, driver: "PymssqlDriver", schema: str | None = None) -> MetadataResult:
+        """Get database object metadata."""
+        schema_name = self.resolve_connection_schema(driver, schema)
+        capability = self.get_metadata_capabilities(driver, ("objects",)).get("objects")
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="objects")
+        rows = driver.select(self.get_domain_query("objects", "by_schema"), schema_name=schema_name)
+        return MetadataResult("objects", capability=capability, items=tuple(rows))
+
+    def get_table_details(self, driver: "PymssqlDriver", table: str, schema: str | None = None) -> MetadataResult:
+        """Get rich table metadata."""
+        schema_name = self.resolve_connection_schema(driver, schema)
+        capability = self.get_metadata_capabilities(driver, ("tables",)).get("tables")
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=table, operation="table_details")
+        rows = driver.select(
+            self.get_domain_query("tables", "details_by_table"), schema_name=schema_name, table_name=table
+        )
+        return MetadataResult("tables", capability=capability, items=tuple(rows))
+
+    def get_routines(self, driver: "PymssqlDriver", schema: str | None = None) -> MetadataResult:
+        """Get routine metadata."""
+        schema_name = self.resolve_connection_schema(driver, schema)
+        capability = self.get_metadata_capabilities(driver, ("routines",)).get("routines")
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="routines")
+        rows = driver.select(self.get_domain_query("routines", "by_schema"), schema_name=schema_name)
+        return MetadataResult("routines", capability=capability, items=tuple(rows))
+
+    def get_privileges(
+        self, driver: "PymssqlDriver", object_name: str | None = None, schema: str | None = None
+    ) -> MetadataResult:
+        """Get privilege metadata."""
+        schema_name = self.resolve_connection_schema(driver, schema)
+        capability = self.get_metadata_capabilities(driver, ("privileges",)).get("privileges")
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=object_name, operation="privileges")
+        rows = driver.select(self.get_domain_query("permissions", "by_schema"), schema_name=schema_name)
+        if object_name is not None:
+            rows = [r for r in rows if _row_value(r, "object_name") == object_name]
+        return MetadataResult("privileges", capability=capability, items=tuple(rows))
+
     def get_views(self, driver: "PymssqlDriver", schema: str | None = None) -> MetadataResult:
         """Get view metadata for a schema."""
         schema_name = self.resolve_connection_schema(driver, schema)
@@ -297,11 +342,12 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
         self, driver: "PymssqlDriver", object_name: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get SQL expression dependency metadata for a schema."""
-        _ = object_name
         schema_name = self.resolve_connection_schema(driver, schema)
         capability = self.get_metadata_capabilities(driver, ("dependencies",)).get("dependencies")
-        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="dependencies")
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=object_name, operation="dependencies")
         rows = driver.select(self.get_domain_query("dependencies", "by_schema"), schema_name=schema_name)
+        if object_name is not None:
+            rows = [r for r in rows if _row_value(r, "referencing_object_name") == object_name]
         return MetadataResult("dependencies", capability=capability, items=tuple(rows))
 
     def get_system_metadata(

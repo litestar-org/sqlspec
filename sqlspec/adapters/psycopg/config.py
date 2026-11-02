@@ -1,6 +1,8 @@
 """Psycopg database configuration with direct field-based configuration."""
 
+import asyncio
 import inspect
+import threading
 from collections.abc import Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
@@ -94,7 +96,6 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "min_size",
     "name",
     "num_workers",
-    "null_pool",
     "open",
     "reconnect_failed",
     "reconnect_timeout",
@@ -188,8 +189,6 @@ class PsycopgPoolParams(PsycopgConnectionParams):
     """Callback invoked when pool reconnection attempts exceed ``reconnect_timeout``."""
     kwargs: NotRequired["dict[str, Any]"]
     """Explicit connection keyword mapping passed to ``psycopg.connect``."""
-    null_pool: NotRequired[bool]
-    """Use ``NullConnectionPool`` / ``AsyncNullConnectionPool`` so idle connections are never retained."""
 
 
 class PsycopgDriverFeatures(TypedDict):
@@ -221,16 +220,14 @@ class PsycopgDriverFeatures(TypedDict):
     """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
     enable_alloydb_columnar: NotRequired[bool]
     """Enable ``google_columnar_engine.enable_columnar_scan=on`` via startup ``options`` or per-transaction ``SET LOCAL``."""
+    enable_pgcopy_binary: NotRequired[bool]
+    """Enable binary streaming format for Arrow ingestion via PGCOPY binary protocol."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"]]
     """External pooler compatibility mode; sets ``prepare_threshold=None`` in ``transaction`` or ``statement`` mode."""
-    pgbouncer: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
-    pgbouncer_mode: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling server-side prepared statements."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
-    null_pool: NotRequired[bool]
-    """Enable ``NullConnectionPool`` / ``AsyncNullConnectionPool`` for serverless or external pooler deployments."""
+    enable_pooling: NotRequired[bool]
+    """Enable connection pooling (defaults to ``True``; ``False`` uses ``NullConnectionPool`` / ``AsyncNullConnectionPool``)."""
 
 
 def build_connection_config(connection_config: "PsycopgPoolParams | Mapping[str, Any] | None") -> dict[str, Any]:
@@ -347,18 +344,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.get(
-            "on_connection_create"
+        self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.pop(
+            "on_connection_create", None
         )
         features_dict.setdefault("enable_alloydb", False)
         features_dict.setdefault("enable_alloydb_iam_auth", False)
         features_dict.setdefault("alloydb_ip_type", "PRIVATE")
         pooler_mode = features_dict.get("pooler_mode", "session")
-        is_transaction_pooler = bool(
-            pooler_mode in {"transaction", "statement"}
-            or features_dict.get("pgbouncer")
-            or features_dict.get("pgbouncer_mode")
-        )
+        is_transaction_pooler = pooler_mode in {"transaction", "statement"}
         if is_transaction_pooler:
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
@@ -368,6 +361,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 connection_config["options"] = columnar_opt
             elif columnar_opt not in str(existing_options):
                 connection_config["options"] = f"{existing_options} {columnar_opt}"
+        self._probe_lock: threading.Lock = threading.Lock()
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
@@ -402,18 +396,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             conn_cfg.update(build_connection_config(direct_dsn))
         else:
             conn_cfg["conninfo"] = str(direct_dsn)
-        is_pooled = bool(
-            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
-            or self.driver_features.get("pgbouncer")
-            or self.driver_features.get("pgbouncer_mode")
-        )
+        is_pooled = self.driver_features.get("pooler_mode") in {"transaction", "statement"}
         if is_pooled and conn_cfg.get("prepare_threshold") is None:
             conn_cfg.pop("prepare_threshold", None)
         features = dict(self.driver_features)
         features["pooler_mode"] = "session"
-        features["pgbouncer"] = False
-        features["pgbouncer_mode"] = False
         features["direct_dsn"] = None
+        if self._user_connection_hook is not None:
+            features["on_connection_create"] = self._user_connection_hook
         return type(self)(
             connection_config=conn_cfg,
             migration_config=dict(self.migration_config) if self.migration_config else None,
@@ -559,7 +549,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
         all_config = dict(self.connection_config)
-        all_config.pop("null_pool", None)
         auth_token_provider = all_config.pop("auth_token_provider", None)
         default_max_lifetime = _AUTH_TOKEN_DEFAULT_MAX_LIFETIME if auth_token_provider is not None else 3600.0
 
@@ -612,9 +601,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self._setup_alloydb_connector(all_config, pool_parameters)
             conninfo = None
 
-        is_null_pool = bool(self.connection_config.get("null_pool") or self.driver_features.get("null_pool"))
-        pool_cls = NullConnectionPool if is_null_pool else ConnectionPool
-        if is_null_pool:
+        pooling_disabled = not bool(self.driver_features.get("enable_pooling", True))
+        pool_cls = NullConnectionPool if pooling_disabled else ConnectionPool
+        if pooling_disabled:
             pool_parameters.pop("min_size", None)
 
         if conninfo:
@@ -636,38 +625,51 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             set_json_loads(deserializer, conn)
 
         if self._pgvector_available is None:
-            detected_extensions: set[str] = set()
-            extensions = build_postgres_extension_probe_names(self.driver_features)
-            probe_succeeded = True
-            if extensions:
-                try:
-                    cursor = conn.execute(
-                        "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
-                    )
-                    results = cursor.fetchall()
-                    detected_extensions = {
-                        cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
-                    }
-                except Exception as exc:
-                    probe_succeeded = False
-                    self._pg_textsearch_probe_error = exc
+            with self._probe_lock:
+                if self._pgvector_available is None:
+                    detected_extensions: set[str] = set()
+                    extensions = build_postgres_extension_probe_names(self.driver_features)
+                    probe_succeeded = True
+                    if extensions:
+                        try:
+                            cursor = conn.execute(
+                                "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
+                            )
+                            results = cursor.fetchall()
+                            detected_extensions = {
+                                cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
+                            }
+                        except Exception as exc:
+                            probe_succeeded = False
+                            self._pg_textsearch_probe_error = exc
+                            if not conn.autocommit:
+                                with suppress(Exception):
+                                    conn.rollback()
+                    if probe_succeeded:
+                        self.statement_config, self._pgvector_available, self._paradedb_available = (
+                            resolve_postgres_extension_state(
+                                self.statement_config, self.driver_features, detected_extensions
+                            )
+                        )
+                        self._pg_textsearch_available = is_postgres_extension_active(
+                            self.driver_features, "pg_textsearch"
+                        )
                     if not conn.autocommit:
-                        with suppress(Exception):
-                            conn.rollback()
-            if probe_succeeded:
-                self.statement_config, self._pgvector_available, self._paradedb_available = (
-                    resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
-                )
-                self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
+                        conn.rollback()
 
         if self._pgvector_available:
             register_pgvector_sync(conn)
 
         if self._user_connection_hook is not None:
-            self._user_connection_hook(conn)
-
-        if not conn.autocommit:
-            conn.rollback()
+            try:
+                self._user_connection_hook(conn)
+                if not conn.autocommit:
+                    conn.commit()
+            except BaseException:
+                if not conn.autocommit:
+                    with suppress(Exception):
+                        conn.rollback()
+                raise
 
     def _ensure_pg_textsearch_available(self) -> None:
         if self._pg_textsearch_available:
@@ -811,15 +813,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if features_dict.get("enable_alloydb", False):
             msg = "Google AlloyDB connector integration (enable_alloydb) is only supported on PsycopgSyncConfig"
             raise ImproperConfigurationError(msg)
-        self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.get(
-            "on_connection_create"
+        self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.pop(
+            "on_connection_create", None
         )
         pooler_mode = features_dict.get("pooler_mode", "session")
-        is_transaction_pooler = bool(
-            pooler_mode in {"transaction", "statement"}
-            or features_dict.get("pgbouncer")
-            or features_dict.get("pgbouncer_mode")
-        )
+        is_transaction_pooler = pooler_mode in {"transaction", "statement"}
         if is_transaction_pooler:
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
@@ -829,6 +827,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 connection_config["options"] = columnar_opt
             elif columnar_opt not in str(existing_options):
                 connection_config["options"] = f"{existing_options} {columnar_opt}"
+        self._probe_lock: asyncio.Lock | None = None
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
@@ -860,18 +859,14 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             conn_cfg.update(build_connection_config(direct_dsn))
         else:
             conn_cfg["conninfo"] = str(direct_dsn)
-        is_pooled = bool(
-            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
-            or self.driver_features.get("pgbouncer")
-            or self.driver_features.get("pgbouncer_mode")
-        )
+        is_pooled = self.driver_features.get("pooler_mode") in {"transaction", "statement"}
         if is_pooled and conn_cfg.get("prepare_threshold") is None:
             conn_cfg.pop("prepare_threshold", None)
         features = dict(self.driver_features)
         features["pooler_mode"] = "session"
-        features["pgbouncer"] = False
-        features["pgbouncer_mode"] = False
         features["direct_dsn"] = None
+        if self._user_connection_hook is not None:
+            features["on_connection_create"] = self._user_connection_hook
         return type(self)(
             connection_config=conn_cfg,
             migration_config=dict(self.migration_config) if self.migration_config else None,
@@ -881,7 +876,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             extension_config=dict(self.extension_config) if self.extension_config else None,
         )
 
-    async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore
+    async def create_connection(self) -> "PsycopgAsyncConnection":
         """Open a standalone connection owned by the caller.
 
         The connection is not bound to the pool, so closing it actually closes
@@ -971,7 +966,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Create the actual async connection pool."""
 
         all_config = dict(self.connection_config)
-        all_config.pop("null_pool", None)
         auth_token_provider = all_config.pop("auth_token_provider", None)
         default_max_lifetime = _AUTH_TOKEN_DEFAULT_MAX_LIFETIME if auth_token_provider is not None else 3600.0
 
@@ -1018,9 +1012,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         kwargs = all_config.pop("kwargs", {})
         all_config.update(kwargs)
 
-        is_null_pool = bool(self.connection_config.get("null_pool") or self.driver_features.get("null_pool"))
-        pool_cls = AsyncNullConnectionPool if is_null_pool else AsyncConnectionPool
-        if is_null_pool:
+        pooling_disabled = not bool(self.driver_features.get("enable_pooling", True))
+        pool_cls = AsyncNullConnectionPool if pooling_disabled else AsyncConnectionPool
+        if pooling_disabled:
             pool_parameters.pop("min_size", None)
 
         if conninfo:
@@ -1045,38 +1039,55 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             set_json_loads(deserializer, conn)
 
         if self._pgvector_available is None:
-            detected_extensions: set[str] = set()
-            extensions = build_postgres_extension_probe_names(self.driver_features)
-            probe_succeeded = True
-            if extensions:
-                try:
-                    cursor = await conn.execute(
-                        "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
-                    )
-                    results = await cursor.fetchall()
-                    detected_extensions = {
-                        cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
-                    }
-                except Exception as exc:
-                    probe_succeeded = False
-                    self._pg_textsearch_probe_error = exc
+            if self._probe_lock is None:
+                self._probe_lock = asyncio.Lock()
+            async with self._probe_lock:
+                if self._pgvector_available is None:
+                    detected_extensions: set[str] = set()
+                    extensions = build_postgres_extension_probe_names(self.driver_features)
+                    probe_succeeded = True
+                    if extensions:
+                        try:
+                            cursor = await conn.execute(
+                                "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
+                            )
+                            results = await cursor.fetchall()
+                            detected_extensions = {
+                                cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
+                            }
+                        except Exception as exc:
+                            probe_succeeded = False
+                            self._pg_textsearch_probe_error = exc
+                            if not conn.autocommit:
+                                with suppress(Exception):
+                                    await conn.rollback()
+                    if probe_succeeded:
+                        self.statement_config, self._pgvector_available, self._paradedb_available = (
+                            resolve_postgres_extension_state(
+                                self.statement_config, self.driver_features, detected_extensions
+                            )
+                        )
+                        self._pg_textsearch_available = is_postgres_extension_active(
+                            self.driver_features, "pg_textsearch"
+                        )
                     if not conn.autocommit:
-                        with suppress(Exception):
-                            await conn.rollback()
-            if probe_succeeded:
-                self.statement_config, self._pgvector_available, self._paradedb_available = (
-                    resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
-                )
-                self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
+                        await conn.rollback()
 
         if self._pgvector_available:
             await register_pgvector_async(conn)
 
         if self._user_connection_hook is not None:
-            await self._user_connection_hook(conn)
-
-        if not conn.autocommit:
-            await conn.rollback()
+            try:
+                hook_res = self._user_connection_hook(conn)
+                if inspect.isawaitable(hook_res):
+                    await hook_res
+                if not conn.autocommit:
+                    await conn.commit()
+            except BaseException:
+                if not conn.autocommit:
+                    with suppress(Exception):
+                        await conn.rollback()
+                raise
 
     def _ensure_pg_textsearch_available(self) -> None:
         if self._pg_textsearch_available:

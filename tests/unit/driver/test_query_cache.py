@@ -698,7 +698,7 @@ async def test_async_cache_hit_executes_once(
         operation_type="SELECT" if returns_rows else "INSERT",
         operation_profile=OperationProfile(returns_rows=returns_rows, modifies_rows=not returns_rows),
     )
-    result = await driver._execute_cache_hit_with_cursor(sql, ("once",), cached)
+    result = await AsyncDriverAdapterBase._execute_cache_hit_with_cursor(driver, sql, ("once",), cached)
 
     executed = [statement for statement in statements if statement.startswith(("SELECT", "INSERT"))]
     assert len(executed) == 1
@@ -747,7 +747,7 @@ async def test_async_cache_hit_does_not_retry_after_execute(
         operation_profile=OperationProfile(returns_rows=returns_rows, modifies_rows=not returns_rows),
     )
     with pytest.raises(error_type) as exc_info:
-        await driver._execute_cache_hit_with_cursor(sql, ("once",), cached)
+        await AsyncDriverAdapterBase._execute_cache_hit_with_cursor(driver, sql, ("once",), cached)
 
     assert exc_info.value is error
     assert len([statement for statement in statements if statement.startswith(("SELECT", "INSERT"))]) == 1
@@ -769,7 +769,9 @@ async def test_async_cache_hit_preserves_row_format(cached_async_cursor: Any, ro
 
     cursor.fetchall = Mock(side_effect=fetch_rows)
     sql = "SELECT id, name FROM users ORDER BY id"
-    result = await driver._execute_cache_hit_with_cursor(sql, (), _make_cached(compiled_sql=sql))
+    result = await AsyncDriverAdapterBase._execute_cache_hit_with_cursor(
+        driver, sql, (), _make_cached(compiled_sql=sql)
+    )
 
     assert result.get_data() == [{"id": 1, "name": "test"}, {"id": 2, "name": "example"}]
     assert result.column_names == ["id", "name"]
@@ -792,7 +794,7 @@ async def test_async_cache_hit_missing_cursor_capability_dispatches_once(
         operation_type="SELECT" if returns_rows else "INSERT",
         operation_profile=OperationProfile(returns_rows=returns_rows, modifies_rows=not returns_rows),
     )
-    result = await driver._execute_cache_hit_with_cursor(sql, ("once",), cached)
+    result = await AsyncDriverAdapterBase._execute_cache_hit_with_cursor(driver, sql, ("once",), cached)
 
     assert len([statement for statement in statements if statement.startswith(("SELECT", "INSERT"))]) == 1
     fallback.assert_awaited_once()

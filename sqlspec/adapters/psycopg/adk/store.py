@@ -7,6 +7,7 @@ from sqlspec.adapters.psycopg._typing import PsycopgJsonb as Jsonb
 from sqlspec.adapters.psycopg._typing import psycopg_dict_row as dict_row
 from sqlspec.adapters.psycopg._typing import psycopg_errors as errors
 from sqlspec.adapters.psycopg._typing import psycopg_sql as pg_sql
+from sqlspec.adapters.psycopg.core import build_postgres_storage_params_sql
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
@@ -706,7 +707,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             self._session_table,
             self._session_table,
             self._session_table,
-            _postgres_table_options(_adk_config(self._config)),
+            build_postgres_storage_params_sql(_adk_config(self._config), default_fillfactor=80, section="adk"),
         )
 
     async def _events_table_ddl(self) -> str:
@@ -723,19 +724,23 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             self._events_table,
             covering_columns,
             generated_indexes,
-            _postgres_table_options(adk_config, include_autovacuum=True),
+            build_postgres_storage_params_sql(
+                adk_config, include_autovacuum=True, default_fillfactor=80, section="adk"
+            ),
             self._events_table,
             self._events_table,
         )
 
     async def _app_states_table_ddl(self) -> str:
         return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(
-            self._app_state_table, _postgres_table_options(_adk_config(self._config))
+            self._app_state_table,
+            build_postgres_storage_params_sql(_adk_config(self._config), default_fillfactor=80, section="adk"),
         )
 
     async def _user_states_table_ddl(self) -> str:
         return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(
-            self._user_state_table, _postgres_table_options(_adk_config(self._config))
+            self._user_state_table,
+            build_postgres_storage_params_sql(_adk_config(self._config), default_fillfactor=80, section="adk"),
         )
 
     async def _metadata_table_ddl(self) -> str:
@@ -1256,7 +1261,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             self._session_table,
             self._session_table,
             self._session_table,
-            _postgres_table_options(_adk_config(self._config)),
+            build_postgres_storage_params_sql(_adk_config(self._config), default_fillfactor=80, section="adk"),
         )
 
     def _events_table_ddl(self) -> str:
@@ -1273,19 +1278,23 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             self._events_table,
             covering_columns,
             generated_indexes,
-            _postgres_table_options(adk_config, include_autovacuum=True),
+            build_postgres_storage_params_sql(
+                adk_config, include_autovacuum=True, default_fillfactor=80, section="adk"
+            ),
             self._events_table,
             self._events_table,
         )
 
     def _app_states_table_ddl(self) -> str:
         return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(
-            self._app_state_table, _postgres_table_options(_adk_config(self._config))
+            self._app_state_table,
+            build_postgres_storage_params_sql(_adk_config(self._config), default_fillfactor=80, section="adk"),
         )
 
     def _user_states_table_ddl(self) -> str:
         return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(
-            self._user_state_table, _postgres_table_options(_adk_config(self._config))
+            self._user_state_table,
+            build_postgres_storage_params_sql(_adk_config(self._config), default_fillfactor=80, section="adk"),
         )
 
     def _metadata_table_ddl(self) -> str:
@@ -2020,33 +2029,6 @@ def _adk_config(config: Any) -> PsycopgADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("PsycopgADKConfig", adk_config)
-
-
-def _postgres_table_options(adk_config: PsycopgADKConfig, *, include_autovacuum: bool = False) -> str:
-    options = [_postgres_fillfactor_option(adk_config)]
-    if include_autovacuum:
-        options.extend(_postgres_autovacuum_options(adk_config))
-    return f" WITH ({', '.join(options)})"
-
-
-def _postgres_fillfactor_option(adk_config: PsycopgADKConfig) -> str:
-    value = adk_config.get("fillfactor", 80)
-    if not isinstance(value, int) or isinstance(value, bool) or value not in range(10, 101):
-        msg = "extension_config['adk']['fillfactor'] must be an integer from 10 to 100"
-        raise ValueError(msg)
-    return f"fillfactor = {value}"
-
-
-def _postgres_autovacuum_options(adk_config: PsycopgADKConfig) -> "list[str]":
-    options: list[str] = []
-    for key in ("autovacuum_vacuum_scale_factor", "autovacuum_analyze_scale_factor"):
-        value = adk_config.get(key)
-        if value is not None:
-            if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
-                msg = f"extension_config['adk']['{key}'] must be a number from 0 to 1"
-                raise ValueError(msg)
-            options.append(f"{key} = {float(value):g}")
-    return options
 
 
 def _postgres_memory_indexes(

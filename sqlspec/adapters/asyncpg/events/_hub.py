@@ -7,11 +7,10 @@ is in progress" hazard). asyncpg's per-channel add_listener callback fans
 notifications into one queue per consumer task.
 """
 
-# pyright: reportPrivateUsage=false
-
 import asyncio
 import contextlib
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
@@ -161,7 +160,7 @@ class AsyncpgListenerHub:
 
     def _get_consumer_queue(self, channel: str) -> "asyncio.Queue[str] | None":
         task = asyncio.current_task()
-        if task is None:  # pragma: no cover
+        if task is None:
             msg = "AsyncpgListenerHub.dequeue requires an active asyncio task"
             raise RuntimeError(msg)
         queues = self._queues.get(channel)
@@ -178,16 +177,9 @@ class AsyncpgListenerHub:
             return self._listener_config
         raw_features = getattr(self._config, "driver_features", None)
         driver_features = raw_features if isinstance(raw_features, dict) else {}
-        pooler_mode = str(
-            driver_features.get("pooler_mode")
-            or (
-                "transaction"
-                if driver_features.get("pgbouncer") or driver_features.get("pgbouncer_mode")
-                else "session"
-            )
-        ).lower()
+        pooler_mode = str(driver_features.get("pooler_mode") or "session").lower()
         raw_direct_dsn = driver_features.get("direct_dsn")
-        direct_dsn = raw_direct_dsn if isinstance(raw_direct_dsn, str) and raw_direct_dsn else None
+        direct_dsn = raw_direct_dsn if isinstance(raw_direct_dsn, (str, Mapping)) and raw_direct_dsn else None
         if pooler_mode in {"transaction", "statement"} and not direct_dsn:
             logger.warning(
                 "PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode=%r without configuring driver_features['direct_dsn']",

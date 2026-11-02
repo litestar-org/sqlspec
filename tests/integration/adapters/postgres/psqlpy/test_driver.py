@@ -4,6 +4,7 @@ import pytest
 
 from sqlspec import SQLResult, StatementStack
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyDriver
+from sqlspec.exceptions import SQLSpecError
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -244,3 +245,17 @@ async def test_extensions_not_enabled_on_standard_postgres(psqlpy_config: "Psqlp
     assert psqlpy_config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
     assert psqlpy_config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
     assert psqlpy_config.statement_config.dialect == "postgres"
+
+
+async def test_psqlpy_cached_dml_and_errors(psqlpy_session: "PsqlpyDriver") -> None:
+    """Native psqlpy cache hits preserve counts and SQLSpec exception translation."""
+    from psqlpy.exceptions import Error
+
+    for name in ("cached-first", "cached-second"):
+        result = await psqlpy_session.execute("INSERT INTO test_table_psqlpy (name) VALUES (?)", name)
+        assert result.rows_affected == 1
+    query = "SELECT 10 / ?::integer AS value"
+    assert (await psqlpy_session.execute(query, 2)).get_data() == [{"value": 5}]
+    with pytest.raises(SQLSpecError) as error:
+        await psqlpy_session.execute(query, 0)
+    assert isinstance(error.value.__cause__, Error)

@@ -2,6 +2,7 @@
 
 import contextlib
 import inspect
+import weakref
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NotRequired
 
@@ -50,7 +51,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         config: AiosqliteConfig instance.
     """
 
-    __slots__ = ("_configured_connection_ids", "_pragma_statements")
+    __slots__ = ("_configured_connections", "_pragma_statements")
     extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
         "pragma_overrides",
         "pragma_profile",
@@ -64,7 +65,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         """
         super().__init__(config)
         self._pragma_statements = extension_pragma_statements(config, "litestar")
-        self._configured_connection_ids: set[int] = set()
+        self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -74,7 +75,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
             await apply_extension_pragmas(driver.connection, self._pragma_statements)
-            self._configured_connection_ids.add(id(driver.connection))
+            self._configured_connections.add(driver.connection)
             await driver.execute_script(sql)
             await driver.commit()
         self._log_table_created()
@@ -83,7 +84,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
     async def prepare_schema_async(self, driver: Any) -> None:
         """Apply configured SQLite PRAGMAs before migration DDL generation."""
         await apply_extension_pragmas(driver.connection, self._pragma_statements)
-        self._configured_connection_ids.add(id(driver.connection))
+        self._configured_connections.add(driver.connection)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -251,9 +252,9 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
             return count
 
     async def _ensure_pragmas(self, connection: Any) -> None:
-        if self._pragma_statements and id(connection) not in self._configured_connection_ids:
+        if self._pragma_statements and connection not in self._configured_connections:
             await apply_extension_pragmas(connection, self._pragma_statements)
-            self._configured_connection_ids.add(id(connection))
+            self._configured_connections.add(connection)
 
     def _table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL.

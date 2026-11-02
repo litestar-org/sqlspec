@@ -14,14 +14,10 @@ from sqlspec.adapters.asyncpg.config import (
     AsyncpgDriverFeatures,
     AsyncpgPoolConfig,
 )
-from sqlspec.adapters.asyncpg.core import (
-    build_connection_config,
-    build_postgres_extension_probe_names,
-    build_statement_config,
-    resolve_postgres_extension_state,
-)
+from sqlspec.adapters.asyncpg.core import build_connection_config, build_statement_config
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.core import StatementConfig, StatementStack
+from sqlspec.core.config_runtime import build_postgres_extension_probe_names, resolve_postgres_extension_state
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -322,6 +318,10 @@ def test_asyncpg_config_normalizes_aliases() -> None:
 def test_asyncpg_driver_features_contract_retains_configured_keys() -> None:
     """AsyncpgConfig retains on_connection_create and type_codecs and populates event defaults."""
     assert "connection_instance" not in AsyncpgDriverFeatures.__annotations__
+    assert "enable_pgcopy_binary" in AsyncpgDriverFeatures.__annotations__
+    assert AsyncpgConfig.supports_native_arrow_export is False
+    assert AsyncpgConfig.supports_native_parquet_export is False
+    assert AsyncpgConfig.supports_native_parquet_import is False
 
     async def hook(_: object) -> None:
         return None
@@ -403,24 +403,15 @@ async def test_asyncpg_pooler_mode_transaction_sets_statement_cache_size_zero(mo
 
     monkeypatch.setattr(config_mod, "asyncpg_create_pool", fake_create_pool)
 
+    assert "pgbouncer" not in AsyncpgDriverFeatures.__annotations__
+    assert "pgbouncer_mode" not in AsyncpgDriverFeatures.__annotations__
+    assert "pgbouncer" not in AsyncpgConnectionConfig.__annotations__
     config = AsyncpgConfig(
         connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"pooler_mode": "transaction"}
     )
     assert config.connection_config["statement_cache_size"] == 0
     await config._create_pool()  # pyright: ignore[reportPrivateUsage]
     assert captured_connect_kwargs["statement_cache_size"] == 0
-
-    alias_config = AsyncpgConfig(
-        connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"pgbouncer": True}
-    )
-    assert alias_config.driver_features["pooler_mode"] == "transaction"
-    assert alias_config.connection_config["statement_cache_size"] == 0
-
-    mode_alias_config = AsyncpgConfig(
-        connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"pgbouncer_mode": True}
-    )
-    assert mode_alias_config.driver_features["pooler_mode"] == "transaction"
-    assert mode_alias_config.connection_config["statement_cache_size"] == 0
 
     conn = AsyncMock()
     conn.is_in_transaction = lambda: True
@@ -486,12 +477,12 @@ async def test_asyncpg_columnar_engine_session_vs_transaction() -> None:
         "google_columnar_engine.enable_columnar_scan": "on"
     }
 
-    auto_pgbouncer_config = AsyncpgConfig(
+    tx_columnar_config = AsyncpgConfig(
         connection_config={"dsn": "postgresql://localhost/test"},
-        driver_features={"pooler_mode": "auto", "pgbouncer": True, "enable_alloydb_columnar": True},
+        driver_features={"pooler_mode": "transaction", "enable_alloydb_columnar": True},
     )
-    assert auto_pgbouncer_config.driver_features["pooler_mode"] == "transaction"
-    assert "server_settings" not in auto_pgbouncer_config.connection_config
+    assert tx_columnar_config.driver_features["pooler_mode"] == "transaction"
+    assert "server_settings" not in tx_columnar_config.connection_config
 
     tx_config = AsyncpgConfig(
         connection_config={"dsn": "postgresql://localhost/test"},

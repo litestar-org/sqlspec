@@ -1,7 +1,7 @@
 """SQLite driver implementation."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -15,6 +15,7 @@ from sqlspec.adapters.sqlite.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    end_transaction,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -25,9 +26,11 @@ from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters._registry import register_driver_profile
 from sqlspec.core.result._base import ArrowResult, DMLResult
+from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
@@ -43,6 +46,8 @@ if TYPE_CHECKING:
     from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
+
+_ROWID_SAFE_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"})
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -175,28 +180,12 @@ class SqliteDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Args:
-            cursor: SQLite cursor object
-            statement: SQL statement containing multiple statements
-
-        Returns:
-            ExecutionResult with script execution details
-        """
+        """Execute SQL script with statement splitting and parameter handling."""
         self._rowid_target_cache.clear()
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-
-        for stmt in statements:
-            cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
-            successful_count += 1
-
-        return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+        try:
+            return super().dispatch_execute_script(cursor, statement)
+        finally:
+            self._rowid_target_cache.clear()
 
     def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
         """Begin a database transaction.
@@ -211,13 +200,16 @@ class SqliteDriver(SyncDriverAdapterBase):
         transaction_mode = mode if mode is not None else self.driver_features.get("default_transaction_mode")
         if transaction_mode is not None and transaction_mode not in {"DEFERRED", "IMMEDIATE", "EXCLUSIVE"}:
             msg = "Transaction mode must be DEFERRED, IMMEDIATE, or EXCLUSIVE"
-            raise ValueError(msg)
+            raise ImproperConfigurationError(msg)
         try:
             if not self.connection.in_transaction:
                 stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
                 cursor = self.connection.execute(stmt)
-                with contextlib.suppress(Exception):
-                    cursor.close()
+                with contextlib.suppress(AttributeError, TypeError):
+                    self.connection.in_transaction = True
+                if cursor is not None:
+                    with contextlib.suppress(Exception):
+                        cursor.close()
         except sqlite3.Error as e:
             raise create_mapped_exception(e) from e
 
@@ -228,13 +220,9 @@ class SqliteDriver(SyncDriverAdapterBase):
             SQLSpecError: If transaction cannot be committed
         """
         try:
-            if self._in_autocommit_mode():
-                if self.connection.in_transaction:
-                    cursor = self.connection.execute("COMMIT")
-                    with contextlib.suppress(Exception):
-                        cursor.close()
-                return
-            self.connection.commit()
+            end_transaction(self.connection, commit=True, supports_autocommit=self._in_autocommit_mode())
+            with contextlib.suppress(AttributeError, TypeError):
+                self.connection.in_transaction = False
         except sqlite3.Error as e:
             raise create_mapped_exception(e) from e
 
@@ -245,18 +233,35 @@ class SqliteDriver(SyncDriverAdapterBase):
             SQLSpecError: If transaction cannot be rolled back
         """
         try:
-            if self._in_autocommit_mode():
-                if self.connection.in_transaction:
-                    cursor = self.connection.execute("ROLLBACK")
-                    with contextlib.suppress(Exception):
-                        cursor.close()
-                self._rowid_target_cache.clear()
-                return
-            self.connection.rollback()
+            end_transaction(self.connection, commit=False, supports_autocommit=self._in_autocommit_mode())
+            with contextlib.suppress(AttributeError, TypeError):
+                self.connection.in_transaction = False
             self._rowid_target_cache.clear()
         except sqlite3.Error as e:
             self._rowid_target_cache.clear()
             raise create_mapped_exception(e) from e
+
+    def create_savepoint(self, name: str) -> None:
+        """Create a savepoint within the current transaction without script splitting."""
+        safe_name = validate_savepoint_name(name)
+        try:
+            cursor = self.connection.execute(f"SAVEPOINT {safe_name}")
+            if cursor is not None:
+                with contextlib.suppress(Exception):
+                    cursor.close()
+        except sqlite3.Error as exc:
+            raise create_mapped_exception(exc) from exc
+
+    def release_savepoint(self, name: str) -> None:
+        """Release a savepoint without clearing rowid target cache or splitting script."""
+        safe_name = validate_savepoint_name(name)
+        try:
+            cursor = self.connection.execute(f"RELEASE SAVEPOINT {safe_name}")
+            if cursor is not None:
+                with contextlib.suppress(Exception):
+                    cursor.close()
+        except sqlite3.Error as exc:
+            raise create_mapped_exception(exc) from exc
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         """Create context manager for SQLite cursor.
@@ -351,7 +356,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         insert_sql = build_insert_statement(table, columns)
         needs_prep = self._arrow_rows_need_preparation(arrow_table)
 
-        owns_transaction = not self.connection.in_transaction
+        owns_transaction = not self._connection_in_transaction()
         try:
             if owns_transaction:
                 transaction_mode = cast(
@@ -359,20 +364,19 @@ class SqliteDriver(SyncDriverAdapterBase):
                     self.driver_features.get("default_transaction_mode") or "IMMEDIATE",
                 )
                 self.begin(mode=transaction_mode)
-            if overwrite:
-                statement = f"DELETE FROM {format_identifier(table)}"
-                with self.with_cursor(self.connection) as cursor:
+            with self.with_cursor(self.connection) as cursor:
+                if overwrite:
+                    statement = f"DELETE FROM {format_identifier(table)}"
                     cursor.execute(statement)
-            for batch in arrow_table.to_batches(max_chunksize=batch_size):
-                pydict = batch.to_pydict()
-                records = list(zip(*[pydict[col] for col in columns], strict=False))
-                if records:
-                    prepared_records = (
-                        self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                        if needs_prep
-                        else records
-                    )
-                    with self.with_cursor(self.connection) as cursor:
+                for batch in arrow_table.to_batches(max_chunksize=batch_size):
+                    pydict = batch.to_pydict()
+                    records = list(zip(*[pydict[col] for col in columns], strict=False))
+                    if records:
+                        prepared_records = (
+                            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                            if needs_prep
+                            else records
+                        )
                         cursor.executemany(insert_sql, cast("Any", prepared_records))
             if owns_transaction:
                 self.commit()
@@ -387,22 +391,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
-
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts from storage into SQLite."""
-
-        return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect SQLite rows for the direct execution path."""
@@ -431,10 +419,11 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         cursor = None
         returns_rows = cached.operation_profile.returns_rows
+        normalized_parameters = normalize_execute_parameters(params)
         self._invalidate_rowid_target_cache(cached.operation_type)
         try:
             try:
-                cursor = self.connection.execute(cached.compiled_sql, params)
+                cursor = self.connection.execute(cached.compiled_sql, normalized_parameters)
             except sqlite3.Error as exc:
                 raise create_mapped_exception(exc) from exc
 
@@ -483,7 +472,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                     cursor.close()
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
-        if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
+        if operation_type not in _ROWID_SAFE_OPERATIONS:
             self._rowid_target_cache.clear()
 
     def _connection_in_transaction(self) -> bool:

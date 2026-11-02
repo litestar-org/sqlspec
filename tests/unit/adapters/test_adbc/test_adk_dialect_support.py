@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from adbc_driver_manager import AdbcStatusCode, IntegrityError
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKConfig, AdbcADKMemoryStore, AdbcADKStore
@@ -16,9 +17,10 @@ from sqlspec.adapters.adbc.adk.store import (
     format_pgvector_literal,
 )
 from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
-from sqlspec.adapters.adbc.litestar.store import ADBCStore
+from sqlspec.adapters.adbc.litestar.store import AdbcStore
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.adk import StoredMemory
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
@@ -336,9 +338,9 @@ def test_sqlite_adk_store_encodes_and_decodes_timestamps() -> None:
 
 
 def test_adbc_litestar_store_handles_pg_extensions_and_bigquery_snowflake(monkeypatch: Any) -> None:
-    """ADBCStore should recognize Postgres extension dialects, omit indexes on BigQuery/Snowflake, and use select_one_or_none."""
+    """AdbcStore should recognize Postgres extension dialects, omit indexes on BigQuery/Snowflake, and use select_one_or_none."""
     config = AdbcConfig(connection_config={"driver_name": "bigquery"})
-    store = ADBCStore(config)
+    store = AdbcStore(config)
     store._dialect = "bigquery"  # pyright: ignore[reportPrivateUsage]
 
     ddl = store._table_ddl()  # pyright: ignore[reportPrivateUsage]
@@ -399,7 +401,7 @@ def test_detect_enterprise_dialects_in_adk_stores(driver_name: str, expected_dia
     config = AdbcConfig(connection_config={"driver_name": driver_name})
     store = AdbcADKStore(config)
     mem_store = AdbcADKMemoryStore(config)
-    assert store.dialect() == expected_dialect
+    assert store.dialect == expected_dialect
     assert mem_store.dialect == expected_dialect
 
 
@@ -408,7 +410,7 @@ def test_detect_dialect_fallback_to_statement_config() -> None:
     config = AdbcConfig(connection_config={}, statement_config=StatementConfig(dialect="oracle"))
     store = AdbcADKStore(config)
     mem_store = AdbcADKMemoryStore(config)
-    assert store.dialect() == "oracle"
+    assert store.dialect == "oracle"
     assert mem_store.dialect == "oracle"
 
 
@@ -760,3 +762,163 @@ def _store_for(driver_name: str) -> AdbcADKStore:
 
 def _normalized(sql: str) -> str:
     return " ".join(sql.split())
+
+
+def test_oracle_adk_memory_store_pre_queries_existing_event_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AdbcADKMemoryStore pre-queries existing event_ids on non-returning dialects."""
+    executed_statements: list[str] = []
+    mock_cursor = MagicMock()
+    mock_cursor.fetchall.return_value = [("evt-existing",)]
+
+    def record_execute(sql: str, _params: Any = None) -> None:
+        executed_statements.append(sql)
+
+    mock_cursor.execute.side_effect = record_execute
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__.return_value = mock_conn
+    mock_ctx.__exit__.return_value = None
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: mock_ctx)
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "oracle", "uri": ":memory:"},
+        extension_config={"adk": {"enable_memory": True}},
+    )
+    mem_store = AdbcADKMemoryStore(config)
+    now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+    count = mem_store.insert_memory_entries([
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app1",
+            "user_id": "user1",
+            "scope": "user",
+            "event_id": "evt-existing",
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"parts": [{"text": "hello"}]},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+            "embedding": None,
+        },
+        {
+            "id": "mem-2",
+            "session_id": "sess-1",
+            "app_name": "app1",
+            "user_id": "user1",
+            "scope": "user",
+            "event_id": "evt-new",
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"parts": [{"text": "world"}]},
+            "content_text": "world",
+            "metadata_json": None,
+            "inserted_at": now,
+            "embedding": None,
+        },
+    ])
+
+    assert any("SELECT event_id FROM" in s for s in executed_statements)
+    assert count == 1
+
+
+@pytest.mark.parametrize("driver_name", ["oracle", "db2"])
+def test_adbc_memory_batch_deduplicates_fresh_event_ids(driver_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repeated fresh event IDs keep the first entry and preserve the rest of the batch."""
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    context = MagicMock()
+    context.__enter__.return_value = conn
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: context)
+    store = AdbcADKMemoryStore(AdbcConfig(connection_config={"driver_name": driver_name}))
+    now = datetime.now(UTC)
+    entry: StoredMemory = {
+        "id": "mem-1",
+        "session_id": "sess-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "evt-1",
+        "author": "user",
+        "timestamp": now,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": now,
+        "embedding": None,
+    }
+
+    count = store.insert_memory_entries([
+        entry,
+        {**entry, "id": "mem-duplicate"},
+        {**entry, "id": "mem-2", "event_id": "evt-2"},
+    ])
+
+    inserts = [call.args[1] for call in cursor.execute.call_args_list if "INSERT INTO" in call.args[0]]
+    assert count == 2
+    assert [params[0] for params in inserts] == ["mem-1", "mem-2"]
+    conn.commit.assert_called_once()
+
+
+@pytest.mark.parametrize("driver_name", ["oracle", "db2"])
+@pytest.mark.parametrize(
+    ("error_message", "event_exists"),
+    [
+        ("ORA-00001: unique constraint violated", True),
+        ("SQL0803N duplicate key", True),
+        ("ORA-00001: unique constraint violated", False),
+        ("foreign key constraint violated", True),
+    ],
+)
+def test_adbc_memory_insert_only_ignores_confirmed_event_conflicts(
+    driver_name: str, error_message: str, event_exists: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate race is idempotent while other integrity errors still roll back."""
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+    cursor.fetchone.return_value = ("evt-1",) if event_exists else None
+    error = IntegrityError(error_message, status_code=AdbcStatusCode.INTEGRITY)
+
+    def execute(sql: str, _params: object = None) -> None:
+        if "INSERT INTO" in sql:
+            raise error
+
+    cursor.execute.side_effect = execute
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    context = MagicMock()
+    context.__enter__.return_value = conn
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: context)
+    store = AdbcADKMemoryStore(AdbcConfig(connection_config={"driver_name": driver_name}))
+    now = datetime.now(UTC)
+    entry: StoredMemory = {
+        "id": "mem-1",
+        "session_id": "sess-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "evt-1",
+        "author": "user",
+        "timestamp": now,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": now,
+        "embedding": None,
+    }
+
+    if event_exists and "foreign key" not in error_message:
+        assert store.insert_memory_entries([entry]) == 0
+        conn.commit.assert_called_once()
+        conflict_checks = [call.args[1] for call in cursor.execute.call_args_list if "WHERE event_id =" in call.args[0]]
+        assert conflict_checks == [("evt-1",)]
+    else:
+        with pytest.raises(IntegrityError) as exc_info:
+            store.insert_memory_entries([entry])
+        assert exc_info.value is error
+        conn.rollback.assert_called_once()

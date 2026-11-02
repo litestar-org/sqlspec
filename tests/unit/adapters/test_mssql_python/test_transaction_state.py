@@ -5,7 +5,8 @@ from typing import Any, cast
 import pytest
 from mssql_python import Error as MssqlPythonError
 
-from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection
+from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, MssqlPythonSessionContext
+from sqlspec.adapters.mssql_python.core import default_statement_config
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.exceptions import SQLSpecError, TransactionError
 
@@ -16,6 +17,9 @@ UNSAFE_SAVEPOINT_NAMES = ["1; DROP TABLE users", "sp-1", "sp 1", "", '"sp"']
 
 class FakeCursor:
     """Minimal cursor recording executed statements."""
+
+    description: list[tuple[str]] | None = None
+    rowcount = 1
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
@@ -213,3 +217,25 @@ def test_mssql_python_savepoint_overrides_accept_valid_name() -> None:
     executed_sql = [call[0] for call in cursor.calls]
     assert "SAVE TRANSACTION sp1" in executed_sql
     assert "ROLLBACK TRANSACTION sp1" in executed_sql
+
+
+def test_mssql_python_implicit_transaction_rolled_back_on_session_exit() -> None:
+    """With autocommit=False, executing a statement opens an implicit transaction that session exit rolls back."""
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor, autocommit=False)
+    session_context = MssqlPythonSessionContext(
+        acquire_connection=lambda: cast("MssqlPythonConnection", connection),
+        release_connection=lambda *args, **kwargs: None,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+
+    with session_context as driver:
+        assert driver._connection_in_transaction() is False
+        driver.execute("INSERT INTO users (name) VALUES (?)", "test")
+        assert driver._connection_in_transaction() is True
+        assert connection.rollbacks == 0
+
+    assert connection.rollbacks == 1
+    assert driver._connection_in_transaction() is False

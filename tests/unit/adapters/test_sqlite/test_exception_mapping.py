@@ -5,7 +5,17 @@ import sqlite3
 import pytest
 
 from sqlspec.adapters.sqlite.core import create_mapped_exception
-from sqlspec.exceptions import DeadlockError, OperationCancelledError, PermissionDeniedError, UniqueViolationError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DataError,
+    DeadlockError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    OperationCancelledError,
+    PermissionDeniedError,
+    UniqueViolationError,
+)
 
 
 class _SqliteError(sqlite3.OperationalError):
@@ -88,3 +98,54 @@ def test_primary_key_identity_takes_precedence_over_message(table: str, code: in
     mapped = create_mapped_exception(error)
     assert isinstance(mapped, UniqueViolationError)
     assert mapped.__cause__ is error
+
+
+def test_not_null_error_code_maps_to_not_null_violation() -> None:
+    err = _SqliteIntegrityError("NOT NULL constraint failed: t.val", 1299, None)
+    result = create_mapped_exception(err)
+    assert isinstance(result, NotNullViolationError)
+    assert result.__cause__ is err
+
+
+def test_check_error_code_maps_to_check_violation() -> None:
+    err = _SqliteIntegrityError("CHECK constraint failed: val > 0", 275, None)
+    result = create_mapped_exception(err)
+    assert isinstance(result, CheckViolationError)
+    assert result.__cause__ is err
+
+
+def test_trigger_abort_does_not_map_to_not_null_violation() -> None:
+    err = _SqliteIntegrityError("trigger aborted", 1811, None)
+    result = create_mapped_exception(err)
+    assert not isinstance(result, NotNullViolationError)
+    assert isinstance(result, IntegrityError)
+    assert result.__cause__ is err
+
+
+def test_no_such_column_with_locked_name_maps_to_operational_error() -> None:
+    err = sqlite3.OperationalError("no such column: is_locked")
+    result = create_mapped_exception(err)
+    assert isinstance(result, OperationalError)
+    assert not isinstance(result, DeadlockError)
+    assert result.__cause__ is err
+
+
+def test_programming_error_maps_to_data_error() -> None:
+    err = sqlite3.ProgrammingError("cannot operate on a closed database")
+    result = create_mapped_exception(err)
+    assert isinstance(result, DataError)
+    assert result.__cause__ is err
+
+
+def test_interface_error_maps_to_operational_error() -> None:
+    err = sqlite3.InterfaceError("error binding parameter")
+    result = create_mapped_exception(err)
+    assert isinstance(result, OperationalError)
+    assert result.__cause__ is err
+
+
+def test_misuse_maps_to_data_error() -> None:
+    err = _SqliteError("bad call", 21, "SQLITE_MISUSE")
+    result = create_mapped_exception(err)
+    assert isinstance(result, DataError)
+    assert result.__cause__ is err

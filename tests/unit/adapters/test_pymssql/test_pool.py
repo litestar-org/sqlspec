@@ -3,7 +3,9 @@
 import threading
 from typing import Any, cast
 
-from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakePymssqlModule
+import pytest
+
+from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakeCursor, FakePymssqlModule
 
 
 def test_pool_connects_with_config_and_runs_hook(monkeypatch) -> None:
@@ -36,7 +38,7 @@ def test_pool_recycles_failed_health_check(monkeypatch) -> None:
     import sqlspec.adapters.pymssql.pool as pool_module
     from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 
-    first = FakeConnection()
+    first = FakeConnection(FakeCursor(error=OSError("connection lost")))
     second = FakeConnection()
     connections = [first, second]
 
@@ -47,7 +49,6 @@ def test_pool_recycles_failed_health_check(monkeypatch) -> None:
 
     fake_module = SequencedModule()
     monkeypatch.setattr(pool_module, "pymssql", fake_module)
-    monkeypatch.setattr(PymssqlConnectionPool, "_is_connection_alive", lambda *_: False)
 
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=0.5)
 
@@ -55,6 +56,7 @@ def test_pool_recycles_failed_health_check(monkeypatch) -> None:
     pool._thread_local.last_used = 0.0  # pyright: ignore[reportPrivateUsage]
     assert cast(object, pool.acquire()) is second
     assert first.closed is True
+    assert first.cursor_obj.closed is True
     assert len(fake_module.connect_calls) == 2
 
 
@@ -63,23 +65,15 @@ def test_pool_zero_health_check_interval_disables_health_check(monkeypatch) -> N
     import sqlspec.adapters.pymssql.pool as pool_module
     from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 
-    connection = FakeConnection()
+    connection = FakeConnection(FakeCursor(error=OSError("health checks should be disabled")))
     fake_module = FakePymssqlModule(connection)
     monkeypatch.setattr(pool_module, "pymssql", fake_module)
-    health_checks = 0
-
-    def _fail_if_called(*_args: Any) -> bool:
-        nonlocal health_checks
-        health_checks += 1
-        return False
-
-    monkeypatch.setattr(PymssqlConnectionPool, "_is_connection_alive", _fail_if_called)
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=0)
 
     assert cast(object, pool.acquire()) is connection
     pool._thread_local.last_used = 0.0  # pyright: ignore[reportPrivateUsage]
     assert cast(object, pool.acquire()) is connection
-    assert health_checks == 0
+    assert connection.cursor_obj.calls == []
     assert len(fake_module.connect_calls) == 1
 
 
@@ -169,18 +163,96 @@ def test_pool_registry_does_not_grow_across_replacements(monkeypatch) -> None:
     class SequencedModule(FakePymssqlModule):
         def connect(self, **kwargs: Any) -> FakeConnection:
             self.connect_calls.append(kwargs)
-            return FakeConnection()
+            return FakeConnection(FakeCursor(error=OSError("connection lost")))
 
     monkeypatch.setattr(pool_module, "pymssql", SequencedModule())
-    monkeypatch.setattr(PymssqlConnectionPool, "_is_connection_alive", lambda *_: False)
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=0.5)
 
+    connections = []
     for _ in range(4):
-        pool.acquire()
+        connections.append(cast("FakeConnection", pool.acquire()))
         pool._thread_local.last_used = 0.0  # pyright: ignore[reportPrivateUsage]
 
-    assert len(pool._connection_registry) == 1  # pyright: ignore[reportPrivateUsage]
+    assert pool.size() == 1
+    assert [connection.closed for connection in connections] == [True, True, True, False]
 
     pool.close()
 
-    assert pool._connection_registry == set()  # pyright: ignore[reportPrivateUsage]
+    assert pool.size() == 0
+    assert all(connection.closed for connection in connections)
+
+
+def test_pool_reentrant_thread_checkout(monkeypatch: Any) -> None:
+    """Re-entrant get_connection calls on the same thread do not close the connection on inner error."""
+    import sqlspec.adapters.pymssql.pool as pool_module
+    from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+
+    connection = FakeConnection()
+    fake_module = FakePymssqlModule(connection)
+    monkeypatch.setattr(pool_module, "pymssql", fake_module)
+
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0)
+
+    with pool.get_connection() as c1:
+        assert cast(object, c1) is connection
+        try:
+            with pool.get_connection() as c2:
+                assert cast(object, c2) is connection
+                raise ValueError("inner failure")
+        except ValueError:
+            pass
+        assert not connection.closed
+
+    assert not connection.closed
+    pool.close()
+    assert connection.closed
+
+
+def test_pool_recovers_after_failed_acquisition_and_retires_failed_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed connect must not prevent a later failed checkout from retiring its connection."""
+    import sqlspec.adapters.pymssql.pool as pool_module
+    from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+
+    dirty_connection = FakeConnection()
+    clean_connection = FakeConnection()
+    attempts: list[OSError | FakeConnection] = [
+        OSError("temporary connect failure"),
+        dirty_connection,
+        clean_connection,
+    ]
+
+    class RecoveringModule(FakePymssqlModule):
+        def connect(self, **kwargs: Any) -> FakeConnection:
+            outcome = attempts.pop(0)
+            if isinstance(outcome, OSError):
+                raise outcome
+            return outcome
+
+    monkeypatch.setattr(pool_module, "pymssql", RecoveringModule())
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0, health_check_interval=0)
+
+    try:
+        with pytest.raises(OSError, match="temporary connect failure"), pool.get_connection():
+            pytest.fail("Failed acquisition must not enter the checkout body")
+
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+
+        with pytest.raises(ValueError, match="failed transaction"), pool.get_connection() as connection:
+            assert cast(object, connection) is dirty_connection
+            dirty_connection.autocommit(False)
+            raise ValueError("failed transaction")
+
+        assert dirty_connection.closed is True
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+
+        with pool.get_connection() as replacement:
+            assert cast(object, replacement) is clean_connection
+            assert clean_connection.closed is False
+            assert clean_connection.autocommit_state is True
+            assert pool.checked_out() == 1
+
+        assert pool.checked_out() == 0
+    finally:
+        pool.close()

@@ -1,22 +1,19 @@
 """AsyncPG adapter compiled helpers."""
 
+import asyncio
 import contextlib
 import datetime as dt
 import re
+import sys
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, Final, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
-from sqlspec.core.config_runtime import (
-    build_postgres_extension_probe_names,
-    is_postgres_extension_active,
-    resolve_postgres_extension_state,
-    resolve_runtime_statement_config,
-)
+from sqlspec.core.config_runtime import resolve_runtime_statement_config
 from sqlspec.exceptions import (
     CheckViolationError,
-    ConnectionTimeoutError,
+    DatabaseConnectionError,
     DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
@@ -25,6 +22,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    QueryTimeoutError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -50,7 +48,7 @@ __all__ = (
     "NormalizedStackOperation",
     "apply_driver_features",
     "build_connection_config",
-    "build_postgres_extension_probe_names",
+    "build_postgres_storage_params_sql",
     "build_profile",
     "build_statement_config",
     "collect_rows",
@@ -58,13 +56,10 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
-    "invoke_prepared_statement",
-    "is_postgres_extension_active",
     "parse_status",
     "register_json_codecs",
     "register_pgvector_support",
     "resolve_many_rowcount",
-    "resolve_postgres_extension_state",
     "resolve_runtime_statement_config",
 )
 
@@ -85,7 +80,6 @@ class NormalizedStackOperation(NamedTuple):
     parameters: "tuple[Any, ...] | dict[str, Any] | None"
 
 
-PREPARED_STATEMENT_CACHE_SIZE: Final[int] = 32
 _EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()
 
 
@@ -132,10 +126,40 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if found_user:
         config["user"] = user_val
 
-    if config.pop("pgbouncer", False):
-        config["statement_cache_size"] = 0
-
     return config
+
+
+def build_postgres_storage_params_sql(
+    settings: "dict[str, object] | Mapping[str, object] | None",
+    *,
+    include_autovacuum: bool = False,
+    default_fillfactor: int | None = None,
+    default_vacuum_scale: float | None = None,
+    default_analyze_scale: float | None = None,
+    section: str = "storage",
+) -> str:
+    """Format PostgreSQL table storage parameters (WITH fillfactor = ...) clause."""
+    options: list[str] = []
+    config_dict = dict(settings) if settings else {}
+    fillfactor = config_dict.get("fillfactor", default_fillfactor)
+    if fillfactor is not None:
+        if not isinstance(fillfactor, int) or isinstance(fillfactor, bool) or fillfactor not in range(10, 101):
+            msg = f"extension_config['{section}']['fillfactor'] must be an integer from 10 to 100"
+            raise ValueError(msg)
+        options.append(f"fillfactor = {fillfactor}")
+    if include_autovacuum:
+        scales = (
+            ("autovacuum_vacuum_scale_factor", default_vacuum_scale),
+            ("autovacuum_analyze_scale_factor", default_analyze_scale),
+        )
+        for key, default_val in scales:
+            value = config_dict.get(key, default_val)
+            if value is not None:
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+                    msg = f"extension_config['{section}']['{key}'] must be a number from 0 to 1"
+                    raise ValueError(msg)
+                options.append(f"{key} = {float(value):g}")
+    return f" WITH ({', '.join(options)})" if options else ""
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -170,39 +194,6 @@ def configure_parameter_serializers(
     return parameter_config.replace(json_serializer=serializer, json_deserializer=effective_deserializer)
 
 
-async def invoke_prepared_statement(
-    prepared: Any, parameters: "tuple[Any, ...] | dict[str, Any] | list[Any] | None", *, fetch: bool, **kwargs: Any
-) -> Any:
-    """Invoke an AsyncPG prepared statement with optional parameters.
-
-    Args:
-        prepared: AsyncPG prepared statement object.
-        parameters: Prepared parameters payload.
-        fetch: Whether to fetch rows.
-        **kwargs: Native execution options, including timeout.
-
-    Returns:
-        Query result or status message.
-    """
-    if parameters is None:
-        if fetch:
-            return await prepared.fetch(**kwargs)
-        await prepared.fetch(**kwargs)
-        return prepared.get_statusmsg()
-
-    if isinstance(parameters, dict):
-        values = tuple(parameters.values())
-        if fetch:
-            return await prepared.fetch(*values, **kwargs)
-        await prepared.fetch(*values, **kwargs)
-        return prepared.get_statusmsg()
-
-    if fetch:
-        return await prepared.fetch(*parameters, **kwargs)
-    await prepared.fetch(*parameters, **kwargs)
-    return prepared.get_statusmsg()
-
-
 def build_statement_config(
     *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
 ) -> "StatementConfig":
@@ -226,20 +217,56 @@ def build_statement_config(
     return base_config.replace(parameter_config=parameter_config)
 
 
+class _JsonEncoder:
+    __slots__ = ("_encoder",)
+
+    def __init__(self, encoder: "Callable[[Any], str]") -> None:
+        self._encoder = encoder
+
+    def __call__(self, value: Any) -> bytes:
+        return _encode_json_payload(value, self._encoder)
+
+
+class _JsonDecoder:
+    __slots__ = ("_decoder",)
+
+    def __init__(self, decoder: "Callable[[str], Any]") -> None:
+        self._decoder = decoder
+
+    def __call__(self, value: Any) -> Any:
+        return _decode_json_payload(value, self._decoder)
+
+
+class _JsonbEncoder:
+    __slots__ = ("_encoder",)
+
+    def __init__(self, encoder: "Callable[[Any], str]") -> None:
+        self._encoder = encoder
+
+    def __call__(self, value: Any) -> bytes:
+        return _encode_jsonb_payload(value, self._encoder)
+
+
+class _JsonbDecoder:
+    __slots__ = ("_decoder",)
+
+    def __init__(self, decoder: "Callable[[str], Any]") -> None:
+        self._decoder = decoder
+
+    def __call__(self, value: Any) -> Any:
+        return _decode_jsonb_payload(value, self._decoder)
+
+
 async def register_json_codecs(connection: Any, encoder: Any, decoder: Any) -> None:
     """Register JSON type codecs on asyncpg connection."""
     try:
         await connection.set_type_codec(
-            "json",
-            encoder=lambda value: _encode_json_payload(value, encoder),
-            decoder=lambda value: _decode_json_payload(value, decoder),
-            schema="pg_catalog",
-            format="binary",
+            "json", encoder=_JsonEncoder(encoder), decoder=_JsonDecoder(decoder), schema="pg_catalog", format="binary"
         )
         await connection.set_type_codec(
             "jsonb",
-            encoder=lambda value: _encode_jsonb_payload(value, encoder),
-            decoder=lambda value: _decode_jsonb_payload(value, decoder),
+            encoder=_JsonbEncoder(encoder),
+            decoder=_JsonbDecoder(decoder),
             schema="pg_catalog",
             format="binary",
         )
@@ -281,12 +308,9 @@ def apply_driver_features(
     processed_features.setdefault("enable_alloydb", False)
     processed_features.setdefault("enable_events", True)
     processed_features.setdefault("events_backend", "notify")
-    pgbouncer_enabled = bool(processed_features.get("pgbouncer") or processed_features.get("pgbouncer_mode"))
-    processed_features["pgbouncer"] = pgbouncer_enabled
-    processed_features["pgbouncer_mode"] = pgbouncer_enabled
     raw_pooler_mode = processed_features.get("pooler_mode")
     if raw_pooler_mode is None:
-        processed_features["pooler_mode"] = "transaction" if pgbouncer_enabled else "session"
+        processed_features["pooler_mode"] = "session"
     else:
         normalized_mode = str(raw_pooler_mode).lower()
         if normalized_mode not in {"session", "transaction", "statement", "auto"}:
@@ -294,12 +318,7 @@ def apply_driver_features(
                 f"Invalid pooler_mode: {raw_pooler_mode!r}. Expected 'session', 'transaction', 'statement', or 'auto'."
             )
             raise ImproperConfigurationError(msg)
-        processed_features["pooler_mode"] = (
-            "transaction" if normalized_mode == "auto" and pgbouncer_enabled else normalized_mode
-        )
-    if processed_features["pooler_mode"] in {"transaction", "statement"}:
-        processed_features["pgbouncer"] = True
-        processed_features["pgbouncer_mode"] = True
+        processed_features["pooler_mode"] = "session" if normalized_mode == "auto" else normalized_mode
     processed_features.setdefault("direct_dsn", None)
     processed_features.setdefault("enable_alloydb_columnar", False)
 
@@ -381,10 +400,10 @@ _EXCEPTION_MAPPING_DISPATCHER.register(
     asyncpg.exceptions.InvalidAuthorizationSpecificationError, ("28000", PermissionDeniedError, "authorization error")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.ConnectionDoesNotExistError, ("08003", ConnectionTimeoutError, "connection does not exist")
+    asyncpg.exceptions.ConnectionDoesNotExistError, ("08003", DatabaseConnectionError, "connection does not exist")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
-    asyncpg.exceptions.CannotConnectNowError, ("57P03", ConnectionTimeoutError, "cannot connect now")
+    asyncpg.exceptions.CannotConnectNowError, ("57P03", DatabaseConnectionError, "cannot connect now")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
     asyncpg.exceptions.PostgresSyntaxError, ("42601", SQLParsingError, "SQL syntax error")
@@ -410,7 +429,14 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
+    if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+        return QueryTimeoutError(str(error))
+    if isinstance(error, OSError) or (
+        asyncpg is not None and isinstance(error, getattr(asyncpg, "InterfaceError", ()))
+    ):
+        return DatabaseConnectionError(str(error))
+
     mapped_error = _EXCEPTION_MAPPING_DISPATCHER.get(error)
     if mapped_error is not None:
         error_code, error_class, description = mapped_error
@@ -453,7 +479,7 @@ def collect_rows(records: "list[Any] | None") -> "tuple[list[Any], list[str]]":
 class AsyncpgStreamSource:
     """Compiled async chunk source streaming dict rows from an asyncpg cursor in a stream-owned transaction."""
 
-    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_timeout_args", "_transaction")
+    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_timeout", "_transaction")
 
     def __init__(
         self,
@@ -461,9 +487,14 @@ class AsyncpgStreamSource:
         sql: str,
         parameters: "tuple[Any, ...]",
         chunk_size: int,
-        timeout_args: "dict[str, Any] | None" = None,
+        timeout: "float | dict[str, Any] | None" = None,
     ) -> None:
-        self._timeout_args = timeout_args or {}
+        if isinstance(timeout, dict):
+            self._timeout: float | None = (
+                float(timeout["timeout"]) if "timeout" in timeout and timeout["timeout"] is not None else None
+            )
+        else:
+            self._timeout = float(timeout) if timeout is not None else None
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
@@ -473,47 +504,71 @@ class AsyncpgStreamSource:
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        await self._driver._run_with_exception_handler(handler, self._start)
+        if sys.exc_info()[1] is None:
+            async with handler:
+                await self._start()
+        else:
+            await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        records = await self._driver._run_with_exception_handler(
-            handler, self._cursor.fetch, self._chunk_size, **self._timeout_args
-        )
+        if sys.exc_info()[1] is None:
+            async with handler:
+                records = (
+                    await self._cursor.fetch(self._chunk_size, timeout=self._timeout)
+                    if self._timeout is not None
+                    else await self._cursor.fetch(self._chunk_size)
+                )
+        elif self._timeout is not None:
+            records = await self._driver._run_with_exception_handler(
+                handler, self._cursor.fetch, self._chunk_size, timeout=self._timeout
+            )
+        else:
+            records = await self._driver._run_with_exception_handler(handler, self._cursor.fetch, self._chunk_size)
         self._driver._check_pending_exception(handler)
         assert records is not None
         return [dict(record) for record in records]
 
     async def close(self, error: bool = False) -> None:
+        cursor = self._cursor
         self._cursor = None
         transaction = self._transaction
         self._transaction = None
-        if transaction is not None:
-            try:
+        try:
+            if cursor is not None and getattr(cursor, "_portal_name", None):
+                # asyncpg has no public cursor close; CockroachDB requires closing its portal before transaction control.
+                await cursor._close_portal(self._timeout)
+            if transaction is not None:
                 if error:
                     await transaction.rollback()
                 else:
                     await transaction.commit()
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await transaction.rollback()
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self._driver.connection.close()
+            raise
 
     async def _start(self) -> None:
-        in_tx_fn = getattr(self._driver, "_connection_in_transaction", None)
-        already_in_tx = bool(in_tx_fn()) if callable(in_tx_fn) else False
+        already_in_tx = self._driver._connection_in_transaction()
         if not already_in_tx:
             transaction = self._driver.connection.transaction()
             await transaction.start()
             self._transaction = transaction
         try:
-            self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters, **self._timeout_args)
+            if self._timeout is not None:
+                self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters, timeout=self._timeout)
+            else:
+                self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters)
         except BaseException:
             transaction = self._transaction
             self._transaction = None
             if transaction is not None:
-                with contextlib.suppress(Exception):
+                try:
                     await transaction.rollback()
+                except BaseException:
+                    with contextlib.suppress(Exception):
+                        await self._driver.connection.close()
             raise
 
 
@@ -554,10 +609,7 @@ def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
 
 def _is_pre_serialized_json(value: str) -> bool:
     stripped = value.strip()
-    if not stripped:
-        return False
-    first = stripped[0]
-    if first not in '{["-0123456789tfn':
+    if not stripped or stripped[0] not in '{["-0123456789tfn':
         return False
     try:
         from_json(stripped)

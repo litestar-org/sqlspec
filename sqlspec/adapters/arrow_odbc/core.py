@@ -1,5 +1,6 @@
 """arrow-odbc adapter core helpers."""
 
+import contextlib
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
@@ -24,12 +25,13 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.typing import ArrowException
 from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Iterator, Mapping
 
     from sqlspec.core import StatementConfig
 
@@ -37,6 +39,7 @@ __all__ = (
     "DB2_INDEX_EXISTS_SQL",
     "DB2_TABLE_EXISTS_SQL",
     "apply_driver_features",
+    "atomic_store_write",
     "build_connection_config",
     "build_profile",
     "build_statement_config",
@@ -46,8 +49,10 @@ __all__ = (
     "driver_profile",
     "extract_native_error_number",
     "normalize_column_names",
+    "quote_bracket_identifier",
     "resolve_dialect_from_dbms_name",
     "split_db2_name",
+    "strip_bracket_quotes",
 )
 
 DB2_TABLE_EXISTS_SQL: Final[str] = (
@@ -176,7 +181,9 @@ def resolve_dialect_from_dbms_name(dbms_name: str | None) -> str:
 
 def create_mapped_exception(error: BaseException, *, logger: Any | None = None) -> SQLSpecError:
     """Map an arrow-odbc exception to SQLSpec's exception hierarchy."""
-    del logger
+    _ = logger
+    if isinstance(error, ArrowException):
+        return DataError(f"PyArrow data error. Original error: {error}")
     message = str(error)
     if _is_sql_server_diagnostic(message):
         error_number = extract_native_error_number(error)
@@ -440,8 +447,9 @@ def _match_dialect_from_dbms_name(dbms_name: str | None) -> str | None:
         return None
     lowered = driver_name.lower()
     for dialect, patterns in _DIALECT_PATTERNS:
-        if any(pattern in lowered for pattern in patterns):
-            return dialect
+        for pattern in patterns:
+            if pattern in lowered:
+                return dialect
     return None
 
 
@@ -657,3 +665,52 @@ def _format_connection_value(option_name: str, value: Any) -> str:
 
 driver_profile = build_profile()
 default_statement_config = build_statement_config()
+
+
+_MIN_DELIMITER_LEN: Final = 2
+
+
+def quote_bracket_identifier(identifier: str) -> str:
+    """Quote an identifier using SQL Server / T-SQL bracket syntax."""
+    return f"[{identifier.replace(']', ']]')}]"
+
+
+def strip_bracket_quotes(part: str) -> str:
+    """Strip T-SQL bracket or double-quote enclosing delimiters from an identifier."""
+    stripped = part.strip()
+    if len(stripped) >= _MIN_DELIMITER_LEN and stripped[0] == "[" and stripped[-1] == "]":
+        return stripped[1:-1].replace("]]", "]")
+    if len(stripped) >= _MIN_DELIMITER_LEN and stripped[0] == '"' and stripped[-1] == '"':
+        return stripped[1:-1].replace('""', '"')
+    return stripped
+
+
+@contextlib.contextmanager
+def atomic_store_write(driver: Any) -> "Iterator[None]":
+    """Wrap multi-statement store mutations in an explicit transaction when supported.
+
+    Yields:
+        None while the atomic write block executes.
+    """
+    in_tx = getattr(driver, "_connection_in_transaction", None)
+    if callable(in_tx) and in_tx() is True:
+        yield
+        return
+
+    dialect = getattr(driver, "_dialect", "")
+    autocommit = getattr(driver, "_connection_autocommit", True)
+    can_begin = not (autocommit and dialect in {"db2", "oracle"})
+
+    if can_begin and hasattr(driver, "begin"):
+        driver.begin()
+
+    try:
+        yield
+    except BaseException:
+        if hasattr(driver, "rollback"):
+            with contextlib.suppress(Exception):
+                driver.rollback()
+        raise
+    else:
+        if hasattr(driver, "commit"):
+            driver.commit()

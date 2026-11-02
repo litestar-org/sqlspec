@@ -8,7 +8,8 @@ import pytest
 
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
-from sqlspec.adapters.adbc.litestar.store import ADBCStore
+from sqlspec.adapters.adbc.litestar.store import AdbcStore
+from sqlspec.exceptions import IntegrityError
 
 __all__ = ()
 
@@ -25,7 +26,7 @@ __all__ = ()
 def test_adbc_litestar_store_enterprise_dialect_primitives(
     dialect: str, expected_placeholder: str, expected_ts_expr: str, expected_ddl_fragment: str
 ) -> None:
-    store = ADBCStore(_make_adbc_config("sqlite:///:memory:"))
+    store = AdbcStore(_make_adbc_config("sqlite:///:memory:"))
     store._dialect = "mssql" if dialect == "tsql" else dialect
 
     assert store._get_param_placeholder(1) == expected_placeholder
@@ -36,7 +37,7 @@ def test_adbc_litestar_store_enterprise_dialect_primitives(
 def test_adbc_litestar_store_normalize_tsql_dialect() -> None:
     driver_stub = SimpleNamespace(dialect="tsql")
     config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(driver_stub))
-    store = ADBCStore(cast("Any", config_stub))
+    store = AdbcStore(cast("Any", config_stub))
     assert store._get_dialect() == "mssql"
 
 
@@ -45,7 +46,7 @@ def test_adbc_litestar_store_normalize_tsql_dialect() -> None:
     [("oracle", "SQLCODE != -942"), ("db2", "SYSCAT.TABLES"), ("mssql", "IF OBJECT_ID")],
 )
 def test_adbc_litestar_store_enterprise_drop_sql(dialect: str, expected_drop_fragment: str) -> None:
-    store = ADBCStore(_make_adbc_config("sqlite:///:memory:"))
+    store = AdbcStore(_make_adbc_config("sqlite:///:memory:"))
     store._dialect = dialect
     drop_sql = "\n".join(store._drop_table_sql())
     assert expected_drop_fragment in drop_sql
@@ -67,7 +68,7 @@ def test_adbc_litestar_store_enterprise_set_uses_check_then_insert_or_update(dia
             pass
 
     config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
-    store = ADBCStore(cast("Any", config_stub))
+    store = AdbcStore(cast("Any", config_stub))
     store._dialect = dialect
     store._set("sess_1", b"payload", expires_in=None)
 
@@ -96,6 +97,56 @@ def test_adbc_event_queue_store_enterprise_dialects(
     drop_sql = "\n".join(store.drop_statements())
     assert expected_ddl_fragment in create_sql
     assert expected_drop_fragment in drop_sql
+
+
+def test_adbc_litestar_store_concurrent_set_fallback() -> None:
+    """AdbcStore._set catches IntegrityError on INSERT race condition and falls back to UPDATE."""
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    class _DriverStub:
+        def select_one(self, sql: str, *params: Any) -> dict[str, Any]:
+            executed.append((sql.strip(), params))
+            return {"count": 0}
+
+        def execute(self, sql: str, *params: Any) -> None:
+            executed.append((sql.strip(), params))
+            if "INSERT INTO" in sql:
+                raise IntegrityError("duplicate key value violates unique constraint")
+
+        def commit(self) -> None:
+            pass
+
+    config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
+    store = AdbcStore(cast("Any", config_stub))
+    store._dialect = "oracle"
+    store._set("sess_1", b"payload", expires_in=None)
+
+    assert any("UPDATE" in item[0] for item in executed)
+
+
+def test_adbc_litestar_store_rollback_on_failure() -> None:
+    """Mutating operations on AdbcStore invoke rollback on execution error."""
+    rolled_back = False
+
+    class _DriverStub:
+        def execute(self, _sql: str, *_params: Any) -> None:
+            raise RuntimeError("disk failure")
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            nonlocal rolled_back
+            rolled_back = True
+
+    config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
+    store = AdbcStore(cast("Any", config_stub))
+    store._dialect = "oracle"
+
+    with pytest.raises(RuntimeError, match="disk failure"):
+        store._delete("sess_1")
+
+    assert rolled_back is True
 
 
 def _make_adbc_config(dialect_uri: str) -> AdbcConfig:

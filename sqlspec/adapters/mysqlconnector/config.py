@@ -592,7 +592,7 @@ class MysqlConnectorAsyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        self.connection_config = build_connection_config(connection_config)
+        connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -601,15 +601,15 @@ class MysqlConnectorAsyncConfig(
             features_dict.pop("on_connection_create", None)
         )
 
-        features_dict.setdefault("enable_local_infile_bulk_load", self.connection_config["allow_local_infile"])
-        if features_dict.get("enable_local_infile_bulk_load") and not self.connection_config.get("allow_local_infile"):
+        features_dict.setdefault("enable_local_infile_bulk_load", connection_config["allow_local_infile"])
+        if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("allow_local_infile"):
             msg = "enable_local_infile_bulk_load requires local_infile=True or allow_local_infile=True in connection_config."
             raise ImproperConfigurationError(msg)
 
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
         super().__init__(
-            connection_config=self.connection_config,
+            connection_config=connection_config,
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
@@ -634,23 +634,6 @@ class MysqlConnectorAsyncConfig(
                 await connection.close()
             raise
         return connection
-
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "MysqlConnectorAsyncConnectionContext":
-        return MysqlConnectorAsyncConnectionContext(self)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "MysqlConnectorAsyncSessionContext":
-        statement_config = statement_config or self.statement_config or default_statement_config
-        handler = _MysqlConnectorAsyncSessionConnectionHandler(self)
-
-        return MysqlConnectorAsyncSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config,
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()

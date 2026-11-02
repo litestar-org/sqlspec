@@ -6,7 +6,7 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlglot import exp
 
@@ -45,6 +45,7 @@ __all__ = (
     "SECONDS_PER_DAY",
     "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "SqliteStreamSource",
+    "_filter_connection_params",
     "apply_driver_features",
     "apply_extension_pragmas",
     "build_connection_config",
@@ -75,14 +76,15 @@ SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
 SQLITE_CONSTRAINT_ROWID_CODE = 2579
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
-SQLITE_CONSTRAINT_NOTNULL_CODE = 1811
-SQLITE_CONSTRAINT_CHECK_CODE = 531
+SQLITE_CONSTRAINT_NOTNULL_CODE = 1299
+SQLITE_CONSTRAINT_CHECK_CODE = 275
 SQLITE_CONSTRAINT_DATATYPE_CODE = 3091
 SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
 SQLITE_CORRUPT_CODE = 11
 SQLITE_MISMATCH_CODE = 20
+SQLITE_MISUSE_CODE = 21
 SQLITE_BUSY_CODE = 5
 SQLITE_LOCKED_CODE = 6
 SQLITE_INTERRUPT_CODE = 9
@@ -101,6 +103,8 @@ _EXTENSION_PRAGMA_PROFILE = (
     "PRAGMA mmap_size = 30000000",
     "PRAGMA journal_size_limit = 67108864",
 )
+_UNIX_EPOCH: Final[datetime] = datetime(1970, 1, 1, tzinfo=UTC)
+_DEFAULT_SCHEMAS: Final[frozenset[str]] = frozenset({"temp", "main"})
 
 
 def datetime_to_julian(dt: "datetime | None") -> "float | None":
@@ -109,8 +113,7 @@ def datetime_to_julian(dt: "datetime | None") -> "float | None":
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
-    epoch = datetime(1970, 1, 1, tzinfo=UTC)
-    delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
+    delta_days = (dt - _UNIX_EPOCH).total_seconds() / SECONDS_PER_DAY
     return JULIAN_EPOCH + delta_days
 
 
@@ -120,7 +123,7 @@ def julian_to_datetime(julian: "float | None") -> "datetime | None":
         return None
     delta_days = julian - JULIAN_EPOCH
     timestamp = delta_days * SECONDS_PER_DAY
-    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=timestamp)
+    return _UNIX_EPOCH + timedelta(seconds=timestamp)
 
 
 def end_transaction(
@@ -404,6 +407,32 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
+_EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
+    "enable_foreign_keys",
+    "enable_optimizations",
+    "health_check_interval",
+    "pool_min_size",
+    "pool_max_size",
+    "pool_timeout",
+    "pool_recycle_seconds",
+    "extra",
+    "db",
+    "path",
+    "file",
+})
+
+
+def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Filter connection parameters for SQLite."""
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in _EXCLUDED_CONNECTION_KEYS
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build connection configuration for pool creation.
 
@@ -413,30 +442,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     Returns:
         Dictionary with connection parameters.
     """
-    excluded_keys = {
-        "enable_foreign_keys",
-        "enable_optimizations",
-        "health_check_interval",
-        "pool_min_size",
-        "pool_max_size",
-        "pool_timeout",
-        "pool_recycle_seconds",
-        "extra",
-        "db",
-        "path",
-        "file",
-    }
-
-    def _filter_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in mapping.items()
-            if key not in excluded_keys
-            and (value is not None or key == "isolation_level")
-            and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-        }
-
-    connection_parameters = _filter_params(connection_config)
+    connection_parameters = _filter_connection_params(connection_config)
 
     if "database" not in connection_parameters:
         database = (
@@ -450,7 +456,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
 
     extra = connection_config.get("extra")
     if isinstance(extra, Mapping):
-        connection_parameters.update(_filter_params(extra))
+        connection_parameters.update(_filter_connection_params(extra))
 
     return connection_parameters
 
@@ -475,7 +481,7 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     if has_sqlite_error(error):
         error_code = error.sqlite_errorcode
         error_name = error.sqlite_errorname
@@ -493,13 +499,19 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         return _create_sqlite_error(error, error_code, DeadlockError, "database busy")
     if primary_code == SQLITE_LOCKED_CODE or (isinstance(error_name, str) and error_name.startswith("SQLITE_LOCKED")):
         return _create_sqlite_error(error, error_code, DeadlockError, "database locked")
-    if "locked" in error_msg or "busy" in error_msg:
-        return _create_sqlite_error(error, error_code or 0, DeadlockError, "database locked")
+    if error_code is None and (
+        "database is locked" in error_msg
+        or "database table is locked" in error_msg
+        or "database locked" in error_msg
+        or "database is busy" in error_msg
+        or "database busy" in error_msg
+    ):
+        return _create_sqlite_error(error, 0, DeadlockError, "database locked")
 
     if primary_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
         return _create_sqlite_error(error, error_code, OperationCancelledError, "query interrupted")
-    if "interrupt" in error_msg:
-        return _create_sqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
+    if error_code is None and ("query was interrupted" in error_msg or "interrupted" in error_msg):
+        return _create_sqlite_error(error, 0, OperationCancelledError, "query interrupted")
 
     if primary_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
         return _create_sqlite_error(error, error_code, PermissionDeniedError, "permission denied")
@@ -507,8 +519,13 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         isinstance(error_name, str) and error_name.startswith("SQLITE_READONLY")
     ):
         return _create_sqlite_error(error, error_code, PermissionDeniedError, "database is read-only")
-    if "permission denied" in error_msg or "readonly" in error_msg:
-        return _create_sqlite_error(error, error_code or 0, PermissionDeniedError, "permission denied")
+    if error_code is None and (
+        "attempt to write a readonly database" in error_msg
+        or "readonly database" in error_msg
+        or "permission denied" in error_msg
+        or "access permission denied" in error_msg
+    ):
+        return _create_sqlite_error(error, 0, PermissionDeniedError, "permission denied")
 
     if primary_code == SQLITE_CANTOPEN_CODE or (
         isinstance(error_name, str) and error_name.startswith("SQLITE_CANTOPEN")
@@ -522,9 +539,16 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     if primary_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
         return _create_sqlite_error(error, error_code, DataError, "data error")
 
+    if primary_code == SQLITE_MISUSE_CODE or error_name == "SQLITE_MISUSE":
+        return _create_sqlite_error(error, error_code, DataError, "programming error")
+
     if "syntax" in error_msg:
         return _create_sqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
 
+    if isinstance(error, sqlite3.ProgrammingError):
+        return _create_sqlite_error(error, error_code, DataError, "programming error")
+    if isinstance(error, sqlite3.InterfaceError):
+        return _create_sqlite_error(error, error_code, OperationalError, "interface error")
     if primary_code == 1 or isinstance(error, sqlite3.OperationalError):
         return _create_sqlite_error(error, error_code, OperationalError, "operational error")
     if isinstance(error, sqlite3.DataError):
@@ -644,7 +668,7 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
         return _target_supports_rowid_legacy(connection, target)
 
     schema_order = ["temp", "main"]
-    if not any(row[0].casefold() in {"temp", "main"} for row in candidates):
+    if not any(row[0].casefold() in _DEFAULT_SCHEMAS for row in candidates):
         try:
             database_cursor = connection.execute("PRAGMA database_list")
             try:

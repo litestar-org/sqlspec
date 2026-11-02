@@ -14,7 +14,7 @@ from sqlspec.adapters.oracledb.driver import OracleAsyncDriver
 
 
 class _FakeOpResult:
-    def __init__(self, error: "Exception | None" = None) -> None:
+    def __init__(self, error: "Any | None" = None) -> None:
         self.error = error
 
 
@@ -108,3 +108,101 @@ async def test_native_stack_inside_an_implicit_transaction_does_not_commit() -> 
 
     assert connection.commit_count == 0
     assert connection.rollback_count == 0
+
+
+@pytest.mark.anyio
+async def test_native_stack_wraps_mapped_error() -> None:
+    """Stack execution errors wrap mapped SQLSpec exceptions, not raw driver errors."""
+    import oracledb
+
+    from sqlspec.exceptions import SQLSpecError, StackExecutionError
+
+    native_err = oracledb.DatabaseError("ORA-00001: unique constraint violated")
+    results = [_FakeOpResult(native_err)]
+    connection = _FakePipelineConnection(results)
+    driver = OracleAsyncDriver(cast("Any", connection))
+
+    stack_results = await driver._execute_stack_native(_stack(), continue_on_error=True)
+    assert len(stack_results) == 1
+    error = stack_results[0].error
+    assert isinstance(error, StackExecutionError)
+    assert isinstance(error.original_error, SQLSpecError)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("continue_on_error", [False, True])
+async def test_stack_maps_native_pipeline_error_records(continue_on_error: bool) -> None:
+    import oracledb
+    from oracledb.errors import _Error
+
+    from sqlspec.exceptions import StackExecutionError, UniqueViolationError
+
+    native_error = _Error("ORA-00001: unique constraint violated", code=1)
+    connection = _FakePipelineConnection([_FakeOpResult(), _FakeOpResult(native_error), _FakeOpResult()])
+    driver = OracleAsyncDriver(cast("Any", connection))
+    driver._pipeline_support = True
+
+    if continue_on_error:
+        results = await driver.execute_stack(_stack(), continue_on_error=True)
+        assert len(results) == 3
+        assert results[0].error is None
+        assert results[2].error is None
+        error = results[1].error
+        assert connection.commit_count == 1
+        assert connection.rollback_count == 0
+    else:
+        with pytest.raises(StackExecutionError) as exc_info:
+            await driver.execute_stack(_stack())
+        error = exc_info.value
+        assert connection.commit_count == 0
+        assert connection.rollback_count == 1
+
+    assert isinstance(error, StackExecutionError)
+    assert error.operation_index == 1
+    assert isinstance(error.original_error, UniqueViolationError)
+    cause = error.original_error.__cause__
+    assert isinstance(cause, oracledb.DatabaseError)
+    assert cause.args[0] is native_error
+
+
+def test_sync_stack_executes_and_commits_without_a_storage_capability_flag() -> None:
+    from sqlspec.adapters.oracledb._typing import OracleSyncConnection
+    from sqlspec.adapters.oracledb.driver import OracleSyncDriver
+
+    class _Cursor:
+        description = None
+        rowcount = 1
+
+        def __init__(self, connection: "_Connection") -> None:
+            self.connection = connection
+
+        def execute(self, statement: str, parameters: object = None, **kwargs: object) -> None:
+            self.connection.executed.append((statement, parameters))
+
+        def close(self) -> None:
+            return None
+
+    class _Connection:
+        transaction_in_progress = False
+
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, object]] = []
+            self.commits = 0
+
+        def cursor(self) -> _Cursor:
+            return _Cursor(self)
+
+        def commit(self) -> None:
+            self.commits += 1
+
+    connection = _Connection()
+    driver = OracleSyncDriver(cast("OracleSyncConnection", connection))
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO items VALUES (:1)", (1,))
+        .push_execute("INSERT INTO items VALUES (:1)", (2,))
+    )
+    results = driver.execute_stack(stack)
+    assert [result.rows_affected for result in results] == [1, 1]
+    assert connection.executed == [("INSERT INTO items VALUES (:1)", [1]), ("INSERT INTO items VALUES (:1)", [2])]
+    assert connection.commits == 1

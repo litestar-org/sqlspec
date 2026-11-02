@@ -3,7 +3,7 @@
 import contextlib
 from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import Any, Final, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
@@ -16,6 +16,7 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
+    OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
@@ -27,14 +28,12 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate, has_type_code
-
-if TYPE_CHECKING:
-    from sqlspec.core.parameters import ParameterValidator
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code
 
 __all__ = (
     "MysqlConnectorAsyncStreamSource",
     "MysqlConnectorSyncStreamSource",
+    "_resolve_column_types",
     "apply_driver_features",
     "build_insert_statement",
     "build_load_data_statement",
@@ -45,16 +44,12 @@ __all__ = (
     "collect_stream_rows",
     "create_mapped_exception",
     "default_statement_config",
-    "detect_json_columns",
-    "detect_json_columns_from_description",
     "driver_profile",
     "encode_records_for_local_infile",
-    "escape_literal_percent",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
-    "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_row_plan",
     "resolve_rowcount",
@@ -80,12 +75,17 @@ MYSQL_CR_SSL_CONNECTION_ERROR: Final[int] = 2026
 MYSQL_SYNTAX_ERROR_MIN: Final[int] = 1064
 MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE: Final[int] = 1100
 
-_MYSQL_MIGRATION_ERROR_CODES: Final[frozenset[int]] = frozenset((1061, 1091))
+_MYSQL_DDL_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
+    1061: (OperationalError, "duplicate key name"),
+    1091: (OperationalError, "cannot drop column or key"),
+}
 _MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
-    "23505": (UniqueViolationError, "unique constraint violation"),
-    "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
-    "23502": (NotNullViolationError, "not-null constraint violation"),
-    "23514": (CheckViolationError, "check constraint violation"),
+    "42S02": (OperationalError, "table does not exist"),
+    "42S22": (OperationalError, "column does not exist"),
+}
+_MYSQL_OPERATIONAL_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1146: (OperationalError, "table does not exist"),
+    1054: (OperationalError, "column does not exist"),
 }
 _MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23": (IntegrityError, "integrity constraint violation"),
@@ -152,6 +152,7 @@ class MysqlConnectorSyncStreamSource:
         "_chunk_size",
         "_cursor",
         "_cursor_options",
+        "_deserializer",
         "_driver",
         "_json_type_codes",
         "_parameters",
@@ -177,36 +178,35 @@ class MysqlConnectorSyncStreamSource:
         self._cursor_options = dict(cursor_options or {})
         self._cursor_options["buffered"] = False
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        deserializer = getattr(driver, "_json_deserializer", None)
+        if deserializer is None and hasattr(driver, "driver_features") and isinstance(driver.driver_features, dict):
+            deserializer = driver.driver_features.get("json_deserializer")
+        self._deserializer: Callable[[Any], Any] = deserializer or from_json
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            try:
-                cursor = self._driver.connection.cursor(**self._cursor_options)
-                self._cursor = cursor
-                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-                self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-            except BaseException:
-                self.close(error=True)
-                raise
+        self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor(**self._cursor_options)
+            self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        except BaseException:
+            self.close(error=True)
+            raise
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        with handler:
-            rows = self._cursor.fetchmany(self._chunk_size)
+        rows = self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
         if self._row_plan is None:
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-        deserializer = cast(
-            "Callable[[Any], Any]",
-            getattr(self._driver, "_json_deserializer", None)
-            or self._driver.driver_features.get("json_deserializer", from_json),
-        )
-        return collect_stream_rows(rows, self._row_plan, deserializer)
+        return collect_stream_rows(rows, self._row_plan, self._deserializer)
 
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -230,6 +230,7 @@ class MysqlConnectorAsyncStreamSource:
         "_chunk_size",
         "_cursor",
         "_cursor_options",
+        "_deserializer",
         "_driver",
         "_json_type_codes",
         "_parameters",
@@ -255,6 +256,10 @@ class MysqlConnectorAsyncStreamSource:
         self._cursor_options = dict(cursor_options or {})
         self._cursor_options["buffered"] = False
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        deserializer = getattr(driver, "_json_deserializer", None)
+        if deserializer is None and hasattr(driver, "driver_features") and isinstance(driver.driver_features, dict):
+            deserializer = driver.driver_features.get("json_deserializer")
+        self._deserializer: Callable[[Any], Any] = deserializer or from_json
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -269,12 +274,7 @@ class MysqlConnectorAsyncStreamSource:
             return []
         if self._row_plan is None:
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-        deserializer = cast(
-            "Callable[[Any], Any]",
-            getattr(self._driver, "_json_deserializer", None)
-            or self._driver.driver_features.get("json_deserializer", from_json),
-        )
-        return collect_stream_rows(rows, self._row_plan, deserializer)
+        return collect_stream_rows(rows, self._row_plan, self._deserializer)
 
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -303,7 +303,7 @@ class MysqlConnectorAsyncStreamSource:
 
 def build_profile() -> "DriverParameterProfile":
     """Create the mysql-connector driver parameter profile."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: bool_to_int, **build_uuid_coercions()}
+    coercions: dict[type, Callable[[Any], Any]] = {bool: int, **build_uuid_coercions()}
     return DriverParameterProfile(
         name="mysql-connector",
         default_style=ParameterStyle.QMARK,
@@ -441,13 +441,6 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
-def resolve_column_names(description: "Sequence[Any] | None") -> "list[str]":
-    """Extract column names from cursor description."""
-    if not description:
-        return []
-    return [col[0] for col in description]
-
-
 def resolve_row_plan(
     description: "Sequence[Any] | None", json_type_codes: "set[int]"
 ) -> "tuple[list[str], list[int] | None]":
@@ -471,24 +464,6 @@ def resolve_row_plan(
         if type_code in json_type_codes:
             append_json(index)
     return column_names, json_indexes or None
-
-
-def detect_json_columns_from_description(
-    description: "Sequence[Any] | None", json_type_codes: "set[int]"
-) -> "list[int]":
-    """Identify JSON column indexes from pre-fetched cursor description metadata."""
-    return resolve_row_plan(description, json_type_codes)[1] or []
-
-
-def detect_json_columns(
-    cursor: Any, json_type_codes: "set[int]", description: "Sequence[Any] | None" = None
-) -> "list[int]":
-    """Identify JSON column indexes from cursor metadata."""
-    if description is None:
-        if not has_cursor_metadata(cursor):
-            return []
-        description = cursor.description
-    return detect_json_columns_from_description(description, json_type_codes)
 
 
 def collect_stream_rows(
@@ -572,13 +547,15 @@ def normalize_lastrowid(cursor: Any) -> int | None:
     return last_id if isinstance(last_id, int) else None
 
 
-def bool_to_int(value: bool) -> int:
-    """Coerce boolean values to integer for MySQL parameter compatibility."""
-    return int(value)
-
-
-def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpecError | bool":
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map MySQL driver exceptions to SQLSpec errors."""
+    _ = logger
+    type_name = type(error).__name__
+    if type_name == "PoolError" or "PoolError" in str(type(error)):
+        return ConnectionTimeoutError(str(error))
+    if type_name == "InterfaceError" or getattr(error, "errno", None) == -1:
+        return DatabaseConnectionError(str(error))
+
     error_code = getattr(error, "errno", None)
     if error_code is None and isinstance(error, Exception) and error.args:
         value = error.args[0]
@@ -587,10 +564,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     sqlstate = error.sqlstate if has_sqlstate(error) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
-    if error_code in _MYSQL_MIGRATION_ERROR_CODES:
-        if logger is not None:
-            logger.warning("MySQL expected migration error (ignoring): %s", error)
-        return True
+    dispatch = _MYSQL_DDL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     dispatch = _MYSQL_SQLSTATE_EXACT_DISPATCH.get(sqlstate) if sqlstate is not None else None
     if dispatch is not None:
@@ -618,6 +594,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["40"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
+    dispatch = _MYSQL_OPERATIONAL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+
     if sqlstate_prefix == "42":
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["42"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
@@ -639,14 +619,6 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
-
-
-def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
-    """Escape literal percent characters before driver-side interpolation."""
-    if not parameters or "%" not in sql:
-        return sql
-    keep = {info.position for info in validator.extract_parameters(sql)}
-    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
 
 
 def build_load_data_statement(
@@ -751,5 +723,40 @@ def _create_mysql_error(
 
 
 driver_profile = build_profile()
+
+_MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
+    0: "decimal",
+    1: "int32",
+    2: "int32",
+    3: "int64",
+    4: "float32",
+    5: "float64",
+    7: "timestamp",
+    8: "int64",
+    10: "date",
+    11: "time",
+    12: "timestamp",
+    246: "decimal",
+    252: "binary",
+    253: "string",
+    254: "string",
+}
+
+
+def _resolve_column_types(description: Any) -> "dict[str, str] | None":
+    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
+
+    Returns ``None`` when the cursor has no description or reports no
+    recognizable type codes.
+    """
+    if not description:
+        return None
+    column_types: dict[str, str] = {}
+    for col in description:
+        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
+        if token is not None:
+            column_types[col[0]] = token
+    return column_types or None
+
 
 default_statement_config = build_statement_config()

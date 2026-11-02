@@ -16,6 +16,7 @@ from sqlspec.adapters.pymssql.core import (
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
+    quote_bracket_identifier,
 )
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.exceptions import (
@@ -252,3 +253,36 @@ def test_build_connection_config_merges_extra_mapping() -> None:
     assert cfg["appname"] == "analytics"
     assert "extra" not in cfg
     assert "ignored" not in cfg
+
+
+def test_freetds_error_code_mapping() -> None:
+    """FreeTDS 20000-series codes and InterfaceError map to appropriate SQLSpec errors."""
+
+    class InterfaceError(Exception):
+        pass
+
+    assert isinstance(create_mapped_exception(Exception(20003, "DBPROCESS is dead")), QueryTimeoutError)
+    assert isinstance(
+        create_mapped_exception(Exception(20002, "Adaptive Server connection failed")), DatabaseConnectionError
+    )
+    assert isinstance(create_mapped_exception(Exception(20009, "Server is unavailable")), DatabaseConnectionError)
+    assert isinstance(create_mapped_exception(Exception(20047, "Connection closed")), DatabaseConnectionError)
+    assert isinstance(create_mapped_exception(InterfaceError("Connection broken")), DatabaseConnectionError)
+
+
+def test_percent_escaping_performance() -> None:
+    """escape_literal_percent correctly handles string literals and placeholders."""
+    validator = default_statement_config.parameter_validator
+    sql = "SELECT [id] FROM [t] WHERE [name] LIKE '50%' AND [cat] = %s"
+    escaped = escape_literal_percent(sql, ("books",), validator)
+    assert escaped == "SELECT [id] FROM [t] WHERE [name] LIKE '50%%' AND [cat] = %s"
+
+
+def test_quote_bracket_identifier() -> None:
+    """quote_bracket_identifier cleanly handles nested quotes and brackets."""
+    assert quote_bracket_identifier("users") == "[users]"
+    assert quote_bracket_identifier("[users]") == "[users]"
+    assert quote_bracket_identifier('"users"') == "[users]"
+    assert quote_bracket_identifier('user"name') == '[user"name]'
+    assert quote_bracket_identifier("[user]]name]") == "[user]]name]"
+    assert quote_bracket_identifier("user]name") == "[user]]name]"

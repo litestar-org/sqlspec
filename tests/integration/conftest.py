@@ -27,6 +27,7 @@ _DATABASE_PLUGINS: tuple[str, ...] = (
     "pytest_databases.docker.rustfs",
     "pytest_databases.docker.snowflake",
     "pytest_databases.docker.spanner",
+    "pytest_databases.docker.sqlanywhere",
 )
 
 _NON_PLUGIN_FIXTURE_MODULES: frozenset[str] = frozenset({"cleanup"})
@@ -48,6 +49,7 @@ _FIXTURE_DRIVER_REQUIREMENTS: dict[str, tuple[tuple[str, ...], ...]] = {
     "spanner_adk": (("google.cloud.spanner",),),
     "spanner_events": (("google.cloud.spanner",),),
     "spanner_litestar": (("google.cloud.spanner", "litestar"),),
+    "sqlanywhere": (("sqlanydb",),),
     "sqlite": ((),),
 }
 

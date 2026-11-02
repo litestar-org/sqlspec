@@ -1,7 +1,9 @@
 """Unit tests for MySQL-family data-dictionary metadata."""
 
 from importlib import import_module
+from inspect import isawaitable
 from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import sqlglot
@@ -11,6 +13,7 @@ from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
 from sqlspec.adapters.mysqlconnector.data_dictionary import MysqlConnectorSyncDataDictionary
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
+from sqlspec.core import SQL
 from sqlspec.data_dictionary import (
     DataDictionaryLoader,
     DDLResult,
@@ -28,9 +31,18 @@ from sqlspec.data_dictionary import (
 class _SyncDDLDriver:
     def __init__(self) -> None:
         self.statements: list[str] = []
+        self.sql_mode = "STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"
+        self.sql_quote_show_create = "1"
 
     def select_one(self, statement: str, *args: Any, **kwargs: Any) -> dict[str, str]:
         self.statements.append(str(statement))
+        query = str(statement)
+        if "SELECT VERSION()" in query:
+            return {
+                "raw_version": "8.4.0",
+                "sql_mode": self.sql_mode,
+                "sql_quote_show_create": self.sql_quote_show_create,
+            }
         return {"Table": "orders", "Create Table": "CREATE TABLE `orders` (`id` int)"}
 
     def select_value_or_none(self, statement: object, *args: Any, **kwargs: Any) -> str | None:
@@ -259,3 +271,47 @@ def test_mysql_object_ddl_routes_through_native_hook() -> None:
     synthesized = dictionary.get_object_ddl(cast(Any, synth_driver), "orders", schema="shop", prefer_native=False)
     assert synthesized.status == MetadataSupport.UNSUPPORTED
     assert not any(statement.startswith("SHOW CREATE") for statement in synth_driver.statements)
+
+
+@pytest.mark.parametrize("dictionary_type", [PyMysqlDataDictionary, AiomysqlDataDictionary])
+async def test_mysql_native_ddl_refreshes_session_context(dictionary_type: type[Any]) -> None:
+    """DDL captures mutable SQL mode and quote settings for every statement."""
+    session = _SyncDDLDriver()
+    driver = (
+        Mock(select_one=AsyncMock(side_effect=session.select_one))
+        if dictionary_type is AiomysqlDataDictionary
+        else session
+    )
+    dictionary = dictionary_type()
+    for sql_mode, quotes in [(session.sql_mode, "1"), ("NO_BACKSLASH_ESCAPES", "0")]:
+        session.sql_mode = sql_mode
+        session.sql_quote_show_create = quotes
+        result = dictionary.get_ddl(driver, "orders", schema="shop")
+        if isawaitable(result):
+            result = await result
+        assert result.context["sql_mode"] == sql_mode
+        assert result.context["sql_quote_show_create"] == quotes
+
+
+@pytest.mark.parametrize("dictionary_type", [PyMysqlDataDictionary, AiomysqlDataDictionary])
+@pytest.mark.parametrize("object_name", [None, "orders"])
+async def test_mysql_get_privileges_binds_optional_object_name(
+    dictionary_type: type[Any], object_name: str | None
+) -> None:
+    from sqlspec.adapters.pymysql.core import default_statement_config
+
+    def select_rows(statement: str, **parameters: Any) -> list[dict[str, str]]:
+        compiled_sql, bound = SQL(str(statement), statement_config=default_statement_config, **parameters).compile()
+        assert "information_schema.table_privileges" in compiled_sql
+        assert bound == {"schema_name": "shop", "object_name": object_name}
+        return [{"table_name": "orders"}]
+
+    is_async = dictionary_type is AiomysqlDataDictionary
+    driver = Mock(
+        select=AsyncMock(side_effect=select_rows) if is_async else Mock(side_effect=select_rows),
+        select_value_or_none=AsyncMock(return_value="8.4.0") if is_async else Mock(return_value="8.4.0"),
+    )
+    result = dictionary_type().get_privileges(driver, object_name=object_name, schema="shop")
+    if isawaitable(result):
+        result = await result
+    assert result.items == ({"table_name": "orders"},)

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from psycopg.sql import Composable
 
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.driver import AdbcDriver
@@ -50,8 +51,8 @@ class FakeSyncCursor:
         self.schema_exists = schema_exists
         self.executed: list[tuple[str, Any]] = []
 
-    def execute(self, sql: str, parameters: Any | None = None) -> None:
-        self.executed.append((sql, parameters))
+    def execute(self, sql: str | Composable, parameters: Any | None = None) -> None:
+        self.executed.append((sql.as_string() if isinstance(sql, Composable) else sql, parameters))
 
     def fetchone(self) -> tuple[int] | None:
         return (1,) if self.schema_exists else None
@@ -73,8 +74,8 @@ class FakeAsyncCursor:
         self.schema_exists = schema_exists
         self.executed: list[tuple[str, Any]] = []
 
-    async def execute(self, sql: str, parameters: Any | None = None) -> None:
-        self.executed.append((sql, parameters))
+    async def execute(self, sql: str | Composable, parameters: Any | None = None) -> None:
+        self.executed.append((sql.as_string() if isinstance(sql, Composable) else sql, parameters))
 
     async def fetchone(self) -> tuple[int] | None:
         return (1,) if self.schema_exists else None

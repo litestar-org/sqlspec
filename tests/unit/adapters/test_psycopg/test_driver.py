@@ -1,9 +1,10 @@
 """Unit tests for psycopg driver transaction behavior."""
 
+import inspect
 from asyncio import CancelledError
 from contextlib import nullcontext
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import psycopg
@@ -12,7 +13,7 @@ import pytest
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL
-from sqlspec.exceptions import SerializationConflictError, SQLSpecError
+from sqlspec.exceptions import SerializationConflictError, SQLSpecError, UniqueViolationError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
@@ -119,6 +120,7 @@ class _SyncTransactionConnection:
 
     def rollback(self) -> None:
         self.rollback_calls += 1
+        self.info.transaction_status = 0
         if self.rollback_error is not None:
             raise self.rollback_error
 
@@ -158,6 +160,7 @@ class _AsyncTransactionConnection:
 
     async def rollback(self) -> None:
         self.rollback_calls += 1
+        self.info.transaction_status = 0
         if self.rollback_error is not None:
             raise self.rollback_error
 
@@ -255,9 +258,9 @@ def test_sync_rollback_restores_changed_autocommit() -> None:
 
     assert connection.autocommit_calls == [False, True]
     assert connection.autocommit is True
-    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
+@pytest.mark.anyio
 async def test_async_rollback_restores_changed_autocommit() -> None:
     connection = _AsyncTransactionConnection()
     driver = _async_driver(connection)
@@ -267,6 +270,59 @@ async def test_async_rollback_restores_changed_autocommit() -> None:
 
     assert connection.autocommit_calls == [False, True]
     assert connection.autocommit is True
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    ("query", "parameters", "wire_sql"),
+    [
+        ("SELECT '100%' AS value", (), "SELECT '100%' AS value"),
+        ("SELECT 10 % 3 AS value", (), "SELECT 10 % 3 AS value"),
+        ("SELECT %s AS value WHERE '100%' LIKE '100%'", (1,), "SELECT %s AS value WHERE '100%%' LIKE '100%%'"),
+    ],
+)
+async def test_cached_percent_sql_preserves_native_binding(
+    is_async: bool, query: str, parameters: tuple[int, ...], wire_sql: str
+) -> None:
+    """Cached and uncached execution apply percent escaping only with native parameters."""
+    cursor = MagicMock()
+    cursor.description = [SimpleNamespace(name="value", type_code=23)]
+    cursor.rowcount = 1
+    if is_async:
+        cursor.execute = AsyncMock()
+        cursor.fetchall = AsyncMock(return_value=[(1,)])
+        cursor.close = AsyncMock()
+    else:
+        cursor.fetchall.return_value = [(1,)]
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = PsycopgAsyncDriver(connection) if is_async else PsycopgSyncDriver(connection)
+
+    for _ in range(2):
+        result = driver.execute(query, *parameters)
+        if inspect.isawaitable(result):
+            result = await result
+        assert result.get_data() == [{"value": 1}]
+
+    assert [call.args[0] for call in cursor.execute.call_args_list] == [wire_sql, wire_sql]
+    bound = [tuple(call.args[1]) if len(call.args) > 1 else () for call in cursor.execute.call_args_list]
+    assert bound == [parameters, parameters]
+
+
+def test_psycopg_sync_stream_source_runs_with_exception_handler() -> None:
+    """PsycopgSyncStreamSource delegates to _run_with_exception_handler inside active except block."""
+    from sqlspec.adapters.psycopg.core import PsycopgSyncStreamSource
+
+    connection = MagicMock()
+    driver = PsycopgSyncDriver(connection=connection)
+    source = PsycopgSyncStreamSource(driver, "SELECT 1", (), 10)
+
+    try:
+        raise ValueError("ambient error")
+    except ValueError:
+        source.start()
+
+    assert source._cursor is not None
     assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
@@ -409,11 +465,11 @@ async def test_async_logical_transaction_is_reported_while_libpq_is_idle() -> No
 
 
 def test_sync_inerror_status_is_not_active_transaction_and_rolls_back_on_begin() -> None:
-    """TRANSACTION_STATUS_INERROR (3) should not report an active transaction and should roll back on begin()."""
+    """TRANSACTION_STATUS_INERROR (3) is reported in transaction state and rolls back on begin()."""
     connection = _SyncTransactionConnection(transaction_status=3)
     driver = _sync_driver(connection)
 
-    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
     driver.begin()
 
     assert connection.rollback_calls == 1
@@ -422,11 +478,11 @@ def test_sync_inerror_status_is_not_active_transaction_and_rolls_back_on_begin()
 
 
 async def test_async_inerror_status_is_not_active_transaction_and_rolls_back_on_begin() -> None:
-    """TRANSACTION_STATUS_INERROR (3) should not report an active transaction and should roll back on async begin()."""
+    """TRANSACTION_STATUS_INERROR (3) is reported in transaction state and rolls back on async begin()."""
     connection = _AsyncTransactionConnection(transaction_status=3)
     driver = _async_driver(connection)
 
-    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+    assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
     await driver.begin()
 
     assert connection.rollback_calls == 1
@@ -460,3 +516,158 @@ def test_sync_copy_to_stdout_decodes_memoryview_chunks_and_reports_rowcount() ->
     assert result is not None
     assert result.get_data() == [{"copy_output": "1\talice\n2\tbob\n"}]
     assert result.rows_affected == 2
+
+
+def test_sync_session_exit_rolls_back_uncommitted_implicit_transaction() -> None:
+    """Session exit rolls back uncommitted implicit autocommit=False transactions."""
+    connection = _SyncTransactionConnection(transaction_status=2)
+    config = PsycopgSyncConfig()
+    context = config.provide_session()
+    object.__setattr__(context, "_acquire_connection", lambda: connection)
+    with context:
+        pass
+    assert connection.rollback_calls == 1
+
+
+@pytest.mark.anyio
+async def test_async_session_exit_rolls_back_uncommitted_implicit_transaction() -> None:
+    """Async session exit rolls back uncommitted implicit autocommit=False transactions."""
+    connection = _AsyncTransactionConnection(transaction_status=2)
+    config = PsycopgAsyncConfig()
+    context = config.provide_session()
+    object.__setattr__(context, "_acquire_connection", AsyncMock(return_value=connection))
+    async with context:
+        pass
+    assert connection.rollback_calls == 1
+
+
+@pytest.mark.anyio
+async def test_psycopg_async_load_from_arrow_runs_with_exception_handler() -> None:
+    """PsycopgAsyncDriver.load_from_arrow routes operations through exception handler inside active except block."""
+    import pyarrow as pa
+
+    connection = MagicMock()
+    cursor_mock = MagicMock()
+    cursor_mock.execute = AsyncMock()
+    copy_ctx = AsyncMock()
+    cursor_mock.copy.return_value = copy_ctx
+    connection.cursor.return_value = cursor_mock
+
+    driver = PsycopgAsyncDriver(
+        connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
+    )
+    table = pa.table({"id": [1, 2], "val": ["a", "b"]})
+
+    try:
+        raise ValueError("ambient error")
+    except ValueError:
+        job = await driver.load_from_arrow("test_table", table, overwrite=True)
+
+    assert job.telemetry["rows_processed"] == 2
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("binary", [False, True])
+@pytest.mark.parametrize("failure_phase", ["enter", "exit"])
+async def test_copy_lifecycle_maps_native_errors(is_async: bool, binary: bool, failure_phase: str) -> None:
+    """COPY setup and finalization errors retain SQLSpec mapping even inside an except block."""
+    import pyarrow as pa
+
+    native_error = psycopg.errors.UniqueViolation("duplicate key value violates unique constraint items_pk")
+    copy_context = AsyncMock() if is_async else MagicMock()
+    enter = copy_context.__aenter__ if is_async else copy_context.__enter__
+    exit_ = copy_context.__aexit__ if is_async else copy_context.__exit__
+    enter.return_value = copy_context
+    if failure_phase == "enter":
+        enter.side_effect = native_error
+    else:
+        exit_.side_effect = native_error
+    cursor = MagicMock()
+    cursor.copy.return_value = copy_context
+    if is_async:
+        cursor.close = AsyncMock()
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    features = {"storage_capabilities": {"arrow_import_enabled": True}, "enable_pgcopy_binary": binary}
+    driver = (
+        PsycopgAsyncDriver(connection, driver_features=features)
+        if is_async
+        else PsycopgSyncDriver(connection, driver_features=features)
+    )
+
+    try:
+        raise ValueError("ambient exception")
+    except ValueError:
+        with pytest.raises(UniqueViolationError) as error:
+            result = driver.load_from_arrow("items", pa.table({"id": [1, 1]}))
+            if inspect.isawaitable(result):
+                await result
+    assert error.value.__cause__ is native_error
+
+
+def test_sync_dispatch_execute_script_emits_statement_observer_events() -> None:
+    """PsycopgSyncDriver.dispatch_execute_script emits script statement events to observers."""
+    from sqlspec.core import SQL
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    events: list[Any] = []
+    connection = MagicMock()
+    cursor = MagicMock()
+    connection.cursor.return_value = cursor
+
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=(events.append,)))
+    driver = PsycopgSyncDriver(connection=connection)
+    driver._observability = runtime
+
+    stmt = SQL("SELECT 1; SELECT 2;")
+    result = driver.dispatch_execute_script(cursor, stmt)
+
+    assert result.statement_count == 2
+    assert len(events) == 2
+    assert events[0].script_ordinal == 0
+    assert events[1].script_ordinal == 1
+
+
+@pytest.mark.anyio
+async def test_async_dispatch_execute_script_emits_statement_observer_events() -> None:
+    """PsycopgAsyncDriver.dispatch_execute_script emits script statement events to observers."""
+    from sqlspec.core import SQL
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    events: list[Any] = []
+    connection = MagicMock()
+    cursor = AsyncMock()
+    connection.cursor.return_value = cursor
+
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=(events.append,)))
+    driver = PsycopgAsyncDriver(connection=connection)
+    driver._observability = runtime
+
+    stmt = SQL("SELECT 1; SELECT 2;")
+    result = await driver.dispatch_execute_script(cursor, stmt)
+
+    assert result.statement_count == 2
+    assert len(events) == 2
+    assert events[0].script_ordinal == 0
+    assert events[1].script_ordinal == 1
+
+
+def test_sync_load_from_arrow_preserves_cause_on_failure() -> None:
+    """PsycopgSyncDriver.load_from_arrow preserves underlying __cause__ on execution failure."""
+    import psycopg
+    import pyarrow as pa
+
+    connection = MagicMock()
+    cursor_mock = MagicMock()
+    cursor_mock.execute.side_effect = psycopg.OperationalError("db error")
+    connection.cursor.return_value = cursor_mock
+
+    driver = PsycopgSyncDriver(
+        connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
+    )
+    table = pa.table({"id": [1, 2]})
+
+    with pytest.raises(Exception) as exc_info:
+        driver.load_from_arrow("test_table", table, overwrite=True)
+
+    assert exc_info.value.__cause__ is not None

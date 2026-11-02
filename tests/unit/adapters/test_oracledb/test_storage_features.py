@@ -56,4 +56,14 @@ def test_oracle_range_partitioning_uses_interval() -> None:
     )
 
     assert "PARTITION BY RANGE (timestamp)" in report["clause"]
-    assert "INTERVAL (NUMTOYMINTERVAL(1, ''MONTH''))" in report["clause"]
+    assert "INTERVAL (NUMTOYMINTERVAL(1, 'MONTH'))" in report["clause"]
+    assert "INTERVAL (NUMTOYMINTERVAL(1, ''MONTH''))" in report["plsql_clause"]
+
+
+def test_validate_oracle_identifier_accepts_dollar_sign() -> None:
+    """validate_oracle_identifier accepts $, #, and _ in Oracle identifiers."""
+    from sqlspec.adapters.oracledb._storage import validate_oracle_identifier
+
+    assert validate_oracle_identifier("tbl$name", "table name") == "tbl$name"
+    assert validate_oracle_identifier("tbl#name", "table name") == "tbl#name"
+    assert validate_oracle_identifier("tbl_name", "table name") == "tbl_name"

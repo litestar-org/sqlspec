@@ -69,7 +69,7 @@ def build_column_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ColumnMetad
             table_name=str(r.get("table_name", "")),
             column_name=str(r.get("column_name", "")),
             data_type=str(r.get("data_type", "")),
-            is_nullable=bool(r.get("is_nullable", True)),
+            is_nullable=r.get("is_nullable") in (True, 1, "YES", "yes"),
             column_default=str(r["column_default"]) if r.get("column_default") is not None else None,
             ordinal_position=int(r.get("ordinal_position", 1)),
             max_length=int(r.get("max_length", 0)) if r.get("max_length") is not None else 0,
@@ -128,8 +128,8 @@ def build_foreign_key_metadata(rows: "Iterable[dict[str, Any]]") -> "list[Foreig
         ForeignKeyMetadata(
             table_name=str(r.get("table_name", "")),
             column_name=str(r.get("column_name", "")),
-            referenced_table=str(r.get("referenced_table_name", "")),
-            referenced_column=str(r.get("referenced_column_name", "")),
+            referenced_table=str(r.get("referenced_table", r.get("referenced_table_name", ""))),
+            referenced_column=str(r.get("referenced_column", r.get("referenced_column_name", ""))),
             constraint_name=str(r.get("constraint_name", "")),
             schema=str(r["schema_name"]) if r.get("schema_name") else None,
             referenced_schema=str(r["referenced_schema"]) if r.get("referenced_schema") else None,
@@ -143,9 +143,6 @@ class SqlanywhereSyncDataDictionary(SyncDataDictionaryBase):
     """Synchronous SAP SQL Anywhere data dictionary."""
 
     dialect: ClassVar[str] = "sqlanywhere"
-
-    def __init__(self) -> None:
-        super().__init__()
 
     def get_metadata_capabilities(
         self, driver: "SqlanywhereDriver", domains: "Sequence[str] | None" = None

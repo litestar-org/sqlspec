@@ -19,11 +19,16 @@ class FakeCursor:
     """Minimal DB-API cursor for pymssql unit tests."""
 
     def __init__(
-        self, rows: "list[Any] | None" = None, description: "list[tuple[str, ...]] | None" = None, rowcount: int = -1
+        self,
+        rows: "list[Any] | None" = None,
+        description: "list[tuple[str, ...]] | None" = None,
+        rowcount: int = -1,
+        error: BaseException | None = None,
     ) -> None:
         self.rows = rows or []
         self.description = description
         self.rowcount = rowcount
+        self.error = error
         self.closed = False
         self.calls: list[tuple[str, Any]] = []
         self.fetchmany_sizes: list[int] = []
@@ -31,6 +36,8 @@ class FakeCursor:
 
     def execute(self, sql: str, parameters: Any = None) -> None:
         self.calls.append((sql, parameters))
+        if self.error is not None:
+            raise self.error
 
     def executemany(self, sql: str, parameters: Any = None) -> None:
         self.many_calls.append((sql, parameters))

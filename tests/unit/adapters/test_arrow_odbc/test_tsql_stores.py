@@ -10,6 +10,7 @@ pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
 from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore, _datetime_value
+from sqlspec.adapters.arrow_odbc.core import atomic_store_write
 from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
 from sqlspec.adapters.arrow_odbc.litestar.store import _TsqlSessionSql
@@ -75,11 +76,12 @@ async def test_tsql_session_set_inline_inserts() -> None:
     await _session_store(connection).set("k", b"v", 60)
 
     assert normalized_calls(connection) == [
+        ("BEGIN TRANSACTION", None),
         ("SELECT session_id FROM sess WHERE session_id = ?", ["k"]),
         ("INSERT INTO sess (session_id, data, expires_at) VALUES (?, ?, ?)", ["k", "dg==", ISO_TIMESTAMP]),
         ("DELETE FROM sess_chunks WHERE session_id = ?", ["k"]),
+        ("COMMIT TRANSACTION", None),
     ]
-    assert connection.commit_calls == 1
 
 
 async def test_tsql_session_set_chunked_updates_existing() -> None:
@@ -92,15 +94,17 @@ async def test_tsql_session_set_chunked_updates_existing() -> None:
 
     calls = normalized_calls(connection)
     assert [sql for sql, _ in calls] == [
+        "BEGIN TRANSACTION",
         "SELECT session_id FROM sess WHERE session_id = ?",
         "UPDATE sess SET data = ?, expires_at = ?, updated_at = SYSUTCDATETIME() WHERE session_id = ?",
         "DELETE FROM sess_chunks WHERE session_id = ?",
         "INSERT INTO sess_chunks (session_id, chunk_index, data) VALUES (?, ?, ?)",
         "INSERT INTO sess_chunks (session_id, chunk_index, data) VALUES (?, ?, ?)",
+        "COMMIT TRANSACTION",
     ]
-    assert calls[1][1] == [None, None, "k"]
-    assert [parameters[:2] for _, parameters in calls[3:] if parameters] == [["k", "0"], ["k", "1"]]
-    assert [len(parameters[2] or "") for _, parameters in calls[3:] if parameters] == [3500, 500]
+    assert calls[2][1] == [None, None, "k"]
+    assert [parameters[:2] for _, parameters in calls[4:-1] if parameters] == [["k", "0"], ["k", "1"]]
+    assert [len(parameters[2] or "") for _, parameters in calls[4:-1] if parameters] == [3500, 500]
 
 
 async def test_tsql_session_get_renews_expiry() -> None:
@@ -191,11 +195,13 @@ async def test_tsql_session_delete_expired() -> None:
     assert await _session_store(connection).delete_expired() == 2
 
     assert normalized_calls(connection) == [
+        ("BEGIN TRANSACTION", None),
         (
             "SELECT COUNT(*) AS expired_count FROM sess WHERE expires_at IS NOT NULL AND expires_at < SYSUTCDATETIME()",
             None,
         ),
         ("DELETE FROM sess WHERE expires_at IS NOT NULL AND expires_at < SYSUTCDATETIME()", None),
+        ("COMMIT TRANSACTION", None),
     ]
 
 
@@ -250,70 +256,137 @@ _ADK_EVENT: "Any" = {
     "event_data": {"x": 1},
 }
 _TSQL_ADK_SESSION_CALLS = [
+    ("BEGIN TRANSACTION", None),
     (
-        "INSERT INTO [dbo].[adk_session] ( id, app_name, user_id, [tenant_id], state, create_time, update_time ) VALUES (?, ?, ?, ?, ?, SYSUTCDATETIME(), SYSUTCDATETIME())",
+        (
+            "INSERT INTO [dbo].[adk_session] ( id, app_name, user_id, [tenant_id], "
+            "state, create_time, update_time ) VALUES (?, ?, ?, ?, ?, SYSUTCDATETIME(), "
+            "SYSUTCDATETIME())"
+        ),
         ["s1", "app", "u", "7", '{"a":1}'],
     ),
     (
-        "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?",
+        (
+            "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM "
+            "[dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?"
+        ),
         ["app", "u", "s1"],
     ),
+    ("COMMIT TRANSACTION", None),
     (
         "UPDATE [dbo].[adk_session] SET update_time = SYSUTCDATETIME() WHERE app_name = ? AND user_id = ? AND id = ?",
         ["app", "u", "s1"],
     ),
     (
-        "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?",
+        (
+            "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM "
+            "[dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?"
+        ),
         ["app", "u", "s1"],
     ),
+    ("BEGIN TRANSACTION", None),
     (
-        "UPDATE [dbo].[adk_session] SET state = ?, update_time = SYSUTCDATETIME() WHERE app_name = ? AND user_id = ? AND id = ?",
+        (
+            "UPDATE [dbo].[adk_session] SET state = ?, update_time = SYSUTCDATETIME() "
+            "WHERE app_name = ? AND user_id = ? AND id = ?"
+        ),
         ['{"a":2}', "app", "u", "s1"],
     ),
+    ("COMMIT TRANSACTION", None),
     (
-        "SELECT id, app_name, user_id, state, create_time, update_time FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? ORDER BY update_time DESC, id DESC OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY",
+        (
+            "SELECT id, app_name, user_id, state, create_time, update_time FROM "
+            "[dbo].[adk_session] WHERE app_name = ? AND user_id = ? ORDER BY update_time "
+            "DESC, id DESC OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY"
+        ),
         ["app", "u"],
     ),
+    ("BEGIN TRANSACTION", None),
     ("DELETE FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?", ["app", "u", "s1"]),
+    ("COMMIT TRANSACTION", None),
+    ("BEGIN TRANSACTION", None),
     (
-        "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, invocation_id, timestamp, event_data ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, "
+            "invocation_id, timestamp, event_data ) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ),
         ["e1", "app", "u", "s1", "i1", "2026-01-02T03:04:05.678901", '{"x":1}'],
     ),
+    ("COMMIT TRANSACTION", None),
+    ("BEGIN TRANSACTION", None),
     (
-        "UPDATE [dbo].[adk_session] SET state = ?, update_time = SYSUTCDATETIME() WHERE app_name = ? AND user_id = ? AND id = ?",
+        (
+            "UPDATE [dbo].[adk_session] SET state = ?, update_time = SYSUTCDATETIME() "
+            "WHERE app_name = ? AND user_id = ? AND id = ?"
+        ),
         ['{"a":3}', "app", "u", "s1"],
     ),
     (
-        "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?",
+        (
+            "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM "
+            "[dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?"
+        ),
         ["app", "u", "s1"],
     ),
     (
-        "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, invocation_id, timestamp, event_data ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, "
+            "invocation_id, timestamp, event_data ) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ),
         ["e1", "app", "u", "s1", "i1", "2026-01-02T03:04:05.678901", '{"x":1}'],
     ),
     (
-        "MERGE INTO [dbo].[adk_app_state] WITH (HOLDLOCK) AS target USING (SELECT ? AS [app_name], ? AS state) AS source ON (target.[app_name] = source.[app_name]) WHEN MATCHED THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], [state], [update_time]) VALUES (source.[app_name], source.[state], SYSUTCDATETIME());",
+        (
+            "MERGE INTO [dbo].[adk_app_state] WITH (HOLDLOCK) AS target USING (SELECT ? "
+            "AS [app_name], ? AS state) AS source ON (target.[app_name] = "
+            "source.[app_name]) WHEN MATCHED THEN UPDATE SET state = source.state, "
+            "update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], "
+            "[state], [update_time]) VALUES (source.[app_name], source.[state], "
+            "SYSUTCDATETIME());"
+        ),
         ["app", '{"g":1}'],
     ),
     (
-        "MERGE INTO [dbo].[adk_user_state] WITH (HOLDLOCK) AS target USING (SELECT ? AS [app_name], ? AS [user_id], ? AS state) AS source ON (target.[app_name] = source.[app_name] AND target.[user_id] = source.[user_id]) WHEN MATCHED THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], [user_id], [state], [update_time]) VALUES (source.[app_name], source.[user_id], source.[state], SYSUTCDATETIME());",
+        (
+            "MERGE INTO [dbo].[adk_user_state] WITH (HOLDLOCK) AS target USING (SELECT ? "
+            "AS [app_name], ? AS [user_id], ? AS state) AS source ON (target.[app_name] "
+            "= source.[app_name] AND target.[user_id] = source.[user_id]) WHEN MATCHED "
+            "THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN "
+            "NOT MATCHED THEN INSERT ([app_name], [user_id], [state], [update_time]) "
+            "VALUES (source.[app_name], source.[user_id], source.[state], "
+            "SYSUTCDATETIME());"
+        ),
         ["app", "u", '{"h":2}'],
     ),
+    ("COMMIT TRANSACTION", None),
     (
-        "SELECT TOP 4 id, app_name, user_id, session_id, invocation_id, timestamp, event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND session_id = ? AND timestamp > ? ORDER BY timestamp ASC",
+        (
+            "SELECT TOP 4 id, app_name, user_id, session_id, invocation_id, timestamp, "
+            "event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND "
+            "session_id = ? AND timestamp > ? ORDER BY timestamp ASC"
+        ),
         ["app", "u", "s1", "2026-01-02T03:04:05.678901"],
     ),
     (
-        "SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND session_id = ? ORDER BY timestamp ASC",
+        (
+            "SELECT id, app_name, user_id, session_id, invocation_id, timestamp, "
+            "event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND "
+            "session_id = ? ORDER BY timestamp ASC"
+        ),
         ["app", "u", "s1"],
     ),
+    ("BEGIN TRANSACTION", None),
     (
         "SELECT COUNT(*) AS row_count FROM [dbo].[adk_event] WHERE timestamp < ? AND app_name = ?",
         ["2026-01-02T03:04:05.678901", "app"],
     ),
     ("DELETE FROM [dbo].[adk_event] WHERE timestamp < ? AND app_name = ?", ["2026-01-02T03:04:05.678901", "app"]),
+    ("COMMIT TRANSACTION", None),
+    ("BEGIN TRANSACTION", None),
     ("SELECT COUNT(*) AS row_count FROM [dbo].[adk_session] WHERE update_time < ?", ["2026-01-02T03:04:05.678901"]),
     ("DELETE FROM [dbo].[adk_session] WHERE update_time < ?", ["2026-01-02T03:04:05.678901"]),
+    ("COMMIT TRANSACTION", None),
+    ("BEGIN TRANSACTION", None),
     (
         "SELECT COUNT(*) AS row_count FROM [dbo].[adk_user_state] WHERE update_time < ? AND app_name = ?",
         ["2026-01-02T03:04:05.678901", "app"],
@@ -322,21 +395,48 @@ _TSQL_ADK_SESSION_CALLS = [
         "DELETE FROM [dbo].[adk_user_state] WHERE update_time < ? AND app_name = ?",
         ["2026-01-02T03:04:05.678901", "app"],
     ),
+    ("COMMIT TRANSACTION", None),
     ("SELECT TOP 1 state FROM [dbo].[adk_app_state] WHERE app_name = ?", ["app"]),
     ("SELECT TOP 1 state FROM [dbo].[adk_user_state] WHERE app_name = ? AND user_id = ?", ["app", "u"]),
+    ("BEGIN TRANSACTION", None),
     (
-        "MERGE INTO [dbo].[adk_app_state] WITH (HOLDLOCK) AS target USING (SELECT ? AS [app_name], ? AS state) AS source ON (target.[app_name] = source.[app_name]) WHEN MATCHED THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], [state], [update_time]) VALUES (source.[app_name], source.[state], SYSUTCDATETIME());",
+        (
+            "MERGE INTO [dbo].[adk_app_state] WITH (HOLDLOCK) AS target USING (SELECT ? "
+            "AS [app_name], ? AS state) AS source ON (target.[app_name] = "
+            "source.[app_name]) WHEN MATCHED THEN UPDATE SET state = source.state, "
+            "update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], "
+            "[state], [update_time]) VALUES (source.[app_name], source.[state], "
+            "SYSUTCDATETIME());"
+        ),
         ["app", '{"g":2}'],
     ),
+    ("COMMIT TRANSACTION", None),
+    ("BEGIN TRANSACTION", None),
     (
-        "MERGE INTO [dbo].[adk_user_state] WITH (HOLDLOCK) AS target USING (SELECT ? AS [app_name], ? AS [user_id], ? AS state) AS source ON (target.[app_name] = source.[app_name] AND target.[user_id] = source.[user_id]) WHEN MATCHED THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], [user_id], [state], [update_time]) VALUES (source.[app_name], source.[user_id], source.[state], SYSUTCDATETIME());",
+        (
+            "MERGE INTO [dbo].[adk_user_state] WITH (HOLDLOCK) AS target USING (SELECT ? "
+            "AS [app_name], ? AS [user_id], ? AS state) AS source ON (target.[app_name] "
+            "= source.[app_name] AND target.[user_id] = source.[user_id]) WHEN MATCHED "
+            "THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN "
+            "NOT MATCHED THEN INSERT ([app_name], [user_id], [state], [update_time]) "
+            "VALUES (source.[app_name], source.[user_id], source.[state], "
+            "SYSUTCDATETIME());"
+        ),
         ["app", "u", '{"h":3}'],
     ),
+    ("COMMIT TRANSACTION", None),
     ("SELECT TOP 1 value FROM [dbo].[adk_internal_metadata] WHERE [key] = ?", ["k"]),
+    ("BEGIN TRANSACTION", None),
     (
-        "MERGE INTO [dbo].[adk_internal_metadata] WITH (HOLDLOCK) AS target USING (SELECT ? AS [key], ? AS value) AS source ON (target.[key] = source.[key]) WHEN MATCHED THEN UPDATE SET value = source.value WHEN NOT MATCHED THEN INSERT ([key], value) VALUES (source.[key], source.value);",
+        (
+            "MERGE INTO [dbo].[adk_internal_metadata] WITH (HOLDLOCK) AS target USING "
+            "(SELECT ? AS [key], ? AS value) AS source ON (target.[key] = source.[key]) "
+            "WHEN MATCHED THEN UPDATE SET value = source.value WHEN NOT MATCHED THEN "
+            "INSERT ([key], value) VALUES (source.[key], source.value);"
+        ),
         ["k", "v"],
     ),
+    ("COMMIT TRANSACTION", None),
 ]
 _TSQL_ADK_DDL = [
     "CREATE TABLE [dbo].[adk_session] ( row_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT [df_adk_session_row_id] DEFAULT NEWSEQUENTIALID(), id NVARCHAR(128) NOT NULL, app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, tenant_id INTEGER, state NVARCHAR(MAX) NOT NULL, create_time DATETIME2(6) NOT NULL CONSTRAINT [df_adk_session_create_time] DEFAULT SYSUTCDATETIME(), update_time DATETIME2(6) NOT NULL CONSTRAINT [df_adk_session_update_time] DEFAULT SYSUTCDATETIME(), CONSTRAINT [pk_adk_session_row_id] PRIMARY KEY (row_id), CONSTRAINT [uq_adk_session_id] UNIQUE (id) )",
@@ -415,9 +515,14 @@ def test_tsql_adk_missing_table_reads_empty(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 _TSQL_ADK_MEMORY_CALLS = [
+    ("BEGIN TRANSACTION", None),
     ("SELECT TOP 1 id FROM [dbo].[adk_memory] WHERE event_id = ?", ["e1"]),
     (
-        "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, content_text, metadata_json, inserted_at, [tenant_id] ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, "
+            "event_id, author, timestamp, content_json, content_text, metadata_json, "
+            "inserted_at, [tenant_id] ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ),
         [
             "m1",
             "s1",
@@ -434,16 +539,31 @@ _TSQL_ADK_MEMORY_CALLS = [
             "7",
         ],
     ),
+    ("COMMIT TRANSACTION", None),
     (
-        "SELECT id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, content_text, metadata_json, inserted_at FROM [dbo].[adk_memory] WHERE app_name = ? AND ((scope = 'user' AND user_id = ?) OR scope = 'app') AND content_text LIKE ? ORDER BY timestamp DESC OFFSET 0 ROWS FETCH NEXT 3 ROWS ONLY",
+        (
+            "SELECT id, session_id, app_name, user_id, scope, event_id, author, "
+            "timestamp, content_json, content_text, metadata_json, inserted_at FROM "
+            "[dbo].[adk_memory] WHERE app_name = ? AND ((scope = 'user' AND user_id = ?) "
+            "OR scope = 'app') AND content_text LIKE ? ORDER BY timestamp DESC OFFSET 0 "
+            "ROWS FETCH NEXT 3 ROWS ONLY"
+        ),
         ["app", "u", "%hello%"],
     ),
     (
-        "SELECT id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, content_text, metadata_json, inserted_at FROM [dbo].[adk_memory] WHERE app_name = ? AND scope = 'app' AND content_text LIKE ? ORDER BY timestamp DESC OFFSET 0 ROWS FETCH NEXT 20 ROWS ONLY",
+        (
+            "SELECT id, session_id, app_name, user_id, scope, event_id, author, "
+            "timestamp, content_json, content_text, metadata_json, inserted_at FROM "
+            "[dbo].[adk_memory] WHERE app_name = ? AND scope = 'app' AND content_text "
+            "LIKE ? ORDER BY timestamp DESC OFFSET 0 ROWS FETCH NEXT 20 ROWS ONLY"
+        ),
         ["app", "%hello%"],
     ),
+    ("BEGIN TRANSACTION", None),
     ("SELECT COUNT(*) AS row_count FROM [dbo].[adk_memory] WHERE session_id = ?", ["s1"]),
     ("DELETE FROM [dbo].[adk_memory] WHERE session_id = ?", ["s1"]),
+    ("COMMIT TRANSACTION", None),
+    ("BEGIN TRANSACTION", None),
     (
         "SELECT COUNT(*) AS row_count FROM [dbo].[adk_memory] WHERE inserted_at < ? AND app_name = ? AND scope = ?",
         [ISO_TIMESTAMP, "app", "user"],
@@ -452,6 +572,7 @@ _TSQL_ADK_MEMORY_CALLS = [
         "DELETE FROM [dbo].[adk_memory] WHERE inserted_at < ? AND app_name = ? AND scope = ?",
         [ISO_TIMESTAMP, "app", "user"],
     ),
+    ("COMMIT TRANSACTION", None),
 ]
 _TSQL_ADK_MEMORY_DDL = "CREATE TABLE [dbo].[adk_memory] ( id NVARCHAR(128) NOT NULL, session_id NVARCHAR(128) NOT NULL, app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, scope NVARCHAR(16) NOT NULL DEFAULT 'user', event_id NVARCHAR(128) NOT NULL, author NVARCHAR(256) NULL, timestamp DATETIME2(6) NOT NULL, content_json NVARCHAR(MAX) NOT NULL, content_text NVARCHAR(MAX) NOT NULL, metadata_json NVARCHAR(MAX) NULL, inserted_at DATETIME2(6) NOT NULL, tenant_id INTEGER, CONSTRAINT [pk_adk_memory_id] PRIMARY KEY (id), CONSTRAINT [uq_adk_memory_event_id] UNIQUE (event_id) )"
 _TSQL_ADK_MEMORY_DROPS = ["DROP TABLE IF EXISTS [dbo].[adk_memory]"]
@@ -505,10 +626,11 @@ def test_tsql_adk_memory_create_tables_and_insert_without_owner() -> None:
         "CREATE INDEX [idx_adk_memory_scope] ON [dbo].[adk_memory]",
         "CREATE INDEX [idx_adk_memory_session] ON [dbo].[adk_memory]",
     ]
-    assert statements[-1] == (
+    assert statements[-2] == (
         "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, event_id, author, timestamp, "
         "content_json, content_text, metadata_json, inserted_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
+    assert statements[-1] == "COMMIT TRANSACTION"
 
 
 async def test_tsql_session_get_parses_string_expiry_and_deletes_expired_in_same_session(
@@ -556,7 +678,7 @@ def test_tsql_adk_append_event_and_update_state_rolls_back_when_session_missing(
     with pytest.raises(ValueError, match="Session s1 not found"):
         store.append_event_and_update_state(_ADK_EVENT, "app", "u", "s1", {"a": 3})
 
-    assert connection.rollback_calls == 1
+    assert any(sql == "ROLLBACK TRANSACTION" for sql, _ in normalized_calls(connection))
     assert connection.commit_calls == 0
 
 
@@ -586,22 +708,22 @@ def test_schema_qualified_tables_across_tsql_stores() -> None:
         extension_config={"events": {"queue_table": "custom.app_events"}},
     )
     adk_store = ArrowOdbcADKStore(config)
-    adk_store._session_table = "custom.adk_session"  # pyright: ignore[reportPrivateUsage]
+    adk_store._session_table = "custom.adk_session"
     memory_store = ArrowOdbcADKMemoryStore(config)
-    memory_store._memory_table = "custom.adk_memory"  # pyright: ignore[reportPrivateUsage]
+    memory_store._memory_table = "custom.adk_memory"
     litestar_store = ArrowOdbcStore(config)
-    litestar_store._sql = _TsqlSessionSql("custom.sess")  # pyright: ignore[reportPrivateUsage]
+    litestar_store._sql = _TsqlSessionSql("custom.sess")
     event_store = ArrowOdbcEventQueueStore(config)
 
-    session_ddl = adk_store._sessions_table_ddl()  # pyright: ignore[reportPrivateUsage]
+    session_ddl = adk_store._sessions_table_ddl()
     assert "[custom].[adk_session]" in session_ddl
     assert "[pk_adk_session_row_id]" in session_ddl
 
-    memory_ddl = memory_store._memory_table_ddl()  # pyright: ignore[reportPrivateUsage]
+    memory_ddl = memory_store._memory_table_ddl()
     assert "[custom].[adk_memory]" in memory_ddl
     assert "[pk_adk_memory_id]" in memory_ddl
 
-    litestar_ddl = litestar_store._table_ddl()  # pyright: ignore[reportPrivateUsage]
+    litestar_ddl = litestar_store._table_ddl()
     assert "SCHEMA_ID(N'custom')" in litestar_ddl
     assert "IX_sess_expires_at" in litestar_ddl
 
@@ -616,3 +738,38 @@ def test_datetime_value_accepts_date_and_rejects_invalid_types() -> None:
     assert _datetime_value(date(2026, 5, 10)) == datetime(2026, 5, 10, 0, 0, tzinfo=UTC)
     with pytest.raises(TypeError, match="Unsupported datetime value"):
         _datetime_value(12345)
+
+
+def test_atomic_write_rolls_back_on_failure_with_default_autocommit() -> None:
+    """_atomic_write rolls back on failure even with default autocommit=True."""
+
+    class MockDriver:
+        def __init__(self) -> None:
+            self._connection_autocommit = True
+            self._dialect = "mssql"
+            self.begun = False
+            self.rolled_back = False
+            self.committed = False
+
+        def _connection_in_transaction(self) -> bool:
+            return self.begun
+
+        def begin(self) -> None:
+            self.begun = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+            self.begun = False
+
+        def commit(self) -> None:
+            self.committed = True
+            self.begun = False
+
+    driver = MockDriver()
+    with pytest.raises(RuntimeError, match="second statement failed"):
+        with atomic_store_write(driver):
+            assert driver.begun is True
+            raise RuntimeError("second statement failed")
+
+    assert driver.rolled_back is True
+    assert driver.committed is False

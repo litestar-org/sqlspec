@@ -13,17 +13,12 @@ import tempfile
 import threading
 import zipfile
 from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
-from sqlspec.adapters.oracledb._json_handlers import is_json_payload
-from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
+from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson, is_json_payload
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
-from sqlspec.adapters.oracledb.data_dictionary import (
-    resolve_oracle_connection_compatible_major,
-    resolve_oracle_connection_major,
-)
-from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -33,7 +28,11 @@ from sqlspec.core import (
     create_sql_result,
 )
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.data_dictionary.dialects.oracle import ORACLE_JSON_STORAGE_NATIVE, resolve_oracle_json_storage
+from sqlspec.data_dictionary.dialects.oracle import (
+    ORACLE_JSON_STORAGE_NATIVE,
+    parse_oracle_version_components,
+    resolve_oracle_json_storage,
+)
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -48,6 +47,8 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    QueryTimeoutError,
+    SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
@@ -56,11 +57,114 @@ from sqlspec.exceptions import (
 from sqlspec.observability import get_trace_context
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
+from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
+
+
+class OracleVersionCache:
+    """Pool-scoped cache for the resolved Oracle server version.
+
+    One instance is created per config and shared with every driver spawned from
+    that config's pool, so the server version is resolved once per pool lifetime
+    rather than once per acquired session. The cache lives and dies with the
+    pool; a server upgrade under a live pool is out of scope and picked up on the
+    next pool restart.
+    """
+
+    __slots__ = ("resolved", "version")
+
+    def __init__(self) -> None:
+        self.resolved: bool = False
+        self.version: Any | None = None
+
+    def reset(self) -> None:
+        """Clear the cached version so the next resolution re-queries the server."""
+        self.resolved = False
+        self.version = None
+
+
+def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
+    """Resolve an Oracle server major without issuing a metadata query.
+
+    Pool-scoped data-dictionary metadata is authoritative when it has already
+    been resolved. Otherwise, use the connection callback cache and finally
+    python-oracledb's connection ``version`` string. The final fallback matters
+    for reacquired pool wrappers that do not retain dynamic attributes.
+    """
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        return int(version_cache.version.major)
+    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
+    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
+        return cached_major
+    version = getattr(connection, "version", None)
+    if not version:
+        return None
+    components = parse_oracle_version_components(str(version))
+    return components[0] if components is not None else None
+
+
+def resolve_oracle_connection_compatible_major(
+    connection: Any, version_cache: "OracleVersionCache | None" = None
+) -> "int | None":
+    """Resolve an Oracle server compatible major version without issuing a metadata query."""
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        comp = version_cache.version.compatible_major
+        return int(comp) if comp is not None else None
+    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
+    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
+        return cached_compatible
+    return None
+
+
+def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an input type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
+        return fallback
+    return partial(_chained_input_handler, inner, fallback)
+
+
+def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an output type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
+        return fallback
+    return partial(_chained_output_handler, inner, fallback)
+
+
+def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
+    current = handler
+    while current is not None:
+        if current is target_inner:
+            return True
+        if not isinstance(current, partial) or current.func is not chain_function:
+            return False
+        inner, current = current.args
+        if inner is target_inner:
+            return True
+    return False
+
+
+def _chained_input_handler(inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int) -> Any:
+    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, value, arraysize)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, value, arraysize)
+    return None
+
+
+def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
+    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, metadata)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, metadata)
+    return None
+
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -73,7 +177,6 @@ if TYPE_CHECKING:
     )
     from sqlspec.core import SQL
     from sqlspec.driver import AsyncExceptionHandler, SyncExceptionHandler
-    from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable
 
 
 __all__ = (
@@ -95,6 +198,7 @@ __all__ = (
     "OracleSessionContextConfig",
     "OracleSyncStreamSource",
     "OracleTopologyConfig",
+    "OracleVersionCache",
     "apply_driver_features",
     "apply_oracle_session_trace_attributes",
     "apply_wallet_ssl_context",
@@ -115,12 +219,12 @@ __all__ = (
     "build_tns_description",
     "build_truncate_statement",
     "build_wallet_ssl_context_if_needed",
+    "chain_input_handler",
+    "chain_output_handler",
     "coerce_large_parameters_async",
     "coerce_large_parameters_sync",
     "coerce_many_parameters_async",
     "coerce_many_parameters_sync",
-    "coerce_oracle_df_to_arrow_batches",
-    "coerce_oracle_df_to_arrow_table",
     "collect_async_rows",
     "collect_sync_rows",
     "connection_is_thin",
@@ -138,12 +242,14 @@ __all__ = (
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
-    "oracle_df_batches_to_arrow_reader",
-    "oracle_df_to_arrow_table",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
+    "read_oracle_lob_async",
+    "read_oracle_lob_sync",
     "release_extracted_wallet_dir",
     "resolve_dbms_cloud_source_uri",
+    "resolve_oracle_connection_compatible_major",
+    "resolve_oracle_connection_major",
     "resolve_row_metadata",
     "resolve_rowcount",
     "retain_extracted_wallet_dir",
@@ -267,8 +373,6 @@ _ORACLE_RESERVED_COLUMN_NAMES: "frozenset[str]" = frozenset({
     "WITH",
 })
 _VERSION_COMPONENTS: int = 3
-TYPE_CONVERTER = OracleOutputConverter()
-_pa: Any = import_optional("pyarrow")
 _LOB_TYPE_NAME_MARKERS: "tuple[str, ...]" = ("LOB", "BFILE")
 _SCALAR_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, str, bytes, bytearray, type(None))
 _BIND_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, type(None))
@@ -293,6 +397,7 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     1400: (NotNullViolationError, "not-null constraint violation"),
     1407: (NotNullViolationError, "not-null constraint violation"),
     1438: (DataError, "numeric precision overflow"),
+    1476: (DataError, "divisor is equal to zero"),
     1652: (OperationalError, "tablespace full"),
     1722: (DataError, "invalid number"),
     1830: (DataError, "date format picture ends before converting entire input string"),
@@ -306,9 +411,10 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     3113: (DatabaseConnectionError, "end-of-file on communication channel"),
     3114: (DatabaseConnectionError, "not connected to ORACLE"),
     3135: (DatabaseConnectionError, "connection lost contact"),
+    3136: (ConnectionTimeoutError, "inbound connection timed out"),
     4068: (OperationalError, "existing state of packages has been discarded"),
     8176: (TransactionError, "consistent read failure"),
-    8177: (TransactionError, "cannot serialize access"),
+    8177: (SerializationConflictError, "cannot serialize access"),
     12154: (DatabaseConnectionError, "TNS resolution failed"),
     12170: (ConnectionTimeoutError, "connect timeout"),
     12505: (DatabaseConnectionError, "listener rejected"),
@@ -319,11 +425,15 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     28000: (PermissionDeniedError, "the account is locked"),
     28001: (PermissionDeniedError, "the password has expired"),
     30006: (OperationalError, "resource busy; acquire with WAIT timeout expired"),
+    40441: (DataError, "JSON syntax error"),
+    42699: (SerializationConflictError, "transaction isolation violation"),
+    51803: (DataError, "vector operation error"),
 }
 
 _DPY_ERROR_CODE_MAPPING: "dict[str, tuple[type[SQLSpecError], str]]" = {
     "DPY-1001": (DatabaseConnectionError, "not connected to database"),
     "DPY-4011": (DatabaseConnectionError, "connection was closed"),
+    "DPY-4024": (QueryTimeoutError, "query execution timeout expired"),
     "DPY-6000": (DatabaseConnectionError, "cannot connect to database"),
     "DPY-6001": (DatabaseConnectionError, "cannot connect to database"),
     "DPY-6005": (ConnectionTimeoutError, "cannot connect to database"),
@@ -787,15 +897,24 @@ def supports_df_batches(connection: object) -> bool:
     return hasattr(connection, "fetch_df_batches")
 
 
+_FETCH_KWARGS_CACHE: dict[tuple[object, object], dict[str, object]] = {}
+
+
 def build_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]":
     """Build per-statement Oracle fetch keyword arguments."""
-    fetch_kwargs: dict[str, object] = {}
     fetch_lobs = driver_features.get("fetch_lobs")
+    fetch_decimals = driver_features.get("fetch_decimals")
+    cache_key = (fetch_lobs, fetch_decimals)
+    cached = _FETCH_KWARGS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    fetch_kwargs: dict[str, object] = {}
     if fetch_lobs is not None:
         fetch_kwargs["fetch_lobs"] = fetch_lobs
-    fetch_decimals = driver_features.get("fetch_decimals")
     if fetch_decimals is not None:
         fetch_kwargs["fetch_decimals"] = fetch_decimals
+    _FETCH_KWARGS_CACHE[cache_key] = fetch_kwargs
     return fetch_kwargs
 
 
@@ -832,71 +951,6 @@ def build_arrow_fetch_kwargs(
     if arrow_schema is not None:
         fetch_kwargs["requested_schema"] = arrow_schema
     return fetch_kwargs
-
-
-def oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None) -> "ArrowTable":
-    """Convert an Oracle DataFrame to a PyArrow Table using zero-copy PyCapsule when supported."""
-    if pa_module is None:
-        ensure_pyarrow()
-        pa_module = _pa
-
-    if hasattr(oracle_df, "__arrow_c_stream__"):
-        reader = (
-            pa_module.RecordBatchReader.from_stream(oracle_df, schema=arrow_schema)
-            if arrow_schema is not None
-            else pa_module.RecordBatchReader.from_stream(oracle_df)
-        )
-        return cast("ArrowTable", reader.read_all())
-    table = pa_module.table(oracle_df)
-    if arrow_schema is not None:
-        table = table.cast(arrow_schema)
-    return cast("ArrowTable", table)
-
-
-def coerce_oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None) -> "ArrowTable":
-    """Alias for :func:`oracle_df_to_arrow_table`."""
-    return oracle_df_to_arrow_table(oracle_df, pa_module=pa_module, arrow_schema=arrow_schema)
-
-
-def coerce_oracle_df_to_arrow_batches(
-    oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None
-) -> "list[ArrowRecordBatch]":
-    """Convert an Oracle DataFrame batch into PyArrow RecordBatches via PyCapsule when supported."""
-    if pa_module is None:
-        ensure_pyarrow()
-        pa_module = _pa
-
-    if hasattr(oracle_df, "__arrow_c_stream__"):
-        reader = (
-            pa_module.RecordBatchReader.from_stream(oracle_df, schema=arrow_schema)
-            if arrow_schema is not None
-            else pa_module.RecordBatchReader.from_stream(oracle_df)
-        )
-        return cast("list[ArrowRecordBatch]", list(reader))
-    table = pa_module.table(oracle_df)
-    if arrow_schema is not None:
-        table = table.cast(arrow_schema)
-    return cast("list[ArrowRecordBatch]", table.to_batches())
-
-
-def oracle_df_batches_to_arrow_reader(
-    batches: "Iterable[Any]", schema: Any = None, pa_module: Any = None
-) -> "ArrowRecordBatchReader":
-    """Convert an iterable of Oracle DataFrame batches into a PyArrow RecordBatchReader."""
-    if pa_module is None:
-        ensure_pyarrow()
-        pa_module = _pa
-
-    collected_batches: list[Any] = []
-    for df_batch in batches:
-        collected_batches.extend(coerce_oracle_df_to_arrow_batches(df_batch, pa_module=pa_module, arrow_schema=schema))
-    if collected_batches:
-        resolved_schema = schema if schema is not None else collected_batches[0].schema
-        return cast(
-            "ArrowRecordBatchReader", pa_module.RecordBatchReader.from_batches(resolved_schema, collected_batches)
-        )
-    resolved_schema = schema if schema is not None else pa_module.schema([])
-    return cast("ArrowRecordBatchReader", pa_module.RecordBatchReader.from_batches(resolved_schema, []))
 
 
 def normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":
@@ -1196,7 +1250,7 @@ def resolve_rowcount(cursor: Any) -> int:
     if not has_rowcount(cursor):
         return 0
     rowcount = cursor.rowcount
-    if isinstance(rowcount, int):
+    if isinstance(rowcount, int) and rowcount >= 0:
         return rowcount
     return 0
 
@@ -1317,6 +1371,20 @@ def apply_driver_features(
     return statement_config, features
 
 
+def _extract_column_cache_key(description: "list[Any]") -> "tuple[tuple[object, object], ...]":
+    key_items: list[tuple[object, object]] = []
+    for column in description:
+        try:
+            col_name = column[0]
+            type_code = column[1]
+        except (TypeError, IndexError, KeyError):
+            col_name = getattr(column, "name", None)
+            type_code = getattr(column, "type_code", None)
+        type_identifier = getattr(type_code, "name", None) or type_code
+        key_items.append((col_name, type_identifier))
+    return tuple(key_items)
+
+
 def resolve_row_metadata(
     description: "list[Any] | None", driver_features: "dict[str, Any]", cache: "dict[Any, tuple[Any, list[str], bool]]"
 ) -> "tuple[list[str], bool]":
@@ -1333,9 +1401,9 @@ def resolve_row_metadata(
     if not description:
         return [], False
 
-    cache_key = id(description)
+    cache_key = _extract_column_cache_key(description)
     cached = cache.get(cache_key)
-    if cached is not None and cached[0] is description:
+    if cached is not None:
         return cached[1], cached[2]
 
     column_names: list[str] = []
@@ -1408,41 +1476,44 @@ class OracleSyncStreamSource:
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            try:
-                cursor = self._driver.connection.cursor()
-                self._cursor = cursor
-                cursor.arraysize = self._chunk_size
-                cursor.prefetchrows = self._chunk_size
-                fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
-                if self._fetch_lobs is not None:
-                    fetch_kwargs["fetch_lobs"] = self._fetch_lobs
-                parameters = coerce_large_parameters_sync(
-                    self._driver.connection,
-                    self._parameters,
-                    clob_type=DB_TYPE_CLOB,
-                    blob_type=DB_TYPE_BLOB,
-                    varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                    raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
-                    version_cache=getattr(self._driver, "_oracle_version_cache", None),
-                )
-                cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
-            except BaseException:
-                self.close(error=True)
-                raise
+        self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor()
+            self._cursor = cursor
+            cursor.arraysize = self._chunk_size
+            cursor.prefetchrows = self._chunk_size
+            fetch_kwargs = getattr(self._driver, "_fetch_kwargs", None) or build_fetch_kwargs(
+                self._driver.driver_features
+            )
+            if self._fetch_lobs is not None:
+                fetch_kwargs = {**fetch_kwargs, "fetch_lobs": self._fetch_lobs}
+            parameters = coerce_large_parameters_sync(
+                self._driver.connection,
+                self._parameters,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=getattr(self._driver, "_oracle_version_cache", None),
+            )
+            cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+        except BaseException:
+            self.close(error=True)
+            raise
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         cursor = self._cursor
         if cursor is None:
             return []
-        rows: list[Any] = []
-        with handler:
-            rows = cursor.fetchmany(self._chunk_size)
+        fetched = self._driver._run_with_exception_handler(handler, cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
-        if not rows:
+        if not fetched:
             return []
+        rows: list[Any] = list(fetched)
         column_names = self._column_names
         if column_names is None:
             column_names, requires_lob_coercion = self._driver._resolve_row_metadata(cursor.description)
@@ -1553,9 +1624,11 @@ class OracleAsyncStreamSource:
             self._cursor = cursor
             cursor.arraysize = self._chunk_size
             cursor.prefetchrows = self._chunk_size
-            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+            fetch_kwargs = getattr(self._driver, "_fetch_kwargs", None) or build_fetch_kwargs(
+                self._driver.driver_features
+            )
             if self._fetch_lobs is not None:
-                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+                fetch_kwargs = {**fetch_kwargs, "fetch_lobs": self._fetch_lobs}
             parameters = await coerce_large_parameters_async(
                 self._driver.connection,
                 self._parameters,
@@ -1619,6 +1692,9 @@ def collect_sync_rows(
     if not fetched_data:
         return [], resolved_column_names
 
+    if driver_features.get("fetch_lobs"):
+        return [row if isinstance(row, tuple) else tuple(row) for row in fetched_data], resolved_column_names
+
     if requires_lob_coercion is None:
         requires_lob_coercion = _description_requires_lob_coercion(description)
     if not requires_lob_coercion:
@@ -1670,6 +1746,9 @@ async def collect_async_rows(
     if not fetched_data:
         return [], resolved_column_names
 
+    if driver_features.get("fetch_lobs"):
+        return [row if isinstance(row, tuple) else tuple(row) for row in fetched_data], resolved_column_names
+
     if requires_lob_coercion is None:
         requires_lob_coercion = _description_requires_lob_coercion(description)
     if not requires_lob_coercion:
@@ -1700,6 +1779,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         A SQLSpec exception that wraps the original error
     """
     del logger
+    if not isinstance(error, BaseException):
+        error = oracledb_module.DatabaseError(error)
     error_obj = error.args[0] if getattr(error, "args", None) else None
     if not error_obj:
         return _create_oracle_error(error, None, SQLSpecError, "database error")
@@ -1725,9 +1806,13 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if not isinstance(error_code, int) or isinstance(error_code, bool) or not error_code:
         error_text = str(error_obj)
         for dpy_code, (error_class, error_desc) in _DPY_ERROR_CODE_MAPPING.items():
-            if error_text.startswith(dpy_code):
+            if dpy_code in error_text:
                 return _create_oracle_error(error, None, error_class, f"{error_desc} [{dpy_code}]")
-        return _create_oracle_error(error, None, SQLSpecError, "database error")
+        ora_match = re.search(r"ORA-(\d+)", error_text)
+        if ora_match:
+            error_code = int(ora_match.group(1))
+        else:
+            return _create_oracle_error(error, None, SQLSpecError, "database error")
 
     mapping = _ERROR_CODE_MAPPING.get(error_code)
     if mapping:
@@ -3129,6 +3214,22 @@ def _resolve_callable_or_str(value: "str | Callable[[], str | None] | None") -> 
     return value
 
 
+async def read_oracle_lob_async(value: Any) -> Any:
+    """Read a LOB value asynchronously from an async connection or return raw data."""
+    if is_async_readable(value):
+        return await value.read()
+    if is_readable(value):
+        return value.read()
+    return value
+
+
+def read_oracle_lob_sync(value: Any) -> Any:
+    """Read a LOB value synchronously from a sync connection or return raw data."""
+    if is_readable(value):
+        return value.read()
+    return value
+
+
 class _OracleSyncStreamDriver(Protocol):
     connection: "OracleSyncConnection"
     driver_features: dict[str, Any]
@@ -3136,6 +3237,10 @@ class _OracleSyncStreamDriver(Protocol):
     def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
 
     def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
+
+    def _run_with_exception_handler(
+        self, exc_handler: "SyncExceptionHandler", operation: "Callable[..., Any]", *args: Any, **kwargs: Any
+    ) -> "Any | None": ...
 
     def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
 
@@ -3195,6 +3300,16 @@ def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
 ORACLEDB_VERSION: "tuple[int, int, int]" = _parse_version_tuple(oracledb_module.__version__)
 
 
+def _string_exceeds_byte_limit(value: str, limit: int) -> bool:
+    """Return whether a string's UTF-8 byte length exceeds the given limit."""
+    char_len = len(value)
+    if char_len > limit:
+        return True
+    if value.isascii():
+        return False
+    return len(value.encode("utf-8")) > limit
+
+
 def _parameter_values_need_coercion(
     values: "Iterable[Any]",
     *,
@@ -3208,7 +3323,7 @@ def _parameter_values_need_coercion(
         if value_type in _BIND_PASSTHROUGH_TYPES:
             continue
         if value_type is str:
-            if len(value.encode("utf-8")) > varchar2_byte_limit:
+            if _string_exceeds_byte_limit(value, varchar2_byte_limit):
                 return True
             continue
         if value_type is bytes or value_type is bytearray:
@@ -3226,7 +3341,7 @@ def _parameter_values_need_coercion(
                 return True
             continue
         if isinstance(value, str):
-            if len(value.encode("utf-8")) > varchar2_byte_limit:
+            if _string_exceeds_byte_limit(value, varchar2_byte_limit):
                 return True
             continue
         if isinstance(value, (bytes, bytearray)):
@@ -3379,7 +3494,7 @@ def _coerce_value_sync(
     if value_type in _BIND_PASSTHROUGH_TYPES:
         return value
     if value_type is str:
-        if len(value.encode("utf-8")) > varchar2_byte_limit:
+        if _string_exceeds_byte_limit(value, varchar2_byte_limit):
             return connection.createlob(clob_type, value)
         return value
     if value_type is bytes:
@@ -3408,7 +3523,7 @@ def _coerce_value_sync(
         if json_binding_state.uses_blob():
             return connection.createlob(blob_type, to_json(value.value, as_bytes=True))
         return value
-    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
+    if isinstance(value, str) and _string_exceeds_byte_limit(value, varchar2_byte_limit):
         return connection.createlob(clob_type, value)
     if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
         return connection.createlob(blob_type, bytes(value))
@@ -3432,7 +3547,7 @@ async def _coerce_value_async(
     if value_type in _BIND_PASSTHROUGH_TYPES:
         return value
     if value_type is str:
-        if len(value.encode("utf-8")) > varchar2_byte_limit:
+        if _string_exceeds_byte_limit(value, varchar2_byte_limit):
             return await connection.createlob(clob_type, value)
         return value
     if value_type is bytes:
@@ -3461,7 +3576,7 @@ async def _coerce_value_async(
         if json_binding_state.uses_blob():
             return await connection.createlob(blob_type, to_json(value.value, as_bytes=True))
         return value
-    if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
+    if isinstance(value, str) and _string_exceeds_byte_limit(value, varchar2_byte_limit):
         return await connection.createlob(clob_type, value)
     if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
         return await connection.createlob(blob_type, bytes(value))
@@ -3570,7 +3685,7 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
             continue
 
         if is_readable(value) or is_async_readable(value):
-            processed_value = await TYPE_CONVERTER.process_lob(value)
+            processed_value = await read_oracle_lob_async(value)
             if coerced_values is None:
                 if processed_value is value:
                     continue

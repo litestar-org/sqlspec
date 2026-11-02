@@ -759,12 +759,12 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                         _mysql_upsert_user_state_sql(self._user_state_table),
                         (app_name, user_id, self._json_serializer(user_state)),
                     )
+                conn.commit()
             except Exception:
                 conn.rollback()
                 raise
             finally:
                 cursor.close()
-            conn.commit()
 
         return _session_record_from_row(row, deserializer=self._json_deserializer)
 
@@ -1045,14 +1045,19 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             """
             params = (*scope_params, f"%{query}%", limit_value)
 
-        async with self._config.provide_connection() as conn:
-            cursor = await conn.cursor()
-            try:
-                await cursor.execute(sql, params)
-                rows = await cursor.fetchall()
-                columns = [col[0] for col in cursor.description or []]
-            finally:
-                await cursor.close()
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = await conn.cursor()
+                try:
+                    await cursor.execute(sql, params)
+                    rows = await cursor.fetchall()
+                    columns = [col[0] for col in cursor.description or []]
+                finally:
+                    await cursor.close()
+        except MysqlConnectorError as exc:
+            if _is_mysql_table_missing(exc):
+                return []
+            raise
 
         records: list[StoredMemory] = []
         for row in rows:
@@ -1072,14 +1077,19 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             raise RuntimeError(msg)
 
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
-        async with self._config.provide_connection() as conn:
-            cursor = await conn.cursor()
-            try:
-                await cursor.execute(sql, (session_id,))
-                await conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-            finally:
-                await cursor.close()
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = await conn.cursor()
+                try:
+                    await cursor.execute(sql, (session_id,))
+                    await conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                finally:
+                    await cursor.close()
+        except MysqlConnectorError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
     async def delete_entries_older_than(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
@@ -1099,14 +1109,19 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
 
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
-        async with self._config.provide_connection() as conn:
-            cursor = await conn.cursor()
-            try:
-                await cursor.execute(sql, tuple(params))
-                await conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-            finally:
-                await cursor.close()
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = await conn.cursor()
+                try:
+                    await cursor.execute(sql, tuple(params))
+                    await conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                finally:
+                    await cursor.close()
+        except MysqlConnectorError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
     async def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -1279,14 +1294,19 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             """
             params = (*scope_params, f"%{query}%", limit_value)
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, params)
-                rows = cursor.fetchall()
-                columns = [col[0] for col in cursor.description or []]
-            finally:
-                cursor.close()
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, params)
+                    rows = cursor.fetchall()
+                    columns = [col[0] for col in cursor.description or []]
+                finally:
+                    cursor.close()
+        except MysqlConnectorError as exc:
+            if _is_mysql_table_missing(exc):
+                return []
+            raise
 
         records: list[StoredMemory] = []
         for row in rows:
@@ -1307,14 +1327,19 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             raise RuntimeError(msg)
 
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (session_id,))
-                conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-            finally:
-                cursor.close()
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, (session_id,))
+                    conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                finally:
+                    cursor.close()
+        except MysqlConnectorError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
@@ -1333,14 +1358,19 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
 
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, tuple(params))
-                conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-            finally:
-                cursor.close()
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, tuple(params))
+                    conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                finally:
+                    cursor.close()
+        except MysqlConnectorError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
     def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)

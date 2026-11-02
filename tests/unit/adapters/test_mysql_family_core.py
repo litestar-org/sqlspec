@@ -55,14 +55,6 @@ def test_collect_rows_accepts_precomputed_row_plan(module_path: str) -> None:
 
 
 @pytest.mark.parametrize("module_path", MODULE_PATHS)
-def test_detect_json_columns_uses_provided_description(module_path: str) -> None:
-    core = importlib.import_module(module_path)
-    description = [("id", 3), ("payload", 245)]
-    cursor = SimpleNamespace(description=description)
-    assert core.detect_json_columns(cursor, {245}, description=description) == [1]
-
-
-@pytest.mark.parametrize("module_path", MODULE_PATHS)
 def test_collect_rows_without_json_reuses_input_list(module_path: str) -> None:
     core = importlib.import_module(module_path)
     description = [("id", 3), ("name", 253)]

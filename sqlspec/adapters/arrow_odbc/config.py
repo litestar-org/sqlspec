@@ -1,7 +1,7 @@
 """arrow-odbc database configuration."""
 
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.arrow_odbc._typing import (
     ArrowOdbcConnection,
@@ -86,7 +86,7 @@ class ArrowOdbcDriverFeatures(TypedDict):
     """``arrow-odbc`` driver feature flags controlling Arrow batch sizing, dialect hints, and codecs."""
 
     chunk_size: NotRequired[int]
-    """Maximum rows per Arrow ``RecordBatch`` fetched from ODBC cursors (defaults to ``65535``)."""
+    """Maximum rows per Arrow ``RecordBatch`` fetched from ODBC cursors (defaults to ``65536``)."""
     max_bytes_per_batch: NotRequired[int]
     """Upper memory budget in bytes per Arrow ``RecordBatch`` buffer."""
     max_text_size: NotRequired[int]
@@ -99,7 +99,7 @@ class ArrowOdbcDriverFeatures(TypedDict):
     """Per-statement ODBC query execution timeout in seconds."""
     payload_text_encoding: NotRequired["TextEncoding"]
     """Wire text encoding override (``'auto'``, ``'utf8'``, or ``'utf16'``) passed to ``arrow-odbc``."""
-    enable_driver_pooling: NotRequired[bool]
+    enable_pooling: NotRequired[bool]
     """Enable process-global ODBC driver-manager connection pooling prior to first connect (defaults to ``False``)."""
     connection_string: NotRequired[str]
     """Resolved connection string inspected for SQL dialect auto-detection."""
@@ -115,6 +115,8 @@ class ArrowOdbcDriverFeatures(TypedDict):
     """Deserializer parsing JSON text payloads (defaults to ``sqlspec.utils.serializers.from_json``)."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec table-backed event channel support."""
+    events_backend: NotRequired[Literal["poll_queue"]]
+    """Event queue backend name (``'poll_queue'``)."""
     on_connection_create: "NotRequired[Callable[[ArrowOdbcConnection], None]]"
     """Callback invoked with the raw ``arrow_odbc.Connection`` immediately after connect."""
 
@@ -239,7 +241,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         if self.connection_instance is not None:
             return cast("ArrowOdbcConnection", self.connection_instance)
         try:
-            _apply_driver_pooling(bool(self.driver_features.get("enable_driver_pooling", False)))
+            _apply_driver_pooling(bool(self.driver_features.get("enable_pooling", False)))
             dialect = _resolve_connection_dialect_hint(self.driver_features)
             connection_string, connect_kwargs = build_connection_config(self.connection_config, dialect=dialect)
             connection = cast("ArrowOdbcConnection", arrow_odbc_connect(connection_string, **connect_kwargs))

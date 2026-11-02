@@ -120,7 +120,7 @@ For bidirectional keyset pagination (`CursorPagination`), set `cursor_key="id"` 
 
 ## Server-Side Session Stores
 
-Supported database adapters expose a Litestar `Store` implementation under `sqlspec.adapters.<adapter>.litestar` (`AsyncpgStore`, `PsycopgSyncStore`, `PsycopgAsyncStore`, `PsqlpyStore`, `CockroachAsyncpgStore`, `CockroachPsycopgSyncStore`, `CockroachPsycopgAsyncStore`, `AiosqliteStore`, `SQLiteStore`, `AsyncmyStore`, `AiomysqlStore`, `PyMysqlStore`, `MysqlConnectorSyncStore`, `MysqlConnectorAsyncStore`, `OracleSyncStore`, `OracleAsyncStore`, `MssqlPythonStore`, `PymssqlStore`, `SybaseStore`, `SqlanywhereStore`, `Db2SyncStore`, `Db2AsyncStore`, `DuckdbStore`, `BigQueryStore`, `SpannerSyncStore`, `SpannerAsyncStore`, `ADBCStore`, and `ArrowOdbcStore`):
+Supported database adapters expose a Litestar `Store` implementation under `sqlspec.adapters.<adapter>.litestar` (`AsyncpgStore`, `PsycopgSyncStore`, `PsycopgAsyncStore`, `PsqlpyStore`, `CockroachAsyncpgStore`, `CockroachPsycopgSyncStore`, `CockroachPsycopgAsyncStore`, `AiosqliteStore`, `SqliteStore`, `AsyncmyStore`, `AiomysqlStore`, `PyMysqlStore`, `MysqlConnectorSyncStore`, `MysqlConnectorAsyncStore`, `OracleSyncStore`, `OracleAsyncStore`, `MssqlPythonStore`, `PymssqlStore`, `SybaseStore`, `SqlanywhereStore`, `Db2SyncStore`, `Db2AsyncStore`, `DuckDBStore`, `BigQueryStore`, `SpannerSyncStore`, `SpannerAsyncStore`, `AdbcStore`, and `ArrowOdbcStore`):
 
 ```python
 --8<-- "docs/examples/frameworks/litestar/session_stores.py:example"

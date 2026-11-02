@@ -1,6 +1,6 @@
 """Tests for centralized scalar conversion helpers."""
 
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -114,20 +114,24 @@ def test_parse_datetime_rfc3339_z_suffix() -> None:
     assert parsed.year == 2023
 
 
-def test_parse_datetime_rfc3339_delegates_to_iso_converter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """RFC3339 parsing should reuse the ISO datetime converter."""
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2023-12-25T10:30:00Z", datetime(2023, 12, 25, 10, 30, tzinfo=UTC)),
+        (
+            "2023-12-25T10:30:00.123456+05:30",
+            datetime(2023, 12, 25, 10, 30, 0, 123456, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+        ),
+        ("2023-12-25T10:30:00-04:00", datetime(2023, 12, 25, 10, 30, tzinfo=timezone(timedelta(hours=-4)))),
+    ],
+)
+def test_parse_datetime_rfc3339_preserves_timezone_and_precision(value: str, expected: datetime) -> None:
+    """RFC3339 parsing preserves the represented instant, offset, and microseconds."""
+    parsed = parse_datetime_rfc3339(value)
 
-    import sqlspec.core.type_converter as type_converter
-
-    expected = datetime(2023, 12, 25, 10, 30, 0, tzinfo=UTC)
-
-    def fake_convert(value: str) -> datetime:
-        assert value == "2023-12-25T10:30:00+00:00"
-        return expected
-
-    monkeypatch.setattr(type_converter, "convert_iso_datetime", fake_convert)
-
-    assert type_converter.parse_datetime_rfc3339("2023-12-25T10:30:00Z") is expected
+    assert parsed == expected
+    assert parsed.utcoffset() == expected.utcoffset()
+    assert parsed.microsecond == expected.microsecond
 
 
 def test_datetime_round_trip() -> None:

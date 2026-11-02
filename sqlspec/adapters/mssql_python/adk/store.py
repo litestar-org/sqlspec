@@ -13,6 +13,7 @@ from sqlspec.adapters.mssql_python.core import (
 )
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -29,8 +30,6 @@ if TYPE_CHECKING:
 __all__ = ("MssqlPythonADKConfig", "MssqlPythonADKMemoryStore", "MssqlPythonADKStore")
 
 MSSQL_TABLE_NOT_FOUND_ERROR: Final[int] = 208
-MSSQL_DUPLICATE_OBJECT_ERROR: Final[int] = 2714
-MSSQL_DUPLICATE_INDEX_ERROR: Final[int] = 1913
 MSSQL_SCHEMA: Final[str] = "dbo"
 JSON_FALLBACK_COLUMN_TYPE: Final[str] = "NVARCHAR(MAX)"
 JSON_NATIVE_COLUMN_TYPE: Final[str] = "JSON"
@@ -48,6 +47,8 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
 
     connector_name: ClassVar[str] = "mssql_python"
     __slots__ = ("_json_column_type", "_native_json")
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
@@ -433,6 +434,8 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
 
     __slots__ = ("_json_column_type", "_native_json")
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
         adk_config = _adk_config(config)
@@ -485,26 +488,30 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
         );
         """
         inserted = 0
+        batch_params: list[tuple[Any, ...]] = []
+        for entry in entries:
+            params: tuple[Any, ...] = (
+                entry["id"],
+                entry["session_id"],
+                entry["app_name"],
+                entry["user_id"],
+                entry.get("scope", "user"),
+                entry["event_id"],
+                entry.get("author"),
+                entry["timestamp"],
+                to_json(entry["content_json"]),
+                entry["content_text"],
+                to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+            )
+            if self._owner_id_column_name:
+                params = (*params, owner_id)
+            batch_params.append((*params, entry["event_id"]))
+
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             try:
-                for entry in entries:
-                    params: tuple[Any, ...] = (
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        entry.get("scope", "user"),
-                        entry["event_id"],
-                        entry.get("author"),
-                        entry["timestamp"],
-                        to_json(entry["content_json"]),
-                        entry["content_text"],
-                        to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
-                    )
-                    if self._owner_id_column_name:
-                        params = (*params, owner_id)
-                    cursor.execute(sql, (*params, entry["event_id"]))
-                    inserted += resolve_rowcount(cursor)
+                cursor.executemany(sql, batch_params)
+                rowcount = resolve_rowcount(cursor)
+                inserted = rowcount if rowcount >= 0 else len(batch_params)
             except Exception:
                 conn.rollback()
                 raise
@@ -524,6 +531,9 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
         if not self._enabled:
             msg = "ADK memory store is disabled"
             raise RuntimeError(msg)
+        if embedding is not None:
+            msg = "Vector embeddings are not configured for MssqlPythonADKMemoryStore"
+            raise ImproperConfigurationError(msg)
         limit_value = limit or self._max_results
         where_scope, scope_params = _build_mssql_scope_where(app_name, user_id, scope_filter)
         escaped_query = _escape_like_pattern(query)
@@ -991,6 +1001,3 @@ def _session_list_query(
     ORDER BY {column} {direction}, id {direction}{page_clause}
     """
     return sql, tuple(params)
-
-
-_escape_sql_literal = escape_sql_literal

@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NotRequired, cast
 
 from sqlspec.adapters.psycopg._typing import psycopg_dict_row as dict_row
+from sqlspec.adapters.psycopg._typing import psycopg_errors as errors
+from sqlspec.adapters.psycopg.core import build_postgres_storage_params_sql
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -92,27 +94,30 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(cast("Any", sql), (key,))
-                row = await cur.fetchone()
+        try:
+            conn_context = self._config.provide_connection()
+            async with conn_context as conn:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(cast("Any", sql), (key,))
+                    row = await cur.fetchone()
 
-            if row is None:
-                return None
+                if row is None:
+                    return None
 
-            if renew_for is not None and row["expires_at"] is not None:
-                new_expires_at = self._calculate_expires_at(renew_for)
-                if new_expires_at is not None:
-                    update_sql = f"""
-                    UPDATE {self._table_name}
-                    SET expires_at = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE session_id = %s
-                    """
-                    await conn.execute(cast("Any", update_sql), (new_expires_at, key))
-                    await conn.commit()
+                if renew_for is not None and row["expires_at"] is not None:
+                    new_expires_at = self._calculate_expires_at(renew_for)
+                    if new_expires_at is not None:
+                        update_sql = f"""
+                        UPDATE {self._table_name}
+                        SET expires_at = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE session_id = %s
+                        """
+                        await conn.execute(cast("Any", update_sql), (new_expires_at, key))
+                        await conn.commit()
 
-            return bytes(row["data"])
+                return bytes(row["data"])
+        except errors.UndefinedTable:
+            return None
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -148,20 +153,26 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn:
-            await conn.execute(cast("Any", sql), (key,))
-            await conn.commit()
+        try:
+            conn_context = self._config.provide_connection()
+            async with conn_context as conn:
+                await conn.execute(cast("Any", sql), (key,))
+                await conn.commit()
+        except errors.UndefinedTable:
+            return
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
         sql = f"DELETE FROM {self._table_name}"
 
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn:
-            await conn.execute(cast("Any", sql))
-            await conn.commit()
-        self._log_delete_all()
+        try:
+            conn_context = self._config.provide_connection()
+            async with conn_context as conn:
+                await conn.execute(cast("Any", sql))
+                await conn.commit()
+            self._log_delete_all()
+        except errors.UndefinedTable:
+            return
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -178,11 +189,14 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn, conn.cursor() as cur:
-            await cur.execute(cast("Any", sql), (key,))
-            result = await cur.fetchone()
-            return result is not None
+        try:
+            conn_context = self._config.provide_connection()
+            async with conn_context as conn, conn.cursor() as cur:
+                await cur.execute(cast("Any", sql), (key,))
+                result = await cur.fetchone()
+                return result is not None
+        except errors.UndefinedTable:
+            return False
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -198,22 +212,25 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         WHERE session_id = %s
         """
 
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(cast("Any", sql), (key,))
-                row = await cur.fetchone()
+        try:
+            conn_context = self._config.provide_connection()
+            async with conn_context as conn:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(cast("Any", sql), (key,))
+                    row = await cur.fetchone()
 
-            if row is None or row["expires_at"] is None:
-                return None
+                if row is None or row["expires_at"] is None:
+                    return None
 
-            expires_at = row["expires_at"]
-            now = datetime.now(UTC)
-            if expires_at <= now:
-                return 0
+                expires_at = row["expires_at"]
+                now = datetime.now(UTC)
+                if expires_at <= now:
+                    return 0
 
-            delta = expires_at - now
-            return int(delta.total_seconds())
+                delta = expires_at - now
+                return int(delta.total_seconds())
+        except errors.UndefinedTable:
+            return None
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions.
@@ -223,14 +240,17 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn, conn.cursor() as cur:
-            await cur.execute(cast("Any", sql))
-            await conn.commit()
-            count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
+        try:
+            conn_context = self._config.provide_connection()
+            async with conn_context as conn, conn.cursor() as cur:
+                await cur.execute(cast("Any", sql))
+                await conn.commit()
+                count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                if count > 0:
+                    self._log_delete_expired(count)
+                return count
+        except errors.UndefinedTable:
+            return 0
 
     def _table_ddl(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.
@@ -238,7 +258,14 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         Returns:
             SQL statement to create the sessions table with proper indexes.
         """
-        fillfactor, vacuum_scale, analyze_scale = _postgres_litestar_tuning(self._config)
+        tuning_clause = build_postgres_storage_params_sql(
+            self._config.extension_config.get("litestar", {}),
+            default_fillfactor=80,
+            default_vacuum_scale=0.05,
+            default_analyze_scale=0.02,
+            include_autovacuum=True,
+            section="litestar",
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id TEXT PRIMARY KEY,
@@ -246,15 +273,10 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
             expires_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = {fillfactor});
+        ){tuning_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
-
-        ALTER TABLE {self._table_name} SET (
-            autovacuum_vacuum_scale_factor = {vacuum_scale:g},
-            autovacuum_analyze_scale_factor = {analyze_scale:g}
-        );
         """
 
     def _drop_table_sql(self) -> "list[str]":
@@ -376,7 +398,14 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         Returns:
             SQL statement to create the sessions table with proper indexes.
         """
-        fillfactor, vacuum_scale, analyze_scale = _postgres_litestar_tuning(self._config)
+        tuning_clause = build_postgres_storage_params_sql(
+            self._config.extension_config.get("litestar", {}),
+            default_fillfactor=80,
+            default_vacuum_scale=0.05,
+            default_analyze_scale=0.02,
+            include_autovacuum=True,
+            section="litestar",
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id TEXT PRIMARY KEY,
@@ -384,15 +413,10 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             expires_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = {fillfactor});
+        ){tuning_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
-
-        ALTER TABLE {self._table_name} SET (
-            autovacuum_vacuum_scale_factor = {vacuum_scale:g},
-            autovacuum_analyze_scale_factor = {analyze_scale:g}
-        );
         """
 
     def _drop_table_sql(self) -> "list[str]":
@@ -419,26 +443,29 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(cast("Any", sql), (key,))
-                row = cur.fetchone()
+        try:
+            with self._config.provide_connection() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(cast("Any", sql), (key,))
+                    row = cur.fetchone()
 
-            if row is None:
-                return None
+                if row is None:
+                    return None
 
-            if renew_for is not None and row["expires_at"] is not None:
-                new_expires_at = self._calculate_expires_at(renew_for)
-                if new_expires_at is not None:
-                    update_sql = f"""
-                    UPDATE {self._table_name}
-                    SET expires_at = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE session_id = %s
-                    """
-                    conn.execute(cast("Any", update_sql), (new_expires_at, key))
-                    conn.commit()
+                if renew_for is not None and row["expires_at"] is not None:
+                    new_expires_at = self._calculate_expires_at(renew_for)
+                    if new_expires_at is not None:
+                        update_sql = f"""
+                        UPDATE {self._table_name}
+                        SET expires_at = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE session_id = %s
+                        """
+                        conn.execute(cast("Any", update_sql), (new_expires_at, key))
+                        conn.commit()
 
-            return bytes(row["data"])
+                return bytes(row["data"])
+        except errors.UndefinedTable:
+            return None
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Synchronous implementation of set."""
@@ -463,18 +490,24 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        with self._config.provide_connection() as conn:
-            conn.execute(cast("Any", sql), (key,))
-            conn.commit()
+        try:
+            with self._config.provide_connection() as conn:
+                conn.execute(cast("Any", sql), (key,))
+                conn.commit()
+        except errors.UndefinedTable:
+            return
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._config.provide_connection() as conn:
-            conn.execute(cast("Any", sql))
-            conn.commit()
-        self._log_delete_all()
+        try:
+            with self._config.provide_connection() as conn:
+                conn.execute(cast("Any", sql))
+                conn.commit()
+            self._log_delete_all()
+        except errors.UndefinedTable:
+            return
 
     def _exists(self, key: str) -> bool:
         """Synchronous implementation of exists."""
@@ -484,10 +517,13 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(cast("Any", sql), (key,))
-            result = cur.fetchone()
-            return result is not None
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(cast("Any", sql), (key,))
+                result = cur.fetchone()
+                return result is not None
+        except errors.UndefinedTable:
+            return False
 
     def _expires_in(self, key: str) -> "int | None":
         """Synchronous implementation of expires_in."""
@@ -496,47 +532,37 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         WHERE session_id = %s
         """
 
-        with self._config.provide_connection() as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(cast("Any", sql), (key,))
-                row = cur.fetchone()
+        try:
+            with self._config.provide_connection() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(cast("Any", sql), (key,))
+                    row = cur.fetchone()
 
-            if row is None or row["expires_at"] is None:
-                return None
+                if row is None or row["expires_at"] is None:
+                    return None
 
-            expires_at = row["expires_at"]
-            now = datetime.now(UTC)
+                expires_at = row["expires_at"]
+                now = datetime.now(UTC)
 
-            if expires_at <= now:
-                return 0
+                if expires_at <= now:
+                    return 0
 
-            delta = expires_at - now
-            return int(delta.total_seconds())
+                delta = expires_at - now
+                return int(delta.total_seconds())
+        except errors.UndefinedTable:
+            return None
 
     def _delete_expired(self) -> int:
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
-        with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(cast("Any", sql))
-            conn.commit()
-            count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
-
-
-def _postgres_litestar_tuning(config: Any) -> "tuple[int, float, float]":
-    settings = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
-    fillfactor = settings.get("fillfactor", 80)
-    if not isinstance(fillfactor, int) or isinstance(fillfactor, bool) or fillfactor not in range(10, 101):
-        msg = "extension_config['litestar']['fillfactor'] must be an integer from 10 to 100"
-        raise ValueError(msg)
-    scales: list[float] = []
-    for key, default in (("autovacuum_vacuum_scale_factor", 0.05), ("autovacuum_analyze_scale_factor", 0.02)):
-        value = settings.get(key, default)
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
-            msg = f"extension_config['litestar']['{key}'] must be a number from 0 to 1"
-            raise ValueError(msg)
-        scales.append(float(value))
-    return fillfactor, scales[0], scales[1]
+        try:
+            with self._config.provide_connection() as conn, conn.cursor() as cur:
+                cur.execute(cast("Any", sql))
+                conn.commit()
+                count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                if count > 0:
+                    self._log_delete_expired(count)
+                return count
+        except errors.UndefinedTable:
+            return 0

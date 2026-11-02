@@ -1,6 +1,7 @@
 """mssql-python sync driver."""
 
 import contextlib
+import sys
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, cast
 
@@ -17,6 +18,7 @@ from sqlspec.adapters.mssql_python.core import (
     driver_profile,
     format_identifier,
     materialize_tuple_rows,
+    normalize_execute_parameters,
     quote_bracket_identifier,
     resolve_column_names,
     resolve_many_rowcount,
@@ -99,8 +101,11 @@ class MssqlPythonStreamSource:
         try:
             cursor = cursor_manager.__enter__()
             handler = self._driver.handle_database_exceptions()
-            with handler:
-                _execute_cursor(cursor, self._sql, self._parameters)
+            if sys.exc_info()[1] is None:
+                with handler:
+                    _execute_cursor(cursor, self._sql, self._parameters)
+            else:
+                self._driver._run_with_exception_handler(handler, _execute_cursor, cursor, self._sql, self._parameters)
             self._driver._check_pending_exception(handler)
         except BaseException:
             with contextlib.suppress(Exception):
@@ -115,8 +120,11 @@ class MssqlPythonStreamSource:
         cursor = cursor_manager.cursor
         handler = self._driver.handle_database_exceptions()
         rows: Any = []
-        with handler:
-            rows = cursor.fetchmany(self._chunk_size)
+        if sys.exc_info()[1] is None:
+            with handler:
+                rows = cursor.fetchmany(self._chunk_size)
+        else:
+            rows = self._driver._run_with_exception_handler(handler, cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
@@ -140,6 +148,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
     __slots__ = (
         "_column_name_cache",
         "_data_dictionary",
+        "_implicit_transaction",
         "_migration_schema_restore",
         "_restore_autocommit",
         "_transaction_active",
@@ -162,6 +171,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         self._migration_schema_restore: tuple[str, str] | None = None
         self._restore_autocommit = False
         self._transaction_active = False
+        self._implicit_transaction = False
 
     @property
     def data_dictionary(self) -> "MssqlPythonSyncDataDictionary":
@@ -170,10 +180,12 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return self._data_dictionary
 
     def dispatch_execute(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
+        if not self._transaction_active and not bool(getattr(self.connection, "autocommit", True)):
+            self._implicit_transaction = True
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         _execute_cursor(cursor, sql, prepared_parameters)
 
-        if statement.returns_rows():
+        if cursor.description is not None:
             fetched, column_names, row_format = collect_rows(
                 cursor.fetchall(), cursor.description, self._column_name_cache
             )
@@ -189,6 +201,8 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
 
     def dispatch_execute_many(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
+        if not self._transaction_active and not bool(getattr(self.connection, "autocommit", True)):
+            self._implicit_transaction = True
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
         cursor.executemany(sql, cast("Any", prepared_parameters))
@@ -196,15 +210,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        successful_count = 0
-        for stmt in statements:
-            _execute_cursor(cursor, stmt, prepared_parameters)
-            successful_count += 1
-        return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+        return super().dispatch_execute_script(cursor, statement)
 
     def collect_rows(self, cursor: "MssqlPythonRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         column_names = resolve_column_names(cursor.description, self._column_name_cache)
@@ -222,8 +228,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             if restore_autocommit:
                 self.connection.autocommit = False
         except MssqlPythonError as exc:
-            msg = f"Failed to begin transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            mapped = create_mapped_exception(exc)
+            msg = f"Failed to begin transaction: {mapped}"
+            raise type(mapped)(msg) from exc
         self._restore_autocommit = restore_autocommit
         self._transaction_active = True
 
@@ -231,19 +238,23 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         try:
             self.connection.commit()
         except MssqlPythonError as exc:
-            msg = f"Failed to commit transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            mapped = create_mapped_exception(exc)
+            msg = f"Failed to commit transaction: {mapped}"
+            raise type(mapped)(msg) from exc
         self._transaction_active = False
+        self._implicit_transaction = False
         self._restore_connection_autocommit()
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
         except MssqlPythonError as exc:
-            msg = f"Failed to rollback transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            mapped = create_mapped_exception(exc)
+            msg = f"Failed to rollback transaction: {mapped}"
+            raise type(mapped)(msg) from exc
         finally:
             self._transaction_active = False
+            self._implicit_transaction = False
             self._restore_connection_autocommit()
 
     def with_cursor(self, connection: "MssqlPythonConnection") -> "MssqlPythonCursor":
@@ -270,21 +281,29 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Point the database user's default schema at the migration schema, remembering the prior one."""
+
+        def _set_schema() -> None:
+            with self.with_cursor(self.connection) as cursor:
+                if self._migration_schema_restore is None:
+                    _execute_cursor(cursor, "SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;", None)
+                    row: Any = cursor.fetchone()
+                    if row is None:
+                        return
+                    user_name, current_schema = (
+                        (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
+                    )
+                    resolved_schema = str(current_schema or "dbo")
+                    _execute_cursor(cursor, _alter_default_schema_sql(str(user_name), schema), None)
+                    self._migration_schema_restore = (str(user_name), resolved_schema)
+                else:
+                    _execute_cursor(cursor, _alter_default_schema_sql(self._migration_schema_restore[0], schema), None)
+
         exc_handler = self.handle_database_exceptions()
-        with exc_handler, self.with_cursor(self.connection) as cursor:
-            if self._migration_schema_restore is None:
-                _execute_cursor(cursor, "SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;", None)
-                row: Any = cursor.fetchone()
-                if row is None:
-                    return
-                user_name, current_schema = (
-                    (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
-                )
-                resolved_schema = str(current_schema or "dbo")
-                _execute_cursor(cursor, _alter_default_schema_sql(str(user_name), schema), None)
-                self._migration_schema_restore = (str(user_name), resolved_schema)
-            else:
-                _execute_cursor(cursor, _alter_default_schema_sql(self._migration_schema_restore[0], schema), None)
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                _set_schema()
+        else:
+            self._run_with_exception_handler(exc_handler, _set_schema)
         self._check_pending_exception(exc_handler)
 
     def reset_migration_session_schema(self) -> None:
@@ -292,21 +311,36 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         if self._migration_schema_restore is None:
             return
         user_name, previous_schema = self._migration_schema_restore
-        exc_handler = self.handle_database_exceptions()
-        with exc_handler:
+
+        def _reset_schema() -> None:
             with self.with_cursor(self.connection) as cursor:
                 _execute_cursor(cursor, _alter_default_schema_sql(user_name, previous_schema), None)
             self.connection.commit()
+
+        exc_handler = self.handle_database_exceptions()
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                _reset_schema()
+        else:
+            self._run_with_exception_handler(exc_handler, _reset_schema)
         self._check_pending_exception(exc_handler)
         self._migration_schema_restore = None
 
     def has_schema(self, schema: str) -> bool:
         """Return whether the specified schema exists."""
+
+        def _check_schema() -> bool:
+            with self.with_cursor(self.connection) as cursor:
+                _execute_cursor(cursor, "SELECT 1 FROM sys.schemas WHERE name = ?", (schema,))
+                return cursor.fetchone() is not None
+
         result = False
         exc_handler = self.handle_database_exceptions()
-        with exc_handler, self.with_cursor(self.connection) as cursor:
-            _execute_cursor(cursor, "SELECT 1 FROM sys.schemas WHERE name = ?", (schema,))
-            result = cursor.fetchone() is not None
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                result = _check_schema()
+        else:
+            result = bool(self._run_with_exception_handler(exc_handler, _check_schema))
         self._check_pending_exception(exc_handler)
         return result
 
@@ -336,7 +370,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             cursor = None
             reader: object | None = None
             exc_handler = self.handle_database_exceptions()
-            with exc_handler:
+
+            def _open_reader() -> None:
+                nonlocal cursor, reader, table
                 cursor = cursor_manager.__enter__()
                 try:
                     _execute_cursor(cursor, sql, prepared_parameters)
@@ -349,6 +385,12 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                     cursor_manager.__exit__(None, None, None)
                     cursor = None
                     raise
+
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    _open_reader()
+            else:
+                self._run_with_exception_handler(exc_handler, _open_reader)
             self._check_pending_exception(exc_handler)
             if table is not None:
                 return build_arrow_result_from_table(
@@ -369,28 +411,40 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        exc_handler = self.handle_database_exceptions()
-        with exc_handler, self.with_cursor(self.connection) as cursor:
-            _execute_cursor(cursor, sql, prepared_parameters)
-            if return_format == "batches":
-                reader = _cursor_arrow_reader(cursor, arrow_kwargs)
-                if reader is not None:
-                    return build_arrow_result_from_reader(
-                        prepared_statement,
-                        reader,
-                        return_format=return_format,
-                        batch_size=batch_size,
-                        arrow_schema=arrow_schema,
-                    )
-            table = cursor.arrow(**arrow_kwargs)
-        self._check_pending_exception(exc_handler)
+        def _fetch_arrow() -> "ArrowResult":
+            with self.with_cursor(self.connection) as cursor:
+                _execute_cursor(cursor, sql, prepared_parameters)
+                if return_format == "batches":
+                    reader = _cursor_arrow_reader(cursor, arrow_kwargs)
+                    if reader is not None:
+                        return build_arrow_result_from_reader(
+                            prepared_statement,
+                            arrow_reader_with_deferred_close(reader, cursor.close),
+                            return_format=return_format,
+                            batch_size=batch_size,
+                            arrow_schema=arrow_schema,
+                        )
+                table = cursor.arrow(**arrow_kwargs)
+                if table is None:
+                    msg = "mssql-python did not return an Arrow table."
+                    raise SQLSpecError(msg)
+                return build_arrow_result_from_table(
+                    prepared_statement,
+                    table,
+                    return_format=return_format,
+                    batch_size=batch_size,
+                    arrow_schema=arrow_schema,
+                )
 
-        if table is None:
-            msg = "mssql-python did not return an Arrow table."
-            raise SQLSpecError(msg)
-        return build_arrow_result_from_table(
-            prepared_statement, table, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
-        )
+        result: ArrowResult | None = None
+        exc_handler = self.handle_database_exceptions()
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                result = _fetch_arrow()
+        else:
+            result = self._run_with_exception_handler(exc_handler, _fetch_arrow)
+        self._check_pending_exception(exc_handler)
+        return cast("ArrowResult", result)
 
     def bulk_copy(
         self,
@@ -408,25 +462,33 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         use_internal_transaction: bool = False,
     ) -> MssqlPythonBulkCopyResult:
         """Bulk insert rows via mssql-python cursor.bulkcopy()."""
-        result: MssqlPythonBulkCopyResult = {"rows_copied": 0}
+
+        def _do_bulkcopy() -> Any:
+            with self.with_cursor(self.connection) as cursor:
+                raw_result = cursor.bulkcopy(
+                    target_table,
+                    rows,
+                    batch_size=batch_size,
+                    timeout=timeout,
+                    column_mappings=column_mappings,
+                    keep_identity=keep_identity,
+                    check_constraints=check_constraints,
+                    table_lock=table_lock,
+                    keep_nulls=keep_nulls,
+                    fire_triggers=fire_triggers,
+                    use_internal_transaction=use_internal_transaction,
+                )
+                return _coerce_bulk_copy_result(raw_result, cursor)
+
+        result: MssqlPythonBulkCopyResult | None = None
         exc_handler = self.handle_database_exceptions()
-        with exc_handler, self.with_cursor(self.connection) as cursor:
-            raw_result = cursor.bulkcopy(
-                target_table,
-                rows,
-                batch_size=batch_size,
-                timeout=timeout,
-                column_mappings=column_mappings,
-                keep_identity=keep_identity,
-                check_constraints=check_constraints,
-                table_lock=table_lock,
-                keep_nulls=keep_nulls,
-                fire_triggers=fire_triggers,
-                use_internal_transaction=use_internal_transaction,
-            )
-            result = _coerce_bulk_copy_result(raw_result, cursor)
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                result = _do_bulkcopy()
+        else:
+            result = self._run_with_exception_handler(exc_handler, _do_bulkcopy)
         self._check_pending_exception(exc_handler)
-        return result
+        return cast("MssqlPythonBulkCopyResult", result)
 
     def load_from_arrow(
         self,
@@ -542,19 +604,28 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         }
         raw_result: Any = None
         use_fallback = False
-        exc_handler = self.handle_database_exceptions()
-        with exc_handler, self.with_cursor(self.connection) as cursor:
-            native_bulkcopy = getattr(cursor, "bulkcopy_arrow", None)
-            if is_stream and not callable(native_bulkcopy):
-                msg = "This mssql-python version does not support native Arrow stream bulk copy"
-                raise SQLSpecError(msg)
-            if overwrite:
-                cursor.execute(f"DELETE FROM {_quote_mssql_table(table)}")
-            if has_rows:
-                if callable(native_bulkcopy):
-                    raw_result = native_bulkcopy(table, arrow_source, **options)
-                else:
+
+        def _do_bulkcopy_arrow() -> Any:
+            nonlocal use_fallback
+            with self.with_cursor(self.connection) as cursor:
+                native_bulkcopy = getattr(cursor, "bulkcopy_arrow", None)
+                if is_stream and not callable(native_bulkcopy):
+                    msg = "This mssql-python version does not support native Arrow stream bulk copy"
+                    raise SQLSpecError(msg)
+                if overwrite:
+                    cursor.execute(f"DELETE FROM {format_identifier(table)}")
+                if has_rows:
+                    if callable(native_bulkcopy):
+                        return native_bulkcopy(table, arrow_source, **options)
                     use_fallback = True
+                return None
+
+        exc_handler = self.handle_database_exceptions()
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                raw_result = _do_bulkcopy_arrow()
+        else:
+            raw_result = self._run_with_exception_handler(exc_handler, _do_bulkcopy_arrow)
         self._check_pending_exception(exc_handler)
         if use_fallback:
             _, records = self._arrow_table_to_rows(cast("Any", arrow_source))
@@ -594,25 +665,18 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into SQL Server via BulkCopy."""
-        if kwargs:
-            return super().load_from_storage(
-                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-            )
-        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
-        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
+        return super().load_from_storage(
+            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+        )
 
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        if not params:
-            statement = self._cached_statement(
-                sql, params, cached, None, params_are_simple=True, compiled_sql=cached.compiled_sql
-            )
-            return self._execute_cached_statement(statement)
-        return super()._execute_cache_hit(sql, params, cached)
+        return super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
 
     def _connection_in_transaction(self) -> bool:
-        return self._transaction_active
+        """Return True for explicit transactions and for open implicit transactions."""
+        return self._transaction_active or self._implicit_transaction
 
     def _restore_connection_autocommit(self) -> None:
         restore_autocommit = self._restore_autocommit
@@ -622,18 +686,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         try:
             self.connection.autocommit = True
         except MssqlPythonError as exc:
-            msg = f"Failed to restore autocommit: {exc}"
-            raise SQLSpecError(msg) from exc
-
-
-def _quote_mssql_table(table: str) -> str:
-    """Bracket-quote each part of a qualified table name.
-
-    Bracket quoting stays valid whatever the session's ``QUOTED_IDENTIFIER``
-    setting is, unlike double quotes which parse as a string literal when it is
-    off.
-    """
-    return format_identifier(table)
+            mapped = create_mapped_exception(exc)
+            msg = f"Failed to restore autocommit: {mapped}"
+            raise type(mapped)(msg) from exc
 
 
 def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:

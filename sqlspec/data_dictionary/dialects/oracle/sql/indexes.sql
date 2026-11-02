@@ -20,16 +20,11 @@ SELECT
     i.avg_leaf_blocks_per_key,
     i.avg_data_blocks_per_key,
     i.clustering_factor,
-    LISTAGG(ic.column_name, ',') WITHIN GROUP (ORDER BY ic.column_position) AS columns,
-    LISTAGG(ie.column_expression, ',') WITHIN GROUP (ORDER BY ie.column_position) AS expressions
+    LISTAGG(ic.column_name, ',') WITHIN GROUP (ORDER BY ic.column_position) AS columns
 FROM all_indexes i
 LEFT JOIN all_ind_columns ic
   ON ic.index_owner = i.owner
   AND ic.index_name = i.index_name
-LEFT JOIN all_ind_expressions ie
-  ON ie.index_owner = i.owner
-  AND ie.index_name = i.index_name
-  AND ie.column_position = ic.column_position
 WHERE i.owner = COALESCE(:schema_name, USER)
   AND (:table_name IS NULL OR i.table_name = :table_name)
 GROUP BY
@@ -57,6 +52,7 @@ ORDER BY i.owner, i.table_name, i.index_name;
 -- name: by_table
 -- dialect: oracle
 SELECT
+    i.owner AS schema_name,
     i.index_name,
     i.table_name AS table_name,
     CASE WHEN i.uniqueness = 'UNIQUE' THEN 1 ELSE 0 END AS is_unique,
@@ -75,4 +71,17 @@ LEFT JOIN all_constraints c
   AND c.constraint_type = 'P'
 WHERE i.table_name = :table_name
   AND i.owner = COALESCE(:schema_name, USER)
-GROUP BY i.index_name, i.table_name, i.uniqueness;
+GROUP BY i.owner, i.index_name, i.table_name, i.uniqueness;
+
+-- name: expressions
+-- dialect: oracle
+SELECT
+    ie.index_owner AS schema_name,
+    ie.table_name,
+    ie.index_name,
+    ie.column_position,
+    ie.column_expression
+FROM all_ind_expressions ie
+WHERE ie.index_owner = COALESCE(:schema_name, USER)
+  AND (:table_name IS NULL OR ie.table_name = :table_name)
+ORDER BY ie.index_owner, ie.table_name, ie.index_name, ie.column_position;

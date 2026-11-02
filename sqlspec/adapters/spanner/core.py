@@ -2,9 +2,10 @@
 
 import contextlib
 import re
+from collections.abc import Callable, Iterable, Mapping
 from functools import partial
 from itertools import islice
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import sqlglot
 from sqlglot import exp
@@ -13,6 +14,7 @@ from sqlglot.errors import SqlglotError
 from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
 from sqlspec.adapters.spanner._typing import SpannerTypeCode as TypeCode
 from sqlspec.adapters.spanner._typing import spanner_exceptions as api_exceptions
+from sqlspec.adapters.spanner._typing import spanner_param_types
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.core import (
     DriverParameterProfile,
@@ -22,8 +24,11 @@ from sqlspec.core import (
     build_statement_config_from_profile,
 )
 from sqlspec.driver import rows_to_dicts
+from sqlspec.driver._exception_handler import _run_with_async_exception_handler, _run_with_sync_exception_handler
 from sqlspec.exceptions import (
+    DataError,
     DeadlockError,
+    IntegrityError,
     NotFoundError,
     OperationalError,
     OperationCancelledError,
@@ -38,7 +43,7 @@ from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Generator, Sequence
 
     from sqlspec.adapters.spanner._typing import SpannerDirectedReadOptions as DirectedReadOptions
     from sqlspec.adapters.spanner._typing import SpannerExecuteSqlRequest as ExecuteSqlRequest
@@ -150,12 +155,24 @@ def build_execute_kwargs(
     return kwargs
 
 
+_EXECUTE_OPTION_KEYS: Final[tuple[str, ...]] = (
+    "request_options",
+    "query_options",
+    "directed_read_options",
+    "retry",
+    "timeout",
+    "last_statement",
+)
+
+
 def pop_execute_options(kwargs: dict[str, Any]) -> "SpannerExecuteOptions | None":
     """Remove native execution options before processing SQL parameters."""
-    if not any(
-        key in kwargs
-        for key in ("request_options", "query_options", "directed_read_options", "retry", "timeout", "last_statement")
-    ):
+    has_options = False
+    for key in _EXECUTE_OPTION_KEYS:
+        if key in kwargs:
+            has_options = True
+            break
+    if not has_options:
         return None
     return SpannerExecuteOptions(
         request_options=kwargs.pop("request_options", None),
@@ -367,9 +384,14 @@ def collect_rows(
         Tuple of (rows, column_names).
     """
     resolved_column_names = column_names if column_names is not None else [field.name for field in fields]
-    if column_plan is None and all(type(row) is tuple for row in rows):
-        return rows, resolved_column_names
     if column_plan is None:
+        all_tuples = True
+        for row in rows:
+            if type(row) is not tuple:
+                all_tuples = False
+                break
+        if all_tuples:
+            return rows, resolved_column_names
         return [tuple(row) for row in rows], resolved_column_names
 
     data: list[Any] = []
@@ -397,6 +419,21 @@ def create_arrow_data(
     return convert_dict_to_arrow(data, return_format=return_format)
 
 
+_GRPC_STATUS_CODE_MAP: Final[dict[int, type[SQLSpecError]]] = {
+    3: SQLParsingError,
+    4: QueryTimeoutError,
+    5: NotFoundError,
+    6: UniqueViolationError,
+    7: PermissionDeniedError,
+    8: OperationalError,
+    9: IntegrityError,
+    10: DeadlockError,
+    11: DataError,
+    14: OperationalError,
+    16: PermissionDeniedError,
+}
+
+
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map Spanner exceptions to SQLSpec exceptions.
 
@@ -416,6 +453,12 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         A SQLSpec exception that wraps the original error
     """
     del logger
+    if hasattr(error, "code") and not isinstance(error, BaseException):
+        status_code = error.code
+        if isinstance(status_code, int) and status_code in _GRPC_STATUS_CODE_MAP:
+            msg = str(getattr(error, "message", "batch DML failure") or "batch DML failure")
+            return _GRPC_STATUS_CODE_MAP[status_code](msg)
+
     if isinstance(error, api_exceptions.AlreadyExists):
         return _create_spanner_error(error, UniqueViolationError, "resource already exists")
 
@@ -433,12 +476,20 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if isinstance(error, api_exceptions.Aborted):
         return _create_spanner_error(error, DeadlockError, "transaction aborted")
 
+    if isinstance(error, api_exceptions.FailedPrecondition):
+        return _create_spanner_error(error, IntegrityError, "constraint violation or precondition failed")
+
+    if isinstance(error, api_exceptions.OutOfRange):
+        return _create_spanner_error(error, DataError, "out of range")
+
     if isinstance(error, api_exceptions.Cancelled):
         return _create_spanner_error(error, OperationCancelledError, "operation cancelled")
     if isinstance(error, api_exceptions.DeadlineExceeded):
         return _create_spanner_error(error, QueryTimeoutError, "deadline exceeded")
 
-    if isinstance(error, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests)):
+    if isinstance(
+        error, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests, api_exceptions.ResourceExhausted)
+    ):
         return _create_spanner_error(error, OperationalError, "service unavailable or rate limited")
 
     return _create_spanner_error(error, SQLSpecError, "error")
@@ -864,22 +915,22 @@ class SpannerSyncStreamSource(_SpannerStreamSourceBase):
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            result_set = self._driver.connection.execute_sql(
-                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-            )
-            self._result_set = result_set
-            self._row_iterator = cast("Generator[Any, None, None]", iter(result_set))
+        _run_with_sync_exception_handler(handler, self._start_query)
         self._driver._check_pending_exception(handler)
+
+    def _start_query(self) -> None:
+        result_set = self._driver.connection.execute_sql(
+            self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+        )
+        self._result_set = result_set
+        self._row_iterator = cast("Generator[Any, None, None]", iter(result_set))
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         row_iterator = self._row_iterator
         if self._result_set is None or row_iterator is None:
             return []
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        with handler:
-            rows = list(islice(row_iterator, self._chunk_size))
+        rows: list[Any] | None = _run_with_sync_exception_handler(handler, list, islice(row_iterator, self._chunk_size))
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
@@ -912,28 +963,33 @@ class SpannerAsyncStreamSource(_SpannerStreamSourceBase):
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        async with handler:
-            result_set = await self._driver.connection.execute_sql(
-                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-            )
-            self._result_set = result_set
-            self._row_iterator = cast("AsyncGenerator[Any, None]", result_set.__aiter__())
+        await _run_with_async_exception_handler(handler, self._start_query)
         self._driver._check_pending_exception(handler)
+
+    async def _start_query(self) -> None:
+        result_set = await self._driver.connection.execute_sql(
+            self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+        )
+        self._result_set = result_set
+        self._row_iterator = cast("AsyncGenerator[Any, None]", result_set.__aiter__())
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         row_iterator = self._row_iterator
         if self._result_set is None or row_iterator is None:
             return []
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        async with handler:
-            with contextlib.suppress(StopAsyncIteration):
-                while len(rows) < self._chunk_size:
-                    rows.append(await row_iterator.__anext__())
+        rows = await _run_with_async_exception_handler(handler, self._fetch_rows, row_iterator)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
         return self._rows_to_chunk(rows)
+
+    async def _fetch_rows(self, row_iterator: "AsyncGenerator[Any, None]") -> "list[Any]":
+        rows: list[Any] = []
+        with contextlib.suppress(StopAsyncIteration):
+            while len(rows) < self._chunk_size:
+                rows.append(await row_iterator.__anext__())
+        return rows
 
     async def close(self, error: bool = False) -> None:
         row_iterator = self._row_iterator
@@ -980,3 +1036,108 @@ def _create_spanner_error(error: Any, error_class: type[SQLSpecError], descripti
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+_DDL_TIMEOUT_SECONDS: Final[float] = 300.0
+
+
+def _json_param_type() -> Any:
+    """Return the SPANNER_PARAM_TYPES JSON type or fallback to STRING."""
+    return getattr(spanner_param_types, "JSON", getattr(spanner_param_types, "STRING", None))
+
+
+def _extract_spanner_json_codecs(config: Any) -> "tuple[Callable[[Any], str], Callable[[str], Any]]":
+    driver_features = getattr(config, "driver_features", None)
+    features = driver_features if isinstance(driver_features, Mapping) else {}
+    serializer = features.get("json_serializer")
+    deserializer = features.get("json_deserializer")
+    return (
+        cast("Callable[[Any], str]", serializer if callable(serializer) else to_json),
+        cast("Callable[[str], Any]", deserializer if callable(deserializer) else from_json),
+    )
+
+
+def _spanner_row_deletion_policy(adk_config: "Mapping[str, Any]", ttl_key: str, column: str) -> str:
+    retention = adk_config.get("retention")
+    if not isinstance(retention, dict):
+        return ""
+    ttl_seconds = retention.get(ttl_key)
+    if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+        return ""
+    ttl_days = max(1, (ttl_seconds + 86_399) // 86_400)
+    return f",\nROW DELETION POLICY (OLDER_THAN({column}, INTERVAL {ttl_days} DAY))"
+
+
+def _is_spanner_table_missing(exc: Exception, *table_names: str) -> bool:
+    message = str(exc).lower()
+    return "not found" in message and any(table_name.lower() in message for table_name in table_names)
+
+
+class _SpannerReadProtocol(Protocol):
+    def execute_sql(
+        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> "Iterable[Any]": ...
+
+
+class _SpannerWriteTransactionProtocol(Protocol):
+    def execute_update(
+        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> int: ...
+
+
+async def _run_read_async(
+    database: Any, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+) -> "list[Any]":
+    try:
+        async with cast("Any", database).snapshot() as snapshot:
+            result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
+            return [row async for row in result_set]
+    except api_exceptions.GoogleAPICallError as exc:
+        raise create_mapped_exception(exc) from exc
+
+
+def _adk_config(config: Any) -> "dict[str, Any]":
+    extension_config = getattr(config, "extension_config", None)
+    adk_config = extension_config.get("adk") if isinstance(extension_config, dict) else {}
+    if not isinstance(adk_config, dict):
+        return {}
+    return adk_config
+
+
+def _run_read(
+    config: Any, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+) -> "list[Any]":
+    try:
+        with config.provide_connection(transaction=False) as snapshot:
+            reader = cast("_SpannerReadProtocol", snapshot)
+            return list(reader.execute_sql(sql, params=params, param_types=types))
+    except api_exceptions.GoogleAPICallError as exc:
+        raise create_mapped_exception(exc) from exc
+
+
+class _SpannerSyncUpdateJob:
+    """Callable transaction work item for Spanner sync single DML updates."""
+
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    def __call__(self, transaction: Any) -> int:
+        writer = cast("_SpannerWriteTransactionProtocol", transaction)
+        return int(writer.execute_update(self._sql, params=self._params, param_types=self._types))
+
+
+class _SpannerAsyncUpdateJob:
+    """Callable async transaction work item for Spanner async single DML updates."""
+
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    async def __call__(self, transaction: Any) -> int:
+        return int(await transaction.execute_update(self._sql, params=self._params, param_types=self._types))

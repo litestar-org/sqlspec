@@ -167,3 +167,34 @@ async def test_oracle_async_stream_fetch_lobs_call_option_overrides_default() ->
     rows: list[dict[str, Any]] = [row async for row in stream]
     assert rows == []
     assert raw_cursor.execute_kwargs["fetch_lobs"] is True
+
+
+def test_resolve_rowcount_negative_rowcount_returns_zero() -> None:
+    """resolve_rowcount returns 0 when cursor.rowcount is negative."""
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.oracledb.core import resolve_rowcount
+
+    cursor = Mock()
+    cursor.rowcount = -1
+    assert resolve_rowcount(cursor) == 0
+
+
+def test_build_fetch_kwargs_returns_cached_instance_when_features_unchanged() -> None:
+    """build_fetch_kwargs returns the identical cached dict when features are unchanged."""
+    features = {"fetch_lobs": False, "fetch_decimals": True}
+    res1 = build_fetch_kwargs(features)
+    res2 = build_fetch_kwargs(features)
+    assert res1 is res2
+
+
+def test_fetch_kwargs_precomputed_on_driver_instance() -> None:
+    """_fetch_kwargs is precomputed and cached on the driver instance."""
+    raw_cursor = _RawCursor()
+    driver = OracleSyncDriver(
+        cast("OracleSyncConnection", _SyncConnection(raw_cursor)),
+        driver_features={"fetch_lobs": False, "fetch_decimals": True},
+    )
+    assert hasattr(driver, "_fetch_kwargs")
+    assert driver._fetch_kwargs == {"fetch_lobs": False, "fetch_decimals": True}
+    assert driver._fetch_kwargs is build_fetch_kwargs({"fetch_lobs": False, "fetch_decimals": True})

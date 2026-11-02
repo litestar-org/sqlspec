@@ -86,18 +86,18 @@ def test_input_handler_claims_tuple_of_float() -> None:
     assert list(packed) == [0.5, 0.25, 0.125]
 
 
-def test_input_handler_packs_int_in_int8_range_as_int8() -> None:
-    """``list[int]`` with all values in [-128, 127] is packed as int8."""
+def test_input_handler_packs_int_sequence_as_float32() -> None:
+    """``list[int]`` is deterministically packed as float32."""
     from sqlspec.adapters.oracledb._vector_handlers import _input_type_handler  # pyright: ignore[reportPrivateUsage]
 
     cursor = _mock_cursor()
     cursor.var.return_value = "var-token"
 
-    _input_type_handler(cursor, [-128, 0, 64, 127], 1)
+    _input_type_handler(cursor, [0, 1, 0], 1)
 
-    packed = cursor.var.call_args.kwargs["inconverter"]([-128, 0, 64, 127])
-    assert packed.typecode == "b"
-    assert list(packed) == [-128, 0, 64, 127]
+    packed = cursor.var.call_args.kwargs["inconverter"]([0, 1, 0])
+    assert packed.typecode == "f"
+    assert list(packed) == [0.0, 1.0, 0.0]
 
 
 def test_input_handler_packs_int_outside_int8_range_as_float32() -> None:
@@ -382,12 +382,12 @@ def test_pack_sequence_converter_float_list() -> None:
 
 
 def test_pack_sequence_converter_int8_range() -> None:
-    """_pack_sequence_converter packs small int lists as int8."""
+    """_pack_sequence_converter packs small int lists as float32."""
     result = _pack_sequence_converter([-128, 0, 127])
 
     assert isinstance(result, array.array)
-    assert result.typecode == "b"
-    assert list(result) == [-128, 0, 127]
+    assert result.typecode == "f"
+    assert list(result) == [-128.0, 0.0, 127.0]
 
 
 def test_input_handler_rejects_heterogeneous_list_and_pre_23ai_and_disabled_flag() -> None:

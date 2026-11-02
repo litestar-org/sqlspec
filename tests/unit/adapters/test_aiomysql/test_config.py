@@ -320,3 +320,31 @@ def test_aiomysql_config_with_dsn_applies_to_connection_kwargs() -> None:
     assert kwargs["password"] == "pass1"
     assert kwargs["host"] == "dbhost"
     assert kwargs["db"] == "production"
+
+
+def test_aiomysql_session_factory_slots() -> None:
+    """_AiomysqlSessionFactory declares __slots__ for connection context tracking."""
+    from sqlspec.adapters.aiomysql.config import _AiomysqlSessionFactory
+
+    assert _AiomysqlSessionFactory.__slots__ == ("_contexts",)
+
+
+async def test_aiomysql_create_connection_closes_socket_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """create_connection closes the standalone connection if _ensure_connection raises."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import aiomysql
+
+    mock_conn = MagicMock()
+    mock_conn.close = MagicMock()
+    monkeypatch.setattr(aiomysql, "connect", AsyncMock(return_value=mock_conn))
+
+    config = AiomysqlConfig(
+        connection_config={"host": "localhost", "db": "test"},
+        driver_features={"on_connection_create": AsyncMock(side_effect=RuntimeError("hook error"))},
+    )
+
+    with pytest.raises(RuntimeError, match="hook error"):
+        await config.create_connection()
+
+    assert mock_conn.close.called

@@ -1,8 +1,11 @@
 """Aiosqlite async ADK store for Google Agent Development Kit session/event storage."""
 
+import array
 import contextlib
 import inspect
+import math
 import re
+import weakref
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
@@ -74,7 +77,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         config: AiosqliteConfig with extension_config["adk"] settings.
     """
 
-    __slots__ = ("_configured_connection_ids", "_pragma_overrides")
+    __slots__ = ("_configured_connections", "_pragma_overrides")
 
     def __init__(self, config: "AiosqliteConfig") -> None:
         """Initialize Aiosqlite ADK store.
@@ -84,7 +87,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
         super().__init__(config)
         self._pragma_overrides = _pragma_overrides(config)
-        self._configured_connection_ids: set[int] = set()
+        self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
     async def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -474,7 +477,11 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             params.append(_datetime_to_julian(after_timestamp))
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT {limit}" if limit else ""
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(int(limit))
+        else:
+            limit_clause = ""
 
         sql = f"""
         SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -688,7 +695,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
     async def _ensure_pragmas(self, connection: Any) -> None:
         """Apply PRAGMA optimization profile once per connection."""
-        if id(connection) not in self._configured_connection_ids:
+        if connection not in self._configured_connections:
             await self._apply_pragmas(connection)
 
     async def _apply_pragmas(self, connection: Any) -> None:
@@ -703,7 +710,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         await _close_cursor(await connection.execute("PRAGMA journal_size_limit = 67108864"))
         for pragma_name, pragma_value in self._pragma_overrides:
             await _close_cursor(await connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
-        self._configured_connection_ids.add(id(connection))
+        self._configured_connections.add(connection)
 
     async def _sessions_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.
@@ -823,7 +830,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         config: AiosqliteConfig with extension_config["adk"] settings.
     """
 
-    __slots__ = ("_configured_connection_ids", "_fts_options", "_pragma_overrides")
+    __slots__ = ("_configured_connections", "_fts_options", "_pragma_overrides")
 
     def __init__(self, config: "AiosqliteConfig") -> None:
         """Initialize Aiosqlite ADK memory store.
@@ -834,7 +841,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         super().__init__(config)
         self._fts_options = _fts_options(config)
         self._pragma_overrides = _pragma_overrides(config)
-        self._configured_connection_ids: set[int] = set()
+        self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.
@@ -873,8 +880,8 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                 INSERT OR IGNORE INTO {self._memory_table}
                 (id, session_id, app_name, user_id, scope, event_id, author,
                  {self._owner_id_column_name}, timestamp, content_json,
-                 content_text, metadata_json, inserted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 content_text, metadata_json, inserted_at, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 for entry in entries:
                     scope = entry.get("scope", "user")
@@ -893,13 +900,14 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                         entry["content_text"],
                         to_json(metadata_json) if metadata_json is not None else None,
                         _datetime_to_julian(entry["inserted_at"]),
+                        _pack_embedding(entry.get("embedding")),
                     ))
             else:
                 sql = f"""
                 INSERT OR IGNORE INTO {self._memory_table}
                 (id, session_id, app_name, user_id, scope, event_id, author,
-                 timestamp, content_json, content_text, metadata_json, inserted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 for entry in entries:
                     scope = entry.get("scope", "user")
@@ -917,6 +925,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                         entry["content_text"],
                         to_json(metadata_json) if metadata_json is not None else None,
                         _datetime_to_julian(entry["inserted_at"]),
+                        _pack_embedding(entry.get("embedding")),
                     ))
             cursor = await conn.executemany(sql, params_list)
             try:
@@ -935,12 +944,13 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
+        """Search memory entries by text query or vector embedding."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query or not query.strip():
+        has_query = bool(query and query.strip())
+        if not has_query and embedding is None:
             return []
 
         limit_value = limit if limit is not None else self._max_results
@@ -949,7 +959,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         async with self._config.provide_connection() as conn:
             await self._ensure_foreign_keys(conn)
-            if self._use_fts:
+            if has_query and self._use_fts:
                 where_scope, scope_params = _build_sqlite_scope_clause("m.", app_name, user_id, scope_filter)
                 fts_sql = f"""
                 SELECT m.* FROM {self._memory_table} AS m
@@ -958,7 +968,8 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                 ORDER BY m.timestamp DESC
                 LIMIT ?
                 """
-                fts_params = (*scope_params, query, limit_value)
+                fts_limit = limit_value if embedding is None else max(limit_value * 5, 50)
+                fts_params = (*scope_params, query, fts_limit)
                 try:
                     cursor = await conn.execute(fts_sql, fts_params)
                     try:
@@ -976,13 +987,23 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
             if rows is None:
                 where_scope, scope_params = _build_sqlite_scope_clause("", app_name, user_id, scope_filter)
-                sql = f"""
-                SELECT * FROM {self._memory_table}
-                WHERE {where_scope} AND content_text LIKE ?
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """
-                params = (*scope_params, f"%{query}%", limit_value)
+                fetch_limit = limit_value if embedding is None else max(limit_value * 5, 50)
+                if has_query:
+                    sql = f"""
+                    SELECT * FROM {self._memory_table}
+                    WHERE {where_scope} AND content_text LIKE ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """
+                    params = (*scope_params, f"%{query}%", fetch_limit)
+                else:
+                    sql = f"""
+                    SELECT * FROM {self._memory_table}
+                    WHERE {where_scope} AND embedding IS NOT NULL
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """
+                    params = (*scope_params, fetch_limit)
                 try:
                     cursor = await conn.execute(sql, params)
                     try:
@@ -1002,8 +1023,19 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             raw["inserted_at"] = _julian_to_datetime(raw["inserted_at"])
             raw["content_json"] = from_json(raw["content_json"])
             raw["metadata_json"] = from_json(raw["metadata_json"]) if raw["metadata_json"] else None
-            raw["embedding"] = None
+            raw["embedding"] = _unpack_embedding(raw.get("embedding"))
             records.append(cast("StoredMemory", raw))
+
+        if embedding is not None and records:
+            query_vec = [float(x) for x in embedding]
+
+            def _score(r: "StoredMemory") -> float:
+                emb = r.get("embedding")
+                return _cosine_similarity(query_vec, emb) if emb is not None else -1.0
+
+            records.sort(key=_score, reverse=True)
+            records = records[:limit_value]
+
         return records
 
     async def delete_entries_by_session(self, session_id: str) -> int:
@@ -1062,7 +1094,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             raise
 
     async def _ensure_foreign_keys(self, connection: Any) -> None:
-        if id(connection) not in self._configured_connection_ids:
+        if connection not in self._configured_connections:
             await self._enable_foreign_keys(connection)
 
     async def _enable_foreign_keys(self, connection: Any) -> None:
@@ -1070,7 +1102,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         await _close_cursor(await connection.execute("PRAGMA foreign_keys = ON"))
         for pragma_name, pragma_value in self._pragma_overrides:
             await _close_cursor(await connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
-        self._configured_connection_ids.add(id(connection))
+        self._configured_connections.add(connection)
 
     async def _memory_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for memory entries.
@@ -1121,7 +1153,8 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             content_json TEXT NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json TEXT,
-            inserted_at REAL NOT NULL
+            inserted_at REAL NOT NULL,
+            embedding BLOB
         );
 
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time
@@ -1241,6 +1274,34 @@ def _build_sqlite_scope_clause(
     if scope_filter == "user":
         return f"{prefix}app_name = ? AND {prefix}scope = 'user' AND {prefix}user_id = ?", (app_name, user_id)
     return f"{prefix}app_name = ? AND {prefix}scope = 'app'", (app_name,)
+
+
+def _pack_embedding(raw: Any) -> bytes | None:
+    """Pack float sequence into float32 binary BLOB."""
+    if raw is None:
+        return None
+    return array.array("f", [float(x) for x in raw]).tobytes()
+
+
+def _unpack_embedding(blob: Any) -> list[float] | None:
+    """Unpack float32 binary BLOB into float list."""
+    if blob is None:
+        return None
+    return list(array.array("f", blob))
+
+
+def _cosine_similarity(v1: "Sequence[float]", v2: "Sequence[float]") -> float:
+    """Compute cosine similarity between two float vectors."""
+    dot = 0.0
+    norm1 = 0.0
+    norm2 = 0.0
+    for a, b in zip(v1, v2, strict=False):
+        dot += a * b
+        norm1 += a * a
+        norm2 += b * b
+    if norm1 == 0.0 or norm2 == 0.0:
+        return 0.0
+    return float(dot / (math.sqrt(norm1) * math.sqrt(norm2)))
 
 
 def _session_list_query(

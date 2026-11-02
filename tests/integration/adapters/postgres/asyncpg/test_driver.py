@@ -483,12 +483,18 @@ async def test_asyncpg_statement_stack_continue_on_error(asyncpg_session: "Async
     assert verify.get_data()[0]["total"] == 2
 
 
-async def test_asyncpg_statement_stack_continue_on_error_inside_transaction(asyncpg_session: "AsyncpgDriver") -> None:
+@pytest.mark.parametrize("raw_begin", [False, True])
+async def test_asyncpg_statement_stack_continue_on_error_inside_transaction(
+    asyncpg_session: "AsyncpgDriver", raw_begin: bool
+) -> None:
     """Continue-on-error inside a user transaction must isolate the failing op via a savepoint."""
 
     await asyncpg_session.execute_script("DELETE FROM test_table_asyncpg")
 
-    await asyncpg_session.begin()
+    if raw_begin:
+        await asyncpg_session.execute("BEGIN")
+    else:
+        await asyncpg_session.begin()
     stack = (
         StatementStack()
         .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (1, "initial", 5))
@@ -501,6 +507,7 @@ async def test_asyncpg_statement_stack_continue_on_error_inside_transaction(asyn
     assert results[0].error is None
     assert results[1].error is not None
     assert results[2].error is None
+    assert asyncpg_session.connection.is_in_transaction()
 
     verify = await asyncpg_session.execute("SELECT COUNT(*) AS total FROM test_table_asyncpg")
     assert verify.get_data()[0]["total"] == 2

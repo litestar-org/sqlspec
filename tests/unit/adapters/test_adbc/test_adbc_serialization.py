@@ -89,8 +89,8 @@ def test_driver_features_defaults() -> None:
 
     assert config.driver_features["json_serializer"] is to_json
     assert config.driver_features["enable_cast_detection"] is True
-    assert config.driver_features["strict_type_coercion"] is False
-    assert config.driver_features["arrow_extension_types"] is True
+    assert config.driver_features["enable_strict_type_coercion"] is False
+    assert config.driver_features["enable_arrow_extension_types"] is True
 
 
 def test_driver_features_override() -> None:
@@ -103,14 +103,14 @@ def test_driver_features_override() -> None:
         driver_features={
             "json_serializer": custom_serializer,
             "enable_cast_detection": False,
-            "strict_type_coercion": True,
+            "enable_strict_type_coercion": True,
         }
     )
 
     assert config.driver_features["json_serializer"] is custom_serializer
     assert config.driver_features["enable_cast_detection"] is False
-    assert config.driver_features["strict_type_coercion"] is True
-    assert config.driver_features["arrow_extension_types"] is True
+    assert config.driver_features["enable_strict_type_coercion"] is True
+    assert config.driver_features["enable_arrow_extension_types"] is True
 
 
 def test_backward_compatibility_no_serializer() -> None:

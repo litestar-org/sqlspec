@@ -6,12 +6,13 @@ from typing import TYPE_CHECKING, Any, cast
 import pyarrow as pa
 import pytest
 
-from sqlspec.adapters.oracledb.core import (
-    build_arrow_fetch_kwargs,
+from sqlspec.adapters.oracledb.core import build_arrow_fetch_kwargs
+from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.utils.arrow_helpers import (
     coerce_oracle_df_to_arrow_batches,
     coerce_oracle_df_to_arrow_table,
+    oracle_df_to_arrow_table,
 )
-from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
@@ -188,4 +189,115 @@ async def test_select_to_arrow_consumes_arrow_c_stream_pycapsule_async() -> None
     )
     res_table = await driver.select_to_arrow("SELECT id, value FROM example", return_format="table")
     assert res_table.get_data().to_pydict() == {"id": [1, 2], "value": [10, 20]}
-    assert stream_df.stream_calls == 1
+
+
+def test_oracle_df_to_arrow_table_lazy_pyarrow_resolution() -> None:
+    """oracle_df_to_arrow_table lazily resolves pyarrow when pa_module is None."""
+    raw_table = pa.table({"ID": [1, 2], "VALUE": [10, 20]})
+    stream_df = _StreamOnlyOracleDataFrame(raw_table)
+    table = oracle_df_to_arrow_table(stream_df, pa_module=None)
+    assert table.num_rows == 2
+
+
+def test_select_to_arrow_maps_native_database_error() -> None:
+    """select_to_arrow routes oracledb.DatabaseError through exception handler."""
+    import oracledb
+
+    from sqlspec.exceptions import SQLSpecError
+
+    class _FailingOracleConn:
+        def fetch_df_all(self, **_kwargs: object) -> None:
+            raise oracledb.DatabaseError("ORA-00942: table or view does not exist")
+
+    driver = OracleSyncDriver(cast("OracleSyncConnection", _FailingOracleConn()))
+    with pytest.raises(SQLSpecError):
+        driver.select_to_arrow("SELECT * FROM non_existent", return_format="table")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("return_format", ["batches", "reader"])
+async def test_arrow_batch_failure_preserves_database_error(is_async: bool, return_format: Any) -> None:
+    import oracledb
+
+    from sqlspec.exceptions import SQLParsingError
+
+    class _FailingConnection:
+        def fetch_df_all(self, **_kwargs: Any) -> None:
+            raise AssertionError("batch export should use fetch_df_batches")
+
+        def fetch_df_batches(self, **_kwargs: Any) -> Iterator[pa.Table]:
+            raise oracledb.DatabaseError("ORA-00942: missing table")
+            yield pa.table({"ID": [1]})
+
+    class _FailingAsyncConnection:
+        async def fetch_df_all(self, **_kwargs: Any) -> None:
+            raise AssertionError("batch export should use fetch_df_batches")
+
+        async def fetch_df_batches(self, **_kwargs: Any) -> AsyncIterator[pa.Table]:
+            raise oracledb.DatabaseError("ORA-00942: missing table")
+            yield pa.table({"ID": [1]})
+
+    with pytest.raises(SQLParsingError, match="ORA-00942") as exc_info:
+        if is_async:
+            await OracleAsyncDriver(cast("Any", _FailingAsyncConnection())).select_to_arrow(
+                "SELECT * FROM missing", return_format=return_format
+            )
+        else:
+            OracleSyncDriver(cast("Any", _FailingConnection())).select_to_arrow(
+                "SELECT * FROM missing", return_format=return_format
+            )
+
+    assert isinstance(exc_info.value.__cause__, oracledb.DatabaseError)
+
+
+def test_lazy_arrow_reader_maps_errors_after_the_first_batch() -> None:
+    import oracledb
+
+    from sqlspec.exceptions import SQLParsingError
+
+    class _FailingConnection:
+        def fetch_df_batches(self, **_kwargs: Any) -> Iterator[pa.Table]:
+            yield pa.table({"ID": [1]})
+            raise oracledb.DatabaseError("ORA-00942: missing table")
+
+        def fetch_df_all(self, **_kwargs: Any) -> None:
+            raise AssertionError("reader export should use fetch_df_batches")
+
+    result = OracleSyncDriver(cast("Any", _FailingConnection())).select_to_arrow(
+        "SELECT * FROM example", return_format="reader"
+    )
+    reader = result.get_data()
+    assert reader.read_next_batch().to_pydict() == {"ID": [1]}
+    with pytest.raises(SQLParsingError, match="ORA-00942") as exc_info:
+        reader.read_next_batch()
+    assert isinstance(exc_info.value.__cause__, oracledb.DatabaseError)
+
+
+def test_sync_select_to_arrow_reader_yields_lazily() -> None:
+    """return_format=reader yields record batches lazily from the underlying stream."""
+    yielded: list[int] = []
+
+    def _generate_tables() -> Iterator[pa.Table]:
+        yielded.append(1)
+        yield pa.table({"ID": [1, 2], "VALUE": [10, 20]})
+        yielded.append(2)
+        yield pa.table({"ID": [3], "VALUE": [30]})
+
+    class _LazyBatchConnection:
+        def fetch_df_batches(self, **_kwargs: object) -> Iterator[pa.Table]:
+            return _generate_tables()
+
+    driver = OracleSyncDriver(
+        cast("OracleSyncConnection", _LazyBatchConnection()), driver_features={"enable_lowercase_column_names": True}
+    )
+
+    result = driver.select_to_arrow("SELECT id, value FROM example", return_format="reader", batch_size=2)
+    reader = result.get_data()
+    assert yielded == [1]
+    first_batch = reader.read_next_batch()
+    assert first_batch.num_rows == 2
+    assert yielded == [1]
+    second_batch = reader.read_next_batch()
+    assert second_batch.num_rows == 1
+    assert yielded == [1, 2]

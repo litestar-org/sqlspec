@@ -154,16 +154,18 @@ def test_input_handler_routes_dict_to_db_type_blob_on_12c() -> None:
     cursor.var.assert_called_once_with(oracledb.DB_TYPE_BLOB, arraysize=2, inconverter=json_converter_in_blob)
 
 
-def test_input_handler_routes_dict_to_db_type_blob_pre_12c() -> None:
-    """Dict bound on Oracle 11g (BLOB_PLAIN storage) should use DB_TYPE_BLOB."""
+def test_input_handler_routes_dict_to_db_type_clob_on_11g() -> None:
+    """Dict bound on Oracle 11g (<12c) uses DB_TYPE_CLOB with json_converter_in_clob."""
+    import oracledb
+
     cursor = _mock_cursor_with_major(11)
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
 
-    result = json_input_type_handler(cursor, {"foo": "bar"}, 2)
+    result = json_input_type_handler(cursor, {"foo": "bar"}, 4)
 
     assert result is cursor_var
-    cursor.var.assert_called_once_with(oracledb.DB_TYPE_BLOB, arraysize=2, inconverter=json_converter_in_blob)
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_CLOB, arraysize=4, inconverter=json_converter_in_clob)
 
 
 def test_input_handler_respects_compatible_major_on_21c() -> None:

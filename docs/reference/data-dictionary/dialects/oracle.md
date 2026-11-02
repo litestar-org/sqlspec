@@ -16,7 +16,7 @@ Introspects `ALL_TABLES`, `ALL_TAB_COLS`, `ALL_INDEXES`, `ALL_IND_COLUMNS`, `ALL
 | **Default Schema** | `None` |
 | **Version Pattern** | `(\d+)` |
 | **DDL Strategy** | Native `DBMS_METADATA.GET_DDL` + AST fallback |
-| **Catalog `.sql` Files** | `22` files (`35` named queries) |
+| **Catalog `.sql` Files** | `22` files (`36` named queries) |
 
 ### Capabilities & Type Mappings
 
@@ -53,7 +53,7 @@ Introspects `ALL_TABLES`, `ALL_TAB_COLS`, `ALL_INDEXES`, `ALL_IND_COLUMNS`, `ALL
 
 ## Catalog SQL Queries
 
-The `oracle` dialect pack defines `35` named queries across `22` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/oracle/`):
+The `oracle` dialect pack defines `36` named queries across `22` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/oracle/`):
 
 | Domain Pack | Named Queries | Bind Parameters |
 | --- | --- | --- |
@@ -65,7 +65,7 @@ The `oracle` dialect pack defines `35` named queries across `22` domain `.sql` f
 | `dependencies.sql` | `by_schema` | `:object_name`, `:schema_name` |
 | `foreign_keys.sql` | `by_table`, `by_schema` | `:schema_name`, `:table_name` |
 | `grants.sql` | `by_schema` | `:object_name`, `:schema_name` |
-| `indexes.sql` | `by_schema`, `by_table` | `:schema_name`, `:table_name` |
+| `indexes.sql` | `by_schema`, `by_table`, `expressions` | `:schema_name`, `:table_name` |
 | `lob_storage.sql` | `by_schema` | `:schema_name`, `:table_name` |
 | `materialized_views.sql` | `by_schema` | `:mview_name`, `:schema_name` |
 | `objects.sql` | `by_schema`, `cloud_ai_available` | `:object_name`, `:schema_name` |
@@ -425,7 +425,7 @@ The `oracle` dialect pack defines `35` named queries across `22` domain `.sql` f
     ORDER BY schema_name, object_name, column_name, grantee, privilege;
     ```
 
-??? code "`indexes.sql` (2 named queries)"
+??? code "`indexes.sql` (3 named queries)"
 
     ```sql
     -- name: by_schema
@@ -450,16 +450,11 @@ The `oracle` dialect pack defines `35` named queries across `22` domain `.sql` f
         i.avg_leaf_blocks_per_key,
         i.avg_data_blocks_per_key,
         i.clustering_factor,
-        LISTAGG(ic.column_name, ',') WITHIN GROUP (ORDER BY ic.column_position) AS columns,
-        LISTAGG(ie.column_expression, ',') WITHIN GROUP (ORDER BY ie.column_position) AS expressions
+        LISTAGG(ic.column_name, ',') WITHIN GROUP (ORDER BY ic.column_position) AS columns
     FROM all_indexes i
     LEFT JOIN all_ind_columns ic
       ON ic.index_owner = i.owner
       AND ic.index_name = i.index_name
-    LEFT JOIN all_ind_expressions ie
-      ON ie.index_owner = i.owner
-      AND ie.index_name = i.index_name
-      AND ie.column_position = ic.column_position
     WHERE i.owner = COALESCE(:schema_name, USER)
       AND (:table_name IS NULL OR i.table_name = :table_name)
     GROUP BY
@@ -487,6 +482,7 @@ The `oracle` dialect pack defines `35` named queries across `22` domain `.sql` f
     -- name: by_table
     -- dialect: oracle
     SELECT
+        i.owner AS schema_name,
         i.index_name,
         i.table_name AS table_name,
         CASE WHEN i.uniqueness = 'UNIQUE' THEN 1 ELSE 0 END AS is_unique,
@@ -505,7 +501,20 @@ The `oracle` dialect pack defines `35` named queries across `22` domain `.sql` f
       AND c.constraint_type = 'P'
     WHERE i.table_name = :table_name
       AND i.owner = COALESCE(:schema_name, USER)
-    GROUP BY i.index_name, i.table_name, i.uniqueness;
+    GROUP BY i.owner, i.index_name, i.table_name, i.uniqueness;
+
+    -- name: expressions
+    -- dialect: oracle
+    SELECT
+        ie.index_owner AS schema_name,
+        ie.table_name,
+        ie.index_name,
+        ie.column_position,
+        ie.column_expression
+    FROM all_ind_expressions ie
+    WHERE ie.index_owner = COALESCE(:schema_name, USER)
+      AND (:table_name IS NULL OR ie.table_name = :table_name)
+    ORDER BY ie.index_owner, ie.table_name, ie.index_name, ie.column_position;
     ```
 
 ??? code "`lob_storage.sql` (1 named queries)"
@@ -876,12 +885,10 @@ The `oracle` dialect pack defines `35` named queries across `22` domain `.sql` f
     -- name: current
     -- dialect: oracle
     SELECT
-        product AS "product",
-        version AS "version",
-        status AS "status"
-    FROM product_component_version
-    WHERE product LIKE 'Oracle%'
-    ORDER BY TO_NUMBER(REGEXP_SUBSTR(version, '^[0-9]+')) DESC, version DESC
+        p.*
+    FROM product_component_version p
+    WHERE p.product LIKE 'Oracle%'
+    ORDER BY TO_NUMBER(REGEXP_SUBSTR(p.version, '^[0-9]+')) DESC, p.version DESC
     FETCH FIRST 1 ROWS ONLY;
 
     -- name: autonomous_service

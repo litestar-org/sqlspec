@@ -16,18 +16,31 @@ from sqlglot.errors import ParseError
 from sqlspec.adapters.duckdb._typing import (
     DuckDBBinderException,
     DuckDBCatalogException,
+    DuckDBConnectionException,
     DuckDBConstraintException,
     DuckDBConversionException,
+    DuckDBDataError,
+    DuckDBInternalException,
     DuckDBInterruptException,
+    DuckDBInvalidInputException,
+    DuckDBInvalidTypeException,
     DuckDBIOException,
+    DuckDBNotImplementedException,
+    DuckDBOperationalError,
+    DuckDBOutOfMemoryException,
+    DuckDBOutOfRangeException,
     DuckDBParserException,
     DuckDBPermissionException,
+    DuckDBSerializationException,
+    DuckDBSyntaxException,
     DuckDBTransactionException,
+    DuckDBTypeMismatchException,
     duckdb_module,
 )
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
@@ -512,11 +525,23 @@ def configure_duckdb_statement_profiling(connection: Any, profile_path: Path) ->
 _EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {
     DuckDBCatalogException: (NotFoundError, "catalog error"),
     DuckDBParserException: (SQLParsingError, "SQL parsing error"),
+    DuckDBSyntaxException: (SQLParsingError, "SQL syntax error"),
     DuckDBBinderException: (SQLParsingError, "SQL parsing error"),
     DuckDBPermissionException: (PermissionDeniedError, "permission denied"),
     DuckDBInterruptException: (OperationCancelledError, "query interrupted"),
     DuckDBIOException: (OperationalError, "operational error"),
     DuckDBConversionException: (DataError, "data error"),
+    DuckDBOutOfRangeException: (DataError, "out of range error"),
+    DuckDBInvalidInputException: (DataError, "invalid input error"),
+    DuckDBTypeMismatchException: (DataError, "type mismatch error"),
+    DuckDBInvalidTypeException: (DataError, "invalid type error"),
+    DuckDBDataError: (DataError, "data error"),
+    DuckDBConnectionException: (DatabaseConnectionError, "connection error"),
+    DuckDBOperationalError: (OperationalError, "operational error"),
+    DuckDBOutOfMemoryException: (OperationalError, "out of memory error"),
+    DuckDBInternalException: (OperationalError, "internal error"),
+    DuckDBSerializationException: (SerializationConflictError, "serialization conflict"),
+    DuckDBNotImplementedException: (SQLSpecError, "not implemented"),
 }
 _EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
 
@@ -594,16 +619,28 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     )
 
 
+_DUCKDB_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?")
+
+
+def _parse_duckdb_version(raw_version: str) -> tuple[int, int, int]:
+    """Parse installed DuckDB version string into a 3-tuple of integers."""
+    match = _DUCKDB_VERSION_RE.match(raw_version.strip())
+    if match is None:
+        return (0, 0, 0)
+    major = int(match.group(1)) if match.group(1) else 0
+    minor = int(match.group(2)) if match.group(2) else 0
+    patch = int(match.group(3)) if match.group(3) else 0
+    return (major, minor, patch)
+
+
+_INSTALLED_DUCKDB_VERSION: Final[tuple[int, int, int]] = _parse_duckdb_version(
+    str(getattr(duckdb_module, "__version__", ""))
+)
+
+
 def duckdb_version_tuple() -> "tuple[int, int, int]":
     """Return the installed DuckDB version as a 3-tuple of integers."""
-    try:
-        raw = getattr(duckdb_module, "__version__", "")
-        parts = [int(part) for part in raw.split(".") if part.isdigit()]
-        while len(parts) < _VERSION_COMPONENTS:
-            parts.append(0)
-        return parts[0], parts[1], parts[2]
-    except Exception:
-        return (0, 0, 0)
+    return _INSTALLED_DUCKDB_VERSION
 
 
 _DUCKDB_COPY_FILENAME_FOLLOWS_QUERY: Final[bool] = duckdb_version_tuple() >= (2, 0, 0)
@@ -802,6 +839,11 @@ def _resolve_native_storage_target(
     return target
 
 
+def _secret_scope_len(secret: "Mapping[str, Any]") -> int:
+    """Return the length of the secret scope string for sorting."""
+    return len(secret.get("scope") or "")
+
+
 def _native_storage_eligible(
     uri: str,
     protocol: str,
@@ -841,9 +883,9 @@ def _native_storage_eligible(
     ]
     if not matching:
         return False
-    matching.sort(key=lambda secret: len(secret.get("scope") or ""), reverse=True)
+    matching.sort(key=_secret_scope_len, reverse=True)
     selected = matching[0]
-    if len(matching) > 1 and len(selected.get("scope") or "") == len(matching[1].get("scope") or ""):
+    if len(matching) > 1 and _secret_scope_len(selected) == _secret_scope_len(matching[1]):
         return False
     provider = selected.get("provider", "config").lower()
     native = {key.lower(): value for key, value in selected.get("value", {}).items()}
@@ -1022,7 +1064,14 @@ def _classify_duckdb_constraint(error: "BaseException") -> SQLSpecError:
 
 
 def _map_transaction_exception(error: "BaseException") -> SQLSpecError:
-    if "conflict on update" in str(error).lower():
+    lowered = str(error).lower()
+    if (
+        "conflict on update" in lowered
+        or "conflict on tuple deletion" in lowered
+        or "write-write conflict" in lowered
+        or "write conflict" in lowered
+        or "serialization" in lowered
+    ):
         return _create_duckdb_error(error, SerializationConflictError, "serialization conflict")
     return _create_duckdb_error(error, OperationalError, "transaction error")
 

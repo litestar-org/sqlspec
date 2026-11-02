@@ -54,8 +54,10 @@ Bind multiple async or sync configurations by specifying unique `session_key`, `
 | `commit_mode` | `"manual" | "autocommit" | "autocommit_include_redirect"` | `"manual"` | Controls automatic commit/rollback middleware behavior based on response status codes. |
 | `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic commit. |
 | `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic rollback. |
-| `enable_correlation_middleware` | `bool` | `False` | Propagates `X-Request-ID` / `X-Correlation-ID` headers into `CorrelationContext`. |
+| `enable_correlation_middleware` | `bool` | `True` | Propagates `X-Request-ID` / `X-Correlation-ID` headers into `CorrelationContext`. |
 | `enable_sqlcommenter_middleware` | `bool` | `False` | Populates `SQLCommenterContext` (`framework="starlette"`, route path, method). |
+
+Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
 
 ## Recap
 

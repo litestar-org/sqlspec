@@ -1,11 +1,14 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for CockroachDB psycopg ADK store extension configuration."""
 
+from datetime import UTC, datetime
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import pytest
 
+from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncConfig, CockroachPsycopgSyncConfig
 from sqlspec.adapters.cockroach_psycopg.adk import (
     CockroachPsycopgADKConfig,
     CockroachPsycopgAsyncADKMemoryStore,
@@ -319,3 +322,86 @@ def test_cockroach_psycopg_sync_list_sessions_rejects_invalid_options(options: "
         store.list_sessions("app", **options)
 
     assert cursor.calls == []
+
+
+def _memory_store_with_cursor(async_mode: bool, adk_config: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Provide real stores with SDK cursor and connection boundaries substituted."""
+    config_type = CockroachPsycopgAsyncConfig if async_mode else CockroachPsycopgSyncConfig
+    cursor = MagicMock()
+    cursor.rowcount = 1
+    cursor.description = []
+    cursor.fetchall.return_value = []
+    conn = MagicMock()
+    context = MagicMock()
+    context.__enter__.return_value = conn
+    context.__aenter__.return_value = conn
+    cursor.__enter__.return_value = cursor
+    cursor.__aenter__.return_value = cursor
+    conn.cursor.return_value = cursor
+    if async_mode:
+        cursor.execute = AsyncMock()
+        cursor.fetchall = AsyncMock(return_value=[])
+        conn.commit = AsyncMock()
+    monkeypatch.setattr(config_type, "provide_connection", lambda *_a, **_k: context)
+    if async_mode:
+        return CockroachPsycopgAsyncADKMemoryStore(
+            CockroachPsycopgAsyncConfig(extension_config={"adk": adk_config})
+        ), cursor
+    return CockroachPsycopgSyncADKMemoryStore(CockroachPsycopgSyncConfig(extension_config={"adk": adk_config})), cursor
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize(("owner_type", "owner_id"), [("INTEGER", 42), ("UUID", UUID(int=1))])
+async def test_cockroach_psycopg_memory_batch_preserves_owner_type(
+    async_mode: bool, owner_type: str, owner_id: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sync and async batches bind one native owner scalar outside UNNEST."""
+    store, cursor = _memory_store_with_cursor(async_mode, {"owner_id_column": f"owner_id {owner_type}"}, monkeypatch)
+    now = datetime.now(UTC)
+    entry = {
+        "id": "mem-1",
+        "session_id": "sess-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "evt-1",
+        "author": "user",
+        "timestamp": now,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": now,
+        "embedding": None,
+    }
+    inserted = store.insert_memory_entries([entry], owner_id)
+    if async_mode:
+        inserted = await inserted
+    assert inserted == 1
+
+    query, params = cursor.execute.call_args.args
+    assert "author, %s, timestamp" in _normalized(query.as_string())
+    assert params[0] == owner_id
+    assert params[1] == ["mem-1"]
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("use_fts", [False, True])
+async def test_cockroach_psycopg_memory_embedding_keeps_text_search(
+    async_mode: bool, use_fts: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Embedding arguments keep searching text columns present in the memory schema."""
+    store, cursor = _memory_store_with_cursor(async_mode, {"memory_use_fts": use_fts}, monkeypatch)
+    result = store.search_entries("hello", "app", "u1", embedding=[0.1])
+    if async_mode:
+        result = await result
+    assert result == []
+    query, params = cursor.execute.call_args.args
+    sql = query.decode()
+    assert "plainto_tsquery" in sql if use_fts else "content_text ILIKE" in sql
+    assert params == ("app", "u1", "hello" if use_fts else "%hello%", 20)
+
+    empty = store.search_entries("", "app", "u1", embedding=[0.1])
+    if async_mode:
+        empty = await empty
+    assert empty == []
+    assert cursor.execute.call_count == 1

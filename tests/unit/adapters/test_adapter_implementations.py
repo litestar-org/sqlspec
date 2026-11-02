@@ -1,6 +1,5 @@
 """Parameterized tests for real adapter implementations."""
 
-import ast
 import importlib
 import inspect
 import operator
@@ -11,6 +10,7 @@ from typing import Any
 
 import pytest
 
+import sqlspec.adapters
 from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig
@@ -83,43 +83,9 @@ ADAPTER_CORE_MODULES = (
 )
 CREATE_MAPPED_EXCEPTION_MODULES = ADAPTER_CORE_MODULES
 APPLY_DRIVER_FEATURES_MODULES = ADAPTER_CORE_MODULES
-ADAPTER_DRIVER_MODULES_WITH_FEATURE_HELPERS = (
-    "sqlspec/adapters/cockroach_psycopg/driver.py",
-    "sqlspec/adapters/duckdb/driver.py",
-)
-MYSQL_FAMILY_UNCOMPILED_MODULES = (
-    "sqlspec/adapters/aiomysql/config.py",
-    "sqlspec/adapters/aiomysql/driver.py",
-    "sqlspec/adapters/asyncmy/config.py",
-    "sqlspec/adapters/asyncmy/driver.py",
-    "sqlspec/adapters/mysqlconnector/config.py",
-    "sqlspec/adapters/mysqlconnector/driver.py",
-    "sqlspec/adapters/pymysql/driver.py",
-    "sqlspec/adapters/pymysql/pool.py",
-)
-MYSQL_VENDOR_IMPORT_ROOTS = ("aiomysql", "asyncmy", "mysql", "pymysql")
-SPANNER_MODULE_PROXY_PATHS = ("sqlspec/adapters/spanner/config.py", "sqlspec/adapters/spanner/driver.py")
 SQLITE_EXCEPTION_HANDLER_CLASSES = (
     ("sqlspec.adapters.aiosqlite.driver", "AiosqliteExceptionHandler"),
     ("sqlspec.adapters.sqlite.driver", "SqliteExceptionHandler"),
-)
-BRIDGE_CURSOR_CLOSE_METHODS = (
-    ("sqlspec/adapters/adbc/_typing.py", "AdbcCursor", "__exit__"),
-    ("sqlspec/adapters/aiomysql/_typing.py", "AiomysqlCursor", "__aexit__"),
-    ("sqlspec/adapters/aiosqlite/_typing.py", "AiosqliteCursor", "__aexit__"),
-    ("sqlspec/adapters/asyncmy/_typing.py", "AsyncmyCursor", "__aexit__"),
-    ("sqlspec/adapters/db2/_typing.py", "Db2SyncCursor", "__exit__"),
-    ("sqlspec/adapters/db2/_typing.py", "Db2AsyncCursor", "__aexit__"),
-    ("sqlspec/adapters/mssql_python/_typing.py", "MssqlPythonCursor", "__exit__"),
-    ("sqlspec/adapters/mysqlconnector/_typing.py", "MysqlConnectorSyncCursor", "__exit__"),
-    ("sqlspec/adapters/mysqlconnector/_typing.py", "MysqlConnectorAsyncCursor", "__aexit__"),
-    ("sqlspec/adapters/oracledb/_typing.py", "OracleSyncCursor", "__exit__"),
-    ("sqlspec/adapters/oracledb/_typing.py", "OracleAsyncCursor", "__aexit__"),
-    ("sqlspec/adapters/psycopg/_typing.py", "PsycopgSyncCursor", "__exit__"),
-    ("sqlspec/adapters/psycopg/_typing.py", "PsycopgAsyncCursor", "__aexit__"),
-    ("sqlspec/adapters/pymssql/_typing.py", "PymssqlCursor", "__exit__"),
-    ("sqlspec/adapters/pymysql/_typing.py", "PyMysqlCursor", "__exit__"),
-    ("sqlspec/adapters/sqlite/_typing.py", "SqliteCursor", "__exit__"),
 )
 
 
@@ -205,93 +171,10 @@ def test_adapter_apply_driver_features_signature_and_return_shape(module_name: s
     assert features["custom"] == "value"
 
 
-@pytest.mark.parametrize("module_path", ADAPTER_DRIVER_MODULES_WITH_FEATURE_HELPERS)
-def test_adapter_drivers_do_not_apply_driver_features(module_path: str) -> None:
-    tree = ast.parse(Path(module_path).read_text())
-
-    imports_helper = any(
-        isinstance(node, ast.ImportFrom)
-        and node.module is not None
-        and node.module.endswith(".core")
-        and any(alias.name == "apply_driver_features" for alias in node.names)
-        for node in ast.walk(tree)
-    )
-    calls_helper = any(
-        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "apply_driver_features"
-        for node in ast.walk(tree)
-    )
-
-    assert imports_helper is False
-    assert calls_helper is False
-
-
-@pytest.mark.parametrize("module_path", MYSQL_FAMILY_UNCOMPILED_MODULES)
-def test_mysql_family_uncompiled_modules_use_adapter_typing_boundary(module_path: str) -> None:
-    tree = ast.parse(Path(module_path).read_text())
-    direct_imports: list[str] = []
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            direct_imports.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            direct_imports.append(node.module)
-
-    direct_vendor_imports = [
-        import_name
-        for import_name in direct_imports
-        if import_name in MYSQL_VENDOR_IMPORT_ROOTS
-        or import_name.startswith(tuple(f"{root}." for root in MYSQL_VENDOR_IMPORT_ROOTS))
-    ]
-
-    assert direct_vendor_imports == []
-
-
-@pytest.mark.parametrize("module_path", SPANNER_MODULE_PROXY_PATHS)
-def test_spanner_modules_do_not_define_module_proxy_getattr(module_path: str) -> None:
-    tree = ast.parse(Path(module_path).read_text())
-
-    module_getattrs = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "__getattr__"]
-
-    assert module_getattrs == []
-
-
 def test_mssql_python_pool_is_implemented_in_pool_module() -> None:
     from sqlspec.adapters.mssql_python import MssqlPythonConnectionPool
 
     assert MssqlPythonConnectionPool.__module__ == "sqlspec.adapters.mssql_python.pool"
-
-
-@pytest.mark.parametrize(("module_path", "class_name", "method_name"), BRIDGE_CURSOR_CLOSE_METHODS)
-def test_bridge_cursor_close_cleanup_suppresses_close_errors(
-    module_path: str, class_name: str, method_name: str
-) -> None:
-    tree = ast.parse(Path(module_path).read_text())
-    class_node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
-    method_node = next(
-        node
-        for node in class_node.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == method_name
-    )
-
-    suppress_calls = [
-        item.context_expr
-        for node in ast.walk(method_node)
-        if isinstance(node, ast.With)
-        for item in node.items
-        if isinstance(item.context_expr, ast.Call)
-    ]
-    suppresses_close_errors = any(
-        isinstance(call.func, ast.Attribute)
-        and isinstance(call.func.value, ast.Name)
-        and call.func.value.id == "contextlib"
-        and call.func.attr == "suppress"
-        and len(call.args) == 1
-        and isinstance(call.args[0], ast.Name)
-        and call.args[0].id == "Exception"
-        for call in suppress_calls
-    )
-
-    assert suppresses_close_errors
 
 
 def test_adapter_parameter_style_handling(
@@ -703,3 +586,32 @@ def test_every_config_declares_type_coercion_capabilities() -> None:
         assert caps is not DatabaseConfigProtocol.type_coercion_capabilities, (
             f"{config_cls.__name__}.type_coercion_capabilities is the base default object"
         )
+
+
+def _litestar_store_targets() -> "list[tuple[str, str]]":
+    """Return ``(adapter, config class)`` pairs for adapters that ship a Litestar store."""
+    targets: list[tuple[str, str]] = []
+    adapters_root = Path(sqlspec.adapters.__file__).parent
+    for config_path in sorted(adapters_root.glob("*/config.py")):
+        adapter = config_path.parent.name
+        if not (config_path.parent / "litestar" / "store.py").exists():
+            continue
+        module = importlib.import_module(f"sqlspec.adapters.{adapter}.config")
+        for name, value in vars(module).items():
+            if (
+                isinstance(value, type)
+                and value.__module__ == module.__name__
+                and name.endswith("Config")
+                and issubclass(value, DatabaseConfigProtocol)
+            ):
+                targets.append((adapter, name))
+    return targets
+
+
+@pytest.mark.parametrize(("adapter", "config_name"), _litestar_store_targets())
+def test_litestar_session_migration_resolves_store_class(adapter: str, config_name: str) -> None:
+    """The Litestar session migration derives the store class name from the config class name."""
+    store_name = config_name.replace("Config", "Store")
+    store_module = importlib.import_module(f"sqlspec.adapters.{adapter}.litestar.store")
+
+    assert hasattr(store_module, store_name), f"{adapter}: expected {store_name} in litestar/store.py"

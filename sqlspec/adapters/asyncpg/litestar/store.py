@@ -1,10 +1,10 @@
 """AsyncPG session store for Litestar integration."""
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, NotRequired, cast
+from typing import TYPE_CHECKING, NotRequired
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
-from sqlspec.adapters.asyncpg.core import parse_status
+from sqlspec.adapters.asyncpg.core import build_postgres_storage_params_sql, parse_status
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
@@ -240,7 +240,14 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         Returns:
             SQL statement to create the sessions table with proper indexes.
         """
-        fillfactor, vacuum_scale, analyze_scale = _postgres_litestar_tuning(self._config)
+        tuning_clause = build_postgres_storage_params_sql(
+            self._config.extension_config.get("litestar", {}),
+            default_fillfactor=80,
+            default_vacuum_scale=0.05,
+            default_analyze_scale=0.02,
+            include_autovacuum=True,
+            section="litestar",
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id TEXT PRIMARY KEY,
@@ -248,11 +255,7 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
             expires_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (
-            fillfactor = {fillfactor},
-            autovacuum_vacuum_scale_factor = {vacuum_scale:g},
-            autovacuum_analyze_scale_factor = {analyze_scale:g}
-        );
+        ){tuning_clause};
 
         CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
         ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
@@ -265,19 +268,3 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
             List of SQL statements to drop indexes and table.
         """
         return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
-
-
-def _postgres_litestar_tuning(config: Any) -> "tuple[int, float, float]":
-    settings = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
-    fillfactor = settings.get("fillfactor", 80)
-    if not isinstance(fillfactor, int) or isinstance(fillfactor, bool) or fillfactor not in range(10, 101):
-        msg = "extension_config['litestar']['fillfactor'] must be an integer from 10 to 100"
-        raise ValueError(msg)
-    scales: list[float] = []
-    for key, default in (("autovacuum_vacuum_scale_factor", 0.05), ("autovacuum_analyze_scale_factor", 0.02)):
-        value = settings.get(key, default)
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
-            msg = f"extension_config['litestar']['{key}'] must be a number from 0 to 1"
-            raise ValueError(msg)
-        scales.append(float(value))
-    return fillfactor, scales[0], scales[1]

@@ -103,6 +103,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="Run Spanner integration tests locally (enabled by default in CI; local runs accept --run-spanner-tests or SQLSPEC_ENABLE_SPANNER_TESTS=1)",
     )
+    parser.addoption(
+        "--run-compiled-adbc",
+        action="store_true",
+        default=False,
+        help="Enable targeted ADBC validation against an installed compiled wheel; explicit interpreted-only skips remain active.",
+    )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -130,7 +136,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if is_spanner and not spanner_enabled:
             item.add_marker(skip_spanner)
 
-    if not is_compiled():
+    if not is_compiled() or config.getoption("--run-compiled-adbc", default=False):
         return
 
     skip_adbc = pytest.mark.skip(reason="Skip ADBC tests when running against mypyc-compiled modules.")

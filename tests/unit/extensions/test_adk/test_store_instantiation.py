@@ -15,6 +15,7 @@ from typing import cast
 
 import pytest
 
+from sqlspec.core import StatementConfig
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
@@ -29,7 +30,7 @@ SESSION_STORE_CLASSES = [
     "sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgAsyncADKStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKStore",
-    "sqlspec.adapters.duckdb.adk.DuckdbADKStore",
+    "sqlspec.adapters.duckdb.adk.DuckDBADKStore",
     "sqlspec.adapters.mssql_python.adk.MssqlPythonADKStore",
     "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorAsyncADKStore",
     "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKStore",
@@ -55,7 +56,7 @@ MEMORY_STORE_CLASSES = [
     "sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKMemoryStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgAsyncADKMemoryStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKMemoryStore",
-    "sqlspec.adapters.duckdb.adk.DuckdbADKMemoryStore",
+    "sqlspec.adapters.duckdb.adk.DuckDBADKMemoryStore",
     "sqlspec.adapters.mssql_python.adk.MssqlPythonADKMemoryStore",
     "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorAsyncADKMemoryStore",
     "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKMemoryStore",
@@ -77,7 +78,7 @@ SYNC_SESSION_STORE_CLASSES = [
     "sqlspec.adapters.adbc.adk.AdbcADKStore",
     "sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKStore",
-    "sqlspec.adapters.duckdb.adk.DuckdbADKStore",
+    "sqlspec.adapters.duckdb.adk.DuckDBADKStore",
     "sqlspec.adapters.mssql_python.adk.MssqlPythonADKStore",
     "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKStore",
     "sqlspec.adapters.oracledb.adk.OracleSyncADKStore",
@@ -92,7 +93,7 @@ SYNC_MEMORY_STORE_CLASSES = [
     "sqlspec.adapters.adbc.adk.AdbcADKMemoryStore",
     "sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKMemoryStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKMemoryStore",
-    "sqlspec.adapters.duckdb.adk.DuckdbADKMemoryStore",
+    "sqlspec.adapters.duckdb.adk.DuckDBADKMemoryStore",
     "sqlspec.adapters.mssql_python.adk.MssqlPythonADKMemoryStore",
     "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKMemoryStore",
     "sqlspec.adapters.oracledb.adk.OracleSyncADKMemoryStore",
@@ -190,6 +191,56 @@ def test_adk_store_registration_validator_resolves_duckdb_store_classes() -> Non
     config = DuckDBConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
 
     _ensure_adk_store_registration(config)
+
+
+@pytest.mark.parametrize(
+    ("adapter", "prefix", "dialect"),
+    [
+        ("db2", "Db2Sync", "db2"),
+        ("db2", "Db2Async", "db2"),
+        ("arrow_odbc", "ArrowOdbc", "tsql"),
+        ("arrow_odbc", "ArrowOdbc", "db2"),
+        ("cockroach_asyncpg", "CockroachAsyncpg", "postgres"),
+        ("cockroach_psycopg", "CockroachPsycopgSync", "postgres"),
+        ("cockroach_psycopg", "CockroachPsycopgAsync", "postgres"),
+        ("duckdb", "DuckDB", "duckdb"),
+        ("mssql_python", "MssqlPython", "tsql"),
+        ("pymssql", "Pymssql", "tsql"),
+        ("sybase", "Sybase", "sybase"),
+        ("sqlanywhere", "Sqlanywhere", "sqlanywhere"),
+    ],
+)
+def test_qualified_table_names_reach_supporting_adk_stores(adapter: str, prefix: str, dialect: str) -> None:
+    """Supported stores accept qualified tables through their public configuration."""
+    session_tables = {
+        "session_table": "app.sessions",
+        "events_table": "app.events",
+        "app_state_table": "app.app_state",
+        "user_state_table": "app.user_state",
+        "metadata_table": "app.metadata",
+    }
+    config = _load_class(f"sqlspec.adapters.{adapter}.{prefix}Config")(
+        extension_config={"adk": {**session_tables, "memory_table": "app.memories"}},
+        statement_config=StatementConfig(dialect=dialect),
+    )
+
+    session_store = _load_class(f"sqlspec.adapters.{adapter}.adk.{prefix}ADKStore")(config)
+    memory_store = _load_class(f"sqlspec.adapters.{adapter}.adk.{prefix}ADKMemoryStore")(config)
+
+    assert {name: getattr(session_store, name) for name in session_tables} == session_tables
+    assert memory_store.memory_table == "app.memories"
+
+
+@pytest.mark.parametrize("table", ["dataset.sessions", "project.dataset.sessions"])
+def test_bigquery_adk_preserves_qualified_table_configuration(table: str) -> None:
+    """BigQuery keeps dataset and project qualification supplied by the caller."""
+    from sqlspec.adapters.bigquery import BigQueryConfig
+    from sqlspec.adapters.bigquery.adk import BigQueryADKStore
+
+    store = BigQueryADKStore(BigQueryConfig(extension_config={"adk": {"session_table": table, "enable_memory": False}}))
+
+    assert store.session_table == table
+    assert f"CREATE TABLE IF NOT EXISTS {table}" in store._sessions_table_ddl()
 
 
 def test_adk_store_registration_validator_fails_fast_for_broken_store_mapping(monkeypatch: pytest.MonkeyPatch) -> None:

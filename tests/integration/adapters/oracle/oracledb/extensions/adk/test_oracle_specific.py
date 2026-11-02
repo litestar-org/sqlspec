@@ -1,7 +1,7 @@
 """Oracle-specific ADK store tests for LOB handling, JSON types, and FK columns."""
 
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
@@ -10,8 +10,13 @@ import oracledb
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
-from sqlspec.adapters.oracledb.adk import OracleAsyncADKStore, OracleSyncADKStore
-from sqlspec.extensions.adk import StoredEvent
+from sqlspec.adapters.oracledb.adk import (
+    OracleAsyncADKMemoryStore,
+    OracleAsyncADKStore,
+    OracleSyncADKMemoryStore,
+    OracleSyncADKStore,
+)
+from sqlspec.extensions.adk import StoredEvent, StoredMemory
 
 pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.oracledb, pytest.mark.integration]
 
@@ -485,3 +490,123 @@ async def test_create_session_with_owner_id_sync(oracle_store_sync_with_fk: "Ora
     retrieved = oracle_store_sync_with_fk.get_session(app_name, user_id, session_id)
     assert retrieved is not None
     assert retrieved["id"] == session_id
+
+
+async def _cleanup_async_memory_store(store: "OracleAsyncADKMemoryStore", config: "OracleAsyncConfig") -> None:
+    """Drop ADK memory tables for async stores."""
+    async with config.provide_connection() as conn:
+        cursor = conn.cursor()
+        for stmt in store._drop_memory_table_sql():
+            try:
+                await cursor.execute(stmt)
+            except Exception:
+                pass
+        await conn.commit()
+
+
+def _cleanup_sync_memory_store(store: "OracleSyncADKMemoryStore", config: "OracleSyncConfig") -> None:
+    """Drop ADK memory tables for sync stores."""
+    with config.provide_connection() as conn:
+        cursor = conn.cursor()
+        for stmt in store._drop_memory_table_sql():
+            try:
+                cursor.execute(stmt)
+            except Exception:
+                pass
+        conn.commit()
+
+
+@pytest.fixture
+async def oracle_async_memory_store(
+    oracle_async_config: "OracleAsyncConfig",
+) -> "AsyncGenerator[OracleAsyncADKMemoryStore, None]":
+    """Create an async Oracle ADK memory store with tables created per test."""
+    store = OracleAsyncADKMemoryStore(oracle_async_config)
+    await store.create_tables()
+    try:
+        yield store
+    finally:
+        await _cleanup_async_memory_store(store, oracle_async_config)
+
+
+@pytest.fixture
+def oracle_sync_memory_store(
+    oracle_sync_config: "OracleSyncConfig",
+) -> "Generator[OracleSyncADKMemoryStore, None, None]":
+    """Create a sync Oracle ADK memory store with tables created per test."""
+    store = OracleSyncADKMemoryStore(oracle_sync_config)
+    store.create_tables()
+    try:
+        yield store
+    finally:
+        _cleanup_sync_memory_store(store, oracle_sync_config)
+
+
+async def test_oracle_async_adk_memory_store_insert_and_search_embedding(
+    oracle_async_memory_store: "OracleAsyncADKMemoryStore",
+) -> None:
+    """Async memory store inserts embedding vector and executes vector search."""
+    app_name = "test-app"
+    user_id = "user-vec"
+    now = datetime.now(UTC)
+    embedding = [0.1 * i for i in range(768)]
+    entries: list[StoredMemory] = [
+        {
+            "id": _unique_session_id("mem-vec"),
+            "session_id": _unique_session_id("sess-vec"),
+            "app_name": app_name,
+            "user_id": user_id,
+            "scope": "user",
+            "event_id": _unique_session_id("ev-vec"),
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"query": "vector search test"},
+            "content_text": "vector search content",
+            "metadata_json": {"tag": "embedding"},
+            "inserted_at": now,
+            "embedding": embedding,
+        }
+    ]
+    inserted = await oracle_async_memory_store.insert_memory_entries(entries)
+    assert inserted == 1
+
+    results = await oracle_async_memory_store.search_entries(
+        query="vector search", app_name=app_name, user_id=user_id, embedding=embedding
+    )
+    assert len(results) >= 1
+    assert results[0]["embedding"] is not None
+
+
+def test_oracle_sync_adk_memory_store_insert_and_search_embedding(
+    oracle_sync_memory_store: "OracleSyncADKMemoryStore",
+) -> None:
+    """Sync memory store inserts embedding vector and executes vector search."""
+    app_name = "test-app"
+    user_id = "user-vec-sync"
+    now = datetime.now(UTC)
+    embedding = [0.1 * i for i in range(768)]
+    entries: list[StoredMemory] = [
+        {
+            "id": _unique_session_id("mem-vec-sync"),
+            "session_id": _unique_session_id("sess-vec-sync"),
+            "app_name": app_name,
+            "user_id": user_id,
+            "scope": "user",
+            "event_id": _unique_session_id("ev-vec-sync"),
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"query": "sync vector search test"},
+            "content_text": "sync vector search content",
+            "metadata_json": {"tag": "embedding"},
+            "inserted_at": now,
+            "embedding": embedding,
+        }
+    ]
+    inserted = oracle_sync_memory_store.insert_memory_entries(entries)
+    assert inserted == 1
+
+    results = oracle_sync_memory_store.search_entries(
+        query="sync vector search", app_name=app_name, user_id=user_id, embedding=embedding
+    )
+    assert len(results) >= 1
+    assert results[0]["embedding"] is not None

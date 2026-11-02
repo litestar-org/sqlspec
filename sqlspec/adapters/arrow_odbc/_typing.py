@@ -1,15 +1,11 @@
-# pyright: reportAttributeAccessIssue=false
 """arrow-odbc adapter type definitions and mypyc-excluded context managers."""
 
 from typing import TYPE_CHECKING, Any
 
-import arrow_odbc as _arrow_odbc  # pyright: ignore[reportMissingImports]
+import arrow_odbc as _arrow_odbc
 from arrow_odbc import Error as ArrowOdbcError
-from arrow_odbc import (
-    TextEncoding,  # pyright: ignore[reportMissingImports]
-    enable_odbc_connection_pooling,  # pyright: ignore[reportMissingImports]
-)
-from arrow_odbc import connect as arrow_odbc_connect  # pyright: ignore[reportMissingImports]
+from arrow_odbc import TextEncoding, enable_odbc_connection_pooling
+from arrow_odbc import connect as arrow_odbc_connect
 
 if TYPE_CHECKING:
     from collections.abc import Callable

@@ -30,13 +30,9 @@ from sqlspec.utils.text import normalize_identifier, quote_identifier
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    import pyarrow as pa
-
     from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
     from sqlspec.core import SQL
-    from sqlspec.data_dictionary._types import DialectConfig
-else:
-    pa = import_optional("pyarrow")
+    from sqlspec.data_dictionary import DialectConfig
 
 __all__ = ("ArrowOdbcDataDictionary",)
 
@@ -243,17 +239,12 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         )
         probe_sql = f"SELECT * FROM {qualified} WHERE 1=0"
         try:
-            reader = driver._read_arrow_batches(  # pyright: ignore[reportPrivateUsage]
-                probe_sql, None, 1, fetch_concurrently=False
-            )
+            reader = driver._read_arrow_batches(probe_sql, None, 1, fetch_concurrently=False)
         except Exception:
             return []
         columns: list[ColumnMetadata] = []
         raw_names = [field.name for field in reader.schema]
-        normalized_names = normalize_column_names(
-            raw_names,
-            driver._lowercase_column_names,  # pyright: ignore[reportPrivateUsage]
-        )
+        normalized_names = normalize_column_names(raw_names, driver._lowercase_column_names)
         for position, (field, column_name) in enumerate(zip(reader.schema, normalized_names, strict=False), start=1):
             entry: ColumnMetadata = {
                 "table_name": table,
@@ -299,7 +290,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
                 source=MetadataSource.DRIVER_METADATA,
                 warnings=(_ODBC_COLUMN_PARTIAL_WARNING,),
             )
-        if domain in {"tables", "indexes", "foreign_keys"} and self._has_query(domain, "by_schema"):
+        if self._has_query(domain, "by_schema"):
             return MetadataCapability(
                 domain=domain,
                 support=MetadataSupport.SUPPORTED,
@@ -324,6 +315,8 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
 
 def _arrow_type_to_sql(data_type: Any) -> str:
     ensure_pyarrow()
+    pa = import_optional("pyarrow")
+    assert pa is not None
     types = pa.types
     if types.is_boolean(data_type):
         return "BOOLEAN"

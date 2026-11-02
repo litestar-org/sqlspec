@@ -1127,3 +1127,17 @@ async def test_oracle_async_stream_source_closes_cursor_when_execute_raises() ->
 
     cursor.close.assert_called_once()
     assert source._cursor is None
+
+
+def test_collect_sync_rows_preserves_lob_locators_when_fetch_lobs_true() -> None:
+    """collect_sync_rows preserves raw LOB locators when fetch_lobs=True."""
+    from sqlspec.adapters.oracledb.core import collect_sync_rows
+
+    raw_lob = MagicMock()
+    raw_lob.read = MagicMock(side_effect=AssertionError("read should not be called"))
+    description = [("payload", "CLOB", None, None, None, None, None)]
+    fetched = [(raw_lob,)]
+    rows, _cols = collect_sync_rows(fetched, description, {"fetch_lobs": True})
+    assert len(rows) == 1
+    assert rows[0][0] is raw_lob
+    raw_lob.read.assert_not_called()

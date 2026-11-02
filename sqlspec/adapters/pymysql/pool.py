@@ -30,6 +30,7 @@ class PyMysqlConnectionPool:
         "_connection_factory",
         "_connection_parameters",
         "_connection_registry",
+        "_connection_threads",
         "_generation",
         "_health_check_interval",
         "_on_connection_create",
@@ -60,6 +61,7 @@ class PyMysqlConnectionPool:
         self._connection_factory = connection_factory
         self._thread_local = threading.local()
         self._connection_registry: set[PyMysqlConnection] = set()
+        self._connection_threads: dict[PyMysqlConnection, threading.Thread] = {}
         self._checked_out = 0
         self._generation = 0
         self._registry_lock = threading.Lock()
@@ -107,13 +109,7 @@ class PyMysqlConnectionPool:
         connection = self.acquire()
         try:
             yield connection
-        except BaseException:
-            with self._registry_lock:
-                self._checked_out = max(0, self._checked_out - 1)
-            with contextlib.suppress(Exception):
-                self._close_thread_connection()
-            raise
-        else:
+        finally:
             self.release(connection)
 
     def close(self) -> None:
@@ -122,6 +118,7 @@ class PyMysqlConnectionPool:
         with self._registry_lock:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
+            self._connection_threads.clear()
             self._generation += 1
         for connection in orphaned:
             with contextlib.suppress(Exception):
@@ -161,6 +158,7 @@ class PyMysqlConnectionPool:
 
     def size(self) -> int:
         """Report total active connections managed by this pool."""
+        self._prune_dead_thread_connections()
         with self._registry_lock:
             return len(self._connection_registry)
 
@@ -168,11 +166,25 @@ class PyMysqlConnectionPool:
         with self._registry_lock:
             return self._checked_out
 
+    def _prune_dead_thread_connections(self) -> None:
+        dead_connections: list[PyMysqlConnection] = []
+        with self._registry_lock:
+            for conn, owner_thread in list(self._connection_threads.items()):
+                if not owner_thread.is_alive():
+                    self._connection_registry.discard(conn)
+                    self._connection_threads.pop(conn, None)
+                    dead_connections.append(conn)
+        for conn in dead_connections:
+            with contextlib.suppress(Exception):
+                conn.close()
+
     def _create_connection(self) -> PyMysqlConnection:
+        self._prune_dead_thread_connections()
         connection = self.new_connection()
 
         with self._registry_lock:
             self._connection_registry.add(connection)
+            self._connection_threads[connection] = threading.current_thread()
 
         return connection
 
@@ -238,6 +250,7 @@ class PyMysqlConnectionPool:
         """Close a pool-owned connection and drop it from the shutdown registry."""
         with self._registry_lock:
             self._connection_registry.discard(connection)
+            self._connection_threads.pop(connection, None)
         with contextlib.suppress(Exception):
             connection.close()
 

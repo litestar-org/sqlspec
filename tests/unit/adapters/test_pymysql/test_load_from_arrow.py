@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -123,3 +124,15 @@ def test_load_from_arrow_binds_the_infile_path_as_a_parameter() -> None:
     assert "LOAD DATA LOCAL INFILE %s INTO TABLE" in statement
     assert parameters[0].endswith(".tsv")
     assert parameters[0] not in statement
+
+
+def test_load_from_arrow_needs_preparation_bypasses_local_infile() -> None:
+    """When arrow rows need preparation, bulk load falls back to executemany instead of local infile."""
+    conn = _FakeConnection()
+    driver = _make_driver(conn, enable_local_infile=True)
+
+    with patch.object(type(driver), "_arrow_rows_need_preparation", lambda _self, _table: True):
+        driver.load_from_arrow("orders", pa.table({"id": [1], "name": ["a"]}))
+
+    assert conn._cursor.execute_calls == []
+    assert len(conn._cursor.executemany_calls) == 1

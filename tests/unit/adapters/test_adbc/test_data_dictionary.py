@@ -10,6 +10,7 @@ pytest.importorskip("adbc_driver_manager")
 
 from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
 
+from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.data_dictionary import (
     AdbcDataDictionary,
     _arrow_type_to_sql,
@@ -18,7 +19,7 @@ from sqlspec.adapters.adbc.data_dictionary import (
     _normalize_native_statistics,
     _normalize_native_tables,
 )
-from sqlspec.data_dictionary import MetadataFidelity, MetadataSource, MetadataSupport
+from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
 from sqlspec.exceptions import OperationalError
 
 SQLITE_OBJECTS_PAYLOAD: list[dict[str, Any]] = [
@@ -200,9 +201,7 @@ def test_get_foreign_keys_empty_native_result_falls_back() -> None:
             "catalog_db_schemas": [
                 {
                     "db_schema_name": "main",
-                    "db_schema_tables": [
-                        {"table_name": "t2", "table_type": "table", "table_columns": [], "table_constraints": []}
-                    ],
+                    "db_schema_tables": [{"table_name": "t2", "table_type": "table", "table_columns": []}],
                 }
             ],
         }
@@ -214,6 +213,38 @@ def test_get_foreign_keys_empty_native_result_falls_back() -> None:
 
     assert result == fallback
     driver.select.assert_called_once()
+
+
+def test_empty_foreign_keys_not_failed() -> None:
+    """Tables with empty constraints list should return empty list without falling back."""
+    driver = Mock()
+    driver.dialect = "duckdb"
+    driver.connection.adbc_get_objects.return_value = _make_reader([
+        {
+            "catalog_name": "memory",
+            "catalog_db_schemas": [
+                {
+                    "db_schema_name": "main",
+                    "db_schema_tables": [
+                        {"table_name": "t2", "table_type": "table", "table_columns": [], "table_constraints": []}
+                    ],
+                }
+            ],
+        }
+    ])
+
+    result = AdbcDataDictionary().get_foreign_keys(driver, table="t2")
+
+    assert result == []
+    driver.select.assert_not_called()
+
+
+def test_snowflake_indexes_fallback() -> None:
+    """Snowflake dialect returns empty indexes without raising SQLFileNotFoundError."""
+    driver = Mock()
+    driver.dialect = "snowflake"
+    result = AdbcDataDictionary().get_indexes(driver, table="t1")
+    assert result == []
 
 
 def test_get_columns_schema_wide_incomplete_falls_back() -> None:
@@ -472,20 +503,19 @@ def test_adbc_get_objects_unique_check_constraints_are_lossy() -> None:
     assert all(item.attributes["is_lossy"] is True for item in constraint_items)
 
 
-def test_adbc_ddl_is_unsupported_without_dialect_pack() -> None:
-    """ADBC transport metadata should not claim lossless DDL."""
-    driver = Mock()
-    driver.dialect = "duckdb"
-
-    result = AdbcDataDictionary().get_ddl(
-        driver,
-        "items",
-        schema="main",
-        object_type="view",
-        include_dependencies=False,
-        prefer_native=False,
-        redact=False,
-    )
+def test_adbc_view_ddl_is_explicitly_unsupported() -> None:
+    """ADBC transport metadata should not claim lossless view DDL."""
+    config = AdbcConfig(connection_config={"driver_name": "sqlite"})
+    with config.provide_session() as driver:
+        result = driver.data_dictionary.get_ddl(
+            driver,
+            "items",
+            schema="main",
+            object_type="view",
+            include_dependencies=False,
+            prefer_native=False,
+            redact=False,
+        )
 
     assert result.identity.name == "items"
     assert result.identity.object_type == "view"
@@ -495,6 +525,47 @@ def test_adbc_ddl_is_unsupported_without_dialect_pack() -> None:
     assert result.fidelity == MetadataFidelity.UNSUPPORTED
     assert result.source == MetadataSource.DRIVER_METADATA
     assert result.warnings
+
+
+@pytest.mark.parametrize("target_dialect", [None, "postgres"])
+def test_adbc_table_and_schema_ddl_preserve_detected_dialect_and_quoted_names(target_dialect: str | None) -> None:
+    """DDL orchestration uses the active ADBC dialect for quoted catalog names and target rendering."""
+    config = AdbcConfig(connection_config={"driver_name": "sqlite"})
+    with config.provide_session() as driver:
+        driver.execute('CREATE TABLE "Mixed Items" ("Mixed ID" INTEGER PRIMARY KEY, "Label" TEXT)')
+        dictionary = driver.data_dictionary
+        table = dictionary.get_ddl(
+            driver,
+            '"Mixed Items"',
+            schema='"main"',
+            include_dependencies=False,
+            prefer_native=False,
+            target_dialect=target_dialect,
+        )
+        schema = dictionary.get_schema_ddl(
+            driver,
+            schema='"main"',
+            include_domains=("tables",),
+            include_dependencies=False,
+            prefer_native=False,
+            target_dialect=target_dialect,
+        )
+    dialect = target_dialect or "sqlite"
+    assert table.status == MetadataSupport.SUPPORTED
+    assert (table.identity.name, table.identity.schema, table.identity.dialect) == ("Mixed Items", "main", dialect)
+    assert isinstance(table.ddl, str)
+    assert '"Mixed Items"' in table.ddl
+    assert '"Mixed ID"' in table.ddl
+    assert len(schema.items) == 1
+    item = schema.items[0]
+    assert isinstance(item, DDLResult)
+    assert (item.identity.name, item.identity.schema, item.identity.dialect, item.status) == (
+        "Mixed Items",
+        "main",
+        dialect,
+        MetadataSupport.SUPPORTED,
+    )
+    assert item.ddl == table.ddl
 
 
 def test_get_statistics_uses_native_statistic_names_when_available() -> None:

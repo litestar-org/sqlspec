@@ -1,6 +1,7 @@
 """Oracle ADK store for Google Agent Development Kit session/event storage."""
 
-from decimal import Decimal
+import array
+import contextlib
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
 from typing_extensions import TypedDict
@@ -11,11 +12,15 @@ from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseErr
 from sqlspec.adapters.oracledb.core import (
     coerce_large_parameters_async,
     coerce_large_parameters_sync,
+    read_oracle_lob_async,
+    read_oracle_lob_sync,
     sanitize_oracle_text_query,
 )
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, OracleVersionInfo, storage_type_from_version
 from sqlspec.builder._vector_distance import build_oracle_hnsw_subquery, build_oracle_hybrid_rrf_sql
 from sqlspec.config import ADKConfig
+from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
     BaseSyncADKStore,
@@ -26,6 +31,7 @@ from sqlspec.extensions.adk import (
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.type_converters import build_nested_decimal_normalizer
 from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
@@ -57,6 +63,7 @@ ORACLE_DEFAULT_EVENTS_TABLE: Final = "adk_event"
 ORACLE_DEFAULT_APP_STATE_TABLE: Final = "adk_app_state"
 ORACLE_DEFAULT_USER_STATE_TABLE: Final = "adk_user_state"
 ORACLE_DEFAULT_METADATA_TABLE: Final = "adk_internal_metadata"
+_EMBEDDING_COLUMN_INDEX: Final = 12
 
 
 _ADK_METADATA_TABLE_DDL_TEMPLATE = (
@@ -245,6 +252,7 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "                event_id VARCHAR2(128) NOT NULL UNIQUE,\n"
     "                author VARCHAR2(256){1},\n"
     "                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,\n"
+    "                {11}"
     "                {2},\n"
     "                content_text CLOB NOT NULL,\n"
     "                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
@@ -346,6 +354,9 @@ class OracleADKPartitionConfig(TypedDict):
 class OracleADKConfig(ADKConfig):
     """Oracle ADK extension settings consumed by Oracle ADK stores."""
 
+    vector_dimensions: NotRequired[int]
+    """Dimensionality of embedding vectors (e.g. 768 for gemini-embedding-001 with MRL). Default: 768."""
+
     in_memory: NotRequired[bool]
     """Enable Oracle INMEMORY clauses on ADK tables."""
 
@@ -369,6 +380,36 @@ class OracleADKConfig(ADKConfig):
 
     memory_table_options: NotRequired[str]
     """Raw Oracle table options for the ADK memory table."""
+
+
+def _rollback_sync(conn: Any) -> None:
+    with contextlib.suppress(Exception):
+        conn.rollback()
+
+
+async def _rollback_async(conn: Any) -> None:
+    with contextlib.suppress(Exception):
+        await conn.rollback()
+
+
+def _memory_supports_vectors(version: "OracleVersionInfo | None") -> bool:
+    if version is None or (version.major, version.minor, version.patch) < (23, 4, 0):
+        return False
+    compatible = parse_oracle_version_components(version.compatible) if version.compatible else None
+    return compatible is None or compatible >= (23, 4, 0)
+
+
+def _require_memory_vectors(version: "OracleVersionInfo | None") -> None:
+    if not _memory_supports_vectors(version):
+        msg = "Oracle memory embeddings require Oracle Database and COMPATIBLE version 23.4 or later."
+        raise ImproperConfigurationError(msg)
+
+
+def _memory_insert_count(entry_count: int, batch_errors: "list[Any]") -> int:
+    for error in batch_errors:
+        if error.code != ORACLE_DUPLICATE_KEY_ERROR:
+            raise OracleDatabaseError(error)
+    return entry_count - len(batch_errors)
 
 
 def coerce_decimal_values(value: Any) -> Any:
@@ -492,10 +533,14 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
 
         async with self._config.provide_connection() as conn:
-            coerced_params = await coerce_large_parameters_async(conn, params)
-            with conn.cursor() as cursor:
-                await cursor.execute(sql, coerced_params)
-                await conn.commit()
+            try:
+                coerced_params = await coerce_large_parameters_async(conn, params)
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, coerced_params)
+                    await conn.commit()
+            except BaseException:
+                await _rollback_async(conn)
+                raise
 
         result = await self.get_session(app_name, user_id, session_id)
         if result is None:
@@ -669,9 +714,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
 
         async with self._config.provide_connection() as conn:
-            with conn.cursor() as cursor:
-                await cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
-                await conn.commit()
+            try:
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                    await conn.commit()
+            except BaseException:
+                await _rollback_async(conn)
+                raise
 
     async def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session.
@@ -688,21 +737,25 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            coerced_params = await coerce_large_parameters_async(
-                conn,
-                {
-                    "id": event_record["id"],
-                    "app_name": event_record["app_name"],
-                    "user_id": event_record["user_id"],
-                    "session_id": event_record["session_id"],
-                    "invocation_id": event_record["invocation_id"],
-                    "timestamp": event_record["timestamp"],
-                    "event_data": await self._serialize_event_data(event_record["event_data"]),
-                },
-            )
-            with conn.cursor() as cursor:
-                await cursor.execute(sql, coerced_params)
-                await conn.commit()
+            try:
+                coerced_params = await coerce_large_parameters_async(
+                    conn,
+                    {
+                        "id": event_record["id"],
+                        "app_name": event_record["app_name"],
+                        "user_id": event_record["user_id"],
+                        "session_id": event_record["session_id"],
+                        "invocation_id": event_record["invocation_id"],
+                        "timestamp": event_record["timestamp"],
+                        "event_data": await self._serialize_event_data(event_record["event_data"]),
+                    },
+                )
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, coerced_params)
+                    await conn.commit()
+            except BaseException:
+                await _rollback_async(conn)
+                raise
 
     async def append_event_and_update_state(
         self,
@@ -1684,9 +1737,14 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
         sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
 
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
-            conn.commit()
+        with self._config.provide_connection() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                    conn.commit()
+            except BaseException:
+                _rollback_sync(conn)
+                raise
 
     def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
@@ -1698,21 +1756,26 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         )
         """
 
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            params = coerce_large_parameters_sync(
-                conn,
-                {
-                    "id": event_record["id"],
-                    "app_name": event_record["app_name"],
-                    "user_id": event_record["user_id"],
-                    "session_id": event_record["session_id"],
-                    "invocation_id": event_record["invocation_id"],
-                    "timestamp": event_record["timestamp"],
-                    "event_data": self._serialize_event_data(event_record["event_data"]),
-                },
-            )
-            cursor.execute(sql, params)
-            conn.commit()
+        with self._config.provide_connection() as conn:
+            try:
+                params = coerce_large_parameters_sync(
+                    conn,
+                    {
+                        "id": event_record["id"],
+                        "app_name": event_record["app_name"],
+                        "user_id": event_record["user_id"],
+                        "session_id": event_record["session_id"],
+                        "invocation_id": event_record["invocation_id"],
+                        "timestamp": event_record["timestamp"],
+                        "event_data": self._serialize_event_data(event_record["event_data"]),
+                    },
+                )
+                with conn.cursor() as cursor:
+                    cursor.execute(sql, params)
+                    conn.commit()
+            except BaseException:
+                _rollback_sync(conn)
+                raise
 
     def append_event_and_update_state(
         self,
@@ -2431,46 +2494,61 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         if not entries:
             return 0
 
+        version = await self._get_version_info()
+        supports_vectors = _memory_supports_vectors(version)
+        if any(entry.get("embedding") is not None for entry in entries):
+            _require_memory_vectors(version)
+        embedding_column = ", embedding" if supports_vectors else ""
+        embedding_param = ", :embedding" if supports_vectors else ""
         owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
         owner_param = ", :owner_id" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {self._memory_table} (
             id, session_id, app_name, user_id, scope, event_id, author{owner_column},
-            timestamp, content_json, content_text, metadata_json, inserted_at
+            timestamp{embedding_column}, content_json, content_text, metadata_json, inserted_at
         ) VALUES (
             :id, :session_id, :app_name, :user_id, :scope, :event_id, :author{owner_param},
-            :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
+            :timestamp{embedding_param}, :content_json, :content_text, :metadata_json, :inserted_at
         )
         """
 
-        inserted_count = 0
-        async with self._config.provide_connection() as conn:
-            with conn.cursor() as cursor:
-                for entry in entries:
-                    content_json = await self._serialize_json_field(entry["content_json"])
-                    metadata_json = await self._serialize_json_field(entry["metadata_json"])
-                    params: dict[str, Any] = {
-                        "id": entry["id"],
-                        "session_id": entry["session_id"],
-                        "app_name": entry["app_name"],
-                        "user_id": entry["user_id"],
-                        "scope": entry.get("scope", "user"),
-                        "event_id": entry["event_id"],
-                        "author": entry["author"],
-                        "timestamp": entry["timestamp"],
-                        "content_json": content_json,
-                        "content_text": entry["content_text"],
-                        "metadata_json": metadata_json,
-                        "inserted_at": entry["inserted_at"],
-                    }
-                    if self._owner_id_column_name:
-                        params["owner_id"] = owner_id
-                    params = await coerce_large_parameters_async(conn, params)
-                    if await self._execute_insert_entry(cursor, sql, params):
-                        inserted_count += 1
-                await conn.commit()
+        batch_params: list[dict[str, Any]] = []
+        for entry in entries:
+            content_json = await self._serialize_json_field(entry["content_json"])
+            metadata_json = await self._serialize_json_field(entry["metadata_json"])
+            embedding_val = entry.get("embedding")
+            bound_embedding = array.array("f", embedding_val) if embedding_val is not None else None
+            p: dict[str, Any] = {
+                "id": entry["id"],
+                "session_id": entry["session_id"],
+                "app_name": entry["app_name"],
+                "user_id": entry["user_id"],
+                "scope": entry.get("scope", "user"),
+                "event_id": entry["event_id"],
+                "author": entry["author"],
+                "timestamp": entry["timestamp"],
+                "content_json": content_json,
+                "content_text": entry["content_text"],
+                "metadata_json": metadata_json,
+                "inserted_at": entry["inserted_at"],
+            }
+            if supports_vectors:
+                p["embedding"] = bound_embedding
+            if self._owner_id_column_name:
+                p["owner_id"] = owner_id
+            batch_params.append(p)
 
-        return inserted_count
+        async with self._config.provide_connection() as conn:
+            try:
+                coerced_batch = [await coerce_large_parameters_async(conn, p) for p in batch_params]
+                with conn.cursor() as cursor:
+                    await cursor.executemany(sql, coerced_batch, batcherrors=True)
+                    inserted_count = _memory_insert_count(len(entries), cursor.getbatcherrors())
+                    await conn.commit()
+                    return inserted_count
+            except BaseException:
+                await _rollback_async(conn)
+                raise
 
     async def search_entries(
         self,
@@ -2486,6 +2564,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             raise RuntimeError(msg)
 
         effective_limit = limit if limit is not None else self._max_results
+        if embedding is not None:
+            _require_memory_vectors(await self._get_version_info())
 
         try:
             if embedding is not None and self._use_fts:
@@ -2573,10 +2653,12 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         return _extract_json_value(data)
 
     async def _memory_table_ddl(self) -> str:
-        storage_type = await self._detect_json_storage_type()
-        return self._memory_table_ddl_for_type(storage_type)
+        version = await self._get_version_info()
+        return self._memory_table_ddl_for_type(
+            storage_type_from_version(version), supports_vectors=_memory_supports_vectors(version)
+        )
 
-    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType") -> str:
+    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType", *, supports_vectors: bool = False) -> str:
         if storage_type == JSONStorageType.JSON_NATIVE:
             json_columns = """
                 content_json JSON,
@@ -2621,6 +2703,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             self._memory_table,
             self._memory_table,
             fts_index,
+            f"embedding VECTOR({self._vector_dimensions}, FLOAT32),\n                " if supports_vectors else "",
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -2708,12 +2791,15 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         if not sanitized_query:
             return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        embedding_column = (
+            "embedding" if _memory_supports_vectors(await self._get_version_info()) else "NULL AS embedding"
+        )
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at,
+                   timestamp, content_json, content_text, metadata_json, inserted_at, {embedding_column},
                    SCORE(1) AS score
             FROM {self._memory_table}
             WHERE {where_scope}
@@ -2759,6 +2845,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             "content_text",
             "metadata_json",
             "inserted_at",
+            "embedding",
         )
         if not sanitized_query:
             sql = build_oracle_hnsw_subquery(
@@ -2804,12 +2891,15 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        embedding_column = (
+            "embedding" if _memory_supports_vectors(await self._get_version_info()) else "NULL AS embedding"
+        )
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
+                   timestamp, content_json, content_text, metadata_json, inserted_at, {embedding_column}
             FROM {self._memory_table}
             WHERE {where_scope}
               AND LOWER(content_text) LIKE :pattern
@@ -2833,6 +2923,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             content_text = row[9]
             if is_async_readable(content_text) or is_readable(content_text):
                 content_text = await _read_lob_async(content_text)
+            embedding_val = row[_EMBEDDING_COLUMN_INDEX] if len(row) > _EMBEDDING_COLUMN_INDEX else None
+            embedding = [float(x) for x in embedding_val] if embedding_val is not None else None
             records.append({
                 "id": row[0],
                 "session_id": row[1],
@@ -2846,7 +2938,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 "content_text": str(content_text),
                 "metadata_json": metadata_json,
                 "inserted_at": row[11],
-                "embedding": None,
+                "embedding": embedding,
             })
         return records
 
@@ -2905,45 +2997,61 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         if not entries:
             return 0
 
+        version = self._get_version_info()
+        supports_vectors = _memory_supports_vectors(version)
+        if any(entry.get("embedding") is not None for entry in entries):
+            _require_memory_vectors(version)
+        embedding_column = ", embedding" if supports_vectors else ""
+        embedding_param = ", :embedding" if supports_vectors else ""
         owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
         owner_param = ", :owner_id" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {self._memory_table} (
             id, session_id, app_name, user_id, scope, event_id, author{owner_column},
-            timestamp, content_json, content_text, metadata_json, inserted_at
+            timestamp{embedding_column}, content_json, content_text, metadata_json, inserted_at
         ) VALUES (
             :id, :session_id, :app_name, :user_id, :scope, :event_id, :author{owner_param},
-            :timestamp, :content_json, :content_text, :metadata_json, :inserted_at
+            :timestamp{embedding_param}, :content_json, :content_text, :metadata_json, :inserted_at
         )
         """
 
-        inserted_count = 0
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            for entry in entries:
-                content_json = self._serialize_json_field(entry["content_json"])
-                metadata_json = self._serialize_json_field(entry["metadata_json"])
-                params: dict[str, Any] = {
-                    "id": entry["id"],
-                    "session_id": entry["session_id"],
-                    "app_name": entry["app_name"],
-                    "user_id": entry["user_id"],
-                    "scope": entry.get("scope", "user"),
-                    "event_id": entry["event_id"],
-                    "author": entry["author"],
-                    "timestamp": entry["timestamp"],
-                    "content_json": content_json,
-                    "content_text": entry["content_text"],
-                    "metadata_json": metadata_json,
-                    "inserted_at": entry["inserted_at"],
-                }
-                if self._owner_id_column_name:
-                    params["owner_id"] = owner_id
-                params = coerce_large_parameters_sync(conn, params)
-                if self._execute_insert_entry(cursor, sql, params):
-                    inserted_count += 1
-            conn.commit()
+        batch_params: list[dict[str, Any]] = []
+        for entry in entries:
+            content_json = self._serialize_json_field(entry["content_json"])
+            metadata_json = self._serialize_json_field(entry["metadata_json"])
+            embedding_val = entry.get("embedding")
+            bound_embedding = array.array("f", embedding_val) if embedding_val is not None else None
+            p: dict[str, Any] = {
+                "id": entry["id"],
+                "session_id": entry["session_id"],
+                "app_name": entry["app_name"],
+                "user_id": entry["user_id"],
+                "scope": entry.get("scope", "user"),
+                "event_id": entry["event_id"],
+                "author": entry["author"],
+                "timestamp": entry["timestamp"],
+                "content_json": content_json,
+                "content_text": entry["content_text"],
+                "metadata_json": metadata_json,
+                "inserted_at": entry["inserted_at"],
+            }
+            if supports_vectors:
+                p["embedding"] = bound_embedding
+            if self._owner_id_column_name:
+                p["owner_id"] = owner_id
+            batch_params.append(p)
 
-        return inserted_count
+        with self._config.provide_connection() as conn:
+            try:
+                coerced_batch = [coerce_large_parameters_sync(conn, p) for p in batch_params]
+                with conn.cursor() as cursor:
+                    cursor.executemany(sql, coerced_batch, batcherrors=True)
+                    inserted_count = _memory_insert_count(len(entries), cursor.getbatcherrors())
+                    conn.commit()
+                    return inserted_count
+            except BaseException:
+                _rollback_sync(conn)
+                raise
 
     def search_entries(
         self,
@@ -2960,6 +3068,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             raise RuntimeError(msg)
 
         effective_limit = limit if limit is not None else self._max_results
+        if embedding is not None:
+            _require_memory_vectors(self._get_version_info())
 
         try:
             if embedding is not None and self._use_fts:
@@ -3045,10 +3155,12 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         return _extract_json_value(data)
 
     def _memory_table_ddl(self) -> str:
-        storage_type = self._detect_json_storage_type()
-        return self._memory_table_ddl_for_type(storage_type)
+        version = self._get_version_info()
+        return self._memory_table_ddl_for_type(
+            storage_type_from_version(version), supports_vectors=_memory_supports_vectors(version)
+        )
 
-    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType") -> str:
+    def _memory_table_ddl_for_type(self, storage_type: "JSONStorageType", *, supports_vectors: bool = False) -> str:
         if storage_type == JSONStorageType.JSON_NATIVE:
             json_columns = """
                 content_json JSON,
@@ -3093,6 +3205,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             self._memory_table,
             self._memory_table,
             fts_index,
+            f"embedding VECTOR({self._vector_dimensions}, FLOAT32),\n                " if supports_vectors else "",
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -3180,12 +3293,13 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         if not sanitized_query:
             return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        embedding_column = "embedding" if _memory_supports_vectors(self._get_version_info()) else "NULL AS embedding"
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at,
+                   timestamp, content_json, content_text, metadata_json, inserted_at, {embedding_column},
                    SCORE(1) AS score
             FROM {self._memory_table}
             WHERE {where_scope}
@@ -3230,6 +3344,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             "content_text",
             "metadata_json",
             "inserted_at",
+            "embedding",
         )
         if not sanitized_query:
             sql = build_oracle_hnsw_subquery(
@@ -3274,12 +3389,13 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        embedding_column = "embedding" if _memory_supports_vectors(self._get_version_info()) else "NULL AS embedding"
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM (
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
+                   timestamp, content_json, content_text, metadata_json, inserted_at, {embedding_column}
             FROM {self._memory_table}
             WHERE {where_scope}
               AND LOWER(content_text) LIKE :pattern
@@ -3302,6 +3418,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             content_text = row[9]
             if is_readable(content_text):
                 content_text = _read_lob_sync(content_text)
+            embedding_val = row[_EMBEDDING_COLUMN_INDEX] if len(row) > _EMBEDDING_COLUMN_INDEX else None
+            embedding = [float(x) for x in embedding_val] if embedding_val is not None else None
             records.append({
                 "id": row[0],
                 "session_id": row[1],
@@ -3315,7 +3433,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 "content_text": str(content_text),
                 "metadata_json": metadata_json,
                 "inserted_at": row[11],
-                "embedding": None,
+                "embedding": embedding,
             })
         return records
 
@@ -3351,20 +3469,11 @@ def _raise_session_not_found(session_id: str) -> NoReturn:
     raise ValueError(msg)
 
 
+_normalize_decimals = build_nested_decimal_normalizer(mode="float")
+
+
 def _coerce_decimal_values(value: Any) -> Any:
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, dict):
-        return {key: _coerce_decimal_values(val) for key, val in value.items()}
-    if isinstance(value, list):
-        return [_coerce_decimal_values(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_coerce_decimal_values(item) for item in value)
-    if isinstance(value, set):
-        return {_coerce_decimal_values(item) for item in value}
-    if isinstance(value, frozenset):
-        return frozenset(_coerce_decimal_values(item) for item in value)
-    return value
+    return _normalize_decimals(value)
 
 
 def _oracle_text_value(value: Any) -> str:
@@ -3438,21 +3547,15 @@ def _adk_table_feature_clause(
         hash_partition_key=hash_partition_key,
         range_partition_key=range_partition_key,
     )
-    return report["clause"]
+    return report["plsql_clause"]
 
 
 async def _read_lob_async(data: Any) -> Any:
-    if is_async_readable(data):
-        return await data.read()
-    if is_readable(data):
-        return data.read()
-    return data
+    return await read_oracle_lob_async(data)
 
 
 def _read_lob_sync(data: Any) -> Any:
-    if is_readable(data):
-        return data.read()
-    return data
+    return read_oracle_lob_sync(data)
 
 
 def _build_oracle_scope_where(

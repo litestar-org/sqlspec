@@ -1,5 +1,5 @@
 """Sybase ASE event extension."""
 
-from sqlspec.adapters.sybase.events.store import SybaseEventQueueStore, SybaseSyncEventQueueStore
+from sqlspec.adapters.sybase.events.store import SybaseEventQueueStore
 
-__all__ = ("SybaseEventQueueStore", "SybaseSyncEventQueueStore")
+__all__ = ("SybaseEventQueueStore",)

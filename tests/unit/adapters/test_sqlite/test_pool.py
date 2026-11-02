@@ -46,6 +46,25 @@ def test_default_pool_uses_native_like_shared_pragma_profile() -> None:
         pool.close()
 
 
+def test_default_memory_connections_do_not_read_uncommitted_rows() -> None:
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    config = SqliteConfig()
+    other = config.provide_pool().new_connection()
+    try:
+        with config.provide_connection() as connection:
+            connection.execute("CREATE TABLE isolated_rows (value INTEGER)")
+            connection.execute("BEGIN")
+            connection.execute("INSERT INTO isolated_rows VALUES (1)")
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                other.execute("SELECT value FROM isolated_rows")
+            connection.rollback()
+            assert other.execute("SELECT COUNT(*) FROM isolated_rows").fetchone() == (0,)
+    finally:
+        other.close()
+        config.close_pool()
+
+
 def test_disable_optimizations_preserves_native_memory_profile() -> None:
     native_connection = sqlite3.connect(":memory:", timeout=30.0)
     pool = SqliteConnectionPool({"database": ":memory:", "timeout": 30.0}, enable_optimizations=False)
@@ -169,6 +188,31 @@ def test_get_connection_commits_open_transaction_on_clean_exit() -> None:
         count = connection.execute("SELECT COUNT(*) FROM widgets").fetchone()[0]
     assert count == 1
 
+    pool.close()
+
+
+def test_get_connection_exits_cleanly_on_another_thread() -> None:
+    """A scope entered on one thread can be exited on another without losing the commit."""
+    pool = SqliteConnectionPool(connection_parameters={"database": ":memory:"}, enable_optimizations=False)
+    scope = pool.get_connection()
+    connection = scope.__enter__()
+    connection.execute("CREATE TABLE widgets (id INTEGER PRIMARY KEY)")
+    connection.execute("INSERT INTO widgets (id) VALUES (1)")
+    errors: list[BaseException] = []
+
+    def _exit() -> None:
+        try:
+            scope.__exit__(None, None, None)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=_exit)
+    worker.start()
+    worker.join(timeout=10)
+
+    assert errors == []
+    assert pool.checked_out() == 0
+    assert connection.execute("SELECT COUNT(*) FROM widgets").fetchone()[0] == 1
     pool.close()
 
 
@@ -387,5 +431,47 @@ def test_memory_pool_replaces_a_closed_connection() -> None:
             connection.close()
         with pool.get_connection() as replacement:
             assert replacement.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        pool.close()
+
+
+def test_nested_get_connection_reentrancy_depth() -> None:
+    pool = SqliteConnectionPool({"database": ":memory:"})
+    try:
+        with pool.get_connection() as conn1:
+            conn1.execute("CREATE TABLE test_depth (x INT)")
+            conn1.commit()
+            conn1.execute("INSERT INTO test_depth VALUES (1)")
+            with pool.get_connection() as conn2:
+                assert conn1 is conn2
+                conn2.execute("INSERT INTO test_depth VALUES (2)")
+            assert getattr(conn1, "in_transaction", False)
+            conn1.commit()
+
+        with pool.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM test_depth").fetchall()
+            assert rows == [(1,), (2,)]
+    finally:
+        pool.close()
+
+
+def test_sqlite_pool_checked_out_reflects_active_sessions_and_prunes_dead_threads() -> None:
+    pool = SqliteConnectionPool({"database": ":memory:"})
+    try:
+        assert pool.checked_out() == 0
+        with pool.get_connection():
+            assert pool.checked_out() == 1
+        assert pool.checked_out() == 0
+
+        def worker() -> None:
+            with pool.get_connection() as conn:
+                conn.execute("SELECT 1")
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+        assert not t.is_alive()
+        assert pool.size() == 1
     finally:
         pool.close()

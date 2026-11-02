@@ -31,9 +31,6 @@ _EXPLICIT_INSTALL_KEYS: Final[tuple[str, ...]] = ("version", "repository", "repo
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "duckdb"
 
-DEFAULT_MIN_POOL: Final[int] = 1
-DEFAULT_MAX_POOL: Final[int] = 4
-POOL_TIMEOUT: Final[float] = 30.0
 POOL_RECYCLE: Final[int] = 86400
 HEALTH_CHECK_INTERVAL: Final[float] = 30.0
 SECRET_CONFLICT_ATTEMPTS: Final[int] = 5
@@ -77,6 +74,7 @@ class DuckDBConnectionPool:
         "_enable_statement_profiling",
         "_extensions",
         "_generation",
+        "_has_dynamic_secrets",
         "_health_check_interval",
         "_installed_signatures",
         "_is_memory_db",
@@ -115,6 +113,7 @@ class DuckDBConnectionPool:
         self._health_check_interval = health_check_interval
         self._extensions = extensions or []
         self._secrets = secrets or []
+        self._has_dynamic_secrets: bool = any(callable(secret.get("value_provider")) for secret in self._secrets)
         self._on_connection_create = on_connection_create
         self._enable_statement_profiling = enable_statement_profiling
         self._profile_paths: dict[int, Path] = {}
@@ -356,6 +355,9 @@ class DuckDBConnectionPool:
             if profile_path is not None:
                 return {"_duckdb_profile_path": str(profile_path)}
             return {}
+        cached_settings = cast("dict[str, Any] | None", state.get("_cached_storage_settings"))
+        if cached_settings is not None:
+            return cached_settings
         settings: dict[str, Any] = {
             "_duckdb_storage_extensions": state.get("storage_extensions", frozenset()),
             "_duckdb_storage_secrets": state.get("storage_secrets", ()),
@@ -364,6 +366,7 @@ class DuckDBConnectionPool:
         profile_path = state.get("profile_path")
         if profile_path is not None:
             settings["_duckdb_profile_path"] = str(profile_path)
+        state["_cached_storage_settings"] = settings
         return settings
 
     def _install_extension_once(
@@ -452,7 +455,7 @@ class DuckDBConnectionPool:
 
     def _refresh_dynamic_secrets(self, connection: DuckDBConnection) -> None:
         """Refresh secrets configured with ``value_provider`` when ``refresh_interval_seconds`` has elapsed."""
-        if not any(callable(secret.get("value_provider")) for secret in self._secrets):
+        if not self._has_dynamic_secrets:
             return
         thread_state = self._thread_local.__dict__
         refresh_times = cast("dict[str, float]", thread_state.setdefault("secret_refresh_times", {}))
@@ -483,6 +486,7 @@ class DuckDBConnectionPool:
                 updated = True
         if updated:
             self._thread_local.storage_secrets = tuple(current_secrets)
+            thread_state.pop("_cached_storage_settings", None)
 
     def _retire_connection(self, connection: DuckDBConnection) -> None:
         """Close a pool-owned connection and drop it from the shutdown registry."""
@@ -500,6 +504,7 @@ class DuckDBConnectionPool:
         thread_state.pop("storage_secrets", None)
         thread_state.pop("storage_protocols", None)
         thread_state.pop("profile_path", None)
+        thread_state.pop("_cached_storage_settings", None)
         if "connection" in thread_state:
             self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
             del self._thread_local.connection

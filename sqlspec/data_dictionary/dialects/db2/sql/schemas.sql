@@ -11,7 +11,3 @@ WHERE s.SCHEMANAME NOT LIKE 'SYS%'
   AND s.SCHEMANAME NOT LIKE 'SQLJ%'
   AND (:schema_name IS NULL OR s.SCHEMANAME = :schema_name)
 ORDER BY s.SCHEMANAME;
-
--- name: current
--- dialect: db2
-VALUES CURRENT SCHEMA;

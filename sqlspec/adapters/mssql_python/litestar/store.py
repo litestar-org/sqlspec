@@ -4,7 +4,12 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor
-from sqlspec.adapters.mssql_python.core import escape_sql_literal, quote_bracket_identifier, split_schema_and_table
+from sqlspec.adapters.mssql_python.core import (
+    escape_sql_literal,
+    quote_bracket_identifier,
+    resolve_rowcount,
+    split_schema_and_table,
+)
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -133,7 +138,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         expires_at = self._calculate_expires_at(expires_in)
         table_ref = _table_ref(self._table_name)
         sql = f"""
-        MERGE INTO {table_ref} AS target
+        MERGE INTO {table_ref} WITH (HOLDLOCK) AS target
         USING (SELECT ? AS session_id, CONVERT(VARBINARY(MAX), ?) AS data, ? AS expires_at) AS src
            ON target.session_id = src.session_id
         WHEN MATCHED THEN
@@ -197,7 +202,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         """
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql)
-            count = int(getattr(cursor, "rowcount", 0) or 0)
+            count = resolve_rowcount(cursor)
             conn.commit()
         if count > 0:
             self._log_delete_expired(count)

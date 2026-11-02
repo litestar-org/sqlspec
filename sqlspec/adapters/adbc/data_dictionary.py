@@ -57,7 +57,6 @@ if TYPE_CHECKING:
 __all__ = ("AdbcDataDictionary",)
 
 logger = get_logger("sqlspec.adapters.adbc")
-_pa: Any = import_optional("pyarrow")
 
 _NATIVE_TABLE_TYPES: Final = frozenset({"table", "base table"})
 _NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError, AttributeError)
@@ -346,18 +345,24 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             operation = "by_schema" if table is None else "by_table"
             return driver.select(self._get_query(dialect, "indexes", operation), schema_type=IndexMetadata)
 
-        if table is None:
-            return driver.select(
-                self._get_query(dialect, "indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
-            )
+        if dialect == "snowflake":
+            return []
 
-        table_name = self._resolve_identifier(dialect, table)
-        return driver.select(
-            self._get_query(dialect, "indexes", "by_table"),
-            schema_name=schema_name,
-            table_name=table_name,
-            schema_type=IndexMetadata,
-        )
+        try:
+            if table is None:
+                return driver.select(
+                    self._get_query(dialect, "indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                )
+
+            table_name = self._resolve_identifier(dialect, table)
+            return driver.select(
+                self._get_query(dialect, "indexes", "by_table"),
+                schema_name=schema_name,
+                table_name=table_name,
+                schema_type=IndexMetadata,
+            )
+        except SQLFileNotFoundError:
+            return []
 
     def get_foreign_keys(
         self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
@@ -821,10 +826,12 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         self, driver: "AdbcDriver", dialect: str, table_name: "str | None", schema_name: "str | None"
     ) -> "list[ForeignKeyMetadata]":
         rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
-        foreign_keys = _normalize_native_foreign_keys(rows, table_name_exact=table_name)
-        if not foreign_keys:
+        if not rows:
             raise _NativeMetadataIncompleteError
-        return foreign_keys
+        for _, _, table in _iter_object_tables(rows):
+            if table.get("table_constraints") is None:
+                raise _NativeMetadataIncompleteError
+        return _normalize_native_foreign_keys(rows, table_name_exact=table_name)
 
 
 class _NativeMetadataIncompleteError(Exception):
@@ -994,7 +1001,9 @@ def _normalize_native_constraints(
 
 def _arrow_type_to_sql(data_type: Any) -> str:
     ensure_pyarrow()
-    types = _pa.types
+    pa = import_optional("pyarrow")
+    assert pa is not None
+    types = pa.types
     if types.is_boolean(data_type):
         return "BOOLEAN"
     if types.is_int8(data_type) or types.is_int16(data_type) or types.is_uint8(data_type) or types.is_uint16(data_type):

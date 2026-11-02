@@ -16,13 +16,19 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.exceptions import ImproperConfigurationError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
-from sqlspec.utils.module_loader import ensure_pandas, ensure_polars, ensure_pyarrow, import_optional_attr
+from sqlspec.utils.module_loader import (
+    ensure_pandas,
+    ensure_polars,
+    ensure_pyarrow,
+    import_optional,
+    import_optional_attr,
+)
 from sqlspec.utils.type_guards import has_arrow_table_stats, has_get_data
 from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
     from sqlspec.core.result import ArrowResult
-    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.data_dictionary import DialectConfig
     from sqlspec.storage import StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable, PandasDataFrame, PolarsDataFrame
 
@@ -46,12 +52,16 @@ __all__ = (
     "cast_arrow_table_schema",
     "coerce_arrow_batches",
     "coerce_arrow_table",
+    "coerce_oracle_df_to_arrow_batches",
+    "coerce_oracle_df_to_arrow_table",
     "convert_dict_to_arrow",
     "convert_dict_to_arrow_with_schema",
     "encode_arrow_batch_pg_binary",
     "ensure_arrow_table",
     "iter_pgcopy_binary_chunks",
     "iter_pgcopy_binary_chunks_async",
+    "oracle_df_batches_to_arrow_reader",
+    "oracle_df_to_arrow_table",
     "records_to_arrow_table",
     "sql_type_for_category",
     "sql_type_from_arrow_type",
@@ -1455,3 +1465,68 @@ class _AsyncBytesIterator:
             return next(self._iterator)
         except StopIteration as exc:
             raise StopAsyncIteration from exc
+
+
+def oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None) -> "ArrowTable":
+    """Convert an Oracle DataFrame to a PyArrow Table using zero-copy PyCapsule when supported."""
+    if pa_module is None:
+        ensure_pyarrow()
+        pa_module = import_optional("pyarrow")
+
+    if hasattr(oracle_df, "__arrow_c_stream__"):
+        reader = (
+            pa_module.RecordBatchReader.from_stream(oracle_df, schema=arrow_schema)
+            if arrow_schema is not None
+            else pa_module.RecordBatchReader.from_stream(oracle_df)
+        )
+        return cast("ArrowTable", reader.read_all())
+    table = pa_module.table(oracle_df)
+    if arrow_schema is not None:
+        table = table.cast(arrow_schema)
+    return cast("ArrowTable", table)
+
+
+def coerce_oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None) -> "ArrowTable":
+    """Alias for :func:`oracle_df_to_arrow_table`."""
+    return oracle_df_to_arrow_table(oracle_df, pa_module=pa_module, arrow_schema=arrow_schema)
+
+
+def coerce_oracle_df_to_arrow_batches(
+    oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None
+) -> "list[ArrowRecordBatch]":
+    """Convert an Oracle DataFrame batch into PyArrow RecordBatches via PyCapsule when supported."""
+    if pa_module is None:
+        ensure_pyarrow()
+        pa_module = import_optional("pyarrow")
+
+    if hasattr(oracle_df, "__arrow_c_stream__"):
+        reader = (
+            pa_module.RecordBatchReader.from_stream(oracle_df, schema=arrow_schema)
+            if arrow_schema is not None
+            else pa_module.RecordBatchReader.from_stream(oracle_df)
+        )
+        return cast("list[ArrowRecordBatch]", list(reader))
+    table = pa_module.table(oracle_df)
+    if arrow_schema is not None:
+        table = table.cast(arrow_schema)
+    return cast("list[ArrowRecordBatch]", table.to_batches())
+
+
+def oracle_df_batches_to_arrow_reader(
+    batches: "Iterable[Any]", schema: Any = None, pa_module: Any = None
+) -> "ArrowRecordBatchReader":
+    """Convert an iterable of Oracle DataFrame batches into a PyArrow RecordBatchReader."""
+    if pa_module is None:
+        ensure_pyarrow()
+        pa_module = import_optional("pyarrow")
+
+    collected_batches: list[Any] = []
+    for df_batch in batches:
+        collected_batches.extend(coerce_oracle_df_to_arrow_batches(df_batch, pa_module=pa_module, arrow_schema=schema))
+    if collected_batches:
+        resolved_schema = schema if schema is not None else collected_batches[0].schema
+        return cast(
+            "ArrowRecordBatchReader", pa_module.RecordBatchReader.from_batches(resolved_schema, collected_batches)
+        )
+    resolved_schema = schema if schema is not None else pa_module.schema([])
+    return cast("ArrowRecordBatchReader", pa_module.RecordBatchReader.from_batches(resolved_schema, []))

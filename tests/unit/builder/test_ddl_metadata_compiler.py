@@ -24,6 +24,37 @@ from sqlspec.data_dictionary import (
 from sqlspec.exceptions import SQLBuilderError
 
 
+def test_create_table_from_metadata_foreign_key_preserves_schemas_and_actions() -> None:
+    """Owned foreign key metadata preserves reference qualification and both actions."""
+    foreign_key = ForeignKeyMetadata(
+        table_name="orders",
+        column_name="customer_id",
+        referenced_table="customers",
+        referenced_column="id",
+        constraint_name="fk_orders_customer",
+        schema="sales",
+        referenced_schema="crm",
+        on_delete="CASCADE",
+        on_update="SET NULL",
+    )
+
+    built = CreateTable.from_metadata(
+        "orders",
+        [{"column_name": "customer_id", "data_type": "INTEGER"}],
+        foreign_keys=[foreign_key],
+        schema="sales",
+        dialect="postgres",
+    ).build()
+
+    assert built.sql == (
+        'CREATE TABLE "sales"."orders" (\n'
+        '  "customer_id" INT,\n'
+        '  CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") '
+        'REFERENCES "crm"."customers"("id") ON DELETE CASCADE ON UPDATE SET NULL\n'
+        ")"
+    )
+
+
 def test_create_table_from_metadata_composite_pk_fk_check_unique_defaults_and_computed() -> None:
     """Test CreateTable.from_metadata with composite PK, FK, CHECK, UNIQUE, defaults, identity, and computed columns."""
     columns: list[dict[str, Any]] = [

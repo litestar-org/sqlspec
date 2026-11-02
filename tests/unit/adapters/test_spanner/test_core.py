@@ -18,7 +18,7 @@ from google.cloud.spanner_v1.types.type import TypeCode
 from sqlspec.adapters.spanner._typing import SpannerSyncSessionContext
 from sqlspec.adapters.spanner.adk.artifact_store import SpannerAsyncADKArtifactStore, SpannerSyncADKArtifactStore
 from sqlspec.adapters.spanner.adk.store import SpannerSyncADKMemoryStore, SpannerSyncADKStore
-from sqlspec.adapters.spanner.config import SpannerSyncConfig, SpannerSyncConnectionContext
+from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
     build_statement_config,
@@ -39,8 +39,10 @@ from sqlspec.adapters.spanner.litestar.store import SpannerSyncStore
 from sqlspec.adapters.spanner.type_converter import spanner_json, spanner_to_uuid
 from sqlspec.core import SQL, TypedParameter
 from sqlspec.exceptions import (
+    DataError,
     DeadlockError,
     ImproperConfigurationError,
+    IntegrityError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
@@ -283,6 +285,22 @@ def test_exception_mapping_permission_denied_unauthenticated_and_timeout() -> No
     assert isinstance(create_mapped_exception(too_many), OperationalError)
     assert isinstance(create_mapped_exception(already_exists), UniqueViolationError)
 
+    failed_precondition = cast("Any", api_exceptions.FailedPrecondition)("fk violation")
+    out_of_range = cast("Any", api_exceptions.OutOfRange)("out of range")
+    resource_exhausted = cast("Any", api_exceptions.ResourceExhausted)("quota exceeded")
+
+    assert isinstance(create_mapped_exception(failed_precondition), IntegrityError)
+    assert isinstance(create_mapped_exception(out_of_range), DataError)
+    assert isinstance(create_mapped_exception(resource_exhausted), OperationalError)
+
+    class _MockStatus:
+        def __init__(self, code: int, message: str) -> None:
+            self.code = code
+            self.message = message
+
+    status_err = create_mapped_exception(_MockStatus(9, "constraint failed"))
+    assert isinstance(status_err, IntegrityError)
+
 
 def test_connection_context_maps_implicit_commit_and_suppresses_rollback_errors() -> None:
     """Verify SpannerSyncConnectionContext maps commit GoogleAPICallError and suppresses rollback errors."""
@@ -310,16 +328,16 @@ def test_connection_context_maps_implicit_commit_and_suppresses_rollback_errors(
     sessions_manager.get_session.return_value = session_obj
     database = SimpleNamespace(sessions_manager=sessions_manager)
 
-    config = MagicMock()
-    config.get_database.return_value = database
-    config.driver_features = {}
+    config = SpannerSyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        connection_instance=cast("Any", object()),
+    )
+    config._database = cast("Any", database)
 
-    ctx = SpannerSyncConnectionContext(config, transaction=True)
-    with pytest.raises(DeadlockError), ctx:
+    with pytest.raises(DeadlockError), config.provide_connection(transaction=True):
         pass
 
-    ctx_rollback = SpannerSyncConnectionContext(config, transaction=True)
-    with pytest.raises(RuntimeError, match="user boom"), ctx_rollback:
+    with pytest.raises(RuntimeError, match="user boom"), config.provide_connection(transaction=True):
         raise RuntimeError("user boom")
 
 

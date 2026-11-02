@@ -226,6 +226,7 @@ async def test_asyncmy_adk_memory_store_insert_and_search_json_handling() -> Non
     cursor = MagicMock()
     cursor.rowcount = 1
     cursor.execute = AsyncMock()
+    cursor.executemany = AsyncMock()
     cursor.description = [
         ("id",),
         ("session_id",),
@@ -288,12 +289,90 @@ async def test_asyncmy_adk_memory_store_insert_and_search_json_handling() -> Non
     records = await store.search_entries("hello", "app", "user-1")
 
     assert inserted == 1
-    insert_params = cursor.execute.call_args_list[0].args[1]
+    insert_params = cursor.executemany.call_args_list[0].args[1][0]
     assert insert_params[6] is None
     assert insert_params[11] is None
     assert len(records) == 1
     assert records[0]["content_json"] == {"text": "hello"}
     assert records[0]["metadata_json"] == {"source": "unit"}
+
+
+async def test_asyncmy_insert_memory_entries_batches_with_executemany() -> None:
+    """insert_memory_entries batches multiple entries in a single cursor.executemany call."""
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
+
+    now = datetime.now(tz=UTC)
+    cursor = MagicMock()
+    cursor.rowcount = 2
+    cursor.executemany = AsyncMock()
+    conn = MagicMock()
+    conn.cursor = MagicMock(return_value=cursor)
+    conn.commit = AsyncMock()
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncmyADKMemoryStore(config)
+
+    entries = [
+        cast(
+            "Any",
+            {
+                "id": f"mem-{i}",
+                "session_id": "sess-1",
+                "app_name": "app",
+                "user_id": "user-1",
+                "event_id": f"evt-{i}",
+                "timestamp": now,
+                "content_json": {"idx": i},
+                "content_text": f"text {i}",
+                "metadata_json": None,
+                "inserted_at": now,
+            },
+        )
+        for i in range(2)
+    ]
+
+    inserted = await store.insert_memory_entries(entries)
+
+    assert inserted == 2
+    assert cursor.executemany.call_count == 1
+    batch_params = cursor.executemany.call_args_list[0].args[1]
+    assert len(batch_params) == 2
+
+
+async def test_asyncmy_search_entries_escapes_like_wildcards() -> None:
+    """search_entries escapes %, _, and \\ wildcards and appends ESCAPE clause."""
+    from unittest.mock import AsyncMock
+
+    cursor = MagicMock()
+    cursor.fetchall = AsyncMock(return_value=[])
+    cursor.description = []
+    cursor.execute = AsyncMock()
+    conn = MagicMock()
+    conn.cursor = MagicMock(return_value=cursor)
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncmyADKMemoryStore(config)
+
+    await store.search_entries("100%_val\\id", "app", "user-1")
+
+    assert cursor.execute.call_count == 1
+    executed_sql = cursor.execute.call_args_list[0].args[0]
+    executed_params = cursor.execute.call_args_list[0].args[1]
+    assert "LIKE %s ESCAPE '\\\\'" in executed_sql
+    assert "%100\\%\\_val\\\\id%" in executed_params
+
+
+async def test_asyncmy_memory_table_ddl_uses_longtext() -> None:
+    """_memory_table_ddl uses LONGTEXT for content_text."""
+    config = _mock_config()
+    store = AsyncmyADKMemoryStore(config)
+    ddl = await store._memory_table_ddl()
+    assert "content_text LONGTEXT NOT NULL" in ddl
 
 
 async def test_asyncmy_stream_source_closes_cursor_when_execute_raises() -> None:

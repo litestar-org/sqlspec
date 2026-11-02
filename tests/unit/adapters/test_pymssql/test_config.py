@@ -5,7 +5,7 @@ from typing import get_type_hints
 import pytest
 
 from sqlspec.adapters.pymssql import build_connection_config
-from sqlspec.adapters.pymssql.config import PymssqlConfig, PymssqlConnectionParams
+from sqlspec.adapters.pymssql.config import PymssqlConfig, PymssqlConnectionParams, PymssqlDriverFeatures
 from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 
@@ -158,3 +158,19 @@ def test_pymssql_session_clean_exit_rolls_back_active_transaction() -> None:
 
     assert conn.rollbacks == 1
     assert calls == ["release"]
+
+
+def test_use_datetime2_default() -> None:
+    """PymssqlConfig connection_config supports use_datetime2."""
+    config = PymssqlConfig(connection_config={"server": "localhost", "use_datetime2": True})
+    assert config.connection_config.get("use_datetime2") is True
+
+
+def test_driver_features_mssql_parity() -> None:
+    """PymssqlConfig defaults enable_pooling to True and harmonizes driver features."""
+    assert "use_pool" not in PymssqlDriverFeatures.__annotations__
+    assert "enable_pooling" in PymssqlDriverFeatures.__annotations__
+    config = PymssqlConfig()
+    assert config.driver_features.get("enable_pooling") is True
+    assert config.driver_features.get("events_backend") == "poll_queue"
+    assert config.driver_features.get("enable_uuid_conversion") is False

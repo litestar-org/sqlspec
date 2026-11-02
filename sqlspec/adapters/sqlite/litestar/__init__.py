@@ -1,5 +1,5 @@
 """Litestar integration for SQLite adapter."""
 
-from sqlspec.adapters.sqlite.litestar.store import SqliteLitestarConfig, SQLiteStore
+from sqlspec.adapters.sqlite.litestar.store import SqliteLitestarConfig, SqliteStore
 
-__all__ = ("SQLiteStore", "SqliteLitestarConfig")
+__all__ = ("SqliteLitestarConfig", "SqliteStore")

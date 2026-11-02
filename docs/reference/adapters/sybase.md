@@ -72,12 +72,6 @@ Synchronous SAP Adaptive Server Enterprise (Sybase ASE) 16.0+ adapter built on `
     options:
       heading_level: 4
 
-::: sqlspec.adapters.sybase.adk.SybaseADKConfig
-    options:
-      heading_level: 4
-      separate_signature: false
-      show_signature_annotations: true
-
 ::: sqlspec.adapters.sybase.adk.SybaseADKStore
     options:
       heading_level: 4
@@ -86,6 +80,6 @@ Synchronous SAP Adaptive Server Enterprise (Sybase ASE) 16.0+ adapter built on `
     options:
       heading_level: 4
 
-::: sqlspec.adapters.sybase.events.SybaseSyncEventQueueStore
+::: sqlspec.adapters.sybase.events.SybaseEventQueueStore
     options:
       heading_level: 4

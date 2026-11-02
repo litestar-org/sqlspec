@@ -168,7 +168,7 @@ def extract_oracle_version_value(row: object) -> "str | None":
         Version string when one can be found, otherwise None.
     """
     if isinstance(row, Mapping):
-        for key in ("version", "VERSION", "Version"):
+        for key in ("version_full", "VERSION_FULL", "Version_Full", "version", "VERSION", "Version"):
             value = row.get(key)
             if value:
                 return str(value)

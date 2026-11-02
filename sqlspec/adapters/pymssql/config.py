@@ -89,6 +89,10 @@ class PymssqlDriverFeatures(TypedDict):
     """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
     """Event channel backend (``poll_queue`` is the sole SQL Server backend)."""
+    enable_pooling: NotRequired[bool]
+    """Enable driver-level connection pooling (defaults to ``True``)."""
+    enable_uuid_conversion: NotRequired[bool]
+    """Enable automatic UUID string-to-object conversions."""
 
 
 class PymssqlConnectionContext(SyncPoolConnectionContext):

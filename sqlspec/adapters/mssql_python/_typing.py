@@ -23,8 +23,7 @@ if TYPE_CHECKING:
 
     MssqlPythonConnection: TypeAlias = Connection
     MssqlPythonRawCursor: TypeAlias = Cursor
-
-if not TYPE_CHECKING:
+else:
     MssqlPythonConnection = Connection
     MssqlPythonRawCursor = Cursor
 

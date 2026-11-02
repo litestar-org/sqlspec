@@ -61,8 +61,7 @@ if TYPE_CHECKING:
     AiomysqlPool: TypeAlias = _AiomysqlPool
     AiomysqlPymysqlError: TypeAlias = _PymysqlError
     AiomysqlPymysqlMySQLError: TypeAlias = _PymysqlMySQLError
-
-if not TYPE_CHECKING:
+else:
     AiomysqlConnection = Connection
     AiomysqlModule = _aiomysql
     AiomysqlRawCursor = _AiomysqlCursor

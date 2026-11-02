@@ -46,6 +46,7 @@ from sqlspec.driver import (
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -67,6 +68,7 @@ if TYPE_CHECKING:
     from sqlspec.config import ExtensionConfigs
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.storage import StorageCapabilities
 
 __all__ = (
     "SpannerAsyncConfig",
@@ -249,6 +251,8 @@ class SpannerDriverFeatures(TypedDict):
     """Event queue backend name (``'poll_queue'``)."""
     enable_batch_write_api: "NotRequired[bool]"
     """Route ``load_from_arrow`` through Spanner ``batch_write`` mutation groups instead of single-transaction mutations (defaults to ``False``)."""
+    on_connection_create: "NotRequired[Callable[[Any], Any | None] | None]"
+    """Callback invoked after a new Spanner connection (Snapshot or Transaction) is created."""
 
 
 def build_connection_config(
@@ -287,15 +291,29 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
             try:
                 txn = self._session.transaction()
                 txn.__enter__()
-            except Exception:
-                manager.put_session(self._session)
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    manager.put_session(self._session)
                 self._session = None
                 raise
             self._connection = cast("SpannerSyncConnection", txn)
-            return self._connection
-
-        self._session = cast("Any", database).snapshot(multi_use=True)
-        self._connection = cast("SpannerSyncConnection", self._session.__enter__())
+        else:
+            self._session = cast("Any", database).snapshot(multi_use=True)
+            self._connection = cast("SpannerSyncConnection", self._session.__enter__())
+        try:
+            hook = getattr(self._config, "_user_connection_hook", None) or getattr(
+                self._config, "on_connection_create", None
+            )
+            if hook:
+                modified = hook(self._connection)
+                if modified is not None:
+                    self._connection = cast("SpannerSyncConnection", modified)
+        except BaseException as exc:
+            with contextlib.suppress(BaseException):
+                self.__exit__(type(exc), exc, exc.__traceback__)
+            self._connection = None
+            self._session = None
+            raise
         return self._connection
 
     def __exit__(
@@ -360,8 +378,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         "type[SpannerSyncConnection]", SpannerSyncConnection
     )
     supports_transactional_ddl: ClassVar[bool] = False
-    supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = False
+    supports_native_arrow_import: ClassVar[bool] = False
     supports_native_parquet_export: ClassVar[bool] = False
     supports_native_parquet_import: ClassVar[bool] = False
     type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
@@ -386,11 +404,16 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        on_connection_create: "Callable[[Any], Any | None] | None" = None,
         **kwargs: Any,
     ) -> None:
         self.connection_config, raw_driver_features = _prepare_settings(
             connection_config, driver_features, default_pool_type=FixedSizePool
         )
+        user_connection_hook = on_connection_create or cast(
+            "Callable[[Any], Any | None] | None", raw_driver_features.pop("on_connection_create", None)
+        )
+        self._user_connection_hook = user_connection_hook
         statement_config, processed_features = apply_driver_features(
             statement_config or default_statement_config, raw_driver_features
         )
@@ -409,6 +432,14 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
 
         self._client: Client | None = None
         self._database: Database | None = None
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        return capabilities
 
     def get_database(self) -> "Database":
         """Return the configured database, creating the pool and client on first use.
@@ -678,15 +709,29 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
             try:
                 txn = self._session.transaction()
                 await txn.__aenter__()
-            except Exception:
-                await manager.put_session(self._session)
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    await manager.put_session(self._session)
                 self._session = None
                 raise
             self._connection = cast("SpannerAsyncConnection", txn)
-            return self._connection
-
-        self._session = cast("Any", database).snapshot(multi_use=True)
-        self._connection = cast("SpannerAsyncConnection", await self._session.__aenter__())
+        else:
+            self._session = cast("Any", database).snapshot(multi_use=True)
+            self._connection = cast("SpannerAsyncConnection", await self._session.__aenter__())
+        try:
+            hook = getattr(self._config, "_user_connection_hook", None) or getattr(
+                self._config, "on_connection_create", None
+            )
+            if hook:
+                modified = hook(self._connection)
+                if modified is not None:
+                    self._connection = cast("SpannerAsyncConnection", modified)
+        except BaseException as exc:
+            with contextlib.suppress(BaseException):
+                await self.__aexit__(type(exc), exc, exc.__traceback__)
+            self._connection = None
+            self._session = None
+            raise
         return self._connection
 
     async def __aexit__(
@@ -752,8 +797,8 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         "type[SpannerAsyncConnection]", SpannerAsyncConnection
     )
     supports_transactional_ddl: ClassVar[bool] = False
-    supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = False
+    supports_native_arrow_import: ClassVar[bool] = False
     supports_native_parquet_export: ClassVar[bool] = False
     supports_native_parquet_import: ClassVar[bool] = False
     type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
@@ -778,11 +823,16 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        on_connection_create: "Callable[[Any], Any | None] | None" = None,
         **kwargs: Any,
     ) -> None:
         self.connection_config, raw_driver_features = _prepare_settings(
             connection_config, driver_features, default_pool_type=AsyncFixedSizePool
         )
+        user_connection_hook = on_connection_create or cast(
+            "Callable[[Any], Any | None] | None", raw_driver_features.pop("on_connection_create", None)
+        )
+        self._user_connection_hook = user_connection_hook
         statement_config, processed_features = apply_driver_features(
             statement_config or default_statement_config, raw_driver_features
         )
@@ -801,6 +851,14 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
 
         self._client: AsyncClient | None = None
         self._database: AsyncDatabase | None = None
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        return capabilities
 
     async def get_database(self) -> "AsyncDatabase":
         """Return the configured database, creating the pool and client on first use.

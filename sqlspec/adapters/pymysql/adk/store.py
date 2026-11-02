@@ -431,14 +431,19 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
             """
             params = (*scope_params, f"%{query}%", limit_value)
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, params)
-                rows = cursor.fetchall()
-                columns = [col[0] for col in cursor.description or []]
-            finally:
-                cursor.close()
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, params)
+                    rows = cursor.fetchall()
+                    columns = [col[0] for col in cursor.description or []]
+                finally:
+                    cursor.close()
+        except PyMysqlMySQLError as exc:
+            if _is_mysql_table_missing(exc):
+                return []
+            raise
 
         records: list[StoredMemory] = []
         for row in rows:
@@ -458,14 +463,19 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
             raise RuntimeError(msg)
 
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (session_id,))
-                conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-            finally:
-                cursor.close()
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, (session_id,))
+                    conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                finally:
+                    cursor.close()
+        except PyMysqlMySQLError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
     def _delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         if not self._enabled:
@@ -482,14 +492,19 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
             params.append(scope)
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, tuple(params))
-                conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-            finally:
-                cursor.close()
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, tuple(params))
+                    conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                finally:
+                    cursor.close()
+        except PyMysqlMySQLError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
 
 def _create_tables(store: PyMysqlADKStore) -> None:

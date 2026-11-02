@@ -1035,7 +1035,7 @@ async def test_listener_hub_refuses_transaction_pooler_without_direct_dsn() -> N
         await psycopg_async_hub.subscribe("alerts")
 
     psycopg_sync_cfg = _PsycopgSyncConfig(_PsycopgSyncConnection())
-    psycopg_sync_cfg.driver_features = {"pgbouncer": True, "direct_dsn": None}  # type: ignore[attr-defined]
+    psycopg_sync_cfg.driver_features = {"pooler_mode": "transaction", "direct_dsn": None}  # type: ignore[attr-defined]
     psycopg_sync_hub = PsycopgSyncListenerHub(psycopg_sync_cfg)  # type: ignore[arg-type]
     with pytest.raises(ImproperConfigurationError, match="direct_dsn"):
         psycopg_sync_hub.subscribe("alerts")

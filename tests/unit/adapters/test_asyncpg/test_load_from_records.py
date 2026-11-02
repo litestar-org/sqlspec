@@ -166,3 +166,12 @@ async def test_load_from_records_does_not_use_arrow_normalization(
     await driver.load_from_records("events", [(1,)], columns=["id"])
 
     connection.copy_records_to_table.assert_awaited_once()
+
+
+async def test_load_from_records_empty_records_with_overwrite(connection: AsyncMock) -> None:
+    """Empty records with overwrite=True should truncate the table and return 0-row job."""
+    driver = AsyncpgDriver(connection, driver_features=DRIVER_FEATURES)  # type: ignore[arg-type]
+    job = await driver.load_from_records("events", [], overwrite=True)
+    assert job.telemetry["rows_processed"] == 0
+    connection.execute.assert_awaited_once()
+    assert "TRUNCATE TABLE" in connection.execute.await_args[0][0]

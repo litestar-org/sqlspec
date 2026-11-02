@@ -130,7 +130,7 @@ def test_run_query_job_passes_job_id_prefix_only_without_job_id() -> None:
 def test_query_and_wait_used_when_enabled() -> None:
     connection = _RecordingConnection()
     connection.row_iterator = _RecordingRowIterator(rows=[{"v": 1}], schema=_schema("v"))
-    driver = BigQueryDriver(cast(Any, connection), driver_features={"use_query_and_wait": True})
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"enable_query_and_wait": True})
 
     result = driver.execute("SELECT 1 AS v")
 
@@ -144,7 +144,7 @@ def test_query_and_wait_used_when_enabled() -> None:
 def test_query_and_wait_dml_rowcount() -> None:
     connection = _RecordingConnection()
     connection.row_iterator = _RecordingRowIterator(num_dml_affected_rows=3)
-    driver = BigQueryDriver(cast(Any, connection), driver_features={"use_query_and_wait": True})
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"enable_query_and_wait": True})
 
     result = driver.execute("UPDATE t SET v = 1")
 
@@ -156,7 +156,7 @@ def test_query_and_wait_explicit_off() -> None:
     connection = _RecordingConnection()
     connection.query_job = _RecordingJob(rows=[{"v": 1}], schema=_schema("v"))
     connection.row_iterator = _RecordingRowIterator(rows=[{"v": 1}], schema=_schema("v"))
-    driver = BigQueryDriver(cast(Any, connection), driver_features={"use_query_and_wait": False})
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"enable_query_and_wait": False})
 
     result = driver.execute("SELECT 1 AS v")
 
@@ -345,7 +345,11 @@ def test_select_to_storage_uses_existing_export_surface_and_job_controls(tmp_pat
     connection.query_job = _RecordingJob(rows=[{"id": 1}], schema=_schema("id"))
     driver = BigQueryDriver(
         cast(Any, connection),
-        driver_features={"job_result_timeout": 5.0, "storage_capabilities": CAPABILITIES, "use_query_and_wait": False},
+        driver_features={
+            "job_result_timeout": 5.0,
+            "storage_capabilities": CAPABILITIES,
+            "enable_query_and_wait": False,
+        },
     )
 
     job = driver.select_to_storage("SELECT 1 AS id", tmp_path / "result.parquet", format_hint="parquet")

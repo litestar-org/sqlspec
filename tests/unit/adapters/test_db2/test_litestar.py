@@ -15,6 +15,7 @@ import sqlspec.dialects.db2  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.core import TABLE_EXISTS_SQL, to_db_timestamp, utc_now
 from sqlspec.adapters.db2.litestar import Db2AsyncStore, Db2SyncStore
+from sqlspec.adapters.db2.litestar.store import session_index_ddl
 from tests.unit.adapters.test_db2._fakes import DriverMode, FakeDb2Cursor, db2_description
 
 pytestmark = pytest.mark.anyio
@@ -268,3 +269,16 @@ def test_store_resolves_by_config_name(config_class: Any, store_class: Any) -> N
     context = SimpleNamespace(config=config_class(connection_config={"database": "d"}))
 
     assert migration._get_store_class(context) is store_class
+
+
+def test_session_index_ddl_qualifies_schema() -> None:
+    """Session index DDL qualifies index name when table is schema-qualified."""
+    assert (
+        session_index_ddl('"MYSCHEMA"."SESSIONS"')
+        == 'CREATE INDEX "MYSCHEMA"."IX_SESSIONS_EXP" ON "MYSCHEMA"."SESSIONS"(expires_at)'
+    )
+    assert (
+        session_index_ddl("MYSCHEMA.SESSIONS")
+        == 'CREATE INDEX "MYSCHEMA"."IX_SESSIONS_EXP" ON MYSCHEMA.SESSIONS(expires_at)'
+    )
+    assert session_index_ddl("sessions") == "CREATE INDEX IX_SESSIONS_EXP ON sessions(expires_at)"

@@ -3,13 +3,14 @@
 import contextlib
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.oracledb._typing import DEQ_IMMEDIATE, DEQ_ON_COMMIT
 from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventMessage, parse_event_timestamp
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -212,22 +213,22 @@ def create_event_backend(
     match (backend_name, is_async):
         case ("aq", False):
             try:
-                return OracleSyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+                return OracleSyncAQEventBackend(cast("OracleSyncConfig", config), extension_settings)
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
         case ("aq", True):
             try:
-                return OracleAsyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+                return OracleAsyncAQEventBackend(cast("OracleAsyncConfig", config), extension_settings)
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
         case ("txeventq", False):
             try:
-                return OracleSyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+                return OracleSyncTxEventQEventBackend(cast("OracleSyncConfig", config), extension_settings)
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
         case ("txeventq", True):
             try:
-                return OracleAsyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+                return OracleAsyncTxEventQEventBackend(cast("OracleAsyncConfig", config), extension_settings)
             except (ImproperConfigurationError, MissingDependencyError):
                 return None
         case _:
@@ -272,6 +273,11 @@ def _build_envelope(
 
 def _parse_message(channel: str, payload: Any) -> EventMessage:
     """Parse Oracle AQ message payload into EventMessage."""
+    if isinstance(payload, (str, bytes)):
+        with contextlib.suppress(Exception):
+            parsed = from_json(payload)
+            if isinstance(parsed, dict):
+                payload = parsed
     if not isinstance(payload, dict):
         payload = {"payload": payload}
     payload_channel = payload.get("channel")

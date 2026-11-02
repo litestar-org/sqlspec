@@ -313,3 +313,29 @@ async def test_create_connection_applies_the_configured_row_factory(tmp_path: Pa
             await connection.close()
     finally:
         await config.close_pool()
+
+
+def test_filter_connection_params_with_hoisted_helper() -> None:
+    from sqlspec.adapters.aiosqlite.core import _filter_connection_params
+
+    raw = {"database": ":memory:", "extra": {}, "pool_size": 10, "timeout": 30.0, "isolation_level": None}
+    filtered = _filter_connection_params(raw)
+    assert filtered == {"database": ":memory:", "timeout": 30.0, "isolation_level": None}
+
+
+async def test_create_pool_preserves_zero_timeouts(tmp_path: Path) -> None:
+    config = AiosqliteConfig(
+        connection_config={
+            "database": tmp_path / "zero.db",
+            "connect_timeout": 0.0,
+            "idle_timeout": 0.0,
+            "operation_timeout": 0.0,
+        }
+    )
+    pool = await config._create_pool()
+    try:
+        assert pool._connect_timeout == 0.0
+        assert pool._idle_timeout == 0.0
+        assert pool._operation_timeout == 0.0
+    finally:
+        await pool.close()

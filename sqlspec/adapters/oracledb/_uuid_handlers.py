@@ -5,10 +5,10 @@ via connection type handlers. Uses stdlib uuid (no external dependencies).
 """
 
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_RAW
+from sqlspec.adapters.oracledb.core import chain_input_handler, chain_output_handler
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid_from_bytes
 
@@ -31,6 +31,7 @@ logger = get_logger(__name__)
 
 
 UUID_BINARY_SIZE = 16
+_MIN_FETCH_INFO_LEN: Final = 4
 
 
 def uuid_converter_in(value: uuid.UUID) -> bytes:
@@ -131,7 +132,11 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     Returns:
         Cursor variable with UUID converter if column is RAW(16), None otherwise.
     """
-    _name, type_code, _display_size, internal_size, _precision, _scale, _null_ok = metadata
+    type_code = getattr(metadata, "type_code", None)
+    internal_size = getattr(metadata, "internal_size", None)
+    if type_code is None and isinstance(metadata, (list, tuple)) and len(metadata) >= _MIN_FETCH_INFO_LEN:
+        type_code = metadata[1]
+        internal_size = metadata[3]
 
     if type_code is DB_TYPE_RAW and internal_size == UUID_BINARY_SIZE:
         return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=uuid_converter_out)

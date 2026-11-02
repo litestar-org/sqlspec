@@ -8,11 +8,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from sqlspec.adapters.oracledb import build_dbms_cloud_copy_data_sql as exported_build_dbms_cloud_copy_data_sql
+from sqlspec.adapters.oracledb._typing import OracleSyncConnection
 from sqlspec.adapters.oracledb.core import (
     ORACLE_ACTION_MAX_BYTES,
     ORACLE_CLIENT_IDENTIFIER_MAX_BYTES,
     ORACLE_ECID_MAX_BYTES,
     ORACLE_MODULE_MAX_BYTES,
+    OracleSyncStreamSource,
     apply_driver_features,
     apply_oracle_session_trace_attributes,
     build_dbms_cloud_copy_data_sql,
@@ -537,3 +539,133 @@ async def test_oracle_load_from_storage_falls_back_to_arrow_when_local_or_no_cre
     assert len(async_executed) == 1
     assert "DBMS_CLOUD.COPY_DATA" not in async_executed[0][0]
     assert "INSERT INTO" in async_executed[0][0]
+
+
+def test_oracle_sync_stream_source_runs_with_exception_handler() -> None:
+    """Sync stream source start and fetch_chunk route execution through _run_with_exception_handler."""
+    cursor = MagicMock()
+    cursor.description = [("id", int, None, None, None, None, None)]
+    cursor.fetchmany.return_value = [(1,)]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", conn))
+
+    source = OracleSyncStreamSource(driver, "SELECT 1 FROM dual", None, 100)
+    source.start()
+    rows = source.fetch_chunk()
+    assert len(rows) == 1
+    assert rows[0] == {"id": 1}
+
+
+def test_oracle_statement_cache_hit_executes_with_fetch_kwargs_and_coercion() -> None:
+    """Fast-path statement cache hit passes fetch kwargs and coerces parameters."""
+    cursor = MagicMock()
+    cursor.description = [("content", "CLOB", None, None, None, None, None)]
+    cursor.fetchall.return_value = [("clob text",)]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", conn))
+
+    res1 = driver.execute("SELECT content FROM articles WHERE id = :id", {"id": "1"})
+    assert res1.get_data() == [{"content": "clob text"}]
+
+    res2 = driver.execute("SELECT content FROM articles WHERE id = :id", {"id": "1"})
+    assert res2.get_data() == [{"content": "clob text"}]
+
+
+def test_oracle_dispatch_execute_script_ignores_colons_in_literals_and_slices_positional() -> None:
+    """dispatch_execute_script ignores colons in literals and slices positional parameters."""
+    from sqlspec import SQL
+
+    executed_statements: list[tuple[str, Any]] = []
+
+    class _MockCursor:
+        def execute(self, stmt: str, params: Any = None) -> None:
+            executed_statements.append((stmt, params))
+
+    conn = MagicMock()
+    cursor = _MockCursor()
+    conn.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", conn), default_statement_config)
+
+    script_sql = "INSERT INTO t (url) VALUES ('http://example.com:8080'); INSERT INTO t (id, name) VALUES (:1, :2)"
+    stmt = SQL(script_sql, [101, "Alice"], statement_config=default_statement_config)
+    res = driver.dispatch_execute_script(cursor, stmt)
+    assert res.statement_count == 2
+    assert len(executed_statements) == 2
+    assert executed_statements[0][1] == []
+    assert executed_statements[1][1] == [101, "Alice"]
+
+
+def test_parse_message_string_or_bytes_payload() -> None:
+    """_parse_message parses JSON string or bytes into a structured EventMessage."""
+    import json
+
+    from sqlspec.adapters.oracledb.events.backend import _parse_message
+
+    raw_dict = {
+        "event_id": "ev-123",
+        "channel": "orders",
+        "payload": {"order_id": 42},
+        "metadata": {"source": "unit"},
+        "published_at": "2026-05-10T12:00:00Z",
+    }
+    json_str = json.dumps(raw_dict)
+    msg_from_str = _parse_message("orders", json_str)
+    assert msg_from_str.event_id == "ev-123"
+    assert msg_from_str.channel == "orders"
+    assert msg_from_str.payload == {"order_id": 42}
+    assert msg_from_str.metadata == {"source": "unit"}
+
+    json_bytes = json_str.encode("utf-8")
+    msg_from_bytes = _parse_message("orders", json_bytes)
+    assert msg_from_bytes.event_id == "ev-123"
+    assert msg_from_bytes.payload == {"order_id": 42}
+
+
+def test_oracle_aq_commit_at_dequeue_and_noop_ack_nack() -> None:
+    """Oracle AQ hub commits at dequeue for at-most-once delivery; ack and nack are no-ops."""
+    import json
+
+    from sqlspec.adapters.oracledb.events._hub import OracleSyncAQHub
+    from sqlspec.adapters.oracledb.events.backend import OracleSyncAQEventBackend
+
+    class _MockOracleSyncConfig:
+        __module__ = "sqlspec.adapters.oracledb.config"
+        is_async = False
+        driver_features: dict[str, object] = {}
+
+        def get_observability_runtime(self) -> object:
+            return MagicMock()
+
+    driver = MagicMock()
+    session_cm = MagicMock()
+    session_cm.__enter__.return_value = driver
+
+    config = _MockOracleSyncConfig()
+    config.provide_session = lambda: session_cm  # type: ignore[attr-defined]
+
+    msg = MagicMock()
+    msg.payload = json.dumps({"event_id": "ev-pinned", "payload": {"foo": "bar"}})
+    queue = MagicMock()
+    queue.deqone.return_value = msg
+
+    hub = OracleSyncAQHub(
+        cast("Any", config),
+        queue_name_template="TEST_QUEUE",
+        visibility=None,
+        default_visibility=None,
+        wait_ceiling=5,
+        backend_name="aq",
+    )
+    hub._session_driver = driver
+    hub._queues["test_chan"] = queue
+
+    payload = hub.dequeue("test_chan", poll_interval=0.1)
+    assert payload is not None
+    driver.commit.assert_called_once()
+
+    backend = OracleSyncAQEventBackend(cast("Any", config))
+    backend._hub = hub
+    backend.ack("ev-pinned")
+    backend.nack("ev-pinned")

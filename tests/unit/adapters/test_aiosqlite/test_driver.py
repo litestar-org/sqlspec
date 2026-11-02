@@ -428,3 +428,59 @@ async def test_aiosqlite_pool_tracks_in_flight_creations_and_connection_registry
     finally:
         await pool.close()
         assert pool.size() == 0
+
+
+async def test_aiosqlite_cache_hit_preserves_ambient_exception_and_formats_wire_sql() -> None:
+    import sys
+
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(connection=connection)
+        await driver.execute("SELECT 1 AS value")
+
+        ambient_preserved = False
+        try:
+            raise RuntimeError("ambient error")
+        except RuntimeError as exc:
+            result = await driver.execute("SELECT 1 AS value")
+            ambient_preserved = sys.exc_info()[1] is exc
+            assert result.data == [(1,)]
+        assert ambient_preserved
+    finally:
+        await connection.close()
+
+
+async def test_aiosqlite_cursor_lazy_allocation() -> None:
+    conn = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(connection=conn)
+        result = await driver.execute("SELECT 1 AS probe")
+        assert result.data == [(1,)]
+    finally:
+        await conn.close()
+
+
+async def test_aiosqlite_data_dictionary_version_cached_across_drivers() -> None:
+    conn1 = await aiosqlite.connect(":memory:")
+    conn2 = await aiosqlite.connect(":memory:")
+    try:
+        driver1 = AiosqliteDriver(connection=conn1)
+        driver2 = AiosqliteDriver(connection=conn2)
+        v1 = await driver1.data_dictionary.get_version(driver1)
+        v2 = await driver2.data_dictionary.get_version(driver2)
+        assert v1 is not None
+        assert v1 is v2
+    finally:
+        await conn1.close()
+        await conn2.close()
+
+
+async def test_aiosqlite_dispatch_execute_script_emits_events() -> None:
+    conn = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(connection=conn)
+        result = await driver.execute_script("CREATE TABLE scr_t (x INT); INSERT INTO scr_t VALUES (1);")
+        assert result.total_statements == 2
+        assert result.successful_statements == 2
+    finally:
+        await conn.close()

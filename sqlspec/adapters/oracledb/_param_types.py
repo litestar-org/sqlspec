@@ -45,3 +45,21 @@ class OracleJson:
 
     def __init__(self, value: Any) -> None:
         self.value = value
+
+
+def is_json_payload(value: Any) -> bool:
+    """Return True if the value should be claimed by the JSON input handler.
+
+    OracleJson, dict, empty list/tuple, and list/tuple containing any non-numeric
+    element are claimed. Non-empty sequences where all elements are int/float
+    (excluding bool) are reserved for the vector handler unless wrapped in OracleJson.
+    """
+    if isinstance(value, OracleJson):
+        return True
+    if isinstance(value, dict):
+        return True
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return True
+        return not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
+    return False

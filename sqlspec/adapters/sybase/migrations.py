@@ -71,14 +71,16 @@ class SybaseMigrationTrackerMixin:
 
     def _existing_columns_query(self) -> str:
         """Return Sybase ASE catalog query text for migration tracking table columns."""
+        has_schema = "." in self.version_table
         schema_name, table_name = split_schema_and_table(self.version_table)
+        schema_condition = f"u.name = '{escape_sql_literal(schema_name)}'" if has_schema else "u.name = USER_NAME()"
         return f"""
             SELECT c.name AS column_name
             FROM dbo.syscolumns c
             INNER JOIN dbo.sysobjects o ON o.id = c.id AND o.type = 'U'
             INNER JOIN dbo.sysusers u ON u.uid = o.uid
             WHERE o.name = '{escape_sql_literal(table_name)}'
-              AND u.name = '{escape_sql_literal(schema_name)}'
+              AND {schema_condition}
         """
 
     def _add_column_statement_text(self, column_name: str) -> str | None:

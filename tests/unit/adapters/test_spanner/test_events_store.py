@@ -3,14 +3,17 @@
 
 import inspect
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.spanner.events import SpannerAsyncEventQueueStore, SpannerSyncEventQueueStore
 from sqlspec.exceptions import ImproperConfigurationError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _mock_spanner_config(events_settings: dict[str, Any] | None = None, *, dialect: str = "spanner") -> MagicMock:
@@ -318,3 +321,45 @@ async def test_ddl_operations_reject_other_config_types(
             result = getattr(store, operation)()
             if inspect.isawaitable(result):
                 await result
+
+
+def test_events_store_spangres_dialect() -> None:
+    """_is_spangres recognizes postgres and postgresql dialect names."""
+    for dialect_name in ("spangres", "postgres", "postgresql", "spanner_postgresql"):
+        config = MagicMock()
+        config.statement_config = MagicMock(dialect=dialect_name)
+        config.connection_config = {}
+        config.extension_config = {"events": {}}
+        store = SpannerSyncEventQueueStore(config)
+        assert store._is_spangres() is True
+
+
+def test_events_store_drop_table_if_exists() -> None:
+    """drop_statements generates IF EXISTS clauses for index and table."""
+    config = _mock_spanner_config()
+    store = SpannerSyncEventQueueStore(config)
+    statements = store.drop_statements()
+    assert "DROP INDEX IF EXISTS" in statements[0]
+    assert "DROP TABLE IF EXISTS" in statements[1]
+
+
+def test_events_store_ddl_error_mapping() -> None:
+    """create_table maps GoogleAPICallError to SQLSpecError and passes configured ddl_timeout."""
+    from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError
+    from sqlspec.exceptions import SQLSpecError
+
+    mock_db = MagicMock()
+    mock_db.update_ddl.side_effect = cast("Callable[[str], SpannerGoogleAPICallError]", SpannerGoogleAPICallError)(
+        "DDL failed"
+    )
+
+    config = MagicMock(spec=SpannerSyncConfig)
+    config.extension_config = {"events": {"queue_table": "test_queue", "ddl_timeout": 300.0}}
+    config.get_database.return_value = mock_db
+
+    store = SpannerSyncEventQueueStore(config)
+    with patch("sqlspec.adapters.spanner.events.store.list_existing_table_names_sync", return_value=set()):
+        with pytest.raises(SQLSpecError):
+            store.create_table()
+
+    mock_db.update_ddl.assert_called_once()

@@ -287,19 +287,14 @@ async def test_psqlpy_session_context_rolls_back_open_transaction_on_exit() -> N
 @pytest.mark.anyio
 async def test_psqlpy_pooler_mode_transaction_disables_prepared_statements() -> None:
     """Transaction pooler mode should construct a valid ConnectionPool and pass prepared=False on execution."""
+    assert "pgbouncer" not in PsqlpyDriverFeatures.__annotations__
+    assert "pgbouncer_mode" not in PsqlpyDriverFeatures.__annotations__
     config = PsqlpyConfig(
         connection_config={"dsn": "postgresql://localhost:6432/test"}, driver_features={"pooler_mode": "transaction"}
     )
     assert config.driver_features["pooler_mode"] == "transaction"
     pool = await config.create_pool()
     pool.close()
-
-    alias_config = PsqlpyConfig(
-        connection_config={"dsn": "postgresql://localhost:6432/test"}, driver_features={"pgbouncer": True}
-    )
-    assert alias_config.driver_features["pooler_mode"] == "transaction"
-    alias_pool = await alias_config.create_pool()
-    alias_pool.close()
 
     conn = AsyncMock()
     conn.fetch.return_value = _ExtensionQueryResult(set())
@@ -335,12 +330,12 @@ async def test_psqlpy_derive_direct_config_and_columnar_engine() -> None:
     )
     assert auto_direct_config.connection_config["options"] == "-c google_columnar_engine.enable_columnar_scan=on"
 
-    auto_pgbouncer_config = PsqlpyConfig(
+    tx_columnar_config = PsqlpyConfig(
         connection_config={"dsn": "postgresql://pooler:6432/test"},
-        driver_features={"pooler_mode": "auto", "pgbouncer": True, "enable_alloydb_columnar": True},
+        driver_features={"pooler_mode": "transaction", "enable_alloydb_columnar": True},
     )
-    assert auto_pgbouncer_config.driver_features["pooler_mode"] == "transaction"
-    assert "options" not in auto_pgbouncer_config.connection_config
+    assert tx_columnar_config.driver_features["pooler_mode"] == "transaction"
+    assert "options" not in tx_columnar_config.connection_config
 
     with pytest.raises(ImproperConfigurationError, match="Invalid pooler_mode"):
         PsqlpyConfig(
@@ -375,3 +370,42 @@ async def test_psqlpy_derive_direct_config_and_columnar_engine() -> None:
     await driver.begin()
     conn.execute.assert_any_await("BEGIN")
     conn.execute.assert_any_await("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
+
+
+@pytest.mark.anyio
+async def test_psqlpy_auth_token_provider_evaluated_on_create_pool_not_init() -> None:
+    """Synchronous and async auth_token_provider is evaluated when creating a pool, not during __init__."""
+    call_count = 0
+
+    def token_provider() -> str:
+        nonlocal call_count
+        call_count += 1
+        return "dynamic_token"
+
+    config = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://localhost:5432/test", "auth_token_provider": token_provider}
+    )
+    assert call_count == 0
+
+    pool = await config.create_pool()
+    assert call_count == 1
+    pool.close()
+
+
+@pytest.mark.anyio
+async def test_psqlpy_sync_on_connection_create_callback() -> None:
+    """Synchronous callback for on_connection_create should execute without awaiting."""
+    hook_called = False
+
+    def sync_hook(conn: Any) -> None:
+        nonlocal hook_called
+        hook_called = True
+
+    config = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://localhost:5432/test"},
+        driver_features={"on_connection_create": sync_hook},
+    )
+    mock_conn = AsyncMock()
+    mock_conn.fetch = AsyncMock(return_value=None)
+    await config._ensure_connection(mock_conn)  # pyright: ignore[reportPrivateUsage]
+    assert hook_called is True

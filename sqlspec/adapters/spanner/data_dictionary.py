@@ -1,11 +1,11 @@
 """Spanner metadata queries using INFORMATION_SCHEMA."""
 
 import re
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core import SQL
+from sqlspec.core import SQL, TypedParameter
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -72,6 +72,15 @@ _SPANNER_SYSTEM_WARNINGS = (
 )
 
 
+_SPANNER_UNSUPPORTED_DOMAINS: Final[frozenset[str]] = frozenset({"schemas", "dependencies"})
+
+
+def _typed_str(val: "str | None") -> "str | TypedParameter":
+    if val is None:
+        return TypedParameter(None, str)
+    return val
+
+
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SpannerSyncDataDictionary(SyncDataDictionaryBase):
     """Fetch table, column, and index metadata from Spanner."""
@@ -130,7 +139,9 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         return driver.select(
-            self.get_query("tables", "by_schema", mode=self.mode), schema_name=schema_name, schema_type=TableMetadata
+            self.get_query("tables", "by_schema", mode=self.mode),
+            schema_name=_typed_str(schema_name),
+            schema_type=TableMetadata,
         )
 
     def get_columns(
@@ -142,15 +153,15 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return driver.select(
                 self.get_query("columns", "by_schema", mode=self.mode),
-                schema_name=schema_name,
+                schema_name=_typed_str(schema_name),
                 schema_type=ColumnMetadata,
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return driver.select(
             self.get_query("columns", "by_table", mode=self.mode),
-            table_name=table,
-            schema_name=schema_name,
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
             schema_type=ColumnMetadata,
         )
 
@@ -163,15 +174,15 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return driver.select(
                 self.get_query("indexes", "by_schema", mode=self.mode),
-                schema_name=schema_name,
+                schema_name=_typed_str(schema_name),
                 schema_type=IndexMetadata,
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return driver.select(
             self.get_query("indexes", "by_table", mode=self.mode),
-            table_name=table,
-            schema_name=schema_name,
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
             schema_type=IndexMetadata,
         )
 
@@ -184,14 +195,14 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return driver.select(
                 self.get_query("foreign_keys", "by_schema", mode=self.mode),
-                schema_name=schema_name,
+                schema_name=_typed_str(schema_name),
                 schema_type=ForeignKeyMetadata,
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return driver.select(
             self.get_query("foreign_keys", "by_table", mode=self.mode),
-            table_name=table,
-            schema_name=schema_name,
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
             schema_type=ForeignKeyMetadata,
         )
 
@@ -203,12 +214,16 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="constraints")
             rows = driver.select(
-                self.get_query("constraints", "by_schema", mode=self.mode), schema_name=schema_name, table_name=None
+                self.get_query("constraints", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                table_name=_typed_str(None),
             )
         else:
             self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="constraints")
             rows = driver.select(
-                self.get_query("constraints", "by_table", mode=self.mode), table_name=table, schema_name=schema_name
+                self.get_query("constraints", "by_table", mode=self.mode),
+                table_name=_typed_str(table),
+                schema_name=_typed_str(schema_name),
             )
         return self._build_domain_result("constraints", rows)
 
@@ -382,7 +397,9 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         return await driver.select(
-            self.get_query("tables", "by_schema", mode=self.mode), schema_name=schema_name, schema_type=TableMetadata
+            self.get_query("tables", "by_schema", mode=self.mode),
+            schema_name=_typed_str(schema_name),
+            schema_type=TableMetadata,
         )
 
     async def get_columns(
@@ -394,15 +411,15 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
             return await driver.select(
                 self.get_query("columns", "by_schema", mode=self.mode),
-                schema_name=schema_name,
+                schema_name=_typed_str(schema_name),
                 schema_type=ColumnMetadata,
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
         return await driver.select(
             self.get_query("columns", "by_table", mode=self.mode),
-            table_name=table,
-            schema_name=schema_name,
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
             schema_type=ColumnMetadata,
         )
 
@@ -415,15 +432,15 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return await driver.select(
                 self.get_query("indexes", "by_schema", mode=self.mode),
-                schema_name=schema_name,
+                schema_name=_typed_str(schema_name),
                 schema_type=IndexMetadata,
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
         return await driver.select(
             self.get_query("indexes", "by_table", mode=self.mode),
-            table_name=table,
-            schema_name=schema_name,
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
             schema_type=IndexMetadata,
         )
 
@@ -436,14 +453,14 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
             return await driver.select(
                 self.get_query("foreign_keys", "by_schema", mode=self.mode),
-                schema_name=schema_name,
+                schema_name=_typed_str(schema_name),
                 schema_type=ForeignKeyMetadata,
             )
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
         return await driver.select(
             self.get_query("foreign_keys", "by_table", mode=self.mode),
-            table_name=table,
-            schema_name=schema_name,
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
             schema_type=ForeignKeyMetadata,
         )
 
@@ -455,12 +472,16 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="constraints")
             rows = await driver.select(
-                self.get_query("constraints", "by_schema", mode=self.mode), schema_name=schema_name, table_name=None
+                self.get_query("constraints", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                table_name=_typed_str(None),
             )
         else:
             self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="constraints")
             rows = await driver.select(
-                self.get_query("constraints", "by_table", mode=self.mode), table_name=table, schema_name=schema_name
+                self.get_query("constraints", "by_table", mode=self.mode),
+                table_name=_typed_str(table),
+                schema_name=_typed_str(schema_name),
             )
         return self._build_domain_result("constraints", rows)
 
@@ -586,6 +607,8 @@ def _spanner_capability_for_domain(domain: str, *, mode: str) -> MetadataCapabil
             risks=(MetadataRisk.VERSION_GATED,),
             warnings=(_SPANNER_POSTGRESQL_WARNING,),
         )
+    if domain in _SPANNER_UNSUPPORTED_DOMAINS:
+        return MetadataCapability.unsupported(domain)
     if domain == "ddl":
         return MetadataCapability(
             domain=domain,

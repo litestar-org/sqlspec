@@ -163,8 +163,8 @@ def test_flask_correlation_disabled_no_correlation_when_disabled() -> None:
         assert seen_correlation_id[0] is False
 
 
-def test_flask_correlation_disabled_default_is_disabled() -> None:
-    """Correlation middleware should be disabled by default."""
+def test_flask_correlation_is_enabled_by_default() -> None:
+    """Correlation middleware is enabled by default, matching the other framework extensions."""
     sqlspec = SQLSpec()
     config = SqliteConfig(connection_config={"database": ":memory:"})
     sqlspec.add_config(config)
@@ -180,7 +180,7 @@ def test_flask_correlation_disabled_default_is_disabled() -> None:
     with app.test_client() as client:
         response = client.get("/test", headers={"x-request-id": "default-test-123"})
         assert response.status_code == 200
-        assert seen_correlation_id[0] is False
+        assert seen_correlation_id[0] is True
 
 
 def test_flask_correlation_trace_headers_extracts_traceparent() -> None:

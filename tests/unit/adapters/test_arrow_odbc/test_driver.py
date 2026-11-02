@@ -1277,3 +1277,35 @@ def test_load_from_arrow_streams_record_batch_reader_and_bulk_insert_unwraps_arr
     arrow_result = ArrowResult(statement=SQL("SELECT 1"), data=table, rows_affected=2)
     driver.bulk_insert_arrow("items", arrow_result)
     assert connection.insert_calls == [("items", 65536, table)]
+
+
+def test_ambient_exception_isolation_select_to_arrow() -> None:
+    """select_to_arrow executes cleanly inside an active exception block without ambient exception leakage."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    try:
+        raise ValueError("ambient error")
+    except ValueError:
+        result = driver.select_to_arrow("SELECT 1")
+        assert result.num_rows == 3
+
+
+def test_transaction_lifecycle_maps_generic_exception() -> None:
+    """begin, commit, and rollback map native exceptions with appropriate transaction failure messages."""
+    connection = FakeConnection()
+    native_error = ArrowOdbcError.__new__(ArrowOdbcError)
+    native_error.args = ("native disk error",)
+
+    def raise_native() -> None:
+        raise native_error
+
+    setattr(connection, "commit", raise_native)
+    setattr(connection, "rollback", raise_native)
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    with pytest.raises(SQLSpecError, match="Failed to commit transaction"):
+        driver.commit()
+
+    with pytest.raises(SQLSpecError, match="Failed to rollback transaction"):
+        driver.rollback()

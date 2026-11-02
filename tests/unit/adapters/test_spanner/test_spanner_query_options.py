@@ -1,10 +1,120 @@
 """Unit tests for Spanner QueryOptions forwarding."""
 
-from unittest.mock import MagicMock
+from collections.abc import AsyncIterator, Iterator
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from google.api_core import exceptions as api_exceptions
+from google.cloud.spanner_v1.types.type import TypeCode
 
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.adapters.spanner.core import default_statement_config
-from sqlspec.adapters.spanner.driver import SpannerSyncDriver
+from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
+from sqlspec.exceptions import OperationalError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from sqlspec.adapters.spanner._typing import SpannerAsyncConnection, SpannerSyncConnection
+
+
+class _StreamResult:
+    def __init__(self, error: BaseException | None) -> None:
+        self.error = error
+        self.closed = False
+        self.metadata = SimpleNamespace(
+            row_type=SimpleNamespace(fields=[SimpleNamespace(name="id", type_=SimpleNamespace(code=TypeCode.INT64))])
+        )
+
+    def __iter__(self) -> Iterator[list[int]]:
+        try:
+            yield [1]
+            if self.error is not None:
+                raise self.error
+            yield [2]
+        finally:
+            self.closed = True
+
+    async def __aiter__(self) -> AsyncIterator[list[int]]:
+        try:
+            yield [1]
+            if self.error is not None:
+                raise self.error
+            yield [2]
+        finally:
+            self.closed = True
+
+
+async def _consume_stream(driver: Any, is_async: bool, *, fails_fetch: bool = False) -> list[dict[str, Any]]:
+    stream = driver.select_stream("SELECT id FROM users", chunk_size=1)
+    if is_async:
+        async with stream:
+            if fails_fetch:
+                assert await anext(stream) == {"id": 1}
+            return [row async for row in stream]
+    with stream:
+        if fails_fetch:
+            assert next(stream) == {"id": 1}
+        return list(stream)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("phase", ["start", "fetch"])
+@pytest.mark.parametrize("ambient", [False, True], ids=["normal", "application-except"])
+async def test_stream_maps_sdk_errors_with_ambient_application_exception(
+    is_async: bool, phase: str, ambient: bool
+) -> None:
+    error = cast("Callable[[str], api_exceptions.ServiceUnavailable]", api_exceptions.ServiceUnavailable)(
+        "Spanner unavailable"
+    )
+    result = _StreamResult(error)
+    execute = AsyncMock() if is_async else MagicMock()
+    execute.side_effect = error if phase == "start" else None
+    execute.return_value = result
+    connection = SimpleNamespace(execute_sql=execute)
+    driver = (
+        SpannerAsyncDriver(connection=cast("SpannerAsyncConnection", connection))
+        if is_async
+        else SpannerSyncDriver(connection=cast("SpannerSyncConnection", connection))
+    )
+
+    with pytest.raises(OperationalError, match="Spanner unavailable") as caught:
+        try:
+            if ambient:
+                raise LookupError("application error")
+        except LookupError:
+            await _consume_stream(driver, is_async, fails_fetch=phase == "fetch")
+        else:
+            await _consume_stream(driver, is_async, fails_fetch=phase == "fetch")
+
+    assert caught.value.__cause__ is error
+    execute.assert_called_once()
+    if phase == "fetch":
+        assert result.closed is True
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_stream_succeeds_with_ambient_application_exception(is_async: bool) -> None:
+    result = _StreamResult(None)
+    execute = AsyncMock(return_value=result) if is_async else MagicMock(return_value=result)
+    connection = SimpleNamespace(execute_sql=execute)
+    driver = (
+        SpannerAsyncDriver(connection=cast("SpannerAsyncConnection", connection))
+        if is_async
+        else SpannerSyncDriver(connection=cast("SpannerSyncConnection", connection))
+    )
+    error = LookupError("application error")
+
+    try:
+        raise error
+    except LookupError as caught:
+        rows = await _consume_stream(driver, is_async)
+        assert caught is error
+
+    assert rows == [{"id": 1}, {"id": 2}]
+    assert result.closed is True
 
 
 def test_driver_execute_with_statement_query_options() -> None:

@@ -5,10 +5,12 @@ import struct
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionExecuteError, PsqlpyDatabaseError
+from sqlspec.adapters.psqlpy.core import build_postgres_storage_params_sql
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
@@ -23,7 +25,6 @@ __all__ = ("PsqlpyADKConfig", "PsqlpyADKMemoryStore", "PsqlpyADKStore", "decode_
 
 logger = get_logger("sqlspec.adapters.psqlpy.adk.store")
 
-POSTGRES_TABLE_NOT_FOUND_SQLSTATE: Final = "42P01"
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 
@@ -553,7 +554,9 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        table_options = _postgres_table_options(_adk_config(self._config))
+        table_options = build_postgres_storage_params_sql(
+            _adk_config(self._config), default_fillfactor=80, section="adk"
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -577,7 +580,9 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     async def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
-        table_options = _postgres_table_options(adk_config, include_autovacuum=True)
+        table_options = build_postgres_storage_params_sql(
+            adk_config, include_autovacuum=True, default_fillfactor=80, section="adk"
+        )
         generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
             adk_config, self._events_table
         )
@@ -603,7 +608,9 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
     async def _app_states_table_ddl(self) -> str:
-        table_options = _postgres_table_options(_adk_config(self._config))
+        table_options = build_postgres_storage_params_sql(
+            _adk_config(self._config), default_fillfactor=80, section="adk"
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
             app_name VARCHAR(128) PRIMARY KEY,
@@ -613,7 +620,9 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
     async def _user_states_table_ddl(self) -> str:
-        table_options = _postgres_table_options(_adk_config(self._config))
+        table_options = build_postgres_storage_params_sql(
+            _adk_config(self._config), default_fillfactor=80, section="adk"
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
             app_name VARCHAR(128) NOT NULL,
@@ -685,73 +694,96 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         if not entries:
             return 0
 
-        inserted_count = 0
+        ids = [entry["id"] for entry in entries]
+        session_ids = [entry["session_id"] for entry in entries]
+        app_names = [entry["app_name"] for entry in entries]
+        user_ids = [entry["user_id"] for entry in entries]
+        scopes = [entry.get("scope", "user") for entry in entries]
+        event_ids = [entry["event_id"] for entry in entries]
+        authors = [entry.get("author") for entry in entries]
+        timestamps = [entry["timestamp"] for entry in entries]
+        content_jsons = [entry["content_json"] for entry in entries]
+        content_texts = [entry["content_text"] for entry in entries]
+        metadata_jsons = [entry.get("metadata_json") for entry in entries]
+        inserted_ats = [entry["inserted_at"] for entry in entries]
+        embeddings = [
+            to_json([float(value) for value in embedding])
+            if (embedding := entry.get("embedding")) is not None
+            else None
+            for entry in entries
+        ]
+
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._memory_table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
-                {self._owner_id_column_name}, timestamp, embedding, content_json,
-                content_text, metadata_json, inserted_at
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::float8[]::vector, $11, $12, $13, $14
+                {self._owner_id_column_name}, timestamp, content_json,
+                content_text, metadata_json, inserted_at, embedding
             )
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
+                $14, timestamp, content_json, content_text, metadata_json, inserted_at, embedding::vector
+            FROM unnest(
+                $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
+                $5::varchar[], $6::varchar[], $7::varchar[],
+                $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[], $13::text[]
+            ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
             ON CONFLICT (event_id) DO NOTHING
+            RETURNING 1
             """
+            params = [
+                ids,
+                session_ids,
+                app_names,
+                user_ids,
+                scopes,
+                event_ids,
+                authors,
+                timestamps,
+                content_jsons,
+                content_texts,
+                metadata_jsons,
+                inserted_ats,
+                embeddings,
+                owner_id,
+            ]
         else:
             sql = f"""
             INSERT INTO {self._memory_table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
-                timestamp, embedding, content_json, content_text, metadata_json, inserted_at
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9::float8[]::vector, $10, $11, $12, $13
+                timestamp, content_json, content_text, metadata_json, inserted_at, embedding
             )
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at, embedding::vector
+            FROM unnest(
+                $1::varchar[], $2::varchar[], $3::varchar[], $4::varchar[],
+                $5::varchar[], $6::varchar[], $7::varchar[],
+                $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[], $13::text[]
+            ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
+                timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
             ON CONFLICT (event_id) DO NOTHING
+            RETURNING 1
             """
+            params = [
+                ids,
+                session_ids,
+                app_names,
+                user_ids,
+                scopes,
+                event_ids,
+                authors,
+                timestamps,
+                content_jsons,
+                content_texts,
+                metadata_jsons,
+                inserted_ats,
+                embeddings,
+            ]
 
         async with self._config.provide_connection() as conn:
-            for entry in entries:
-                raw_embedding = entry.get("embedding")
-                embedding_val = [float(v) for v in raw_embedding] if raw_embedding is not None else None
-                if self._owner_id_column_name:
-                    params = [
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        entry.get("scope", "user"),
-                        entry["event_id"],
-                        entry.get("author"),
-                        owner_id,
-                        entry["timestamp"],
-                        embedding_val,
-                        entry["content_json"],
-                        entry["content_text"],
-                        entry.get("metadata_json"),
-                        entry["inserted_at"],
-                    ]
-                else:
-                    params = [
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        entry.get("scope", "user"),
-                        entry["event_id"],
-                        entry.get("author"),
-                        entry["timestamp"],
-                        embedding_val,
-                        entry["content_json"],
-                        entry["content_text"],
-                        entry.get("metadata_json"),
-                        entry["inserted_at"],
-                    ]
-
-                result = await conn.execute(sql, params)
-                rows_affected = self._extract_rows_affected(result)
-                if rows_affected > 0:
-                    inserted_count += rows_affected
-
-        return inserted_count
+            result = await conn.fetch(sql, params)
+            rows = result.result() if result else []
+            return len(rows)
 
     async def search_entries(
         self,
@@ -1154,33 +1186,6 @@ def _adk_config(config: Any) -> PsqlpyADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("PsqlpyADKConfig", adk_config)
-
-
-def _postgres_table_options(adk_config: PsqlpyADKConfig, *, include_autovacuum: bool = False) -> str:
-    options = [_postgres_fillfactor_option(adk_config)]
-    if include_autovacuum:
-        options.extend(_postgres_autovacuum_options(adk_config))
-    return f" WITH ({', '.join(options)})"
-
-
-def _postgres_fillfactor_option(adk_config: PsqlpyADKConfig) -> str:
-    value = adk_config.get("fillfactor", 80)
-    if not isinstance(value, int) or isinstance(value, bool) or value not in range(10, 101):
-        msg = "extension_config['adk']['fillfactor'] must be an integer from 10 to 100"
-        raise ValueError(msg)
-    return f"fillfactor = {value}"
-
-
-def _postgres_autovacuum_options(adk_config: PsqlpyADKConfig) -> "list[str]":
-    options: list[str] = []
-    for key in ("autovacuum_vacuum_scale_factor", "autovacuum_analyze_scale_factor"):
-        value = adk_config.get(key)
-        if value is not None:
-            if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
-                msg = f"extension_config['adk']['{key}'] must be a number from 0 to 1"
-                raise ValueError(msg)
-            options.append(f"{key} = {float(value):g}")
-    return options
 
 
 def _postgres_memory_indexes(

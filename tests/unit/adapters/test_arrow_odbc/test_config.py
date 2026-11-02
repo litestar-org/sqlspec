@@ -179,9 +179,9 @@ def test_driver_pooling_defaults_to_off(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_enable_driver_pooling_is_a_declared_feature() -> None:
     assert (
-        "enable_driver_pooling"
+        "enable_pooling"
         in ArrowOdbcConfig(
-            connection_config={"dsn": "analytics"}, driver_features={"enable_driver_pooling": False}
+            connection_config={"dsn": "analytics"}, driver_features={"enable_pooling": False}
         ).driver_features
     )
 
@@ -315,7 +315,13 @@ def test_create_connection_wraps_driver_pooling_failure_in_improper_configuratio
         raise RuntimeError(msg)
 
     monkeypatch.setattr(arrow_odbc_config, "enable_odbc_connection_pooling", broken_pooling)
-    config = ArrowOdbcConfig(connection_config={"dsn": "analytics"}, driver_features={"enable_driver_pooling": True})
+    config = ArrowOdbcConfig(connection_config={"dsn": "analytics"}, driver_features={"enable_pooling": True})
 
     with pytest.raises(ImproperConfigurationError, match="Could not configure arrow-odbc connection"):
         config.create_connection()
+
+
+def test_driver_features_chunk_size_default() -> None:
+    """ArrowOdbcConfig defaults chunk_size to 65536 matching documentation."""
+    config = ArrowOdbcConfig()
+    assert config.driver_features["chunk_size"] == 65_536

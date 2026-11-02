@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import sys
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.db2._typing import (
@@ -96,8 +97,13 @@ class Db2SyncStreamSource:
         try:
             cursor = cursor_manager.__enter__()
             handler = self._driver.handle_database_exceptions()
-            with handler:
-                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            if sys.exc_info()[1] is None:
+                with handler:
+                    cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            else:
+                self._driver._run_with_exception_handler(
+                    handler, cursor.execute, self._sql, normalize_execute_parameters(self._parameters)
+                )
             self._driver._check_pending_exception(handler)
         except BaseException:
             with contextlib.suppress(Exception):
@@ -112,8 +118,11 @@ class Db2SyncStreamSource:
         cursor = cursor_manager.cursor
         handler = self._driver.handle_database_exceptions()
         rows: Any = []
-        with handler:
-            rows = cursor.fetchmany(self._chunk_size)
+        if sys.exc_info()[1] is None:
+            with handler:
+                rows = cursor.fetchmany(self._chunk_size)
+        else:
+            rows = self._driver._run_with_exception_handler(handler, cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
@@ -305,21 +314,30 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         Args:
             schema: Schema to make current. Unquoted all-lowercase names fold to uppercase.
         """
-        with self.with_cursor(self.connection) as cursor:
+        handler = self.handle_database_exceptions()
+        with handler, self.with_cursor(self.connection) as cursor:
             if self._migration_schema_restore is None:
                 cursor.execute("VALUES CURRENT SCHEMA")
                 row = cursor.fetchone()
                 self._migration_schema_restore = str(row[0])
             cursor.execute(build_set_schema_sql(schema))
+        self._check_pending_exception(handler)
 
     def reset_migration_session_schema(self) -> None:
-        """Restore the current schema captured by ``set_migration_session_schema``."""
+        """Restore the current schema captured by ``set_migration_session_schema``.
+
+        The captured schema is quoted before passing to ``build_set_schema_sql``
+        to preserve lowercase or mixed-case catalog schema names from being folded
+        to uppercase.
+        """
         previous_schema = self._migration_schema_restore
         if previous_schema is None:
             return
         self._migration_schema_restore = None
-        with self.with_cursor(self.connection) as cursor:
+        handler = self.handle_database_exceptions()
+        with handler, self.with_cursor(self.connection) as cursor:
             cursor.execute(build_set_schema_sql(quote_identifier(previous_schema)))
+        self._check_pending_exception(handler)
 
     def has_schema(self, schema: str) -> bool:
         """Return whether the schema exists in the catalog.
@@ -330,9 +348,13 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         Returns:
             True when ``SYSCAT.SCHEMATA`` lists the schema.
         """
-        with self.with_cursor(self.connection) as cursor:
+        exists = False
+        handler = self.handle_database_exceptions()
+        with handler, self.with_cursor(self.connection) as cursor:
             cursor.execute("SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = ?", (normalize_identifier(schema, "db2"),))
-            return cursor.fetchone() is not None
+            exists = cursor.fetchone() is not None
+        self._check_pending_exception(handler)
+        return exists
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         column_names = resolve_column_names(
@@ -637,20 +659,32 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             schema: Schema to make current. Unquoted all-lowercase names fold to uppercase.
         """
         async with self.with_cursor(self.connection) as cursor:
+            handler = self.handle_database_exceptions()
             if self._migration_schema_restore is None:
-                await cursor.execute("VALUES CURRENT SCHEMA")
+                await self._run_with_exception_handler(handler, cursor.execute, "VALUES CURRENT SCHEMA")
+                self._check_pending_exception(handler)
                 row = await cursor.fetchone()
                 self._migration_schema_restore = str(row[0])
-            await cursor.execute(build_set_schema_sql(schema))
+            await self._run_with_exception_handler(handler, cursor.execute, build_set_schema_sql(schema))
+            self._check_pending_exception(handler)
 
     async def reset_migration_session_schema(self) -> None:
-        """Restore the current schema captured by ``set_migration_session_schema``."""
+        """Restore the current schema captured by ``set_migration_session_schema``.
+
+        The captured schema is quoted before passing to ``build_set_schema_sql``
+        to preserve lowercase or mixed-case catalog schema names from being folded
+        to uppercase.
+        """
         previous_schema = self._migration_schema_restore
         if previous_schema is None:
             return
         self._migration_schema_restore = None
         async with self.with_cursor(self.connection) as cursor:
-            await cursor.execute(build_set_schema_sql(quote_identifier(previous_schema)))
+            handler = self.handle_database_exceptions()
+            await self._run_with_exception_handler(
+                handler, cursor.execute, build_set_schema_sql(quote_identifier(previous_schema))
+            )
+            self._check_pending_exception(handler)
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether the schema exists in the catalog.
@@ -662,10 +696,16 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             True when ``SYSCAT.SCHEMATA`` lists the schema.
         """
         async with self.with_cursor(self.connection) as cursor:
-            await cursor.execute(
-                "SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = ?", (normalize_identifier(schema, "db2"),)
+            handler = self.handle_database_exceptions()
+            await self._run_with_exception_handler(
+                handler,
+                cursor.execute,
+                "SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = ?",
+                (normalize_identifier(schema, "db2"),),
             )
-            return await cursor.fetchone() is not None
+            self._check_pending_exception(handler)
+            row = await cursor.fetchone()
+            return row is not None
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         column_names = resolve_column_names(

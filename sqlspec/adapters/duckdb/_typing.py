@@ -9,14 +9,26 @@ from typing import TYPE_CHECKING, Any
 import duckdb as duckdb_module
 from duckdb import BinderException as DuckDBBinderException
 from duckdb import CatalogException as DuckDBCatalogException
+from duckdb import ConnectionException as DuckDBConnectionException
 from duckdb import ConstraintException as DuckDBConstraintException
 from duckdb import ConversionException as DuckDBConversionException
+from duckdb import DataError as DuckDBDataError
 from duckdb import DuckDBPyConnection
+from duckdb import InternalException as DuckDBInternalException
 from duckdb import InterruptException as DuckDBInterruptException
+from duckdb import InvalidInputException as DuckDBInvalidInputException
+from duckdb import InvalidTypeException as DuckDBInvalidTypeException
 from duckdb import IOException as DuckDBIOException
+from duckdb import NotImplementedException as DuckDBNotImplementedException
+from duckdb import OperationalError as DuckDBOperationalError
+from duckdb import OutOfMemoryException as DuckDBOutOfMemoryException
+from duckdb import OutOfRangeException as DuckDBOutOfRangeException
 from duckdb import ParserException as DuckDBParserException
 from duckdb import PermissionException as DuckDBPermissionException
+from duckdb import SerializationException as DuckDBSerializationException
+from duckdb import SyntaxException as DuckDBSyntaxException
 from duckdb import TransactionException as DuckDBTransactionException
+from duckdb import TypeMismatchException as DuckDBTypeMismatchException
 
 _DuckDBConnection = DuckDBPyConnection
 
@@ -36,15 +48,27 @@ __all__ = (
     "DuckDBBinderException",
     "DuckDBCatalogException",
     "DuckDBConnection",
+    "DuckDBConnectionException",
     "DuckDBConstraintException",
     "DuckDBConversionException",
     "DuckDBCursor",
+    "DuckDBDataError",
     "DuckDBIOException",
+    "DuckDBInternalException",
     "DuckDBInterruptException",
+    "DuckDBInvalidInputException",
+    "DuckDBInvalidTypeException",
+    "DuckDBNotImplementedException",
+    "DuckDBOperationalError",
+    "DuckDBOutOfMemoryException",
+    "DuckDBOutOfRangeException",
     "DuckDBParserException",
     "DuckDBPermissionException",
+    "DuckDBSerializationException",
     "DuckDBSessionContext",
+    "DuckDBSyntaxException",
     "DuckDBTransactionException",
+    "DuckDBTypeMismatchException",
     "duckdb_module",
 )
 
@@ -120,6 +144,9 @@ class DuckDBSessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        if self._driver is not None:
+            self._driver.close()
+            self._driver = None
         if self._connection is not None:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None

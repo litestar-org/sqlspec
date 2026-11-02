@@ -1,17 +1,19 @@
 """Sybase ASE ADK stores for Google Agent Development Kit session storage."""
 
+import contextlib
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from sqlspec.adapters.sybase._typing import SybaseCursor, SybaseError
 from sqlspec.adapters.sybase.core import (
+    create_mapped_exception,
     escape_sql_literal,
     extract_error_number,
     quote_bracket_identifier,
     resolve_rowcount,
     split_schema_and_table,
 )
-from sqlspec.config import ADKConfig
+from sqlspec.exceptions import NotFoundError, SQLSpecError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -25,15 +27,11 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk import SessionOrderBy
     from sqlspec.extensions.adk.memory._types import StoredMemory
 
-__all__ = ("SybaseADKConfig", "SybaseADKMemoryStore", "SybaseADKStore")
+__all__ = ("SybaseADKMemoryStore", "SybaseADKStore")
 
 SYBASE_TABLE_NOT_FOUND_ERROR: Final[int] = 208
 SYBASE_SCHEMA: Final[str] = "dbo"
 JSON_COLUMN_TYPE: Final[str] = "TEXT"
-
-
-class SybaseADKConfig(ADKConfig):
-    """Sybase ASE ADK extension settings."""
 
 
 class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
@@ -41,6 +39,8 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
 
     connector_name: ClassVar[str] = "sybase"
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "SybaseConfig") -> None:
         super().__init__(config)
@@ -117,7 +117,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 """,
                 (app_name, user_id, session_id),
             )
-        except SybaseError as exc:
+        except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return None
             raise
@@ -155,7 +155,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         )
         try:
             rows = self._execute_fetchall(sql, params)
-        except SybaseError as exc:
+        except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return []
             raise
@@ -237,7 +237,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
             rows = self._execute_fetchall(sql, params)
-        except SybaseError as exc:
+        except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return []
             raise
@@ -252,7 +252,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             params.append(app_name)
         try:
             return self._execute(sql, tuple(params), commit=True)
-        except SybaseError as exc:
+        except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return 0
             raise
@@ -266,7 +266,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             params.append(app_name)
         try:
             return self._execute(sql, tuple(params), commit=True)
-        except SybaseError as exc:
+        except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return 0
             raise
@@ -280,7 +280,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             params.append(app_name)
         try:
             return self._execute(sql, tuple(params), commit=True)
-        except SybaseError as exc:
+        except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return 0
             raise
@@ -291,7 +291,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             row = self._execute_fetchone(
                 f"SELECT TOP 1 state FROM {_table_ref(self._app_state_table)} WHERE app_name = %s", (app_name,)
             )
-        except SybaseError as exc:
+        except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return None
             raise
@@ -308,7 +308,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 """,
                 (app_name, user_id),
             )
-        except SybaseError as exc:
+        except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return None
             raise
@@ -334,7 +334,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             row = self._execute_fetchone(
                 f"SELECT TOP 1 value FROM {_table_ref(self._metadata_table)} WHERE [key] = %s", (key,)
             )
-        except SybaseError as exc:
+        except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return None
             raise
@@ -409,23 +409,38 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
 
     def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
         with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
-            cursor.execute(sql, params)
-            row = cursor.fetchone()
-            if commit:
-                conn.commit()
+            try:
+                cursor.execute(sql, params)
+                row = cursor.fetchone()
+                if commit:
+                    conn.commit()
+            except Exception as exc:
+                if commit:
+                    with contextlib.suppress(Exception):
+                        conn.rollback()
+                raise create_mapped_exception(exc) from exc
             return row
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
-            cursor.execute(sql, params)
-            return list(cursor.fetchall())
+            try:
+                cursor.execute(sql, params)
+                return list(cursor.fetchall())
+            except Exception as exc:
+                raise create_mapped_exception(exc) from exc
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
         with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
-            cursor.execute(sql, params)
-            rowcount = resolve_rowcount(cursor)
-            if commit:
-                conn.commit()
+            try:
+                cursor.execute(sql, params)
+                rowcount = resolve_rowcount(cursor)
+                if commit:
+                    conn.commit()
+            except Exception as exc:
+                if commit:
+                    with contextlib.suppress(Exception):
+                        conn.rollback()
+                raise create_mapped_exception(exc) from exc
             return rowcount
 
 
@@ -433,6 +448,8 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
     """Sybase ASE ADK memory store using pymssql."""
 
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "SybaseConfig") -> None:
         super().__init__(config)
@@ -498,9 +515,10 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
                     params.append(entry["event_id"])
                     cursor.execute(sql, tuple(params))
                     inserted += resolve_rowcount(cursor)
-            except Exception:
-                conn.rollback()
-                raise
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                raise create_mapped_exception(exc) from exc
             conn.commit()
         return inserted
 
@@ -594,15 +612,24 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
-            cursor.execute(sql, params)
-            return list(cursor.fetchall())
+            try:
+                cursor.execute(sql, params)
+                return list(cursor.fetchall())
+            except Exception as exc:
+                raise create_mapped_exception(exc) from exc
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
         with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
-            cursor.execute(sql, params)
-            rowcount = resolve_rowcount(cursor)
-            if commit:
-                conn.commit()
+            try:
+                cursor.execute(sql, params)
+                rowcount = resolve_rowcount(cursor)
+                if commit:
+                    conn.commit()
+            except Exception as exc:
+                if commit:
+                    with contextlib.suppress(Exception):
+                        conn.rollback()
+                raise create_mapped_exception(exc) from exc
             return rowcount
 
 
@@ -863,11 +890,15 @@ def _json_dict(value: Any) -> "dict[str, Any]":
 
 
 def _is_sybase_table_missing(exc: BaseException) -> bool:
-    text = str(exc).lower()
+    target = getattr(exc, "__cause__", None) or exc
+    text = f"{exc!s} {target!s}".lower()
     return (
         "not found" in text
         or "invalid object name" in text
         or extract_error_number(exc) == SYBASE_TABLE_NOT_FOUND_ERROR
+        or extract_error_number(target) == SYBASE_TABLE_NOT_FOUND_ERROR
+        or isinstance(exc, NotFoundError)
+        or isinstance(target, NotFoundError)
     )
 
 

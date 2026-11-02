@@ -340,8 +340,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 self._release_pooled_statement(single_stmt)
             if has_observers:
                 stmt_duration = perf_counter() - stmt_started
-                stmt_profile: dict[str, Any] | None = self._pending_statement_profile
-                self._pending_statement_profile = None
+                stmt_profile = self._consume_statement_profile()
                 self._emit_script_statement_event(
                     sql=stmt,
                     parameters=prepared_parameters,
@@ -1659,8 +1658,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             runtime.span_manager.end_span(span, error=exc)
             await runtime.emit_error_async(exc, **query_context)
             raise
-        profile: dict[str, Any] | None = self._pending_statement_profile
-        self._pending_statement_profile = None
+        profile = self._consume_statement_profile()
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
         await runtime.emit_query_complete_async(**{**query_context, "rows_affected": result.rows_affected})
@@ -2265,7 +2263,7 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         Returns:
             DDL result for the object.
         """
-        resolved_name, resolved_schema = self.resolve_ddl_object_name(driver, object_name, schema)
+        resolved_name, resolved_schema = type(self).resolve_ddl_object_name(self, driver, object_name, schema)
         return await self._get_exact_object_ddl(
             driver,
             resolved_name,
@@ -2379,11 +2377,13 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
 
         Query failures (for example missing privileges) propagate to the caller.
         """
-        resolved_table, resolved_schema = self.resolve_ddl_object_name(driver, table, schema)
+        resolved_table, resolved_schema = type(self).resolve_ddl_object_name(self, driver, table, schema)
         columns = await self.get_columns(
             driver,
-            table=self.exact_catalog_identifier(driver, resolved_table),
-            schema=self.exact_catalog_identifier(driver, resolved_schema) if resolved_schema is not None else None,
+            table=type(self).exact_catalog_identifier(self, driver, resolved_table),
+            schema=type(self).exact_catalog_identifier(self, driver, resolved_schema)
+            if resolved_schema is not None
+            else None,
         )
         if not columns:
             return []
@@ -2411,7 +2411,7 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         profiles = await self.get_table_profile(
             driver, table, schema=schema, sample_size=sample_size, target_dialect=target_dialect
         )
-        resolved_table, resolved_schema = self.resolve_ddl_object_name(driver, table, schema)
+        resolved_table, resolved_schema = type(self).resolve_ddl_object_name(self, driver, table, schema)
         if not profiles:
             return self._unsupported_ddl(target_table or resolved_table, schema=resolved_schema, object_type="table")
         return self._compile_profiled_table_ddl(
@@ -2604,7 +2604,7 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         if not replace_names:
             return items
         catalog = await self._load_table_catalog(driver, schema, replace_names, warnings)
-        source_dialect = self.resolve_ddl_dialect(driver)
+        source_dialect = type(self).resolve_ddl_dialect(self, driver)
         resolved: list[DDLResult] = []
         replaced_tables: set[tuple[str, str]] = set()
         for item in items:
@@ -2653,7 +2653,7 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         they were already loaded for every table, so callers can reuse them for ordering.
         """
         resolved_default_schema = default_schema if default_schema is not None else schema
-        source_dialect = self.resolve_ddl_dialect(driver)
+        source_dialect = type(self).resolve_ddl_dialect(self, driver)
         excluded_names = self._normalize_excluded_table_names(exclude_tables)
         results: list[DDLResult] = []
         loaded_foreign_keys: list[Any] | None = None
@@ -2837,7 +2837,7 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
 
     async def _load_table_rows(self, driver: Any, domain: str, table_name: str, schema: "str | None") -> "list[Any]":
         """Load one catalog domain for one table using its exact catalog name."""
-        lookup_table = self.exact_catalog_identifier(driver, table_name)
+        lookup_table = type(self).exact_catalog_identifier(self, driver, table_name)
         if domain == "columns":
             return list(await self.get_columns(driver, table=lookup_table, schema=schema))
         if domain == "foreign_keys":
@@ -2859,8 +2859,8 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         warnings: tuple[str, ...] = (),
     ) -> "DDLResult":
         """Synthesize table DDL from exact catalog names using columns, constraints, foreign keys, and indexes."""
-        lookup_table = self.exact_catalog_identifier(driver, table_name)
-        lookup_schema = self.exact_catalog_identifier(driver, schema) if schema is not None else None
+        lookup_table = type(self).exact_catalog_identifier(self, driver, table_name)
+        lookup_schema = type(self).exact_catalog_identifier(self, driver, schema) if schema is not None else None
         columns = await self.get_columns(driver, table=lookup_table, schema=lookup_schema)
         if not columns:
             return self._unsupported_ddl(table_name, schema=schema, object_type="table", warnings=warnings)
@@ -2879,7 +2879,7 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
             foreign_keys=foreign_keys,
             indexes=indexes,
             target_dialect=target_dialect,
-            source_dialect=self.resolve_ddl_dialect(driver),
+            source_dialect=type(self).resolve_ddl_dialect(self, driver),
             warnings=warnings,
         )
 

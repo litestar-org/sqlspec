@@ -57,7 +57,7 @@ SQLANYWHERE_FEATURE_FLAGS: FeatureFlags = {
     "supports_merge": True,
     "supports_for_update": True,
     "supports_skip_locked": True,
-    "supports_transactional_ddl": True,
+    "supports_transactional_ddl": False,
     "supports_transactions": True,
     "supports_prepared_statements": True,
     "supports_in_memory": False,

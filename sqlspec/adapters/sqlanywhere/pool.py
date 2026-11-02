@@ -5,11 +5,10 @@ import logging
 import threading
 import time
 from contextlib import contextmanager
-from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.sqlanywhere._typing import SqlanywhereConnection
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.adapters.sqlanywhere._typing import SQLANYDB_MODULE, SqlanywhereConnection
+from sqlspec.exceptions import OperationalError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -73,11 +72,10 @@ class SqlanywhereConnectionPool:
 
     def new_connection(self) -> SqlanywhereConnection:
         """Open a standalone SAP SQL Anywhere connection via ``sqlanydb.connect``."""
-        sqlanydb = _load_sqlanydb_module()
-        connection = sqlanydb.connect(**self._connection_parameters)
+        connection = SQLANYDB_MODULE.connect(**self._connection_parameters)
         if self._on_connection_create is not None:
             self._on_connection_create(connection)
-        return cast("SqlanywhereConnection", connection)
+        return connection
 
     @contextmanager
     def get_connection(self) -> "Generator[SqlanywhereConnection, None, None]":
@@ -142,8 +140,17 @@ class SqlanywhereConnectionPool:
 
     def _create_connection(self) -> SqlanywhereConnection:
         self._prune_dead_thread_connections()
+        with self._registry_lock:
+            if self._max_size > 0 and len(self._connection_registry) >= self._max_size:
+                msg = f"Connection pool exhausted (max_size={self._max_size})"
+                raise OperationalError(msg)
         connection = self.new_connection()
         with self._registry_lock:
+            if self._max_size > 0 and len(self._connection_registry) >= self._max_size:
+                with contextlib.suppress(Exception):
+                    connection.close()
+                msg = f"Connection pool exhausted (max_size={self._max_size})"
+                raise OperationalError(msg)
             self._connection_registry.add(connection)
             self._connection_threads[connection] = threading.current_thread()
         return connection
@@ -227,11 +234,3 @@ class SqlanywhereConnectionPool:
             self._thread_local.created_at = 0.0
             self._thread_local.last_used = 0.0
             self._thread_local.generation = -1
-
-
-def _load_sqlanydb_module() -> Any:
-    """Import ``sqlanydb`` lazily or raise ``MissingDependencyError``."""
-    try:
-        return import_module("sqlanydb")
-    except ImportError as exc:
-        raise MissingDependencyError(package="sqlanydb", install_package="sqlanywhere") from exc

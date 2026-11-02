@@ -148,10 +148,6 @@ class PsqlpyDriverFeatures(TypedDict):
     """Enable ``google_columnar_engine.enable_columnar_scan=on`` at session startup or per transaction."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
     """External pooler compatibility mode; executes queries with ``prepared=False`` when not ``session``."""
-    pgbouncer: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling prepared execution."""
-    pgbouncer_mode: NotRequired[bool]
-    """Alias for ``pooler_mode='transaction'`` disabling prepared execution."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -162,6 +158,8 @@ class PsqlpyDriverFeatures(TypedDict):
     """Async callback invoked once per physical ``psqlpy`` connection acquired from the pool."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec event channel pub/sub support (defaults to ``True`` when ``events`` is configured)."""
+    enable_pgcopy_binary: NotRequired[bool]
+    """Enable binary wire format for PostgreSQL COPY operations."""
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
     """Event transport backend (``notify`` for LISTEN/NOTIFY, ``notify_queue``, or ``poll_queue``)."""
 
@@ -240,10 +238,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
     connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
-    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = False
     supports_native_arrow_import: ClassVar[bool] = True
-    supports_native_parquet_export: ClassVar[bool] = True
-    supports_native_parquet_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = False
+    supports_native_parquet_import: ClassVar[bool] = False
     supports_native_row_streaming: ClassVar[bool] = True
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
         datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=True, uuid_binding="native"
@@ -286,9 +284,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
-            features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
-        )
+        is_transaction_pooler = features_dict.get("pooler_mode") in {"transaction", "statement"}
         if bool(features_dict.get("enable_alloydb_columnar", False)) and not is_transaction_pooler:
             columnar_opt = "-c google_columnar_engine.enable_columnar_scan=on"
             existing_options = connection_config.get("options")
@@ -411,8 +407,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             conn_cfg.update(build_connection_config(direct_dsn))
         features: dict[str, Any] = dict(self.driver_features)
         features["pooler_mode"] = "session"
-        features["pgbouncer"] = False
-        features["pgbouncer_mode"] = False
         features["direct_dsn"] = None
         if self._user_connection_hook is not None:
             features["on_connection_create"] = self._user_connection_hook
@@ -456,7 +450,9 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         conn_id = id(connection)
         if conn_id not in self._initialized_connection_ids:
             if self._user_connection_hook is not None:
-                await self._user_connection_hook(connection)
+                hook_res = self._user_connection_hook(connection)
+                if inspect.isawaitable(hook_res):
+                    await hook_res
             if len(self._initialized_connection_ids) >= _MAX_INITIALIZED_CONNECTION_IDS:
                 self._initialized_connection_ids.clear()
             self._initialized_connection_ids.add(conn_id)

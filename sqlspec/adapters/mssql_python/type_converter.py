@@ -1,4 +1,9 @@
-"""Type converters for mssql-python parameter binding."""
+"""Type converters and Apache Arrow mappings for mssql-python.
+
+Provides public utility functions and converter classes for mapping SQL Server
+data types to PyArrow types (``mssql_type_to_arrow``) and converting Python
+runtime values for mssql-python driver operations (``MssqlPythonTypeConverter``).
+"""
 
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID

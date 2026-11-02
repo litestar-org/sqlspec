@@ -5,11 +5,11 @@ from pathlib import Path
 from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.adapters.sqlite.events.store import SqliteEventQueueStore
-from sqlspec.adapters.sqlite.litestar.store import SQLiteStore
+from sqlspec.adapters.sqlite.litestar.store import SqliteStore
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_sync
 
 
-class AdditiveSQLiteStore(SQLiteStore):
+class AdditiveSQLiteStore(SqliteStore):
     """Session store target with one additive column."""
 
     def _table_ddl(self) -> str:
@@ -31,11 +31,7 @@ class AdditiveSqliteADKMemoryStore(SqliteADKMemoryStore):
     """ADK memory target with one additive column."""
 
     def _memory_table_ddl(self) -> str:
-        return (
-            super()
-            ._memory_table_ddl()
-            .replace("inserted_at REAL NOT NULL\n", "inserted_at REAL NOT NULL,\n            schema_tag TEXT\n")
-        )
+        return super()._memory_table_ddl().replace("embedding BLOB\n", "embedding BLOB,\n            schema_tag TEXT\n")
 
 
 class AdditiveSqliteEventQueueStore(SqliteEventQueueStore):
@@ -50,7 +46,7 @@ async def test_litestar_session_store_reconcile_uses_target_ddl(tmp_path: Path) 
         connection_config={"database": str(tmp_path / "litestar.db")},
         extension_config={"litestar": {"session_table": "sessions"}},
     )
-    await SQLiteStore(config).create_table()
+    await SqliteStore(config).create_table()
 
     store = AdditiveSQLiteStore(config)
     await store.reconcile_schema(assume_existing=True)

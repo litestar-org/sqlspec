@@ -14,7 +14,6 @@ from sqlspec.adapters.asyncmy._typing import (
     AsyncmyModule,
     AsyncmyPool,
     AsyncmyRawCursor,
-    AsyncmySessionContext,
 )
 from sqlspec.adapters.asyncmy.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
@@ -24,6 +23,7 @@ from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
+from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     import ssl
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.storage import StorageCapabilities
 
 
 __all__ = (
@@ -40,6 +41,7 @@ __all__ = (
     "AsyncmyDriverFeatures",
     "AsyncmyPoolParams",
     "AsyncmySSLParams",
+    "AsyncmySessionContext",
     "build_connection_config",
 )
 
@@ -222,9 +224,13 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
     async def release_connection(self, _conn: "AsyncmyConnection", **kwargs: Any) -> None:
         ctx = self._contexts.pop(id(_conn), None)
         if ctx is not None:
-            if _conn is not None and bool(getattr(_conn, "server_status", 0) & 1):
-                with contextlib.suppress(Exception):
-                    await _conn.rollback()
+            if _conn is not None:
+                in_transaction = False
+                with contextlib.suppress(AttributeError):
+                    in_transaction = bool(_conn.server_status & 1)
+                if in_transaction:
+                    with contextlib.suppress(Exception):
+                        await _conn.rollback()
             await ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
@@ -259,13 +265,66 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
     ) -> bool | None:
         conn = self._connection
         self._connection = None
-        if conn is not None and bool(getattr(conn, "server_status", 0) & 1):
-            with contextlib.suppress(Exception):
-                await conn.rollback()
+        if conn is not None:
+            in_transaction = False
+            with contextlib.suppress(AttributeError):
+                in_transaction = bool(conn.server_status & 1)
+            if in_transaction:
+                with contextlib.suppress(Exception):
+                    await conn.rollback()
         if self._ctx:
             ctx = self._ctx
             self._ctx = None
             return cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
+        return None
+
+
+class AsyncmySessionContext:
+    """Async context manager for AsyncMy sessions.
+
+    Acquires a connection from the config, builds the driver, and releases the
+    connection when the session ends.
+    """
+
+    __slots__ = (
+        "_acquire_connection",
+        "_connection",
+        "_driver",
+        "_driver_features",
+        "_prepare_driver",
+        "_release_connection",
+        "_statement_config",
+    )
+
+    def __init__(
+        self,
+        acquire_connection: "Callable[[], Awaitable[AsyncmyConnection]]",
+        release_connection: "Callable[..., Any]",
+        statement_config: "StatementConfig",
+        driver_features: "dict[str, Any]",
+        prepare_driver: "Callable[[AsyncmyDriver], AsyncmyDriver]",
+    ) -> None:
+        self._acquire_connection = acquire_connection
+        self._release_connection = release_connection
+        self._statement_config = statement_config
+        self._driver_features = driver_features
+        self._prepare_driver = prepare_driver
+        self._connection: AsyncmyConnection | None = None
+        self._driver: AsyncmyDriver | None = None
+
+    async def __aenter__(self) -> "AsyncmyDriver":
+        self._connection = await self._acquire_connection()
+        self._driver = AsyncmyDriver(
+            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
+        )
+        return self._prepare_driver(self._driver)
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> "bool | None":
+        if self._connection is not None:
+            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            self._connection = None
         return None
 
 
@@ -278,10 +337,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncmyConnection)
     supports_transactional_ddl: ClassVar[bool] = False
-    supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_parquet_export: ClassVar[bool] = True
-    supports_native_arrow_import: ClassVar[bool] = True
-    supports_native_parquet_import: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = False
+    supports_native_parquet_export: ClassVar[bool] = False
+    supports_native_arrow_import: ClassVar[bool] = False
+    supports_native_parquet_import: ClassVar[bool] = False
     supports_native_row_streaming: ClassVar[bool] = True
     type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
         datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
@@ -320,8 +379,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
-        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-        features_dict = dict(driver_features) if driver_features else {}
+        statement_config, features_dict = apply_driver_features(statement_config, driver_features)
         self._user_connection_hook: Callable[[AsyncmyConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
@@ -356,7 +414,11 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         pool_kwargs, connection_kwargs = _split_pool_config(self.connection_config)
         connection_kwargs.update({key: value for key, value in pool_kwargs.items() if key in _ASYNCMY_SHARED_POOL_KEYS})
         connection = await asyncmy.connect(**connection_kwargs)
-        await self._ensure_connection(connection)
+        try:
+            await self._ensure_connection(connection)
+        except BaseException:
+            connection.close()
+            raise
         return connection
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncmyPool":
@@ -397,6 +459,15 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """Return queue polling defaults for Asyncmy adapters."""
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        capabilities["parquet_import_enabled"] = arrow_ready
+        capabilities["parquet_export_enabled"] = arrow_ready
+        return capabilities
 
     async def _create_pool(self) -> "AsyncmyPool":
         """Create the actual async connection pool.

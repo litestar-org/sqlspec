@@ -3,10 +3,11 @@
 import contextlib
 import datetime as dt
 import decimal
-import inspect
 import re
 import uuid
+from collections.abc import Mapping
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import sqlglot
@@ -14,7 +15,12 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_TYPE
-from sqlspec.adapters.psqlpy._typing import PsqlpyDataError, PsqlpyIntegrityError, PsqlpyOperationalError
+from sqlspec.adapters.psqlpy._typing import (
+    PsqlpyConnectionExecuteError,
+    PsqlpyDataError,
+    PsqlpyIntegrityError,
+    PsqlpyOperationalError,
+)
 from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
 from sqlspec.core import (
     DriverParameterProfile,
@@ -29,7 +35,7 @@ from sqlspec.core.config_runtime import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.core.parameters import type_coercion_dispatcher
+from sqlspec.core.parameters import type_coercion_dispatcher, type_coercion_fallbacks
 from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -58,7 +64,7 @@ from sqlspec.utils.type_guards import has_query_result_metadata
 from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
     from sqlspec.core import SQL
 
@@ -67,6 +73,7 @@ __all__ = (
     "apply_driver_features",
     "build_connection_config",
     "build_postgres_extension_probe_names",
+    "build_postgres_storage_params_sql",
     "build_profile",
     "build_statement_config",
     "coerce_json_columns",
@@ -74,7 +81,6 @@ __all__ = (
     "collect_rows",
     "create_mapped_exception",
     "default_statement_config",
-    "detect_postgres_extensions",
     "driver_profile",
     "extract_rows_affected",
     "format_execute_many_parameters",
@@ -104,6 +110,39 @@ _DML_COUNT_QUERY_CACHE_SIZE: Final = 1024
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
 _NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple)
+
+
+def build_postgres_storage_params_sql(
+    settings: "dict[str, object] | Mapping[str, object] | None",
+    *,
+    include_autovacuum: bool = False,
+    default_fillfactor: int | None = None,
+    default_vacuum_scale: float | None = None,
+    default_analyze_scale: float | None = None,
+    section: str = "storage",
+) -> str:
+    """Format PostgreSQL table storage parameters (WITH fillfactor = ...) clause."""
+    options: list[str] = []
+    config_dict = dict(settings) if settings else {}
+    fillfactor = config_dict.get("fillfactor", default_fillfactor)
+    if fillfactor is not None:
+        if not isinstance(fillfactor, int) or isinstance(fillfactor, bool) or fillfactor not in range(10, 101):
+            msg = f"extension_config['{section}']['fillfactor'] must be an integer from 10 to 100"
+            raise ValueError(msg)
+        options.append(f"fillfactor = {fillfactor}")
+    if include_autovacuum:
+        scales = (
+            ("autovacuum_vacuum_scale_factor", default_vacuum_scale),
+            ("autovacuum_analyze_scale_factor", default_analyze_scale),
+        )
+        for key, default_val in scales:
+            value = config_dict.get(key, default_val)
+            if value is not None:
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+                    msg = f"extension_config['{section}']['{key}'] must be a number from 0 to 1"
+                    raise ValueError(msg)
+                options.append(f"{key} = {float(value):g}")
+    return f" WITH ({', '.join(options)})" if options else ""
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -169,13 +208,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     username = config.pop("username", None) or config.pop("user", None)
     if username is not None:
         config["username"] = username
-    auth_token_provider = config.get("auth_token_provider")
-    if callable(auth_token_provider) and not inspect.iscoroutinefunction(auth_token_provider):
-        config.pop("auth_token_provider", None)
-        token_result = auth_token_provider()
-        if not inspect.isawaitable(token_result):
-            config["password"] = str(token_result)
-    elif auth_token_provider is None:
+    if "auth_token_provider" in config and config["auth_token_provider"] is None:
         config.pop("auth_token_provider", None)
     return config
 
@@ -193,12 +226,9 @@ def apply_driver_features(
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
     features.setdefault("enable_pg_textsearch", True)
-    pgbouncer_enabled = bool(features.get("pgbouncer") or features.get("pgbouncer_mode"))
-    features["pgbouncer"] = pgbouncer_enabled
-    features["pgbouncer_mode"] = pgbouncer_enabled
     raw_pooler_mode = features.get("pooler_mode")
     if raw_pooler_mode is None:
-        features["pooler_mode"] = "transaction" if pgbouncer_enabled else "session"
+        features["pooler_mode"] = "session"
     else:
         normalized_mode = str(raw_pooler_mode).lower()
         if normalized_mode not in {"session", "transaction", "statement", "auto"}:
@@ -206,10 +236,7 @@ def apply_driver_features(
                 f"Invalid pooler_mode: {raw_pooler_mode!r}. Expected 'session', 'transaction', 'statement', or 'auto'."
             )
             raise ImproperConfigurationError(msg)
-        features["pooler_mode"] = "transaction" if normalized_mode == "auto" and pgbouncer_enabled else normalized_mode
-    if features["pooler_mode"] in {"transaction", "statement"}:
-        features["pgbouncer"] = True
-        features["pgbouncer_mode"] = True
+        features["pooler_mode"] = "session" if normalized_mode == "auto" else normalized_mode
     features.setdefault("direct_dsn", None)
     features.setdefault("enable_alloydb_columnar", False)
 
@@ -417,23 +444,28 @@ def extract_rows_affected(result: Any) -> int:
     return 0
 
 
-def get_parameter_casts(statement: "SQL | CachedQuery") -> "dict[int, str]":
+_EMPTY_PARAMETER_CASTS: Final[Mapping[int, str]] = MappingProxyType({})
+
+
+def get_parameter_casts(statement: "SQL | CachedQuery") -> "Mapping[int, str]":
     """Get parameter cast metadata from a SQLSpec statement."""
     if isinstance(statement, CachedQuery):
         return statement.parameter_casts
     state = statement.get_processed_state()
-    return {} if state is Empty else state.parameter_casts or {}
+    return _EMPTY_PARAMETER_CASTS if state is Empty or not state.parameter_casts else state.parameter_casts
 
 
 def prepare_parameters_with_casts(
-    parameters: Any, parameter_casts: "dict[int, str]", statement_config: "StatementConfig"
+    parameters: Any, parameter_casts: "Mapping[int, str]", statement_config: "StatementConfig"
 ) -> Any:
     """Prepare parameters with cast-aware type coercion."""
     if isinstance(parameters, (list, tuple)):
-        result: list[Any] = []
         serializer = statement_config.parameter_config.json_serializer or to_json
         type_map = statement_config.parameter_config.type_coercion_map
-        dispatcher = type_coercion_dispatcher(tuple(type_map.items())) if type_map else None
+        fallbacks = type_coercion_fallbacks(type_map) if type_map else ()
+        dispatcher = type_coercion_dispatcher(fallbacks) if fallbacks else None
+        coerced: list[Any] | None = None
+
         for idx, param in enumerate(parameters, start=1):
             cast_type = parameter_casts.get(idx, "")
             prepared_value = param
@@ -447,8 +479,14 @@ def prepare_parameters_with_casts(
                         prepared_value = fallback_converter(prepared_value)
             if cast_type:
                 prepared_value = _coerce_parameter_for_cast(prepared_value, cast_type, serializer)
-            result.append(prepared_value)
-        return tuple(result) if isinstance(parameters, tuple) else result
+            if prepared_value is not param and coerced is None:
+                coerced = list(parameters[: idx - 1])
+            if coerced is not None:
+                coerced.append(prepared_value)
+
+        if coerced is not None:
+            return tuple(coerced) if isinstance(parameters, tuple) else coerced
+        return parameters
     return parameters
 
 
@@ -478,14 +516,28 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     error_msg = str(error).lower()
 
-    if "unique" in error_msg or "duplicate key" in error_msg:
+    if isinstance(error, PsqlpyDataError):
+        return _create_postgres_error(error, DataError, "data error")
+
+    if "syntax error" in error_msg or "parse error" in error_msg:
+        return _create_postgres_error(error, SQLParsingError, "SQL syntax error")
+
+    if (
+        "unique constraint" in error_msg
+        or "duplicate key value" in error_msg
+        or "violates unique constraint" in error_msg
+    ):
         return _create_postgres_error(error, UniqueViolationError, "unique constraint violation")
-    if "foreign key" in error_msg or "violates foreign key" in error_msg:
+    if "foreign key constraint" in error_msg or "violates foreign key constraint" in error_msg:
         return _create_postgres_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-    if "not null" in error_msg or ("null value" in error_msg and "violates not-null" in error_msg):
+    if (
+        "not-null constraint" in error_msg
+        or "violates not-null constraint" in error_msg
+        or ("null value in column" in error_msg and "violates not-null" in error_msg)
+    ):
         return _create_postgres_error(error, NotNullViolationError, "not-null constraint violation")
     if "check constraint" in error_msg or "violates check constraint" in error_msg:
         return _create_postgres_error(error, CheckViolationError, "check constraint violation")
@@ -497,13 +549,18 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if "serialization failure" in error_msg or "could not serialize" in error_msg:
         return _create_postgres_error(error, SerializationConflictError, "serialization failure")
 
+    if "connection" in error_msg:
+        if "timeout" in error_msg or "timed out" in error_msg:
+            return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
+        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
+
     if (
-        "connection" in error_msg
-        or "could not connect" in error_msg
-        or "connection refused" in error_msg
+        "connection refused" in error_msg
         or "connection reset" in error_msg
-        or "broken pipe" in error_msg
+        or "could not connect to server" in error_msg
         or "server closed the connection" in error_msg
+        or "broken pipe" in error_msg
+        or "failed to connect" in error_msg
     ):
         if "timeout" in error_msg or "timed out" in error_msg:
             return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
@@ -521,16 +578,17 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     ):
         return _create_postgres_error(error, PermissionDeniedError, "authentication error")
 
-    if isinstance(error, PsqlpyDataError):
-        return _create_postgres_error(error, DataError, "data error")
-
-    if "syntax error" in error_msg or "parse" in error_msg:
-        return _create_postgres_error(error, SQLParsingError, "SQL syntax error")
-
     if isinstance(error, PsqlpyOperationalError):
         return _create_postgres_error(error, OperationalError, "operational error")
     if isinstance(error, PsqlpyIntegrityError):
         return _create_postgres_error(error, IntegrityError, "integrity constraint violation")
+    if isinstance(error, (PsqlpyConnectionExecuteError,)):
+        return _create_postgres_error(error, DatabaseConnectionError, "connection execute error")
+
+    if "connection" in error_msg:
+        if "timeout" in error_msg or "timed out" in error_msg:
+            return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
+        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
 
     return _create_postgres_error(error, SQLSpecError, "database error")
 
@@ -570,41 +628,6 @@ def format_execute_many_parameters(parameters: Any, *, coerce_numeric: bool) -> 
         return formatted
 
     return [_format_execute_many_param_set(parameters, coerce_numeric=coerce_numeric)]
-
-
-async def detect_postgres_extensions(
-    connection: Any, *, enable_pgvector: bool = False, enable_paradedb: bool = False, enable_pg_textsearch: bool = False
-) -> "tuple[bool, bool, bool]":
-    """Detect whether pgvector, paradedb, and pg_textsearch extensions are installed on PostgreSQL.
-
-    Args:
-        connection: Active psqlpy connection.
-        enable_pgvector: Whether to probe for pgvector extension.
-        enable_paradedb: Whether to probe for paradedb extension.
-        enable_pg_textsearch: Whether to probe for pg_textsearch extension.
-
-    Returns:
-        Tuple of ``(pgvector_available, paradedb_available, pg_textsearch_available)``.
-    """
-    driver_features: dict[str, Any] = {
-        "enable_pgvector": enable_pgvector,
-        "enable_paradedb": enable_paradedb,
-        "enable_pg_textsearch": enable_pg_textsearch,
-    }
-    extensions_to_check = build_postgres_extension_probe_names(driver_features)
-    if not extensions_to_check:
-        return False, False, False
-
-    try:
-        result = await connection.fetch(
-            "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions_to_check]
-        )
-        rows = result.result() if result else []
-        detected = {cast("str", row["extname"] if isinstance(row, dict) else row[0]) for row in rows}
-    except Exception:
-        logger.debug("PostgreSQL extension detection failed for psqlpy connection")
-        return False, False, False
-    return "vector" in detected, "pg_search" in detected, "pg_textsearch" in detected
 
 
 def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:

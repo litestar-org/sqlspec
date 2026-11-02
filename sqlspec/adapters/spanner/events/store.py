@@ -12,8 +12,10 @@ import logging
 import math
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.spanner.core import (
+    create_mapped_exception,
     execute_ddl_async,
     execute_ddl_sync,
     list_existing_table_names_async,
@@ -55,12 +57,8 @@ class _SpannerEventStoreMixin:
         return statements
 
     def drop_statements(self) -> "list[str]":
-        """Return drop statements in reverse dependency order.
-
-        Spanner requires index to be dropped before the table.
-        The caller should handle errors for non-existent objects.
-        """
-        return [f"DROP INDEX {self._index_name()}", f"DROP TABLE {self.table_name}"]
+        """Return drop statements in reverse dependency order."""
+        return [f"DROP INDEX IF EXISTS {self._index_name()}", f"DROP TABLE IF EXISTS {self.table_name}"]
 
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Spanner-specific column types."""
@@ -82,7 +80,18 @@ class _SpannerEventStoreMixin:
         """Return True when the statement dialect is Spangres (PostgreSQL on Spanner)."""
         statement_config = getattr(self._config, "statement_config", None)
         dialect = str(getattr(statement_config, "dialect", "spanner")).lower()
-        return dialect == "spangres"
+        if dialect in {"spangres", "postgres", "postgresql", "spanner_postgresql"}:
+            return True
+        conn_config = getattr(self._config, "connection_config", {})
+        if isinstance(conn_config, dict):
+            db_dialect = str(conn_config.get("database_dialect", "")).upper()
+            if "POSTGRES" in db_dialect:
+                return True
+        return False
+
+    def _resolve_ddl_timeout(self) -> "float | None":
+        timeout = self._extension_settings.get("ddl_timeout")
+        return float(timeout) if timeout is not None else None
 
     def _resolve_shard_count(self) -> int:
         """Validate and return the configured shard count."""
@@ -210,6 +219,13 @@ class SpannerSyncEventQueueStore(_SpannerEventStoreMixin, BaseEventQueueStore[Sp
     """
 
     __slots__ = ()
+    extension_config_options = BaseEventQueueStore.extension_config_options | frozenset({
+        "ddl_timeout",
+        "index_options",
+        "retention_seconds",
+        "shard_count",
+        "table_options",
+    })
 
     def create_table(self) -> None:
         """Create the event queue table and index through ``Database.update_ddl``.
@@ -227,7 +243,10 @@ class SpannerSyncEventQueueStore(_SpannerEventStoreMixin, BaseEventQueueStore[Sp
             return
         statements = self.create_statements()
         self._log_ddl("events.queue.create", len(statements))
-        execute_ddl_sync(database, statements)
+        try:
+            execute_ddl_sync(database, statements, timeout=self._resolve_ddl_timeout())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def drop_table(self) -> None:
         """Drop the event queue table and index through ``Database.update_ddl``.
@@ -245,7 +264,10 @@ class SpannerSyncEventQueueStore(_SpannerEventStoreMixin, BaseEventQueueStore[Sp
             return
         statements = self.drop_statements()
         self._log_ddl("events.queue.drop", len(statements))
-        execute_ddl_sync(database, statements)
+        try:
+            execute_ddl_sync(database, statements, timeout=self._resolve_ddl_timeout())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 class SpannerAsyncEventQueueStore(_SpannerEventStoreMixin, BaseEventQueueStore[SpannerAsyncConfig]):
@@ -259,6 +281,13 @@ class SpannerAsyncEventQueueStore(_SpannerEventStoreMixin, BaseEventQueueStore[S
     """
 
     __slots__ = ()
+    extension_config_options = BaseEventQueueStore.extension_config_options | frozenset({
+        "ddl_timeout",
+        "index_options",
+        "retention_seconds",
+        "shard_count",
+        "table_options",
+    })
 
     async def create_table(self) -> None:
         """Create the event queue table and index through ``Database.update_ddl``.
@@ -276,7 +305,10 @@ class SpannerAsyncEventQueueStore(_SpannerEventStoreMixin, BaseEventQueueStore[S
             return
         statements = self.create_statements()
         self._log_ddl("events.queue.create", len(statements))
-        await execute_ddl_async(database, statements)
+        try:
+            await execute_ddl_async(database, statements, timeout=self._resolve_ddl_timeout())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def drop_table(self) -> None:
         """Drop the event queue table and index through ``Database.update_ddl``.
@@ -294,4 +326,7 @@ class SpannerAsyncEventQueueStore(_SpannerEventStoreMixin, BaseEventQueueStore[S
             return
         statements = self.drop_statements()
         self._log_ddl("events.queue.drop", len(statements))
-        await execute_ddl_async(database, statements)
+        try:
+            await execute_ddl_async(database, statements, timeout=self._resolve_ddl_timeout())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc

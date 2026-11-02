@@ -5,7 +5,18 @@ import sqlite3
 import pytest
 
 from sqlspec.adapters.aiosqlite.core import create_mapped_exception
-from sqlspec.exceptions import DeadlockError, OperationCancelledError, PermissionDeniedError, UniqueViolationError
+from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
+    DeadlockError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    OperationCancelledError,
+    PermissionDeniedError,
+    UniqueViolationError,
+)
 
 
 class _SqliteError(sqlite3.OperationalError):
@@ -128,3 +139,79 @@ def test_primary_key_identity_takes_precedence_over_message(table: str, code: in
     mapped = create_mapped_exception(error)
     assert isinstance(mapped, UniqueViolationError)
     assert mapped.__cause__ is error
+
+
+def test_not_null_error_code_maps_to_not_null_violation() -> None:
+    err = _SqliteIntegrityError("NOT NULL constraint failed: t.val", 1299, None)
+    result = create_mapped_exception(err)
+    assert isinstance(result, NotNullViolationError)
+    assert result.__cause__ is err
+
+
+def test_check_error_code_maps_to_check_violation() -> None:
+    err = _SqliteIntegrityError("CHECK constraint failed: val > 0", 275, None)
+    result = create_mapped_exception(err)
+    assert isinstance(result, CheckViolationError)
+    assert result.__cause__ is err
+
+
+def test_trigger_abort_does_not_map_to_not_null_violation() -> None:
+    err = _SqliteIntegrityError("trigger aborted", 1811, None)
+    result = create_mapped_exception(err)
+    assert not isinstance(result, NotNullViolationError)
+    assert isinstance(result, IntegrityError)
+    assert result.__cause__ is err
+
+
+def test_no_such_column_with_locked_name_maps_to_operational_error() -> None:
+    err = sqlite3.OperationalError("no such column: is_locked")
+    result = create_mapped_exception(err)
+    assert isinstance(result, OperationalError)
+    assert not isinstance(result, DeadlockError)
+    assert result.__cause__ is err
+
+
+def test_programming_error_maps_to_data_error() -> None:
+    err = sqlite3.ProgrammingError("cannot operate on a closed database")
+    result = create_mapped_exception(err)
+    assert isinstance(result, DataError)
+    assert result.__cause__ is err
+
+
+def test_interface_error_maps_to_operational_error() -> None:
+    err = sqlite3.InterfaceError("error binding parameter")
+    result = create_mapped_exception(err)
+    assert isinstance(result, OperationalError)
+    assert result.__cause__ is err
+
+
+def test_auth_error_maps_to_permission_denied() -> None:
+    err = _SqliteError("not authorized", 23, "SQLITE_AUTH")
+    result = create_mapped_exception(err)
+    assert isinstance(result, PermissionDeniedError)
+    assert result.__cause__ is err
+
+
+def test_range_and_toobig_errors_map_to_data_error() -> None:
+    err_range = _SqliteError("column index out of range", 25, "SQLITE_RANGE")
+    res_range = create_mapped_exception(err_range)
+    assert isinstance(res_range, DataError)
+    assert res_range.__cause__ is err_range
+
+    err_toobig = _SqliteError("string or blob too big", 18, "SQLITE_TOOBIG")
+    res_toobig = create_mapped_exception(err_toobig)
+    assert isinstance(res_toobig, DataError)
+    assert res_toobig.__cause__ is err_toobig
+
+
+def test_notadb_error_maps_to_database_connection_error() -> None:
+    err = _SqliteError("file is not a database", 26, "SQLITE_NOTADB")
+    result = create_mapped_exception(err)
+    assert isinstance(result, DatabaseConnectionError)
+    assert result.__cause__ is err
+
+
+def test_create_mapped_exception_accepts_logger_parameter() -> None:
+    err = sqlite3.OperationalError("generic")
+    result = create_mapped_exception(err, logger=None)
+    assert isinstance(result, OperationalError)

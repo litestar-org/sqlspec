@@ -1,7 +1,6 @@
 """arrow-odbc Litestar Store implementation."""
 
 import base64
-import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -11,13 +10,14 @@ from sqlspec.adapters.arrow_odbc.core import (
     db2_timestamp_text,
     split_db2_name,
 )
+from sqlspec.adapters.arrow_odbc.core import atomic_store_write as _atomic_write
+from sqlspec.adapters.arrow_odbc.core import strip_bracket_quotes as _strip_tsql_quotes
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
 
 __all__ = ("ArrowOdbcStore",)
@@ -37,10 +37,15 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
 
     def __init__(self, config: "ArrowOdbcConfig") -> None:
         super().__init__(config)
-        dialect = str(config.statement_config.dialect).lower()
-        self._sql: _TsqlSessionSql | _Db2SessionSql = (
-            _Db2SessionSql(self._table_name) if dialect == "db2" else _TsqlSessionSql(self._table_name)
-        )
+        dialect_attr = getattr(config.statement_config, "dialect", None)
+        dialect = str(dialect_attr).lower() if isinstance(dialect_attr, str) else "mssql"
+        if dialect == "db2":
+            self._sql: _TsqlSessionSql | _Db2SessionSql = _Db2SessionSql(self._table_name)
+        elif dialect in {"mssql", "tsql"}:
+            self._sql = _TsqlSessionSql(self._table_name)
+        else:
+            msg = f"ArrowOdbcStore requires dialect 'mssql' or 'db2' (received {dialect!r})."
+            raise ImproperConfigurationError(msg)
 
     @property
     def _chunk_table_name(self) -> str:
@@ -428,32 +433,6 @@ class _Db2SessionSql:
             f"CONSTRAINT FK_{self._catalog_table}_CHUNKS FOREIGN KEY (session_id) "
             f"REFERENCES {self._table_name}(session_id) ON DELETE CASCADE)"
         )
-
-
-@contextlib.contextmanager
-def _atomic_write(driver: Any) -> "Iterator[None]":
-    if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
-        yield
-        return
-    if not getattr(driver, "_connection_autocommit", True):
-        driver.begin()
-    try:
-        yield
-    except Exception:
-        with contextlib.suppress(Exception):
-            driver.rollback()
-        raise
-    else:
-        driver.commit()
-
-
-def _strip_tsql_quotes(part: str) -> str:
-    stripped = part.strip()
-    if len(stripped) >= _QUALIFIED_PARTS_MIN and stripped.startswith("[") and stripped.endswith("]"):
-        return stripped[1:-1].replace("]]", "]")
-    if len(stripped) >= _QUALIFIED_PARTS_MIN and stripped.startswith('"') and stripped.endswith('"'):
-        return stripped[1:-1].replace('""', '"')
-    return stripped
 
 
 def _split_tsql_table_name(table_name: str) -> "tuple[str, str]":

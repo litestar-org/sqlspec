@@ -9,6 +9,7 @@ from sqlspec.adapters.sqlite.adk import SqliteADKConfig, SqliteADKMemoryStore, S
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.adk import StoredMemory
 
 
 class RecordingConnection:
@@ -189,3 +190,76 @@ def test_sqlite_list_sessions_rejects_invalid_options_before_connecting(options:
         store.list_sessions("app", **options)
 
     assert conn.calls == []
+
+
+def test_sqlite_adk_get_events_with_limit_binds_parameter() -> None:
+    """Verify get_events parameterizes LIMIT instead of string interpolation."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    store = SqliteADKStore(config)
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    class _MockEventsCursor:
+        def fetchall(self) -> list[Any]:
+            return []
+
+    class _MockEventsConnection:
+        def execute(self, sql: str, params: Any = None) -> _MockEventsCursor:
+            calls.append((sql, params))
+            return _MockEventsCursor()
+
+    class _SyncContextManager:
+        def __enter__(self) -> Any:
+            return _MockEventsConnection()
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+    config.provide_connection = MagicMock(return_value=_SyncContextManager())  # type: ignore[method-assign]
+
+    events = store.get_events("app", "user", "session", limit=10)
+    assert events == []
+    assert len(calls) >= 1
+    sql, params = calls[-1]
+    assert "LIMIT ?" in sql
+    assert 10 in params
+
+
+def test_sqlite_adk_memory_store_persists_and_retrieves_float32_embeddings() -> None:
+    """Verify memory entries persist and retrieve float32 embeddings."""
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    store = SqliteADKMemoryStore(config)
+    try:
+        store.create_tables()
+
+        now = datetime.now(UTC)
+        embedding = [0.1, 0.2, 0.3, 0.4]
+        record = StoredMemory(
+            id=str(uuid4()),
+            session_id="s1",
+            app_name="app",
+            user_id="u1",
+            scope="user",
+            event_id="evt-1",
+            author="user",
+            timestamp=now,
+            content_json={"text": "vector search test"},
+            content_text="vector search test",
+            metadata_json=None,
+            inserted_at=now,
+            embedding=embedding,
+        )
+        inserted = store.insert_memory_entries([record])
+        assert inserted == 1
+
+        results = store.search_entries(query="vector", app_name="app", user_id="u1", embedding=embedding)
+        assert len(results) == 1
+        assert results[0]["event_id"] == "evt-1"
+        assert results[0]["embedding"] is not None
+        assert len(results[0]["embedding"]) == 4
+        for orig, rec in zip(embedding, results[0]["embedding"], strict=True):
+            assert abs(orig - rec) < 1e-6
+    finally:
+        config.close_pool()

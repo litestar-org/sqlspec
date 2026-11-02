@@ -5,6 +5,7 @@ type coercion, error handling, and query job management.
 """
 
 import io
+import sys
 from collections.abc import Mapping
 from contextlib import suppress
 from itertools import chain
@@ -22,6 +23,7 @@ from sqlspec.adapters.bigquery._typing import (
     BigQuerySessionContext,
     BigQueryStorageWriteModule,
     BigQueryStorageWriteTypes,
+    GoogleAPIError,
     GoogleCloudError,
 )
 from sqlspec.adapters.bigquery.core import (
@@ -60,8 +62,9 @@ from sqlspec.core import (
 )
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError, StorageOperationFailedError
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
+from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -83,8 +86,6 @@ __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQ
 logger = get_logger(__name__)
 _DATASET_TABLE_PARTS = 2
 _PROJECT_DATASET_TABLE_PARTS = 3
-_pa: Any = import_optional("pyarrow")
-_pq: Any = import_optional("pyarrow.parquet")
 
 
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
@@ -99,7 +100,7 @@ class BigQueryExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, GoogleCloudError):
+        if issubclass(exc_type, (GoogleCloudError, GoogleAPIError)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -116,6 +117,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_default_query_job_config",
+        "_enable_query_and_wait",
         "_enable_storage_write_api",
         "_in_transaction",
         "_job_result_kwargs_defaults",
@@ -126,7 +128,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_literal_inliner",
         "_request_timeout",
         "_session_id",
-        "_use_query_and_wait",
     )
     dialect = "bigquery"
 
@@ -164,7 +165,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._job_retry: Retry | None = build_retry(self._job_retry_deadline) if self._job_retry_deadline > 0 else None
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
         self._request_timeout = self._resolve_request_timeout(features)
-        self._use_query_and_wait = bool(features.get("use_query_and_wait", True))
+        self._enable_query_and_wait = bool(features.get("enable_query_and_wait", True))
         self._enable_storage_write_api = bool(features.get("enable_storage_write_api", False))
         self._in_transaction: bool = False
         self._session_id: str | None = None
@@ -318,7 +319,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not hasattr(self.connection, "query"):
             return
         exc_handler = self.handle_database_exceptions()
-        with exc_handler:
+
+        def _begin_op() -> None:
             job_config = (
                 BigQueryQueryJobConfig(create_session=True)
                 if self._session_id is None
@@ -344,8 +346,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
             session_id = getattr(session_info, "session_id", None)
             if isinstance(session_id, str) and session_id:
                 self._session_id = session_id
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                _begin_op()
+        else:
+            self._run_with_exception_handler(exc_handler, _begin_op)
+        self._check_pending_exception(exc_handler)
 
     def commit(self) -> None:
         """Commit the active BigQuery session transaction."""
@@ -354,13 +361,19 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not was_in_tx or not hasattr(self.connection, "query"):
             return
         exc_handler = self.handle_database_exceptions()
-        with exc_handler:
+
+        def _commit_op() -> None:
             job = self._run_query_job(self.connection, "COMMIT TRANSACTION", None)
             result_fn = getattr(job, "result", None)
             if callable(result_fn):
                 result_fn(job_retry=self._job_retry, timeout=self._job_result_timeout)
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                _commit_op()
+        else:
+            self._run_with_exception_handler(exc_handler, _commit_op)
+        self._check_pending_exception(exc_handler)
 
     def rollback(self) -> None:
         """Rollback the active BigQuery session transaction."""
@@ -369,13 +382,19 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not was_in_tx or not hasattr(self.connection, "query"):
             return
         exc_handler = self.handle_database_exceptions()
-        with exc_handler:
+
+        def _rollback_op() -> None:
             job = self._run_query_job(self.connection, "ROLLBACK TRANSACTION", None)
             result_fn = getattr(job, "result", None)
             if callable(result_fn):
                 result_fn(job_retry=self._job_retry, timeout=self._job_result_timeout)
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                _rollback_op()
+        else:
+            self._run_with_exception_handler(exc_handler, _rollback_op)
+        self._check_pending_exception(exc_handler)
 
     def dry_run(
         self,
@@ -394,7 +413,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
             job_config.connection_properties = [BigQueryConnectionProperty("session_id", self._session_id)]
         exc_handler = self.handle_database_exceptions()
         total_bytes = 0
-        with exc_handler:
+
+        def _dry_run_op() -> int:
             job = run_query_job(
                 self.connection,
                 sql,
@@ -406,9 +426,16 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 timeout=self._job_request_timeout(),
                 job_retry=self._job_retry,
             )
-            total_bytes = int(getattr(job, "total_bytes_processed", 0) or 0)
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+            return int(getattr(job, "total_bytes_processed", 0) or 0)
+
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                total_bytes = _dry_run_op()
+        else:
+            res = self._run_with_exception_handler(exc_handler, _dry_run_op)
+            if res is not None:
+                total_bytes = res
+        self._check_pending_exception(exc_handler)
         return total_bytes
 
     def create_savepoint(self, name: str) -> None:
@@ -523,7 +550,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
             exc_handler = self.handle_database_exceptions()
             streaming_result: ArrowResult | None = None
-            with exc_handler:
+
+            def _streaming_op() -> Any:
                 query_job = self._run_query_job(self.connection, sql, driver_params)
                 row_iterator = query_job.result(
                     page_size=batch_size, job_retry=self._job_retry, timeout=self._job_result_timeout
@@ -535,7 +563,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     else (query_job.schema or getattr(row_iterator, "schema", None))
                 )
                 arrow_reader = _bigquery_arrow_reader_from_iterable(arrow_batches, schema=fallback_schema)
-                streaming_result = build_arrow_result_from_reader(
+                return build_arrow_result_from_reader(
                     prepared_statement,
                     arrow_reader,
                     return_format=return_format,
@@ -543,8 +571,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     arrow_schema=arrow_schema,
                 )
 
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    streaming_result = _streaming_op()
+            else:
+                streaming_result = self._run_with_exception_handler(exc_handler, _streaming_op)
+            self._check_pending_exception(exc_handler)
             if streaming_result is None:
                 msg = "Unreachable"
                 raise RuntimeError(msg)
@@ -596,8 +628,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
 
         if arrow_result is None:
             msg = "Unreachable"
@@ -661,7 +692,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     raise
                 if handler.pending_exception is not None:
                     self.observability.end_storage_span(span, error=handler.pending_exception)
-                    raise handler.pending_exception from None
+                    self._check_pending_exception(handler)
                 native_telemetry = self.observability.annotate_storage_telemetry(native_telemetry)
                 self.observability.end_storage_span(span, telemetry=native_telemetry)
                 self._attach_partition_telemetry(native_telemetry, partitioner)
@@ -732,8 +763,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 rows, qualified_table, job_config=job_config, timeout=self._job_request_timeout()
             )
             job.result(timeout=self._job_request_timeout())
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
         telemetry_payload = build_load_job_telemetry(job, qualified_table, format_label="jsonl")
         return self._storage_job(telemetry_payload)
 
@@ -795,20 +825,23 @@ class BigQueryDriver(SyncDriverAdapterBase):
         ensure_pyarrow()
         qualified_table = self._qualify_table_name(table)
 
-        if self._enable_storage_write_api and not overwrite and not uses_local_bigquery_endpoint(self.connection):
-            try:
-                telemetry_payload = self._load_arrow_via_storage_write_api(qualified_table, arrow_table)
-            except ImportError as exc:
-                logger.warning("Storage Write API unavailable, falling back to Parquet load job: %s", exc)
-            else:
-                if telemetry:
-                    telemetry_payload.setdefault("extra", {})
-                    telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
-                self._attach_partition_telemetry(telemetry_payload, partitioner)
-                return self._storage_job(telemetry_payload)
+        if (
+            self._enable_storage_write_api
+            and not overwrite
+            and not uses_local_bigquery_endpoint(self.connection)
+            and BigQueryStorageWriteModule is not None
+            and BigQueryStorageWriteTypes is not None
+        ):
+            telemetry_payload = self._load_arrow_via_storage_write_api(qualified_table, arrow_table)
+            if telemetry:
+                telemetry_payload.setdefault("extra", {})
+                telemetry_payload["extra"]["arrow_rows"] = telemetry.get("rows_processed")
+            self._attach_partition_telemetry(telemetry_payload, partitioner)
+            return self._storage_job(telemetry_payload)
 
+        pq = import_pyarrow_parquet()
         buffer = io.BytesIO()
-        _pq.write_table(arrow_table, buffer)
+        pq.write_table(arrow_table, buffer)
         buffer.seek(0)
         job_config = build_load_job_config("parquet", overwrite)
         exc_handler = self.handle_database_exceptions()
@@ -818,8 +851,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 buffer, qualified_table, job_config=job_config, timeout=self._job_request_timeout()
             )
             job.result(timeout=self._job_request_timeout())
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
         telemetry_payload = build_load_job_telemetry(job, qualified_table, format_label="parquet")
         if telemetry:
             telemetry_payload.setdefault("extra", {})
@@ -878,8 +910,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     buffer, qualified_table, job_config=job_config, timeout=self._job_request_timeout()
                 )
             job.result(timeout=self._job_request_timeout())
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
         telemetry_payload = build_load_job_telemetry(job, qualified_table, format_label=file_format)
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, source_telemetry)
@@ -921,7 +952,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     def _can_use_query_and_wait(self, statement: "SQL", sql: str) -> bool:
         """Use the interactive fast path only for compatible query jobs."""
-        if not self._use_query_and_wait or not hasattr(self.connection, "query_and_wait"):
+        if not self._enable_query_and_wait or not hasattr(self.connection, "query_and_wait"):
             return False
         if self._in_transaction or self._session_id is not None:
             return False
@@ -1012,7 +1043,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
             client = provider(self.connection)
         else:
             credentials = getattr(self.connection, "_credentials", None)
-            client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
+            write_client_cls = cast("Any", BigQueryStorageWriteModule).BigQueryWriteClient
+            client = write_client_cls(credentials=credentials)
         parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
         write_stream_type_enum = types.WriteStream.Type.COMMITTED if is_committed else types.WriteStream.Type.PENDING
         write_stream = client.create_write_stream(
@@ -1086,20 +1118,42 @@ def _bigquery_arrow_reader_from_iterable(
     batches: "Iterable[ArrowRecordBatch]", schema: Any = None
 ) -> "ArrowRecordBatchReader":
     ensure_pyarrow()
+    pa = import_pyarrow()
     iterator = iter(batches)
     try:
         first_batch = next(iterator)
     except StopIteration:
-        if isinstance(schema, _pa.Schema):
+        if isinstance(schema, pa.Schema):
             empty_schema = schema
         elif isinstance(schema, (list, tuple)):
-            empty_schema = _pa.schema([_pa.field(getattr(field, "name", str(field)), _pa.null()) for field in schema])
+            type_map = {
+                "INTEGER": pa.int64(),
+                "INT64": pa.int64(),
+                "FLOAT": pa.float64(),
+                "FLOAT64": pa.float64(),
+                "BOOLEAN": pa.bool_(),
+                "BOOL": pa.bool_(),
+                "STRING": pa.string(),
+                "BYTES": pa.binary(),
+                "DATE": pa.date32(),
+                "DATETIME": pa.timestamp("us"),
+                "TIMESTAMP": pa.timestamp("us", tz="UTC"),
+                "NUMERIC": pa.decimal128(38, 9),
+                "BIGNUMERIC": pa.decimal256(76, 38),
+            }
+            fields = [
+                pa.field(
+                    getattr(field, "name", str(field)),
+                    type_map.get(str(getattr(field, "field_type", "")).upper(), pa.null()),
+                )
+                for field in schema
+            ]
+            empty_schema = pa.schema(fields)
         else:
-            empty_schema = _pa.schema([])
-        return cast("ArrowRecordBatchReader", _pa.RecordBatchReader.from_batches(empty_schema, ()))
+            empty_schema = pa.schema([])
+        return cast("ArrowRecordBatchReader", pa.RecordBatchReader.from_batches(empty_schema, ()))
     return cast(
-        "ArrowRecordBatchReader",
-        _pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator)),
+        "ArrowRecordBatchReader", pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator))
     )
 
 

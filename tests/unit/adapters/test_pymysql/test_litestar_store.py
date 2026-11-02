@@ -46,3 +46,29 @@ def test_pymysql_litestar_store_rejects_non_string_options() -> None:
     """Explicit option values cannot silently degrade to an empty clause."""
     with pytest.raises(ImproperConfigurationError, match="table_options"):
         PyMysqlStore(_mock_config({"table_options": 42}))
+
+
+def test_pymysql_litestar_store_drop_table_sql_omits_drop_index() -> None:
+    """_drop_table_sql must emit only DROP TABLE IF EXISTS without preceding DROP INDEX."""
+    store = PyMysqlStore(_mock_config())
+    assert store._drop_table_sql() == ["DROP TABLE IF EXISTS litestar_session"]
+
+
+def test_pymysql_litestar_store_set_uses_mariadb_compatible_upsert() -> None:
+    """_set must use VALUES(col) in ON DUPLICATE KEY UPDATE for MySQL and MariaDB compatibility."""
+    cursor = MagicMock()
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn.__enter__.return_value = conn
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+
+    store = PyMysqlStore(config)
+    store._set("session-1", b"payload", 300)
+
+    assert cursor.execute.call_count == 1
+    sql = cursor.execute.call_args_list[0].args[0]
+    assert "ON DUPLICATE KEY UPDATE" in sql
+    assert "data = VALUES(data)" in sql
+    assert "expires_at = VALUES(expires_at)" in sql
+    assert "AS new" not in sql

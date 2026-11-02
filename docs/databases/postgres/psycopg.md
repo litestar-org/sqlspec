@@ -28,7 +28,7 @@
     poetry add "sqlspec[psycopg]"
     ```
 
-Choose `psycopg` when your service mixes synchronous CLI/worker processes with `asyncio` HTTP servers, relies on standard `libpq` environment variables and `.pgpass` / GSSAPI / Kerberos authentication, or runs on scale-to-zero serverless platforms where `null_pool=True` avoids idle connections.
+Choose `psycopg` when your service mixes synchronous CLI/worker processes with `asyncio` HTTP servers, relies on standard `libpq` environment variables and `.pgpass` / GSSAPI / Kerberos authentication, or runs on scale-to-zero serverless platforms where `enable_pooling=False` avoids idle connections.
 
 ## Minimal Connection and Pool Setup
 
@@ -76,7 +76,7 @@ Choose `psycopg` when your service mixes synchronous CLI/worker processes with `
 | `min_size` / `max_size` | `connection_config` | Pool bounds passed to `psycopg_pool.ConnectionPool` or `AsyncConnectionPool`. |
 | `timeout` / `max_waiting` | `connection_config` | Pool checkout timeout (seconds) and maximum queued callers before raising pool timeout errors. |
 | `max_lifetime` / `max_idle` | `connection_config` | Connection recycle and idle eviction intervals in seconds. |
-| `null_pool` | `driver_features` | Instantiates `NullConnectionPool` / `AsyncNullConnectionPool` (zero idle connections while still enforcing `max_size` concurrency). |
+| `enable_pooling` | `driver_features` | Instantiates `NullConnectionPool` / `AsyncNullConnectionPool` when `False` (zero idle connections while still enforcing `max_size` concurrency). |
 | `pooler_mode` | `driver_features` | `"session"`, `"transaction"`, or `"statement"`; sets `prepare_threshold=None` automatically in transaction/statement modes. |
 | `direct_dsn` | `driver_features` | Direct PostgreSQL URI used by `derive_direct_config()` for migrations and `LISTEN/NOTIFY`. |
 | `enable_alloydb` / `enable_alloydb_columnar` | `driver_features` | Connects via AlloyDB connector and enables the AlloyDB columnar engine while honoring `prepare_threshold`. |

@@ -4,14 +4,19 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.sqlanywhere._typing import SqlanywhereCursor
-from sqlspec.adapters.sqlanywhere.core import quote_double_identifier, split_schema_and_table
+from sqlspec.adapters.sqlanywhere.core import quote_double_identifier, resolve_rowcount, split_schema_and_table
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlanywhere.config import SqlanywhereConfig
 
-__all__ = ("SqlanywhereStore",)
+__all__ = ("SqlanywhereLitestarConfig", "SqlanywhereStore")
+
+
+class SqlanywhereLitestarConfig(LitestarConfig):
+    """Configuration for SAP SQL Anywhere Litestar session store."""
 
 
 class SqlanywhereStore(BaseSQLSpecStore["SqlanywhereConfig"]):
@@ -182,7 +187,7 @@ class SqlanywhereStore(BaseSQLSpecStore["SqlanywhereConfig"]):
         with self._config.provide_connection() as conn, SqlanywhereCursor(conn) as cursor:
             cursor.execute(sql)
             conn.commit()
-            count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+            count = resolve_rowcount(cursor)
         if count > 0:
             self._log_delete_expired(count)
         return count

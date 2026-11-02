@@ -3,7 +3,7 @@
 import contextlib
 from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.adapters.pymysql._typing import PyMysqlSSCursor
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -17,6 +17,7 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
+    OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
@@ -28,13 +29,13 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate, has_type_code
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code
 
 if TYPE_CHECKING:
     from sqlspec.core.parameters import ParameterValidator
 
 __all__ = (
-    "PymysqlStreamSource",
+    "PyMysqlStreamSource",
     "apply_driver_features",
     "build_insert_statement",
     "build_load_data_statement",
@@ -45,8 +46,6 @@ __all__ = (
     "collect_stream_rows",
     "create_mapped_exception",
     "default_statement_config",
-    "detect_json_columns",
-    "detect_json_columns_from_description",
     "driver_profile",
     "encode_records_for_local_infile",
     "escape_literal_percent",
@@ -54,7 +53,6 @@ __all__ = (
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
-    "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_row_plan",
     "resolve_rowcount",
@@ -80,7 +78,10 @@ MYSQL_CR_SSL_CONNECTION_ERROR: Final[int] = 2026
 MYSQL_SYNTAX_ERROR_MIN: Final[int] = 1064
 MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE: Final[int] = 1100
 
-_MYSQL_MIGRATION_ERROR_CODES: Final[frozenset[int]] = frozenset((1061, 1091))
+_MYSQL_DDL_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
+    1061: (OperationalError, "duplicate key name"),
+    1091: (OperationalError, "cannot drop column or key"),
+}
 _MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23505": (UniqueViolationError, "unique constraint violation"),
     "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
@@ -145,10 +146,19 @@ _MYSQL_DATA_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 }
 
 
-class PymysqlStreamSource:
+class PyMysqlStreamSource:
     """Compiled chunk source streaming dict rows from a PyMySQL unbuffered ``SSCursor``."""
 
-    __slots__ = ("_chunk_size", "_cursor", "_driver", "_json_type_codes", "_parameters", "_row_plan", "_sql")
+    __slots__ = (
+        "_chunk_size",
+        "_cursor",
+        "_deserializer",
+        "_driver",
+        "_json_type_codes",
+        "_parameters",
+        "_row_plan",
+        "_sql",
+    )
 
     def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, json_type_codes: "set[int]") -> None:
         self._driver = driver
@@ -158,36 +168,35 @@ class PymysqlStreamSource:
         self._cursor: Any = None
         self._json_type_codes = json_type_codes
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        deserializer = getattr(driver, "_json_deserializer", None)
+        if deserializer is None and hasattr(driver, "driver_features") and isinstance(driver.driver_features, dict):
+            deserializer = driver.driver_features.get("json_deserializer")
+        self._deserializer: Callable[[Any], Any] = deserializer or from_json
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            try:
-                cursor = self._driver.connection.cursor(PyMysqlSSCursor)
-                self._cursor = cursor
-                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-                self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-            except BaseException:
-                self.close(error=True)
-                raise
+        self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor(PyMysqlSSCursor)
+            self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        except BaseException:
+            self.close(error=True)
+            raise
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        with handler:
-            rows = self._cursor.fetchmany(self._chunk_size)
+        rows = self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
         if self._row_plan is None:
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-        deserializer = cast(
-            "Callable[[Any], Any]",
-            getattr(self._driver, "_json_deserializer", None)
-            or self._driver.driver_features.get("json_deserializer", from_json),
-        )
-        return collect_stream_rows(rows, self._row_plan, deserializer)
+        return collect_stream_rows(rows, self._row_plan, self._deserializer)
 
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -199,7 +208,7 @@ class PymysqlStreamSource:
 
 def build_profile() -> "DriverParameterProfile":
     """Create the PyMySQL driver parameter profile."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: bool_to_int, **build_uuid_coercions()}
+    coercions: dict[type, Callable[[Any], Any]] = {bool: int, **build_uuid_coercions()}
     return DriverParameterProfile(
         name="PyMySQL",
         default_style=ParameterStyle.QMARK,
@@ -254,14 +263,14 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars="`", allow_bracket_quotes=False)
-    formatted = ".".join(quote_backtick_identifier(part) for part in parts)
+    formatted = ".".join([quote_backtick_identifier(part) for part in parts])
     return formatted or quote_backtick_identifier(cleaned)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
     """Construct an INSERT statement with positional placeholders."""
-    column_clause = ", ".join(quote_backtick_identifier(column) for column in columns)
-    placeholders = ", ".join("%s" for _ in columns)
+    column_clause = ", ".join([quote_backtick_identifier(column) for column in columns])
+    placeholders = ", ".join(["%s" for _ in columns])
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
@@ -294,7 +303,11 @@ def can_use_local_infile_records(arrow_table: Any, records: "Sequence[Sequence[A
                 all_safe_types = False
         if all_safe_types:
             return True
-    return not any(isinstance(value, (bytes, bytearray, memoryview, timedelta)) for row in records for value in row)
+    for row in records:
+        for value in row:
+            if isinstance(value, (bytes, bytearray, memoryview, timedelta)):
+                return False
+    return True
 
 
 def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
@@ -338,13 +351,6 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
-def resolve_column_names(description: "Sequence[Any] | None") -> "list[str]":
-    """Extract column names from cursor description."""
-    if not description:
-        return []
-    return [col[0] for col in description]
-
-
 def resolve_row_plan(
     description: "Sequence[Any] | None", json_type_codes: "set[int]"
 ) -> "tuple[list[str], list[int] | None]":
@@ -354,7 +360,7 @@ def resolve_row_plan(
 
     column_names: list[str] = []
     if not json_type_codes:
-        column_names.extend(column[0] for column in description)
+        column_names.extend([column[0] for column in description])
         return column_names, None
 
     json_indexes: list[int] = []
@@ -368,24 +374,6 @@ def resolve_row_plan(
         if type_code in json_type_codes:
             append_json(index)
     return column_names, json_indexes or None
-
-
-def detect_json_columns_from_description(
-    description: "Sequence[Any] | None", json_type_codes: "set[int]"
-) -> "list[int]":
-    """Identify JSON column indexes from pre-fetched cursor description metadata."""
-    return resolve_row_plan(description, json_type_codes)[1] or []
-
-
-def detect_json_columns(
-    cursor: Any, json_type_codes: "set[int]", description: "Sequence[Any] | None" = None
-) -> "list[int]":
-    """Identify JSON column indexes from cursor metadata."""
-    if description is None:
-        if not has_cursor_metadata(cursor):
-            return []
-        description = cursor.description
-    return detect_json_columns_from_description(description, json_type_codes)
 
 
 def collect_stream_rows(
@@ -469,13 +457,9 @@ def normalize_lastrowid(cursor: Any) -> int | None:
     return last_id if isinstance(last_id, int) else None
 
 
-def bool_to_int(value: bool) -> int:
-    """Coerce boolean values to integer for MySQL parameter compatibility."""
-    return int(value)
-
-
-def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpecError | bool":
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map MySQL driver exceptions to SQLSpec errors."""
+    _ = logger
     error_code = getattr(error, "errno", None)
     if error_code is None and isinstance(error, Exception) and error.args:
         value = error.args[0]
@@ -484,10 +468,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     sqlstate = error.sqlstate if has_sqlstate(error) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
-    if error_code in _MYSQL_MIGRATION_ERROR_CODES:
-        if logger is not None:
-            logger.warning("MySQL expected migration error (ignoring): %s", error)
-        return True
+    dispatch = _MYSQL_DDL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     dispatch = _MYSQL_SQLSTATE_EXACT_DISPATCH.get(sqlstate) if sqlstate is not None else None
     if dispatch is not None:
@@ -543,7 +526,9 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     if not parameters or "%" not in sql:
         return sql
     keep = {info.position for info in validator.extract_parameters(sql)}
-    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
+    if len(keep) == sql.count("%"):
+        return sql
+    return "".join(["%%" if char == "%" and index not in keep else char for index, char in enumerate(sql)])
 
 
 def build_load_data_statement(
@@ -553,10 +538,10 @@ def build_load_data_statement(
     table_sql = format_identifier(table)
     if escape_percent:
         table_sql = table_sql.replace("%", "%%")
-    column_list = ", ".join(
+    column_list = ", ".join([
         quote_backtick_identifier(column).replace("%", "%%") if escape_percent else quote_backtick_identifier(column)
         for column in columns
-    )
+    ])
     return (
         f"LOAD DATA LOCAL INFILE {placeholder} INTO TABLE {table_sql} "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "

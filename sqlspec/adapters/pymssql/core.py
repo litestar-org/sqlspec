@@ -19,6 +19,7 @@ from sqlspec.exceptions import (
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
+    TransactionError,
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
@@ -58,9 +59,19 @@ __all__ = (
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
+_ODBC_SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "08S01": (DatabaseConnectionError, "communication link failure"),
+    "08001": (DatabaseConnectionError, "unable to connect to data source"),
+    "HYT00": (QueryTimeoutError, "query timeout expired"),
+    "HY008": (QueryTimeoutError, "operation canceled"),
+}
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    220: (DataError, "arithmetic overflow error"),
+    258: (QueryTimeoutError, "timeout waiting for latch"),
     2601: (UniqueViolationError, "unique constraint violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
+    3617: (QueryTimeoutError, "query canceled by user or attention event"),
+    3930: (TransactionError, "current transaction cannot be committed"),
     515: (NotNullViolationError, "not-null constraint violation"),
     18456: (PermissionDeniedError, "permission denied"),
     229: (PermissionDeniedError, "permission denied"),
@@ -85,14 +96,20 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     8115: (DataError, "arithmetic overflow error"),
     8152: (DataError, "string or binary data would be truncated"),
     1105: (OperationalError, "operational error"),
+    20003: (QueryTimeoutError, "query timeout expired (FreeTDS)"),
+    20002: (DatabaseConnectionError, "adaptive Server connection failed (FreeTDS)"),
+    20009: (DatabaseConnectionError, "unable to connect: host unreachable or server down (FreeTDS)"),
+    20047: (DatabaseConnectionError, "connection closed or broken (FreeTDS)"),
 }
 
 
 def quote_bracket_identifier(identifier: str) -> str:
     """Quote a T-SQL identifier with square brackets."""
     cleaned = identifier.strip()
-    if (cleaned.startswith("[") and cleaned.endswith("]")) or (cleaned.startswith('"') and cleaned.endswith('"')):
-        cleaned = cleaned[1:-1].replace("]]", "]").replace('""', '"')
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        cleaned = cleaned[1:-1].replace("]]", "]")
+    elif cleaned.startswith('"') and cleaned.endswith('"'):
+        cleaned = cleaned[1:-1].replace('""', '"')
     return f"[{cleaned.replace(']', ']]')}]"
 
 
@@ -122,13 +139,13 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=True)
-    return ".".join(quote_bracket_identifier(part) for part in parts)
+    return ".".join([quote_bracket_identifier(part) for part in parts])
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
     """Build a pymssql-compatible INSERT statement."""
-    column_clause = ", ".join(quote_bracket_identifier(column) for column in columns)
-    placeholders = ", ".join("%s" for _ in columns)
+    column_clause = ", ".join([quote_bracket_identifier(column) for column in columns])
+    placeholders = ", ".join(["%s"] * len(columns))
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
@@ -137,7 +154,13 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     if not parameters or "%" not in sql:
         return sql
     keep = {info.position for info in validator.extract_parameters(sql)}
-    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
+    result: list[str] = []
+    for index, char in enumerate(sql):
+        if char == "%" and index not in keep:
+            result.append("%%")
+        else:
+            result.append(char)
+    return "".join(result)
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:
@@ -192,6 +215,9 @@ def apply_driver_features(
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
+    features.setdefault("enable_pooling", True)
+    features.setdefault("events_backend", "poll_queue")
+    features.setdefault("enable_uuid_conversion", False)
 
     if json_serializer is not None and (
         json_serializer is not to_json
@@ -206,8 +232,32 @@ def apply_driver_features(
     return statement_config, features
 
 
+_SQLSTATE_LENGTH: Final[int] = 5
+
+
+def extract_sqlstate(error: BaseException) -> str | None:
+    """Extract an ODBC SQLSTATE code from a driver error."""
+    val = getattr(error, "sqlstate", None)
+    if isinstance(val, str) and val:
+        return val.strip().upper()
+    if hasattr(error, "args") and len(error.args) > 1:
+        second = error.args[1]
+        if isinstance(second, str) and len(second.strip()) == _SQLSTATE_LENGTH:
+            return second.strip().upper()
+    message = str(error).upper()
+    for code in _ODBC_SQLSTATE_MAP:
+        if code in message:
+            return code
+    return None
+
+
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a SQL Server exception to SQLSpec's exception hierarchy."""
+    sqlstate = extract_sqlstate(error)
+    if sqlstate is not None and sqlstate in _ODBC_SQLSTATE_MAP:
+        error_class, description = _ODBC_SQLSTATE_MAP[sqlstate]
+        return error_class(f"SQL Server SQLSTATE {sqlstate}: {description}. Original error: {error}")
+
     error_number = extract_error_number(error)
 
     if error_number == _MSSQL_CONSTRAINT_547:
@@ -230,6 +280,8 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
         return constraint_exception
 
     exc_name = type(error).__name__
+    if exc_name == "InterfaceError":
+        return DatabaseConnectionError(f"SQL Server interface error. Original error: {error}")
     if exc_name == "IntegrityError":
         return IntegrityError(f"SQL Server integrity error. Original error: {error}")
     if exc_name == "OperationalError":

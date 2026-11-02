@@ -88,6 +88,10 @@ class ADBCOutputConverter:
         return converted
 
 
+_CONVERTER_CACHE: Final[dict[tuple[str, int], ADBCOutputConverter]] = {}
+_CONVERTER_CACHE_MAX_SIZE: Final[int] = 128
+
+
 def get_adbc_type_converter(
     dialect: str, cache_size: int = 5000, *, json_serializer: "Callable[[Any], str] | None" = None
 ) -> ADBCOutputConverter:
@@ -102,4 +106,12 @@ def get_adbc_type_converter(
         Configured ADBCOutputConverter instance.
     """
     _ = cache_size
-    return ADBCOutputConverter(dialect, json_serializer=json_serializer or to_json)
+    serializer = json_serializer or to_json
+    cache_key = (dialect, id(serializer))
+    converter = _CONVERTER_CACHE.get(cache_key)
+    if converter is None:
+        converter = ADBCOutputConverter(dialect, json_serializer=serializer)
+        if len(_CONVERTER_CACHE) >= _CONVERTER_CACHE_MAX_SIZE:
+            del _CONVERTER_CACHE[next(iter(_CONVERTER_CACHE))]
+        _CONVERTER_CACHE[cache_key] = converter
+    return converter

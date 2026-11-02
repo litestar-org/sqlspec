@@ -11,6 +11,7 @@ import duckdb
 from sqlspec.adapters.duckdb.core import create_mapped_exception
 from sqlspec.exceptions import (
     CheckViolationError,
+    DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
     IntegrityError,
@@ -50,6 +51,16 @@ def _make_native(name: str, message: str) -> tuple[type[BaseException], BaseExce
         ("InterruptException", "query interrupted", OperationCancelledError),
         ("IOException", "disk read failure", OperationalError),
         ("ConversionException", "could not convert string", DataError),
+        ("OutOfRangeException", "out of range", DataError),
+        ("InvalidInputException", "invalid input", DataError),
+        ("TypeMismatchException", "type mismatch", DataError),
+        ("InvalidTypeException", "invalid type", DataError),
+        ("SyntaxException", "syntax error", SQLParsingError),
+        ("ConnectionException", "connection error", DatabaseConnectionError),
+        ("OperationalError", "operational error", OperationalError),
+        ("OutOfMemoryException", "out of memory", OperationalError),
+        ("InternalException", "internal error", OperationalError),
+        ("SerializationException", "serialization failure", SerializationConflictError),
     ],
 )
 def test_create_mapped_exception_native_dispatch(
@@ -187,3 +198,14 @@ def test_create_mapped_exception_substring_fallback_conflict_on_update() -> None
 
     mapped = create_mapped_exception(_Generic("Conflict on update!"))
     assert isinstance(mapped, SerializationConflictError)
+
+
+def test_transaction_write_conflict_serialization_error() -> None:
+    """Transaction write-write conflicts map to SerializationConflictError."""
+    exc1 = duckdb.TransactionException("TransactionContext Error: write-write conflict on table users")
+    mapped1 = create_mapped_exception(exc1)
+    assert isinstance(mapped1, SerializationConflictError)
+
+    exc2 = duckdb.TransactionException("TransactionContext Error: conflict on tuple deletion")
+    mapped2 = create_mapped_exception(exc2)
+    assert isinstance(mapped2, SerializationConflictError)

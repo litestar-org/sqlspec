@@ -227,3 +227,23 @@ def test_resolve_rowcount_falls_back_to_cursor_rowcount_when_fetchone_returns_no
             return None
 
     assert resolve_rowcount(_NoneFetchCursor()) == 4
+
+
+def test_provide_session_storage_settings_caching() -> None:
+    """DuckDBConnectionPool caches _storage_settings on thread-local state."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    pool = config.create_pool()
+    with pool.get_connection() as conn:
+        settings1 = pool._storage_settings(conn)
+        settings2 = pool._storage_settings(conn)
+        assert settings1 is settings2
+
+
+def test_version_tuple_parsing() -> None:
+    """_parse_duckdb_version parses release and pre-release version strings correctly."""
+    from sqlspec.adapters.duckdb.core import _parse_duckdb_version, duckdb_version_tuple
+
+    assert _parse_duckdb_version("1.2.0") == (1, 2, 0)
+    assert _parse_duckdb_version("2.0.0rc1") == (2, 0, 0)
+    assert _parse_duckdb_version("v0.9.2") == (0, 9, 2)
+    assert duckdb_version_tuple() >= (0, 0, 0)

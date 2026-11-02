@@ -6,7 +6,9 @@ import pytest
 from pymssql import IntegrityError as PymssqlIntegrityError
 
 from sqlspec import StatementStack
-from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor
+from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor, PymssqlSessionContext
+from sqlspec.adapters.pymssql.core import default_statement_config
+from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLSpecError, StackExecutionError, TransactionError, UniqueViolationError
 from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakeCursor
@@ -87,6 +89,23 @@ def test_dispatch_execute_select_compiles_to_pyformat_and_collects_rows() -> Non
     assert result.selected_data == [(1, "Ada")]
     assert result.column_names == ["id", "name"]
     assert result.data_row_count == 1
+
+
+def test_execute_output_into_does_not_fetch_client_rows() -> None:
+    """OUTPUT INTO must not fetch a result set that the native cursor does not expose."""
+
+    class OutputIntoCursor(FakeCursor):
+        def fetchall(self) -> list[Any]:
+            msg = "OUTPUT INTO does not expose a client result set"
+            raise AssertionError(msg)
+
+    cursor = OutputIntoCursor(rowcount=1)
+    driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection(cursor)))
+
+    result = driver.execute("INSERT INTO dbo.users OUTPUT inserted.id INTO @ids DEFAULT VALUES")
+
+    assert result.rows_affected == 1
+    assert result.get_data() == []
 
 
 def test_dispatch_execute_many_uses_executemany_and_rowcount() -> None:
@@ -340,3 +359,69 @@ def test_pymssql_load_from_arrow_truncates_and_inserts_batches() -> None:
     assert cursor.many_calls == [
         ("INSERT INTO [dbo].[metrics] ([id], [label]) VALUES (%s, %s)", [(1, "50%"), (2, "100%")])
     ]
+
+
+def test_pymssql_transaction_lifecycle() -> None:
+    """begin(), commit(), and rollback() manage transaction active flags and are idempotent."""
+    cursor = FakeCursor()
+    conn = FakeConnection(cursor)
+    conn.autocommit_state = True
+    driver = PymssqlDriver(cast("Any", conn))
+
+    driver.begin()
+    assert driver._connection_in_transaction() is True
+    driver.begin()
+    assert driver._connection_in_transaction() is True
+
+    driver.commit()
+    assert driver._connection_in_transaction() is False
+    driver.commit()
+    assert driver._connection_in_transaction() is False
+
+    driver.begin()
+    assert driver._connection_in_transaction() is True
+    driver.rollback()
+    assert driver._connection_in_transaction() is False
+    driver.rollback()
+    assert driver._connection_in_transaction() is False
+
+
+def test_cache_hit_fast_path_percent_escape() -> None:
+    """Parameterized queries without literal percents take the cache-hit fast path."""
+    from types import SimpleNamespace
+
+    from sqlspec.core.statement import ProcessedState
+
+    cursor = FakeCursor(description=[("id",), ("name",)])
+    cursor.rows = [(1, "Ada")]
+    conn = FakeConnection(cursor)
+    driver = PymssqlDriver(cast("Any", conn))
+    cached = SimpleNamespace(
+        compiled_sql="SELECT [id], [name] FROM [dbo].[users] WHERE [id] = %s",
+        expression=None,
+        operation_type="SELECT",
+        operation_profile=SimpleNamespace(returns_rows=True, modifies_rows=False),
+        input_named_parameters=(),
+        processed_state=ProcessedState("", ()),
+    )
+
+    result = driver._execute_cache_hit(
+        "SELECT [id], [name] FROM [dbo].[users] WHERE [id] = %s", (1,), cast("Any", cached)
+    )
+    assert result.get_data() == [{"id": 1, "name": "Ada"}]
+
+
+def test_session_context_initialization() -> None:
+    """PymssqlSessionContext accepts explicit driver_cls factory without dynamic import."""
+    cursor = FakeCursor()
+    conn = FakeConnection(cursor)
+    context = PymssqlSessionContext(
+        acquire_connection=lambda: conn,
+        release_connection=lambda *args, **kwargs: None,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+        driver_cls=PymssqlDriver,
+    )
+    with context as driver:
+        assert isinstance(driver, PymssqlDriver)

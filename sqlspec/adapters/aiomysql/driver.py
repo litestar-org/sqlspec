@@ -19,7 +19,6 @@ from sqlspec.adapters.aiomysql._typing import (
     AiomysqlCursor,
     AiomysqlFieldType,
     AiomysqlPymysqlError,
-    AiomysqlPymysqlMySQLError,
     AiomysqlSessionContext,
 )
 from sqlspec.adapters.aiomysql.core import (
@@ -44,7 +43,6 @@ from sqlspec.adapters.aiomysql.core import (
 from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
-from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
@@ -98,10 +96,7 @@ class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
         if exc_type is None:
             return False
         if issubclass(exc_type, AiomysqlPymysqlError):
-            result = create_mapped_exception(exc_val, logger=logger)
-            if result is True:
-                return True
-            self.pending_exception = cast("Exception", result)
+            self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
 
@@ -156,8 +151,8 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Statement execution results with data or row counts
         """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         description = getattr(cursor, "description", None) or None
@@ -193,15 +188,17 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Batch execution results
         """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
         match = AIOMYSQL_INSERT_VALUES_PATTERN.match(sql)
         if match:
             sql = (
-                escape_literal_percent(match.group(1), prepared_parameters, self.statement_config.parameter_validator)
+                escape_literal_percent(
+                    match.group(1), prepared_parameters, statement.statement_config.parameter_validator
+                )
                 + sql[match.end(1) :]
             )
         else:
-            sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+            sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -221,25 +218,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult: Script execution results with statement count
         """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_cursor = cursor
-        normalized_params = normalize_execute_parameters(prepared_parameters)
-
-        for stmt in statements:
-            stmt_sql = (
-                escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
-                if normalized_params is not None
-                else stmt
-            )
-            await cursor.execute(stmt_sql, normalized_params)
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+        return await super().dispatch_execute_script(cursor, statement)
 
     async def begin(self) -> None:
         """Begin a database transaction.
@@ -249,12 +228,8 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """
         try:
             await self.connection.begin()
-        except AiomysqlPymysqlMySQLError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, Exception):
-                raise mapped from e
-            msg = f"Failed to begin MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+        except AiomysqlPymysqlError as e:
+            raise create_mapped_exception(e) from e
 
     async def commit(self) -> None:
         """Commit the current transaction.
@@ -264,12 +239,8 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """
         try:
             await self.connection.commit()
-        except AiomysqlPymysqlMySQLError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, Exception):
-                raise mapped from e
-            msg = f"Failed to commit MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+        except AiomysqlPymysqlError as e:
+            raise create_mapped_exception(e) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction.
@@ -279,12 +250,8 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """
         try:
             await self.connection.rollback()
-        except AiomysqlPymysqlMySQLError as e:
-            mapped = create_mapped_exception(e, logger=logger)
-            if isinstance(mapped, Exception):
-                raise mapped from e
-            msg = f"Failed to rollback MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+        except AiomysqlPymysqlError as e:
+            raise create_mapped_exception(e) from e
 
     def with_cursor(self, connection: "AiomysqlConnection") -> "AiomysqlCursor":
         """Create cursor context manager for the connection.
@@ -301,8 +268,8 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """Return a native aiomysql row stream backed by an unbuffered ``SSCursor``."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, statement.statement_config.parameter_validator)
         return AsyncRowStream(
             AiomysqlStreamSource(self, sql, prepared_parameters, chunk_size, AIOMYSQL_JSON_TYPE_CODES)
         )
@@ -392,11 +359,9 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             )
             if use_infile:
                 payload = encode_records_for_local_infile(records)
-                fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
+                tmp_name = await asyncio.to_thread(_write_local_infile_tempfile, payload)
                 try:
-                    with os.fdopen(fd, "wb") as tmp:
-                        tmp.write(payload)
-                    load_sql = build_load_data_statement(table, columns)
+                    load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
                     await self._run_with_exception_handler(
                         exc_handler, self._execute_cursor_statement, load_sql, (tmp_name,)
@@ -422,22 +387,6 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    async def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts from storage into MySQL."""
-
-        return await super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect aiomysql rows for the direct execution path."""
         description = cursor.description or None
@@ -452,10 +401,18 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        statement = self._cached_statement(
-            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-        )
-        return await self._execute_cached_statement(statement)
+        if (
+            "%" in cached.compiled_sql
+            and escape_literal_percent(
+                cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
+            )
+            != cached.compiled_sql
+        ):
+            statement = self._cached_statement(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return await self._execute_cached_statement(statement)
+        return await super()._execute_cache_hit(sql, params, cached)
 
     async def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
         async with self.with_cursor(self.connection) as cursor:
@@ -475,6 +432,14 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             True when the server reports an open transaction.
         """
         return bool(self.connection.get_transaction_status())
+
+
+def _write_local_infile_tempfile(payload: bytes) -> str:
+    """Write LOCAL INFILE payload to a temporary file."""
+    fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
+    with os.fdopen(fd, "wb") as tmp:
+        tmp.write(payload)
+    return tmp_name
 
 
 def _resolve_column_types(description: Any) -> "dict[str, str] | None":

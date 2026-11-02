@@ -33,7 +33,7 @@ ORDER BY tl.name, ti.cid;
 -- name: by_table
 -- dialect: sqlite
 SELECT
-    :schema_name AS schema_name,
+    COALESCE(:schema_name, 'main') AS schema_name,
     :table_name AS table_name,
     ti.name AS column_name,
     ti.type AS data_type,
@@ -54,6 +54,6 @@ SELECT
     END AS extra,
     ti.hidden IN (2, 3) AS is_generated,
     CASE WHEN ti.hidden = 1 THEN 1 ELSE 0 END AS is_hidden
-FROM pragma_table_xinfo(:table_name, :schema_name) AS ti
+FROM pragma_table_xinfo(:table_name, COALESCE(:schema_name, 'main')) AS ti
 LEFT JOIN {schema_prefix}sqlite_schema AS sm ON sm.type = 'table' AND sm.name = :table_name
 ORDER BY ti.cid;

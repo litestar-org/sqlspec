@@ -141,7 +141,7 @@ class SQLSpecPlugin:
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
             "disable_di": framework_config.get("disable_di", False),
-            "enable_correlation_middleware": framework_config.get("enable_correlation_middleware", False),
+            "enable_correlation_middleware": framework_config.get("enable_correlation_middleware", True),
             "correlation_header": framework_config.get("correlation_header", "x-request-id"),
             "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
             "auto_trace_headers": framework_config.get("auto_trace_headers", True),

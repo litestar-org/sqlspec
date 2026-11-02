@@ -6,11 +6,12 @@ from textwrap import dedent
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
+import duckdb
 import pytest
 
 import sqlspec.adapters.duckdb.adk as duckdb_adk
-from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore, DuckdbADKStore
-from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
+from sqlspec.adapters.duckdb.adk import DuckDBADKMemoryStore, DuckDBADKStore
+from sqlspec.adapters.duckdb.litestar.store import DuckDBStore
 from sqlspec.config import ADKConfig
 
 
@@ -27,10 +28,10 @@ def _normalize_sql(sql: str) -> str:
 def test_duckdb_adk_config_types_adapter_local_optimizations() -> None:
     """DuckDB ADK optimization settings are typed on the adapter-local extension config."""
 
-    assert hasattr(duckdb_adk, "DuckdbADKConfig")
-    assert hasattr(duckdb_adk, "DuckdbADKFTSOptions")
-    duckdb_adk_config = cast("Any", duckdb_adk.DuckdbADKConfig)
-    duckdb_adk_fts_options = cast("Any", duckdb_adk.DuckdbADKFTSOptions)
+    assert hasattr(duckdb_adk, "DuckDBADKConfig")
+    assert hasattr(duckdb_adk, "DuckDBADKFTSOptions")
+    duckdb_adk_config = cast("Any", duckdb_adk.DuckDBADKConfig)
+    duckdb_adk_fts_options = cast("Any", duckdb_adk.DuckDBADKFTSOptions)
 
     assert cast("Any", ADKConfig).__optional_keys__ <= duckdb_adk_config.__optional_keys__
 
@@ -60,7 +61,7 @@ def test_duckdb_adk_config_types_adapter_local_optimizations() -> None:
 def test_duckdb_adk_events_table_uses_plain_schema_by_default() -> None:
     """DuckDB ADK event DDL stays unchanged unless DuckDB-specific config opts in."""
 
-    store = DuckdbADKStore(_mock_config())
+    store = DuckDBADKStore(_mock_config())
 
     sql = store._events_table_ddl()
 
@@ -87,7 +88,7 @@ def test_duckdb_adk_events_table_uses_plain_schema_by_default() -> None:
 def test_duckdb_adk_events_table_applies_adapter_local_generated_columns() -> None:
     """DuckDB ADK generated event projection columns and indexes are opt-in."""
 
-    store = DuckdbADKStore(
+    store = DuckDBADKStore(
         _mock_config({"enable_event_generated_columns": True, "enable_event_generated_column_indexes": True})
     )
 
@@ -110,7 +111,7 @@ def test_duckdb_adk_events_table_applies_adapter_local_generated_columns() -> No
 def test_duckdb_adk_memory_fts_pragmas_use_default_options() -> None:
     """DuckDB ADK FTS PRAGMA rendering preserves the current default options."""
 
-    store = DuckdbADKMemoryStore(_mock_config({"memory_use_fts": True}))
+    store = DuckDBADKMemoryStore(_mock_config({"memory_use_fts": True}))
 
     assert (
         store._fts_index_ddl(overwrite=False) == "PRAGMA create_fts_index('adk_memory', 'id', 'content_text', "
@@ -125,7 +126,7 @@ def test_duckdb_adk_memory_fts_pragmas_use_default_options() -> None:
 def test_duckdb_adk_memory_fts_pragmas_apply_adapter_local_options() -> None:
     """DuckDB ADK FTS options come from extension_config["adk"], not driver_features."""
 
-    store = DuckdbADKMemoryStore(
+    store = DuckDBADKMemoryStore(
         _mock_config({
             "memory_use_fts": True,
             "memory_fts_options": {
@@ -177,11 +178,11 @@ def _normalized(sql: str) -> str:
     return " ".join(sql.split())
 
 
-def _session_store_with_connection() -> "tuple[DuckdbADKStore, _SessionListConnection]":
+def _session_store_with_connection() -> "tuple[DuckDBADKStore, _SessionListConnection]":
     conn = _SessionListConnection()
     config = _mock_config()
     config.provide_connection = lambda *_a, **_k: conn
-    return DuckdbADKStore(config), conn
+    return DuckDBADKStore(config), conn
 
 
 def test_duckdb_list_sessions_binds_order_and_page() -> None:
@@ -274,7 +275,7 @@ def test_duckdb_adk_delete_helpers_use_returning_row_count() -> None:
     conn = _DeleteConn()
     config = _mock_config()
     config.provide_connection = lambda *_a, **_k: conn
-    store = DuckdbADKStore(config)
+    store = DuckDBADKStore(config)
     cutoff = datetime.now(UTC)
 
     assert store._delete_expired_events(cutoff) == 2
@@ -285,7 +286,7 @@ def test_duckdb_adk_delete_helpers_use_returning_row_count() -> None:
 
 def test_duckdb_adk_ensure_fts_extension_loads_before_installing() -> None:
     """_ensure_fts_extension should try LOAD fts first and skip INSTALL fts when already installed."""
-    store = DuckdbADKMemoryStore(_mock_config({"memory_use_fts": True}))
+    store = DuckDBADKMemoryStore(_mock_config({"memory_use_fts": True}))
     executed: list[str] = []
 
     class _Conn:
@@ -297,11 +298,84 @@ def test_duckdb_adk_ensure_fts_extension_loads_before_installing() -> None:
 
 
 def test_duckdb_litestar_store_uses_timestamptz_and_normalizes_utc() -> None:
-    """DuckdbStore DDL and queries use TIMESTAMPTZ/CURRENT_TIMESTAMP and normalize naive timestamps to UTC."""
-    store = DuckdbStore(_mock_config())
+    """DuckDBStore DDL and queries use TIMESTAMPTZ/CURRENT_TIMESTAMP and normalize naive timestamps to UTC."""
+    store = DuckDBStore(_mock_config())
     ddl = store._table_ddl()
     assert "TIMESTAMPTZ" in ddl
     naive = datetime(2026, 1, 1, 12, 0, 0)
     converted = store._timestamp_to_datetime(naive)
     assert converted is not None
     assert converted.tzinfo == UTC
+
+
+def test_typing_import() -> None:
+    """DuckDB ADK store imports TypedDict from standard typing."""
+    import sqlspec.adapters.duckdb.adk.store as store_mod
+
+    assert store_mod.TypedDict.__module__ == "typing"
+
+
+def test_search_entries_embedding_warning() -> None:
+    """DuckDBADKMemoryStore.search_entries raises NotImplementedError if embedding is passed."""
+    store = DuckDBADKMemoryStore(_mock_config())
+    with pytest.raises(NotImplementedError, match="does not support embedding-based search"):
+        store.search_entries("query", "app", "user", embedding=[0.1, 0.2, 0.3])
+
+
+def test_schema_qualified_adk_tables_create_in_the_configured_schema() -> None:
+    """Qualified session and memory DDL creates tables and indexes in DuckDB."""
+    session_store = DuckDBADKStore(_mock_config({"session_table": "custom.sessions"}))
+    memory_store = DuckDBADKMemoryStore(_mock_config({"memory_table": "custom.memories"}))
+
+    with duckdb.connect() as connection:
+        connection.execute("CREATE SCHEMA custom")
+        connection.execute(session_store._sessions_table_ddl())
+        connection.execute(memory_store._memory_table_ddl())
+
+        assert connection.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name", ["custom"]
+        ).fetchall() == [("memories",), ("sessions",)]
+
+
+def test_duckdb_adk_rejects_catalog_qualified_table_names() -> None:
+    """The ADK schema helpers support schema.table, without a catalog component."""
+    with pytest.raises(ValueError, match="Invalid table name"):
+        DuckDBADKMemoryStore(_mock_config({"memory_table": "catalog.custom.memories"}))
+
+
+def test_schema_qualified_fts_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Schema-qualified memory tables format indexes without dots and macro as fts_{schema}_{table}."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_table": "custom.my_memories"}))
+    ddl = store._memory_table_ddl()
+    assert "CREATE INDEX IF NOT EXISTS idx_custom_my_memories_app_scope_user_time" in ddl
+    assert "CREATE INDEX IF NOT EXISTS idx_custom_my_memories_scope" in ddl
+    assert "CREATE INDEX IF NOT EXISTS idx_custom_my_memories_session" in ddl
+
+    class _CaptureConn:
+        def __init__(self) -> None:
+            self.sql: str = ""
+
+        def execute(self, sql: str, params: Any = None) -> "_CaptureConn":
+            self.sql = sql
+            return self
+
+        def fetchall(self) -> list[Any]:
+            return []
+
+        @property
+        def description(self) -> list[Any]:
+            return []
+
+        def __enter__(self) -> "Self":
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+    conn = _CaptureConn()
+    config = _mock_config({"memory_table": "custom.my_memories", "memory_use_fts": True})
+    config.provide_connection = lambda *_a, **_k: conn
+    store_fts = DuckDBADKMemoryStore(config)
+    monkeypatch.setattr(DuckDBADKMemoryStore, "_ensure_fts_extension", lambda _s, _c: True)
+    store_fts.search_entries("test", "app", "user")
+    assert "fts_custom_my_memories.match_bm25" in conn.sql

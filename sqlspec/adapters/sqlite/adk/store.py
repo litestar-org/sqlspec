@@ -1,6 +1,8 @@
 """SQLite sync ADK store for Google Agent Development Kit session/event storage."""
 
+import array
 import contextlib
+import math
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -478,7 +480,11 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             params.append(_datetime_to_julian(after_timestamp))
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT {limit}" if limit else ""
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(int(limit))
+        else:
+            limit_clause = ""
 
         sql = f"""
         SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -887,8 +893,8 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                 INSERT OR IGNORE INTO {self._memory_table}
                 (id, session_id, app_name, user_id, scope, event_id, author,
                  {self._owner_id_column_name}, timestamp, content_json,
-                 content_text, metadata_json, inserted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 content_text, metadata_json, inserted_at, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 for entry in entries:
                     timestamp_julian = _datetime_to_julian(entry["timestamp"])
@@ -911,13 +917,14 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                         entry["content_text"],
                         metadata_json_str,
                         inserted_at_julian,
+                        _pack_embedding(entry.get("embedding")),
                     ))
             else:
                 sql = f"""
                 INSERT OR IGNORE INTO {self._memory_table}
                 (id, session_id, app_name, user_id, scope, event_id, author,
-                 timestamp, content_json, content_text, metadata_json, inserted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 for entry in entries:
                     timestamp_julian = _datetime_to_julian(entry["timestamp"])
@@ -939,6 +946,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                         entry["content_text"],
                         metadata_json_str,
                         inserted_at_julian,
+                        _pack_embedding(entry.get("embedding")),
                     ))
 
             cursor = conn.executemany(sql, params_list)
@@ -959,19 +967,22 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
+        """Search memory entries by text query or vector embedding."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query or not query.strip():
+        has_query = bool(query and query.strip())
+        if not has_query and embedding is None:
             return []
 
         effective_limit = limit if limit is not None else self._max_results
+        fetch_limit = effective_limit if embedding is None else max(effective_limit * 5, 50)
 
-        if self._use_fts:
+        records: list[StoredMemory] | None = None
+        if has_query and self._use_fts:
             try:
-                return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                records = self._search_entries_fts(query, app_name, user_id, fetch_limit, scope_filter)
             except sqlite3.OperationalError as exc:
                 error_text = str(exc)
                 if SQLITE_TABLE_NOT_FOUND_ERROR in error_text and f"{self._memory_table}_fts" not in error_text:
@@ -979,12 +990,29 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
             except Exception as exc:
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
-        try:
-            return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
-        except sqlite3.OperationalError as exc:
-            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
-                return []
-            raise
+
+        if records is None:
+            try:
+                if has_query:
+                    records = self._search_entries_simple(query, app_name, user_id, fetch_limit, scope_filter)
+                else:
+                    records = self._search_entries_vector(app_name, user_id, fetch_limit, scope_filter)
+            except sqlite3.OperationalError as exc:
+                if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                    return []
+                raise
+
+        if embedding is not None and records:
+            query_vec = [float(x) for x in embedding]
+
+            def _score(r: "StoredMemory") -> float:
+                emb = r.get("embedding")
+                return _cosine_similarity(query_vec, emb) if emb is not None else -1.0
+
+            records.sort(key=_score, reverse=True)
+            records = records[:effective_limit]
+
+        return records
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -1092,7 +1120,8 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             content_json TEXT NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json TEXT,
-            inserted_at REAL NOT NULL
+            inserted_at REAL NOT NULL,
+            embedding BLOB
         );
 
         CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time
@@ -1169,6 +1198,21 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         params = (*scope_params, pattern, limit)
         return self._fetch_records(sql, params)
 
+    def _search_entries_vector(
+        self, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_sqlite_scope_clause("", app_name, user_id, scope_filter)
+        sql = f"""
+        SELECT *
+        FROM {self._memory_table}
+        WHERE {where_scope}
+          AND embedding IS NOT NULL
+        ORDER BY timestamp DESC
+        LIMIT ?
+        """
+        params = (*scope_params, limit)
+        return self._fetch_records(sql, params)
+
     def _fetch_records(self, sql: str, params: "tuple[Any, ...]") -> "list[StoredMemory]":
         with self._config.provide_connection() as conn:
             self._ensure_foreign_keys(conn)
@@ -1205,7 +1249,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             raw["inserted_at"] = _julian_to_datetime(raw["inserted_at"])
             raw["content_json"] = from_json(raw["content_json"]) if raw["content_json"] else {}
             raw["metadata_json"] = from_json(raw["metadata_json"]) if raw["metadata_json"] else None
-            raw["embedding"] = None
+            raw["embedding"] = _unpack_embedding(raw.get("embedding"))
             records.append(cast("StoredMemory", raw))
         return records
 
@@ -1301,6 +1345,34 @@ def _build_sqlite_scope_clause(
     if scope_filter == "user":
         return f"{prefix}app_name = ? AND {prefix}scope = 'user' AND {prefix}user_id = ?", (app_name, user_id)
     return f"{prefix}app_name = ? AND {prefix}scope = 'app'", (app_name,)
+
+
+def _pack_embedding(raw: Any) -> bytes | None:
+    """Pack float sequence into float32 binary BLOB."""
+    if raw is None:
+        return None
+    return array.array("f", [float(x) for x in raw]).tobytes()
+
+
+def _unpack_embedding(blob: Any) -> list[float] | None:
+    """Unpack float32 binary BLOB into float list."""
+    if blob is None:
+        return None
+    return list(array.array("f", blob))
+
+
+def _cosine_similarity(v1: "Sequence[float]", v2: "Sequence[float]") -> float:
+    """Compute cosine similarity between two float vectors."""
+    dot = 0.0
+    norm1 = 0.0
+    norm2 = 0.0
+    for a, b in zip(v1, v2, strict=False):
+        dot += a * b
+        norm1 += a * a
+        norm2 += b * b
+    if norm1 == 0.0 or norm2 == 0.0:
+        return 0.0
+    return float(dot / (math.sqrt(norm1) * math.sqrt(norm2)))
 
 
 def _session_list_query(

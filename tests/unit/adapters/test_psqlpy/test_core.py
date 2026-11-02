@@ -67,6 +67,15 @@ def test_create_mapped_exception_leaves_not_supported_error_generic() -> None:
     assert type(mapped) is SQLSpecError
 
 
+def test_create_mapped_exception_syntax_error_containing_connection_maps_to_sql_parsing_error() -> None:
+    """Syntax error containing the substring 'connection' maps to SQLParsingError, not DatabaseConnectionError."""
+    from sqlspec.exceptions import SQLParsingError
+
+    error = psqlpy_exceptions.Error('syntax error at or near "connection"')
+    mapped = psqlpy_core.create_mapped_exception(error)
+    assert type(mapped) is SQLParsingError
+
+
 def test_format_execute_many_parameters_no_coercion_reuses_list_rows() -> None:
     """Formatting should preserve list rows when no numeric coercion is requested."""
     records = [[1, "a"], [2, "b"]]

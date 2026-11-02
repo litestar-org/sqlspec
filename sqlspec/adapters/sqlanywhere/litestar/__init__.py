@@ -1,5 +1,5 @@
 """Litestar integration for SAP SQL Anywhere adapter."""
 
-from sqlspec.adapters.sqlanywhere.litestar.store import SqlanywhereStore
+from sqlspec.adapters.sqlanywhere.litestar.store import SqlanywhereLitestarConfig, SqlanywhereStore
 
-__all__ = ("SqlanywhereStore",)
+__all__ = ("SqlanywhereLitestarConfig", "SqlanywhereStore")

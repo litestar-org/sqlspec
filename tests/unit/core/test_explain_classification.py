@@ -95,3 +95,51 @@ def test_sql_explain_oracle_stays_non_row_returning() -> None:
 
     assert statement.sql == "EXPLAIN PLAN FOR SELECT 1"
     assert statement.returns_rows() is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT INTO t (a) OUTPUT inserted.id INTO @ids VALUES (1)",
+        "UPDATE t SET a = 1 OUTPUT inserted.id INTO @ids WHERE id = 1",
+        "DELETE t OUTPUT deleted.id INTO @ids WHERE id = 1",
+    ],
+)
+def test_tsql_output_into_does_not_return_client_rows(sql: str) -> None:
+    """OUTPUT ... INTO writes into a table variable, so no rows reach the client."""
+    statement = SQL(sql, statement_config=StatementConfig(dialect="tsql"))
+
+    assert statement.returns_rows() is False
+
+
+def test_tsql_output_without_into_returns_client_rows() -> None:
+    """A bare OUTPUT clause streams the affected rows to the client."""
+    statement = SQL("INSERT INTO t (a) OUTPUT inserted.id VALUES (1)", statement_config=StatementConfig(dialect="tsql"))
+
+    assert statement.returns_rows() is True
+
+
+def test_oracle_returning_into_does_not_return_client_rows() -> None:
+    """RETURNING INTO fills output variables rather than a client result set."""
+    statement = SQL(
+        "INSERT INTO t (a) VALUES (1) RETURNING id INTO :result",
+        result=0,
+        statement_config=StatementConfig(dialect="oracle"),
+    )
+
+    assert statement.returns_rows() is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT INTO t (a) VALUES (1) RETURNING id",
+        "UPDATE t SET a = 1 WHERE id = 1 RETURNING id",
+        "DELETE FROM t WHERE id = 1 RETURNING id",
+    ],
+)
+def test_postgres_returning_keeps_client_rows(sql: str) -> None:
+    """Ordinary RETURNING statements still expose the affected rows to callers."""
+    statement = SQL(sql, statement_config=StatementConfig(dialect="postgres"))
+
+    assert statement.returns_rows() is True

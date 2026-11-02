@@ -20,7 +20,7 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
-__all__ = ("JULIAN_EPOCH", "SECONDS_PER_DAY", "SQLiteStore", "SqliteLitestarConfig")
+__all__ = ("JULIAN_EPOCH", "SECONDS_PER_DAY", "SqliteLitestarConfig", "SqliteStore")
 
 
 class SqliteLitestarConfig(LitestarConfig):
@@ -36,7 +36,7 @@ class SqliteLitestarConfig(LitestarConfig):
     """Validated PRAGMA overrides applied during schema preparation."""
 
 
-class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
+class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
     """SQLite session store using synchronous SQLite driver.
 
     Implements server-side session storage for Litestar using SQLite

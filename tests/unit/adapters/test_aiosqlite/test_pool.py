@@ -462,3 +462,23 @@ class _FallbackConnectProxy:
             return self._connection
 
         return resolve().__await__()
+
+
+async def test_release_retires_connection_when_rollback_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    pool = AiosqliteConnectionPool({"database": ":memory:", "timeout": 30.0})
+    pool_conn = await pool.acquire()
+    assert pool._queue.qsize() == 0
+
+    await pool_conn.connection.execute("CREATE TABLE test_tx (id INT)")
+    await pool_conn.connection.execute("INSERT INTO test_tx VALUES (1)")
+    assert getattr(pool_conn.connection, "in_transaction", False)
+
+    async def _failing_end_transaction(_raw_conn: Any, *, commit: bool = False) -> None:
+        raise sqlite3.OperationalError("disk I/O error during rollback")
+
+    monkeypatch.setattr(pool_module, "end_transaction", _failing_end_transaction)
+
+    await pool.release(pool_conn)
+    assert pool._queue.qsize() == 0
+    assert not pool_conn.is_healthy
+    await pool.close()

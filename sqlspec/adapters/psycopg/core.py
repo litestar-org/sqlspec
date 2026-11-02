@@ -16,16 +16,12 @@ from sqlspec.core import (
     StatementConfig,
     build_statement_config_from_profile,
 )
-from sqlspec.core.config_runtime import (
-    build_postgres_extension_probe_names,
-    is_postgres_extension_active,
-    resolve_postgres_extension_state,
-    resolve_runtime_statement_config,
-)
 from sqlspec.driver import ExecutionResult, rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
+    DatabaseConnectionError,
+    DataError,
     DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
@@ -34,9 +30,11 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    QueryTimeoutError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
+    TransactionError,
     UniqueViolationError,
     _classify_timeout_or_cancellation,
     map_sqlstate_to_exception,
@@ -54,6 +52,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ParameterStyleConfig, StackOperation
 
 __all__ = (
+    "OPEN_TRANSACTION_STATUSES",
     "TRANSACTION_STATUS_ACTIVE",
     "TRANSACTION_STATUS_IDLE",
     "TRANSACTION_STATUS_INERROR",
@@ -67,23 +66,19 @@ __all__ = (
     "build_async_pipeline_execution_result",
     "build_copy_from_command",
     "build_pipeline_execution_result",
-    "build_postgres_extension_probe_names",
+    "build_postgres_storage_params_sql",
     "build_profile",
     "build_statement_config",
     "build_truncate_command",
-    "collect_rows",
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
     "escape_literal_percent",
     "execute_with_optional_parameters",
     "execute_with_optional_parameters_async",
-    "is_postgres_extension_active",
     "pipeline_supported",
     "resolve_many_rowcount",
-    "resolve_postgres_extension_state",
     "resolve_rowcount",
-    "resolve_runtime_statement_config",
 )
 
 TRANSACTION_STATUS_IDLE = 0
@@ -91,6 +86,11 @@ TRANSACTION_STATUS_ACTIVE = 1
 TRANSACTION_STATUS_INTRANS = 2
 TRANSACTION_STATUS_INERROR = 3
 TRANSACTION_STATUS_UNKNOWN = 4
+OPEN_TRANSACTION_STATUSES: Final[tuple[int, ...]] = (
+    TRANSACTION_STATUS_ACTIVE,
+    TRANSACTION_STATUS_INTRANS,
+    TRANSACTION_STATUS_INERROR,
+)
 
 
 class PreparedStackOperation(NamedTuple):
@@ -132,6 +132,39 @@ def build_copy_from_command(table: str, columns: "list[str]", *, binary: bool = 
 
 def build_truncate_command(table: str) -> "PsycopgComposed":
     return PsycopgSQL("TRUNCATE TABLE {}").format(_compose_table_identifier(table))
+
+
+def build_postgres_storage_params_sql(
+    settings: "dict[str, object] | Mapping[str, object] | None",
+    *,
+    include_autovacuum: bool = False,
+    default_fillfactor: int | None = None,
+    default_vacuum_scale: float | None = None,
+    default_analyze_scale: float | None = None,
+    section: str = "storage",
+) -> str:
+    """Format PostgreSQL table storage parameters (WITH fillfactor = ...) clause."""
+    options: list[str] = []
+    config_dict = dict(settings) if settings else {}
+    fillfactor = config_dict.get("fillfactor", default_fillfactor)
+    if fillfactor is not None:
+        if not isinstance(fillfactor, int) or isinstance(fillfactor, bool) or fillfactor not in range(10, 101):
+            msg = f"extension_config['{section}']['fillfactor'] must be an integer from 10 to 100"
+            raise ValueError(msg)
+        options.append(f"fillfactor = {fillfactor}")
+    if include_autovacuum:
+        scales = (
+            ("autovacuum_vacuum_scale_factor", default_vacuum_scale),
+            ("autovacuum_analyze_scale_factor", default_analyze_scale),
+        )
+        for key, default_val in scales:
+            value = config_dict.get(key, default_val)
+            if value is not None:
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+                    msg = f"extension_config['{section}']['{key}'] must be a number from 0 to 1"
+                    raise ValueError(msg)
+                options.append(f"{key} = {float(value):g}")
+    return f" WITH ({', '.join(options)})" if options else ""
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -181,12 +214,10 @@ def apply_driver_features(
     features.setdefault("enable_paradedb", True)
     features.setdefault("enable_pg_textsearch", True)
     features.setdefault("enable_alloydb_columnar", False)
-    pgbouncer_enabled = bool(features.get("pgbouncer") or features.get("pgbouncer_mode"))
-    features["pgbouncer"] = pgbouncer_enabled
-    features["pgbouncer_mode"] = pgbouncer_enabled
+    features.setdefault("enable_pgcopy_binary", False)
     raw_pooler_mode = features.get("pooler_mode")
     if raw_pooler_mode is None:
-        features["pooler_mode"] = "transaction" if pgbouncer_enabled else "session"
+        features["pooler_mode"] = "session"
     else:
         normalized_mode = str(raw_pooler_mode).lower()
         if normalized_mode not in {"session", "transaction", "statement", "auto"}:
@@ -194,10 +225,7 @@ def apply_driver_features(
                 f"Invalid pooler_mode: {raw_pooler_mode!r}. Expected 'session', 'transaction', 'statement', or 'auto'."
             )
             raise ImproperConfigurationError(msg)
-        features["pooler_mode"] = "transaction" if normalized_mode == "auto" and pgbouncer_enabled else normalized_mode
-    if features["pooler_mode"] in {"transaction", "statement"}:
-        features["pgbouncer"] = True
-        features["pgbouncer_mode"] = True
+        features["pooler_mode"] = "session" if normalized_mode == "auto" else normalized_mode
     features.setdefault("direct_dsn", None)
 
     parameter_config = _parameter_config(driver_profile, serializer, deserializer)
@@ -270,27 +298,12 @@ class PsycopgSyncStreamSource:
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
-        with handler:
-            transaction = self._driver.connection.transaction()
-            transaction.__enter__()
-            self._transaction = transaction
-            try:
-                cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
-                cursor.itersize = self._chunk_size
-                execute_with_optional_parameters(cursor, self._sql, self._parameters)
-                self._cursor = cursor
-            except BaseException as exc:
-                self._transaction = None
-                with contextlib.suppress(Exception):
-                    transaction.__exit__(type(exc), exc, exc.__traceback__)
-                raise
+        self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        with handler:
-            rows = self._cursor.fetchmany(self._chunk_size)
+        rows = self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
@@ -312,6 +325,21 @@ class PsycopgSyncStreamSource:
                     transaction.__exit__(RuntimeError, RuntimeError("stream failed"), None)
                 else:
                     transaction.__exit__(None, None, None)
+
+    def _start(self) -> None:
+        transaction = self._driver.connection.transaction()
+        transaction.__enter__()
+        self._transaction = transaction
+        try:
+            cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+            cursor.itersize = self._chunk_size
+            execute_with_optional_parameters(cursor, self._sql, self._parameters)
+            self._cursor = cursor
+        except BaseException as exc:
+            self._transaction = None
+            with contextlib.suppress(Exception):
+                transaction.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
 
 class PsycopgAsyncStreamSource:
@@ -570,17 +598,22 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Returns:
         A SQLSpec exception that wraps the original error
     """
-    del logger
+    _ = logger
     error_type = type(error)
     mapped_error = _EXCEPTION_MAPPING.get(error_type)
     if mapped_error is None:
         mapped_error = _resolve_exception_mapping(error_type)
     if mapped_error is not None:
         mapped_error_code, error_class, description = mapped_error
-        if mapped_error_code == "57014":
+        sqlstate_code = getattr(error, "sqlstate", None) or mapped_error_code
+        if sqlstate_code == "57014":
             termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
-            return _create_postgres_error(error, mapped_error_code, termination_class, description)
-        return _create_postgres_error(error, mapped_error_code, error_class, description)
+            return _create_postgres_error(error, sqlstate_code, termination_class, description)
+        if sqlstate_code == "55P03":
+            return _create_postgres_error(error, sqlstate_code, QueryTimeoutError, description)
+        if sqlstate_code.startswith("25"):
+            return _create_postgres_error(error, sqlstate_code, TransactionError, description)
+        return _create_postgres_error(error, sqlstate_code, error_class, description)
 
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
     error_code = sqlstate_attr if sqlstate_attr is not None else None
@@ -588,6 +621,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         if error_code == "57014":
             termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
             return _create_postgres_error(error, error_code, termination_class, "query terminated")
+        if error_code == "55P03":
+            return _create_postgres_error(error, error_code, QueryTimeoutError, "lock timeout")
+        if error_code.startswith("25"):
+            return _create_postgres_error(error, error_code, TransactionError, "invalid transaction state")
         exc_class = map_sqlstate_to_exception(error_code)
         if exc_class:
             return _create_postgres_error(error, error_code, exc_class, "database error")
@@ -614,7 +651,14 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
 
 
 def _register_exception_mappings() -> None:
+    from sqlspec.typing import import_optional_attr
+
+    pool_timeout = import_optional_attr("psycopg_pool", "PoolTimeout")
+    if pool_timeout is not None:
+        _EXCEPTION_MAPPING[pool_timeout] = ("", ConnectionTimeoutError, "connection pool timeout")
+
     _EXCEPTION_MAPPING.update({
+        pg_errors.LockNotAvailable: ("55P03", QueryTimeoutError, "lock not available"),
         pg_errors.UniqueViolation: ("23505", UniqueViolationError, "unique constraint violation"),
         pg_errors.ForeignKeyViolation: ("23503", ForeignKeyViolationError, "foreign key constraint violation"),
         pg_errors.NotNullViolation: ("23502", NotNullViolationError, "not-null constraint violation"),
@@ -627,6 +671,10 @@ def _register_exception_mappings() -> None:
         pg_errors.AdminShutdown: ("57P01", ConnectionTimeoutError, "admin shutdown"),
         pg_errors.CannotConnectNow: ("57P03", ConnectionTimeoutError, "cannot connect now"),
         pg_errors.SyntaxError: ("42601", SQLParsingError, "SQL syntax error"),
+        psycopg.OperationalError: ("", DatabaseConnectionError, "operational error"),
+        psycopg.DataError: ("", DataError, "data error"),
+        psycopg.NotSupportedError: ("", SQLSpecError, "not supported"),
+        psycopg.InterfaceError: ("", DatabaseConnectionError, "interface error"),
     })
 
 

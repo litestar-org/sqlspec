@@ -14,13 +14,13 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.duckdb.config import DuckDBConfig
-from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
+from sqlspec.adapters.duckdb.litestar.store import DuckDBStore
 
 pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 
 
 @pytest.fixture
-async def duckdb_store(tmp_path: Path) -> AsyncGenerator[DuckdbStore, None]:
+async def duckdb_store(tmp_path: Path) -> AsyncGenerator[DuckDBStore, None]:
     """Create DuckDB store with temporary file-based database.
 
     Args:
@@ -42,7 +42,7 @@ async def duckdb_store(tmp_path: Path) -> AsyncGenerator[DuckdbStore, None]:
         connection_config={"database": str(db_path)}, extension_config={"litestar": {"session_table": "test_sessions"}}
     )
     try:
-        store = DuckdbStore(config)
+        store = DuckDBStore(config)
         await store.create_table()
         yield store
         await store.delete_all()
@@ -52,7 +52,7 @@ async def duckdb_store(tmp_path: Path) -> AsyncGenerator[DuckdbStore, None]:
             db_path.unlink()
 
 
-async def test_sync_to_thread_concurrency(duckdb_store: DuckdbStore) -> None:
+async def test_sync_to_thread_concurrency(duckdb_store: DuckDBStore) -> None:
     """Test concurrent access via sync_to_thread wrapper.
 
     DuckDB has write serialization, so we test sequential writes

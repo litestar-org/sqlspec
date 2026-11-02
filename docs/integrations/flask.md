@@ -56,8 +56,10 @@ Configure distinct `session_key`, `connection_key`, and `pool_key` values under 
 | `commit_mode` | `"manual" | "autocommit" | "autocommit_include_redirect"` | `"manual"` | Commits on `2xx` (`autocommit`) or `2xx`/`3xx` (`autocommit_include_redirect`) in `after_request` and rolls back on errors. |
 | `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic commit. |
 | `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic rollback. |
-| `enable_correlation_middleware` | `bool` | `False` | Binds request correlation headers into `CorrelationContext`. |
+| `enable_correlation_middleware` | `bool` | `True` | Binds request correlation headers into `CorrelationContext`. |
 | `enable_sqlcommenter_middleware` | `bool` | `False` | Populates `SQLCommenterContext` (`framework="flask"`, route endpoint, method) for wire-level SQL comments. |
+
+Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
 
 ## Recap
 

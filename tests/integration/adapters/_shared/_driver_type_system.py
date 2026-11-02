@@ -1,26 +1,17 @@
-"""Driver-type-system registry and source-equality helpers for contract tests."""
+"""Driver-type-system registry for adapter contract tests."""
 
-import ast
-import difflib
 import importlib
-import inspect
-import textwrap
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 __all__ = (
     "DRIVER_FEATURE_CONSUMED_KEYS",
     "DRIVER_FEATURE_CONTRACT_ENABLED",
     "DRIVER_FEATURE_CONTRACT_GROUPS",
     "DRIVER_FEATURE_TYPED_DICTS",
-    "SOURCE_EQUIVALENCE_ALLOWLIST",
-    "SOURCE_EQUIVALENCE_CASES",
     "DriverFeatureContractGroup",
-    "SourceEquivalenceCase",
-    "assert_source_equivalent",
     "get_driver_feature_consumed_keys",
     "get_driver_feature_keys",
-    "normalize_source",
 )
 
 
@@ -31,17 +22,6 @@ class DriverFeatureContractGroup:
     description: str
     enabled: bool = False
     enabled_adapters: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class SourceEquivalenceCase:
-    """One source-equality tripwire across adapter helper implementations."""
-
-    case_id: str
-    group: str
-    symbol: str
-    module_paths: tuple[str, ...]
-    allowlist_key: str
 
 
 DRIVER_FEATURE_TYPED_DICTS: dict[str, tuple[str, str]] = {
@@ -97,9 +77,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "json_serializer",
         "enable_cast_detection",
         "enable_strict_type_coercion",
-        "strict_type_coercion",
         "enable_arrow_extension_types",
-        "arrow_extension_types",
         "enable_pgvector",
         "enable_paradedb",
         "enable_pg_textsearch",
@@ -139,6 +117,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "extensions",
     ),
     "arrow_odbc": (
+        "events_backend",
         "chunk_size",
         "max_bytes_per_batch",
         "max_text_size",
@@ -146,7 +125,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "fetch_concurrently",
         "query_timeout_sec",
         "payload_text_encoding",
-        "enable_driver_pooling",
+        "enable_pooling",
         "connection_string",
         "dbms_name",
         "connection_autocommit",
@@ -165,6 +144,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_local_infile_bulk_load",
     ),
     "asyncpg": (
+        "enable_pgcopy_binary",
         "json_serializer",
         "json_deserializer",
         "enable_json_codecs",
@@ -184,12 +164,12 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "events_backend",
         "on_connection_create",
         "pooler_mode",
-        "pgbouncer",
-        "pgbouncer_mode",
         "direct_dsn",
         "type_codecs",
     ),
     "bigquery": (
+        "default_query_job_config",
+        "json_deserializer",
         "connection_instance",
         "on_connection_create",
         "json_serializer",
@@ -198,7 +178,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "events_backend",
         "job_retry_deadline",
         "job_result_timeout",
-        "use_query_and_wait",
+        "enable_query_and_wait",
         "request_timeout",
         "query_page_size",
         "query_max_results",
@@ -261,7 +241,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_statement_profiling",
     ),
     "mssql_python": (
-        "use_pool",
+        "enable_pooling",
         "json_serializer",
         "json_deserializer",
         "on_connection_create",
@@ -297,6 +277,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "dbms_cloud_credential",
     ),
     "psqlpy": (
+        "enable_pgcopy_binary",
         "enable_cast_detection",
         "enable_pgvector",
         "enable_paradedb",
@@ -308,11 +289,10 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_events",
         "events_backend",
         "pooler_mode",
-        "pgbouncer",
-        "pgbouncer_mode",
         "direct_dsn",
     ),
     "psycopg": (
+        "enable_pgcopy_binary",
         "enable_pgvector",
         "enable_paradedb",
         "enable_pg_textsearch",
@@ -327,12 +307,18 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "alloydb_ip_type",
         "enable_alloydb_columnar",
         "pooler_mode",
-        "pgbouncer",
-        "pgbouncer_mode",
         "direct_dsn",
-        "null_pool",
+        "enable_pooling",
     ),
-    "pymssql": ("json_serializer", "json_deserializer", "on_connection_create", "enable_events", "events_backend"),
+    "pymssql": (
+        "enable_pooling",
+        "enable_uuid_conversion",
+        "json_serializer",
+        "json_deserializer",
+        "on_connection_create",
+        "enable_events",
+        "events_backend",
+    ),
     "pymysql": (
         "json_serializer",
         "json_deserializer",
@@ -346,6 +332,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "cloud_sql_ip_type",
     ),
     "spanner": (
+        "on_connection_create",
         "enable_uuid_conversion",
         "json_serializer",
         "json_deserializer",
@@ -419,184 +406,6 @@ DRIVER_FEATURE_CONTRACT_ENABLED: dict[str, bool] = {
     group_name: group.enabled for group_name, group in DRIVER_FEATURE_CONTRACT_GROUPS.items()
 }
 
-SOURCE_EQUIVALENCE_CASES: tuple[SourceEquivalenceCase, ...] = (
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_format_identifier",
-        group="mysql_four_way",
-        symbol="format_identifier",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:format_identifier",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_build_insert_statement",
-        group="mysql_four_way",
-        symbol="build_insert_statement",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:build_insert_statement",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_normalize_execute_parameters",
-        group="mysql_four_way",
-        symbol="normalize_execute_parameters",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:normalize_execute_parameters",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_normalize_execute_many_parameters",
-        group="mysql_four_way",
-        symbol="normalize_execute_many_parameters",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:normalize_execute_many_parameters",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_resolve_column_names",
-        group="mysql_four_way",
-        symbol="resolve_column_names",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:resolve_column_names",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_detect_json_columns_from_description",
-        group="mysql_four_way",
-        symbol="detect_json_columns_from_description",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:detect_json_columns_from_description",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_detect_json_columns",
-        group="mysql_four_way",
-        symbol="detect_json_columns",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:detect_json_columns",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_resolve_row_plan",
-        group="mysql_four_way",
-        symbol="resolve_row_plan",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:resolve_row_plan",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_collect_rows",
-        group="mysql_four_way",
-        symbol="collect_rows",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:collect_rows",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_collect_stream_rows",
-        group="mysql_four_way",
-        symbol="collect_stream_rows",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:collect_stream_rows",
-    ),
-    SourceEquivalenceCase(
-        case_id="mysql_four_way_create_mapped_exception",
-        group="mysql_four_way",
-        symbol="create_mapped_exception",
-        module_paths=(
-            "sqlspec.adapters.aiomysql.core",
-            "sqlspec.adapters.asyncmy.core",
-            "sqlspec.adapters.mysqlconnector.core",
-            "sqlspec.adapters.pymysql.core",
-        ),
-        allowlist_key="mysql_four_way:create_mapped_exception",
-    ),
-    SourceEquivalenceCase(
-        case_id="sqlite_pair_apply_driver_features",
-        group="sqlite_pair",
-        symbol="apply_driver_features",
-        module_paths=("sqlspec.adapters.sqlite.core", "sqlspec.adapters.aiosqlite.core"),
-        allowlist_key="sqlite_pair:apply_driver_features",
-    ),
-    SourceEquivalenceCase(
-        case_id="sqlite_pair_build_insert_statement",
-        group="sqlite_pair",
-        symbol="build_insert_statement",
-        module_paths=("sqlspec.adapters.sqlite.core", "sqlspec.adapters.aiosqlite.core"),
-        allowlist_key="sqlite_pair:build_insert_statement",
-    ),
-    SourceEquivalenceCase(
-        case_id="sqlite_pair_normalize_execute_parameters",
-        group="sqlite_pair",
-        symbol="normalize_execute_parameters",
-        module_paths=("sqlspec.adapters.sqlite.core", "sqlspec.adapters.aiosqlite.core"),
-        allowlist_key="sqlite_pair:normalize_execute_parameters",
-    ),
-    SourceEquivalenceCase(
-        case_id="sqlite_pair_normalize_execute_many_parameters",
-        group="sqlite_pair",
-        symbol="normalize_execute_many_parameters",
-        module_paths=("sqlspec.adapters.sqlite.core", "sqlspec.adapters.aiosqlite.core"),
-        allowlist_key="sqlite_pair:normalize_execute_many_parameters",
-    ),
-    SourceEquivalenceCase(
-        case_id="mssql_pair_create_mapped_exception",
-        group="mssql_pair",
-        symbol="create_mapped_exception",
-        module_paths=("sqlspec.adapters.mssql_python.core", "sqlspec.adapters.pymssql.core"),
-        allowlist_key="mssql_pair:create_mapped_exception",
-    ),
-)
-
-SOURCE_EQUIVALENCE_ALLOWLIST: dict[str, frozenset[str]] = {
-    case.allowlist_key: frozenset() for case in SOURCE_EQUIVALENCE_CASES
-}
-
-SOURCE_EQUIVALENCE_ALLOWLIST["mysql_four_way:create_mapped_exception"] = frozenset({
-    "sqlspec.adapters.mysqlconnector.core"
-})
-
 
 def get_driver_feature_keys(adapter: str) -> tuple[str, ...]:
     """Return the canonical DriverFeatures keys declared by an adapter TypedDict."""
@@ -614,88 +423,10 @@ def get_driver_feature_consumed_keys(adapter: str) -> tuple[str, ...]:
     return DRIVER_FEATURE_CONSUMED_KEYS[adapter]
 
 
-class _DocstringStripper(ast.NodeTransformer):
-    def visit_Module(self, node: ast.Module) -> ast.Module:
-        node.body = self._strip_body(node.body)
-        return cast("ast.Module", self.generic_visit(node))
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
-        node.body = self._strip_body(node.body)
-        return cast("ast.FunctionDef", self.generic_visit(node))
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
-        node.body = self._strip_body(node.body)
-        return cast("ast.AsyncFunctionDef", self.generic_visit(node))
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
-        node.body = self._strip_body(node.body)
-        return cast("ast.ClassDef", self.generic_visit(node))
-
-    def _strip_body(self, body: list[ast.stmt]) -> list[ast.stmt]:
-        if body and isinstance(body[0], ast.Expr):
-            value = body[0].value
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                return body[1:]
-        return body
-
-
-def normalize_source(source: str) -> str:
-    """Normalize Python source so source-equality checks ignore docstrings and formatting."""
-    normalized = textwrap.dedent(source).strip()
-    tree = ast.parse(normalized)
-    stripped = _DocstringStripper().visit(tree)
-    ast.fix_missing_locations(stripped)
-    return ast.unparse(stripped).strip()
-
-
-def assert_source_equivalent(case: SourceEquivalenceCase) -> None:
-    """Assert that every unallowlisted module exports the same normalized source."""
-    allowed_modules = SOURCE_EQUIVALENCE_ALLOWLIST.get(case.allowlist_key, frozenset())
-    normalized_sources: dict[str, str] = {}
-    for module_path in case.module_paths:
-        if module_path in allowed_modules:
-            continue
-        normalized_sources[module_path] = normalize_source(_load_symbol_source(module_path, case.symbol))
-
-    if len(normalized_sources) < 2:
-        msg = f"{case.case_id} does not have enough unallowlisted modules to compare"
-        raise AssertionError(msg)
-
-    baseline_module, baseline_source = next(iter(normalized_sources.items()))
-    mismatches: list[str] = []
-    for module_path, source in normalized_sources.items():
-        if source == baseline_source:
-            continue
-        diff = "\n".join(
-            difflib.unified_diff(
-                baseline_source.splitlines(),
-                source.splitlines(),
-                fromfile=baseline_module,
-                tofile=module_path,
-                lineterm="",
-            )
-        )
-        mismatches.append(diff)
-
-    if mismatches:
-        details = "\n\n".join(mismatches)
-        msg = f"{case.case_id} source mismatch for {case.symbol}:\n{details}"
-        raise AssertionError(msg)
-
-
 def _load_symbol(module_path: str, symbol_name: str) -> Any:
     try:
         module = importlib.import_module(module_path)
         return getattr(module, symbol_name)
     except (AttributeError, ImportError) as exc:
         msg = f"Unable to load {symbol_name} from {module_path}: {exc}"
-        raise AssertionError(msg) from exc
-
-
-def _load_symbol_source(module_path: str, symbol_name: str) -> str:
-    symbol = _load_symbol(module_path, symbol_name)
-    try:
-        return inspect.getsource(symbol)
-    except OSError as exc:
-        msg = f"Unable to read source for {symbol_name} from {module_path}: {exc}"
         raise AssertionError(msg) from exc

@@ -15,6 +15,7 @@ Configuration:
 from typing import NotRequired
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
+from sqlspec.adapters.bigquery.core import _bigquery_partition_clauses, _positive_int_or_none, resolve_dataset_id
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
@@ -88,7 +89,7 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
 
     def _string_type(self, length: int) -> str:
         """Return BigQuery STRING type (length is ignored)."""
-        del length
+        _ = length
         return "STRING"
 
     def _integer_type(self) -> str:
@@ -136,43 +137,4 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
 
 
 def _resolve_events_dataset_id(config: BigQueryConfig) -> "str | None":
-    dataset_id = config.connection_config.get("dataset_id")
-    if isinstance(dataset_id, str) and dataset_id:
-        return dataset_id
-    default_job_config = config.connection_config.get("default_query_job_config") or config.driver_features.get(
-        "default_query_job_config"
-    )
-    if default_job_config is None:
-        return None
-    default_dataset = getattr(default_job_config, "default_dataset", None)
-    if default_dataset is None:
-        return None
-    if isinstance(default_dataset, str):
-        return default_dataset or None
-    resolved_id = getattr(default_dataset, "dataset_id", None)
-    if resolved_id:
-        return str(resolved_id)
-    return str(default_dataset)
-
-
-def _positive_int_or_none(value: object, key: str) -> "int | None":
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        msg = f"extension_config['events']['{key}'] must be a positive integer"
-        raise ValueError(msg)
-    return value
-
-
-def _bigquery_partition_clauses(
-    column: str, *, enabled: bool, expiration_days: "int | None", require_filter: bool
-) -> "tuple[str, str]":
-    if not enabled:
-        return "", ""
-    options: list[str] = []
-    if require_filter:
-        options.append("require_partition_filter = TRUE")
-    if expiration_days is not None:
-        options.append(f"partition_expiration_days = {expiration_days}")
-    options_clause = f" OPTIONS({', '.join(options)})" if options else ""
-    return f" PARTITION BY DATE({column})", options_clause
+    return resolve_dataset_id(config)

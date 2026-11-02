@@ -7,6 +7,7 @@ from sqlspec.adapters.adbc import (
     AdbcDriver,
     AdbcDriverFeatures,
     AdbcExceptionHandler,
+    AdbcPoolConfig,
 )
 ```
 
@@ -19,6 +20,12 @@ Apache Arrow Database Connectivity (ADBC) adapter supporting zero-copy Arrow ing
       heading_level: 3
 
 ::: sqlspec.adapters.adbc.AdbcConnectionParams
+    options:
+      heading_level: 3
+      separate_signature: false
+      show_signature_annotations: true
+
+::: sqlspec.adapters.adbc.AdbcPoolConfig
     options:
       heading_level: 3
       separate_signature: false
@@ -49,7 +56,7 @@ Apache Arrow Database Connectivity (ADBC) adapter supporting zero-copy Arrow ing
 
 ## Extension Stores & Configs
 
-::: sqlspec.adapters.adbc.litestar.ADBCStore
+::: sqlspec.adapters.adbc.litestar.AdbcStore
     options:
       heading_level: 4
 

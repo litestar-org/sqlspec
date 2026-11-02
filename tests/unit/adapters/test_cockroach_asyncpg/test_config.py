@@ -549,3 +549,142 @@ async def test_cockroach_asyncpg_adk_locality_validation_and_schema_qualified_dd
     litestar_store = CockroachAsyncpgStore(good_config)
     litestar_store._table_name = "tenant_a.litestar_sessions"
     assert "idx_tenant_a_litestar_sessions_expires_at" in litestar_store._table_ddl()
+
+
+async def test_cockroach_asyncpg_follower_read_only_for_readonly_statements() -> None:
+    """CockroachAsyncpgDriver should not begin follower-read transactions for modifying operations."""
+    in_tx = False
+
+    async def _in_tx() -> bool:
+        return in_tx
+
+    async def _begin(self: Any) -> None:
+        nonlocal in_tx
+        in_tx = True
+
+    with (
+        patch.object(CockroachAsyncpgDriver, "_connection_in_transaction", _in_tx),
+        patch.object(CockroachAsyncpgDriver, "begin", _begin),
+    ):
+        conn = MagicMock()
+        conn.fetch = AsyncMock(return_value=[])
+        driver = CockroachAsyncpgDriver(
+            connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+        )
+        modifying_stmt = SQL("INSERT INTO users (name) VALUES ('alice') RETURNING id")
+        await driver.dispatch_execute(conn, modifying_stmt)
+        assert in_tx is False
+
+
+async def test_cockroach_asyncpg_begin_follower_read_failure_handling() -> None:
+    """Failing SET TRANSACTION in begin() must rollback and raise mapped exception."""
+    conn = MagicMock()
+    conn.is_in_transaction.return_value = False
+    tx = AsyncMock()
+    conn.transaction.return_value = tx
+    conn.execute = AsyncMock(side_effect=RuntimeError("syntax error in staleness"))
+
+    driver = CockroachAsyncpgDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    with pytest.raises(Exception):
+        await driver.begin()
+    assert driver._transaction is None
+    tx.rollback.assert_awaited_once()
+
+
+async def test_cockroach_asyncpg_select_stream_follower_reads() -> None:
+    """select_stream on a SELECT query with follower reads emits the staleness clause and closes."""
+    executed_statements: list[str] = []
+    conn = MagicMock()
+    conn.is_in_transaction.return_value = False
+    tx = AsyncMock()
+    conn.transaction.return_value = tx
+
+    async def fake_execute(query: str, *args: Any, **kwargs: Any) -> str:
+        executed_statements.append(query)
+        return "OK"
+
+    conn.execute = AsyncMock(side_effect=fake_execute)
+
+    cursor_mock = AsyncMock()
+    cursor_mock.fetch = AsyncMock(side_effect=[[{"id": 1}], []])
+    conn.cursor = AsyncMock(return_value=cursor_mock)
+
+    driver = CockroachAsyncpgDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    stream = driver.dispatch_select_stream(SQL("SELECT id FROM users"), chunk_size=10)
+    assert stream is not None
+    rows = [row async for row in stream]
+    assert rows == [{"id": 1}]
+    assert any("AS OF SYSTEM TIME '-10s'" in s for s in executed_statements)
+    tx.commit.assert_awaited()
+
+
+async def test_cockroach_asyncpg_get_columns_and_indexes_by_table() -> None:
+    """CockroachAsyncpgDataDictionary executes by_table query when table is specified."""
+    from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
+
+    calls: list[tuple[Any, dict[str, Any]]] = []
+    driver = MagicMock()
+
+    async def fake_select(query: Any, **kwargs: Any) -> list[Any]:
+        calls.append((query, kwargs))
+        return []
+
+    driver.select = AsyncMock(side_effect=fake_select)
+    dd = CockroachAsyncpgDataDictionary()
+
+    await dd.get_columns(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+    calls.clear()
+    await dd.get_indexes(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+
+async def test_cockroach_asyncpg_cache_hit_with_cursor() -> None:
+    """CockroachAsyncpgDriver executes cached queries directly on connection via _execute_cache_hit."""
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[{"val": 42}])
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    driver = CockroachAsyncpgDriver(cast("Any", conn))
+    res1 = await driver.execute("SELECT 42")
+    assert res1.data == [{"val": 42}]
+
+    res2 = await driver.execute("SELECT 42")
+    assert res2.data == [{"val": 42}]
+    assert conn.fetch.call_count == 2
+
+    upd1 = await driver.execute("UPDATE t SET x = 1")
+    assert upd1.rows_affected == 1
+
+    upd2 = await driver.execute("UPDATE t SET x = 1")
+    assert upd2.rows_affected == 1
+    assert conn.execute.call_count == 2
+
+
+def test_cockroach_asyncpg_connection_config_timeout_annotations() -> None:
+    """CockroachAsyncpgConnectionConfig exposes statement_timeout and idle_in_transaction_session_timeout."""
+    annotations = CockroachAsyncpgConnectionConfig.__annotations__
+    assert "statement_timeout" in annotations
+    assert "idle_in_transaction_session_timeout" in annotations
+
+
+async def test_cockroach_asyncpg_execute_native_storage_under_active_exception() -> None:
+    """_execute_native_storage inside active except block does not pollute pending exception."""
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[{"rows": 1}])
+    driver = CockroachAsyncpgDriver(cast("Any", conn))
+
+    try:
+        raise ValueError("outer error")
+    except ValueError:
+        rows = await driver._execute_native_storage("SELECT 1", [])
+        assert rows == [{"rows": 1}]

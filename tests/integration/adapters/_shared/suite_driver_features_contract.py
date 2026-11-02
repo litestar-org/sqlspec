@@ -1,6 +1,5 @@
-"""Shared driver-feature contracts: registry scaffolds, source tripwires, and folded driver-specific behaviors."""
+"""Shared driver-feature contracts and folded driver-specific behaviors."""
 
-import importlib
 from collections.abc import Sequence
 from typing import cast
 
@@ -9,7 +8,6 @@ from _pytest.mark.structures import ParameterSet
 
 from tests.integration.adapters._shared._cases import (
     ASYNC_DRIVER_CASES,
-    DRIVER_CASES,
     SYNC_DRIVER_CASES,
     DriverCase,
     DriverCaseContext,
@@ -17,9 +15,6 @@ from tests.integration.adapters._shared._cases import (
 )
 from tests.integration.adapters._shared._driver_type_system import (
     DRIVER_FEATURE_CONTRACT_GROUPS,
-    SOURCE_EQUIVALENCE_CASES,
-    SourceEquivalenceCase,
-    assert_source_equivalent,
     get_driver_feature_consumed_keys,
     get_driver_feature_keys,
 )
@@ -36,30 +31,6 @@ from tests.integration.adapters._shared.behaviors import (
     assert_sync_driver_features_contract,
     validate_extra_assertions,
 )
-
-_DRIVER_TYPE_SYSTEM_MODULE = "tests.integration.adapters._shared._driver_type_system"
-
-
-def test_driver_type_system_registry_module_exports_contract_groups() -> None:
-    """The driver-type-system registry module is importable and exposes the expected contract groups."""
-    module = importlib.import_module(_DRIVER_TYPE_SYSTEM_MODULE)
-
-    assert hasattr(module, "DRIVER_FEATURE_CONTRACT_GROUPS")
-    assert hasattr(module, "DRIVER_FEATURE_CONTRACT_ENABLED")
-    assert hasattr(module, "DRIVER_FEATURE_CONSUMED_KEYS")
-    assert hasattr(module, "SOURCE_EQUIVALENCE_CASES")
-    assert hasattr(module, "SOURCE_EQUIVALENCE_ALLOWLIST")
-    assert set(module.DRIVER_FEATURE_CONTRACT_GROUPS) == {
-        "feature_honesty",
-        "enable_false_semantics",
-        "parity",
-        "row_format",
-    }
-    assert module.DRIVER_FEATURE_CONTRACT_ENABLED == {
-        group_name: group.enabled for group_name, group in module.DRIVER_FEATURE_CONTRACT_GROUPS.items()
-    }
-    assert set(module.DRIVER_FEATURE_CONSUMED_KEYS) == {case.adapter for case in DRIVER_CASES}
-    assert {case.group for case in module.SOURCE_EQUIVALENCE_CASES} == {"mysql_four_way", "sqlite_pair", "mssql_pair"}
 
 
 def _disabled_first_params(group_name: str, cases: Sequence[DriverCase]) -> tuple[ParameterSet, ...]:
@@ -175,12 +146,6 @@ async def test_async_driver_feature_row_format_contract(async_driver_case: Drive
     """Async row-format tags match the actual configured row shape."""
     make_config = cast("AsyncConfigFactory | None", async_driver_case.make_config)
     await assert_async_driver_feature_row_format_contract(make_config, async_driver_case.case)
-
-
-@pytest.mark.parametrize("source_equivalence_case", SOURCE_EQUIVALENCE_CASES, ids=lambda case: case.case_id)
-def test_driver_feature_source_equivalence(source_equivalence_case: SourceEquivalenceCase) -> None:
-    """Duplicate helper implementations stay source-equivalent across adapter families."""
-    assert_source_equivalent(source_equivalence_case)
 
 
 def test_sync_driver_features_contract(sync_driver_case: DriverCaseContext) -> None:

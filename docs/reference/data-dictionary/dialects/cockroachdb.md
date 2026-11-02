@@ -79,15 +79,16 @@ The `cockroachdb` dialect pack defines `18` named queries across `15` domain `.s
     ```sql
     -- name: by_schema
     -- dialect: cockroachdb
-    WITH target_schema AS (
+    WITH resolved_table_schema AS (
+        SELECT rn.nspname::text AS schema_name
+        FROM pg_catalog.pg_class rc
+        JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+        WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
+    ),
+    target_schema AS (
         SELECT COALESCE(
             :schema_name::text,
-            (
-                SELECT rn.nspname::text
-                FROM pg_catalog.pg_class rc
-                JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
-                WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
-            ),
+            (SELECT schema_name FROM resolved_table_schema),
             current_schema()
         ) AS schema_name
     ),
@@ -160,15 +161,16 @@ The `cockroachdb` dialect pack defines `18` named queries across `15` domain `.s
 
     -- name: by_table
     -- dialect: cockroachdb
-    WITH target_schema AS (
+    WITH resolved_table_schema AS (
+        SELECT rn.nspname::text AS schema_name
+        FROM pg_catalog.pg_class rc
+        JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+        WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
+    ),
+    target_schema AS (
         SELECT COALESCE(
             :schema_name::text,
-            (
-                SELECT rn.nspname::text
-                FROM pg_catalog.pg_class rc
-                JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
-                WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
-            ),
+            (SELECT schema_name FROM resolved_table_schema),
             current_schema()
         ) AS schema_name
     ),
@@ -260,6 +262,36 @@ The `cockroachdb` dialect pack defines `18` named queries across `15` domain `.s
     ```sql
     -- name: by_schema
     -- dialect: cockroachdb
+    WITH con_cols AS (
+        SELECT
+            kcu.constraint_catalog,
+            kcu.constraint_schema,
+            kcu.constraint_name,
+            kcu.table_schema,
+            kcu.table_name,
+            array_agg(kcu.column_name::text ORDER BY kcu.ordinal_position) AS columns
+        FROM information_schema.key_column_usage kcu
+        WHERE kcu.table_schema = :schema_name
+          AND (:table_name::text IS NULL OR kcu.table_name = :table_name)
+        GROUP BY
+            kcu.constraint_catalog,
+            kcu.constraint_schema,
+            kcu.constraint_name,
+            kcu.table_schema,
+            kcu.table_name
+    ),
+    ref_cols AS (
+        SELECT
+            pk_kcu.constraint_catalog,
+            pk_kcu.constraint_schema,
+            pk_kcu.constraint_name,
+            array_agg(pk_kcu.column_name::text ORDER BY pk_kcu.ordinal_position) AS referenced_columns
+        FROM information_schema.key_column_usage pk_kcu
+        GROUP BY
+            pk_kcu.constraint_catalog,
+            pk_kcu.constraint_schema,
+            pk_kcu.constraint_name
+    )
     SELECT
         tc.constraint_catalog::text AS constraint_catalog,
         tc.constraint_schema::text AS constraint_schema,
@@ -269,27 +301,17 @@ The `cockroachdb` dialect pack defines `18` named queries across `15` domain `.s
         tc.constraint_type::text AS constraint_type,
         tc.is_deferrable::text AS is_deferrable,
         tc.initially_deferred::text AS initially_deferred,
-        ARRAY(
-            SELECT kcu.column_name::text
-            FROM information_schema.key_column_usage kcu
-            WHERE kcu.constraint_catalog = tc.constraint_catalog
-              AND kcu.constraint_schema = tc.constraint_schema
-              AND kcu.constraint_name = tc.constraint_name
-              AND kcu.table_schema = tc.table_schema
-              AND kcu.table_name = tc.table_name
-            ORDER BY kcu.ordinal_position
-        )::text[] AS columns,
+        COALESCE(cc.columns, ARRAY[]::text[]) AS columns,
         rc.unique_constraint_schema::text AS referenced_schema,
         pk_tc.table_name::text AS referenced_table,
-        ARRAY(
-            SELECT pk_kcu.column_name::text
-            FROM information_schema.key_column_usage pk_kcu
-            WHERE pk_kcu.constraint_catalog = rc.unique_constraint_catalog
-              AND pk_kcu.constraint_schema = rc.unique_constraint_schema
-              AND pk_kcu.constraint_name = rc.unique_constraint_name
-            ORDER BY pk_kcu.ordinal_position
-        )::text[] AS referenced_columns
+        COALESCE(rc_cols.referenced_columns, ARRAY[]::text[]) AS referenced_columns
     FROM information_schema.table_constraints tc
+    LEFT JOIN con_cols cc
+      ON cc.constraint_catalog = tc.constraint_catalog
+     AND cc.constraint_schema = tc.constraint_schema
+     AND cc.constraint_name = tc.constraint_name
+     AND cc.table_schema = tc.table_schema
+     AND cc.table_name = tc.table_name
     LEFT JOIN information_schema.referential_constraints rc
       ON rc.constraint_catalog = tc.constraint_catalog
      AND rc.constraint_schema = tc.constraint_schema
@@ -298,6 +320,10 @@ The `cockroachdb` dialect pack defines `18` named queries across `15` domain `.s
       ON pk_tc.constraint_catalog = rc.unique_constraint_catalog
      AND pk_tc.constraint_schema = rc.unique_constraint_schema
      AND pk_tc.constraint_name = rc.unique_constraint_name
+    LEFT JOIN ref_cols rc_cols
+      ON rc_cols.constraint_catalog = rc.unique_constraint_catalog
+     AND rc_cols.constraint_schema = rc.unique_constraint_schema
+     AND rc_cols.constraint_name = rc.unique_constraint_name
     WHERE tc.table_schema = :schema_name
       AND (:table_name::text IS NULL OR tc.table_name = :table_name)
     ORDER BY tc.table_schema, tc.table_name, tc.constraint_name;

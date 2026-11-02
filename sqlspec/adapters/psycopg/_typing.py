@@ -46,10 +46,10 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, Statement, StatementConfig
 
-    PsycopgSyncConnection: TypeAlias = PsycopgConnection[PsycopgDictRow]
-    PsycopgAsyncConnection: TypeAlias = PsycopgNativeAsyncConnection[PsycopgDictRow]
-    PsycopgSyncRawCursor: TypeAlias = PsycopgCursor[PsycopgDictRow]
-    PsycopgAsyncRawCursor: TypeAlias = PsycopgNativeAsyncCursor[PsycopgDictRow]
+    PsycopgSyncConnection: TypeAlias = PsycopgConnection[Any]
+    PsycopgAsyncConnection: TypeAlias = PsycopgNativeAsyncConnection[Any]
+    PsycopgSyncRawCursor: TypeAlias = PsycopgCursor[Any]
+    PsycopgAsyncRawCursor: TypeAlias = PsycopgNativeAsyncCursor[Any]
 else:
     PsycopgSyncConnection = PsycopgConnection
     PsycopgAsyncConnection = PsycopgNativeAsyncConnection
@@ -215,7 +215,10 @@ class PsycopgSyncSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         try:
-            if self._driver is not None and getattr(self._driver, "_transaction_active", False):
+            if self._driver is not None and (
+                getattr(self._driver, "_transaction_active", False)
+                or getattr(self._driver, "_connection_in_transaction", lambda: False)()
+            ):
                 with contextlib.suppress(Exception):
                     self._driver.rollback()
         finally:
@@ -276,7 +279,10 @@ class PsycopgAsyncSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         try:
-            if self._driver is not None and getattr(self._driver, "_transaction_active", False):
+            if self._driver is not None and (
+                getattr(self._driver, "_transaction_active", False)
+                or getattr(self._driver, "_connection_in_transaction", lambda: False)()
+            ):
                 with contextlib.suppress(Exception):
                     await self._driver.rollback()
         finally:

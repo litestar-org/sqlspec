@@ -8,6 +8,8 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.core import SQL
 from sqlspec.core.result import SQLResult
 
 __all__ = (
@@ -229,3 +231,101 @@ class _SpyDuckDBCursor:
 
     def fetchone(self) -> Any:
         return self._connection.fetchone()
+
+
+def test_select_stream_hugeint_interval_divergent_types() -> None:
+    """Stream selection falls back to fetchmany when divergent types like HUGEINT are present."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    stream = driver.select_stream("SELECT 170141183460469231731687303715884105727::HUGEINT as val", chunk_size=1)
+    assert stream is not None
+    chunks = list(stream)
+    assert len(chunks) == 1
+    assert chunks[0]["val"] == 170141183460469231731687303715884105727
+
+
+@pytest.mark.parametrize("exhaust_stream", [True, False])
+def test_select_stream_preserves_active_transaction(exhaust_stream: bool) -> None:
+    with duckdb.connect(":memory:") as connection:
+        driver = DuckDBDriver(connection)
+        driver.execute("CREATE TABLE items (id INTEGER)")
+        driver.begin()
+        driver.execute("INSERT INTO items VALUES (1)")
+
+        with driver.select_stream("SELECT id::HUGEINT AS id FROM items", chunk_size=1) as stream:
+            if exhaust_stream:
+                assert list(stream) == [{"id": 1}]
+            else:
+                assert next(stream) == {"id": 1}
+
+        assert driver.select_value("SELECT COUNT(*) FROM items") == 1
+        driver.rollback()
+        assert driver.select_value("SELECT COUNT(*) FROM items") == 0
+
+
+def test_concurrent_execute_many_ast_mutation() -> None:
+    """dispatch_execute_many does not mutate parsed_expression.meta."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    driver.execute("CREATE TABLE items (id INT, name VARCHAR)")
+
+    stmt = SQL("INSERT INTO items VALUES (?, ?)", statement_config=driver.statement_config)
+    stmt.compile()
+    expr = stmt._peek_expression()
+    assert expr is not None
+    meta_before = dict(expr.meta)
+
+    driver.execute_many(stmt, [[1, "a"], [2, "b"]])
+    assert expr.meta == meta_before
+
+
+def test_select_column_name_cache_concurrency() -> None:
+    """_materialize_select_rows avoids redundant double-locking when row count hint matches."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    driver.execute("CREATE TABLE test_cache_hits (id INT)")
+    driver.execute("INSERT INTO test_cache_hits VALUES (1), (2)")
+
+    sql = "SELECT * FROM test_cache_hits"
+    res1 = driver.execute(sql)
+    assert len(res1.data) == 2
+    hint1 = driver._cache_holder.get_row_count_hint(sql)
+    assert hint1 == 2
+
+    res2 = driver.execute(sql)
+    assert len(res2.data) == 2
+    hint2 = driver._cache_holder.get_row_count_hint(sql)
+    assert hint2 == 2
+
+
+def test_auxiliary_exception_isolation() -> None:
+    """Auxiliary methods route through exception handler with active exception isolation."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    try:
+        raise ValueError("ambient error")
+    except ValueError:
+        driver.begin()
+        driver.commit()
+
+
+def test_migration_helpers_exception_mapping() -> None:
+    """set_migration_session_schema and has_schema map exceptions properly."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    driver = DuckDBDriver(config.create_connection())
+    assert driver.has_schema("main") is True
+    driver.set_migration_session_schema("main")
+
+
+def test_profiling_temp_file_cleanup() -> None:
+    """Driver cleans up temporary profile JSON file upon close."""
+    config = DuckDBConfig(
+        connection_config={"database": ":memory:"}, driver_features={"enable_statement_profiling": True}
+    )
+    driver = DuckDBDriver(config.create_connection(), driver_features={"enable_statement_profiling": True})
+    driver.execute("SELECT 1")
+    profile_path = driver._created_profile_path
+    assert profile_path is not None
+    assert profile_path.exists()
+    driver.close()
+    assert not profile_path.exists()

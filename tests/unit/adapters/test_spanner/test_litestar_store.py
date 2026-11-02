@@ -42,7 +42,7 @@ def test_delete_uses_run_in_transaction() -> None:
 
 
 def test_delete_all_uses_run_in_transaction() -> None:
-    """Verify _delete_all uses database.run_in_transaction for write operations."""
+    """Verify _delete_all uses execute_partitioned_dml."""
     mock_db = _mock_database()
 
     config = MagicMock()
@@ -52,11 +52,11 @@ def test_delete_all_uses_run_in_transaction() -> None:
     store = SpannerSyncStore(config)
     store._delete_all()  # pyright: ignore
 
-    mock_db.run_in_transaction.assert_called_once()
+    mock_db.execute_partitioned_dml.assert_called_once()
 
 
 def test_delete_expired_uses_run_in_transaction() -> None:
-    """Verify _delete_expired uses database.run_in_transaction for write operations."""
+    """Verify _delete_expired uses execute_partitioned_dml."""
     mock_db = _mock_database()
 
     config = MagicMock()
@@ -66,7 +66,49 @@ def test_delete_expired_uses_run_in_transaction() -> None:
     store = SpannerSyncStore(config)
     store._delete_expired()  # pyright: ignore
 
-    mock_db.run_in_transaction.assert_called_once()
+    mock_db.execute_partitioned_dml.assert_called_once()
+
+
+def test_set_single_dml_upsert() -> None:
+    """Verify _set issues a single INSERT OR UPDATE DML statement."""
+    executed_statements: list[str] = []
+
+    class _MockTxn:
+        def execute_update(self, sql: str, params: Any = None, param_types: Any = None) -> int:
+            executed_statements.append(sql)
+            return 1
+
+    mock_db = MagicMock()
+    mock_db.run_in_transaction = MagicMock(side_effect=lambda func: func(_MockTxn()))
+
+    config = MagicMock()
+    config.extension_config = {"litestar": {"session_table": "sess"}}
+    config.get_database.return_value = mock_db
+
+    store = SpannerSyncStore(config)
+    store._set("s1", b"data", None)  # pyright: ignore
+
+    assert len(executed_statements) == 1
+    assert "INSERT OR UPDATE INTO" in executed_statements[0]
+
+
+def test_row_deletion_policy_ddl() -> None:
+    """Verify _table_ddl includes ROW DELETION POLICY when enabled."""
+    config = MagicMock()
+    config.extension_config = {"litestar": {"session_table": "sess", "enable_row_deletion_policy": True}}
+    store = SpannerSyncStore(config)
+    ddl = store._table_ddl()
+    assert "ROW DELETION POLICY (OLDER_THAN(expires_at, INTERVAL 0 DAY))" in ddl
+
+
+def test_litestar_store_param_types_cached() -> None:
+    """_get_param_types returns module-level cached constants."""
+    config = MagicMock()
+    config.extension_config = {"litestar": {"session_table": "sess"}}
+    store = SpannerSyncStore(config)
+    t1 = store._get_param_types(session_id=True, data=True, expires_at=True)
+    t2 = store._get_param_types(session_id=True, data=True, expires_at=True)
+    assert t1 is t2
 
 
 def _context_manager_yielding(value: Any) -> Any:
@@ -134,6 +176,7 @@ def _mock_async_database() -> MagicMock:
         return await func(txn)
 
     db.run_in_transaction = AsyncMock(side_effect=_run_in_txn)
+    db.execute_partitioned_dml = AsyncMock(return_value=1)
     db._txn = txn
     return db
 
@@ -181,11 +224,11 @@ async def test_async_store_set_delete_delete_all_delete_expired() -> None:
     assert db.run_in_transaction.await_count == 2
 
     await store.delete_all()
-    assert db.run_in_transaction.await_count == 3
+    assert db.execute_partitioned_dml.await_count == 1
 
     deleted = await store.delete_expired()
     assert deleted == 1
-    assert db.run_in_transaction.await_count == 4
+    assert db.execute_partitioned_dml.await_count == 2
 
 
 async def test_async_store_get_exists_expires_in() -> None:

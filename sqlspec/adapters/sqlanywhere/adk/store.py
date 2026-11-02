@@ -10,7 +10,6 @@ from sqlspec.adapters.sqlanywhere.core import (
     resolve_rowcount,
     split_schema_and_table,
 )
-from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
@@ -23,14 +22,10 @@ if TYPE_CHECKING:
     from sqlspec.extensions.adk import SessionOrderBy
     from sqlspec.extensions.adk.memory._types import StoredMemory
 
-__all__ = ("SqlanywhereADKConfig", "SqlanywhereADKMemoryStore", "SqlanywhereADKStore")
+__all__ = ("SqlanywhereADKMemoryStore", "SqlanywhereADKStore")
 
 SQLANYWHERE_TABLE_NOT_FOUND_SQLCODE: Final[int] = -141
 JSON_COLUMN_TYPE: Final[str] = "LONG VARCHAR"
-
-
-class SqlanywhereADKConfig(ADKConfig):
-    """SAP SQL Anywhere ADK extension settings."""
 
 
 class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
@@ -38,6 +33,8 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
 
     connector_name: ClassVar[str] = "sqlanywhere"
     __slots__ = ()
+
+    _max_table_name_parts = 2
 
     def __init__(self, config: "SqlanywhereConfig") -> None:
         super().__init__(config)
@@ -416,6 +413,8 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
 
     __slots__ = ()
 
+    _max_table_name_parts = 2
+
     def __init__(self, config: "SqlanywhereConfig") -> None:
         super().__init__(config)
 
@@ -450,6 +449,7 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
             content_json, content_text, metadata_json{owner_column}
         )
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{owner_value}
+        FROM SYS.DUMMY
         WHERE NOT EXISTS (
             SELECT 1 FROM {_table_ref(self._memory_table)}
             WHERE event_id = ?
@@ -508,7 +508,12 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
         ORDER BY timestamp DESC
         LIMIT ?
         """
-        rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%", limit_value))
+        try:
+            rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%", limit_value))
+        except SqlanywhereError as exc:
+            if _is_sqlanywhere_table_missing(exc):
+                return []
+            raise
         return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:

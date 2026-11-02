@@ -1,13 +1,13 @@
 """SAP SQL Anywhere database driver implementation over sqlanydb."""
 
 import contextlib
+import sys
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.sqlanywhere._typing import (
     SqlanywhereConnection,
     SqlanywhereCursor,
-    SqlanywhereError,
     SqlanywhereRawCursor,
     SqlanywhereSessionContext,
 )
@@ -34,7 +34,7 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLSpecError, TransactionError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -66,7 +66,7 @@ class SqlanywhereExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if isinstance(exc_val, (SqlanywhereError, Exception)) and not isinstance(exc_val, SQLSpecError):
+        if isinstance(exc_val, Exception) and not isinstance(exc_val, SQLSpecError):
             self.pending_exception = create_mapped_exception(exc_val, logger=logger)
             return True
         return False
@@ -90,12 +90,19 @@ class SqlanywhereStreamSource:
         try:
             cursor = cursor_manager.__enter__()
             handler = self._driver.handle_database_exceptions()
-            with handler:
+            if sys.exc_info()[1] is None:
+                with handler:
+                    normalized_params = normalize_execute_parameters(self._parameters)
+                    if normalized_params:
+                        cursor.execute(self._sql, normalized_params)
+                    else:
+                        cursor.execute(self._sql)
+            else:
                 normalized_params = normalize_execute_parameters(self._parameters)
                 if normalized_params:
-                    cursor.execute(self._sql, normalized_params)
+                    self._driver._run_with_exception_handler(handler, cursor.execute, self._sql, normalized_params)
                 else:
-                    cursor.execute(self._sql)
+                    self._driver._run_with_exception_handler(handler, cursor.execute, self._sql)
             self._driver._check_pending_exception(handler)
         except BaseException:
             with contextlib.suppress(Exception):
@@ -110,8 +117,11 @@ class SqlanywhereStreamSource:
         cursor = cursor_manager.cursor
         handler = self._driver.handle_database_exceptions()
         rows: Any = []
-        with handler:
-            rows = cursor.fetchmany(self._chunk_size)
+        if sys.exc_info()[1] is None:
+            with handler:
+                rows = cursor.fetchmany(self._chunk_size)
+        else:
+            rows = self._driver._run_with_exception_handler(handler, cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
@@ -216,14 +226,14 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
             self._transaction_active = False
         except Exception as exc:
             msg = f"Failed to commit SQL Anywhere transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            raise TransactionError(msg) from exc
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
         except Exception as exc:
             msg = f"Failed to rollback SQL Anywhere transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            raise TransactionError(msg) from exc
         finally:
             self._transaction_active = False
 
@@ -253,9 +263,19 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
         """Return whether the specified user/schema exists in SYS.SYSUSER."""
         result = False
         exc_handler = self.handle_database_exceptions()
-        with exc_handler, self.with_cursor(self.connection) as cursor:
-            cursor.execute("SELECT 1 FROM SYS.SYSUSER WHERE user_name = ?", (schema,))
-            result = cursor.fetchone() is not None
+        with self.with_cursor(self.connection) as cursor:
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    cursor.execute("SELECT 1 FROM SYS.SYSUSER WHERE user_name = ?", (schema,))
+                    result = cursor.fetchone() is not None
+            else:
+
+                def _fetch() -> None:
+                    nonlocal result
+                    cursor.execute("SELECT 1 FROM SYS.SYSUSER WHERE user_name = ?", (schema,))
+                    result = cursor.fetchone() is not None
+
+                self._run_with_exception_handler(exc_handler, _fetch)
         self._check_pending_exception(exc_handler)
         return result
 
@@ -337,8 +357,12 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
         if overwrite:
             statement = f"DELETE FROM {format_identifier(table)}"
             exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.execute(statement)
+            with self.with_cursor(self.connection) as cursor:
+                if sys.exc_info()[1] is None:
+                    with exc_handler:
+                        cursor.execute(statement)
+                else:
+                    self._run_with_exception_handler(exc_handler, cursor.execute, statement)
             self._check_pending_exception(exc_handler)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
@@ -352,8 +376,14 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
             )
             normalized_records = normalize_execute_many_parameters(prepared_records)
             exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.executemany(insert_sql, cast("Sequence[QueryParams]", normalized_records))
+            with self.with_cursor(self.connection) as cursor:
+                if sys.exc_info()[1] is None:
+                    with exc_handler:
+                        cursor.executemany(insert_sql, cast("Sequence[QueryParams]", normalized_records))
+                else:
+                    self._run_with_exception_handler(
+                        exc_handler, cursor.executemany, insert_sql, cast("Sequence[QueryParams]", normalized_records)
+                    )
             self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)

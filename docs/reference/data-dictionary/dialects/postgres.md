@@ -257,6 +257,24 @@ The `postgres` dialect pack defines `26` named queries across `21` domain `.sql`
     ```sql
     -- name: by_schema
     -- dialect: postgres
+    WITH con_cols AS (
+        SELECT
+            con.oid AS con_oid,
+            array_agg(att.attname::text ORDER BY keys.ord) AS columns
+        FROM pg_catalog.pg_constraint con
+        CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS keys(attnum, ord)
+        JOIN pg_catalog.pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = keys.attnum
+        GROUP BY con.oid
+    ),
+    ref_cols AS (
+        SELECT
+            con.oid AS con_oid,
+            array_agg(att.attname::text ORDER BY keys.ord) AS referenced_columns
+        FROM pg_catalog.pg_constraint con
+        CROSS JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS keys(attnum, ord)
+        JOIN pg_catalog.pg_attribute att ON att.attrelid = con.confrelid AND att.attnum = keys.attnum
+        GROUP BY con.oid
+    )
     SELECT
         current_database()::text AS constraint_catalog,
         n.nspname::text AS constraint_schema,
@@ -272,20 +290,10 @@ The `postgres` dialect pack defines `26` named queries across `21` domain `.sql`
             ELSE con.contype::text
         END AS constraint_type,
         pg_catalog.pg_get_constraintdef(con.oid, true)::text AS definition,
-        ARRAY(
-            SELECT att.attname::text
-            FROM unnest(con.conkey) WITH ORDINALITY AS keys(attnum, ord)
-            JOIN pg_catalog.pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = keys.attnum
-            ORDER BY keys.ord
-        )::text[] AS columns,
+        COALESCE(cc.columns, ARRAY[]::text[]) AS columns,
         ref_ns.nspname::text AS referenced_schema,
         ref.relname::text AS referenced_table,
-        ARRAY(
-            SELECT att.attname::text
-            FROM unnest(con.confkey) WITH ORDINALITY AS keys(attnum, ord)
-            JOIN pg_catalog.pg_attribute att ON att.attrelid = con.confrelid AND att.attnum = keys.attnum
-            ORDER BY keys.ord
-        )::text[] AS referenced_columns,
+        COALESCE(rc.referenced_columns, ARRAY[]::text[]) AS referenced_columns,
         con.condeferrable AS is_deferrable,
         con.condeferred AS initially_deferred,
         dep.refobjid IS NOT NULL AS is_extension_owned
@@ -295,6 +303,8 @@ The `postgres` dialect pack defines `26` named queries across `21` domain `.sql`
     LEFT JOIN pg_catalog.pg_class ref ON ref.oid = con.confrelid
     LEFT JOIN pg_catalog.pg_namespace ref_ns ON ref_ns.oid = ref.relnamespace
     LEFT JOIN pg_catalog.pg_depend dep ON dep.objid = con.oid AND dep.deptype = 'e'
+    LEFT JOIN con_cols cc ON cc.con_oid = con.oid
+    LEFT JOIN ref_cols rc ON rc.con_oid = con.oid
     WHERE n.nspname = :schema_name
       AND (:table_name::text IS NULL OR c.relname = :table_name)
     ORDER BY n.nspname, c.relname, con.conname;
@@ -505,6 +515,18 @@ The `postgres` dialect pack defines `26` named queries across `21` domain `.sql`
     ```sql
     -- name: by_schema
     -- dialect: postgres
+    WITH target_schema AS (
+        SELECT COALESCE(
+            :schema_name::text,
+            (
+                SELECT rn.nspname::text
+                FROM pg_catalog.pg_class rc
+                JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+                WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
+            ),
+            current_schema()
+        ) AS schema_name
+    )
     SELECT
         tn.nspname::text AS schema_name,
         tbl.relname::text AS table_name,
@@ -540,11 +562,11 @@ The `postgres` dialect pack defines `26` named queries across `21` domain `.sql`
     FROM pg_catalog.pg_index ix
     JOIN pg_catalog.pg_class tbl ON tbl.oid = ix.indrelid
     JOIN pg_catalog.pg_namespace tn ON tn.oid = tbl.relnamespace
+    JOIN target_schema ts ON ts.schema_name = tn.nspname
     JOIN pg_catalog.pg_class idx ON idx.oid = ix.indexrelid
     JOIN pg_catalog.pg_am am ON am.oid = idx.relam
     LEFT JOIN pg_catalog.pg_depend dep ON dep.objid = idx.oid AND dep.deptype = 'e'
-    WHERE tn.nspname = :schema_name
-      AND (:table_name::text IS NULL OR tbl.relname = :table_name)
+    WHERE (:table_name::text IS NULL OR tbl.relname = :table_name)
     ORDER BY tn.nspname, tbl.relname, idx.relname;
 
     -- name: by_table
@@ -786,7 +808,7 @@ The `postgres` dialect pack defines `26` named queries across `21` domain `.sql`
         total_exec_time,
         mean_exec_time,
         rows
-    FROM pg_catalog.pg_stat_statements
+    FROM pg_stat_statements
     ORDER BY total_exec_time DESC
     LIMIT :limit;
 

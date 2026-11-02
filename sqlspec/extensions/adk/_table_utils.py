@@ -40,17 +40,27 @@ def reset_drop_sql(
     return unique_statements(statements)
 
 
-def ensure_table_name(table_name: str) -> None:
-    """Validate table name for SQL safety."""
+def ensure_table_name(table_name: str, *, max_parts: int = 1) -> None:
+    """Validate table identifier components supported by the store.
+
+    Args:
+        table_name: Table name to validate.
+        max_parts: Maximum number of identifier components the store supports.
+
+    Raises:
+        ValueError: If a name component is empty, invalid, or too long.
+    """
     if not table_name:
         msg = "Table name cannot be empty"
         raise ValueError(msg)
 
-    if len(table_name) > _MAX_TABLE_NAME_LENGTH:
-        msg = f"Table name too long: {len(table_name)} chars (max {_MAX_TABLE_NAME_LENGTH})"
-        raise ValueError(msg)
+    parts = table_name.split(".")
+    for part in parts:
+        if len(part) > _MAX_TABLE_NAME_LENGTH:
+            msg = f"Table name too long: {len(part)} chars (max {_MAX_TABLE_NAME_LENGTH})"
+            raise ValueError(msg)
 
-    if not _VALID_TABLE_NAME_PATTERN.match(table_name):
+    if len(parts) > max_parts or any(not _VALID_TABLE_NAME_PATTERN.fullmatch(part) for part in parts):
         msg = (
             f"Invalid table name: {table_name!r}. "
             "Must start with letter/underscore and contain only alphanumeric characters and underscores"

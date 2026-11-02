@@ -1,14 +1,15 @@
 -- name: by_schema
 -- dialect: cockroachdb
-WITH target_schema AS (
+WITH resolved_table_schema AS (
+    SELECT rn.nspname::text AS schema_name
+    FROM pg_catalog.pg_class rc
+    JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+    WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
+),
+target_schema AS (
     SELECT COALESCE(
         :schema_name::text,
-        (
-            SELECT rn.nspname::text
-            FROM pg_catalog.pg_class rc
-            JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
-            WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
-        ),
+        (SELECT schema_name FROM resolved_table_schema),
         current_schema()
     ) AS schema_name
 ),
@@ -81,15 +82,16 @@ ORDER BY c.table_schema, c.table_name, c.ordinal_position;
 
 -- name: by_table
 -- dialect: cockroachdb
-WITH target_schema AS (
+WITH resolved_table_schema AS (
+    SELECT rn.nspname::text AS schema_name
+    FROM pg_catalog.pg_class rc
+    JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+    WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
+),
+target_schema AS (
     SELECT COALESCE(
         :schema_name::text,
-        (
-            SELECT rn.nspname::text
-            FROM pg_catalog.pg_class rc
-            JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
-            WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
-        ),
+        (SELECT schema_name FROM resolved_table_schema),
         current_schema()
     ) AS schema_name
 ),

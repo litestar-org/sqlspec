@@ -6,9 +6,7 @@ from typing import cast
 
 import pytest
 
-import sqlspec.adapters.db2.pool as pool_module
 from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
-from sqlspec.exceptions import MissingDependencyError
 from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor, FakeIbmDbDbiModule, FakeIbmDbModule
 
 FakeModules = tuple[FakeIbmDbModule, FakeIbmDbDbiModule]
@@ -38,7 +36,10 @@ def test_pool_connects_with_config_and_runs_hook(fake_ibm_db: FakeModules) -> No
     assert "PORT=50000" in dsn_called
     assert seen == [connection]
     assert pool.size() == 1
-    assert pool.checked_out() == 0
+    assert pool.checked_out() == 1
+
+    with pool.get_connection():
+        assert pool.checked_out() == 1
 
 
 def test_pool_renders_dsn_and_passes_empty_connect_arguments(fake_ibm_db: FakeModules) -> None:
@@ -64,32 +65,19 @@ def test_pool_renders_dsn_and_passes_empty_connect_arguments(fake_ibm_db: FakeMo
     )
 
 
-def test_pool_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """MissingDependencyError is raised when ibm_db_dbi is not available."""
-    monkeypatch.setattr(pool_module, "_IBM_DB_DBI", None)
-    monkeypatch.setattr(pool_module, "import_optional", lambda _name: None)
-
-    pool = Db2SyncConnectionPool({"database": "TESTDB"})
-
-    with pytest.raises(MissingDependencyError) as exc_info:
-        pool.acquire()
-
-    assert "ibm_db" in str(exc_info.value)
-
-
-def test_pool_recycles_failed_health_check(fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pool_recycles_failed_health_check(fake_ibm_db: FakeModules) -> None:
     """Failed health check should close and replace thread connection."""
     _, fake_module = fake_ibm_db
-    first = FakeDb2Connection()
+    first = FakeDb2Connection([FakeDb2Cursor(error=RuntimeError("connection lost"))])
     second = FakeDb2Connection()
     fake_module.pending_connections.extend([first, second])
-    monkeypatch.setattr(Db2SyncConnectionPool, "_is_connection_alive", lambda *_: False)
 
     pool = Db2SyncConnectionPool({"database": "TESTDB"}, health_check_interval=-1.0)
 
     assert cast(object, pool.acquire()) is first
     assert cast(object, pool.acquire()) is second
     assert first.closed is True
+    assert first.cursors[0].closed is True
     assert len(fake_module.connect_calls) == 2
 
 
@@ -152,21 +140,24 @@ def test_pool_close_closes_connections_opened_on_other_threads(fake_ibm_db: Fake
     assert [conn.closed for conn in opened] == [True, True]
 
 
-def test_pool_registry_does_not_grow_across_replacements(
-    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pool_registry_does_not_grow_across_replacements(fake_ibm_db: FakeModules) -> None:
     """Registry size remains bounded during connection replacement."""
-    monkeypatch.setattr(Db2SyncConnectionPool, "_is_connection_alive", lambda *_: False)
+    _, module = fake_ibm_db
+    connections = [FakeDb2Connection([FakeDb2Cursor(error=RuntimeError("connection lost"))]) for _ in range(4)]
+    module.pending_connections.extend(connections)
     pool = Db2SyncConnectionPool({"database": "TESTDB"}, health_check_interval=-1.0)
 
     for _ in range(4):
         pool.acquire()
 
-    assert len(pool._connection_registry) == 1
+    assert pool.size() == 1
+    assert len(module.connect_calls) == 4
+    assert [connection.closed for connection in connections] == [True, True, True, False]
 
     pool.close()
 
-    assert pool._connection_registry == set()
+    assert pool.size() == 0
+    assert all(connection.closed for connection in connections)
 
 
 def test_pool_get_connection_context_manager(fake_ibm_db: FakeModules) -> None:

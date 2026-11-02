@@ -55,4 +55,5 @@ FROM information_schema.tables t
 LEFT JOIN dependency_levels dl ON dl.table_name = t.table_name
 WHERE t.table_type = 'BASE TABLE'
   AND t.table_schema = COALESCE(:schema_name, current_schema())
+  AND (:table_name IS NULL OR t.table_name = :table_name)
 ORDER BY level, t.table_name;

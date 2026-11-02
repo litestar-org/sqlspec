@@ -1,14 +1,14 @@
 """Oracle session store for Litestar integration."""
 
+import contextlib
 from datetime import UTC, timedelta
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
 
-from sqlspec.adapters.oracledb._storage import oracle_table_feature_report
-from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
+from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, validate_oracle_identifier
+from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB, read_oracle_lob_async, read_oracle_lob_sync, resolve_rowcount
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
-from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
@@ -109,6 +109,8 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             config: OracleAsyncConfig instance.
         """
         super().__init__(config)
+        for part in self._table_name.split("."):
+            validate_oracle_identifier(part, "table name")
 
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
@@ -137,14 +139,14 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
-        WHERE session_id = :session_id
+        WHERE session_id = :1
         AND (expires_at IS NULL OR expires_at > SYSTIMESTAMP)
         """
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
             with conn.cursor() as cursor:
-                await cursor.execute(sql, {"session_id": key})
+                await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
 
                 if row is None:
@@ -158,14 +160,19 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                         update_sql = f"""
                         UPDATE {self._table_name}
                         SET expires_at = CASE
-                                WHEN :expires_in_seconds IS NULL THEN NULL
-                                ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                                WHEN :1 IS NULL THEN NULL
+                                ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:1, 'SECOND')
                             END,
                             updated_at = SYSTIMESTAMP
-                        WHERE session_id = :session_id
+                        WHERE session_id = :2
                         """
-                        await cursor.execute(update_sql, {"expires_in_seconds": expires_in_seconds, "session_id": key})
-                        await conn.commit()
+                        try:
+                            await cursor.execute(update_sql, (expires_in_seconds, expires_in_seconds, key))
+                            await conn.commit()
+                        except BaseException:
+                            with contextlib.suppress(Exception):
+                                await conn.rollback()
+                            raise
 
                 return await _read_blob_async(data_blob)
 
@@ -208,12 +215,19 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            bind_data: Any = await conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
-            with conn.cursor() as cursor:
-                await cursor.execute(
-                    sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds}
+            try:
+                bind_data: Any = (
+                    await conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
                 )
-                await conn.commit()
+                with conn.cursor() as cursor:
+                    await cursor.execute(
+                        sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds}
+                    )
+                    await conn.commit()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await conn.rollback()
+                raise
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -221,13 +235,18 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         Args:
             key: Session ID to delete.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE session_id = :session_id"
+        sql = f"DELETE FROM {self._table_name} WHERE session_id = :1"
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            with conn.cursor() as cursor:
-                await cursor.execute(sql, {"session_id": key})
-                await conn.commit()
+            try:
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, (key,))
+                    await conn.commit()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await conn.rollback()
+                raise
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
@@ -235,9 +254,14 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            with conn.cursor() as cursor:
-                await cursor.execute(sql)
-                await conn.commit()
+            try:
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql)
+                    await conn.commit()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await conn.rollback()
+                raise
         self._log_delete_all()
 
     async def exists(self, key: str) -> bool:
@@ -251,14 +275,14 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
         sql = f"""
         SELECT 1 FROM {self._table_name}
-        WHERE session_id = :session_id
+        WHERE session_id = :1
         AND (expires_at IS NULL OR expires_at > SYSTIMESTAMP)
         """
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
             with conn.cursor() as cursor:
-                await cursor.execute(sql, {"session_id": key})
+                await cursor.execute(sql, (key,))
                 result = await cursor.fetchone()
                 return result is not None
 
@@ -273,13 +297,13 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
         sql = f"""
         SELECT expires_at, SYSTIMESTAMP FROM {self._table_name}
-        WHERE session_id = :session_id
+        WHERE session_id = :1
         """
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
             with conn.cursor() as cursor:
-                await cursor.execute(sql, {"session_id": key})
+                await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
 
                 if row is None or row[0] is None:
@@ -308,78 +332,26 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            with conn.cursor() as cursor:
-                await cursor.execute(sql)
-                count = cursor.rowcount if cursor.rowcount is not None else 0
-                await conn.commit()
-                if count > 0:
-                    self._log_delete_expired(count)
-                return count
+            try:
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql)
+                    count = resolve_rowcount(cursor)
+                    await conn.commit()
+                    if count > 0:
+                        self._log_delete_expired(count)
+                    return count
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await conn.rollback()
+                raise
 
     def _table_ddl(self) -> str:
-        """Get Oracle CREATE TABLE SQL with optimized schema.
-
-        Returns:
-            SQL statement to create the sessions table with proper indexes.
-        """
-        table_clause = _litestar_table_feature_clause(self._config, self._in_memory)
-        index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"[:30]
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
-                session_id VARCHAR2(255) PRIMARY KEY,
-                data BLOB NOT NULL,
-                expires_at TIMESTAMP WITH TIME ZONE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            ){table_clause}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX {index_name}
-                ON {self._table_name}(expires_at)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        """Get Oracle CREATE TABLE SQL with optimized schema."""
+        return _build_session_table_ddl(self._table_name, self._config, self._in_memory)
 
     def _drop_table_sql(self) -> "list[str]":
-        """Get Oracle DROP TABLE SQL with PL/SQL error handling.
-
-        Returns:
-            List of SQL statements with exception handling for non-existent objects.
-        """
-        index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"[:30]
-        return [
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX {index_name}';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -1418 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE {self._table_name}';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-        ]
+        """Get Oracle DROP TABLE SQL with PL/SQL error handling."""
+        return _build_drop_session_table_sql(self._table_name)
 
 
 class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
@@ -415,6 +387,8 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             config: OracleSyncConfig instance.
         """
         super().__init__(config)
+        for part in self._table_name.split("."):
+            validate_oracle_identifier(part, "table name")
 
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
@@ -492,69 +466,12 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         return await async_(self._delete_expired)()
 
     def _table_ddl(self) -> str:
-        """Get Oracle CREATE TABLE SQL with optimized schema.
-
-        Returns:
-            SQL statement to create the sessions table with proper indexes.
-        """
-        table_clause = _litestar_table_feature_clause(self._config, self._in_memory)
-        index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"[:30]
-        return f"""
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
-                session_id VARCHAR2(255) PRIMARY KEY,
-                data BLOB NOT NULL,
-                expires_at TIMESTAMP WITH TIME ZONE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-            ){table_clause}';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-
-        BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX {index_name}
-                ON {self._table_name}(expires_at)';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
-        """
+        """Get Oracle CREATE TABLE SQL with optimized schema."""
+        return _build_session_table_ddl(self._table_name, self._config, self._in_memory)
 
     def _drop_table_sql(self) -> "list[str]":
-        """Get Oracle DROP TABLE SQL with PL/SQL error handling.
-
-        Returns:
-            List of SQL statements with exception handling for non-existent objects.
-        """
-        index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"[:30]
-        return [
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX {index_name}';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -1418 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-            f"""
-            BEGIN
-                EXECUTE IMMEDIATE 'DROP TABLE {self._table_name}';
-            EXCEPTION
-                WHEN OTHERS THEN
-                    IF SQLCODE != -942 THEN
-                        RAISE;
-                    END IF;
-            END;
-            """,
-        ]
+        """Get Oracle DROP TABLE SQL with PL/SQL error handling."""
+        return _build_drop_session_table_sql(self._table_name)
 
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
@@ -568,12 +485,12 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of get."""
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
-        WHERE session_id = :session_id
+        WHERE session_id = :1
         AND (expires_at IS NULL OR expires_at > SYSTIMESTAMP)
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"session_id": key})
+            cursor.execute(sql, (key,))
             row = cursor.fetchone()
 
             if row is None:
@@ -587,14 +504,19 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                     update_sql = f"""
                     UPDATE {self._table_name}
                     SET expires_at = CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                            WHEN :1 IS NULL THEN NULL
+                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:1, 'SECOND')
                         END,
                         updated_at = SYSTIMESTAMP
-                    WHERE session_id = :session_id
+                    WHERE session_id = :2
                     """
-                    cursor.execute(update_sql, {"expires_in_seconds": expires_in_seconds, "session_id": key})
-                    conn.commit()
+                    try:
+                        cursor.execute(update_sql, (expires_in_seconds, expires_in_seconds, key))
+                        conn.commit()
+                    except BaseException:
+                        with contextlib.suppress(Exception):
+                            conn.rollback()
+                        raise
 
             return _read_blob_sync(data_blob)
 
@@ -630,38 +552,57 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn:
-            bind_data: Any = conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
-            with conn.cursor() as cursor:
-                cursor.execute(sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds})
-                conn.commit()
+            try:
+                bind_data: Any = conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds}
+                    )
+                    conn.commit()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                raise
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
-        sql = f"DELETE FROM {self._table_name} WHERE session_id = :session_id"
+        sql = f"DELETE FROM {self._table_name} WHERE session_id = :1"
 
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"session_id": key})
-            conn.commit()
+        with self._config.provide_connection() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(sql, (key,))
+                    conn.commit()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                raise
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql)
-            conn.commit()
+        with self._config.provide_connection() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(sql)
+                    conn.commit()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                raise
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
         """Synchronous implementation of exists."""
         sql = f"""
         SELECT 1 FROM {self._table_name}
-        WHERE session_id = :session_id
+        WHERE session_id = :1
         AND (expires_at IS NULL OR expires_at > SYSTIMESTAMP)
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"session_id": key})
+            cursor.execute(sql, (key,))
             result = cursor.fetchone()
             return result is not None
 
@@ -669,11 +610,11 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of expires_in."""
         sql = f"""
         SELECT expires_at, SYSTIMESTAMP FROM {self._table_name}
-        WHERE session_id = :session_id
+        WHERE session_id = :1
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"session_id": key})
+            cursor.execute(sql, (key,))
             row = cursor.fetchone()
 
             if row is None or row[0] is None:
@@ -696,13 +637,19 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= SYSTIMESTAMP"
 
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql)
-            count = cursor.rowcount if cursor.rowcount is not None else 0
-            conn.commit()
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
+        with self._config.provide_connection() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(sql)
+                    count = resolve_rowcount(cursor)
+                    conn.commit()
+                    if count > 0:
+                        self._log_delete_expired(count)
+                    return count
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                raise
 
 
 def _oracle_expiry_seconds(expires_in: "int | timedelta | None") -> "int | None":
@@ -729,18 +676,73 @@ def _coerce_bytes_payload(value: object) -> bytes:
 
 async def _read_blob_async(value: object) -> bytes:
     """Read LOB values from async connections into bytes."""
-    if is_async_readable(value):
-        return _coerce_bytes_payload(await value.read())
-    if is_readable(value):
-        return _coerce_bytes_payload(value.read())
-    return _coerce_bytes_payload(value)
+    data = await read_oracle_lob_async(value)
+    return _coerce_bytes_payload(data)
 
 
 def _read_blob_sync(value: object) -> bytes:
     """Read LOB values from sync connections into bytes."""
-    if is_readable(value):
-        return _coerce_bytes_payload(value.read())
-    return _coerce_bytes_payload(value)
+    data = read_oracle_lob_sync(value)
+    return _coerce_bytes_payload(data)
+
+
+def _build_session_table_ddl(table_name: str, config: Any, in_memory: bool) -> str:
+    """Build Oracle CREATE TABLE and INDEX SQL for the session store."""
+    table_clause = _litestar_table_feature_clause(config, in_memory)
+    index_name = f"idx_{table_name.replace('.', '_')}_expires_at"[:30]
+    return f"""
+    BEGIN
+        EXECUTE IMMEDIATE 'CREATE TABLE {table_name} (
+            session_id VARCHAR2(255) PRIMARY KEY,
+            data BLOB NOT NULL,
+            expires_at TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+        ){table_clause}';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN
+                RAISE;
+            END IF;
+    END;
+
+    BEGIN
+        EXECUTE IMMEDIATE 'CREATE INDEX {index_name}
+            ON {table_name}(expires_at)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN
+                RAISE;
+            END IF;
+    END;
+    """
+
+
+def _build_drop_session_table_sql(table_name: str) -> "list[str]":
+    """Build Oracle DROP TABLE and DROP INDEX statements for the session store."""
+    index_name = f"idx_{table_name.replace('.', '_')}_expires_at"[:30]
+    return [
+        f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP INDEX {index_name}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -1418 THEN
+                    RAISE;
+                END IF;
+        END;
+        """,
+        f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE {table_name}';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -942 THEN
+                    RAISE;
+                END IF;
+        END;
+        """,
+    ]
 
 
 def _litestar_table_feature_clause(config: Any, in_memory: bool) -> str:
@@ -756,4 +758,4 @@ def _litestar_table_feature_clause(config: Any, in_memory: bool) -> str:
         range_partition_key="expires_at",
         table_options_key="table_options",
     )
-    return report["clause"]
+    return report["plsql_clause"]

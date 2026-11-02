@@ -28,7 +28,14 @@ from sqlspec.builder._parsing_utils import (
     parse_order_expression,
 )
 from sqlspec.core import SQL
-from sqlspec.data_dictionary._types import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport, ObjectIdentity
+from sqlspec.data_dictionary import (
+    DDLResult,
+    ForeignKeyMetadata,
+    MetadataFidelity,
+    MetadataSource,
+    MetadataSupport,
+    ObjectIdentity,
+)
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.arrow_helpers import sql_type_for_category, sql_type_from_arrow_type
 from sqlspec.utils.type_guards import has_sqlglot_expression
@@ -3063,6 +3070,19 @@ def _normalize_metadata_row(item: Any) -> dict[str, Any]:
             if nested_ident.schema is not None:
                 result.setdefault("schema_name", nested_ident.schema)
         return result
+
+    if isinstance(item, ForeignKeyMetadata):
+        return {
+            "table_name": item.table_name,
+            "column_name": item.column_name,
+            "referenced_table": item.referenced_table,
+            "referenced_column": item.referenced_column,
+            "constraint_name": item.constraint_name,
+            "schema": item.schema,
+            "referenced_schema": item.referenced_schema,
+            "on_delete": item.on_delete,
+            "on_update": item.on_update,
+        }
 
     ident = getattr(item, "identity", None)
     attrs = getattr(item, "attributes", None)

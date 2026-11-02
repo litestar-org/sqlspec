@@ -5,17 +5,18 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
+import importlib
 from typing import TYPE_CHECKING, Any
 
-import mysql as _mysql
+import mysql
 import mysql.connector as _mysql_connector
 from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
 from mysql.connector import aio as _mysql_connector_aio
+from mysql.connector import constants as _mysql_connector_constants
+from mysql.connector import cursor as _mysql_connector_cursor
 from mysql.connector import pooling as _mysql_connector_pooling
-from mysql.connector.constants import FieldType as _MysqlConnectorFieldType
-from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
-
-from sqlspec.typing import import_optional_attr
+from mysql.connector.aio import MySQLConnection as _MysqlConnectorAsyncConnection
+from mysql.connector.aio import cursor as _mysql_connector_aio_cursor
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -76,24 +77,28 @@ if TYPE_CHECKING:
     MysqlConnectorSyncConnection: TypeAlias = _MysqlConnectorSyncConnection
     MysqlConnectorAio: TypeAlias = MysqlConnectorAioModuleProtocol
     MysqlConnectorAsyncConnection: TypeAlias = MysqlConnectorAsyncConnectionProtocol
-    MysqlConnectorSyncRawCursor: TypeAlias = _MysqlConnectorSyncRawCursor
+    MysqlConnectorSyncRawCursor: TypeAlias = _mysql_connector_cursor.MySQLCursor
     MysqlConnectorConnectionPool: TypeAlias = _mysql_connector_pooling.MySQLConnectionPool
     MysqlConnectorError: TypeAlias = _mysql_connector.Error
     MysqlConnectorFieldType: TypeAlias = MysqlConnectorFieldTypeProtocol
     MysqlConnectorMysqlModule: TypeAlias = MysqlConnectorMysqlModuleProtocol
     MysqlConnectorAsyncRawCursor: TypeAlias = MysqlConnectorAsyncRawCursorProtocol
-
-if not TYPE_CHECKING:
-    MysqlConnectorAsyncPool = import_optional_attr("mysql.connector.aio.pooling", "MySQLConnectionPool")
+else:
+    try:
+        from mysql.connector.aio.pooling import MySQLConnectionPool as MysqlConnectorAsyncPool
+    except ModuleNotFoundError as exc:
+        if exc.name != "mysql.connector.aio.pooling":
+            raise
+        MysqlConnectorAsyncPool = None
     MysqlConnectorAio = _mysql_connector_aio
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
-    MysqlConnectorAsyncConnection = import_optional_attr("mysql.connector.aio", "MySQLConnection")
+    MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection
     MysqlConnectorConnectionPool = _mysql_connector_pooling.MySQLConnectionPool
     MysqlConnectorError = _mysql_connector.Error
-    MysqlConnectorFieldType = _MysqlConnectorFieldType
-    MysqlConnectorMysqlModule = _mysql
-    MysqlConnectorSyncRawCursor = _MysqlConnectorSyncRawCursor
-    MysqlConnectorAsyncRawCursor = import_optional_attr("mysql.connector.aio.cursor", "MySQLCursor")
+    MysqlConnectorFieldType = _mysql_connector_constants.FieldType
+    MysqlConnectorMysqlModule = mysql
+    MysqlConnectorSyncRawCursor = _mysql_connector_cursor.MySQLCursor
+    MysqlConnectorAsyncRawCursor = _mysql_connector_aio_cursor.MySQLCursor
 
 __all__ = (
     "MysqlConnectorAio",
@@ -126,10 +131,13 @@ class MysqlConnectorSyncCursor:
     ) -> None:
         self.connection = connection
         self.cursor: MysqlConnectorSyncRawCursor | None = None
-        self.cursor_options = cursor_options or {}
+        self.cursor_options = cursor_options
 
     def __enter__(self) -> "MysqlConnectorSyncRawCursor":
-        self.cursor = self.connection.cursor(**self.cursor_options)
+        if self.cursor_options is None:
+            self.cursor = self.connection.cursor()
+        else:
+            self.cursor = self.connection.cursor(**self.cursor_options)
         return self.cursor
 
     def __exit__(self, *_: object) -> None:
@@ -152,10 +160,13 @@ class MysqlConnectorAsyncCursor:
     ) -> None:
         self.connection = connection
         self.cursor: MysqlConnectorAsyncRawCursor | None = None
-        self.cursor_options = cursor_options or {}
+        self.cursor_options = cursor_options
 
     async def __aenter__(self) -> "MysqlConnectorAsyncRawCursor":
-        self.cursor = await self.connection.cursor(**self.cursor_options)
+        if self.cursor_options is None:
+            self.cursor = await self.connection.cursor()
+        else:
+            self.cursor = await self.connection.cursor(**self.cursor_options)
         return self.cursor
 
     async def __aexit__(self, *_: object) -> None:
@@ -265,7 +276,8 @@ def _get_mysqlconnector_sync_driver_type() -> "type[MysqlConnectorSyncDriver]":
     global _resolved_sync_driver_type
     driver_cls = _resolved_sync_driver_type
     if driver_cls is None:
-        driver_cls = import_optional_attr("sqlspec.adapters.mysqlconnector.driver", "MysqlConnectorSyncDriver")
+        module = importlib.import_module("sqlspec.adapters.mysqlconnector.driver")
+        driver_cls = module.MysqlConnectorSyncDriver
         _resolved_sync_driver_type = driver_cls
     return driver_cls
 
@@ -275,6 +287,7 @@ def _get_mysqlconnector_async_driver_type() -> "type[MysqlConnectorAsyncDriver]"
     global _resolved_async_driver_type
     driver_cls = _resolved_async_driver_type
     if driver_cls is None:
-        driver_cls = import_optional_attr("sqlspec.adapters.mysqlconnector.driver", "MysqlConnectorAsyncDriver")
+        module = importlib.import_module("sqlspec.adapters.mysqlconnector.driver")
+        driver_cls = module.MysqlConnectorAsyncDriver
         _resolved_async_driver_type = driver_cls
     return driver_cls

@@ -8,13 +8,14 @@ Tests cover:
 - Connection config normalization
 """
 
-from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from typing import Any, Self, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
+    CockroachPsycopgAsyncDriver,
     CockroachPsycopgAsyncSessionContext,
     CockroachPsycopgDriverFeatures,
     CockroachPsycopgRetryConfig,
@@ -810,3 +811,436 @@ async def test_cockroach_psycopg_adk_stores_commit_ddl_and_validate_locality() -
     litestar_store = CockroachPsycopgSyncStore(good_cfg)
     litestar_store._table_name = "tenant_a.litestar_sessions"
     assert "idx_tenant_a_litestar_sessions_expires_at" in litestar_store._table_ddl()
+
+
+def test_cockroach_psycopg_follower_read_only_for_readonly_statements(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CockroachPsycopgSyncDriver should not begin follower-read transactions for modifying operations."""
+    in_tx = False
+
+    def _in_tx(_self: Any) -> bool:
+        return in_tx
+
+    def _begin(_self: Any) -> None:
+        nonlocal in_tx
+        in_tx = True
+
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "_connection_in_transaction", _in_tx)
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "begin", _begin)
+
+    conn = MagicMock()
+    cursor = MagicMock()
+    col = MagicMock()
+    col.name = "id"
+    col.type_code = 23
+    cursor.description = [col]
+    cursor.fetchall.return_value = [{"id": 1}]
+    driver = CockroachPsycopgSyncDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    modifying_stmt = SQL("INSERT INTO users (name) VALUES ('alice') RETURNING id")
+    driver.dispatch_execute(cursor, modifying_stmt)
+    assert in_tx is False
+
+
+def test_cockroach_psycopg_begin_follower_read_failure_handling() -> None:
+    """Failing SET TRANSACTION in begin() must rollback, reset transaction active, and raise mapped exception."""
+    conn = MagicMock()
+    conn.autocommit = True
+    conn.info.transaction_status = 0
+    conn.execute.side_effect = RuntimeError("syntax error in staleness")
+
+    driver = CockroachPsycopgSyncDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    with pytest.raises(Exception):
+        driver.begin()
+    assert driver._transaction_active is False
+    conn.rollback.assert_called_once()
+
+
+def test_cockroach_psycopg_select_stream_follower_reads() -> None:
+    """select_stream on a SELECT query with follower reads emits the staleness clause and closes."""
+    executed_statements: list[str] = []
+    conn = MagicMock()
+    conn.autocommit = True
+    conn.info.transaction_status = 0
+
+    def fake_conn_execute(query: str, *args: Any, **kwargs: Any) -> Any:
+        executed_statements.append(query)
+        return MagicMock()
+
+    conn.execute.side_effect = fake_conn_execute
+
+    tx = MagicMock()
+    conn.transaction.return_value = tx
+
+    stream_cursor = MagicMock()
+    col = MagicMock()
+    col.name = "id"
+    stream_cursor.description = [col]
+    stream_cursor.fetchmany.side_effect = [[(1,)], []]
+    conn.cursor.return_value = stream_cursor
+
+    driver = CockroachPsycopgSyncDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    stream = driver.dispatch_select_stream(SQL("SELECT id FROM users"), chunk_size=10)
+    assert stream is not None
+    rows = list(stream)
+    assert rows == [{"id": 1}]
+    assert any("AS OF SYSTEM TIME '-10s'" in s for s in executed_statements)
+    conn.commit.assert_called()
+
+
+def test_cockroach_psycopg_sync_user_configure_runs_after_internal_setup() -> None:
+    """User-supplied configure callback runs after internal connection setup in sync config."""
+    call_order: list[str] = []
+    fake_conn = MagicMock()
+    fake_conn.autocommit = False
+
+    def user_cb(conn: Any) -> None:
+        assert conn.autocommit is True
+        call_order.append("user_cb")
+
+    config = CockroachPsycopgSyncConfig(connection_config={"autocommit": True, "configure": user_cb})
+
+    with patch("sqlspec.adapters.cockroach_psycopg.config.psycopg_crdb.CrdbConnection.connect", return_value=fake_conn):
+        conn = config.create_connection()
+        assert conn is fake_conn
+        assert call_order == ["user_cb"]
+
+    pool = config.create_pool()
+    assert pool is not None
+
+
+async def test_cockroach_psycopg_async_user_configure_runs_after_internal_setup() -> None:
+    """User-supplied async configure callback runs after internal connection setup in async config."""
+    call_order: list[str] = []
+    fake_conn = MagicMock()
+    autocommit_val = False
+
+    async def fake_set_autocommit(val: bool) -> None:
+        nonlocal autocommit_val
+        autocommit_val = val
+        call_order.append("internal_autocommit")
+
+    fake_conn.set_autocommit = AsyncMock(side_effect=fake_set_autocommit)
+
+    async def async_user_cb(conn: Any) -> None:
+        assert autocommit_val is True
+        call_order.append("user_cb")
+
+    config = CockroachPsycopgAsyncConfig(connection_config={"autocommit": True, "configure": async_user_cb})
+
+    with patch(
+        "sqlspec.adapters.cockroach_psycopg.config.psycopg_crdb.AsyncCrdbConnection.connect",
+        AsyncMock(return_value=fake_conn),
+    ):
+        conn = await config.create_connection()
+        assert conn is fake_conn
+        assert call_order == ["internal_autocommit", "user_cb"]
+
+
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("override_kind", "expected"),
+    [
+        ("inherit", ["original"]),
+        ("mapping", ["replacement"]),
+        ("mapping_none", []),
+        ("keyword", ["replacement"]),
+        ("keyword_none", []),
+        ("keyword_precedence", []),
+    ],
+)
+async def test_cockroach_psycopg_derived_connection_preserves_configure(
+    async_mode: bool, override_kind: str, expected: list[str]
+) -> None:
+    """Derived connections inherit configure callbacks and honor explicit replacements."""
+    calls: list[str] = []
+
+    def original_callback(_connection: Any) -> None:
+        calls.append("original")
+
+    def replacement_callback(_connection: Any) -> None:
+        calls.append("replacement")
+
+    async def async_original_callback(connection: Any) -> None:
+        original_callback(connection)
+
+    async def async_replacement_callback(connection: Any) -> None:
+        replacement_callback(connection)
+
+    original = async_original_callback if async_mode else original_callback
+    replacement = async_replacement_callback if async_mode else replacement_callback
+    source_config: dict[str, Any] = {"autocommit": True, "configure": original}
+    config = (
+        CockroachPsycopgAsyncConfig(connection_config=source_config)
+        if async_mode
+        else CockroachPsycopgSyncConfig(connection_config=source_config)
+    )
+    overrides: dict[str, Any] = {}
+    if override_kind in {"mapping", "keyword_precedence"}:
+        overrides["connection_config_overrides"] = {"configure": replacement}
+    elif override_kind == "mapping_none":
+        overrides["connection_config_overrides"] = {"configure": None}
+    if override_kind == "keyword":
+        overrides["configure"] = replacement
+    elif override_kind in {"keyword_none", "keyword_precedence"}:
+        overrides["configure"] = None
+    derived = config.derive_pool(**overrides)
+    fake_connection = MagicMock()
+    fake_connection.set_autocommit = AsyncMock()
+    sdk_connection = "AsyncCrdbConnection" if async_mode else "CrdbConnection"
+    connect = AsyncMock(return_value=fake_connection) if async_mode else MagicMock(return_value=fake_connection)
+
+    with patch(f"sqlspec.adapters.cockroach_psycopg.config.psycopg_crdb.{sdk_connection}.connect", connect):
+        if isinstance(derived, CockroachPsycopgAsyncConfig):
+            await derived.create_connection()
+        else:
+            derived.create_connection()
+        assert calls == expected
+        calls.clear()
+        with (
+            patch("sqlspec.adapters.cockroach_psycopg.config.ConnectionPool", _SyncPoolSpy),
+            patch("sqlspec.adapters.cockroach_psycopg.config.AsyncConnectionPool", _AsyncPoolSpy),
+        ):
+            if isinstance(derived, CockroachPsycopgAsyncConfig):
+                await derived.create_pool()
+                pool_kwargs = _AsyncPoolSpy.calls[-1][1]
+                await pool_kwargs["configure"](fake_connection)
+            else:
+                derived.create_pool()
+                pool_kwargs = _SyncPoolSpy.calls[-1][1]
+                pool_kwargs["configure"](fake_connection)
+        assert pool_kwargs["kwargs"] == {"autocommit": True}
+        assert calls == expected
+        calls.clear()
+        if isinstance(config, CockroachPsycopgAsyncConfig):
+            await config.create_connection()
+        else:
+            config.create_connection()
+
+    assert calls == ["original"]
+    assert source_config["configure"] is original
+
+
+def test_cockroach_psycopg_adk_hash_shard_bucket_count_validation() -> None:
+    """Invalid hash_shard_bucket_count must raise ValueError in cockroach_psycopg adk store."""
+    from sqlspec.adapters.cockroach_psycopg.adk.store import CockroachPsycopgADKConfig, _cockroach_hash_shard_clause
+
+    bad_config: CockroachPsycopgADKConfig = {"enable_hash_sharded_indexes": True, "hash_shard_bucket_count": -1}
+    with pytest.raises(ValueError, match="hash_shard_bucket_count"):
+        _cockroach_hash_shard_clause(bad_config)
+
+
+async def test_cockroach_psycopg_adk_memory_search_with_embedding() -> None:
+    """An embedding argument preserves text search against the canonical memory schema."""
+    executed_queries: list[tuple[str, Any]] = []
+
+    class _FakeCursor:
+        description = [
+            ("id",),
+            ("session_id",),
+            ("app_name",),
+            ("user_id",),
+            ("scope",),
+            ("event_id",),
+            ("author",),
+            ("timestamp",),
+            ("content_json",),
+            ("content_text",),
+            ("metadata_json",),
+            ("inserted_at",),
+        ]
+
+        async def execute(self, sql: bytes, params: Any) -> None:
+            executed_queries.append((sql.decode(), params))
+
+        async def fetchall(self) -> list[Any]:
+            return []
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            pass
+
+    class _FakeConn:
+        def cursor(self) -> _FakeCursor:
+            return _FakeCursor()
+
+    class _FakeCtx:
+        async def __aenter__(self) -> _FakeConn:
+            return _FakeConn()
+
+        async def __aexit__(self, *_a: Any) -> None:
+            pass
+
+    config = CockroachPsycopgAsyncConfig(extension_config={"adk": {"enable_memory": True}})
+    object.__setattr__(config, "provide_connection", lambda: _FakeCtx())
+    store = CockroachPsycopgAsyncADKMemoryStore(config)
+
+    result = await store.search_entries(query="hello", app_name="app", user_id="u1", limit=7, embedding=[0.1, 0.2, 0.3])
+    assert result == []
+    assert len(executed_queries) == 1
+    sql, params = executed_queries[0]
+    assert "content_text ILIKE %s" in sql
+    assert "ORDER BY timestamp DESC" in sql
+    assert params == ("app", "u1", "%hello%", 7)
+
+
+async def test_cockroach_psycopg_adk_memory_insert_batch_unnest() -> None:
+    """insert_memory_entries executes a single UNNEST query rather than an N+1 loop."""
+    executed_queries: list[str] = []
+
+    class _FakeCursor:
+        rowcount = 2
+
+        async def execute(self, sql: Any, params: Any) -> None:
+            executed_queries.append(str(sql))
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            pass
+
+    class _FakeConn:
+        def cursor(self) -> _FakeCursor:
+            return _FakeCursor()
+
+        async def commit(self) -> None:
+            pass
+
+    class _FakeCtx:
+        async def __aenter__(self) -> _FakeConn:
+            return _FakeConn()
+
+        async def __aexit__(self, *_a: Any) -> None:
+            pass
+
+    config = CockroachPsycopgAsyncConfig(extension_config={"adk": {"enable_memory": True}})
+    object.__setattr__(config, "provide_connection", lambda: _FakeCtx())
+    store = CockroachPsycopgAsyncADKMemoryStore(config)
+
+    entry1: Any = {
+        "id": "1",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "e1",
+        "author": "user",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "content_json": {},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": "2026-01-01T00:00:00Z",
+    }
+    entry2: Any = {
+        "id": "2",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "e2",
+        "author": "user",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "content_json": {},
+        "content_text": "world",
+        "metadata_json": None,
+        "inserted_at": "2026-01-01T00:00:00Z",
+    }
+
+    count = await store.insert_memory_entries([entry1, entry2])
+    assert count == 2
+    assert len(executed_queries) == 1
+    assert "unnest" in executed_queries[0].lower()
+
+
+def test_cockroach_psycopg_sync_get_columns_and_indexes_by_table() -> None:
+    """CockroachPsycopgSyncDataDictionary executes by_table query when table is specified."""
+    from sqlspec.adapters.cockroach_psycopg.data_dictionary import CockroachPsycopgSyncDataDictionary
+
+    calls: list[tuple[Any, dict[str, Any]]] = []
+    driver = MagicMock()
+
+    def fake_select(query: Any, **kwargs: Any) -> list[Any]:
+        calls.append((query, kwargs))
+        return []
+
+    driver.select = fake_select
+    dd = CockroachPsycopgSyncDataDictionary()
+
+    dd.get_columns(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+    calls.clear()
+    dd.get_indexes(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+
+async def test_cockroach_psycopg_async_get_columns_and_indexes_by_table() -> None:
+    """CockroachPsycopgAsyncDataDictionary executes by_table query when table is specified."""
+    from sqlspec.adapters.cockroach_psycopg.data_dictionary import CockroachPsycopgAsyncDataDictionary
+
+    calls: list[tuple[Any, dict[str, Any]]] = []
+    driver = MagicMock()
+
+    async def fake_select(query: Any, **kwargs: Any) -> list[Any]:
+        calls.append((query, kwargs))
+        return []
+
+    driver.select = AsyncMock(side_effect=fake_select)
+    dd = CockroachPsycopgAsyncDataDictionary()
+
+    await dd.get_columns(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+    calls.clear()
+    await dd.get_indexes(driver, table="users", schema=None)
+    assert len(calls) == 1
+    assert calls[0][1]["table_name"] == "users"
+    assert calls[0][1]["schema_name"] is None
+
+
+def test_cockroach_psycopg_sync_execute_native_storage_under_active_exception() -> None:
+    """_execute_native_storage in sync driver inside active except block works cleanly."""
+    conn = MagicMock()
+    conn.autocommit = True
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [{"rows": 1}]
+    conn.cursor.return_value = cursor
+
+    driver = CockroachPsycopgSyncDriver(connection=conn)
+    try:
+        raise ValueError("outer error")
+    except ValueError:
+        rows = driver._execute_native_storage("SELECT 1", [])
+        assert rows == [{"rows": 1}]
+
+
+async def test_cockroach_psycopg_async_execute_native_storage_under_active_exception() -> None:
+    """_execute_native_storage in async driver inside active except block works cleanly."""
+    conn = MagicMock()
+    conn.autocommit = True
+    cursor = MagicMock()
+    cursor.fetchall = AsyncMock(return_value=[{"rows": 1}])
+    cursor.execute = AsyncMock()
+    cursor.__aenter__ = AsyncMock(return_value=cursor)
+    cursor.__aexit__ = AsyncMock()
+    conn.cursor.return_value = cursor
+
+    driver = CockroachPsycopgAsyncDriver(connection=conn)
+    try:
+        raise ValueError("outer error")
+    except ValueError:
+        rows = await driver._execute_native_storage("SELECT 1", [])
+        assert rows == [{"rows": 1}]

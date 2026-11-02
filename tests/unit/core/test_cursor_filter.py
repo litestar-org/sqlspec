@@ -90,11 +90,16 @@ def test_composite_cursor_key_shorthand(keys: Any, expected: list[CursorKey]) ->
     assert shorthand.encode({"v": 10, "id": 3}, backward=True) == explicit.encode({"v": 10, "id": 3}, backward=True)
 
 
-@pytest.mark.parametrize(
-    "keys", ["", [""], [("id", "bad")], [("id",)], [("id", "asc", "last")], [3], ["id", CursorKey("id")]]
-)
+@pytest.mark.parametrize("keys", ["", [""], [("id", "bad")], ["id", CursorKey("id")]])
 def test_invalid_cursor_key_shorthand(keys: Any) -> None:
     with pytest.raises(ValueError):
+        CursorFilter(keys, 2)
+
+
+@pytest.mark.parametrize("keys", [[("id",)], [("id", "asc", "last")], [3]])
+def test_cursor_key_shorthand_rejects_unsupported_input_shapes(keys: Any) -> None:
+    """Inputs outside CursorKeys are rejected by validation or compiled type guards."""
+    with pytest.raises((TypeError, ValueError)):
         CursorFilter(keys, 2)
 
 

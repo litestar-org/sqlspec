@@ -47,10 +47,12 @@ async def test_asyncpg_custom_codec_is_registered_after_internal_setup() -> None
     }
 
 
-def test_asyncpg_pgbouncer_disables_prepared_cache_consistently() -> None:
-    config = AsyncpgConfig(connection_config={"pgbouncer": True, "statement_cache_size": 128})
+def test_asyncpg_pooler_mode_transaction_disables_prepared_cache_consistently() -> None:
+    config = AsyncpgConfig(
+        connection_config={"statement_cache_size": 128}, driver_features={"pooler_mode": "transaction"}
+    )
     assert config.connection_config["statement_cache_size"] == 0
-    assert config.driver_features["pgbouncer"] is True
+    assert config.driver_features["pooler_mode"] == "transaction"
 
 
 @pytest.mark.parametrize(
@@ -62,7 +64,9 @@ async def test_null_pool_preserves_throttling_without_leaking_flag(
 ) -> None:
     constructor = MagicMock()
     monkeypatch.setattr(psycopg_module, pool_name, constructor)
-    config = config_type(connection_config={"null_pool": True, "open": False, "max_size": 7, "max_waiting": 2})
+    config = config_type(
+        connection_config={"open": False, "max_size": 7, "max_waiting": 2}, driver_features={"enable_pooling": False}
+    )
     if config_type is PsycopgAsyncConfig:
         await config._create_pool()
     else:
@@ -70,8 +74,8 @@ async def test_null_pool_preserves_throttling_without_leaking_flag(
     args = constructor.call_args.kwargs
     assert args["max_size"] == 7
     assert args["max_waiting"] == 2
-    assert "null_pool" not in args["kwargs"]
-    assert "null_pool" not in config._connection_kwargs()[2]
+    assert "enable_pooling" not in args["kwargs"]
+    assert "enable_pooling" not in config._connection_kwargs()[2]
 
 
 @pytest.mark.parametrize("builder", [asyncpg_cockroach_config, psycopg_cockroach_config])
@@ -119,7 +123,7 @@ async def test_pgbouncer_stack_cancellation_keeps_transaction_cleanup() -> None:
     transaction.__aenter__ = AsyncMock()
     transaction.__aexit__ = AsyncMock(return_value=False)
     connection.transaction.return_value = transaction
-    driver = AsyncpgDriver(connection, driver_features={"pgbouncer": True})
+    driver = AsyncpgDriver(connection, driver_features={"pooler_mode": "transaction"})
     stack = StatementStack().push_execute("SELECT 1")
     with pytest.raises(asyncio.CancelledError):
         await driver.execute_stack(stack)

@@ -17,6 +17,7 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     IntegrityError,
     NotNullViolationError,
+    OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
@@ -28,7 +29,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate, has_type_code
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code
 
 if TYPE_CHECKING:
     from sqlspec.core.parameters import ParameterValidator
@@ -45,8 +46,6 @@ __all__ = (
     "collect_stream_rows",
     "create_mapped_exception",
     "default_statement_config",
-    "detect_json_columns",
-    "detect_json_columns_from_description",
     "driver_profile",
     "encode_records_for_local_infile",
     "escape_literal_percent",
@@ -54,7 +53,6 @@ __all__ = (
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
-    "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_row_plan",
     "resolve_rowcount",
@@ -80,13 +78,11 @@ MYSQL_CR_SSL_CONNECTION_ERROR: Final[int] = 2026
 MYSQL_SYNTAX_ERROR_MIN: Final[int] = 1064
 MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE: Final[int] = 1100
 
-_MYSQL_MIGRATION_ERROR_CODES: Final[frozenset[int]] = frozenset((1061, 1091))
-_MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
-    "23505": (UniqueViolationError, "unique constraint violation"),
-    "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
-    "23502": (NotNullViolationError, "not-null constraint violation"),
-    "23514": (CheckViolationError, "check constraint violation"),
+_MYSQL_DDL_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
+    1061: (OperationalError, "duplicate key name"),
+    1091: (OperationalError, "cannot drop column or key"),
 }
+_MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {}
 _MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23": (IntegrityError, "integrity constraint violation"),
     "28": (PermissionDeniedError, "authorization error"),
@@ -94,6 +90,10 @@ _MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]
     "42": (SQLParsingError, "SQL syntax error"),
     "08": (DatabaseConnectionError, "connection error"),
     "22": (DataError, "data error"),
+}
+_MYSQL_SYNTAX_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1054: (SQLParsingError, "unknown column"),
+    1146: (SQLParsingError, "table does not exist"),
 }
 _MYSQL_CONSTRAINT_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_DUP_ENTRY: (UniqueViolationError, "unique constraint violation"),
@@ -112,6 +112,8 @@ _MYSQL_ACCESS_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] =
     MYSQL_ER_DBACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_ACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_TABLEACCESS_DENIED: (PermissionDeniedError, "access denied"),
+    1290: (PermissionDeniedError, "read-only server"),
+    1836: (PermissionDeniedError, "read-only mode"),
 }
 _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_LOCK_DEADLOCK: (DeadlockError, "deadlock detected"),
@@ -121,6 +123,7 @@ _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str
     3024: (QueryTimeoutError, "query execution timeout"),
 }
 _MYSQL_CONNECTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1040: (DatabaseConnectionError, "too many connections"),
     MYSQL_CR_SERVER_LOST: (ConnectionTimeoutError, "connection lost"),
     MYSQL_CR_CONNECTION_ERROR: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_CONN_HOST_ERROR: (DatabaseConnectionError, "connection error"),
@@ -191,8 +194,11 @@ class AsyncmyStreamSource:
         cursor = self._cursor
         self._cursor = None
         if cursor is not None:
-            with contextlib.suppress(Exception):
+            try:
                 await cursor.close()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    self._driver.connection.close()
 
     async def _start(self) -> None:
         try:
@@ -207,7 +213,7 @@ class AsyncmyStreamSource:
 
 def build_profile() -> "DriverParameterProfile":
     """Create the AsyncMy driver parameter profile."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: bool_to_int, **build_uuid_coercions()}
+    coercions: dict[type, Callable[[Any], Any]] = {bool: int, **build_uuid_coercions()}
     return DriverParameterProfile(
         name="asyncmy",
         default_style=ParameterStyle.QMARK,
@@ -345,13 +351,6 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
-def resolve_column_names(description: "Sequence[Any] | None") -> "list[str]":
-    """Extract column names from cursor description."""
-    if not description:
-        return []
-    return [col[0] for col in description]
-
-
 def resolve_row_plan(
     description: "Sequence[Any] | None", json_type_codes: "set[int]"
 ) -> "tuple[list[str], list[int] | None]":
@@ -375,24 +374,6 @@ def resolve_row_plan(
         if type_code in json_type_codes:
             append_json(index)
     return column_names, json_indexes or None
-
-
-def detect_json_columns_from_description(
-    description: "Sequence[Any] | None", json_type_codes: "set[int]"
-) -> "list[int]":
-    """Identify JSON column indexes from pre-fetched cursor description metadata."""
-    return resolve_row_plan(description, json_type_codes)[1] or []
-
-
-def detect_json_columns(
-    cursor: Any, json_type_codes: "set[int]", description: "Sequence[Any] | None" = None
-) -> "list[int]":
-    """Identify JSON column indexes from cursor metadata."""
-    if description is None:
-        if not has_cursor_metadata(cursor):
-            return []
-        description = cursor.description
-    return detect_json_columns_from_description(description, json_type_codes)
 
 
 def collect_stream_rows(
@@ -476,13 +457,9 @@ def normalize_lastrowid(cursor: Any) -> int | None:
     return last_id if isinstance(last_id, int) else None
 
 
-def bool_to_int(value: bool) -> int:
-    """Coerce boolean values to integer for MySQL parameter compatibility."""
-    return int(value)
-
-
-def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpecError | bool":
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map MySQL driver exceptions to SQLSpec errors."""
+    _ = logger
     error_code = getattr(error, "errno", None)
     if error_code is None and isinstance(error, Exception) and error.args:
         value = error.args[0]
@@ -491,10 +468,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     sqlstate = error.sqlstate if has_sqlstate(error) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
-    if error_code in _MYSQL_MIGRATION_ERROR_CODES:
-        if logger is not None:
-            logger.warning("MySQL expected migration error (ignoring): %s", error)
-        return True
+    dispatch = _MYSQL_DDL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     dispatch = _MYSQL_SQLSTATE_EXACT_DISPATCH.get(sqlstate) if sqlstate is not None else None
     if dispatch is not None:
@@ -520,6 +496,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
     if sqlstate_prefix == "40":
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["40"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+
+    dispatch = _MYSQL_SYNTAX_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     if sqlstate_prefix == "42":

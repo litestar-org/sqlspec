@@ -48,3 +48,54 @@ def test_mysqlconnector_sync_store_honors_table_options() -> None:
     ddl = store._table_ddl()
 
     assert f"{DEFAULT_ENGINE_CLAUSE} COMMENT='litestar-session'" in ddl
+
+
+def test_mysqlconnector_drop_table_sql_omits_drop_index() -> None:
+    """_drop_table_sql must emit only DROP TABLE IF EXISTS without preceding DROP INDEX."""
+    async_store = MysqlConnectorAsyncStore(_mock_config())
+    sync_store = MysqlConnectorSyncStore(_mock_config())
+
+    assert async_store._drop_table_sql() == ["DROP TABLE IF EXISTS litestar_session"]
+    assert sync_store._drop_table_sql() == ["DROP TABLE IF EXISTS litestar_session"]
+
+
+async def test_mysqlconnector_set_uses_mariadb_compatible_upsert() -> None:
+    """set must use VALUES(col) in ON DUPLICATE KEY UPDATE for MySQL and MariaDB compatibility."""
+    from unittest.mock import AsyncMock
+
+    cursor = MagicMock()
+    cursor.execute = AsyncMock()
+    cursor.close = AsyncMock()
+    conn = MagicMock()
+    conn.cursor = AsyncMock(return_value=cursor)
+    conn.commit = AsyncMock()
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+
+    store = MysqlConnectorAsyncStore(config)
+    await store.set("session-1", b"payload", 300)
+
+    assert cursor.execute.call_count == 1
+    sql = cursor.execute.call_args_list[0].args[0]
+    assert "ON DUPLICATE KEY UPDATE" in sql
+    assert "data = VALUES(data)" in sql
+    assert "expires_at = VALUES(expires_at)" in sql
+    assert "AS new" not in sql
+
+
+def test_mysqlconnector_sync_create_table_does_not_commit() -> None:
+    """Sync _create_table does not call driver.commit() after execute_script."""
+    driver = MagicMock()
+    session = MagicMock()
+    session.__enter__ = MagicMock(return_value=driver)
+    session.__exit__ = MagicMock(return_value=None)
+    config = _mock_config()
+    config.provide_session = lambda *_a, **_k: session
+
+    store = MysqlConnectorSyncStore(config)
+    store._create_table()
+
+    assert driver.execute_script.called
+    assert not driver.commit.called

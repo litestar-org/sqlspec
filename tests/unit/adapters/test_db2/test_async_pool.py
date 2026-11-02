@@ -7,11 +7,11 @@ from typing import Any, cast
 
 import pytest
 
-import sqlspec.adapters.db2.pool as pool_module
 from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool
 from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError
 from tests.unit.adapters.test_db2._fakes import (
     FakeDb2AsyncConnection,
+    FakeDb2AsyncCursor,
     FakeDb2Connection,
     FakeDb2Cursor,
     FakeDb2OperationalError,
@@ -26,16 +26,13 @@ pytestmark = pytest.mark.anyio
 
 
 class FakeClock:
-    """Replacement for the pool module's ``time`` with a controllable monotonic clock."""
+    """Controllable external monotonic clock."""
 
     def __init__(self) -> None:
         self.now = 1000.0
 
     def monotonic(self) -> float:
         return self.now
-
-    def time(self) -> float:
-        return time.time()
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
@@ -205,7 +202,7 @@ async def test_recycle_and_health_check(fake_ibm_db: FakeModules, monkeypatch: p
     """Old connections are recycled, idle ones are pinged, and failed pings replace the connection."""
     _, module = fake_ibm_db
     clock = FakeClock()
-    monkeypatch.setattr(pool_module, "time", clock)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
     recycled = FakeDb2Connection()
     unhealthy = FakeDb2Connection([
         FakeDb2Cursor(error=db2_error(-30108, "08506", "A connection failed", FakeDb2OperationalError))
@@ -327,30 +324,47 @@ async def test_async_connection_create_hook_is_awaited(
         await pool.close()
 
 
+@pytest.mark.parametrize("close_fails", [False, True])
 async def test_cancelled_health_check_closes_detached_connection(
-    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch
+    fake_ibm_db: FakeModules, close_fails: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pool = Db2AsyncConnectionPool({"database": "TESTDB"}, max_size=1)
+    pool = Db2AsyncConnectionPool({"database": "TESTDB"}, max_size=1, health_check_interval=-1.0)
     connection = _as_fake(await pool.acquire())
     await pool.release(connection)
     checking = asyncio.Event()
+    finish = asyncio.Event()
+    execute = FakeDb2AsyncCursor.execute
+    close = FakeDb2AsyncCursor.close
 
-    async def check(_pool: object, _record: object) -> bool:
+    async def blocked_execute(cursor: FakeDb2AsyncCursor, operation: str, parameters: object = None) -> FakeDb2Cursor:
         checking.set()
-        await asyncio.Event().wait()
-        return True
+        await finish.wait()
+        return await execute(cursor, operation, parameters)
 
-    monkeypatch.setattr(Db2AsyncConnectionPool, "_is_reusable", check)
+    async def failing_close(cursor: FakeDb2AsyncCursor) -> None:
+        await close(cursor)
+        msg = "Cursor close failed during cancelled health check."
+        raise OSError(msg)
+
+    monkeypatch.setattr(FakeDb2AsyncCursor, "execute", blocked_execute)
+    if close_fails:
+        monkeypatch.setattr(FakeDb2AsyncCursor, "close", failing_close)
     task = asyncio.create_task(pool.acquire())
-    await checking.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert connection.sync_connection.closed is True
-    assert pool.size() == 0
-    replacement = await pool.acquire()
-    await pool.release(replacement)
-    await pool.close()
+    try:
+        await asyncio.wait_for(checking.wait(), timeout=1.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1.0)
+        assert connection.sync_connection.closed is True
+        assert connection.sync_connection.cursors[0].closed is True
+        assert pool.size() == 0
+        replacement = await asyncio.wait_for(pool.acquire(), timeout=1.0)
+        await pool.release(replacement)
+    finally:
+        finish.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await pool.close()
 
 
 async def test_pool_closed_while_opening_rejects_and_closes_connection(fake_ibm_db: FakeModules) -> None:

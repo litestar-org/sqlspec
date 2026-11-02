@@ -124,6 +124,9 @@ _SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "22007": (DataError, "invalid datetime format"),
     "22012": (DataError, "division by zero"),
     "42601": (SQLParsingError, "sql syntax error"),
+    "42703": (SQLParsingError, "undefined column"),
+    "42710": (SQLParsingError, "duplicate object"),
+    "42884": (SQLParsingError, "routine not found"),
 }
 
 _SQLCODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
@@ -138,9 +141,13 @@ _SQLCODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     1042: (DatabaseConnectionError, "unexpected system error occurred"),
     30081: (DatabaseConnectionError, "communication failure"),
     104: (SQLParsingError, "sql syntax error"),
+    206: (SQLParsingError, "undefined column"),
+    440: (SQLParsingError, "routine not found"),
+    601: (SQLParsingError, "duplicate object"),
     302: (DataError, "numeric or string value out of range"),
     433: (DataError, "value is too long"),
     952: (QueryTimeoutError, "statement execution interrupted or timed out"),
+    30082: (PermissionDeniedError, "security processing failed"),
 }
 
 

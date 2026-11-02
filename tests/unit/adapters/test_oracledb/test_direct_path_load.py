@@ -329,3 +329,24 @@ def test_convertible_scalar_columns_keep_the_native_path(arrow_type: "pa.DataTyp
 
     assert len(conn.dpl_calls) == 1
     assert conn._cursor.executemany_calls == []
+
+
+def test_direct_path_load_failure_preserves_cause() -> None:
+    """direct_path_load failure preserves the underlying cause on the raised exception."""
+    import oracledb
+
+    from sqlspec.exceptions import SQLSpecError
+
+    native_err = oracledb.DatabaseError("ORA-00001: unique constraint violated")
+
+    class _FailingDPLConn(_DPLConnection):
+        def direct_path_load(self, **kwargs: Any) -> None:
+            raise native_err
+
+    conn = _FailingDPLConn(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    with pytest.raises(SQLSpecError) as exc_info:
+        driver.load_from_arrow("MYTAB", _arrow())
+
+    assert exc_info.value.__cause__ is native_err

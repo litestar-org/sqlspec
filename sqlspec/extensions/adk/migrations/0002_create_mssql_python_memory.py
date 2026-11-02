@@ -26,20 +26,16 @@ async def up(context: "MigrationContext | None" = None) -> list[str]:
     if not any(cls.__module__.startswith("sqlspec.adapters.mssql_python.") for cls in type(config).__mro__):
         return []
 
-    from sqlspec.adapters.mssql_python.adk.store import (
-        MssqlPythonADKMemoryStore,
-        _create_index_sql,
-        _escape_sql_literal,
-        _table_ref,
-    )
+    from sqlspec.adapters.mssql_python.adk.store import MssqlPythonADKMemoryStore, _create_index_sql, _table_ref
+    from sqlspec.adapters.mssql_python.core import escape_sql_literal
 
     store = MssqlPythonADKMemoryStore(config)
     statements = [store._memory_table_ddl()]  # pyright: ignore[reportPrivateUsage]
     for index_name, table, columns in store._memory_index_specs():  # pyright: ignore[reportPrivateUsage]
         statements.append(
             "IF NOT EXISTS (SELECT 1 FROM sys.indexes "
-            f"WHERE name = N'{_escape_sql_literal(index_name)}' "
-            f"AND object_id = OBJECT_ID(N'{_escape_sql_literal(_table_ref(table))}')) "
+            f"WHERE name = N'{escape_sql_literal(index_name)}' "
+            f"AND object_id = OBJECT_ID(N'{escape_sql_literal(_table_ref(table))}')) "
             f"BEGIN {_create_index_sql(table, index_name, columns)}; END;"
         )
     return statements

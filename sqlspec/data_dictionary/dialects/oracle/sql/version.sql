@@ -1,12 +1,10 @@
 -- name: current
 -- dialect: oracle
 SELECT
-    product AS "product",
-    version AS "version",
-    status AS "status"
-FROM product_component_version
-WHERE product LIKE 'Oracle%'
-ORDER BY TO_NUMBER(REGEXP_SUBSTR(version, '^[0-9]+')) DESC, version DESC
+    p.*
+FROM product_component_version p
+WHERE p.product LIKE 'Oracle%'
+ORDER BY TO_NUMBER(REGEXP_SUBSTR(p.version, '^[0-9]+')) DESC, p.version DESC
 FETCH FIRST 1 ROWS ONLY;
 
 -- name: autonomous_service

@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Mapping
-from contextlib import suppress
+from contextlib import asynccontextmanager, nullcontext, suppress
 from io import BytesIO
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -11,6 +11,7 @@ from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgPostgresError, AsyncpgSessionContext
+from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.adapters.asyncpg.core import (
     AsyncpgStreamSource,
     NormalizedStackOperation,
@@ -24,6 +25,7 @@ from sqlspec.adapters.asyncpg.core import (
 from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.core import (
     SQL,
+    DMLResult,
     StackResult,
     StatementStack,
     get_cache_config,
@@ -37,18 +39,20 @@ from sqlspec.driver import (
     BaseAsyncExceptionHandler,
     StackExecutionObserver,
     describe_stack_statement,
+    validate_savepoint_name,
 )
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_guards import has_sqlstate
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig
-    from sqlspec.driver import ExecutionResult
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 
@@ -74,7 +78,11 @@ class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
 
         _ = exc_type
-        if isinstance(exc_val, AsyncpgPostgresError) or has_sqlstate(exc_val):
+        if (
+            isinstance(exc_val, (AsyncpgPostgresError, TimeoutError, OSError))
+            or has_sqlstate(exc_val)
+            or (asyncpg is not None and isinstance(exc_val, getattr(asyncpg, "InterfaceError", ())))
+        ):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -132,8 +140,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
 
+        timeout = self._timeout_value(statement.statement_config)
         if statement.returns_rows():
-            records = await cursor.fetch(sql, *params, **self._timeout_arguments(statement.statement_config))
+            records = (
+                await cursor.fetch(sql, *params, timeout=timeout)
+                if timeout is not None
+                else await cursor.fetch(sql, *params)
+            )
             data, column_names = collect_rows(records)
 
             return self.create_execution_result(
@@ -145,8 +158,11 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 row_format="record",
             )
 
-        result = await cursor.execute(sql, *params, **self._timeout_arguments(statement.statement_config))
-
+        result = (
+            await cursor.execute(sql, *params, timeout=timeout)
+            if timeout is not None
+            else await cursor.execute(sql, *params)
+        )
         affected_rows = parse_status(result)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
@@ -162,15 +178,52 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        timeout = self._timeout_value(statement.statement_config)
 
         if prepared_parameters:
             parameter_sets = cast("list[Sequence[object]]", prepared_parameters)
-            await cursor.executemany(sql, parameter_sets, **self._timeout_arguments(statement.statement_config))
+            if timeout is not None:
+                await cursor.executemany(sql, parameter_sets, timeout=timeout)
+            else:
+                await cursor.executemany(sql, parameter_sets)
             affected_rows = resolve_many_rowcount(parameter_sets)
         else:
             affected_rows = 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    async def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        wire_sql = self._format_wire_sql(cached.compiled_sql)
+        timeout = self._timeout_value(self.statement_config)
+        args = (
+            params if isinstance(params, (tuple, list)) else tuple(params.values()) if isinstance(params, dict) else ()
+        )
+        if cached.operation_profile.returns_rows:
+            records = (
+                await self.connection.fetch(wire_sql, *args, timeout=timeout)
+                if timeout is not None
+                else await self.connection.fetch(wire_sql, *args)
+            )
+            data, column_names = collect_rows(records)
+            return self.build_cached_select_result(
+                sql,
+                params,
+                cached,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                row_format="record",
+                compiled_sql=wire_sql,
+            )
+        status = (
+            await self.connection.execute(wire_sql, *args, timeout=timeout)
+            if timeout is not None
+            else await self.connection.execute(wire_sql, *args)
+        )
+        affected_rows = parse_status(status)
+        return DMLResult(cached.operation_type, affected_rows)
 
     async def dispatch_execute_script(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -182,20 +235,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution details
         """
-        sql, _ = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_result = None
-
-        for stmt in statements:
-            result = await cursor.execute(stmt, **self._timeout_arguments(statement.statement_config))
-            last_result = result
-            successful_count += 1
-
-        return self.create_execution_result(
-            last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
-        )
+        return await super().dispatch_execute_script(cursor, statement)
 
     async def dispatch_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "SQLResult | None":
         """Handle PostgreSQL COPY operations and other special cases.
@@ -233,10 +273,15 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         transaction = self.connection.transaction()
         try:
             await transaction.start()
+        except Exception as e:
+            self._release_failed_transaction_claim(transaction)
+            raise create_mapped_exception(e) from e
+        try:
             if self._should_set_local_columnar():
                 await self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
-        except AsyncpgPostgresError as e:
-            self._release_failed_transaction_claim(transaction)
+        except Exception as e:
+            with suppress(Exception):
+                await transaction.rollback()
             raise create_mapped_exception(e) from e
         self._transaction = transaction
 
@@ -249,7 +294,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 await transaction.commit()
             elif self._connection_in_transaction():
                 await self.connection.execute("COMMIT")
-        except AsyncpgPostgresError as e:
+        except Exception as e:
             raise create_mapped_exception(e) from e
 
     async def rollback(self) -> None:
@@ -261,7 +306,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 await transaction.rollback()
             elif self._connection_in_transaction():
                 await self.connection.execute("ROLLBACK")
-        except AsyncpgPostgresError as e:
+        except Exception as e:
             raise create_mapped_exception(e) from e
 
     async def set_migration_session_schema(self, schema: str) -> None:
@@ -299,9 +344,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
-        return AsyncRowStream(
-            AsyncpgStreamSource(self, sql, params, chunk_size, self._timeout_arguments(statement.statement_config))
-        )
+        timeout = self._timeout_value(statement.statement_config)
+        return AsyncRowStream(AsyncpgStreamSource(self, sql, params, chunk_size, timeout))
 
     def handle_database_exceptions(self) -> "AsyncpgExceptionHandler":
         """Handle database exceptions with PostgreSQL error codes."""
@@ -336,7 +380,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         ``STDIN``/``STDOUT`` stream form.
         """
 
-        self._require_capability("arrow_export_enabled")
         arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_storage_result(
@@ -385,29 +428,33 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if overwrite:
             try:
                 await self.connection.execute(f"TRUNCATE TABLE {quoted_target}")
-            except AsyncpgPostgresError as exc:
+            except Exception as exc:
+                mapped = create_mapped_exception(exc)
                 msg = f"Failed to truncate table '{table}': {exc}"
-                raise SQLSpecError(msg) from exc
+                raise type(mapped)(msg) from exc
         columns, batch_iter = self._coerce_arrow_batches(source)
         first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
         metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
         if first_batch is not None:
             all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             use_binary = bool(self.driver_features.get("enable_pgcopy_binary", False))
-            if use_binary:
-                async_chunks = self._iter_pgcopy_binary_chunks_async(all_batches, columns=columns, metrics=metrics)
-                await self.connection.copy_to_table(
-                    table_name, source=async_chunks, columns=columns, schema_name=schema_name, format="binary"
-                )
-            else:
-                for batch in all_batches:
-                    metrics["rows_processed"] += int(batch.num_rows)
-                    metrics["bytes_processed"] += int(batch.nbytes)
-                    records = self._arrow_batch_to_rows(batch, columns)
-                    if records:
-                        await self.connection.copy_records_to_table(
-                            table_name, records=records, columns=columns, schema_name=schema_name
-                        )
+            try:
+                if use_binary:
+                    async_chunks = self._iter_pgcopy_binary_chunks_async(all_batches, columns=columns, metrics=metrics)
+                    await self.connection.copy_to_table(
+                        table_name, source=async_chunks, columns=columns, schema_name=schema_name, format="binary"
+                    )
+                else:
+                    for batch in all_batches:
+                        metrics["rows_processed"] += int(batch.num_rows)
+                        metrics["bytes_processed"] += int(batch.nbytes)
+                        records = self._arrow_batch_to_rows(batch, columns)
+                        if records:
+                            await self.connection.copy_records_to_table(
+                                table_name, records=records, columns=columns, schema_name=schema_name
+                            )
+            except Exception as exc:
+                raise create_mapped_exception(exc) from exc
         telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -448,6 +495,21 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         materialized = list(records)
         if not materialized:
+            if overwrite:
+                table_name, schema_name, quoted_target = self._copy_target(table)
+                try:
+                    await self.connection.execute(f"TRUNCATE TABLE {quoted_target}")
+                except Exception as exc:
+                    mapped = create_mapped_exception(exc)
+                    msg = f"Failed to truncate table '{table}': {exc}"
+                    raise type(mapped)(msg) from exc
+                empty_telemetry: StorageTelemetry = {
+                    "bytes_processed": 0,
+                    "destination": table,
+                    "format": "records",
+                    "rows_processed": 0,
+                }
+                return self._storage_job(empty_telemetry)
             msg = "load_from_records requires at least one record."
             raise ImproperConfigurationError(msg)
 
@@ -484,12 +546,16 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if overwrite:
             try:
                 await self.connection.execute(f"TRUNCATE TABLE {quoted_target}")
-            except AsyncpgPostgresError as exc:
+            except Exception as exc:
+                mapped = create_mapped_exception(exc)
                 msg = f"Failed to truncate table '{table}': {exc}"
-                raise SQLSpecError(msg) from exc
-        await self.connection.copy_records_to_table(
-            table_name, records=copy_rows, columns=resolved_columns, schema_name=schema_name
-        )
+                raise type(mapped)(msg) from exc
+        try:
+            await self.connection.copy_records_to_table(
+                table_name, records=copy_rows, columns=resolved_columns, schema_name=schema_name
+            )
+        except Exception as exc:
+            raise create_mapped_exception(exc) from exc
         telemetry_payload: StorageTelemetry = {
             "bytes_processed": 0,
             "destination": table,
@@ -498,29 +564,18 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         }
         return self._storage_job(telemetry_payload)
 
-    async def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Read an artifact from storage and ingest it via COPY."""
-
-        return await super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
-
-    def _timeout_arguments(self, config: "StatementConfig") -> "dict[str, Any]":
+    def _timeout_value(self, config: "StatementConfig") -> float | None:
         for options in (config.execution_args, self.statement_config.execution_args):
             if options:
                 for key in ("timeout", "command_timeout"):
                     if key in options:
-                        return {"timeout": options[key]}
-        return {}
+                        val = options[key]
+                        return float(val) if val is not None else None
+        return None
+
+    def _timeout_arguments(self, config: "StatementConfig") -> "dict[str, Any]":
+        timeout = self._timeout_value(config)
+        return {"timeout": timeout} if timeout is not None else {}
 
     def _release_failed_transaction_claim(self, transaction: Any) -> None:
         """Clear the connection's transaction claim left by a failed start."""
@@ -570,16 +625,19 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     ) -> "tuple[StackResult, ...]":
         results: list[StackResult] = []
 
+        caller_in_tx = self._connection_in_transaction()
         transaction_cm = None
-        if not continue_on_error and not self._connection_in_transaction():
+        if not continue_on_error and not caller_in_tx:
             transaction_cm = self.connection.transaction()
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=False) as observer:
             if transaction_cm is not None:
                 async with transaction_cm:
-                    await self._run_stack_operations(stack, continue_on_error, observer, results)
+                    await self._run_stack_operations(
+                        stack, continue_on_error, observer, results, caller_in_tx=caller_in_tx
+                    )
             else:
-                await self._run_stack_operations(stack, continue_on_error, observer, results)
+                await self._run_stack_operations(stack, continue_on_error, observer, results, caller_in_tx=caller_in_tx)
 
         return tuple(results)
 
@@ -589,6 +647,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         continue_on_error: bool,
         observer: "StackExecutionObserver",
         results: "list[StackResult]",
+        *,
+        caller_in_tx: bool = False,
     ) -> None:
         """Run operations for statement stack execution.
 
@@ -596,27 +656,32 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """
         for index, operation in enumerate(stack.operations):
             try:
-                normalized: NormalizedStackOperation | None = None
-                if operation.method == "execute":
-                    kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
-                    statement_config = kwargs.pop("statement_config", None)
-                    config = statement_config or self.statement_config
+                scope = self._stack_savepoint() if continue_on_error and caller_in_tx else nullcontext()
+                async with scope:
+                    normalized: NormalizedStackOperation | None = None
+                    if operation.method == "execute":
+                        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+                        statement_config = kwargs.pop("statement_config", None)
+                        config = statement_config or self.statement_config
 
-                    sql_statement = self.prepare_statement(
-                        operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
-                    )
-                    if not sql_statement.is_script and not sql_statement.is_many:
-                        sql_text, prepared_parameters = self._compiled_sql(sql_statement, config)
-                        prepared_parameters = cast("tuple[Any, ...] | dict[str, Any] | None", prepared_parameters)
-                        normalized = NormalizedStackOperation(
-                            operation=operation, statement=sql_statement, sql=sql_text, parameters=prepared_parameters
+                        sql_statement = self.prepare_statement(
+                            operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
                         )
+                        if not sql_statement.is_script and not sql_statement.is_many:
+                            sql_text, prepared_parameters = self._compiled_sql(sql_statement, config)
+                            prepared_parameters = cast("tuple[Any, ...] | dict[str, Any] | None", prepared_parameters)
+                            normalized = NormalizedStackOperation(
+                                operation=operation,
+                                statement=sql_statement,
+                                sql=sql_text,
+                                parameters=prepared_parameters,
+                            )
 
-                if normalized is not None:
-                    stack_result = await self._execute_stack_operation_prepared(normalized)
-                else:
-                    result = await self._execute_stack_operation(operation)
-                    stack_result = StackResult(result=result)
+                    if normalized is not None:
+                        stack_result = await self._execute_stack_operation_prepared(normalized)
+                    else:
+                        result = await self._execute_stack_operation(operation)
+                        stack_result = StackResult(result=result)
             except Exception as exc:
                 stack_error = StackExecutionError(
                     index,
@@ -626,15 +691,28 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                     mode="continue-on-error" if continue_on_error else "fail-fast",
                 )
                 if continue_on_error:
-                    await self._rollback_failed_stack()
+                    if not caller_in_tx:
+                        await self._rollback_failed_stack()
                     observer.record_operation_error(stack_error)
                     results.append(StackResult.from_error(stack_error))
                     continue
                 raise stack_error from exc
 
             results.append(stack_result)
-            if continue_on_error:
+            if continue_on_error and not caller_in_tx:
                 await self._commit_stack_success()
+
+    @asynccontextmanager
+    async def _stack_savepoint(self) -> "AsyncIterator[None]":
+        name = validate_savepoint_name(f"sqlspec_stack_{uuid4().hex}")
+        await self.connection.execute(f"SAVEPOINT {name}")
+        try:
+            yield
+        except BaseException:
+            await self.connection.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            raise
+        finally:
+            await self.connection.execute(f"RELEASE SAVEPOINT {name}")
 
     async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
         result = await self._execute_cached_statement(normalized.statement)
@@ -644,9 +722,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     def _is_transaction_pooler_mode(self) -> bool:
         pooler_mode = self.driver_features.get("pooler_mode", "session")
-        return pooler_mode in {"transaction", "statement"} or bool(
-            self.driver_features.get("pgbouncer") or self.driver_features.get("pgbouncer_mode")
-        )
+        return pooler_mode in {"transaction", "statement"}
 
     def _should_set_local_columnar(self) -> bool:
         return bool(self.driver_features.get("enable_alloydb_columnar", False)) and self._is_transaction_pooler_mode()

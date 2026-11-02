@@ -6,8 +6,6 @@ per subscribed channel. Each dequeue uses the cached handle and honors the
 caller's poll_interval (capped at the configured aq_wait_seconds ceiling).
 """
 
-# pyright: reportPrivateUsage=false
-
 import asyncio
 import contextlib
 import logging
@@ -84,7 +82,7 @@ class OracleSyncAQHub:
             _apply_deq_options(queue, self._visibility, self._default_visibility, wait_seconds)
             try:
                 message = queue.deqone()
-            except Exception as error:  # pragma: no cover
+            except Exception as error:
                 if not isinstance(error, OracleDatabaseError):
                     raise
                 log_with_context(
@@ -218,7 +216,7 @@ class OracleAsyncAQHub:
             _apply_deq_options(queue, self._visibility, self._default_visibility, wait_seconds)
             try:
                 message = await queue.deqone()
-            except Exception as error:  # pragma: no cover
+            except Exception as error:
                 if not isinstance(error, OracleDatabaseError):
                     raise
                 log_with_context(
