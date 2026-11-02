@@ -482,6 +482,7 @@ The `oracle` dialect pack defines `36` named queries across `22` domain `.sql` f
     -- name: by_table
     -- dialect: oracle
     SELECT
+        i.owner AS schema_name,
         i.index_name,
         i.table_name AS table_name,
         CASE WHEN i.uniqueness = 'UNIQUE' THEN 1 ELSE 0 END AS is_unique,
@@ -500,7 +501,7 @@ The `oracle` dialect pack defines `36` named queries across `22` domain `.sql` f
       AND c.constraint_type = 'P'
     WHERE i.table_name = :table_name
       AND i.owner = COALESCE(:schema_name, USER)
-    GROUP BY i.index_name, i.table_name, i.uniqueness;
+    GROUP BY i.owner, i.index_name, i.table_name, i.uniqueness;
 
     -- name: expressions
     -- dialect: oracle
@@ -884,12 +885,10 @@ The `oracle` dialect pack defines `36` named queries across `22` domain `.sql` f
     -- name: current
     -- dialect: oracle
     SELECT
-        product AS "product",
-        version AS "version",
-        status AS "status"
-    FROM product_component_version
-    WHERE product LIKE 'Oracle%'
-    ORDER BY TO_NUMBER(REGEXP_SUBSTR(version, '^[0-9]+')) DESC, version DESC
+        p.*
+    FROM product_component_version p
+    WHERE p.product LIKE 'Oracle%'
+    ORDER BY TO_NUMBER(REGEXP_SUBSTR(p.version, '^[0-9]+')) DESC, p.version DESC
     FETCH FIRST 1 ROWS ONLY;
 
     -- name: autonomous_service

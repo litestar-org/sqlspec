@@ -515,6 +515,18 @@ The `postgres` dialect pack defines `26` named queries across `21` domain `.sql`
     ```sql
     -- name: by_schema
     -- dialect: postgres
+    WITH target_schema AS (
+        SELECT COALESCE(
+            :schema_name::text,
+            (
+                SELECT rn.nspname::text
+                FROM pg_catalog.pg_class rc
+                JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+                WHERE rc.oid = pg_catalog.to_regclass(pg_catalog.quote_ident(:table_name::text))
+            ),
+            current_schema()
+        ) AS schema_name
+    )
     SELECT
         tn.nspname::text AS schema_name,
         tbl.relname::text AS table_name,
@@ -550,11 +562,11 @@ The `postgres` dialect pack defines `26` named queries across `21` domain `.sql`
     FROM pg_catalog.pg_index ix
     JOIN pg_catalog.pg_class tbl ON tbl.oid = ix.indrelid
     JOIN pg_catalog.pg_namespace tn ON tn.oid = tbl.relnamespace
+    JOIN target_schema ts ON ts.schema_name = tn.nspname
     JOIN pg_catalog.pg_class idx ON idx.oid = ix.indexrelid
     JOIN pg_catalog.pg_am am ON am.oid = idx.relam
     LEFT JOIN pg_catalog.pg_depend dep ON dep.objid = idx.oid AND dep.deptype = 'e'
-    WHERE tn.nspname = :schema_name
-      AND (:table_name::text IS NULL OR tbl.relname = :table_name)
+    WHERE (:table_name::text IS NULL OR tbl.relname = :table_name)
     ORDER BY tn.nspname, tbl.relname, idx.relname;
 
     -- name: by_table
