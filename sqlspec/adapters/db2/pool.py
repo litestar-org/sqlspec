@@ -27,6 +27,42 @@ _ADAPTER_NAME = "db2"
 _IBM_DB_DBI = ibm_db_dbi
 
 
+def _set_current_schema(connection: Any, schema: str) -> None:
+    """Set the SQL register and SDK catalog schema without CLI keyword quoting."""
+    cursor = connection.cursor()
+    pending_exception: BaseException | None = None
+    try:
+        cursor.execute("SET CURRENT SCHEMA = ?", (schema,))
+    except BaseException as exc:
+        pending_exception = exc
+    try:
+        cursor.close()
+    except BaseException as exc:
+        if pending_exception is None:
+            pending_exception = exc
+    if pending_exception is not None:
+        raise pending_exception
+    connection.set_current_schema(schema)
+
+
+async def _set_current_schema_async(connection: Any, schema: str) -> None:
+    """Set both schema states, closing the cursor outside the query's exception handler."""
+    cursor = await connection.cursor()
+    pending_exception: BaseException | None = None
+    try:
+        await cursor.execute("SET CURRENT SCHEMA = ?", (schema,))
+    except BaseException as exc:
+        pending_exception = exc
+    try:
+        await cursor.close()
+    except BaseException as exc:
+        if pending_exception is None:
+            pending_exception = exc
+    if pending_exception is not None:
+        raise pending_exception
+    await connection.set_current_schema(schema)
+
+
 class Db2SyncConnectionPool:
     """Thread-local connection manager for IBM Db2."""
 
@@ -62,7 +98,9 @@ class Db2SyncConnectionPool:
             on_connection_create: Callback executed when connection is created.
         """
         self._connection_parameters = connection_parameters
-        self._dsn = build_dsn_string(connection_parameters)
+        native_parameters = dict(connection_parameters)
+        native_parameters.pop("current_schema", None)
+        self._dsn = build_dsn_string(native_parameters)
         self._autocommit = bool(connection_parameters.get("autocommit", True))
         self._thread_local = threading.local()
         self._connection_registry: set[Any] = set()
@@ -83,6 +121,9 @@ class Db2SyncConnectionPool:
 
         The connection opens in the pool's autocommit mode.
 
+        The schema is applied with a bound statement because CLI keyword parsing cannot preserve
+        semicolon-bearing schema values. The SDK catalog schema is synchronized before the hook.
+
         The result is owned by the caller: it is not thread-local and is not
         tracked for pool shutdown.
 
@@ -101,13 +142,16 @@ class Db2SyncConnectionPool:
             self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
         )
 
-        if self._on_connection_create is not None:
-            try:
+        try:
+            schema = self._connection_parameters.get("current_schema")
+            if schema is not None:
+                _set_current_schema(connection, schema)
+            if self._on_connection_create is not None:
                 self._on_connection_create(connection)
-            except BaseException:
-                with contextlib.suppress(Exception):
-                    connection.close()
-                raise
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                connection.close()
+            raise
 
         return connection
 
@@ -343,7 +387,9 @@ class Db2AsyncConnectionPool:
                 an awaitable.
         """
         self._connection_parameters = connection_parameters
-        self._dsn = build_dsn_string(connection_parameters)
+        native_parameters = dict(connection_parameters)
+        native_parameters.pop("current_schema", None)
+        self._dsn = build_dsn_string(native_parameters)
         self._autocommit = bool(connection_parameters.get("autocommit", True))
         self._max_size = max_size
         self._acquire_timeout = acquire_timeout
@@ -374,6 +420,9 @@ class Db2AsyncConnectionPool:
         The connection opens in the pool's autocommit mode and the creation hook runs on it. The
         result is owned by the caller and is not tracked by the pool.
 
+        The schema is applied with a bound statement and synchronized with the SDK catalog schema
+        before the hook, avoiding the CLI keyword parser's treatment of semicolons.
+
         Returns:
             Any: A newly opened ``ibm_db_dbi.AsyncConnection``.
 
@@ -388,14 +437,18 @@ class Db2AsyncConnectionPool:
         connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(
             self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
         )
-        if self._on_connection_create is not None:
-            try:
+        try:
+            schema = self._connection_parameters.get("current_schema")
+            if schema is not None:
+                await _set_current_schema_async(connection, schema)
+            if self._on_connection_create is not None:
                 result = self._on_connection_create(connection)
                 if inspect.isawaitable(result):
                     await result
-            except BaseException:
-                await self._close_connection(connection)
-                raise
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                await connection.close()
+            raise
         return connection
 
     async def acquire(self) -> Any:

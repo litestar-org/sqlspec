@@ -212,6 +212,7 @@ class FakeDb2Connection:
         self.dbms_name = "DB2/LINUXX8664"
         self.autocommit = autocommit
         self.dsn: str | None = None
+        self.current_schema: str | None = None
         self.pending: list[tuple[str, object]] = []
         self.committed: list[tuple[str, object]] = []
         self.rollbacks = 0
@@ -240,6 +241,11 @@ class FakeDb2Connection:
     def set_autocommit(self, is_on: bool) -> None:
         """Switch the connection's autocommit mode."""
         self.autocommit = bool(is_on)
+
+    def set_current_schema(self, schema: str) -> bool:
+        """Update the schema used by SDK catalog operations."""
+        self.current_schema = schema
+        return True
 
     def commit(self) -> None:
         """Make pending writes durable."""
@@ -379,6 +385,10 @@ class FakeDb2AsyncConnection:
     async def set_autocommit(self, is_on: bool) -> None:
         """Switch the wrapped connection's autocommit mode."""
         self.sync_connection.set_autocommit(is_on)
+
+    async def set_current_schema(self, schema: str) -> bool:
+        """Update the schema used by SDK catalog operations."""
+        return self.sync_connection.set_current_schema(schema)
 
 
 class FakeAsyncConnectionFactory:

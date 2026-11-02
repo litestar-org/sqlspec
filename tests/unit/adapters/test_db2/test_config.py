@@ -1,5 +1,6 @@
 """Tests for IBM Db2 database configuration."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -25,6 +26,7 @@ from tests.unit.adapters.test_db2._fakes import (
     DriverMode,
     FakeDb2AsyncConnection,
     FakeDb2Connection,
+    FakeDb2Cursor,
     FakeIbmDbDbiModule,
     FakeIbmDbModule,
 )
@@ -133,6 +135,104 @@ def test_password_with_semicolon_is_brace_escaped(fake_ibm_db: FakeModules) -> N
     assert "PWD={p;x};" in dsn
     assert dsn.count("PWD=") == 1
     assert (user, password, host, database) == ("", "", "", "")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("schema", ["APP", "SQLSPEC;SEMICOLON", "Mixed Case"])
+async def test_schema_dsn_roundtrip_is_applied_before_creation_hook(
+    db2_mode: DriverMode, fake_ibm_db: FakeModules, schema: str
+) -> None:
+    """Schema values reach SQL as one bound value instead of CLI keyword fragments."""
+    _, fake_module = fake_ibm_db
+    cursor = FakeDb2Cursor()
+    native_connection = FakeDb2Connection(cursors=[cursor])
+    fake_module.pending_connections.append(native_connection)
+    hook_observations: list[tuple[list[tuple[str, Any]], str | None]] = []
+    source = db2_mode.config(
+        connection_config={"database": "d", "user": "u", "password": "p;x", "current_schema": schema}
+    )
+    config = db2_mode.config(
+        connection_config={"dsn": source.get_connection_string()},
+        driver_features={
+            "on_connection_create": lambda _: hook_observations.append((
+                list(cursor.executed),
+                native_connection.current_schema,
+            ))
+        },
+    )
+    expected = [("SET CURRENT SCHEMA = ?", (schema,))]
+
+    assert config.get_connection_string() == source.get_connection_string()
+    connection = await config.create_connection() if db2_mode.is_async else config.create_connection()
+    try:
+        assert cursor.executed == expected
+        assert hook_observations == [(expected, schema)]
+        assert cursor.closed
+        assert not native_connection.closed
+        assert fake_module.connect_calls[0][:5] == ("DATABASE=d;UID=u;PWD={p;x};", "", "", "", "")
+    finally:
+        if db2_mode.is_async:
+            await connection.close()
+            await config.close_pool()
+        else:
+            connection.close()
+            config.close_pool()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", ["execute", "close", "setter", "execute-and-close", "cancel-and-close"])
+async def test_schema_initialization_failure_closes_connection_and_preserves_error(
+    db2_mode: DriverMode, fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """Schema initialization never hands an uninitialized or cancelled connection to the hook."""
+    _, fake_module = fake_ibm_db
+    primary: BaseException = (
+        asyncio.CancelledError("schema cancelled")
+        if failure == "cancel-and-close"
+        else RuntimeError("schema initialization failed")
+    )
+    cursor = FakeDb2Cursor(error=primary if failure in {"execute", "execute-and-close", "cancel-and-close"} else None)
+    native_connection = FakeDb2Connection(cursors=[cursor])
+    fake_module.pending_connections.append(native_connection)
+    hook_calls: list[object] = []
+
+    def close_cursor() -> None:
+        cursor.closed = True
+        raise primary if failure == "close" else RuntimeError("schema cursor close failed")
+
+    def set_schema(_: str) -> bool:
+        raise primary
+
+    original_close = native_connection.close
+
+    def close_connection() -> None:
+        original_close()
+        raise RuntimeError("connection close failed")
+
+    if failure in {"close", "execute-and-close", "cancel-and-close"}:
+        monkeypatch.setattr(cursor, "close", close_cursor)
+    if failure == "setter":
+        monkeypatch.setattr(native_connection, "set_current_schema", set_schema)
+    monkeypatch.setattr(native_connection, "close", close_connection)
+    config = db2_mode.config(
+        connection_config={"database": "d", "current_schema": "SQLSPEC;SEMICOLON"},
+        driver_features={"on_connection_create": hook_calls.append},
+    )
+    try:
+        with pytest.raises(type(primary)) as caught:
+            if db2_mode.is_async:
+                await config.create_connection()
+            else:
+                config.create_connection()
+        assert caught.value is primary
+        assert cursor.closed
+        assert native_connection.closed
+        assert hook_calls == []
+    finally:
+        if db2_mode.is_async:
+            await config.close_pool()
+        else:
+            config.close_pool()
 
 
 @pytest.mark.parametrize(
