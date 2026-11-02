@@ -5028,7 +5028,7 @@ def _pool_contract_table(case: DriverCase) -> str:
 
 
 def _connection_probe_sql(case: DriverCase) -> str:
-    """Trivial query used to force a connection to be drawn so the create-hook fires."""
+    """Scalar query that acquires a native connection for lifecycle contracts."""
     if case.dialect == "oracle":
         return "SELECT 1 FROM DUAL"
     if case.dialect == "db2":
@@ -5132,7 +5132,7 @@ def assert_sync_connection_instance_contract(make_config: SyncConfigFactory, cas
     try:
         assert fresh.provide_pool() is not None
         with fresh.provide_session() as session:
-            assert session.select_value("SELECT 1") == 1
+            assert session.select_value(_connection_probe_sql(case)) == 1
     finally:
         fresh.close_pool()
 
@@ -5163,7 +5163,7 @@ async def assert_async_connection_instance_contract(make_config: AsyncConfigFact
     try:
         assert await fresh.provide_pool() is not None
         async with fresh.provide_session() as session:
-            assert await session.select_value("SELECT 1") == 1
+            assert await session.select_value(_connection_probe_sql(case)) == 1
     finally:
         await fresh.close_pool()
 
