@@ -31,7 +31,7 @@ def resolve_adapter_name(config_or_store: object) -> "str | None":
     if resolved is not None:
         return resolved
     if not isinstance(config_or_store, type):
-        inner_config = getattr(config_or_store, "_config", None)
+        inner_config = _extract_bound_config(config_or_store, target_cls)
         if inner_config is not None and inner_config is not config_or_store:
             return resolve_adapter_name(inner_config)
     return None
@@ -175,3 +175,20 @@ def _match_store_class_in_module(
                     return resolved
 
     return None
+
+
+def _extract_bound_config(config_or_store: object, target_cls: "type[Any]") -> "object | None":
+    """Extract bound inner configuration from a store instance while avoiding mock recursion."""
+    if hasattr(config_or_store, "_mock_return_value"):
+        if "_config" in getattr(config_or_store, "__dict__", {}):
+            return getattr(config_or_store, "_config", None)
+        return None
+    has_slot = any("_config" in getattr(cls, "__slots__", ()) for cls in target_cls.__mro__)
+    has_attr = (
+        "_config" in getattr(config_or_store, "__dict__", {})
+        or has_slot
+        or isinstance(getattr(target_cls, "_config", None), property)
+    )
+    if not has_attr:
+        return None
+    return getattr(config_or_store, "_config", None)

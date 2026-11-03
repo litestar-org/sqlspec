@@ -85,6 +85,65 @@ def apply_driver_features(
     return statement_config, features
 ```
 
+## Extension Integration & Third-Party Adapter Contract
+
+SQLSpec extensions (`events`, `adk`, `litestar`) and their associated migration loaders resolve the underlying database adapter name and extension store classes through `sqlspec.utils.adapters.resolve_adapter_name` and `sqlspec.utils.adapters.resolve_extension_store_class`.
+
+### Adapter Name Resolution
+
+`resolve_adapter_name(config_or_store)` determines the adapter identifier using a two-stage hierarchy:
+
+1. **Explicit `adapter_name` ClassVar**: If the configuration or store class explicitly defines an `adapter_name: ClassVar[str | None]` attribute containing a non-empty string, that value is returned immediately.
+2. **Module Hierarchy Fallback (MRO)**: The resolver inspects `target_cls.__mro__`. The first class whose `__module__` begins with `"sqlspec.adapters."` provides the adapter name from the third segment (`cls.__module__.split(".")[2]`).
+
+If an instance wraps an inner configuration (accessible via `_config`), resolution recursively inspects the wrapped object.
+
+### Extension Store Class Resolution
+
+When instantiating stores or running extension migrations, `resolve_extension_store_class` resolves the concrete store implementation:
+
+1. **Built-in Adapters (Auto-discovery)**: For adapters located inside `sqlspec.adapters.<name>`, stores are automatically discovered by inspecting `sqlspec.adapters.<name>.<extension>.store` (or `sqlspec.adapters.<name>.<extension>`). The loader matches the configuration class name with the appropriate store suffix (for example, `SpannerAsyncConfig` maps to `SpannerAsyncEventQueueStore` for `events`, or `SpannerAsyncStore` for `litestar`), falling back to sync or async store variants.
+2. **Subclasses of Built-in Configs**: Application-level subclasses of built-in configurations (such as subclassing `SpannerSyncConfig` or `SqliteConfig`) automatically inherit adapter resolution and store discovery from their base class in `sqlspec.adapters` via MRO. Subclasses can optionally override `adapter_name` or any explicit store ClassVar.
+3. **Third-Party Adapters & Custom Stores**: Third-party adapter packages or custom configuration classes defined outside `sqlspec.adapters` declare explicit store class attributes on their configuration class:
+   - `events_store_class: ClassVar[type[BaseEventQueueStore] | None]`: Custom event queue store subclassing `sqlspec.extensions.events.BaseEventQueueStore`.
+   - `adk_store_class: ClassVar[type[BaseSyncADKStore] | type[BaseAsyncADKStore] | None]`: Custom ADK session store subclassing `BaseSyncADKStore` or `BaseAsyncADKStore`.
+   - `adk_memory_store_class: ClassVar[type[BaseSyncADKMemoryStore] | type[BaseAsyncADKMemoryStore] | None]`: Custom ADK memory store subclassing `BaseSyncADKMemoryStore` or `BaseAsyncADKMemoryStore`.
+   - `litestar_store_class: ClassVar[type[BaseSQLSpecStore] | None]`: Custom Litestar session store subclassing `sqlspec.extensions.litestar.BaseSQLSpecStore`.
+
+Below is an example of a third-party configuration registering custom extension stores:
+
+```python
+from typing import ClassVar
+
+from sqlspec.config import AsyncDatabaseConfig
+from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.extensions.litestar import BaseSQLSpecStore
+
+
+class CustomEventQueueStore(BaseEventQueueStore):
+    """Custom event queue store implementation."""
+
+    adapter_name: ClassVar[str | None] = "custom_driver"
+
+
+class CustomLitestarStore(BaseSQLSpecStore):
+    """Custom Litestar session store implementation."""
+
+    adapter_name: ClassVar[str | None] = "custom_driver"
+
+
+class CustomAsyncConfig(AsyncDatabaseConfig):
+    """Third-party database configuration."""
+
+    adapter_name: ClassVar[str | None] = "custom_driver"
+    events_store_class: ClassVar[type[BaseEventQueueStore] | None] = (
+        CustomEventQueueStore
+    )
+    litestar_store_class: ClassVar[type[BaseSQLSpecStore] | None] = (
+        CustomLitestarStore
+    )
+```
+
 ## Driver Adapter Skeleton
 
 Below is a minimal synchronous driver skeleton demonstrating the required `SyncDriverAdapterBase` methods:

@@ -282,3 +282,15 @@ def test_config_and_store_base_classes_declare_adapter_and_store_classvars() -> 
     assert BaseAsyncADKStore.adapter_name is None
     assert BaseSyncADKMemoryStore.adapter_name is None
     assert BaseAsyncADKMemoryStore.adapter_name is None
+
+
+def test_resolve_adapter_name_handles_mock_objects_without_recursion() -> None:
+    """Mock instances without explicit adapter settings return None without recursing."""
+    from unittest.mock import MagicMock
+
+    mock_config = MagicMock()
+    assert resolve_adapter_name(mock_config) is None
+
+    mock_store = MagicMock()
+    mock_store._config = SqliteConfig(connection_config={"database": ":memory:"})
+    assert resolve_adapter_name(mock_store) == "sqlite"
