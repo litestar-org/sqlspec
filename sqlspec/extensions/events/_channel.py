@@ -882,7 +882,8 @@ def _validate_adapter_event_settings(
     if not isinstance(explicit_store, type) and config is not None:
         explicit_store = getattr(type(config), "events_store_class", None)
     if isinstance(explicit_store, type) and issubclass(explicit_store, BaseEventQueueStore):
-        allowed = BaseEventQueueStore.extension_config_options | explicit_store.extension_config_options
+        store_options = cast("frozenset[str]", getattr(explicit_store, "extension_config_options", frozenset()))
+        allowed = BaseEventQueueStore.extension_config_options | store_options
         target_label = adapter_name or resolve_adapter_name(explicit_store) or explicit_store.__name__
     else:
         if adapter_name is None:
