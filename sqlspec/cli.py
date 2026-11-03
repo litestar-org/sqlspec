@@ -20,7 +20,6 @@ from sqlspec.migrations import commands as migration_commands_module
 from sqlspec.migrations.squash import parse_version_range
 from sqlspec.utils.config_tools import discover_config_from_pyproject, resolve_config_sync
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import run_
 
 if TYPE_CHECKING:
@@ -238,19 +237,14 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     def _get_memory_store_class(
         config: "AnyDatabaseConfig",
     ) -> "type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]] | None":
-        config_module = type(config).__module__
-        config_name = type(config).__name__
-
-        if not config_module.startswith("sqlspec.adapters."):
-            return None
-
-        adapter_name = config_module.split(".")[2]
-        store_class_name = config_name.replace("Config", "ADKMemoryStore")
-        store_path = f"sqlspec.adapters.{adapter_name}.adk.store.{store_class_name}"
+        from sqlspec.extensions.adk._config_utils import _adk_memory_migration_store_class
 
         try:
-            return cast("type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]]", import_string(store_path))
-        except ImportError:
+            return cast(
+                "type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]] | None",
+                _adk_memory_migration_store_class(config),
+            )
+        except Exception:
             return None
 
     def _is_adk_memory_enabled(config: "AnyDatabaseConfig") -> bool:

@@ -4,11 +4,15 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import msgspec
 
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.data_dictionary._types import DialectConfig
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 __all__ = (
     "DEFAULT_OUTPUT_DIR",
@@ -444,10 +448,12 @@ def _extract_bind_params(sql_text: str) -> list[str]:
 
 def _format_capability_cell(config: DialectConfig, feature: str) -> str:
     """Format a capability matrix cell combining static feature_flags and version gates."""
-    if feature in config.feature_versions:
-        return f"`>={config.feature_versions[feature]}`"
-    if feature in config.feature_flags:
-        return "`Yes`" if config.feature_flags[feature] else "`No`"
+    feature_versions: Mapping[str, Any] = config.feature_versions
+    if feature in feature_versions:
+        return f"`>={feature_versions[feature]}`"
+    feature_flags: Mapping[str, Any] = config.feature_flags
+    if feature in feature_flags:
+        return "`Yes`" if feature_flags[feature] else "`No`"
     return "`No`"
 
 

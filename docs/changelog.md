@@ -7,6 +7,28 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.70.1 - Extension adapter name and store class resolution via ClassVars and MRO
+
+**Added:**
+
+* Added `sqlspec.utils.adapters` (`resolve_adapter_name` and `resolve_extension_store_class`) to centralize adapter name and store class resolution without `.split(".")[2]` module path derivations. Subclasses defined outside `sqlspec.adapters` resolve through their base classes in `sqlspec.adapters` via MRO, or by declaring explicit `adapter_name` and extension store ClassVars (`events_store_class`, `adk_store_class`, `adk_memory_store_class`, `litestar_store_class`).
+  ([#877](https://github.com/litestar-org/sqlspec/pull/877))
+* Declared `adapter_name`, `events_store_class`, `adk_store_class`, `adk_memory_store_class`, and `litestar_store_class` `ClassVar` attributes on `DatabaseConfigProtocol`, `SyncDatabaseConfig`, `AsyncDatabaseConfig`, and extension base stores (`BaseEventQueueStore`, `BaseSQLSpecStore`, `_ADKStoreCommon`, `_ADKMemoryStoreCommon`).
+  ([#877](https://github.com/litestar-org/sqlspec/pull/877))
+* Documented third-party adapter package and configuration subclass extension integration contracts in [docs/contributing/creating-adapters.md](contributing/creating-adapters.md#extension-integration-third-party-adapter-contract).
+  ([#877](https://github.com/litestar-org/sqlspec/pull/877))
+
+**Fixed:**
+
+* Fixed `BaseEventQueueStore` and `BaseSQLSpecStore` extension option validation for configuration and store classes defined outside `sqlspec.adapters`, preventing `IndexError` when resolving the adapter label.
+  ([#877](https://github.com/litestar-org/sqlspec/pull/877))
+* Fixed extension migration loaders (`events` `0001_create_event_queue`, `litestar` `0001_create_session_table`, and `adk` `0001_create_adk_tables` / `0002_create_mssql_python_memory`) to resolve store classes for custom configurations and built-in subclasses.
+  ([#877](https://github.com/litestar-org/sqlspec/pull/877))
+* Hardened `resolve_adapter_name` against recursive mock attribute expansion when inspecting unconfigured `unittest.mock.MagicMock` objects.
+  ([#877](https://github.com/litestar-org/sqlspec/pull/877))
+* Fixed TypedDict literal key access in `tools/docs/generate_data_dictionary_docs.py` (`_format_capability_cell`).
+  ([#877](https://github.com/litestar-org/sqlspec/pull/877))
+
 ### v0.70.0 - Sybase ASE and SAP SQL Anywhere adapters, streaming Arrow ingestion, canonical DDL synthesis, sharded fixtures, and documentation overhaul
 
 **Added:**

@@ -12,7 +12,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyPoolParams
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgPoolParams
-from sqlspec.adapters.spanner import SpannerAsyncConfig
+from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.migrations.context import MigrationContext
 
@@ -249,3 +249,23 @@ def test_reset_migration_is_not_packaged() -> None:
     """Only the canonical schema migration ships with the ADK extension."""
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("sqlspec.extensions.adk.migrations.0002_reset_adk_tables")
+
+
+async def test_adk_migration_runs_for_external_config_with_spanner_adapter_name() -> None:
+    """External config subclass setting adapter_name = 'spanner' resolves Spanner ADK stores and runs migrations."""
+
+    class ExternalSpannerConfig(SpannerSyncConfig):
+        adapter_name = "spanner"
+
+    ExternalSpannerConfig.__module__ = "myapp.database.config"
+    config = ExternalSpannerConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        extension_config={"adk": {"enable_memory": True}},
+    )
+    context = MigrationContext(config=config, dialect="spanner")
+
+    up_statements = await migration.up(context)
+
+    assert any("CREATE TABLE adk_session" in sql for sql in up_statements)
+    assert any("CREATE TABLE adk_event" in sql for sql in up_statements)
+    assert any("CREATE TABLE adk_memory" in sql for sql in up_statements)

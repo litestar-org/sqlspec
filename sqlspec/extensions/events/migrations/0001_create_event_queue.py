@@ -5,8 +5,8 @@ import logging
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.adapters import resolve_adapter_name, resolve_extension_store_class
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.module_loader import import_string
 
 if TYPE_CHECKING:
     from sqlspec.extensions.events._store import BaseEventQueueStore
@@ -82,18 +82,23 @@ def _load_store(context: "MigrationContext | None") -> "BaseEventQueueStore[Any]
         raise SQLSpecError(msg)
     config = context.config
     config_class = type(config)
-    module_path = config_class.__module__
-    if not module_path.startswith("sqlspec.adapters."):
-        msg = f"Unsupported configuration for events extension: {module_path}.{config_class.__name__}"
-        raise SQLSpecError(msg)
-    adapter_name = module_path.split(".")[2]
-    store_class_name = config_class.__name__.replace("Config", "EventQueueStore")
-    store_path = f"sqlspec.adapters.{adapter_name}.events.store.{store_class_name}"
     try:
-        store_class = import_string(store_path)
+        store_class = resolve_extension_store_class(
+            config, extension="events", store_attr="events_store_class", store_suffix="EventQueueStore"
+        )
     except ImportError as error:  # pragma: no cover
+        adapter_name = resolve_adapter_name(config) or config_class.__name__
+        store_class_name = config_class.__name__.replace("Config", "EventQueueStore")
         msg = f"Adapter {adapter_name} missing events store {store_class_name}"
         raise SQLSpecError(msg) from error
+    if store_class is None:
+        target_adapter = resolve_adapter_name(config)
+        if target_adapter is None:
+            msg = f"Unsupported configuration for events extension: {config_class.__module__}.{config_class.__name__}"
+            raise SQLSpecError(msg)
+        store_class_name = config_class.__name__.replace("Config", "EventQueueStore")
+        msg = f"Adapter {target_adapter} missing events store {store_class_name}"
+        raise SQLSpecError(msg)
     try:
         store: BaseEventQueueStore[Any] = store_class(config)
     except ValueError as error:  # pragma: no cover

@@ -7,6 +7,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._buffer import validate_queue_capacity
 from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
 from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget
+from sqlspec.utils.adapters import resolve_adapter_name
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -34,6 +35,8 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     """
 
     __slots__ = ("_config", "_extension_settings", "_table_name")
+
+    adapter_name: ClassVar[str | None] = None
 
     extension_config_options: ClassVar[frozenset[str]] = frozenset({
         "backend",
@@ -117,7 +120,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         """Reject events options that this adapter store cannot honor."""
         unsupported = sorted(set(self._extension_settings).difference(type(self).extension_config_options))
         if unsupported:
-            adapter = type(self).__module__.split(".")[2]
+            adapter = resolve_adapter_name(self) or type(self).__name__
             keys = ", ".join(repr(key) for key in unsupported)
             msg = f"Unsupported events configuration key(s) for {adapter}: {keys}"
             raise ImproperConfigurationError(msg)

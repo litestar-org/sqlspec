@@ -853,7 +853,7 @@ def _resolve_event_backend(
     Returns:
         Tuple of resolved backend and backend label.
     """
-    _validate_adapter_event_settings(extension_settings, adapter_name)
+    _validate_adapter_event_settings(extension_settings, adapter_name, config=config)
     queue_backend = build_queue_backend(config, extension_settings, adapter_name=adapter_name, hints=hints)
     backend_name = _resolve_backend_name(config, extension_settings, adapter_name)
     native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=adapter_name)
@@ -874,30 +874,41 @@ def _resolve_event_backend(
     return native_backend, backend_name or "poll_queue"
 
 
-def _validate_adapter_event_settings(settings: "dict[str, Any]", adapter_name: "str | None") -> None:
+def _validate_adapter_event_settings(
+    settings: "dict[str, Any]", adapter_name: "str | None", *, config: Any = None
+) -> None:
     """Apply the adapter store's accepted keys to native and polling channels."""
-    if adapter_name is None:
-        return
-    module_name = f"sqlspec.adapters.{adapter_name}.events.store"
-    try:
-        module = importlib.import_module(module_name)
-    except ModuleNotFoundError as error:
-        if error.name not in {module_name, module_name.rsplit(".", 1)[0]}:
-            raise
-        return
-    allowed = BaseEventQueueStore.extension_config_options
-    for name in getattr(module, "__all__", ()):
-        store_type = cast("type[BaseEventQueueStore[Any]]", getattr(module, name))
-        if (
-            isinstance(store_type, type)
-            and issubclass(store_type, BaseEventQueueStore)
-            and store_type.__module__ == module_name
-        ):
-            allowed = allowed | store_type.extension_config_options
+    explicit_store = getattr(config, "events_store_class", None) if config is not None else None
+    if not isinstance(explicit_store, type) and config is not None:
+        explicit_store = getattr(type(config), "events_store_class", None)
+    if isinstance(explicit_store, type) and issubclass(explicit_store, BaseEventQueueStore):
+        store_options = cast("frozenset[str]", getattr(explicit_store, "extension_config_options", frozenset()))
+        allowed = BaseEventQueueStore.extension_config_options | store_options
+        target_label = adapter_name or resolve_adapter_name(explicit_store) or explicit_store.__name__
+    else:
+        if adapter_name is None:
+            return
+        module_name = f"sqlspec.adapters.{adapter_name}.events.store"
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as error:
+            if error.name not in {module_name, module_name.rsplit(".", 1)[0], f"sqlspec.adapters.{adapter_name}"}:
+                raise
+            return
+        allowed = BaseEventQueueStore.extension_config_options
+        for name in getattr(module, "__all__", ()):
+            store_type = cast("type[BaseEventQueueStore[Any]]", getattr(module, name))
+            if (
+                isinstance(store_type, type)
+                and issubclass(store_type, BaseEventQueueStore)
+                and resolve_adapter_name(store_type) == adapter_name
+            ):
+                allowed = allowed | store_type.extension_config_options
+        target_label = adapter_name
     unsupported = sorted(set(settings).difference(allowed))
     if unsupported:
         keys = ", ".join(repr(key) for key in unsupported)
-        msg = f"Unsupported events configuration key(s) for {adapter_name}: {keys}"
+        msg = f"Unsupported events configuration key(s) for {target_label}: {keys}"
         raise ImproperConfigurationError(msg)
 
 
