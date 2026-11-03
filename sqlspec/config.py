@@ -858,6 +858,11 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
         datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="native"
     )
+    adapter_name: "ClassVar[str | None]" = None
+    events_store_class: "ClassVar[type[Any] | None]" = None
+    adk_store_class: "ClassVar[type[Any] | None]" = None
+    adk_memory_store_class: "ClassVar[type[Any] | None]" = None
+    litestar_store_class: "ClassVar[type[Any] | None]" = None
     bind_key: "str | None"
     statement_config: "StatementConfig"
     connection_config: "dict[str, Any]"

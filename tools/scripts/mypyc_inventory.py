@@ -299,6 +299,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "prove_separately",
         "reason": "Optional async adapter drivers remain outside baseline smoke until vendor dependencies and exception-handler paths are proven.",
     },
+    "sqlspec/utils/adapters.py": {
+        "classification": "compile_now",
+        "reason": "Adapter name and extension store resolution helpers are pure class/MRO/module lookups called by compiled event channel and hint paths.",
+    },
     "sqlspec/utils/module_loader.py": {
         "classification": "compile_now",
         "reason": "Optional dependency probing helper compiles cleanly and is called by many import paths.",

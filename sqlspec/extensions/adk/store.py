@@ -48,6 +48,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
     )
 
     _max_table_name_parts: ClassVar[int] = 1
+    adapter_name: ClassVar[str | None] = None
 
     def __init__(self, config: ConfigT) -> None:
         """Initialize the ADK store.

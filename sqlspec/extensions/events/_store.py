@@ -35,6 +35,8 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
 
     __slots__ = ("_config", "_extension_settings", "_table_name")
 
+    adapter_name: ClassVar[str | None] = None
+
     extension_config_options: ClassVar[frozenset[str]] = frozenset({
         "backend",
         "cleanup_on_ack",

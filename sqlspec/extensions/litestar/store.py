@@ -47,6 +47,8 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
 
     __slots__ = ("_config", "_table_name")
 
+    adapter_name: ClassVar[str | None] = None
+
     extension_config_options: ClassVar[frozenset[str]] = frozenset({
         "auto_trace_headers",
         "commit_mode",

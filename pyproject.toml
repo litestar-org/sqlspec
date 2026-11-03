@@ -301,6 +301,7 @@ include = [
   "sqlspec/adapters/oracledb/_vector_handlers.py", # DB_TYPE_VECTOR inputtypehandler / outputtypehandler dispatch
   "sqlspec/adapters/oracledb/_storage.py",         # Pure extension-table storage capability and DDL gates
   "sqlspec/utils/text.py",                         # Text utilities
+  "sqlspec/utils/adapters.py",                     # Adapter and extension store resolution helpers
   "sqlspec/utils/sync_tools.py",                   # Synchronous utility functions
   "sqlspec/utils/env.py",                          # Environment variable parsing utilities
   "sqlspec/utils/module_loader.py",                # Optional dependency loader helpers
