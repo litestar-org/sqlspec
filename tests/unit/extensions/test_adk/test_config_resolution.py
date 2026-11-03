@@ -4,6 +4,10 @@ from typing import Any, cast
 
 import pytest
 
+from sqlspec.adapters.spanner import SpannerSyncConfig
+from sqlspec.adapters.spanner.adk.store import SpannerSyncADKMemoryStore, SpannerSyncADKStore
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import _config_utils
@@ -186,3 +190,40 @@ def test_store_registration_skips_disabled_feature_store_classes(monkeypatch: py
     _ensure_adk_store_registration(config)
 
     assert resolved == ["ADKMemoryStore"]
+
+
+def test_adk_store_resolution_supports_external_subclass_and_explicit_classvars() -> None:
+    """ADK store registration and validation resolve external subclasses via MRO, adapter_name, and ClassVars."""
+
+    class ExternalSpannerConfig(SpannerSyncConfig):
+        adapter_name = "spanner"
+
+    ExternalSpannerConfig.__module__ = "myapp.database.config"
+    spanner_config = ExternalSpannerConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        extension_config={"adk": {"shard_count": 4}},
+    )
+    assert _config_utils._adk_adapter_store_class(spanner_config, "ADKStore") is SpannerSyncADKStore
+    assert _config_utils._adk_memory_migration_store_class(spanner_config) is SpannerSyncADKMemoryStore
+
+    class SubclassedSqliteConfig(SqliteConfig):
+        pass
+
+    SubclassedSqliteConfig.__module__ = "myapp.database.config"
+    sqlite_config = SubclassedSqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"adk": {}},
+    )
+    assert _config_utils._adk_adapter_store_class(sqlite_config, "ADKStore") is SqliteADKStore
+    assert _config_utils._adk_memory_migration_store_class(sqlite_config) is SqliteADKMemoryStore
+
+    class CustomThirdPartyConfig:
+        adapter_name = "third_party"
+        adk_store_class = SqliteADKStore
+        adk_memory_store_class = SqliteADKMemoryStore
+        extension_config: dict[str, dict[str, Any]] = {"adk": {}}
+
+    third_party_config = CustomThirdPartyConfig()
+    assert _config_utils._adk_adapter_store_class(third_party_config, "ADKStore") is SqliteADKStore
+    assert _config_utils._adk_memory_migration_store_class(third_party_config) is SqliteADKMemoryStore
+

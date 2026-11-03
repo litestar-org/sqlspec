@@ -3,9 +3,9 @@
 from dataclasses import dataclass
 from typing import Any, Final, final
 
-__all__ = ("EventRuntimeHints", "get_runtime_hints", "resolve_adapter_name")
+from sqlspec.utils.adapters import resolve_adapter_name
 
-_ADAPTER_MODULE_PARTS = 3
+__all__ = ("EventRuntimeHints", "get_runtime_hints", "resolve_adapter_name")
 
 
 @final
@@ -37,11 +37,3 @@ def get_runtime_hints(adapter: "str | None", config: "Any" = None) -> "EventRunt
         return hints
     return _DEFAULT_HINTS
 
-
-def resolve_adapter_name(config: Any) -> "str | None":
-    """Resolve adapter name from config module path."""
-    module_name = type(config).__module__
-    parts = module_name.split(".")
-    if len(parts) >= _ADAPTER_MODULE_PARTS and parts[0] == "sqlspec" and parts[1] == "adapters":
-        return parts[2]
-    return None

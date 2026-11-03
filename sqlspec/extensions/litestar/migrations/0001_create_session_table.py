@@ -3,8 +3,8 @@
 from typing import TYPE_CHECKING, NoReturn
 
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.adapters import resolve_adapter_name, resolve_extension_store_class
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import import_string
 
 if TYPE_CHECKING:
     from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -63,7 +63,7 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
 
 
 def _get_store_class(context: "MigrationContext | None") -> "type[BaseSQLSpecStore]":
-    """Get the appropriate store class based on the config's module path.
+    """Get the appropriate store class for the migration context configuration.
 
     Args:
         context: Migration context containing config.
@@ -74,22 +74,29 @@ def _get_store_class(context: "MigrationContext | None") -> "type[BaseSQLSpecSto
     if not context or not context.config:
         _raise_missing_config()
 
-    config_class = type(context.config)
+    config = context.config
+    config_class = type(config)
     config_module = config_class.__module__
     config_name = config_class.__name__
-
-    if not config_module.startswith("sqlspec.adapters."):
-        _raise_unsupported_config(f"{config_module}.{config_name}")
-
-    adapter_name = config_module.split(".")[2]
+    adapter_name = resolve_adapter_name(config)
     store_class_name = config_name.replace("Config", "Store")
-
-    store_path = f"sqlspec.adapters.{adapter_name}.litestar.store.{store_class_name}"
+    store_path = (
+        f"sqlspec.adapters.{adapter_name}.litestar.store.{store_class_name}"
+        if adapter_name is not None
+        else f"{config_module}.{store_class_name}"
+    )
 
     try:
-        store_class: type[BaseSQLSpecStore] = import_string(store_path)
+        store_class = resolve_extension_store_class(
+            config, extension="litestar", store_attr="litestar_store_class", store_suffix="Store"
+        )
     except ImportError as e:
         _raise_store_import_failed(store_path, e)
+
+    if store_class is None:
+        if adapter_name is None:
+            _raise_unsupported_config(f"{config_module}.{config_name}")
+        _raise_store_import_failed(store_path, ImportError(store_class_name))
 
     return store_class
 

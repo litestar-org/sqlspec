@@ -41,3 +41,17 @@ async def test_memory_upgrade_requires_database_config() -> None:
 
     with pytest.raises(SQLSpecError, match="context must have a config"):
         await migration.up()
+
+
+@pytest.mark.anyio
+async def test_external_config_with_mssql_adapter_name_runs_memory_upgrade() -> None:
+    class ExternalMssqlConfig:
+        adapter_name = "mssql_python"
+        is_async = False
+        extension_config = {"adk": {"memory_table": "ext_memory"}}
+
+    ExternalMssqlConfig.__module__ = "myapp.database.config"
+    statements = await migration.up(MigrationContext(config=ExternalMssqlConfig()))
+    assert len(statements) == 5
+    assert "CREATE TABLE [dbo].[ext_memory]" in statements[0]
+

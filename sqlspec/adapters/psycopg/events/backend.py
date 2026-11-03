@@ -17,6 +17,7 @@ from sqlspec.extensions.events import (
     decode_notify_payload,
     encode_notify_payload,
 )
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
@@ -103,7 +104,7 @@ class PsycopgSyncEventsBackend:
     backend_name = "notify"
 
     def __init__(self, config: "PsycopgSyncConfig") -> None:
-        if "psycopg" not in type(config).__module__:
+        if resolve_adapter_name(config) not in {"psycopg", "cockroach_psycopg"}:
             msg = "Psycopg events backend requires a Psycopg adapter"
             raise ImproperConfigurationError(msg)
         if config.is_async:
@@ -202,7 +203,7 @@ class PsycopgAsyncEventsBackend:
     backend_name = "notify"
 
     def __init__(self, config: "PsycopgAsyncConfig") -> None:
-        if "psycopg" not in type(config).__module__:
+        if resolve_adapter_name(config) not in {"psycopg", "cockroach_psycopg"}:
             msg = "Psycopg events backend requires a Psycopg adapter"
             raise ImproperConfigurationError(msg)
         if not config.is_async:
@@ -292,7 +293,7 @@ class PsycopgSyncHybridEventsBackend:
     backend_name = "notify_queue"
 
     def __init__(self, config: "PsycopgSyncConfig", queue: "SyncTableEventQueue") -> None:
-        if "psycopg" not in type(config).__module__:
+        if resolve_adapter_name(config) not in {"psycopg", "cockroach_psycopg"}:
             msg = "Psycopg hybrid backend requires a Psycopg adapter"
             raise ImproperConfigurationError(msg)
         if config.is_async:
@@ -473,7 +474,7 @@ class PsycopgAsyncHybridEventsBackend:
     backend_name = "notify_queue"
 
     def __init__(self, config: "PsycopgAsyncConfig", queue: "AsyncTableEventQueue") -> None:
-        if "psycopg" not in type(config).__module__:
+        if resolve_adapter_name(config) not in {"psycopg", "cockroach_psycopg"}:
             msg = "Psycopg hybrid backend requires a Psycopg adapter"
             raise ImproperConfigurationError(msg)
         if not config.is_async:

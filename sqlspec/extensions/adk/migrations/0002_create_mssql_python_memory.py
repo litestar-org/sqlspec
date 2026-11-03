@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.extensions.adk._config_utils import _adk_memory_migration_enabled
+from sqlspec.utils.adapters import resolve_adapter_name
 
 if TYPE_CHECKING:
     from sqlspec.migrations.context import MigrationContext
@@ -23,7 +24,7 @@ async def up(context: "MigrationContext | None" = None) -> list[str]:
     config = context.config
     if not _adk_memory_migration_enabled(config):
         return []
-    if not any(cls.__module__.startswith("sqlspec.adapters.mssql_python.") for cls in type(config).__mro__):
+    if resolve_adapter_name(config) != "mssql_python":
         return []
 
     from sqlspec.adapters.mssql_python.adk.store import MssqlPythonADKMemoryStore, _create_index_sql, _table_ref

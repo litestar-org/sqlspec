@@ -108,8 +108,21 @@ def test_oracle_typed_events_preserve_storage_options() -> None:
 
 
 def test_custom_config_events_preserve_application_settings() -> None:
+    class CustomSqliteEventStore(SqliteEventQueueStore):
+        extension_config_options = SqliteEventQueueStore.extension_config_options | frozenset({"application_option"})
+
     class CustomSqliteConfig(SqliteConfig):
-        pass
+        events_store_class = CustomSqliteEventStore
 
     config = CustomSqliteConfig(extension_config={"events": {"application_option": True}})
     assert SyncEventChannel(config).backend_name == "poll_queue"
+
+
+def test_subclassed_sqlite_config_inherits_adapter_event_validation() -> None:
+    class PlainSubclassSqliteConfig(SqliteConfig):
+        pass
+
+    config = PlainSubclassSqliteConfig(extension_config={"events": {"fillfactor": 80}})
+    with pytest.raises(ImproperConfigurationError, match=r"Unsupported events configuration.*fillfactor"):
+        SyncEventChannel(config)
+

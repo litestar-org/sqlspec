@@ -10,6 +10,7 @@ from litestar.stores.base import Store
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import has_extension_config
@@ -159,7 +160,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         settings = extension_config.get("litestar", {})
         unsupported = sorted(set(settings).difference(type(self).extension_config_options))
         if unsupported:
-            adapter = type(self).__module__.split(".")[2]
+            adapter = resolve_adapter_name(self) or type(self).__name__
             keys = ", ".join(repr(key) for key in unsupported)
             msg = f"Unsupported Litestar configuration key(s) for {adapter}: {keys}"
             raise ImproperConfigurationError(msg)

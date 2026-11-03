@@ -6,6 +6,7 @@ from typing import Any, NoReturn, NotRequired, Protocol, cast
 from typing_extensions import TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.utils.adapters import resolve_adapter_name, resolve_extension_store_class
 from sqlspec.utils.module_loader import import_string
 
 __all__ = (
@@ -130,17 +131,24 @@ def _adk_store_path(config: Any, store_suffix: str) -> str:
     config_class = type(config)
     config_module = config_class.__module__
     config_name = config_class.__name__
+    adapter_name = resolve_adapter_name(config)
 
-    if not config_module.startswith("sqlspec.adapters."):
+    if adapter_name is None:
         _raise_unsupported_config(f"{config_module}.{config_name}")
 
-    adapter_name = config_module.split(".")[2]
     store_class_name = config_name.replace("Config", store_suffix)
     return f"sqlspec.adapters.{adapter_name}.adk.{store_class_name}"
 
 
 def _adk_adapter_store_class(config: Any, store_suffix: str) -> Any:
     """Import an adapter-specific ADK store class for a config."""
+
+    store_attr = "adk_memory_store_class" if store_suffix == "ADKMemoryStore" else "adk_store_class"
+    explicit_store = getattr(config, store_attr, None)
+    if not isinstance(explicit_store, type):
+        explicit_store = getattr(type(config), store_attr, None)
+    if isinstance(explicit_store, type):
+        return explicit_store
 
     store_path = _adk_store_path(config, store_suffix)
     try:
@@ -155,6 +163,12 @@ def _adk_adapter_store_class(config: Any, store_suffix: str) -> Any:
 def _adk_memory_migration_store_class(config: Any) -> Any | None:
     """Import the ADK memory store class when the adapter provides one."""
 
+    explicit_store = getattr(config, "adk_memory_store_class", None)
+    if not isinstance(explicit_store, type):
+        explicit_store = getattr(type(config), "adk_memory_store_class", None)
+    if isinstance(explicit_store, type):
+        return explicit_store
+
     store_path = _adk_store_path(config, "ADKMemoryStore")
     try:
         return import_string(store_path)
@@ -163,23 +177,35 @@ def _adk_memory_migration_store_class(config: Any) -> Any | None:
 
 
 def _adk_exported_store_class(config: Any, store_suffix: str) -> Any | None:
-    """Return an ADK store export that matches a config name case-insensitively."""
+    """Return an ADK store export that matches a config name or sync/async mode."""
 
-    config_class = type(config)
-    config_module = config_class.__module__
-    config_name = config_class.__name__
-    if not config_module.startswith("sqlspec.adapters."):
+    store_attr = "adk_memory_store_class" if store_suffix == "ADKMemoryStore" else "adk_store_class"
+    try:
+        resolved = resolve_extension_store_class(
+            config, extension="adk", store_attr=store_attr, store_suffix=store_suffix
+        )
+    except ImportError:
+        resolved = None
+    if resolved is not None:
+        return resolved
+
+    adapter_name = resolve_adapter_name(config)
+    if adapter_name is None:
         return None
 
-    adapter_name = config_module.split(".")[2]
     module_path = f"sqlspec.adapters.{adapter_name}.adk"
     try:
         module = importlib.import_module(module_path)
     except ImportError:
         return None
 
+    config_name = type(config).__name__
     expected_prefix = config_name.removesuffix("Config").lower()
-    store_names = tuple(name for name in getattr(module, "__all__", ()) if name.endswith(store_suffix))
+    store_names = tuple(
+        name
+        for name in getattr(module, "__all__", ())
+        if name.endswith(store_suffix) and not (store_suffix == "ADKStore" and name.endswith("ADKMemoryStore"))
+    )
 
     for store_name in store_names:
         if store_name[: -len(store_suffix)].lower() == expected_prefix:
@@ -221,11 +247,16 @@ def _validate_adk_extension_config(config: _ADKConfigSource, settings: dict[str,
     """Reject ADK options that the selected adapter cannot honor."""
     from sqlspec.config import ADKConfig
 
-    config_module = type(config).__module__
-    if not config_module.startswith("sqlspec.adapters."):
+    adapter_name = resolve_adapter_name(config)
+    if adapter_name is None:
         return
-    adapter_name = config_module.split(".")[2]
-    store_module = importlib.import_module(f"sqlspec.adapters.{adapter_name}.adk.store")
+    module_name = f"sqlspec.adapters.{adapter_name}.adk.store"
+    try:
+        store_module = importlib.import_module(module_name)
+    except ModuleNotFoundError as error:
+        if error.name not in {module_name, module_name.rsplit(".", 1)[0], f"sqlspec.adapters.{adapter_name}"}:
+            raise
+        return
     accepted = set(ADKConfig.__required_keys__) | set(ADKConfig.__optional_keys__)
     for exported_name in getattr(store_module, "__all__", ()):
         if not exported_name.endswith("ADKConfig"):

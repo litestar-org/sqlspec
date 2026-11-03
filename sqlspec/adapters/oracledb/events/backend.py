@@ -9,6 +9,7 @@ from sqlspec.adapters.oracledb._typing import DEQ_IMMEDIATE, DEQ_ON_COMMIT
 from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventMessage, parse_event_timestamp
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.uuids import uuid4
@@ -42,7 +43,7 @@ class OracleSyncAQEventBackend:
     backend_name = "aq"
 
     def __init__(self, config: "OracleSyncConfig", settings: "dict[str, Any] | None" = None) -> None:
-        if "oracledb" not in type(config).__module__:
+        if resolve_adapter_name(config) != "oracledb":
             msg = "Oracle AQ backend requires an Oracle adapter"
             raise ImproperConfigurationError(msg)
         if config.is_async:
@@ -123,7 +124,7 @@ class OracleAsyncAQEventBackend:
     backend_name = "aq"
 
     def __init__(self, config: "OracleAsyncConfig", settings: "dict[str, Any] | None" = None) -> None:
-        if "oracledb" not in type(config).__module__:
+        if resolve_adapter_name(config) != "oracledb":
             msg = "Oracle AQ backend requires an Oracle adapter"
             raise ImproperConfigurationError(msg)
         if not config.is_async:

@@ -2,6 +2,7 @@
 """Extended unit tests for EventChannel configuration and backend selection."""
 
 import asyncio
+import importlib
 import threading
 import time
 from datetime import UTC, datetime
@@ -10,15 +11,18 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from sqlspec import ObservabilityRuntime
+from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import (
     AsyncEventChannel,
     AsyncEventListener,
+    BaseEventQueueStore,
     EventMessage,
     SyncEventChannel,
     SyncEventListener,
 )
+from sqlspec.migrations.context import MigrationContext
 
 if TYPE_CHECKING:
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -489,10 +493,58 @@ def test_sync_table_listener_preserves_idle_poll_interval(
     listener = channel.listen("test_channel", lambda _: None, poll_interval=10.0)
     try:
         assert polled.wait(timeout=1.0)
-        # Several old 0.1-second polling windows must not trigger more queries.
         time.sleep(0.3)
         assert len(polls) == 1
     finally:
         channel.stop_listener(listener.id)
         config.close_pool()
     assert not listener.thread.is_alive()
+
+
+@pytest.mark.anyio
+async def test_events_migration_resolves_external_config_with_spanner_adapter_name() -> None:
+    """Events migration resolves Spanner store for external config setting adapter_name = 'spanner'."""
+    events_migration = importlib.import_module("sqlspec.extensions.events.migrations.0001_create_event_queue")
+
+    class ExternalSpannerConfig(SpannerSyncConfig):
+        adapter_name = "spanner"
+
+    ExternalSpannerConfig.__module__ = "myapp.database.config"
+    config = ExternalSpannerConfig(
+        connection_config={"project": "test-p", "instance_id": "test-i", "database_id": "test-d"}
+    )
+    context = MigrationContext(config=config, dialect="spanner")
+
+    up_sql = await events_migration.up(context)
+    down_sql = await events_migration.down(context)
+
+    assert any("STRING(" in stmt and "INT64" in stmt for stmt in up_sql)
+    assert any("DROP TABLE" in stmt and "sqlspec_event_queue" in stmt for stmt in down_sql)
+
+
+@pytest.mark.anyio
+async def test_events_migration_resolves_subclass_via_mro_and_custom_store_classvar() -> None:
+    """Events migration resolves built-in subclasses via MRO and honors events_store_class."""
+    events_migration = importlib.import_module("sqlspec.extensions.events.migrations.0001_create_event_queue")
+
+    class SubclassedSqliteConfig(SqliteConfig):
+        pass
+
+    SubclassedSqliteConfig.__module__ = "myapp.database.config"
+    subclass_config = SubclassedSqliteConfig(connection_config={"database": ":memory:"})
+    subclass_up = await events_migration.up(MigrationContext(config=subclass_config, dialect="sqlite"))
+    assert any("CREATE TABLE IF NOT EXISTS sqlspec_event_queue" in stmt for stmt in subclass_up)
+
+    class CustomEventStore(BaseEventQueueStore[Any]):
+        def _column_types(self) -> tuple[str, str, str]:
+            return "CUSTOM_JSON", "CUSTOM_META", "CUSTOM_TS"
+
+    class ThirdPartyConfig:
+        is_async = False
+        extension_config: dict[str, Any] = {}
+        events_store_class = CustomEventStore
+
+    ThirdPartyConfig.__module__ = "third_party_pkg.config"
+    custom_up = await events_migration.up(MigrationContext(config=ThirdPartyConfig(), dialect="sqlite"))
+    assert any("CUSTOM_JSON" in stmt and "CUSTOM_META" in stmt for stmt in custom_up)
+

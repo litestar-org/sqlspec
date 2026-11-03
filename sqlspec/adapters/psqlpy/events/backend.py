@@ -16,6 +16,7 @@ from sqlspec.extensions.events import (
     decode_notify_payload,
     encode_notify_payload,
 )
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.uuids import uuid4
@@ -88,7 +89,7 @@ class PsqlpyEventsBackend:
     backend_name = "notify"
 
     def __init__(self, config: "PsqlpyConfig") -> None:
-        if "psqlpy" not in type(config).__module__:
+        if resolve_adapter_name(config) != "psqlpy":
             msg = "Psqlpy events backend requires a Psqlpy adapter"
             raise ImproperConfigurationError(msg)
         self._config = config
@@ -177,7 +178,7 @@ class PsqlpyHybridEventsBackend:
     backend_name = "notify_queue"
 
     def __init__(self, config: "PsqlpyConfig", queue: "AsyncTableEventQueue") -> None:
-        if "psqlpy" not in type(config).__module__:
+        if resolve_adapter_name(config) != "psqlpy":
             msg = "Psqlpy hybrid backend requires a Psqlpy adapter"
             raise ImproperConfigurationError(msg)
         self._config = config
