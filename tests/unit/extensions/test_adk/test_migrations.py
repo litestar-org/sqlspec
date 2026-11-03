@@ -269,4 +269,3 @@ async def test_adk_migration_runs_for_external_config_with_spanner_adapter_name(
     assert any("CREATE TABLE adk_session" in sql for sql in up_statements)
     assert any("CREATE TABLE adk_event" in sql for sql in up_statements)
     assert any("CREATE TABLE adk_memory" in sql for sql in up_statements)
-

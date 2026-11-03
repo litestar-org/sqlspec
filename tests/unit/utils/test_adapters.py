@@ -130,20 +130,8 @@ def test_resolve_adapter_name_for_store_classes_and_instances() -> None:
 @pytest.mark.parametrize(
     ("is_async", "expected_events", "expected_adk", "expected_memory", "expected_litestar"),
     [
-        (
-            False,
-            SpannerSyncEventQueueStore,
-            SpannerSyncADKStore,
-            SpannerSyncADKMemoryStore,
-            SpannerSyncStore,
-        ),
-        (
-            True,
-            SpannerAsyncEventQueueStore,
-            SpannerAsyncADKStore,
-            SpannerAsyncADKMemoryStore,
-            SpannerAsyncStore,
-        ),
+        (False, SpannerSyncEventQueueStore, SpannerSyncADKStore, SpannerSyncADKMemoryStore, SpannerSyncStore),
+        (True, SpannerAsyncEventQueueStore, SpannerAsyncADKStore, SpannerAsyncADKMemoryStore, SpannerAsyncStore),
     ],
 )
 def test_resolve_extension_store_class_for_external_config_with_spanner_adapter_name(

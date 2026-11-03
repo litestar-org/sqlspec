@@ -36,4 +36,3 @@ def get_runtime_hints(adapter: "str | None", config: "Any" = None) -> "EventRunt
     if isinstance(hints, EventRuntimeHints):
         return hints
     return _DEFAULT_HINTS
-

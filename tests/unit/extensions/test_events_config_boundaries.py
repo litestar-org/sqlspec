@@ -125,4 +125,3 @@ def test_subclassed_sqlite_config_inherits_adapter_event_validation() -> None:
     config = PlainSubclassSqliteConfig(extension_config={"events": {"fillfactor": 80}})
     with pytest.raises(ImproperConfigurationError, match=r"Unsupported events configuration.*fillfactor"):
         SyncEventChannel(config)
-

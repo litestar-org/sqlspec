@@ -547,4 +547,3 @@ async def test_events_migration_resolves_subclass_via_mro_and_custom_store_class
     ThirdPartyConfig.__module__ = "third_party_pkg.config"
     custom_up = await events_migration.up(MigrationContext(config=ThirdPartyConfig(), dialect="sqlite"))
     assert any("CUSTOM_JSON" in stmt and "CUSTOM_META" in stmt for stmt in custom_up)
-

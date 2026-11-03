@@ -210,10 +210,7 @@ def test_adk_store_resolution_supports_external_subclass_and_explicit_classvars(
         pass
 
     SubclassedSqliteConfig.__module__ = "myapp.database.config"
-    sqlite_config = SubclassedSqliteConfig(
-        connection_config={"database": ":memory:"},
-        extension_config={"adk": {}},
-    )
+    sqlite_config = SubclassedSqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
     assert _config_utils._adk_adapter_store_class(sqlite_config, "ADKStore") is SqliteADKStore
     assert _config_utils._adk_memory_migration_store_class(sqlite_config) is SqliteADKMemoryStore
 
@@ -226,4 +223,3 @@ def test_adk_store_resolution_supports_external_subclass_and_explicit_classvars(
     third_party_config = CustomThirdPartyConfig()
     assert _config_utils._adk_adapter_store_class(third_party_config, "ADKStore") is SqliteADKStore
     assert _config_utils._adk_memory_migration_store_class(third_party_config) is SqliteADKMemoryStore
-

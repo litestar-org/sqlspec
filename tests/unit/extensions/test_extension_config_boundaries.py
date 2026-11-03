@@ -62,9 +62,7 @@ async def test_litestar_migration_resolves_external_spanner_and_subclass_configs
         adapter_name = "spanner"
 
     ExternalSpannerConfig.__module__ = "myapp.database.config"
-    spanner_config = ExternalSpannerConfig(
-        connection_config={"project": "p", "instance_id": "i", "database_id": "d"}
-    )
+    spanner_config = ExternalSpannerConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     spanner_up = await litestar_migration.up(MigrationContext(config=spanner_config, dialect="spanner"))
     assert any("CREATE TABLE IF NOT EXISTS litestar_session" in stmt for stmt in spanner_up)
 
@@ -96,4 +94,3 @@ def test_custom_stores_in_short_module_paths_report_adapter_name_on_invalid_conf
     bad_litestar_config = SqliteConfig(extension_config={"litestar": {"unknown_opt": True}})
     with pytest.raises(ImproperConfigurationError, match="Unsupported Litestar configuration key\\(s\\) for sqlite"):
         CustomLitestarStore(bad_litestar_config)
-

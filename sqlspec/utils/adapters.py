@@ -113,11 +113,7 @@ def _candidate_config_names(target_cls: "type[Any]", adapter_name: str) -> "list
     adapter_module_prefix = f"sqlspec.adapters.{adapter_name}."
     for cls in target_cls.__mro__:
         cls_name = cls.__name__
-        if (
-            cls.__module__.startswith(adapter_module_prefix)
-            and cls_name.endswith("Config")
-            and cls_name not in names
-        ):
+        if cls.__module__.startswith(adapter_module_prefix) and cls_name.endswith("Config") and cls_name not in names:
             names.append(cls_name)
     return names
 
@@ -137,11 +133,7 @@ def _exported_store_names(store_module: Any, store_suffix: str) -> "tuple[str, .
 
 
 def _match_store_class_in_module(
-    store_module: Any,
-    target_cls: "type[Any]",
-    config_or_cls: object,
-    adapter_name: str,
-    store_suffix: str,
+    store_module: Any, target_cls: "type[Any]", config_or_cls: object, adapter_name: str, store_suffix: str
 ) -> "type[Any] | None":
     candidate_names = _candidate_config_names(target_cls, adapter_name)
     exported_names = _exported_store_names(store_module, store_suffix)

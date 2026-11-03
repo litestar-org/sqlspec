@@ -54,4 +54,3 @@ async def test_external_config_with_mssql_adapter_name_runs_memory_upgrade() -> 
     statements = await migration.up(MigrationContext(config=ExternalMssqlConfig()))
     assert len(statements) == 5
     assert "CREATE TABLE [dbo].[ext_memory]" in statements[0]
-
