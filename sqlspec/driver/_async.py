@@ -1136,6 +1136,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             batch_size=batch_size,
             arrow_schema=arrow_schema,
             column_types=result.get_metadata("column_types"),
+            column_names=result.column_names,
         )
         return create_arrow_result(
             statement=result.statement,

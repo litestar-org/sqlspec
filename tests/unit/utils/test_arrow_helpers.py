@@ -1,13 +1,19 @@
 """Tests for arrow_helpers conversion utilities."""
 
 import math
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
 from sqlspec.exceptions import MissingDependencyError, SQLBuilderError
 from sqlspec.typing import PYARROW_INSTALLED
-from sqlspec.utils.arrow_helpers import coerce_arrow_table, convert_dict_to_arrow, sql_type_for_category
+from sqlspec.utils.arrow_helpers import (
+    arrow_table_to_return_format,
+    coerce_arrow_table,
+    convert_dict_to_arrow,
+    convert_dict_to_arrow_with_schema,
+    sql_type_for_category,
+)
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 
@@ -28,6 +34,53 @@ def test_convert_empty_data_to_batch() -> None:
 
     assert result.num_rows == 0
     assert result.num_columns == 0
+
+
+@pytest.mark.parametrize("return_format", ("table", "batch", "reader"))
+@pytest.mark.parametrize("use_schema", (False, True))
+def test_empty_arrow_conversion_preserves_projected_schema(
+    return_format: Literal["table", "batch", "reader"], use_schema: bool
+) -> None:
+    import pyarrow as pa
+
+    schema = pa.schema([pa.field("id", pa.int32(), metadata={b"source": b"explicit"}), pa.field("name", pa.string())])
+    expected = schema if use_schema else pa.schema([("id", pa.int64()), ("name", pa.null())])
+    result = convert_dict_to_arrow_with_schema(
+        [],
+        return_format=return_format,
+        arrow_schema=schema if use_schema else None,
+        column_types={"id": "int64"},
+        column_names=["id", "name"],
+    )
+
+    assert isinstance(result, (pa.Table, pa.RecordBatch, pa.RecordBatchReader))
+    assert result.schema.equals(expected, check_metadata=True)
+    if isinstance(result, pa.RecordBatchReader):
+        result = result.read_all()
+    assert result.num_rows == 0
+
+
+def test_empty_arrow_schema_takes_precedence_over_projected_names() -> None:
+    import pyarrow as pa
+
+    schema = pa.schema([("explicit", pa.int64())])
+    result = convert_dict_to_arrow_with_schema([], arrow_schema=schema, column_names=["projected"])
+
+    assert isinstance(result, pa.Table)
+    assert result.schema == schema
+    assert convert_dict_to_arrow_with_schema([], return_format="batches", arrow_schema=schema) == []
+
+
+def test_empty_native_arrow_batch_keeps_full_schema() -> None:
+    import pyarrow as pa
+
+    schema = pa.schema([pa.field("id", pa.int64(), metadata={b"source": b"native"})], metadata={b"table": b"items"})
+    table = pa.Table.from_pylist([], schema=schema)
+    batch = arrow_table_to_return_format(table, return_format="batch")
+
+    assert isinstance(batch, pa.RecordBatch)
+    assert batch.schema.equals(schema, check_metadata=True)
+    assert batch.num_rows == 0
 
 
 def test_convert_single_row_to_table() -> None:

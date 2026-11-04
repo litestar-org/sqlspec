@@ -2,12 +2,16 @@
 """Tests for the fetch method compatibility aliases."""
 
 import inspect
-from typing import Any
+from collections.abc import AsyncGenerator
+from contextlib import AsyncExitStack
+from pathlib import Path
+from typing import Any, Literal
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.typing import PYARROW_INSTALLED
 from tests.conftest import requires_interpreted
 
 _ALIAS_PAIRS = (
@@ -20,6 +24,78 @@ _ALIAS_PAIRS = (
     ("fetch_stream", "select_stream"),
     ("fetch_with_total", "select_with_total"),
 )
+
+
+@pytest.fixture(params=("sync", "async"))
+async def arrow_session(request: pytest.FixtureRequest) -> AsyncGenerator[Any, None]:
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    config: Any = (
+        SqliteConfig(connection_config={"database": ":memory:"})
+        if request.param == "sync"
+        else AiosqliteConfig(connection_config={"database": ":memory:"})
+    )
+    try:
+        async with AsyncExitStack() as stack:
+            context = config.provide_session()
+            session = (
+                stack.enter_context(context) if request.param == "sync" else await stack.enter_async_context(context)
+            )
+            yield session
+    finally:
+        closed = config.close_pool()
+        if inspect.isawaitable(closed):
+            await closed
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
+@pytest.mark.parametrize("method", ("select_to_arrow", "fetch_to_arrow"))
+@pytest.mark.parametrize("return_format", ("table", "batch", "reader"))
+@pytest.mark.parametrize("use_schema", (False, True))
+async def test_empty_arrow_query_keeps_projection(
+    arrow_session: Any, method: str, return_format: str, use_schema: bool
+) -> None:
+    import pyarrow as pa
+
+    schema = pa.schema([("id", pa.int64()), ("name", pa.string())]) if use_schema else None
+    result = getattr(arrow_session, method)(
+        "SELECT 1 AS id, 'Ada' AS name WHERE 1 = 0", return_format=return_format, arrow_schema=schema
+    )
+    if inspect.isawaitable(result):
+        result = await result
+    data = result.get_data()
+    expected = schema if use_schema else pa.schema([("id", pa.null()), ("name", pa.null())])
+
+    assert data.schema == expected
+    if return_format == "reader":
+        data = data.read_all()
+    assert data.num_rows == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
+@pytest.mark.parametrize("format_hint", ("parquet", "arrow-ipc", "csv"))
+@pytest.mark.parametrize("return_format", ("table", "batch", "reader"))
+async def test_empty_arrow_storage_keeps_projection(
+    arrow_session: Any, tmp_path: Path, format_hint: Literal["parquet", "arrow-ipc", "csv"], return_format: str
+) -> None:
+    from sqlspec.storage._arrow_payload import decode_arrow_payload
+    from sqlspec.storage.backends.local import LocalStore
+
+    path = tmp_path / f"empty.{format_hint}"
+    job = arrow_session.select_to_storage(
+        "SELECT 1 AS id, 'Ada' AS name WHERE 1 = 0", path, format_hint=format_hint, return_format=return_format
+    )
+    if inspect.isawaitable(job):
+        job = await job
+    payload = LocalStore(str(tmp_path)).read_bytes_sync(path.name)
+    table = decode_arrow_payload(payload, format_hint)
+
+    assert table.column_names == ["id", "name"]
+    assert table.num_rows == 0
+
 
 _DELEGATION_CASES = (
     (
