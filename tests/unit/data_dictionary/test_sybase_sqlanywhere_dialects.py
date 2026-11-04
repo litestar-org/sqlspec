@@ -1,5 +1,9 @@
 """Unit tests for Sybase ASE and SAP SQL Anywhere data dictionary configurations and SQL packs."""
 
+import sqlite3
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, cast
+
 import pytest
 
 from sqlspec.data_dictionary import DataDictionaryLoader, TableMetadata, VersionInfo, get_dialect_config
@@ -22,6 +26,300 @@ from sqlspec.data_dictionary.dialects.sybase import (
     merge_sybase_table_lists,
     resolve_sybase_feature_flag,
 )
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.sybase import SybaseDriver
+
+
+class SybaseCatalogCursor(sqlite3.Cursor):
+    """Execute the real driver's bound catalog queries on a local DB-API substitute."""
+
+    def execute(self, sql: str, parameters: Any = ()) -> "SybaseCatalogCursor":
+        super().execute(sql.replace("%s", "?"), parameters)
+        return self
+
+
+class SybaseCatalogConnection(sqlite3.Connection):
+    """Provide a pymssql-compatible cursor over the local catalog fixture."""
+
+    def cursor(self, factory: Any = SybaseCatalogCursor) -> SybaseCatalogCursor:
+        return cast("SybaseCatalogCursor", super().cursor(factory=factory))
+
+
+@pytest.fixture
+def sybase_catalog_driver() -> "Iterator[tuple[SybaseDriver, sqlite3.Connection]]":
+    """Substitute only the native DB-API boundary while exercising real catalog SQL."""
+    pytest.importorskip("pymssql")
+    from sqlspec.adapters.sybase import SybaseDriver
+
+    connection = sqlite3.connect(":memory:", factory=SybaseCatalogConnection)
+    connection.create_function("USER_NAME", -1, lambda *_args: "dbo")
+    connection.create_function("DB_NAME", 0, lambda: "app")
+    connection.create_function("index_col", 3, lambda *_args: None)
+    key_columns = ", ".join(f"fokey{position} INTEGER, refkey{position} INTEGER" for position in range(1, 17))
+    connection.executescript("""
+        ATTACH DATABASE ':memory:' AS dbo;
+        CREATE TABLE dbo.sysusers (uid INTEGER, name TEXT);
+        CREATE TABLE dbo.sysobjects (id INTEGER, uid INTEGER, name TEXT, type TEXT, sysstat INTEGER);
+        CREATE TABLE dbo.systypes (usertype INTEGER, name TEXT);
+        CREATE TABLE dbo.syscolumns (
+            id INTEGER, name TEXT, usertype INTEGER, status INTEGER DEFAULT 0,
+            status2 INTEGER DEFAULT 0, status3 INTEGER DEFAULT 0, cdefault INTEGER DEFAULT 0,
+            computedcol INTEGER DEFAULT 0, colid INTEGER, length INTEGER DEFAULT 4,
+            prec INTEGER DEFAULT 10, scale INTEGER DEFAULT 0
+        );
+        CREATE TABLE dbo.syscomments (
+            id INTEGER, text TEXT, number INTEGER DEFAULT 0, colid2 INTEGER DEFAULT 0,
+            colid INTEGER DEFAULT 1, texttype INTEGER DEFAULT 0, status INTEGER DEFAULT 0
+        );
+        CREATE TABLE dbo.sysconstraints (tableid INTEGER, constrid INTEGER, status INTEGER);
+        CREATE TABLE dbo.sysindexes (id INTEGER, name TEXT, indid INTEGER, status INTEGER);
+        INSERT INTO dbo.sysusers VALUES (1, 'dbo'), (2, 'audit');
+        INSERT INTO dbo.systypes VALUES (1, 'int');
+    """)
+    connection.execute(
+        "CREATE TABLE dbo.sysreferences (tableid INTEGER, reftabid INTEGER, constrid INTEGER, "
+        "keycnt INTEGER, pmrydbname TEXT, frgndbname TEXT, " + key_columns + ")"
+    )
+    try:
+        yield SybaseDriver(connection=cast("Any", connection)), connection
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("table", [None, "items"])
+def test_sybase_catalog_columns_preserve_flags_and_complete_expressions(
+    sybase_catalog_driver: "tuple[SybaseDriver, sqlite3.Connection]", table: str | None
+) -> None:
+    """Reflect writable flags and every definition chunk through both column queries."""
+    driver, connection = sybase_catalog_driver
+    connection.execute("INSERT INTO dbo.sysobjects VALUES (10, 1, 'items', 'U', 3)")
+    connection.executemany(
+        "INSERT INTO dbo.syscolumns (id, name, usertype, colid, status, status2, status3, cdefault, computedcol) "
+        "VALUES (10, ?, 1, ?, ?, ?, ?, ?, ?)",
+        [
+            ("id", 1, 128, 0, 0, 0, 0),
+            ("note", 2, 8, 0, 0, 200, 0),
+            ("computed", 3, 0, 16, 0, 0, 400),
+            ("hidden", 4, 0, 0, 1, 0, 0),
+            ("materialized", 5, 0, 32, 0, 0, 500),
+            ("view_computed", 6, 0, 64, 0, 0, 0),
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO dbo.syscomments (id, text, colid2, colid, texttype, status) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (200, "'" + "x" * 254, 0, 1, 0, 0),
+            (200, "x" * 255, 0, 2, 0, 0),
+            (200, "tail'", 1, 1, 0, 0),
+            (200, "user comment", 0, 1, 1, 0),
+            (400, " id + ", 0, 1, 0, 0),
+            (400, "1 + " * 70, 0, 2, 0, 0),
+            (400, "1 + " * 70, 0, 3, 0, 0),
+            (400, "0", 1, 1, 0, 0),
+            (500, "obfuscated text", 0, 1, 0, 1),
+        ],
+    )
+
+    columns = driver.data_dictionary.get_columns(driver, table=table, schema="dbo")
+
+    assert [column["column_name"] for column in columns] == [
+        "id",
+        "note",
+        "computed",
+        "hidden",
+        "materialized",
+        "view_computed",
+    ]
+    assert columns[0]["is_nullable"] is False
+    assert columns[0]["is_identity"] is True
+    assert columns[0]["identity_generation"] == "ALWAYS"
+    assert columns[1]["is_nullable"] is True
+    assert columns[1]["column_default"] == "'" + "x" * 509 + "tail'"
+    assert columns[2]["is_generated"] is True
+    assert columns[2]["generation_expression"] == " id + " + "1 + " * 140 + "0"
+    assert columns[3]["is_hidden"] is True
+    assert columns[4]["is_generated"] is True
+    assert columns[4]["generation_expression"] is None
+    assert columns[5]["is_generated"] is True
+
+
+@pytest.mark.parametrize("table", [None, "items"])
+def test_sybase_catalog_constraints_filter_defaults_and_reassemble_checks(
+    sybase_catalog_driver: "tuple[SybaseDriver, sqlite3.Connection]", table: str | None
+) -> None:
+    """Return actual constraints without defaults, computed columns, or delete triggers."""
+    driver, connection = sybase_catalog_driver
+    connection.executemany(
+        "INSERT INTO dbo.sysobjects VALUES (?, 1, ?, ?, ?)",
+        [
+            (10, "items", "U", 3),
+            (100, "ck_items", "R", 10),
+            (101, "fk_items", "RI", 9),
+            (102, "df_items", "D", 6),
+            (103, "computed_items", "C", 13),
+            (104, "tr_items", "TR", 8),
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO dbo.sysconstraints VALUES (10, ?, ?)", [(100, 128), (101, 64), (102, 0), (103, 0), (104, 128)]
+    )
+    connection.executemany(
+        "INSERT INTO dbo.sysindexes VALUES (10, ?, ?, ?)", [("pk_items", 1, 2048), ("uq_items", 2, 2)]
+    )
+    connection.executemany(
+        "INSERT INTO dbo.syscomments (id, text, colid) VALUES (100, ?, ?)",
+        [("CHECK (" + "id > 0 AND " * 30, 1), ("id > 0 AND " * 30, 2), ("1 = 1)", 3)],
+    )
+    connection.execute("INSERT INTO dbo.syscomments (id, text, texttype) VALUES (100, 'not a definition', 1)")
+
+    result = driver.data_dictionary.get_constraints(driver, table=table, schema="dbo")
+
+    constraints = {str(item["constraint_name"]): item for item in cast("tuple[dict[str, object], ...]", result.items)}
+    assert set(constraints) == {"ck_items", "fk_items", "pk_items", "uq_items"}
+    assert constraints["ck_items"]["constraint_type"] == "CHECK"
+    assert constraints["ck_items"]["check_clause"] == "CHECK (" + "id > 0 AND " * 60 + "1 = 1)"
+    assert constraints["fk_items"]["constraint_type"] == "FOREIGN KEY"
+    assert constraints["fk_items"]["check_clause"] is None
+    assert constraints["pk_items"]["constraint_type"] == "PRIMARY KEY"
+    assert constraints["uq_items"]["constraint_type"] == "UNIQUE"
+    assert set(constraints["ck_items"]) == {
+        "schema_name",
+        "table_name",
+        "constraint_name",
+        "constraint_type",
+        "check_clause",
+        "is_enforced",
+    }
+
+
+def test_sybase_catalog_views_preserve_definition_chunks_and_hidden_text(
+    sybase_catalog_driver: "tuple[SybaseDriver, sqlite3.Connection]",
+) -> None:
+    """Reconstruct long views in catalog counter order without exposing hidden text."""
+    driver, connection = sybase_catalog_driver
+    connection.executemany(
+        "INSERT INTO dbo.sysobjects VALUES (?, 1, ?, 'V', 2)",
+        [(100, "items_view"), (101, "hidden_view"), (102, "empty_view")],
+    )
+    connection.executemany(
+        "INSERT INTO dbo.syscomments (id, text, number, colid2, colid, texttype, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (100, "tail", 0, 1, 1, 0, 0),
+            (100, "CREATE VIEW items_view AS " + " SELECT 1 UNION ALL" * 20, 0, 0, 1, 0, 0),
+            (100, " SELECT 2 ", 0, 0, 2, 0, 0),
+            (100, "ignored", 0, 0, 1, 1, 0),
+            (101, "obfuscated", 0, 0, 1, 0, 1),
+        ],
+    )
+
+    result = driver.data_dictionary.get_views(driver, schema="dbo")
+
+    views = {str(item["view_name"]): item for item in cast("tuple[dict[str, object], ...]", result.items)}
+    assert set(views) == {"items_view", "hidden_view", "empty_view"}
+    assert views["items_view"]["definition"] == (
+        "CREATE VIEW items_view AS " + " SELECT 1 UNION ALL" * 20 + " SELECT 2 tail"
+    )
+    assert views["hidden_view"]["definition"] is None
+    assert views["empty_view"]["definition"] is None
+    assert set(views["items_view"]) == {"schema_name", "view_name", "definition", "is_read_only", "is_valid"}
+
+
+def test_sybase_catalog_tables_follow_foreign_keys_without_per_table_queries(
+    sybase_catalog_driver: "tuple[SybaseDriver, sqlite3.Connection]",
+) -> None:
+    """Order roots and descendants and retain cycles, views, and cross-schema children."""
+    driver, connection = sybase_catalog_driver
+    connection.executemany(
+        "INSERT INTO dbo.sysobjects VALUES (?, ?, ?, ?, ?)",
+        [
+            (10, 1, "z_parent", "U", 3),
+            (11, 1, "b_child", "U", 3),
+            (12, 1, "a_grandchild", "U", 3),
+            (13, 1, "c_self", "U", 3),
+            (14, 1, "d_cycle", "U", 3),
+            (15, 1, "e_cycle", "U", 3),
+            (16, 1, "f_external", "U", 3),
+            (17, 2, "audit_parent", "U", 3),
+            (18, 1, "a_view", "V", 2),
+            (19, 1, "g_remote", "U", 3),
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO dbo.syscolumns (id, name, usertype, colid) VALUES (?, 'id', 1, 1)",
+        [(identifier,) for identifier in range(10, 20)],
+    )
+    connection.executemany(
+        "INSERT INTO dbo.syscolumns (id, name, usertype, colid) VALUES (?, 'other_id', 1, 2)", [(10,), (11,)]
+    )
+    connection.executemany(
+        "INSERT INTO dbo.sysobjects VALUES (?, 1, ?, 'RI', 9)",
+        [(100 + index, "fk_" + str(index)) for index in range(8)],
+    )
+    connection.executemany(
+        "INSERT INTO dbo.sysreferences "
+        "(tableid, reftabid, constrid, keycnt, fokey1, refkey1, pmrydbname, frgndbname) "
+        "VALUES (?, ?, ?, 1, 1, 1, ?, ?)",
+        [
+            (11, 10, 100, None, None),
+            (12, 11, 101, "app", "app"),
+            (13, 13, 102, None, None),
+            (14, 15, 103, None, None),
+            (15, 14, 104, None, None),
+            (16, 17, 105, None, None),
+            (19, 12, 106, "other_database", "app"),
+            (11, 10, 107, None, None),
+        ],
+    )
+    connection.execute("UPDATE dbo.sysreferences SET keycnt = 2, fokey2 = 2, refkey2 = 2 WHERE constrid = 100")
+    statements: list[str] = []
+    connection.set_trace_callback(statements.append)
+
+    tables = driver.data_dictionary.get_tables(driver, schema="dbo")
+
+    assert [row["table_name"] for row in tables] == [
+        "c_self",
+        "f_external",
+        "g_remote",
+        "z_parent",
+        "b_child",
+        "a_grandchild",
+        "d_cycle",
+        "e_cycle",
+        "a_view",
+    ]
+    assert {row["table_name"]: row["dependency_level"] for row in tables} == {
+        "z_parent": 0,
+        "b_child": 1,
+        "a_grandchild": 2,
+        "c_self": 0,
+        "d_cycle": 0,
+        "e_cycle": 0,
+        "f_external": 0,
+        "a_view": 0,
+        "g_remote": 0,
+    }
+    assert all(row["level"] == row["dependency_level"] for row in tables)
+    assert len([sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]) == 3
+    foreign_keys = driver.data_dictionary.get_foreign_keys(driver, table="b_child", schema="dbo")
+    assert [(key.table_name, key.referenced_table) for key in foreign_keys] == [
+        ("b_child", "z_parent"),
+        ("b_child", "z_parent"),
+        ("b_child", "z_parent"),
+    ]
+
+
+def test_sybase_catalog_empty_schema(sybase_catalog_driver: "tuple[SybaseDriver, sqlite3.Connection]") -> None:
+    """Reflect an empty schema without an unnecessary foreign-key query."""
+    driver, connection = sybase_catalog_driver
+    statements: list[str] = []
+    connection.set_trace_callback(statements.append)
+
+    assert driver.data_dictionary.get_tables(driver, schema="dbo") == []
+    assert driver.data_dictionary.get_columns(driver, schema="dbo") == []
+    assert driver.data_dictionary.get_constraints(driver, schema="dbo").items == ()
+    assert driver.data_dictionary.get_views(driver, schema="dbo").items == ()
+    assert len([sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]) == 5
 
 
 def test_sybase_and_sqlanywhere_dialect_configs_registered() -> None:

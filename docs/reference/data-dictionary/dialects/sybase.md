@@ -75,7 +75,8 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
         c.name AS column_name,
         t.name AS data_type,
         CASE WHEN (c.status & 8) = 8 THEN 'YES' ELSE 'NO' END AS is_nullable,
-        cm.text AS column_default,
+        CASE WHEN cm.id = c.cdefault AND (COALESCE(cm.status, 0) & 1) = 0
+            THEN cm.text ELSE NULL END AS column_default,
         c.colid AS ordinal_position,
         c.length AS char_length,
         c.length AS max_length,
@@ -85,15 +86,21 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
         CASE WHEN uq.col_name IS NOT NULL THEN 1 ELSE 0 END AS is_unique,
         CASE WHEN (c.status & 128) = 128 THEN 1 ELSE 0 END AS is_identity,
         CASE WHEN (c.status & 128) = 128 THEN 'ALWAYS' ELSE NULL END AS identity_generation,
-        0 AS is_generated,
-        NULL AS generation_expression,
-        0 AS is_hidden,
+        CASE WHEN (COALESCE(c.status2, 0) & 112) <> 0 THEN 1 ELSE 0 END AS is_generated,
+        CASE WHEN cm.id = c.computedcol AND (COALESCE(cm.status, 0) & 1) = 0
+            THEN cm.text ELSE NULL END AS generation_expression,
+        CASE WHEN (COALESCE(c.status3, 0) & 1) = 1 THEN 1 ELSE 0 END AS is_hidden,
+        cm.id AS _definition_id,
+        cm.number AS _definition_number,
+        cm.colid2 AS _definition_colid2,
+        cm.colid AS _definition_colid,
         NULL AS column_comment
     FROM dbo.syscolumns c
     JOIN dbo.sysobjects o ON c.id = o.id
     JOIN dbo.sysusers u ON o.uid = u.uid
     JOIN dbo.systypes t ON c.usertype = t.usertype
-    LEFT JOIN dbo.syscomments cm ON c.cdefault = cm.id AND cm.colid = 1
+    LEFT JOIN dbo.syscomments cm
+        ON (cm.id = c.cdefault OR cm.id = c.computedcol) AND cm.texttype = 0
     LEFT JOIN (
         SELECT DISTINCT
             i.id,
@@ -127,7 +134,7 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
     WHERE o.type IN ('U', 'V')
       AND u.name = COALESCE(:schema_name, USER_NAME())
       AND (:table_name IS NULL OR o.name = :table_name)
-    ORDER BY u.name, o.name, c.colid;
+    ORDER BY u.name, o.name, c.colid, cm.id, cm.number, cm.colid2, cm.colid;
 
     -- name: by_table
     -- dialect: sybase
@@ -137,7 +144,8 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
         c.name AS column_name,
         t.name AS data_type,
         CASE WHEN (c.status & 8) = 8 THEN 'YES' ELSE 'NO' END AS is_nullable,
-        cm.text AS column_default,
+        CASE WHEN cm.id = c.cdefault AND (COALESCE(cm.status, 0) & 1) = 0
+            THEN cm.text ELSE NULL END AS column_default,
         c.colid AS ordinal_position,
         c.length AS char_length,
         c.length AS max_length,
@@ -147,15 +155,21 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
         CASE WHEN uq.col_name IS NOT NULL THEN 1 ELSE 0 END AS is_unique,
         CASE WHEN (c.status & 128) = 128 THEN 1 ELSE 0 END AS is_identity,
         CASE WHEN (c.status & 128) = 128 THEN 'ALWAYS' ELSE NULL END AS identity_generation,
-        0 AS is_generated,
-        NULL AS generation_expression,
-        0 AS is_hidden,
+        CASE WHEN (COALESCE(c.status2, 0) & 112) <> 0 THEN 1 ELSE 0 END AS is_generated,
+        CASE WHEN cm.id = c.computedcol AND (COALESCE(cm.status, 0) & 1) = 0
+            THEN cm.text ELSE NULL END AS generation_expression,
+        CASE WHEN (COALESCE(c.status3, 0) & 1) = 1 THEN 1 ELSE 0 END AS is_hidden,
+        cm.id AS _definition_id,
+        cm.number AS _definition_number,
+        cm.colid2 AS _definition_colid2,
+        cm.colid AS _definition_colid,
         NULL AS column_comment
     FROM dbo.syscolumns c
     JOIN dbo.sysobjects o ON c.id = o.id
     JOIN dbo.sysusers u ON o.uid = u.uid
     JOIN dbo.systypes t ON c.usertype = t.usertype
-    LEFT JOIN dbo.syscomments cm ON c.cdefault = cm.id AND cm.colid = 1
+    LEFT JOIN dbo.syscomments cm
+        ON (cm.id = c.cdefault OR cm.id = c.computedcol) AND cm.texttype = 0
     LEFT JOIN (
         SELECT DISTINCT
             i.id,
@@ -189,7 +203,7 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
     WHERE o.type IN ('U', 'V')
       AND o.name = :table_name
       AND u.name = COALESCE(:schema_name, USER_NAME())
-    ORDER BY c.colid;
+    ORDER BY c.colid, cm.id, cm.number, cm.colid2, cm.colid;
     ```
 
 ??? code "`constraints.sql` (2 named queries)"
@@ -201,33 +215,34 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
         u.name AS schema_name,
         o.name AS table_name,
         co.name AS constraint_name,
-        CASE
-            WHEN (c.status & 1) = 1 THEN 'PRIMARY KEY'
-            WHEN (c.status & 2) = 2 THEN 'UNIQUE'
-            WHEN (c.status & 64) = 64 THEN 'FOREIGN KEY'
-            WHEN (c.status & 128) = 128 THEN 'CHECK'
-            ELSE 'CONSTRAINT'
-        END AS constraint_type,
-        cm.text AS check_clause,
-        'Y' AS is_enforced
+        CASE WHEN (co.sysstat & 15) = 9 THEN 'FOREIGN KEY' ELSE 'CHECK' END AS constraint_type,
+        CASE WHEN (co.sysstat & 15) = 10 AND (COALESCE(cm.status, 0) & 1) = 0
+            THEN cm.text ELSE NULL END AS check_clause,
+        'Y' AS is_enforced,
+        cm.id AS _definition_id,
+        cm.number AS _definition_number,
+        cm.colid2 AS _definition_colid2,
+        cm.colid AS _definition_colid
     FROM dbo.sysconstraints c
     JOIN dbo.sysobjects o ON c.tableid = o.id
     JOIN dbo.sysusers u ON o.uid = u.uid
     JOIN dbo.sysobjects co ON c.constrid = co.id
-    LEFT JOIN dbo.syscomments cm ON co.id = cm.id AND cm.colid = 1
-    WHERE u.name = COALESCE(:schema_name, USER_NAME())
+    LEFT JOIN dbo.syscomments cm ON co.id = cm.id AND cm.texttype = 0
+    WHERE (co.sysstat & 15) IN (9, 10)
+      AND u.name = COALESCE(:schema_name, USER_NAME())
       AND (:table_name IS NULL OR o.name = :table_name)
-    UNION
+    UNION ALL
     SELECT
         u.name AS schema_name,
         o.name AS table_name,
         i.name AS constraint_name,
-        CASE
-            WHEN (i.status & 2048) = 2048 THEN 'PRIMARY KEY'
-            WHEN (i.status & 2) = 2 THEN 'UNIQUE'
-        END AS constraint_type,
+        CASE WHEN (i.status & 2048) = 2048 THEN 'PRIMARY KEY' ELSE 'UNIQUE' END AS constraint_type,
         NULL AS check_clause,
-        'Y' AS is_enforced
+        'Y' AS is_enforced,
+        0 AS _definition_id,
+        0 AS _definition_number,
+        0 AS _definition_colid2,
+        0 AS _definition_colid
     FROM dbo.sysindexes i
     JOIN dbo.sysobjects o ON i.id = o.id
     JOIN dbo.sysusers u ON o.uid = u.uid
@@ -235,13 +250,7 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
       AND ((i.status & 2048) = 2048 OR (i.status & 2) = 2)
       AND u.name = COALESCE(:schema_name, USER_NAME())
       AND (:table_name IS NULL OR o.name = :table_name)
-      AND NOT EXISTS (
-          SELECT 1
-          FROM dbo.sysconstraints sc
-          JOIN dbo.sysobjects sco ON sc.constrid = sco.id
-          WHERE sc.tableid = o.id AND sco.name = i.name
-      )
-    ORDER BY schema_name, table_name, constraint_name;
+    ORDER BY schema_name, table_name, constraint_name, _definition_number, _definition_colid2, _definition_colid;
 
     -- name: by_table
     -- dialect: sybase
@@ -249,47 +258,42 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
         u.name AS schema_name,
         o.name AS table_name,
         co.name AS constraint_name,
-        CASE
-            WHEN (c.status & 1) = 1 THEN 'PRIMARY KEY'
-            WHEN (c.status & 2) = 2 THEN 'UNIQUE'
-            WHEN (c.status & 64) = 64 THEN 'FOREIGN KEY'
-            WHEN (c.status & 128) = 128 THEN 'CHECK'
-            ELSE 'CONSTRAINT'
-        END AS constraint_type,
-        cm.text AS check_clause,
-        'Y' AS is_enforced
+        CASE WHEN (co.sysstat & 15) = 9 THEN 'FOREIGN KEY' ELSE 'CHECK' END AS constraint_type,
+        CASE WHEN (co.sysstat & 15) = 10 AND (COALESCE(cm.status, 0) & 1) = 0
+            THEN cm.text ELSE NULL END AS check_clause,
+        'Y' AS is_enforced,
+        cm.id AS _definition_id,
+        cm.number AS _definition_number,
+        cm.colid2 AS _definition_colid2,
+        cm.colid AS _definition_colid
     FROM dbo.sysconstraints c
     JOIN dbo.sysobjects o ON c.tableid = o.id
     JOIN dbo.sysusers u ON o.uid = u.uid
     JOIN dbo.sysobjects co ON c.constrid = co.id
-    LEFT JOIN dbo.syscomments cm ON co.id = cm.id AND cm.colid = 1
-    WHERE o.name = :table_name
+    LEFT JOIN dbo.syscomments cm ON co.id = cm.id AND cm.texttype = 0
+    WHERE (co.sysstat & 15) IN (9, 10)
       AND u.name = COALESCE(:schema_name, USER_NAME())
-    UNION
+      AND o.name = :table_name
+    UNION ALL
     SELECT
         u.name AS schema_name,
         o.name AS table_name,
         i.name AS constraint_name,
-        CASE
-            WHEN (i.status & 2048) = 2048 THEN 'PRIMARY KEY'
-            WHEN (i.status & 2) = 2 THEN 'UNIQUE'
-        END AS constraint_type,
+        CASE WHEN (i.status & 2048) = 2048 THEN 'PRIMARY KEY' ELSE 'UNIQUE' END AS constraint_type,
         NULL AS check_clause,
-        'Y' AS is_enforced
+        'Y' AS is_enforced,
+        0 AS _definition_id,
+        0 AS _definition_number,
+        0 AS _definition_colid2,
+        0 AS _definition_colid
     FROM dbo.sysindexes i
     JOIN dbo.sysobjects o ON i.id = o.id
     JOIN dbo.sysusers u ON o.uid = u.uid
     WHERE o.type = 'U'
       AND ((i.status & 2048) = 2048 OR (i.status & 2) = 2)
-      AND o.name = :table_name
       AND u.name = COALESCE(:schema_name, USER_NAME())
-      AND NOT EXISTS (
-          SELECT 1
-          FROM dbo.sysconstraints sc
-          JOIN dbo.sysobjects sco ON sc.constrid = sco.id
-          WHERE sc.tableid = o.id AND sco.name = i.name
-      )
-    ORDER BY constraint_name;
+      AND o.name = :table_name
+    ORDER BY schema_name, table_name, constraint_name, _definition_number, _definition_colid2, _definition_colid;
     ```
 
 ??? code "`foreign_keys.sql` (2 named queries)"
@@ -329,7 +333,9 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
         WHEN 9 THEN r.refkey9 WHEN 10 THEN r.refkey10 WHEN 11 THEN r.refkey11 WHEN 12 THEN r.refkey12
         WHEN 13 THEN r.refkey13 WHEN 14 THEN r.refkey14 WHEN 15 THEN r.refkey15 WHEN 16 THEN r.refkey16
     END
-    WHERE k.pos <= r.frgcnt
+    WHERE k.pos <= r.keycnt
+      AND (r.pmrydbname IS NULL OR r.pmrydbname = DB_NAME())
+      AND (r.frgndbname IS NULL OR r.frgndbname = DB_NAME())
       AND u.name = COALESCE(:schema_name, USER_NAME())
       AND (:table_name IS NULL OR o.name = :table_name)
     ORDER BY u.name, o.name, co.name, k.pos;
@@ -368,7 +374,9 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
         WHEN 9 THEN r.refkey9 WHEN 10 THEN r.refkey10 WHEN 11 THEN r.refkey11 WHEN 12 THEN r.refkey12
         WHEN 13 THEN r.refkey13 WHEN 14 THEN r.refkey14 WHEN 15 THEN r.refkey15 WHEN 16 THEN r.refkey16
     END
-    WHERE k.pos <= r.frgcnt
+    WHERE k.pos <= r.keycnt
+      AND (r.pmrydbname IS NULL OR r.pmrydbname = DB_NAME())
+      AND (r.frgndbname IS NULL OR r.frgndbname = DB_NAME())
       AND o.name = :table_name
       AND u.name = COALESCE(:schema_name, USER_NAME())
     ORDER BY co.name, k.pos;
@@ -544,14 +552,18 @@ The `sybase` dialect pack defines `16` named queries across `9` domain `.sql` fi
     SELECT
         u.name AS schema_name,
         o.name AS view_name,
-        cm.text AS definition,
+        CASE WHEN (COALESCE(cm.status, 0) & 1) = 0 THEN cm.text ELSE NULL END AS definition,
+        cm.id AS _definition_id,
+        cm.number AS _definition_number,
+        cm.colid2 AS _definition_colid2,
+        cm.colid AS _definition_colid,
         0 AS is_read_only,
         1 AS is_valid
     FROM dbo.sysobjects o
     JOIN dbo.sysusers u ON o.uid = u.uid
-    LEFT JOIN dbo.syscomments cm ON o.id = cm.id AND cm.colid = 1
+    LEFT JOIN dbo.syscomments cm ON o.id = cm.id AND cm.texttype = 0
     WHERE o.type = 'V'
       AND u.name = COALESCE(:schema_name, USER_NAME())
       AND (:view_name IS NULL OR o.name = :view_name)
-    ORDER BY u.name, o.name;
+    ORDER BY u.name, o.name, cm.number, cm.colid2, cm.colid;
     ```
