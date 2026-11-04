@@ -31,67 +31,6 @@ Group related queries inside `.sql` files using `-- name: <query_name>` comment 
 
 Query names inside nested directories can be organized by namespace (or hyphenated identifiers normalized automatically when accessed) and shared across any session opened from `spec`. `SQLFileLoader` also integrates with `StorageRegistry` so SQL bundles can be loaded from local directories or registered object storage aliases.
 
-### Anatomy of a Multi-Query `.sql` File
-
-A single `.sql` file can group all reads and writes for a domain module under distinct `-- name:` headers, with optional dialect annotations and `-- param:` declarations:
-
-=== "SQL (`app/sql/billing.sql`)"
-
-    ```sql
-    -- name: create_invoices_table
-    CREATE TABLE IF NOT EXISTS invoices (
-        id INTEGER PRIMARY KEY,
-        customer_id INTEGER NOT NULL,
-        status TEXT NOT NULL,
-        total_cents INTEGER NOT NULL
-    );
-
-    -- name: insert_invoice
-    -- param: customer_id int  Account identifier
-    -- param: status str       Initial invoice state
-    -- param: total_cents int  Invoice total in minor currency units
-    INSERT INTO invoices (customer_id, status, total_cents)
-    VALUES (:customer_id, :status, :total_cents);
-
-    -- name: list_customer_invoices
-    -- param: customer_id int  Account identifier
-    -- param: status str?      Optional status filter
-    SELECT id, customer_id, status, total_cents
-    FROM invoices
-    WHERE customer_id = :customer_id
-      AND (:status IS NULL OR status = :status)
-    ORDER BY id DESC;
-    ```
-
-=== "Python"
-
-    ```python
-    from pathlib import Path
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
-    spec = SQLSpec()
-    config = spec.add_config(
-        SqliteConfig(connection_config={"database": ":memory:"})
-    )
-    spec.load_sql_files(Path("app/sql/billing.sql"))
-
-    with spec.provide_session(config) as session:
-        session.execute(spec.get_sql("create_invoices_table"))
-        session.execute(
-            spec.get_sql("insert_invoice"),
-            customer_id=42,
-            status="paid",
-            total_cents=9500,
-        )
-        invoices = session.select(
-            spec.get_sql("list_customer_invoices"),
-            customer_id=42,
-            status="paid",
-        )
-    ```
-
 ### Organizing Query Directories
 
 When `spec.load_sql_files(Path("app/sql"))` scans a directory tree, you can keep queries organized per domain (`app/sql/billing.sql`, `app/sql/users.sql`) and inspect loaded definitions at startup:
@@ -100,7 +39,11 @@ When `spec.load_sql_files(Path("app/sql"))` scans a directory tree, you can keep
 - `spec.get_sql("list_customer_invoices")`: Returns the immutable `SQL` template ready for execution or filter composition.
 - `SQLFileLoader(storage_registry=...)`: Loads `.sql` files from S3, GCS, Azure Blob Storage, or embedded package paths registered in `StorageRegistry`.
 
+<span id="anatomy-of-a-multi-query-sql-file"></span>
+
 ## Declared Parameter Headers (`-- param:`)
+
+Each `-- name:` block can start with `-- dialect:` and `-- param:` headers. The following file groups two related queries.
 
 Add `-- param: <name> <type>[?]  <description>` headers immediately below `-- name:` to document expected arguments and enforce automatic required-parameter validation before a query ever touches the database connection:
 
@@ -165,9 +108,7 @@ Pass slot values to `get_sql()`, then pass the query's remaining data values to 
 
 Slots accept trusted SQL strings, SQLGlot expressions, and `SQL` objects. Strings are inserted as SQL text. Use a `SQL` object with named placeholders for user data, as shown above. Choose ordering expressions and identifiers from trusted code or an allowlist.
 
-A missing required slot or unknown slot name raises `SQLSlotError`. Positional bindings and statement filters on a `SQL` slot also raise this error. Apply filters to the completed statement returned by `get_sql()` instead.
-
-Use distinct names for slot bindings and the outer query's placeholders. For example, the predicate uses `team_name`, while the shared fragment uses `workspace_id`. Reusing an outer placeholder name in a bound slot raises `SQLSlotError`.
+A missing required slot or unknown slot name raises `SQLSlotError`. Positional bindings and statement filters on a `SQL` slot also raise this error. Apply filters to the completed statement returned by `get_sql()` instead. Use distinct names for slot bindings and the outer query's placeholders, such as `team_name` and `workspace_id`. Reusing an outer placeholder name in a bound slot raises `SQLSlotError`.
 
 Fragments may include other fragments, and a fragment may contain slot markers. Defaults belong to the named query's header; fragments cannot declare `-- slot:`, `-- param:`, or `-- dialect:` headers. Load all referenced fragments before retrieving a query.
 

@@ -1,13 +1,7 @@
 # SQL File Loader
 
 ```python
-from sqlspec.loader import (
-    NamedStatement,
-    SlotDeclaration,
-    SQLFile,
-    SQLFileCacheEntry,
-    SQLFileLoader,
-)
+from sqlspec.loader import SQLFileLoader
 ```
 
 Load, cache, and compose named SQL queries (`-- name:`), reusable fragments (`-- fragment:` / `/* include: */`), and dynamic slots (`-- slot:` / `/* slot: */`) from local files or remote object storage. See [Fragments and Slots](../learn/sql-files.md#fragments-and-slots) for syntax and a runnable example.
@@ -30,7 +24,7 @@ Fragments may contain include and slot markers, but cannot declare dialect, para
 
 Bound parameter names from a `SQL` slot must not overlap the outer query's placeholders. Two slots may share a named binding only when their values are equal. Slot values do not change the stored query template.
 
-Markers inside quoted strings, quoted identifiers, dollar-quoted bodies, or other comments are left unchanged. Leading `-- slot:` headers are case-insensitive; avoid that spelling for ordinary prose comments.
+Markers inside single-quoted strings, double-quoted identifiers, dollar-quoted bodies, or other comments are left unchanged. Leading `-- slot:` headers are case-insensitive; avoid that spelling for ordinary prose comments.
 
 ### Namespaces and Inspection
 
@@ -38,15 +32,7 @@ Directory namespaces apply to fragments and named queries. Include lookup first 
 
 All referenced fragments must be loaded before retrieving a query. The order in which their files are loaded does not matter.
 
-Use `spec.loader` to access these `SQLFileLoader` methods:
-
-| Method | Result |
-| --- | --- |
-| `list_fragments()` / `has_fragment(name)` | Discover registered fragment names or check an exact normalized name. |
-| `get_fragment_text(name)` | Get a fragment with nested includes expanded. |
-| `add_fragment(name, sql)` | Register trusted fragment SQL directly. |
-| `get_query_slots(name)` | Get `SlotDeclaration` entries, including markers contributed by fragments. A required slot has `default=None`. |
-| `get_query_text(name)` | Expand includes while keeping slot markers. |
+Use `spec.loader` to access the inspection and registration methods documented below.
 
 ### Caching and Errors
 
