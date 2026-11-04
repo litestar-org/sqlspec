@@ -72,6 +72,7 @@ Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 eit
         SybaseConfig(
             connection_config={
                 "server_alias": "SYBASE_PROD",
+                "port": 5000,
                 "user": "sa",
                 "password": "secret_password",
                 "database": "app_db",
@@ -80,17 +81,21 @@ Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 eit
     )
     ```
 
+FreeTDS aliases supply the configured host and TDS protocol. Pass the port explicitly even when the section in `freetds.conf` defines it. `pymssql` adds a port to the alias and overrides the section's port; an omitted, empty, or zero port raises `ImproperConfigurationError`.
+
 ## Key Configuration Parameters
 
 | Setting | Location | Description |
 | --- | --- | --- |
 | `server` / `host` | `connection_config` | Database host name or IP address (default port `5000`). |
-| `server_alias` / `freetds_server` | `connection_config` | Section name in `freetds.conf` configured with `tds version = 5.0`. |
+| `server_alias` / `freetds_server` | `connection_config` | Section name in `freetds.conf` configured with `tds version = 5.0`; requires an explicit `port`. |
+| `is_server_alias` | `connection_config` | Set to `True` when `server` names a FreeTDS section. The same explicit-port requirement applies. |
 | `database` / `db` | `connection_config` | Target database catalog name. |
 | `user` / `username` | `connection_config` | Authentication login principal. |
 | `password` | `connection_config` | Authentication password credentials. |
 | `autocommit` | `connection_config` | Defaults to `True` to allow DDL execution outside implicit transactions. |
-| `conn_properties` | `connection_config` | Sybase session initialization commands (defaults to quoted identifier and ANSINULL options). |
+| `conn_properties` | `connection_config` | Defaults to `SET CHAINED OFF`, `SET QUOTED_IDENTIFIER ON`, `SET ANSINULL ON`, and `SET TEXTSIZE 2147483647`. A supplied value replaces these defaults. |
+| `read_only` | `connection_config` | Passed as native pymssql login intent. It does not enforce read-only access in ASE; use database permissions. |
 | `pool_recycle_seconds` | `connection_config` | Maximum connection age in seconds before recycling (defaults to 24 hours). |
 | `health_check_interval` | `connection_config` | Minimum idle time in seconds before running liveness probes. |
 | `json_serializer` / `json_deserializer` | `driver_features` | Custom JSON text serialization/deserialization callables. |
@@ -98,5 +103,5 @@ Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 eit
 ## Dialect and Catalog Notes
 
 - **Autocommit and DDL in Transactions**: In Sybase ASE, statements like `CREATE TABLE` and `CREATE INDEX` raise error 2762 inside multi-statement transactions unless database option `ddl in tran` is enabled. `SybaseConfig` defaults `autocommit=True` and begins explicit transactions on demand via `driver.begin()`.
-- **Pagination**: Supports both unparenthesized `SELECT TOP n ...` and ANSI SQL pagination `ROWS LIMIT n OFFSET m`.
+- **Pagination**: Bounded ADK session, event, and memory queries use `SELECT TOP n` when no offset is requested. Positive offsets use `ROWS LIMIT n OFFSET m`, which requires ASE support for that syntax and a compatible server mode.
 - **System Catalogs**: Reflection queries introspect `dbo.sysobjects`, `dbo.syscolumns`, `dbo.sysindexes`, `dbo.sysreferences`, and `dbo.systypes`.
