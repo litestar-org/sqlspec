@@ -994,7 +994,7 @@ class ArrowResult(StatementResult):
             raise ValueError(msg)
         active_pipeline = pipeline or SyncStoragePipeline()
         if hasattr(self.data, "to_batches") or hasattr(self.data, "iter_batches") or hasattr(self.data, "__iter__"):
-            if hasattr(self.data, "schema"):
+            if hasattr(self.data, "__arrow_c_stream__"):
                 batch_iter = self.data
             else:
                 _cols, batch_iter = coerce_arrow_batches(self.data)
@@ -1024,7 +1024,7 @@ class ArrowResult(StatementResult):
             raise ValueError(msg)
         active_pipeline = pipeline or AsyncStoragePipeline()
         if hasattr(self.data, "to_batches") or hasattr(self.data, "iter_batches") or hasattr(self.data, "__iter__"):
-            if hasattr(self.data, "schema"):
+            if hasattr(self.data, "__arrow_c_stream__"):
                 batch_iter = self.data
             else:
                 _cols, batch_iter = coerce_arrow_batches(self.data)
