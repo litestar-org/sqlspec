@@ -7,14 +7,34 @@ important operational fixes.
 
 ## Recent Updates
 
-### Unreleased
+### v0.71.0 - SAP fixes, Arrow schemas, and SQL file guides
+
+**Changed:**
+
+* Restored the guide to fragments and slots in `SQLFileLoader` and `SQLSpec.get_sql()`. It includes a runnable example, safe bound values, and notes on namespaces, caching, and errors.
+  ([#885](https://github.com/litestar-org/sqlspec/pull/885))
+* Updated locked drivers and tools, including SQLGlot 30.29.0, python-oracledb 26.1.0, pymssql 2.4.6, Ruff 0.17.3, and Mypy 2.4.1. The supported minimum versions have not changed.
 
 **Fixed:**
 
-* FreeTDS aliases for SAP ASE require an explicit nonzero `port`, including aliases set with `is_server_alias=True`. Set it in `connection_config` even when `freetds.conf` defines a port. See [Sybase connection setup](databases/sybase.md#connection-setup-and-protocol-negotiation).
-* SAP ASE staged loads use update-then-insert conflict handling. SQL Anywhere staged loads match the supplied conflict keys with `MERGE`. Both preserve columns listed in `exclude_update_columns`.
-* Empty row-based Arrow conversions retain column names in `table`, `batch`, and `reader` formats, including storage exports from those formats. Use `arrow_schema` to choose types when the adapter supplies no type hints. See [empty Arrow results](learn/arrow-and-storage.md#empty-results-and-explicit-schemas).
-* SAP table inference uses date-time types for Arrow timestamps, bounds string primary keys, and rejects decimal precision above the dialect's limit.
+* Fixed how `SybaseConfig` and `SybaseConnectionPool` pass native options and FreeTDS aliases to pymssql. An alias needs an explicit nonzero `port`, even when `freetds.conf` defines one. This also applies to `is_server_alias=True`. Default session setup includes `SET CHAINED OFF`. See [Sybase connection setup](databases/sybase.md#connection-setup-and-protocol-negotiation).
+  ([#886](https://github.com/litestar-org/sqlspec/pull/886))
+* Kept the outer Sybase pool lease open when an inner lease fails. A failed outer lease still closes the connection.
+  ([#886](https://github.com/litestar-org/sqlspec/pull/886))
+* Fixed column flags, computed values, constraint types, composite foreign keys, and table load order in `SybaseSyncDataDictionary`. Long defaults, checks, and view definitions now keep all chunks of their catalog text.
+  ([#886](https://github.com/litestar-org/sqlspec/pull/886))
+* Fixed native ASE checks for migration and extension tables. Bounded `SybaseADKStore` and `SybaseADKMemoryStore` queries use `TOP` when the offset is zero or absent.
+  ([#886](https://github.com/litestar-org/sqlspec/pull/886))
+* Fixed SAP staging tables, checkpoints, and index SQL. ASE staged upserts update matching rows, then insert new rows. SQL Anywhere uses `MERGE` with the supplied `conflict_keys`. Both honor `on_conflict="nothing"` and `exclude_update_columns`.
+  ([#886](https://github.com/litestar-org/sqlspec/pull/886))
+* Fixed SAP types inferred by `CreateTable.from_arrow_schema()` and `CreateTable.from_records()`. ASE timestamps keep `BIGDATETIME`; SQL Anywhere keeps timestamps with time zones. String primary keys use `VARCHAR(255)`. Decimal precision above the dialect limit raises `SQLBuilderError`. ASE `BIGDATETIME` has no time-zone field, so normalize zone-aware values before loading them. See [SAP column types and staged loads](learn/arrow-and-storage.md#sap-column-types-and-staged-loads).
+  ([#886](https://github.com/litestar-org/sqlspec/pull/886))
+* Empty row-based Arrow `table`, `batch`, and `reader` results now keep column names, including in storage exports. An explicit `arrow_schema` sets the types; fields without type hints use Arrow `null`. Empty Oracle native readers also keep supplied schemas. Sync native readers keep their schema metadata. See [empty Arrow results](learn/arrow-and-storage.md#empty-results-and-explicit-schemas).
+  ([#886](https://github.com/litestar-org/sqlspec/pull/886))
+* Kept Arrow C stream exports working through `ArrowResult.write_to_storage_sync()` and `ArrowResult.write_to_storage_async()`, including empty Polars frames.
+  ([#886](https://github.com/litestar-org/sqlspec/pull/886))
+* Fixed the SAP system names in statement events and OpenTelemetry spans to `sybase` and `sqlanywhere`.
+  ([#886](https://github.com/litestar-org/sqlspec/pull/886))
 
 ### v0.70.1 - Extension adapter name and store class resolution via ClassVars and MRO
 
