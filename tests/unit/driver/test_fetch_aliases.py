@@ -59,7 +59,7 @@ async def test_empty_arrow_query_keeps_projection(
 ) -> None:
     import pyarrow as pa
 
-    schema = pa.schema([("id", pa.int64()), ("name", pa.string())]) if use_schema else None
+    schema = pa.schema((("id", pa.int64()), ("name", pa.string()))) if use_schema else None
     result = getattr(arrow_session, method)(
         "SELECT 1 AS id, 'Ada' AS name WHERE 1 = 0", return_format=return_format, arrow_schema=schema
     )

@@ -94,15 +94,15 @@ def test_sync_select_to_arrow_batches_uses_fetch_df_batches() -> None:
 @pytest.mark.parametrize("use_schema", (False, True))
 def test_sync_empty_native_reader_keeps_schema(use_schema: bool) -> None:
     native_schema = pa.schema(
-        [pa.field("ID", pa.int64(), metadata={b"source": b"native"}), pa.field("VALUE", pa.decimal128(9, 2))],
+        (pa.field("ID", pa.int64(), metadata={b"source": b"native"}), pa.field("VALUE", pa.decimal128(9, 2))),
         metadata={b"table": b"example"},
     )
     expected = pa.schema(
-        [pa.field("id", pa.int64(), metadata={b"source": b"native"}), pa.field("value", pa.decimal128(9, 2))],
+        (pa.field("id", pa.int64(), metadata={b"source": b"native"}), pa.field("value", pa.decimal128(9, 2))),
         metadata={b"table": b"example"},
     )
     requested_schema = (
-        pa.schema([("id", pa.int32()), ("value", pa.decimal128(12, 4))], metadata={b"source": b"caller"})
+        pa.schema((("id", pa.int32()), ("value", pa.decimal128(12, 4))), metadata={b"source": b"caller"})
         if use_schema
         else None
     )
@@ -124,7 +124,7 @@ def test_sync_empty_native_reader_keeps_schema(use_schema: bool) -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("is_async", (False, True))
 async def test_native_reader_without_frames_honors_explicit_schema(is_async: bool) -> None:
-    schema = pa.schema([("id", pa.int64()), ("value", pa.string())], metadata={b"source": b"caller"})
+    schema = pa.schema((("id", pa.int64()), ("value", pa.string())), metadata={b"source": b"caller"})
     if is_async:
         async_connection = _OracleAsyncBatchConnection([])
         driver = OracleAsyncDriver(cast("OracleAsyncConnection", async_connection))

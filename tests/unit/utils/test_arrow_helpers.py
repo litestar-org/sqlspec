@@ -44,8 +44,8 @@ def test_empty_arrow_conversion_preserves_projected_schema(
 ) -> None:
     import pyarrow as pa
 
-    schema = pa.schema([pa.field("id", pa.int32(), metadata={b"source": b"explicit"}), pa.field("name", pa.string())])
-    expected = schema if use_schema else pa.schema([("id", pa.int64()), ("name", pa.null())])
+    schema = pa.schema((pa.field("id", pa.int32(), metadata={b"source": b"explicit"}), pa.field("name", pa.string())))
+    expected = schema if use_schema else pa.schema((("id", pa.int64()), ("name", pa.null())))
     result = convert_dict_to_arrow_with_schema(
         [],
         return_format=return_format,

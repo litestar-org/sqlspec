@@ -1,8 +1,8 @@
 """Unit tests for Sybase ASE and SAP SQL Anywhere data dictionary configurations and SQL packs."""
 
 import sqlite3
-from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 import pytest
 
@@ -31,6 +31,9 @@ if TYPE_CHECKING:
     from sqlspec.adapters.sybase import SybaseDriver
 
 
+_CursorT = TypeVar("_CursorT", bound=sqlite3.Cursor)
+
+
 class SybaseCatalogCursor(sqlite3.Cursor):
     """Execute the real driver's bound catalog queries on a local DB-API substitute."""
 
@@ -42,8 +45,16 @@ class SybaseCatalogCursor(sqlite3.Cursor):
 class SybaseCatalogConnection(sqlite3.Connection):
     """Provide a pymssql-compatible cursor over the local catalog fixture."""
 
-    def cursor(self, factory: Any = SybaseCatalogCursor) -> SybaseCatalogCursor:
-        return cast("SybaseCatalogCursor", super().cursor(factory=factory))
+    @overload
+    def cursor(self, factory: None = None) -> SybaseCatalogCursor: ...
+
+    @overload
+    def cursor(self, factory: Callable[[sqlite3.Connection], _CursorT]) -> _CursorT: ...
+
+    def cursor(
+        self, factory: Callable[[sqlite3.Connection], sqlite3.Cursor] | None = SybaseCatalogCursor
+    ) -> sqlite3.Cursor:
+        return super().cursor(factory=factory)
 
 
 @pytest.fixture
