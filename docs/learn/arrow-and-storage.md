@@ -34,7 +34,7 @@ with spec.provide_session(config) as session:
     arrow_table = arrow_result.data
 ```
 
-Adapters with native columnar wire protocols—including **DuckDB**, **ADBC**, **Arrow ODBC**, **BigQuery** (Storage Read API), and **Oracle 23ai/26ai** (zero-copy PyCapsule `fetch_df_all` / `fetch_df_batches`)—transfer Arrow buffers without materializing intermediate Python row dictionaries. Other DB-API adapters convert rows automatically using schema-guided Arrow builders when `native_only=False` (the default).
+Adapters with native Arrow support include DuckDB, ADBC, Arrow ODBC, BigQuery's Storage Read API, and Oracle's DataFrame APIs. These paths avoid intermediate Python row dictionaries. Other DB-API adapters convert rows when `native_only=False` (the default).
 
 Convert an `ArrowResult` to DataFrame libraries in one call:
 
@@ -44,34 +44,39 @@ Convert an `ArrowResult` to DataFrame libraries in one call:
 
 ### Empty Results and Explicit Schemas
 
-Row-based drivers keep column names when a query has no rows. If type hints are absent, each empty column has the Arrow `null` type. Set `arrow_schema=` to choose each column's type:
+Row-based drivers keep column names when a query has no rows. Without adapter type hints, each empty column has the Arrow `null` type. Set `arrow_schema=` to choose each column's type. Install PyArrow with `uv add pyarrow` before running this standalone example:
 
 ```python
 import pyarrow as pa
 
-with spec.provide_session(config) as session:
-    empty_result = session.select_to_arrow(
-        "SELECT host, cpu_pct FROM metrics WHERE 1 = 0",
-        arrow_schema=pa.schema([("host", pa.string()), ("cpu_pct", pa.float64())]),
-    )
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+--8<-- "docs/examples/querying/empty_arrow_schema.py:example"
 ```
 
-Empty `table`, `batch`, and `reader` results keep this schema. Empty `batches` results are an empty list. Exports keep column names. Parquet and Arrow IPC keep the set types; CSV keeps the header names.
+The result has zero rows and the schema `host: string, cpu_pct: double`. Empty `table`, `batch`, and `reader` results retain this schema. Empty `batches` results are an empty list, so they cannot carry a schema.
+
+Use `table`, `batch`, or `reader` for empty exports that retain column names. Parquet and Arrow IPC also retain Arrow types; CSV retains header names.
 
 ### SAP Column Types and Staged Loads
 
-Arrow types map to these SAP column types:
+`CreateTable.from_arrow_schema()` chooses these types when building SAP tables. These mappings also apply to type inference from Python records:
 
 | Arrow category | SAP ASE | SAP SQL Anywhere |
 | --- | --- | --- |
 | Timestamp without time zone | `BIGDATETIME` | `TIMESTAMP` |
 | Timestamp with time zone | `BIGDATETIME` | `TIMESTAMP WITH TIME ZONE` |
-| Text used in a key | `VARCHAR(255)` | `VARCHAR(255)` |
+| Date | `DATE` | `DATE` |
+| Time | `BIGTIME` | `TIME` |
+| String primary key | `VARCHAR(255)` | `VARCHAR(255)` |
 | Maximum decimal precision | 38 | 127 |
 
-ASE `TIMESTAMP` stores a row version. Use `BIGDATETIME` for dates and times. This type cannot keep a time zone. If a decimal is too wide, SQLSpec raises `SQLBuilderError`. Cast it to a smaller decimal or to text.
+ASE `TIMESTAMP` stores a row version. Arrow timestamp values use `BIGDATETIME`, which has no time-zone field. Normalize zone-aware values before loading them.
 
-With `conflict_keys`, ASE loads update rows that match, then insert new rows. SQL Anywhere uses `MERGE` and can match keys other than the primary key. Set `on_conflict="nothing"` to keep rows that match. Use `exclude_update_columns` to keep a column's old value. These steps do not lock out other writers.
+A decimal wider than the dialect's limit raises `SQLBuilderError`. Choose a narrower type only if the values fit, or store them as text.
+
+With `conflict_keys`, staged ASE loads update matching rows, then insert new rows in a separate statement. SQL Anywhere uses `MERGE`; both match the supplied keys. Set `on_conflict="nothing"` to preserve matching rows, or use `exclude_update_columns` to preserve selected columns. Coordinate concurrent loads that use the same keys.
 
 ## Unified Object Storage (`StorageRegistry`)
 

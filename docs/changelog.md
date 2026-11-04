@@ -7,6 +7,15 @@ important operational fixes.
 
 ## Recent Updates
 
+### Unreleased
+
+**Fixed:**
+
+* FreeTDS aliases for SAP ASE require an explicit nonzero `port`, including aliases set with `is_server_alias=True`. Set it in `connection_config` even when `freetds.conf` defines a port. See [Sybase connection setup](databases/sybase.md#connection-setup-and-protocol-negotiation).
+* SAP ASE staged loads use update-then-insert conflict handling. SQL Anywhere staged loads match the supplied conflict keys with `MERGE`. Both preserve columns listed in `exclude_update_columns`.
+* Empty row-based Arrow conversions retain column names in `table`, `batch`, and `reader` formats, including storage exports from those formats. Use `arrow_schema` to choose types when the adapter supplies no type hints. See [empty Arrow results](learn/arrow-and-storage.md#empty-results-and-explicit-schemas).
+* SAP table inference uses date-time types for Arrow timestamps, bounds string primary keys, and rejects decimal precision above the dialect's limit.
+
 ### v0.70.1 - Extension adapter name and store class resolution via ClassVars and MRO
 
 **Added:**

@@ -81,7 +81,7 @@ Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 eit
     )
     ```
 
-FreeTDS aliases supply the configured host and TDS protocol. Pass the port explicitly even when the section in `freetds.conf` defines it. `pymssql` adds a port to the alias and overrides the section's port; an omitted, empty, or zero port raises `ImproperConfigurationError`.
+An alias supplies the host and TDS version. Set `port` as well, even if it is in `freetds.conf`. `pymssql` replaces the port from that file with the value you pass. A missing, empty, or zero port raises `ImproperConfigurationError`.
 
 ## Key Configuration Parameters
 
@@ -103,5 +103,13 @@ FreeTDS aliases supply the configured host and TDS protocol. Pass the port expli
 ## Dialect and Catalog Notes
 
 - **Autocommit and DDL in Transactions**: In Sybase ASE, statements like `CREATE TABLE` and `CREATE INDEX` raise error 2762 inside multi-statement transactions unless database option `ddl in tran` is enabled. `SybaseConfig` defaults `autocommit=True` and begins explicit transactions on demand via `driver.begin()`.
-- **Pagination**: Bounded ADK session, event, and memory queries use `SELECT TOP n` when no offset is requested. Positive offsets use `ROWS LIMIT n OFFSET m`, which requires ASE support for that syntax and a compatible server mode.
+- **Pagination**: Bounded ADK session, event, and memory queries use `SELECT TOP n` with no offset. Positive offsets use `ROWS LIMIT n OFFSET m`; check that your ASE version and server mode support it.
 - **System Catalogs**: Reflection queries introspect `dbo.sysobjects`, `dbo.syscolumns`, `dbo.sysindexes`, `dbo.sysreferences`, and `dbo.systypes`.
+
+## Arrow and Staged Storage Loads
+
+`CreateTable.from_arrow_schema()` maps Arrow timestamps to `BIGDATETIME`. ASE's `TIMESTAMP` type holds a row version. `BIGDATETIME` has no time-zone field, so normalize zone-aware values before loading them. String primary keys use `VARCHAR(255)`. Decimal precision above 38 raises `SQLBuilderError`.
+
+With `conflict_keys`, staged loads update matching rows, then insert new rows in a separate statement. Coordinate concurrent loads that use the same keys. See [Arrow and Storage](../learn/arrow-and-storage.md#sap-column-types-and-staged-loads) for conflict options and SQL Anywhere differences.
+
+See the [adapter matrix](index.md), [configuration guide](../learn/configuration.md), and [Sybase API reference](../reference/adapters/sybase.md) for shared features and configuration details.
