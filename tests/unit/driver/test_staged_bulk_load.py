@@ -205,11 +205,15 @@ def test_spanner_load_from_arrow_uses_insert_or_ignore_when_on_conflict_nothing(
     assert not mock_tx.insert_or_update.called
 
 
-@pytest.mark.parametrize("dialect", ["sybase", "sqlanywhere"])
-def test_sap_stage_table_ddl_uses_select_into(dialect: str) -> None:
-    assert build_stage_table_ddl(dialect, "audit.items", "audit.staged") == [
-        "SELECT TOP 0 * INTO audit.staged FROM audit.items"
-    ]
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("sybase", "SELECT TOP 0 * INTO audit.staged FROM audit.items"),
+        ("sqlanywhere", "SELECT * INTO audit.staged FROM audit.items WHERE 1=0"),
+    ],
+)
+def test_sap_stage_table_ddl_uses_select_into(dialect: str, expected: str) -> None:
+    assert build_stage_table_ddl(dialect, "audit.items", "audit.staged") == [expected]
 
 
 def test_sybase_stage_upsert_updates_then_inserts_with_composite_keys_and_casts() -> None:
@@ -282,7 +286,7 @@ class _SapStorageRecorder:
 
     def execute_script(self, script: str) -> None:
         self.scripts.append(script)
-        if self.fail_merge:
+        if self.fail_merge and script.startswith(("UPDATE", "INSERT")):
             raise RuntimeError("native merge failure")
         self.statements.extend(part.strip() for part in script.split(";") if part.strip())
 
@@ -353,7 +357,8 @@ async def test_sybase_staged_upserts_use_scripts_and_always_cleanup(
         result = await run_load()
         assert result.telemetry["rows_processed"] == 1
         assert [statement.split()[0] for statement in recorder.statements] == ["SELECT", "UPDATE", "INSERT", "DROP"]
-    assert len(recorder.scripts) == 1
+    assert len(recorder.scripts) == 2
+    assert recorder.scripts[0] == "SELECT TOP 0 * INTO staged FROM items"
     assert recorder.statements[-1] == "DROP TABLE staged"
 
 
@@ -367,15 +372,24 @@ def test_sybase_driver_executes_both_staged_upsert_statements() -> None:
     )
     connection = SimpleNamespace(cursor=lambda: cursor)
     driver = SybaseDriver(cast("SybaseConnection", connection))
-    result = driver.execute_script(
-        build_stage_merge_sql("sybase", "items", "staged", ["id", "value"], conflict_keys=["id"])
+    result = execute_staged_load_sync(
+        driver,
+        "items",
+        pa.table({"id": [1], "value": ["value"]}),
+        raw_loader=lambda table, source, **kwargs: create_storage_bridge_job(
+            "completed", {"rows_processed": source.num_rows}
+        ),
+        stage_table="staged",
+        conflict_keys=["id"],
     )
 
     assert statements == [
+        "SELECT TOP 0 * INTO staged FROM items",
         "UPDATE items SET value = stg.value FROM items tgt, staged stg WHERE tgt.id = stg.id",
         (
             "INSERT INTO items (id, value) SELECT stg.id, stg.value FROM staged stg "
             "WHERE NOT EXISTS (SELECT 1 FROM items tgt WHERE tgt.id = stg.id)"
         ),
+        "DROP TABLE staged",
     ]
-    assert result.successful_statements == 2
+    assert result.telemetry["rows_processed"] == 1

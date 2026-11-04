@@ -369,8 +369,10 @@ def build_stage_table_ddl(
         return [f"CREATE TEMPORARY TABLE IF NOT EXISTS {stage_table} LIKE {target_table}"]
     if norm in _ORACLE_FAMILY_DIALECTS:
         return [f"CREATE TABLE {stage_table} NOLOGGING AS SELECT * FROM {target_table} WHERE 1=0"]
-    if norm in _MSSQL_FAMILY_DIALECTS or norm in _SAP_DIALECTS:
+    if norm in _MSSQL_FAMILY_DIALECTS or norm == "sybase":
         return [f"SELECT TOP 0 * INTO {stage_table} FROM {target_table}"]
+    if norm == "sqlanywhere":
+        return [f"SELECT * INTO {stage_table} FROM {target_table} WHERE 1=0"]
     if norm == "db2":
         return [f"CREATE TABLE {stage_table} AS (SELECT * FROM {target_table}) WITH NO DATA"]
     if norm == "bigquery":
@@ -798,8 +800,9 @@ def execute_staged_load_sync(
 
     arrow_table = coerce_arrow_table(source)
     columns = list(arrow_table.column_names)
+    execute_ddl = driver.execute_script if dialect in _SAP_DIALECTS else driver.execute
     for ddl in build_stage_table_ddl(dialect, table, resolved_stage, multi_worker=multi_worker):
-        driver.execute(ddl)
+        execute_ddl(ddl)
     try:
         if overwrite and not conflict_keys:
             driver.execute(f"DELETE FROM {table}")
@@ -878,8 +881,9 @@ async def execute_staged_load_async(
 
     arrow_table = coerce_arrow_table(source)
     columns = list(arrow_table.column_names)
+    execute_ddl = driver.execute_script if dialect in _SAP_DIALECTS else driver.execute
     for ddl in build_stage_table_ddl(dialect, table, resolved_stage, multi_worker=multi_worker):
-        await driver.execute(ddl)
+        await execute_ddl(ddl)
     try:
         if overwrite and not conflict_keys:
             await driver.execute(f"DELETE FROM {table}")
@@ -1017,8 +1021,9 @@ def execute_load_from_storage_sync(
     resolved_stage = resolve_stage_table_name(table, stage_table, conflict_keys=conflict_keys, dialect=dialect)
     effective_target = resolved_stage or table
     if resolved_stage is not None:
+        execute_ddl = driver.execute_script if dialect in _SAP_DIALECTS else driver.execute
         for ddl in build_stage_table_ddl(dialect, table, resolved_stage, multi_worker=max_workers > 1):
-            driver.execute(ddl)
+            execute_ddl(ddl)
 
     total_rows = 0
     total_bytes = 0
@@ -1215,8 +1220,9 @@ async def execute_load_from_storage_async(
     resolved_stage = resolve_stage_table_name(table, stage_table, conflict_keys=conflict_keys, dialect=dialect)
     effective_target = resolved_stage or table
     if resolved_stage is not None:
+        execute_ddl = driver.execute_script if dialect in _SAP_DIALECTS else driver.execute
         for ddl in build_stage_table_ddl(dialect, table, resolved_stage, multi_worker=max_workers > 1):
-            await driver.execute(ddl)
+            await execute_ddl(ddl)
 
     total_rows = 0
     total_bytes = 0
