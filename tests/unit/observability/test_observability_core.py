@@ -27,6 +27,7 @@ from sqlspec.observability import (
     GCPLogFormatter,
     LifecycleDispatcher,
     SamplingConfig,
+    TelemetryConfig,
     compute_sql_hash,
     get_trace_context,
     resolve_db_system,
@@ -717,6 +718,23 @@ def test_resolve_db_system_sqlite() -> None:
     assert resolve_db_system("AiosqliteDriver") == "sqlite"
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("sybase", "sybase"),
+        ("SybaseDriver", "sybase"),
+        ("SybaseConfig", "sybase"),
+        ("SYBASEdriver", "sybase"),
+        ("sqlanywhere", "sqlanywhere"),
+        ("SqlanywhereDriver", "sqlanywhere"),
+        ("SqlanywhereConfig", "sqlanywhere"),
+        ("SQLanyWHEREdriver", "sqlanywhere"),
+    ],
+)
+def test_resolve_db_system_sap_adapters(name: str, expected: str) -> None:
+    assert resolve_db_system(name) == expected
+
+
 def test_resolve_db_system_unknown() -> None:
     assert resolve_db_system("UnknownDriver") == "other_sql"
 
@@ -932,29 +950,60 @@ def test_register_lifecycle_hook_updates_is_idle() -> None:
     assert runtime.is_idle is False
 
 
-def test_span_manager_attaches_context_and_resolves_db_system(monkeypatch) -> None:
-    """Verify SpanManager attaches active span context and resolves db.system from driver fallback."""
+@pytest.mark.parametrize(
+    ("config_name", "driver", "expected"),
+    [
+        ("SQLSpecConfig", "AsyncpgDriver", "postgresql"),
+        ("SybaseConfig", "PymssqlDriver", "sybase"),
+        ("SqlanywhereConfig", "SqlanywhereDriver", "sqlanywhere"),
+        ("SQLSpecConfig", "SybaseDriver", "sybase"),
+        ("SQLSpecConfig", "SqlanywhereDriver", "sqlanywhere"),
+        ("SQLSpecConfig", "PymssqlDriver", "mssql"),
+        ("SQLSpecConfig", "UnknownDriver", "other_sql"),
+    ],
+)
+def test_span_manager_attaches_context_and_resolves_db_system(config_name: str, driver: str, expected: str) -> None:
+    """Emit matching database identifiers in statement events and exported spans."""
+    trace_sdk = pytest.importorskip("opentelemetry.sdk.trace")
+    export_sdk = pytest.importorskip("opentelemetry.sdk.trace.export")
+    in_memory_export = pytest.importorskip("opentelemetry.sdk.trace.export.in_memory_span_exporter")
     assert resolve_db_system("CockroachAsyncpgConfig") == "cockroachdb"
     assert resolve_db_system("PymssqlDriver") == "mssql"
     assert resolve_db_system("MariaDBConfig") == "mariadb"
 
+    exporter = in_memory_export.InMemorySpanExporter()
+    provider = trace_sdk.TracerProvider()
+    provider.add_span_processor(export_sdk.SimpleSpanProcessor(exporter))
     observed: list[dict[str, Any]] = []
     runtime = ObservabilityRuntime(
-        ObservabilityConfig(statement_observers=(lambda e: observed.append(e.as_dict()),)), config_name="SQLSpecConfig"
+        ObservabilityConfig(
+            statement_observers=(lambda e: observed.append(e.as_dict()),),
+            telemetry=TelemetryConfig(enable_spans=True, provider_factory=lambda: provider),
+        ),
+        config_name=config_name,
     )
-    runtime.emit_statement_event(
-        sql="SELECT 1",
-        parameters=None,
-        driver="AsyncpgDriver",
-        operation="SELECT",
-        execution_mode="single",
-        is_many=False,
-        is_script=False,
-        rows_affected=1,
-        duration_s=0.01,
-        storage_backend=None,
-    )
-    assert observed[0]["db_system"] == "postgresql"
+    try:
+        span = runtime.start_query_span("SELECT 1", "SELECT", driver)
+        runtime.emit_statement_event(
+            sql="SELECT 1",
+            parameters=None,
+            driver=driver,
+            operation="SELECT",
+            execution_mode="single",
+            is_many=False,
+            is_script=False,
+            rows_affected=1,
+            duration_s=0.01,
+            storage_backend=None,
+        )
+        runtime.span_manager.end_span(span)
+
+        assert observed[0]["db_system"] == expected
+        exported_spans = exporter.get_finished_spans()
+        assert len(exported_spans) == 1
+        assert exported_spans[0].attributes["db.system"] == expected
+    finally:
+        provider.shutdown()
 
 
 def test_observability_config_diagnostics_and_logging(caplog) -> None:
