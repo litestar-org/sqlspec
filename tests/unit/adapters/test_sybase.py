@@ -3,14 +3,17 @@
 import os
 import socket
 import threading
+from collections.abc import Generator
 from contextlib import nullcontext
 from datetime import UTC, datetime
-from typing import Any, cast
+from types import SimpleNamespace
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pymssql
 import pytest
 
+import sqlspec.adapters.sybase.pool as sybase_pool
 from sqlspec.adapters.sybase import (
     DEFAULT_SYBASE_CONN_PROPERTIES,
     DEFAULT_SYBASE_TDS_VERSION,
@@ -129,6 +132,151 @@ class FakeConnection:
     def autocommit(self, value: bool) -> None:
         self.autocommit_values.append(value)
         self.autocommit_state = value
+
+
+@pytest.fixture
+def recording_sybase_config(monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[SybaseConfig, FakeCursor], None, None]:
+    """Record native DB-API calls while using the real config, pool, driver and stores."""
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    monkeypatch.setenv("TDSVER", "5.0")
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: connection))
+    config = SybaseConfig(extension_config={"adk": {}, "litestar": {"session_table": "sessions"}})
+    try:
+        yield config, cursor
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("table", "object_name"), [("event_queue", "[event_queue]"), ("audit.event_queue", "[audit].[event_queue]")]
+)
+def test_sybase_event_queue_guards_resolve_same_owner(table: str, object_name: str) -> None:
+    store = SybaseEventQueueStore(SybaseConfig(extension_config={"events": {"queue_table": table}}))
+
+    create_table, create_index = store.create_statements()
+    drop_table = store.drop_statements()[0]
+
+    assert create_table.startswith(f"IF OBJECT_ID('{object_name}') IS NULL EXECUTE('CREATE TABLE {store.table_name} ")
+    assert f"AND id = OBJECT_ID('{object_name}')) EXECUTE('CREATE INDEX " in create_index
+    assert drop_table == f"IF OBJECT_ID('{object_name}') IS NOT NULL EXECUTE('DROP TABLE {store.table_name}');"
+
+
+def test_sybase_tracking_table_guard_uses_native_object_id(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor],
+) -> None:
+    config, cursor = recording_sybase_config
+    with config.provide_session() as driver:
+        SybaseSyncMigrationTracker(version_table_name="audit.ddl_migrations").ensure_tracking_table(driver)
+
+    assert cursor.calls[0][0].startswith(
+        "IF OBJECT_ID('[audit].[ddl_migrations]') IS NULL EXECUTE('CREATE TABLE [audit].[ddl_migrations]"
+    )
+
+
+def test_sybase_adk_lifecycle_uses_native_object_id(recording_sybase_config: tuple[SybaseConfig, FakeCursor]) -> None:
+    config, cursor = recording_sybase_config
+    sessions = SybaseADKStore(config)
+    memory = SybaseADKMemoryStore(config)
+    sessions.create_tables()
+    memory.create_tables()
+    sessions.drop_tables()
+    memory.drop_tables()
+
+    statements = [sql for sql, _params in cursor.calls]
+    for table in ("adk_session", "adk_event", "adk_app_state", "adk_user_state", "adk_internal_metadata", "adk_memory"):
+        reference = f"[dbo].[{table}]"
+        assert any(
+            statement.startswith(f"IF OBJECT_ID('{reference}') IS NULL EXECUTE('CREATE TABLE {reference}")
+            for statement in statements
+        )
+        assert any(
+            statement.startswith(f"IF OBJECT_ID('{reference}') IS NOT NULL EXECUTE('DROP TABLE {reference}')")
+            for statement in statements
+        )
+
+
+@pytest.mark.anyio
+async def test_sybase_litestar_create_uses_native_object_id(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor],
+) -> None:
+    config, cursor = recording_sybase_config
+    await SybaseStore(config).create_table()
+
+    assert any(
+        sql.startswith("IF OBJECT_ID('[dbo].[sessions]') IS NULL EXECUTE('CREATE TABLE [dbo].[sessions]")
+        for sql, _params in cursor.calls
+    )
+
+
+@pytest.mark.parametrize(
+    ("limit", "after"), [(None, None), (5, None), (5, datetime(2026, 1, 1, tzinfo=UTC)), (0, None)]
+)
+def test_sybase_adk_events_use_top_for_bounded_queries(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor], limit: int | None, after: datetime | None
+) -> None:
+    config, cursor = recording_sybase_config
+    assert SybaseADKStore(config).get_events("app", "user", "session", after_timestamp=after, limit=limit) == []
+    if limit == 0:
+        assert cursor.calls == []
+        return
+
+    statement, parameters = cursor.calls[-1]
+    sql = " ".join(statement.split())
+    prefix = "SELECT TOP %s id," if limit is not None else "SELECT id,"
+    assert sql.startswith(prefix)
+    assert sql.endswith("ORDER BY timestamp ASC")
+    expected: tuple[Any, ...] = ("app", "user", "session")
+    if limit is not None:
+        expected = (limit, *expected)
+    if after is not None:
+        expected = (*expected, after)
+        assert "AND timestamp > %s" in sql
+    assert parameters == expected
+
+
+@pytest.mark.parametrize(("limit", "offset"), [(None, None), (5, None), (5, 0), (5, 2), (0, None)])
+def test_sybase_adk_session_pages_use_top_only_without_offset(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor], limit: int | None, offset: int | None
+) -> None:
+    config, cursor = recording_sybase_config
+    assert SybaseADKStore(config).list_sessions("app", "user", limit=limit, offset=offset) == []
+    if limit == 0:
+        assert cursor.calls == []
+        return
+
+    statement, parameters = cursor.calls[-1]
+    sql = " ".join(statement.split())
+    if limit is not None and not offset:
+        assert sql.startswith("SELECT TOP %s id,")
+        assert parameters == (limit, "app", "user")
+    else:
+        assert sql.startswith("SELECT id,")
+        assert parameters == (("app", "user", limit, offset) if offset else ("app", "user"))
+    ordering = "ORDER BY update_time DESC, id DESC"
+    assert sql.endswith(f"{ordering} ROWS LIMIT %s OFFSET %s" if offset else ordering)
+
+
+@pytest.mark.parametrize(
+    ("scope", "scope_parameters"), [("all", ("app", "user")), ("user", ("app", "user")), ("app", ("app",))]
+)
+@pytest.mark.parametrize(("limit", "expected_limit"), [(7, 7), (None, 20), (0, 20)])
+def test_sybase_memory_search_uses_top_and_preserves_scope_and_like_values(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor],
+    scope: Literal["all", "user", "app"],
+    scope_parameters: tuple[str, ...],
+    limit: int | None,
+    expected_limit: int,
+) -> None:
+    config, cursor = recording_sybase_config
+    assert (
+        SybaseADKMemoryStore(config).search_entries(r"50%_[x]\\", "app", "user", limit=limit, scope_filter=scope) == []
+    )
+    statement, parameters = cursor.calls[-1]
+    sql = " ".join(statement.split())
+    assert sql.startswith("SELECT TOP %s id,")
+    assert sql.endswith("ORDER BY timestamp DESC")
+    assert parameters == (expected_limit, *scope_parameters, r"%50\%\_\[x]\\\\%")
 
 
 def test_build_connection_config_defaults_and_normalization() -> None:

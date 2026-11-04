@@ -370,15 +370,15 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
 
     def _drop_app_states_table_sql(self) -> str:
         ref = escape_sql_literal(_table_ref(self._app_state_table))
-        return f"IF OBJECT_ID('{ref}', 'U') IS NOT NULL EXECUTE('DROP TABLE {ref}')"
+        return f"IF OBJECT_ID('{ref}') IS NOT NULL EXECUTE('DROP TABLE {ref}')"
 
     def _drop_user_states_table_sql(self) -> str:
         ref = escape_sql_literal(_table_ref(self._user_state_table))
-        return f"IF OBJECT_ID('{ref}', 'U') IS NOT NULL EXECUTE('DROP TABLE {ref}')"
+        return f"IF OBJECT_ID('{ref}') IS NOT NULL EXECUTE('DROP TABLE {ref}')"
 
     def _drop_metadata_table_sql(self) -> str:
         ref = escape_sql_literal(_table_ref(self._metadata_table))
-        return f"IF OBJECT_ID('{ref}', 'U') IS NOT NULL EXECUTE('DROP TABLE {ref}')"
+        return f"IF OBJECT_ID('{ref}') IS NOT NULL EXECUTE('DROP TABLE {ref}')"
 
     def _drop_tables_sql(self) -> "list[str]":
         events_ref = escape_sql_literal(_table_ref(self._events_table))
@@ -387,8 +387,8 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
             self._drop_app_states_table_sql(),
-            f"IF OBJECT_ID('{events_ref}', 'U') IS NOT NULL EXECUTE('DROP TABLE {events_ref}')",
-            f"IF OBJECT_ID('{sessions_ref}', 'U') IS NOT NULL EXECUTE('DROP TABLE {sessions_ref}')",
+            f"IF OBJECT_ID('{events_ref}') IS NOT NULL EXECUTE('DROP TABLE {events_ref}')",
+            f"IF OBJECT_ID('{sessions_ref}') IS NOT NULL EXECUTE('DROP TABLE {sessions_ref}')",
         ]
 
     def _upsert_app_state_sql(self) -> str:
@@ -540,15 +540,14 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
         where_scope, scope_params = _build_sybase_scope_where(app_name, user_id, scope_filter)
         escaped_query = _escape_like_pattern(query)
         sql = f"""
-        SELECT
+        SELECT TOP %s
             id, session_id, app_name, user_id, scope, event_id, author, timestamp,
             content_json, content_text, metadata_json, inserted_at
         FROM {_table_ref(self._memory_table)}
         WHERE {where_scope} AND content_text LIKE %s ESCAPE '\\'
         ORDER BY timestamp DESC
-        ROWS LIMIT %s
         """
-        rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%", limit_value))
+        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"))
         return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:
@@ -594,7 +593,7 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
             f"CONSTRAINT {_constraint_ref('uq', self._memory_table, 'event_id')} UNIQUE (event_id)"
             ")"
         )
-        return f"IF OBJECT_ID('{escaped_ref}', 'U') IS NULL EXECUTE('{create_sql}');"
+        return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
     def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
@@ -608,7 +607,7 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
 
     def _drop_memory_table_sql(self) -> "list[str]":
         ref = escape_sql_literal(_table_ref(self._memory_table))
-        return [f"IF OBJECT_ID('{ref}', 'U') IS NOT NULL EXECUTE('DROP TABLE {ref}')"]
+        return [f"IF OBJECT_ID('{ref}') IS NOT NULL EXECUTE('DROP TABLE {ref}')"]
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
@@ -656,7 +655,7 @@ def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: 
         f"CONSTRAINT {_constraint_ref('pk', table, 'id')} PRIMARY KEY (id)"
         ")"
     )
-    return f"IF OBJECT_ID('{escaped_ref}', 'U') IS NULL EXECUTE('{create_sql}');"
+    return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
 
 def _sessions_index_specs(table: str) -> "list[tuple[str, str, str]]":
@@ -684,7 +683,7 @@ def _events_table_ddl(table: str, session_table: str, json_column_type: str) -> 
         f"CONSTRAINT {_constraint_ref('fk', table, 'session')} FOREIGN KEY (session_id) REFERENCES {session_ref}(id)"
         ")"
     )
-    return f"IF OBJECT_ID('{escaped_ref}', 'U') IS NULL EXECUTE('{create_sql}');"
+    return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
 
 def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
@@ -709,7 +708,7 @@ def _app_states_table_ddl(table: str, json_column_type: str) -> str:
         f"CONSTRAINT {_constraint_ref('pk', table, 'app_name')} PRIMARY KEY (app_name)"
         ")"
     )
-    return f"IF OBJECT_ID('{escaped_ref}', 'U') IS NULL EXECUTE('{create_sql}');"
+    return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
 
 def _user_states_table_ddl(table: str, json_column_type: str) -> str:
@@ -724,7 +723,7 @@ def _user_states_table_ddl(table: str, json_column_type: str) -> str:
         f"CONSTRAINT {_constraint_ref('pk', table, 'app_user')} PRIMARY KEY (app_name, user_id)"
         ")"
     )
-    return f"IF OBJECT_ID('{escaped_ref}', 'U') IS NULL EXECUTE('{create_sql}');"
+    return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
 
 def _metadata_table_ddl(table: str) -> str:
@@ -737,7 +736,7 @@ def _metadata_table_ddl(table: str) -> str:
         f"CONSTRAINT {_constraint_ref('pk', table, 'key')} PRIMARY KEY ([key])"
         ")"
     )
-    return f"IF OBJECT_ID('{escaped_ref}', 'U') IS NULL EXECUTE('{create_sql}');"
+    return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
 
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:
@@ -794,15 +793,15 @@ def _events_query(
     if after_timestamp is not None:
         after_clause = " AND timestamp > %s"
         params.append(after_timestamp)
-    limit_clause = ""
+    top_clause = ""
     if limit is not None:
-        limit_clause = "\n    ROWS LIMIT %s"
-        params.append(limit)
+        top_clause = "TOP %s "
+        params.insert(0, limit)
     sql = f"""
-    SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+    SELECT {top_clause}id, app_name, user_id, session_id, invocation_id, timestamp, event_data
     FROM {_table_ref(table)}
     WHERE app_name = %s AND user_id = %s AND session_id = %s{after_clause}
-    ORDER BY timestamp ASC{limit_clause}
+    ORDER BY timestamp ASC
     """
     return sql, tuple(params)
 
@@ -947,13 +946,17 @@ def _session_list_query(
         params.append(user_id)
         where_clause = f"{where_clause} AND user_id = %s"
 
+    top_clause = ""
     page_clause = ""
-    if limit is not None:
+    if limit is not None and offset == 0:
+        top_clause = "TOP %s "
+        params.insert(0, limit)
+    elif limit is not None:
         params.extend((limit, offset))
         page_clause = "\n    ROWS LIMIT %s OFFSET %s"
 
     sql = f"""
-    SELECT id, app_name, user_id, state, create_time, update_time
+    SELECT {top_clause}id, app_name, user_id, state, create_time, update_time
     FROM {_table_ref(session_table)}
     WHERE {where_clause}
     ORDER BY {column} {direction}, id {direction}{page_clause}
