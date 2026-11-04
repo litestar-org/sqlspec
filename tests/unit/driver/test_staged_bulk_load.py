@@ -1,31 +1,30 @@
 """Unit tests for staged bulk load, dialect-aware upsert/merge, type casts, and load_from_records."""
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Literal, cast
 from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pytest
 
-from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.spanner._typing import SpannerTransaction
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sybase import SybaseDriver
 from sqlspec.adapters.sybase._typing import SybaseConnection
+from sqlspec.adapters.sybase.core import default_statement_config as sybase_statement_config
 from sqlspec.driver._storage_helpers import (
     build_drop_stage_table_sql,
     build_stage_merge_sql,
     build_stage_table_ddl,
-    execute_load_from_storage_async,
-    execute_load_from_storage_sync,
-    execute_staged_load_async,
-    execute_staged_load_sync,
     resolve_stage_table_name,
 )
-from sqlspec.storage import StorageBridgeJob, SyncStoragePipeline, create_storage_bridge_job
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.storage import StorageBridgeJob
 
 
 def test_resolve_stage_table_name_auto_and_custom() -> None:
@@ -271,125 +270,159 @@ def test_sqlanywhere_stage_merge_preserves_non_primary_conflict_keys() -> None:
     )
 
 
-class _SapStorageRecorder:
-    dialect = "sybase"
+class _StorageNativeCursor:
+    description = None
+    lastrowid = None
 
-    def __init__(self, *, fail_merge: bool = False) -> None:
-        self.statements: list[str] = []
-        self.scripts: list[str] = []
-        self.fail_merge = fail_merge
+    def __init__(self, connection: "_StorageNativeConnection") -> None:
+        self.connection = connection
+        self.rowcount = 1
+        self.closed = False
+        connection.open_cursors += 1
 
-    def execute(self, statement: str) -> None:
-        self.statements.append(statement)
-        if statement.startswith(("UPDATE", "INSERT", "MERGE")):
-            raise AssertionError("ASE staged upserts must execute through the script boundary")
-
-    def execute_script(self, script: str) -> None:
-        self.scripts.append(script)
-        if self.fail_merge and script.startswith(("UPDATE", "INSERT")):
+    def execute(self, statement: str, parameters: Any = None) -> None:
+        self.connection.statements.append(statement)
+        if self.connection.fail_merge and statement.startswith("UPDATE"):
             raise RuntimeError("native merge failure")
-        self.statements.extend(part.strip() for part in script.split(";") if part.strip())
 
-    def load_from_arrow(self, table: str, source: pa.Table, **kwargs: Any) -> StorageBridgeJob:
-        return create_storage_bridge_job(
-            "completed", {"rows_processed": source.num_rows, "bytes_processed": source.nbytes}
-        )
+    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> None:
+        self.connection.statements.append(statement)
+        self.connection.inserted_rows.extend(tuple(row) for row in parameters)
+        self.rowcount = len(parameters)
 
-    def _storage_pipeline(self) -> SyncStoragePipeline:
-        return SyncStoragePipeline()
+    def fetchall(self) -> list[Any]:
+        return []
+
+    def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            self.connection.open_cursors -= 1
 
 
-class _AsyncSapStorageRecorder:
+class _StorageNativeConnection:
+    in_transaction = True
+
+    def __init__(self, *, fail_merge: bool) -> None:
+        self.fail_merge = fail_merge
+        self.statements: list[str] = []
+        self.inserted_rows: list[tuple[Any, ...]] = []
+        self.open_cursors = 0
+
+    def cursor(self) -> _StorageNativeCursor:
+        return _StorageNativeCursor(self)
+
+    def execute(self, statement: str, parameters: Any = None) -> _StorageNativeCursor:
+        cursor = self.cursor()
+        try:
+            cursor.execute(statement, parameters)
+        except BaseException:
+            cursor.close()
+            raise
+        return cursor
+
+
+class _StorageAsyncNativeCursor:
+    description = None
+    lastrowid = None
+
+    def __init__(self, cursor: _StorageNativeCursor) -> None:
+        self.cursor = cursor
+
+    @property
+    def rowcount(self) -> int:
+        return self.cursor.rowcount
+
+    async def execute(self, statement: str, parameters: Any = None) -> None:
+        self.cursor.execute(statement, parameters)
+
+    async def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> None:
+        self.cursor.executemany(statement, parameters)
+
+    async def close(self) -> None:
+        self.cursor.close()
+
+
+class _StorageAsyncNativeConnection:
+    in_transaction = True
+
+    def __init__(self, connection: _StorageNativeConnection) -> None:
+        self._conn = connection
+
+    async def cursor(self) -> _StorageAsyncNativeCursor:
+        return _StorageAsyncNativeCursor(self._conn.cursor())
+
+    async def _execute(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        return function(*args, **kwargs)
+
+
+class _SybaseAsyncStorageDriver(AiosqliteDriver):
+    __slots__ = ()
+
     dialect = "sybase"
-
-    def __init__(self, recorder: _SapStorageRecorder) -> None:
-        self.recorder = recorder
-
-    async def execute(self, statement: str) -> None:
-        self.recorder.execute(statement)
-
-    async def execute_script(self, script: str) -> None:
-        self.recorder.execute_script(script)
-
-    async def load_from_arrow(self, table: str, source: pa.Table, **kwargs: Any) -> StorageBridgeJob:
-        return self.recorder.load_from_arrow(table, source, **kwargs)
-
-    def _storage_pipeline(self) -> SyncStoragePipeline:
-        return SyncStoragePipeline()
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("from_storage", [False, True], ids=["arrow", "storage"])
 @pytest.mark.parametrize("fail_merge", [False, True], ids=["success", "failure"])
-async def test_sybase_staged_upserts_use_scripts_and_always_cleanup(
+async def test_sybase_staged_upserts_execute_native_inserts_and_always_cleanup(
     tmp_path: Path, asynchronous: bool, from_storage: bool, fail_merge: bool
 ) -> None:
     import pyarrow.parquet as pq
 
     source = pa.table({"id": [1], "value": ["value"]})
-    recorder = _SapStorageRecorder(fail_merge=fail_merge)
-    driver = _AsyncSapStorageRecorder(recorder) if asynchronous else recorder
+    native = _StorageNativeConnection(fail_merge=fail_merge)
+    config = sybase_statement_config.replace(enable_caching=False)
+    features = {"storage_capabilities": {"arrow_import_enabled": True}}
+    driver = (
+        _SybaseAsyncStorageDriver(
+            cast("AiosqliteConnection", _StorageAsyncNativeConnection(native)),
+            statement_config=config,
+            driver_features=features,
+        )
+        if asynchronous
+        else SybaseDriver(cast("SybaseConnection", native), statement_config=config, driver_features=features)
+    )
     source_path = tmp_path / "input.parquet"
     pq.write_table(source, source_path)
 
     async def run_load() -> StorageBridgeJob:
-        if from_storage:
-            if isinstance(driver, _AsyncSapStorageRecorder):
-                return await execute_load_from_storage_async(
-                    driver, "items", [source_path], file_format="parquet", stage_table="staged", conflict_keys=["id"]
+        if isinstance(driver, _SybaseAsyncStorageDriver):
+            if from_storage:
+                return await driver.load_from_storage(
+                    "items", source_path, file_format="parquet", stage_table="staged", conflict_keys=["id"]
                 )
-            return execute_load_from_storage_sync(
-                driver, "items", [source_path], file_format="parquet", stage_table="staged", conflict_keys=["id"]
+            return await driver.load_from_arrow("items", source, stage_table="staged", conflict_keys=["id"])
+        if from_storage:
+            return driver.load_from_storage(
+                "items", source_path, file_format="parquet", stage_table="staged", conflict_keys=["id"]
             )
-        if isinstance(driver, _AsyncSapStorageRecorder):
-            return await execute_staged_load_async(
-                driver, "items", source, raw_loader=driver.load_from_arrow, stage_table="staged", conflict_keys=["id"]
-            )
-        return execute_staged_load_sync(
-            driver, "items", source, raw_loader=driver.load_from_arrow, stage_table="staged", conflict_keys=["id"]
-        )
+        return driver.load_from_arrow("items", source, stage_table="staged", conflict_keys=["id"])
 
     if fail_merge:
-        with pytest.raises(RuntimeError, match="native merge failure"):
+        error_type = RuntimeError if asynchronous else SQLSpecError
+        with pytest.raises(error_type, match="native merge failure"):
             await run_load()
     else:
         result = await run_load()
         assert result.telemetry["rows_processed"] == 1
-        assert [statement.split()[0] for statement in recorder.statements] == ["SELECT", "UPDATE", "INSERT", "DROP"]
-    assert len(recorder.scripts) == 2
-    assert recorder.scripts[0] == "SELECT TOP 0 * INTO staged FROM items"
-    assert recorder.statements[-1] == "DROP TABLE staged"
 
-
-def test_sybase_driver_executes_both_staged_upsert_statements() -> None:
-    statements: list[str] = []
-    cursor = SimpleNamespace(
-        description=None,
-        rowcount=1,
-        execute=lambda statement, parameters=None: statements.append(statement),
-        close=lambda: None,
+    bulk_insert = (
+        'INSERT INTO "staged" ("id", "value") VALUES (?, ?)'
+        if asynchronous
+        else "INSERT INTO [staged] ([id], [value]) VALUES (%s, %s)"
     )
-    connection = SimpleNamespace(cursor=lambda: cursor)
-    driver = SybaseDriver(cast("SybaseConnection", connection))
-    result = execute_staged_load_sync(
-        driver,
-        "items",
-        pa.table({"id": [1], "value": ["value"]}),
-        raw_loader=lambda table, source, **kwargs: create_storage_bridge_job(
-            "completed", {"rows_processed": source.num_rows}
-        ),
-        stage_table="staged",
-        conflict_keys=["id"],
-    )
-
-    assert statements == [
+    expected = [
         "SELECT TOP 0 * INTO staged FROM items",
+        bulk_insert,
         "UPDATE items SET value = stg.value FROM items tgt, staged stg WHERE tgt.id = stg.id",
-        (
+    ]
+    if not fail_merge:
+        expected.append(
             "INSERT INTO items (id, value) SELECT stg.id, stg.value FROM staged stg "
             "WHERE NOT EXISTS (SELECT 1 FROM items tgt WHERE tgt.id = stg.id)"
-        ),
-        "DROP TABLE staged",
-    ]
-    assert result.telemetry["rows_processed"] == 1
+        )
+    expected.append("DROP TABLE staged")
+    assert native.statements == expected
+    assert native.inserted_rows == [(1, "value")]
+    assert native.open_cursors == 0
