@@ -129,6 +129,50 @@ Add `-- param: <name> <type>[?]  <description>` headers immediately below `-- na
 
 Suffixing the type with `?` (such as `str?` or `int?`) marks the parameter optional and defaults omitted keyword arguments to `None` (`NULL`), enabling clean `(:name IS NULL OR name = :name)` filter patterns in pure SQL. Omitting a required parameter raises `SQLSpecError` immediately with the missing parameter name.
 
+<span id="sql-fragments-and-slots"></span>
+
+## Fragments and Slots
+
+Reuse a query's SQL structure with **fragments**, and choose parts of that SQL at retrieval time with **slots**. Both features work with `SQLFileLoader` and `SQLSpec`.
+
+Declare a shared section with `-- fragment: name`, then insert it with `/* include: name */`. In this example, both queries use the same common table expression to select teams in one workspace:
+
+```sql
+--8<-- "docs/examples/sql_files/fragments_and_slots.sql:queries"
+```
+
+A `/* slot: name */` marker reserves a place for SQL text. Put `-- slot: name = default SQL` in the query's leading header block to supply a default. Here, `list_teams` defaults to all teams ordered by ID. The `count_teams` predicate has no default, so callers must fill it.
+
+Save that SQL as `teams.sql` and pass its path as `sql_file` in the following example:
+
+```python
+from pathlib import Path
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.core import SQL
+
+sql_file = Path("teams.sql")
+
+--8<-- "docs/examples/sql_files/fragments_and_slots.py:example"
+```
+
+The default query returns the two teams in workspace 42. Changing `ordering` puts SQLSpec first. Filling `predicates` with the bound `SQL` value selects SQLSpec, and the count query returns `1`. The third team belongs to another workspace and stays outside both results.
+
+Pass slot values to `get_sql()`, then pass the query's remaining data values to `session.select()` or another execution method. A `SQL` slot carries its own named bindings; `team_name` travels with the predicate while `workspace_id` is bound at execution.
+
+### Choosing Safe Slot Values
+
+Slots accept trusted SQL strings, SQLGlot expressions, and `SQL` objects. Strings are inserted as SQL text. Use a `SQL` object with named placeholders for user data, as shown above. Choose ordering expressions and identifiers from trusted code or an allowlist.
+
+A missing required slot or unknown slot name raises `SQLSlotError`. Positional bindings and statement filters on a `SQL` slot also raise this error. Apply filters to the completed statement returned by `get_sql()` instead.
+
+Use distinct names for slot bindings and the outer query's placeholders. For example, the predicate uses `team_name`, while the shared fragment uses `workspace_id`. Reusing an outer placeholder name in a bound slot raises `SQLSlotError`.
+
+Fragments may include other fragments, and a fragment may contain slot markers. Defaults belong to the named query's header; fragments cannot declare `-- slot:`, `-- param:`, or `-- dialect:` headers. Load all referenced fragments before retrieving a query.
+
+For namespaced files, lookup rules, inspection methods, and cache behavior, see the [loader composition reference](../reference/loader.md#composition-rules).
+
 ## Composing Dynamic `WHERE` Clauses onto Named SQL
 
 Static `.sql` files often need optional runtime predicates for search, tenant scoping, or pagination. Because `spec.get_sql(...)` returns an immutable `SQL` statement object, calling `.where(...)`, `.where_eq(...)`, `.where_like(...)`, or `.paginate(...)` returns a new derived `SQL` instance without mutating the cached base template:

@@ -1083,10 +1083,10 @@ important operational fixes.
 
 * SQL file loader supports reusable SQL sections via `-- fragment: name` directives spliced
   with `/* include: name */`, and dynamic fill points via `/* slot: name */` comments.
-  Slots accept default fallbacks via `-- slot: name = default` and can be populated at load time
+  Slots accept default fallbacks via `-- slot: name = default` and can be populated at retrieval time
   via `loader.get_sql(name, **slots)` or `spec.get_sql(name, **slots)` using strings,
   sqlglot expressions, or `SQL` instances with parameter merging.
-  See [SQL fragments and slots](learn/sql-files.md).
+  See [SQL fragments and slots](learn/sql-files.md#fragments-and-slots).
   ([#763](https://github.com/litestar-org/sqlspec/issues/763))
 
 * DuckDB transfers object-store data natively without materializing Python Arrow tables.
