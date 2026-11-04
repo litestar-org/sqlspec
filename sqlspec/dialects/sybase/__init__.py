@@ -34,7 +34,7 @@ class SybaseTokenizer(TSQL.Tokenizer):
 
     KEYWORDS = {
         **TSQL.Tokenizer.KEYWORDS,
-        "BIGDATETIME": TokenType.DATETIME,
+        "BIGDATETIME": TokenType.DATETIME2,
         "BIGTIME": TokenType.TIME,
         "BLOB": TokenType.BLOB,
     }
