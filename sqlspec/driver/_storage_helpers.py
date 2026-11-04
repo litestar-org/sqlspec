@@ -27,6 +27,7 @@ from sqlspec.utils.arrow_helpers import (
     iter_pgcopy_binary_chunks_async,
     records_to_arrow_table,
 )
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -211,14 +212,8 @@ _MYSQL_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({
     "asyncmy",
     "mysqlconnector",
 })
-_MSSQL_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({
-    "mssql",
-    "tsql",
-    "pymssql",
-    "mssql_python",
-    "sybase",
-    "sqlanywhere",
-})
+_MSSQL_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({"mssql", "tsql", "pymssql", "mssql_python"})
+_SAP_DIALECTS: Final[frozenset[str]] = frozenset({"sybase", "sqlanywhere"})
 _ORACLE_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "oracledb"})
 _CREATE_UNIQUE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+UNIQUE\s+INDEX\s+(?!CONCURRENTLY\b)", re.IGNORECASE)
 _CREATE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+INDEX\s+(?!CONCURRENTLY\b)", re.IGNORECASE)
@@ -260,6 +255,20 @@ def init_spawn_worker_thread_budget(max_workers: int, cpu_count: int | None = No
 def build_checkpoint_table_ddl(dialect: str, checkpoint_table: str) -> str:
     """Build DDL to create a multi-shard ingestion checkpoint table if it does not exist."""
     norm = (dialect or "").lower().strip()
+    if norm == "sybase":
+        create_sql = (
+            f"CREATE TABLE {checkpoint_table} ("
+            "phase VARCHAR(128) NOT NULL, "
+            "shard_uri VARCHAR(1024) NOT NULL, "
+            "rows_loaded BIGINT NOT NULL, "
+            "bytes_processed BIGINT NOT NULL, "
+            "duration_s FLOAT NOT NULL, "
+            "completed_at BIGDATETIME DEFAULT GETDATE(), "
+            "PRIMARY KEY (phase, shard_uri))"
+        )
+        object_name = checkpoint_table.replace("'", "''")
+        escaped_create = create_sql.replace("'", "''")
+        return f"IF OBJECT_ID('{object_name}') IS NULL EXECUTE ('{escaped_create}')"
     if norm in _MSSQL_FAMILY_DIALECTS:
         return (
             f"IF OBJECT_ID('{checkpoint_table}', 'U') IS NULL "
@@ -360,7 +369,7 @@ def build_stage_table_ddl(
         return [f"CREATE TEMPORARY TABLE IF NOT EXISTS {stage_table} LIKE {target_table}"]
     if norm in _ORACLE_FAMILY_DIALECTS:
         return [f"CREATE TABLE {stage_table} NOLOGGING AS SELECT * FROM {target_table} WHERE 1=0"]
-    if norm in _MSSQL_FAMILY_DIALECTS:
+    if norm in _MSSQL_FAMILY_DIALECTS or norm in _SAP_DIALECTS:
         return [f"SELECT TOP 0 * INTO {stage_table} FROM {target_table}"]
     if norm == "db2":
         return [f"CREATE TABLE {stage_table} AS (SELECT * FROM {target_table}) WITH NO DATA"]
@@ -419,6 +428,27 @@ def build_stage_merge_sql(
         )
 
     on_clause = " AND ".join(f"tgt.{key} = stg.{key}" for key in conflict_keys)
+    if norm == "sybase":
+        stage_values = ", ".join(
+            f"CAST(stg.{col} AS {type_casts[col]})" if (type_casts and col in type_casts) else f"stg.{col}"
+            for col in columns
+        )
+        insert_sql = (
+            f"INSERT INTO {target_table} ({col_list}) SELECT {stage_values} FROM {stage_table} stg "
+            f"WHERE NOT EXISTS (SELECT 1 FROM {target_table} tgt WHERE {on_clause})"
+        )
+        if on_conflict == "nothing" or not update_columns:
+            return insert_sql
+        assignments = ", ".join(
+            f"{col} = CAST(stg.{col} AS {type_casts[col]})"
+            if (type_casts and col in type_casts)
+            else f"{col} = stg.{col}"
+            for col in update_columns
+        )
+        return (
+            f"UPDATE {target_table} SET {assignments} "
+            f"FROM {target_table} tgt, {stage_table} stg WHERE {on_clause}; {insert_sql}"
+        )
     matched_clause = ""
     if on_conflict == "update" and update_columns:
         set_pairs = ", ".join(
@@ -440,7 +470,7 @@ def build_stage_merge_sql(
 def build_drop_stage_table_sql(dialect: str, stage_table: str) -> str:
     """Build SQL statement to drop a staging table."""
     norm = (dialect or "").lower().strip()
-    if norm in (_ORACLE_FAMILY_DIALECTS | {"db2"}):
+    if norm in (_ORACLE_FAMILY_DIALECTS | {"db2", "sybase"}):
         return f"DROP TABLE {stage_table}"
     return f"DROP TABLE IF EXISTS {stage_table}"
 
@@ -486,6 +516,13 @@ def build_drop_index_sql(
     if not idx_name:
         return None
     resolved_schema = schema or (str(index_meta.get("schema_name") or "").strip() or None)
+    if norm in _SAP_DIALECTS:
+        table_parts = split_qualified_identifier(table)
+        if len(table_parts) == 1 and resolved_schema:
+            table_parts = (*split_qualified_identifier(resolved_schema), *table_parts)
+        quoted_parts = [quote_identifier(part) for part in table_parts]
+        quoted_parts.append(quote_identifier(idx_name))
+        return f"DROP INDEX {'.'.join(quoted_parts)}"
     if norm in _MSSQL_FAMILY_DIALECTS:
         qualified_table = f"[{resolved_schema}].[{table}]" if resolved_schema and "." not in table else f"[{table}]"
         return f"DROP INDEX [{idx_name}] ON {qualified_table}"
@@ -538,7 +575,14 @@ def build_create_index_sql(
         resolved_schema = schema or (str(index_meta.get("schema_name") or "").strip() or None)
         is_unique = bool(index_meta.get("is_unique") or index_meta.get("unique"))
         unique_kw = "UNIQUE " if is_unique else ""
-        if norm in _MSSQL_FAMILY_DIALECTS:
+        if norm in _SAP_DIALECTS:
+            table_parts = split_qualified_identifier(table)
+            if len(table_parts) == 1 and resolved_schema:
+                table_parts = (*split_qualified_identifier(resolved_schema), *table_parts)
+            qualified_table = ".".join(quote_identifier(part) for part in table_parts)
+            quoted_index = quote_identifier(idx_name)
+            sql_text = f"CREATE {unique_kw}INDEX {quoted_index} ON {qualified_table} ({col_list})"
+        elif norm in _MSSQL_FAMILY_DIALECTS:
             qualified_table = f"[{resolved_schema}].[{table}]" if resolved_schema and "." not in table else f"[{table}]"
             sql_text = f"CREATE {unique_kw}INDEX [{idx_name}] ON {qualified_table} ({col_list})"
         elif norm in _MYSQL_FAMILY_DIALECTS:
@@ -771,7 +815,10 @@ def execute_staged_load_sync(
                 exclude_update_columns=exclude_update_columns,
                 type_casts=type_casts,
             )
-            driver.execute(merge_sql)
+            if dialect == "sybase" and conflict_keys:
+                driver.execute_script(merge_sql)
+            else:
+                driver.execute(merge_sql)
         job.telemetry["destination"] = table
         return job
     finally:
@@ -853,7 +900,10 @@ async def execute_staged_load_async(
                 exclude_update_columns=exclude_update_columns,
                 type_casts=type_casts,
             )
-            await driver.execute(merge_sql)
+            if dialect == "sybase" and conflict_keys:
+                await driver.execute_script(merge_sql)
+            else:
+                await driver.execute(merge_sql)
         job.telemetry["destination"] = table
         return job
     finally:
@@ -1041,7 +1091,10 @@ def execute_load_from_storage_sync(
                 type_casts=type_casts,
             )
             w0 = perf_counter()
-            driver.execute(merge_sql)
+            if dialect == "sybase" and conflict_keys:
+                driver.execute_script(merge_sql)
+            else:
+                driver.execute(merge_sql)
             write_duration += perf_counter() - w0
     finally:
         if resolved_stage is not None and drop_stage_table:
@@ -1226,7 +1279,10 @@ async def execute_load_from_storage_async(
                 type_casts=type_casts,
             )
             w0 = perf_counter()
-            await driver.execute(merge_sql)
+            if dialect == "sybase" and conflict_keys:
+                await driver.execute_script(merge_sql)
+            else:
+                await driver.execute(merge_sql)
             write_duration += perf_counter() - w0
     finally:
         if resolved_stage is not None and drop_stage_table:

@@ -13,6 +13,7 @@ from sqlspec.utils.arrow_helpers import (
     convert_dict_to_arrow,
     convert_dict_to_arrow_with_schema,
     sql_type_for_category,
+    sql_type_from_arrow_type,
 )
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
@@ -472,3 +473,38 @@ def test_coerce_arrow_batches_accepts_table_record_batch_and_arrow_result() -> N
     cols_res, iter_res = coerce_arrow_batches(arrow_result)
     assert cols_res == ["id", "name"]
     assert [b.num_rows for b in iter_res] == [2, 2, 1]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "timezone", "expected"),
+    [
+        ("sybase", None, "BIGDATETIME"),
+        ("sybase", "UTC", "BIGDATETIME"),
+        ("sqlanywhere", None, "TIMESTAMP"),
+        ("sqlanywhere", "UTC", "TIMESTAMP WITH TIME ZONE"),
+    ],
+)
+def test_sap_arrow_timestamp_types(dialect: str, timezone: str | None, expected: str) -> None:
+    import pyarrow as pa
+
+    arrow_type = pa.timestamp("us", tz=timezone) if timezone is not None else pa.timestamp("us")
+    assert sql_type_from_arrow_type(arrow_type, dialect) == expected
+    assert sql_type_for_category("timestamptz" if timezone else "timestamp", dialect) == expected
+
+
+@pytest.mark.parametrize("dialect", ["sybase", "sqlanywhere"])
+def test_sap_key_text_is_bounded_and_indexable(dialect: str) -> None:
+    assert sql_type_for_category("key_text", dialect) == "VARCHAR(255)"
+
+
+@pytest.mark.parametrize(("dialect", "maximum"), [("sybase", 38), ("sqlanywhere", 127)])
+def test_sap_decimal_precision_keeps_exact_values_and_rejects_overflow(dialect: str, maximum: int) -> None:
+    import pyarrow as pa
+
+    assert sql_type_for_category("decimal", dialect, precision=maximum, scale=4) == f"DECIMAL({maximum}, 4)"
+    assert sql_type_from_arrow_type(pa.decimal128(38, 4), dialect) == "DECIMAL(38, 4)"
+    with pytest.raises(SQLBuilderError, match=f"maximum precision {maximum} supported by {dialect}"):
+        sql_type_for_category("decimal", dialect, precision=maximum + 1, scale=4)
+    if dialect == "sybase":
+        with pytest.raises(SQLBuilderError, match="maximum precision 38 supported by sybase"):
+            sql_type_from_arrow_type(pa.decimal256(50, 4), dialect)

@@ -89,19 +89,31 @@ _PLAIN_CATEGORY_TYPES: "dict[str, str]" = {
     "time": "TIME",
     "interval": "INTERVAL",
 }
-_NAIVE_TIMESTAMP_TYPES: "dict[str, str]" = {"mssql": "DATETIME2(6)", "bigquery": "DATETIME"}
+_NAIVE_TIMESTAMP_TYPES: "dict[str, str]" = {"mssql": "DATETIME2(6)", "bigquery": "DATETIME", "sybase": "BIGDATETIME"}
 _AWARE_TIMESTAMP_TYPES: "dict[str, str]" = {
     "postgres": "TIMESTAMP WITH TIME ZONE",
     "cockroachdb": "TIMESTAMPTZ",
     "duckdb": "TIMESTAMP WITH TIME ZONE",
     "oracle": "TIMESTAMP WITH TIME ZONE",
     "mssql": "DATETIMEOFFSET(6)",
+    "sybase": "BIGDATETIME",
+    "sqlanywhere": "TIMESTAMP WITH TIME ZONE",
 }
-_BOUNDED_KEY_TEXT_DIALECTS: "frozenset[str]" = frozenset({"mysql", "mariadb", "oracle", "mssql", "db2"})
+_BOUNDED_KEY_TEXT_DIALECTS: "frozenset[str]" = frozenset({
+    "mysql",
+    "mariadb",
+    "oracle",
+    "mssql",
+    "db2",
+    "sybase",
+    "sqlanywhere",
+})
 _KEY_TEXT_LENGTH = 255
 _DEFAULT_DECIMAL_PRECISION = 38
 _DEFAULT_DECIMAL_SCALE = 9
 _DECIMAL_MAX_PRECISION: "dict[str, int]" = {
+    "sybase": 38,
+    "sqlanywhere": 127,
     "duckdb": 38,
     "mssql": 38,
     "oracle": 38,

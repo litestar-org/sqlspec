@@ -38,9 +38,40 @@ Adapters with native columnar wire protocols—including **DuckDB**, **ADBC**, *
 
 Convert an `ArrowResult` to DataFrame libraries in one call:
 
-- `arrow_result.data`: Underlying `pyarrow.Table` (when `return_format="table"`) or `RecordBatchReader` (`return_format="batches"`).
+- `arrow_result.data`: Underlying `pyarrow.Table` (when `return_format="table"`) or `RecordBatchReader` (`return_format="reader"`).
 - `arrow_result.to_polars()`: Converts to a `polars.DataFrame` (`uv add "sqlspec[polars]"`).
 - `arrow_result.to_pandas()`: Converts to a `pandas.DataFrame` (`uv add "sqlspec[pandas]"`).
+
+### Empty Results and Explicit Schemas
+
+Row-based drivers keep column names when a query has no rows. If type hints are absent, each empty column has the Arrow `null` type. Set `arrow_schema=` to choose each column's type:
+
+```python
+import pyarrow as pa
+
+with spec.provide_session(config) as session:
+    empty_result = session.select_to_arrow(
+        "SELECT host, cpu_pct FROM metrics WHERE 1 = 0",
+        arrow_schema=pa.schema([("host", pa.string()), ("cpu_pct", pa.float64())]),
+    )
+```
+
+Empty `table`, `batch`, and `reader` results keep this schema. Empty `batches` results are an empty list. Exports keep column names. Parquet and Arrow IPC keep the set types; CSV keeps the header names.
+
+### SAP Column Types and Staged Loads
+
+Arrow types map to these SAP column types:
+
+| Arrow category | SAP ASE | SAP SQL Anywhere |
+| --- | --- | --- |
+| Timestamp without time zone | `BIGDATETIME` | `TIMESTAMP` |
+| Timestamp with time zone | `BIGDATETIME` | `TIMESTAMP WITH TIME ZONE` |
+| Text used in a key | `VARCHAR(255)` | `VARCHAR(255)` |
+| Maximum decimal precision | 38 | 127 |
+
+ASE `TIMESTAMP` stores a row version. Use `BIGDATETIME` for dates and times. This type cannot keep a time zone. If a decimal is too wide, SQLSpec raises `SQLBuilderError`. Cast it to a smaller decimal or to text.
+
+With `conflict_keys`, ASE loads update rows that match, then insert new rows. SQL Anywhere uses `MERGE` and can match keys other than the primary key. Set `on_conflict="nothing"` to keep rows that match. Use `exclude_update_columns` to keep a column's old value. These steps do not lock out other writers.
 
 ## Unified Object Storage (`StorageRegistry`)
 

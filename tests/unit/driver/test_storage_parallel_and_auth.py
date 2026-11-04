@@ -306,3 +306,30 @@ def test_duckdb_secret_value_provider_and_gcs_bearer_token_and_globs() -> None:
     assert parquet_glob_sql is not None and "read_parquet" in parquet_glob_sql.lower()
     assert csv_glob_sql is not None and "read_csv" in csv_glob_sql.lower()
     assert jsonl_glob_sql is not None and "read_json" in jsonl_glob_sql.lower()
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        (
+            "sybase",
+            (
+                "IF OBJECT_ID('audit.checkpoints') IS NULL EXECUTE ('CREATE TABLE audit.checkpoints ("
+                "phase VARCHAR(128) NOT NULL, shard_uri VARCHAR(1024) NOT NULL, "
+                "rows_loaded BIGINT NOT NULL, bytes_processed BIGINT NOT NULL, duration_s FLOAT NOT NULL, "
+                "completed_at BIGDATETIME DEFAULT GETDATE(), PRIMARY KEY (phase, shard_uri))')"
+            ),
+        ),
+        (
+            "sqlanywhere",
+            (
+                "CREATE TABLE IF NOT EXISTS audit.checkpoints ("
+                "phase VARCHAR(128) NOT NULL, shard_uri VARCHAR(1024) NOT NULL, "
+                "rows_loaded BIGINT NOT NULL, bytes_processed BIGINT NOT NULL, duration_s DOUBLE PRECISION NOT NULL, "
+                "completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (phase, shard_uri))"
+            ),
+        ),
+    ],
+)
+def test_sap_checkpoint_ddl_uses_native_types_and_existence_syntax(dialect: str, expected: str) -> None:
+    assert build_checkpoint_table_ddl(dialect, "audit.checkpoints") == expected

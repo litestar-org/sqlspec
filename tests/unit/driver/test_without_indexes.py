@@ -109,3 +109,24 @@ async def test_async_without_indexes_and_load_from_arrow_drop_indexes(tmp_path: 
             assert "idx_async_orders_cust" in final_indexes
     finally:
         await config.close_pool()
+
+
+@pytest.mark.parametrize("dialect", ["sybase", "sqlanywhere"])
+@pytest.mark.parametrize(
+    ("table", "schema", "qualified"),
+    [
+        ("orders", None, '"orders"'),
+        ("orders", "audit", '"audit"."orders"'),
+        ("audit.orders", None, '"audit"."orders"'),
+        ("[audit].[order.items]", None, '"audit"."order.items"'),
+        ('"audit"."order.items"', None, '"audit"."order.items"'),
+    ],
+)
+def test_sap_indexes_quote_owner_table_and_index_separately(
+    dialect: str, table: str, schema: str | None, qualified: str
+) -> None:
+    metadata = {"index_name": 'idx"value', "columns": ["value"]}
+    assert build_drop_index_sql(dialect, metadata, table, schema) == f'DROP INDEX {qualified}."idx""value"'
+    assert build_create_index_sql(dialect, metadata, table, schema=schema) == (
+        f'CREATE INDEX "idx""value" ON {qualified} (value)'
+    )
