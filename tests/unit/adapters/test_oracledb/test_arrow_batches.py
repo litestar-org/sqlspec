@@ -19,13 +19,17 @@ if TYPE_CHECKING:
 
 
 class _OracleBatchConnection:
-    def __init__(self) -> None:
+    def __init__(self, tables: list[pa.Table] | None = None) -> None:
         self.fetch_batch_calls: list[dict[str, object]] = []
+        self.tables = (
+            tables
+            if tables is not None
+            else [pa.table({"ID": [1, 2], "VALUE": [10, 20]}), pa.table({"ID": [3], "VALUE": [30]})]
+        )
 
     def fetch_df_batches(self, **kwargs: object) -> Iterator[pa.Table]:
         self.fetch_batch_calls.append(kwargs)
-        yield pa.table({"ID": [1, 2], "VALUE": [10, 20]})
-        yield pa.table({"ID": [3], "VALUE": [30]})
+        yield from self.tables
 
     def fetch_df_all(self, **_kwargs: object) -> object:
         msg = "reader and batches formats should use fetch_df_batches(), not fetch_df_all()"
@@ -42,13 +46,18 @@ class _OracleAllConnection:
 
 
 class _OracleAsyncBatchConnection:
-    def __init__(self) -> None:
+    def __init__(self, tables: list[pa.Table] | None = None) -> None:
         self.fetch_batch_calls: list[dict[str, object]] = []
+        self.tables = (
+            tables
+            if tables is not None
+            else [pa.table({"ID": [1, 2], "VALUE": [10, 20]}), pa.table({"ID": [3], "VALUE": [30]})]
+        )
 
     async def fetch_df_batches(self, **kwargs: object) -> AsyncIterator[pa.Table]:
         self.fetch_batch_calls.append(kwargs)
-        yield pa.table({"ID": [1, 2], "VALUE": [10, 20]})
-        yield pa.table({"ID": [3], "VALUE": [30]})
+        for table in self.tables:
+            yield table
 
     async def fetch_df_all(self, **_kwargs: object) -> object:
         msg = "reader and batches formats should use fetch_df_batches(), not fetch_df_all()"
@@ -80,6 +89,61 @@ def test_sync_select_to_arrow_batches_uses_fetch_df_batches() -> None:
     assert connection.fetch_batch_calls[0]["size"] == 2
     assert connection.fetch_batch_calls[0]["fetch_decimals"] is True
     assert "fetch_lobs" not in connection.fetch_batch_calls[0]
+
+
+@pytest.mark.parametrize("use_schema", (False, True))
+def test_sync_empty_native_reader_keeps_schema(use_schema: bool) -> None:
+    native_schema = pa.schema(
+        [pa.field("ID", pa.int64(), metadata={b"source": b"native"}), pa.field("VALUE", pa.decimal128(9, 2))],
+        metadata={b"table": b"example"},
+    )
+    expected = pa.schema(
+        [pa.field("id", pa.int64(), metadata={b"source": b"native"}), pa.field("value", pa.decimal128(9, 2))],
+        metadata={b"table": b"example"},
+    )
+    requested_schema = (
+        pa.schema([("id", pa.int32()), ("value", pa.decimal128(12, 4))], metadata={b"source": b"caller"})
+        if use_schema
+        else None
+    )
+    connection = _OracleBatchConnection([pa.Table.from_pylist([], schema=native_schema)])
+    driver = OracleSyncDriver(
+        cast("OracleSyncConnection", connection), driver_features={"enable_lowercase_column_names": True}
+    )
+
+    result = driver.select_to_arrow(
+        "SELECT id, value FROM example WHERE 1 = 0", return_format="reader", arrow_schema=requested_schema
+    )
+    reader = result.get_data()
+
+    assert reader.schema.equals(requested_schema if use_schema else expected, check_metadata=True)
+    assert reader.read_all().num_rows == 0
+    assert len(connection.fetch_batch_calls) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_native_reader_without_frames_honors_explicit_schema(is_async: bool) -> None:
+    schema = pa.schema([("id", pa.int64()), ("value", pa.string())], metadata={b"source": b"caller"})
+    if is_async:
+        async_connection = _OracleAsyncBatchConnection([])
+        driver = OracleAsyncDriver(cast("OracleAsyncConnection", async_connection))
+        result = await driver.select_to_arrow(
+            "SELECT id, value FROM example WHERE 1 = 0", return_format="reader", arrow_schema=schema
+        )
+        calls = async_connection.fetch_batch_calls
+    else:
+        connection = _OracleBatchConnection([])
+        result = OracleSyncDriver(cast("OracleSyncConnection", connection)).select_to_arrow(
+            "SELECT id, value FROM example WHERE 1 = 0", return_format="reader", arrow_schema=schema
+        )
+        calls = connection.fetch_batch_calls
+    reader = result.get_data()
+
+    assert reader.schema.equals(schema, check_metadata=True)
+    assert reader.read_all().num_rows == 0
+    assert result.rows_affected == 0
+    assert len(calls) == 1
 
 
 def test_sync_select_to_arrow_table_omits_fetch_lobs_from_fetch_df_all() -> None:

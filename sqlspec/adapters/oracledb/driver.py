@@ -1251,10 +1251,15 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
                 column_names = normalize_column_names(batch_table.column_names, self.driver_features)
                 if column_names != batch_table.column_names:
-                    batch_table = batch_table.rename_columns(column_names)
+                    batch_table = batch_table.rename_columns(column_names).replace_schema_metadata(
+                        batch_table.schema.metadata
+                    )
                 if arrow_schema is not None:
                     batch_table = batch_table.cast(arrow_schema)
-                yield from batch_table.to_batches()
+                if batch_table.num_rows:
+                    yield from batch_table.to_batches()
+                else:
+                    yield import_pyarrow().RecordBatch.from_pylist([], schema=batch_table.schema)
         except OracleError as exc:
             raise create_mapped_exception(exc) from exc
 
@@ -1760,7 +1765,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 rows_affected = sum(batch.num_rows for batch in record_batches)
                 pa = import_pyarrow()
                 if batch_schema is None:
-                    batch_schema = pa.schema([])
+                    batch_schema = arrow_schema if arrow_schema is not None else pa.schema([])
                 arrow_data: object
                 if return_format == "reader":
                     arrow_data = pa.RecordBatchReader.from_batches(batch_schema, record_batches)
