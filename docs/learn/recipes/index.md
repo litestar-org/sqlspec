@@ -9,7 +9,7 @@ Production services combine SQLSpec's session primitives, filters, storage pipel
 | [Service Layer](service-layer.md) | Encapsulate domain reads, existence checks, pagination, and atomic write transactions without leaking raw session lifecycles into route handlers or CLI callers. | `SQLSpecSyncService`, `SQLSpecAsyncService`, `begin_transaction`, `get_one`, `exists`, `paginate` |
 | [Multi-Tenancy](multi-tenancy.md) | Isolate tenant data across dedicated databases (`bind_key`), per-tenant schemas (`search_path` / `current_schema`), or row-level predicates (`tenant_id`). | `SQLSpec`, `bind_key`, `provide_session`, `StatementFilter`, PostgreSQL `SET LOCAL` |
 | [Health Checks](health-checks.md) | Expose bounded-timeout Kubernetes liveness and readiness probes without exhausting connection pools or polluting application telemetry. | `provide_session`, `select_value`, `asyncio.timeout`, `SamplingConfig` |
-| [ETL and Bulk Ingest](etl-and-bulk-ingest.md) | Move analytical or operational datasets between databases and Parquet/Arrow object storage without exhausting worker memory. | `select_stream`, `execute_many`, `select_to_arrow`, `select_to_storage`, `load_from_arrow`, `load_from_storage` |
+| [ETL and Bulk Ingest](etl-and-bulk-ingest.md) | Move analytical or operational datasets between databases and Parquet/Arrow object storage without exhausting worker memory. | `select_stream`, `execute_many`, `select_to_arrow`, `select_to_storage`, `load_from_arrow`, `load_from_records`, `load_from_storage`, `without_indexes` |
 
 ## Choosing When to Introduce a Pattern
 

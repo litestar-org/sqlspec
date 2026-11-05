@@ -102,7 +102,7 @@ Validate the resolved schema slug against a strict identifier allowlist (`^[a-z0
 - **IBM Db2**: `Db2ConnectionParams(current_schema=...)` or `SET CURRENT SCHEMA`.
 - **Migrations**: Use `migration_config={"default_schema": tenant_schema, "version_table_schema": "admin"}` to upgrade each tenant schema deterministically.
 
-## Database-per-Tenant with bind_key
+## Database-per-Tenant with Bind Keys
 
 For dedicated enterprise tenants, register one adapter configuration per tenant `bind_key` on `SQLSpec`:
 

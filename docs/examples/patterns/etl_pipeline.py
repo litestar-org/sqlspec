@@ -3,76 +3,76 @@
 import tempfile
 from pathlib import Path
 
+# --8<-- [start:example]
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
-__all__ = ("main",)
+
+def run_etl_pipeline(base_dir: Path) -> float:
+    """Extract completed orders and batch-load revenue totals."""
+    spec = SQLSpec()
+    src_cfg = {"database": str(base_dir / "source.db")}
+    dst_cfg = {"database": str(base_dir / "target.db")}
+    source_config = spec.add_config(SqliteConfig(connection_config=src_cfg))
+    target_config = spec.add_config(SqliteConfig(connection_config=dst_cfg))
+
+    with spec.provide_session(source_config) as session:
+        session.execute(
+            """
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY,
+                amount REAL,
+                status TEXT
+            )
+            """
+        )
+        rows = [(100.0, "complete"), (50.0, "pending"), (200.0, "complete")]
+        session.execute_many(
+            """
+            INSERT INTO orders (amount, status)
+            VALUES (?, ?)
+            """,
+            rows,
+        )
+        completed = session.select(
+            """
+            SELECT id, amount
+            FROM orders
+            WHERE status = ?
+            """,
+            "complete",
+        )
+
+    with spec.provide_session(target_config) as session:
+        session.execute(
+            """
+            CREATE TABLE revenue (
+                order_id INTEGER,
+                amount REAL
+            )
+            """
+        )
+        session.execute_many(
+            """
+            INSERT INTO revenue (order_id, amount)
+            VALUES (?, ?)
+            """,
+            [(row["id"], row["amount"]) for row in completed],
+        )
+        total = float(session.select_value("SELECT SUM(amount) FROM revenue"))
+
+    return total
+
+
+# --8<-- [end:example]
+
+__all__ = ("main", "run_etl_pipeline")
 
 
 def main() -> float:
     """Run a two-database SQLite ETL pipeline inside a temporary directory."""
-    spec = SQLSpec()
-
     with tempfile.TemporaryDirectory() as tmp_dir:
-        base_dir = Path(tmp_dir)
-        source_config = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "source.db")}))
-        target_config = spec.add_config(SqliteConfig(connection_config={"database": str(base_dir / "target.db")}))
-
-        with spec.provide_session(source_config) as session:
-            session.execute(
-                """
-                CREATE TABLE orders (
-                    id INTEGER PRIMARY KEY,
-                    amount REAL,
-                    status TEXT
-                )
-                """
-            )
-            session.execute_many(
-                """
-                INSERT INTO orders (amount, status)
-                VALUES (?, ?)
-                """,
-                [(100.0, "complete"), (50.0, "pending"), (200.0, "complete")],
-            )
-
-        # --8<-- [start:example]
-        with spec.provide_session(source_config) as session:
-            completed = session.select(
-                """
-                SELECT id, amount
-                FROM orders
-                WHERE status = ?
-                """,
-                "complete",
-            )
-
-        with spec.provide_session(target_config) as session:
-            session.execute(
-                """
-                CREATE TABLE revenue (
-                    order_id INTEGER,
-                    amount REAL
-                )
-                """
-            )
-            session.execute_many(
-                """
-                INSERT INTO revenue (order_id, amount)
-                VALUES (?, ?)
-                """,
-                [(row["id"], row["amount"]) for row in completed],
-            )
-            total = float(
-                session.select_value(
-                    """
-                    SELECT SUM(amount)
-                    FROM revenue
-                    """
-                )
-            )
-        # --8<-- [end:example]
-
+        total = run_etl_pipeline(Path(tmp_dir))
     assert total == 300.0
     return total
 
