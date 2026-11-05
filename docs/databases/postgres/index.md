@@ -8,7 +8,7 @@ SQLSpec provides three dedicated PostgreSQL adapters—[`asyncpg`](asyncpg.md), 
 | --- | --- | --- | --- | --- |
 | [`AsyncpgConfig`](asyncpg.md) | `sqlspec[asyncpg]` | Async | `asyncpg.Pool` (binary protocol) | Lowest-latency pure `asyncio` OLTP services using PostgreSQL's binary wire protocol. |
 | [`PsycopgAsyncConfig` / `PsycopgSyncConfig`](psycopg.md) | `sqlspec[psycopg]` | Sync & Async | `psycopg_pool` (`ConnectionPool` / `AsyncConnectionPool` / `NullConnectionPool`) | Services mixing sync and `asyncio` pools, libpq parity, serverless `NullConnectionPool`, or streaming `COPY`. |
-| [`PsqlpyConfig`](psqlpy.md) | `sqlspec[psqlpy]` | Async | Rust Tokio `ConnectionPool` | High-concurrency `asyncio` workloads using wire-level transaction pipelining and native `PgVector` bindings. |
+| [`PsqlpyConfig`](psqlpy.md) | `sqlspec[psqlpy]` | Async | Rust Tokio `ConnectionPool` | High-concurrency `asyncio` workloads that benefit from a Rust connection pool and native `PgVector` bindings. |
 
 For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-connector`) or `sqlspec[alloydb]` (`google-cloud-alloydb-connector`).
 
@@ -173,7 +173,7 @@ With both settings active, HTTP traffic uses PgBouncer safely without prepared-s
 
 - **Parameter Translation**: Write `:named` parameters in SQL or `.sql` files; SQLSpec compiles them to `$1, $2` for `asyncpg`/`psqlpy` and `%s` / `%(name)s` for `psycopg` while preserving PostgreSQL `::type` casts.
 - **JSONB Key Existence Operator**: Prefer `jsonb_exists(payload, :key)` or named `:key` placeholders when checking key existence so `?` is never ambiguous with positional qmark parameter styles.
-- **Exception Hierarchy**: SQLSTATE codes (`23505`, `23503`, `23502`, `23514`, `40P01`, `40001`, `57014`, `42501`) map consistently to `UniqueViolationError`, `ForeignKeyViolationError`, `NotNullViolationError`, `CheckViolationError`, `DeadlockError`, `SerializationConflictError`, `QueryTimeoutError`, and `PermissionDeniedError`.
+- **Exception Hierarchy**: SQLSTATE codes `23505`, `23503`, `23502`, `23514`, `40P01`, `40001`, and `42501` map consistently to `UniqueViolationError`, `ForeignKeyViolationError`, `NotNullViolationError`, `CheckViolationError`, `DeadlockError`, `SerializationConflictError`, and `PermissionDeniedError`. `57014` (query canceled) maps to `QueryTimeoutError` when the server reports a statement timeout and to `OperationCancelledError` otherwise.
 
 ## See Also
 

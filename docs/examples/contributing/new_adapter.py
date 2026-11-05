@@ -6,10 +6,8 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from sqlspec.adapters.sqlite.core import driver_profile
-from sqlspec.core.capabilities import TypeCoercionCapabilities
-from sqlspec.core.parameters import get_driver_profile, register_driver_profile
-from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.core import TypeCoercionCapabilities, get_driver_profile, register_driver_profile
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:

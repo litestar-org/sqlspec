@@ -1,10 +1,10 @@
 # PostgreSQL — psqlpy
 
-`sqlspec.adapters.psqlpy` integrates `psqlpy`—a Rust/PyO3 `asyncio` PostgreSQL driver built on Tokio—combining native Rust connection pooling, wire-level transaction pipelining (`StatementStack`), and built-in `PgVector` parameter support.
+`sqlspec.adapters.psqlpy` integrates `psqlpy`, a Rust/PyO3 `asyncio` PostgreSQL driver built on Tokio, combining native Rust connection pooling, binary `COPY` ingestion, and built-in `PgVector` parameter support.
 
 ## Overview & Capabilities
 
-Choose `PsqlpyConfig` for latency-sensitive `asyncio` workloads that benefit from Tokio's multi-threaded Rust socket pool, single-round-trip wire pipelining on `execute_stack`, and `pgvector` bindings without requiring an extra Python `pgvector` client dependency.
+Choose `PsqlpyConfig` for latency-sensitive `asyncio` workloads that benefit from Tokio's multi-threaded Rust socket pool and `pgvector` bindings without requiring an extra Python `pgvector` client dependency.
 
 | Capability | Details |
 | --- | --- |
@@ -148,7 +148,7 @@ Pass `PsqlpyDriverFeatures` keys inside `driver_features={...}` on `PsqlpyConfig
 | `NUMERIC` / `DECIMAL` | `decimal.Decimal` | Exact arbitrary-precision decimal values. |
 
 - **Pooler Mode and Direct DSN**: Setting `pooler_mode` to `"transaction"` or `"statement"` passes `prepared=False` automatically so statements execute safely through PgBouncer or Supavisor, while `direct_dsn` provides an unpooled connection target for `config.derive_direct_config()` migrations and `LISTEN/NOTIFY` listeners.
-- **Wire-Level StatementStack Pipelining**: `PsqlpyDriver.execute_stack` dispatches eligible multi-statement stacks over `connection.transaction().pipeline(...)` in a single network batch while preserving `rows_affected` counts on non-`RETURNING` DML statements.
+- **StatementStack Execution**: `psqlpy` has no native pipeline override, so `session.execute_stack(stack)` uses the shared sequential execution path and runs each step in order.
 - **Bulk COPY and Arrow Ingest**: `session.load_from_arrow(...)` streams Arrow batches into PostgreSQL via `binary_copy_to_table`, avoiding intermediate row-by-row INSERT overhead.
 - **Rust Extension Object Semantics**: `psqlpy.Connection` is a slotted Rust PyO3 type without a Python `__dict__`; avoid attaching ad-hoc attributes to `session.connection` inside custom `on_connection_create` hooks.
 

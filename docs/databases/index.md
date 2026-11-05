@@ -22,12 +22,12 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 | [`pymssql`](mssql.md) | `sqlspec[pymssql]` | Sync | `%(name)s` / `%s` | `PymssqlConnectionPool` | Row | Table Queue | Sessions + Memory (`LIKE`) |
 | [`sybase`](sybase.md) | `sqlspec[sybase]` | Sync | `?` (`qmark`) / `%(name)s` | `SybaseConnectionPool` | Row / Stream | Table Queue | Sessions + Memory (`LIKE`) |
 | [`sqlanywhere`](sqlanywhere.md) | `sqlspec[sqlanywhere]` | Sync | `?` (`qmark`) | `SqlanywhereConnectionPool` | Row / Stream | Table Queue | Sessions + Memory (`LIKE`) |
-| [`db2`](db2.md) | `sqlspec[db2]` | Sync + Async | `?` (`qmark`) | `Db2SyncConnectionPool` / `Db2AsyncConnectionPool` | Schema-Guided Row | Table Queue (`SKIP LOCKED DATA`) | Sessions + Memory (`POSSTR`) |
+| [`db2`](db2.md) | `sqlspec[db2]` | Sync + Async | `?` (`qmark`) | `Db2SyncConnectionPool` / `Db2AsyncConnectionPool` | Schema-Guided Row | Table Queue (`SKIP LOCKED DATA`) | Sessions + Memory (`LOCATE`) |
 | [`duckdb`](duckdb.md) | `sqlspec[duckdb]` | Sync | `?` (`qmark`) | `DuckDBConnectionPool` | Native Zero-Copy | Table Queue | Sessions + Memory (`FTS`, `ARRAY` Cosine) |
 | [`bigquery`](bigquery.md) | `sqlspec[bigquery]` | Sync | `@name` (`named`) | Stateless HTTP/gRPC Client | Storage Read / Write API | Table Queue | Sessions + Events (analytics replica) |
 | [`spanner`](spanner.md) | `sqlspec[spanner]` | Sync + Async | `@name` (`named`) | `FixedSizePool` / `AsyncFixedSizePool` | Row / Batched | Lock-Free Snapshot + `run_in_transaction` | Sessions + Memory (`ARRAY<FLOAT32>`, FTS `SCORE`, RRF) + Artifacts |
 | [`adbc`](adbc.md) | `sqlspec[adbc]` | Sync | `?` / `$1` / `:1` | Optional PostgreSQL clone pool | Native C-Stream | Table Queue | Sessions + Memory (PostgreSQL `pgvector` RRF, DuckDB, Oracle, Db2) |
-| [`arrow_odbc`](arrow-odbc.md) | `sqlspec[arrow-odbc]` | Sync | `?` (`qmark`) | ODBC Driver Pool (`enable_pooling`) | Native Rust ODBC Batch | Table Queue | Sessions + Memory (`LIKE` / `POSSTR`) |
+| [`arrow_odbc`](arrow-odbc.md) | `sqlspec[arrow-odbc]` | Sync | `?` (`qmark`) | ODBC Driver Pool (`enable_pooling`) | Native Rust ODBC Batch | Table Queue | Sessions + Memory (`LIKE`) |
 
 ## Database Setup Guides
 

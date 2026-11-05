@@ -140,7 +140,7 @@ Pass `Db2DriverFeatures` keys inside `driver_features={...}` on `Db2SyncConfig` 
 - **Data-Change-Table Returning Syntax (`FINAL TABLE`)**: Db2 compiles `INSERT ... RETURNING` projections using `SELECT ... FROM FINAL TABLE (INSERT INTO ...)` syntax via SQLSpec's custom `db2` SQLGlot dialect, and supports standard `MERGE INTO` upserts.
 - **Strict Connection Key Validation**: `Db2SyncConfig` and `Db2AsyncConfig` validate `connection_config` keys eagerly, raising `ImproperConfigurationError` if unknown aliases such as `host`, `username`, or `min_size` are passed instead of `hostname`, `user`, and `max_size`.
 - **Savepoint Cursor Retention**: Db2 closes open cursors on savepoint rollback unless `ON ROLLBACK RETAIN CURSORS` is specified; SQLSpec emits `SAVEPOINT <name> ON ROLLBACK RETAIN CURSORS` and `RELEASE SAVEPOINT <name>` automatically.
-- **Lock-Free Event Queue and ADK Stores**: `Db2EventQueueStore` uses `FETCH FIRST n ROWS ONLY` with `FOR UPDATE WITH RS SKIP LOCKED DATA` for concurrent queue workers, and `Db2ADKMemoryStore` uses `POSSTR(LOWER(content_text), LOWER(?)) > 0` for case-insensitive text search.
+- **Event Queue and ADK Stores**: `Db2SyncEventQueueStore` and `Db2AsyncEventQueueStore` claim rows with `FETCH FIRST n ROWS ONLY` and `WITH RS USE AND KEEP UPDATE LOCKS SKIP LOCKED DATA` so concurrent queue workers skip rows that are already claimed. `Db2SyncADKMemoryStore` and `Db2AsyncADKMemoryStore` match text with `LOCATE(LOWER(?), LOWER(content_text)) > 0` for case-insensitive search.
 
 ## See Also
 

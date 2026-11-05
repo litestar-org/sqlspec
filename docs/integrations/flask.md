@@ -51,9 +51,9 @@ Configure distinct `session_key` and optional `connection_key` values under `ext
 <!-- GENERATED:START config-table:sqlspec.config.FlaskConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `connection_key` | `str` | `auto-generated from session_key` | Key for storing connection in Flask g object. Default: auto-generated from session_key. |
+| `connection_key` | `str` | - | Key for storing connection in Flask g object. Default: auto-generated from session_key. |
 | `session_key` | `str` | `'db_session'` | Key for accessing session via plugin.get_session(). Default: 'db_session'. |
-| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commits, user handles explicitly; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |
 | `extra_commit_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger commit. Default: None. |
 | `extra_rollback_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger rollback. Default: None. |
 | `disable_di` | `bool` | `False` | Disable built-in dependency injection. Default: False. When True, the Flask extension will not register request hooks for managing database connections and sessions. Users are responsible for managing the database lifecycle manually via their own DI solution. |

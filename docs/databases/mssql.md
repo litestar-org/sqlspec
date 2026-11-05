@@ -220,8 +220,8 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
 | `BIT` | `bool` / `int` | T-SQL boolean flag (`0` / `1`). |
 
 - **OUTPUT INSERTED Returning Semantics**: SQLGlot's `tsql` dialect compiles `.returning(...)` clauses on `INSERT`, `UPDATE`, and `DELETE` builders into T-SQL `OUTPUT INSERTED.*` / `OUTPUT DELETED.*` projections automatically.
-- **MERGE Upserts**: Build atomic SQL Server upserts with `sql.merge into(...)` (`WHEN MATCHED THEN UPDATE ... WHEN NOT MATCHED THEN INSERT ...`).
-- **Streaming Arrow BulkCopy on mssql-python**: `session.load_from_arrow(table_name, arrow_data)` streams `pyarrow.Table`, `RecordBatch`, or `RecordBatchReader` batches directly through `mssql_python`'s native TDS `bulkcopy` engine without materializing intermediate Python dicts.
+- **MERGE Upserts**: Build atomic SQL Server upserts with `sql.merge(dialect="tsql").into(...)` (`WHEN MATCHED THEN UPDATE ... WHEN NOT MATCHED THEN INSERT ...`).
+- **Streaming Arrow BulkCopy on mssql-python**: `session.load_from_arrow(table, source)` streams `pyarrow.Table`, `RecordBatch`, or `RecordBatchReader` batches directly through `mssql_python`'s native TDS `bulkcopy` engine without materializing intermediate Python dicts.
 - **T-SQL Pagination Requires ORDER BY**: SQL Server's `OFFSET ... ROWS FETCH NEXT ... ROWS ONLY` syntax requires an explicit `ORDER BY` clause. Always attach `.order_by(...)` or `OrderByFilter` when using `LimitOffsetFilter` on `tsql`.
 
 ## See Also

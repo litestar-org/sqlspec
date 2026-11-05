@@ -156,8 +156,8 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `binary_prefix` | `bool` | - | Emit `_binary` introducer prefixes when escaping `bytes` literals. |
     | `client_flag` | `int` | - | Bitmask of MySQL `CLIENT_*` protocol capability flags. |
     | `conv` | `dict[Any, Any]` | - | Custom MySQL field-type conversion table. |
-    | `cursor_class` | `type['AsyncmyRawCursor'] or type['AsyncmyDictCursor']` | - | Cursor class alias normalized for `asyncmy` connections. |
-    | `cursor_cls` | `type['AsyncmyRawCursor'] or type['AsyncmyDictCursor']` | - | Default `asyncmy` cursor class used by raw connections. |
+    | `cursor_class` | `type[AsyncmyRawCursor] or type[AsyncmyDictCursor]` | - | Cursor class alias normalized for `asyncmy` connections. |
+    | `cursor_cls` | `type[AsyncmyRawCursor] or type[AsyncmyDictCursor]` | - | Default `asyncmy` cursor class used by raw connections. |
     | `max_allowed_packet` | `int` | `16 MiB` | Maximum client packet size in bytes (defaults to `16 MiB` in `asyncmy`). |
     | `program_name` | `str` | - | Client program name reported in `performance_schema.session_connect_attrs`. |
     | `read_timeout` | `int or float` | - | Socket read timeout in seconds for query responses. |
@@ -218,8 +218,8 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `conv` | `dict[int, Callable[[bytes], Any]] or dict[int, type[Any]] or Mapping[int, Any]` | - | Custom PyMySQL/aiomysql type decoder mapping. |
     | `use_unicode` | `bool or None` | `True` | Decode text columns into Python `str` values (defaults to `True`). |
     | `client_flag` | `int` | - | Bitmask of MySQL `CLIENT_*` capability flags. |
-    | `cursorclass` | `type['AiomysqlRawCursor'] or type['AiomysqlDictCursor']` | - | Default `aiomysql` cursor class instantiated by `conn.cursor()`. |
-    | `cursor_class` | `type['AiomysqlRawCursor'] or type['AiomysqlDictCursor']` | - | Alias normalized to `cursorclass`. |
+    | `cursorclass` | `type[AiomysqlRawCursor] or type[AiomysqlDictCursor]` | - | Default `aiomysql` cursor class instantiated by `conn.cursor()`. |
+    | `cursor_class` | `type[AiomysqlRawCursor] or type[AiomysqlDictCursor]` | - | Alias normalized to `cursorclass`. |
     | `auth_plugin` | `str` | - | Explicit client authentication plugin name (such as `caching_sha2_password`). |
     | `program_name` | `str` | - | Application name reported in MySQL connection attributes. |
     | `server_public_key` | `str or bytes` | - | Server RSA public key PEM for SHA-256 password exchange. |
@@ -409,7 +409,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
 | Database Type | Python Type | Notes / Feature Flag |
 | --- | --- | --- |
 | `JSON` | `dict` / `list` | Serialized and deserialized automatically via `json_serializer` and `json_deserializer`. |
-| `TINYINT(1)` | `bool` / `int` | Detected as boolean when column width is `1` and `enable_tinyint_boolean=True` (where configured). |
+| `TINYINT(1)` / `BOOLEAN` | `int` / `bool` | Python `bool` parameters bind as `1` / `0`; result columns return `int`. |
 | `CHAR(36)` / `BINARY(16)` | `uuid.UUID` / `str` / `bytes` | Coerces Python `uuid.UUID` parameters to string or binary storage formats. |
 | `DECIMAL` / `NUMERIC` | `decimal.Decimal` | Exact arbitrary-precision decimal arithmetic. |
 | `DATETIME` / `TIMESTAMP` | `datetime.datetime` | Microsecond-precision timestamp handling (`DATETIME(6)`). |

@@ -31,7 +31,7 @@ Configure the `events` extension on your database config (`EventsConfig`). When 
 | `migrations_path` | `str or Path` | - | Directory containing this extension's migrations, or a `'<dotted.module>:<subdir>'` specification. Overrides the default `sqlspec.extensions.<name>` lookup. Setting this auto-includes the extension in `migration_config["include_extensions"]`. |
 | `manage_schema` | `bool` | `True` | Apply additive target-schema reconciliation. Default: True. |
 | `create_schema` | `bool` | `True` | Create the queue table during managed reconciliation. Default: True. |
-| `backend` | `Literal['notify', 'notify_queue', 'poll_queue', 'aq', 'txeventq']` | - | Backend implementation. PostgreSQL adapters default to 'notify', others to 'poll_queue'. |
+| `backend` | `Literal['notify', 'notify_queue', 'poll_queue', 'aq', 'txeventq']` | - | Backend implementation. PostgreSQL adapters default to 'notify', others to 'poll_queue'. notify: Transient PostgreSQL LISTEN/NOTIFY wakeup; not a durable event ledger; notify_queue: Durable table queue with PostgreSQL LISTEN/NOTIFY wakeups; poll_queue: Durable table queue discovered by polling; aq: Oracle Advanced Queuing; txeventq: Oracle Transactional Event Queues |
 | `queue_table` | `str` | - | Name of the fallback queue table. Defaults to 'sqlspec_event_queue'. |
 | `lease_seconds` | `int` | `30` | Lease duration for claimed events before they can be retried. Defaults to 30 seconds. |
 | `retention_seconds` | `int` | `86400` | Retention window for acknowledged events before cleanup. Defaults to 86400 (24 hours). |
@@ -147,9 +147,9 @@ PostgreSQL caps `NOTIFY` payloads at `7,999` UTF-8 bytes across the full encoded
 
 Several adapters export typed `EventsConfig` subclasses under `sqlspec.adapters.<adapter>.events` for storage-level optimizations:
 
-- **PostgreSQL (`AsyncpgEventsConfig`, `PsycopgEventsConfig`, `PsqlpyEventsConfig`)**: `fillfactor` (`10`–`100`) and `listener_queue_capacity`.
+- **PostgreSQL (`AsyncpgEventsConfig`, `PsycopgEventsConfig`, `PsqlpyEventsConfig`)**: `fillfactor` (`10`–`100`) and autovacuum scale factors on all three, plus `listener_queue_capacity` on `AsyncpgEventsConfig` and `PsycopgEventsConfig`.
 - **SQLite (`SqliteEventsConfig`, `AiosqliteEventsConfig`)**: PRAGMA profile and overrides for high-concurrency WAL queue polling.
-- **Cloud Spanner (`EventsConfig` on `SpannerSyncConfig` / `SpannerAsyncConfig`)**: `shard_count > 1` hash-shard prefixing to prevent queue-head hotspots, snapshot-read candidate polling, and native `ROW DELETION POLICY` TTL cleanup (`cleanup_on_ack=False`).
+- **Cloud Spanner (base `EventsConfig` on `SpannerSyncConfig` / `SpannerAsyncConfig`)**: `shard_count > 1` hash-shard prefixing to prevent queue-head hotspots. The adapter also uses snapshot-read candidate polling and keeps acknowledged rows for native `ROW DELETION POLICY` TTL cleanup instead of deleting them on `ack`.
 - **BigQuery (`BigQueryEventsConfig`)**: `partitioning=True` (`DATE(available_at)` partitioning), `partition_expiration_days`, and `require_partition_filter`.
 - **Oracle (`OracleEventsConfig`)**: `backend="aq"` or `"txeventq"`, `aq_queue` (`"SQLSPEC_EVT_{channel}"` per-channel routing), `aq_visibility` (`"DEQ_ON_COMMIT"` / `"DEQ_IMMEDIATE"`), `OracleEventsPartitionConfig`, and `OracleEventsCompressionConfig`.
 

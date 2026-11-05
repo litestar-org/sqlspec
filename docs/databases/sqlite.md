@@ -77,7 +77,7 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
 === "SQLite (Sync)"
 
     > [!NOTE]
-    > `SqliteConnectionPool` is a thread-local connection manager that recycles connections via `pool_recycle_seconds` and `health_check_interval` directly on `SqliteConnectionParams`. When `database=":memory:"` is configured, `SqliteConfig` automatically normalizes it to a unique shared-cache URI (`file:sqlspec_memory_<id>?mode=memory&cache=shared`, `uri=True`) so tables persist across thread-local checkouts.
+    > `SqliteConnectionPool` is a thread-local connection manager that recycles connections via `pool_recycle_seconds` and `health_check_interval` directly on `SqliteConnectionParams`. When `database=":memory:"` is configured, `SqliteConfig` automatically normalizes it to a unique shared-cache URI (`file:memory_<hex>?mode=memory&cache=shared`, `uri=True`) so tables persist across thread-local checkouts.
 
     **Connection and Pool Parameters (`SqliteConnectionParams`)**
 

@@ -86,7 +86,7 @@ Pass `AsyncpgConnectionConfig` and `AsyncpgPoolConfig` keys inside `connection_c
 | `init` | `Callable[[AsyncpgConnection], Awaitable[None]]` | - | Async callback invoked once when a new physical connection is created. |
 | `reset` | `Callable[[AsyncpgConnection], Awaitable[None]]` | - | Async callback invoked when a connection is released back to the pool. |
 | `loop` | `AbstractEventLoop` | - | Explicit `asyncio` event loop passed to `asyncpg.create_pool`. |
-| `connection_class` | `type['AsyncpgConnection']` | - | Custom `asyncpg.Connection` subclass instantiated by the pool. |
+| `connection_class` | `type[AsyncpgConnection]` | - | Custom `asyncpg.Connection` subclass instantiated by the pool. |
 | `record_class` | `type[Record]` | - | Custom `asyncpg.Record` subclass returned by raw queries. |
 | `extra` | `dict[str, Any]` | - | Additional keyword arguments forwarded directly to `asyncpg.create_pool`. |
 <!-- GENERATED:END config-table:sqlspec.adapters.asyncpg.config.AsyncpgConnectionConfig,sqlspec.adapters.asyncpg.config.AsyncpgPoolConfig -->
@@ -138,7 +138,7 @@ Pass `AsyncpgDriverFeatures` keys inside `driver_features={...}` on `AsyncpgConf
 - **Untyped Parameters Inside Polymorphic Functions**: Because `asyncpg` prepares statements over PostgreSQL's binary protocol, untyped parameters inside functions like `jsonb_build_object(:k, :v)` require an explicit SQL cast such as `CAST(:k AS text)` so PostgreSQL can resolve the parameter OID.
 - **Binding JSON String Primitives**: When `enable_json_codecs=True`, Python `dict`, `list`, `int`, and `bool` values serialize via `json_serializer`, while bare `str` values are treated as pre-serialized JSON text. Pass `to_json("value")` when inserting a scalar JSON string literal into a `jsonb` column.
 - **Binary COPY and Arrow Ingest**: `session.load_from_arrow(...)` streams Arrow batches into PostgreSQL via binary `COPY ... FROM STDIN` for high-throughput bulk loads, and `LISTEN/NOTIFY` channels integrate directly with `EventChannel`.
-- **Sequential StatementStack Execution**: `asyncpg`'s binary protocol forbids overlapping operations on a single connection; `session.execute_stack(stack)` executes steps sequentially against cached prepared statements and records `sequential_prepared` in observer telemetry.
+- **Sequential StatementStack Execution**: `asyncpg`'s binary protocol forbids overlapping operations on a single connection, so `session.execute_stack(stack)` runs each step in order against native prepared statements instead of pipelining them.
 
 ## See Also
 

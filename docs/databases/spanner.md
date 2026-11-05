@@ -48,7 +48,6 @@
                 "project": "my-gcp-project",
                 "instance_id": "prod-instance",
                 "database_id": "app_db",
-                "pool_type": "FixedSizePool",
                 "size": 25,
                 "target_size": 25,
                 "max_sessions": 100,
@@ -171,7 +170,7 @@ Pass `SpannerDriverFeatures` keys inside `driver_features={...}` on `SpannerSync
 | `UUID` / `STRING(36)` | `uuid.UUID` / `str` | Converted automatically when `enable_uuid_conversion=True` (default). |
 
 - **Read Sessions, Write Sessions, and Transaction Retries**: Call `config.provide_read_session()` (or `config.provide_session(transaction=False)`) for lock-free single-use or bounded-staleness `Snapshot` reads with zero `Commit` RPC overhead. Call `config.provide_write_session()` for read-write sessions, or `config.run_in_transaction(fn)` / `session.run_in_transaction(fn)` to automatically retry `Aborted` (`DeadlockError`) transactions using Spanner's native backoff delay.
-- **Direct Mutation Batching and Partitioned DML**: For high-throughput key-value writes that bypass SQL parsing, call `session.write_insert(table, data)`, `session.write_update(table, data)`, `session.write_upsert(table, data)`, or `session.write_delete(table, keys)` (automatically chunked across Spanner's per-commit mutation limit via `estimate_batch_mutations`). For large bulk updates or deletes across an entire table, call `session.execute_partitioned_dml(sql, params)` or `config.execute_partitioned_dml(sql, params)`.
+- **Direct Mutation Batching and Partitioned DML**: For high-throughput key-value writes that bypass SQL parsing, call `session.write_insert(table, data)`, `session.write_update(table, data)`, `session.write_upsert(table, data)`, or `session.write_delete(table, keys)` (automatically chunked to stay under Spanner's per-commit mutation limit). For large bulk updates or deletes across an entire table, call `session.execute_partitioned_dml(sql, params)` or `config.execute_partitioned_dml(sql, params)`.
 - **THEN RETURN DML and Dual Dialects**: Both sync and async drivers return projected rows and `rows_affected` on `INSERT ... THEN RETURN`, `UPDATE ... THEN RETURN`, and `DELETE ... THEN RETURN` statements across both GoogleSQL (`dialect="spanner"`, supporting `INTERLEAVE IN PARENT`, `ROW DELETION POLICY`, and `GRAPH_TABLE`) and PostgreSQL (`dialect="spangres"`, supporting `TTL INTERVAL` and `$1` placeholders).
 - **ADK Vector, Hybrid RRF, and Artifact Stores**: `SpannerSyncADKMemoryStore` and `SpannerAsyncADKMemoryStore` support `ARRAY<FLOAT32>` embeddings with `APPROX_COSINE_DISTANCE`, FTS `SCORE`, and single-round-trip Hybrid RRF (`k=60`), alongside `SpannerSyncADKArtifactStore` and `SpannerAsyncADKArtifactStore`.
 

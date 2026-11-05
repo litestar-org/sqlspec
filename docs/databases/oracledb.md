@@ -1,6 +1,6 @@
 # Oracle Database
 
-`sqlspec.adapters.oracledb` wraps `python-oracledb` (`>= 3.4`) across Oracle Database 11g through 26ai, supporting synchronous (`OracleSyncConfig`) and `asyncio` (`OracleAsyncConfig`) pools, zero-client Thin mode, Instant Client Thick mode, mTLS/PKCS#12 wallets (`wallet_zip`), multi-endpoint RAC/Data Guard topologies (`OracleTopologyConfig`), zero-RTT session context piggybacking (`OracleSessionContextConfig`), Oracle 26ai `VECTOR` and Hybrid RRF search, Direct Path Loads, and server-side `DBMS_CLOUD.COPY_DATA`.
+`sqlspec.adapters.oracledb` wraps `python-oracledb` (`>= 3.4`) across Oracle Database 12c through 26ai in Thin mode (older releases require Thick mode), supporting synchronous (`OracleSyncConfig`) and `asyncio` (`OracleAsyncConfig`) pools, zero-client Thin mode, Instant Client Thick mode, mTLS/PKCS#12 wallets (`wallet_zip`), multi-endpoint RAC/Data Guard topologies (`OracleTopologyConfig`), zero-RTT session context piggybacking (`OracleSessionContextConfig`), Oracle 26ai `VECTOR` and Hybrid RRF search, Direct Path Loads, and server-side `DBMS_CLOUD.COPY_DATA`.
 
 ## Overview & Capabilities
 
@@ -58,7 +58,7 @@
             },
             driver_features={
                 "enable_lowercase_column_names": True,
-                "session_context_hook": lambda: OracleSessionContextConfig(
+                "session_context_hook": OracleSessionContextConfig(
                     module="orders-api",
                     action="http-request",
                 ),
@@ -253,9 +253,9 @@ Pass `OracleDriverFeatures` keys inside `driver_features={...}` on `OracleSyncCo
 | `RAW(16)` | `uuid.UUID` / `bytes` | Bi-directional `uuid.UUID` <-> `RAW(16)` coercion when `enable_uuid_binary=True` (default). |
 | `VECTOR` (Oracle 26ai) | `numpy.ndarray` / `array.array` / `list[float]` | Zero-copy `float32`, `float64`, `int8`, and `binary` vector conversion controlled by `enable_numpy_vectors` and `vector_return_format`. |
 
-- **Zero-RTT Session Context Piggybacking (`session_context_hook`)**: Configure `session_context_hook` returning an `OracleSessionContextConfig` (`client_identifier`, `module`, `action`, `dbop`, `edition`, `econtext_id`). `python-oracledb` piggybacks those attributes onto the next database round-trip packet without issuing extra `DBMS_SESSION` RPC calls.
+- **Session Context on Checkout (`session_context_hook`)**: Pass an `OracleSessionContextConfig` (or an equivalent dict) as `session_context_hook`. Each field accepts a static value or a zero-argument callable resolved per checkout. `module`, `action`, `client_identifier`, and `ecid` are set as connection attributes that `python-oracledb` piggybacks onto the next round trip, while `edition`, `time_zone`, `nls_parameters`, and `contexts` run in a single checkout PL/SQL block. The context is cleared on release when `reset_on_release=True` (default).
 - **Direct Path Load and Cloud Storage Copy**: When `enable_direct_path_load=True`, `session.load_from_arrow(...)` uses Oracle's Direct Path Load API (bypassing buffer cache when constraints/triggers allow) and falls back cleanly to batched array DML. For object-store Parquet/CSV/JSON files, set `dbms_cloud_credential` to run server-side `DBMS_CLOUD.COPY_DATA`.
-- **Oracle 26ai VECTOR HNSW and Hybrid RRF**: `sqlspec.adapters.oracledb` exposes `build_oracle_hnsw_subquery` and `build_oracle_hybrid_rrf_sql` (used by `OracleSyncADKMemoryStore` and `OracleAsyncADKMemoryStore`) to isolate `VECTOR_DISTANCE(..., COSINE)` inside an inline view so the Oracle Cost-Based Optimizer uses HNSW/IVF vector indexes alongside Oracle Text `CONTAINS` scores in a single-round-trip Reciprocal Rank Fusion query.
+- **Oracle 26ai VECTOR HNSW and Hybrid RRF**: `sqlspec.builder` exposes `build_oracle_hnsw_subquery` and `build_oracle_hybrid_rrf_sql` (used by `OracleSyncADKMemoryStore` and `OracleAsyncADKMemoryStore`) to isolate `VECTOR_DISTANCE(..., COSINE)` inside an inline view so the Oracle Cost-Based Optimizer uses HNSW/IVF vector indexes alongside Oracle Text `CONTAINS` scores in a single-round-trip Reciprocal Rank Fusion query.
 - **Oracle AQ Events**: `EventChannel` supports both transactional table queues and native Oracle Advanced Queuing (`DBMS_AQ`) via `driver_features={"events_backend": "aq"}`.
 
 ## See Also

@@ -129,7 +129,7 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | `init` | `Callable[[CockroachAsyncpgConnection], Awaitable[None]]` | - | Async hook run once when a new physical connection is opened. |
     | `reset` | `Callable[[CockroachAsyncpgConnection], Awaitable[None]]` | - | Async hook run when returning a connection to the pool. |
     | `loop` | `AbstractEventLoop` | - | Explicit `asyncio` event loop for pool tasks. |
-    | `connection_class` | `type['CockroachAsyncpgConnection']` | - | Custom `asyncpg.Connection` subclass used by the pool. |
+    | `connection_class` | `type[CockroachAsyncpgConnection]` | - | Custom `asyncpg.Connection` subclass used by the pool. |
     | `record_class` | `type[Record]` | - | Custom `asyncpg.Record` subclass returned by raw queries. |
     | `extra` | `dict[str, Any]` | - | Additional keyword arguments forwarded to `asyncpg.create_pool`. |
     <!-- GENERATED:END config-table:sqlspec.adapters.cockroach_asyncpg.config.CockroachAsyncpgConnectionConfig,sqlspec.adapters.cockroach_asyncpg.config.CockroachAsyncpgPoolConfig -->
@@ -231,14 +231,14 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
 
 | Database Type | Python Type | Notes / Feature Flag |
 | --- | --- | --- |
-| `JSONB` / `JSON` | `dict` / `list` | Registered when `enable_json_codecs=True` (default) using `json_serializer` and `json_deserializer`. |
+| `JSONB` / `JSON` | `dict` / `list` | Encoded with `json_serializer` and decoded with `json_deserializer`. `cockroach_asyncpg` registers binary codecs when `enable_json_codecs=True` (default); `cockroach_psycopg` installs the serializer through Psycopg's JSON dumpers. |
 | `UUID` | `uuid.UUID` / `str` | Recommended distributed primary key type (`UUID DEFAULT gen_random_uuid()`). |
 | `INT8` / `INT64` | `int` | CockroachDB's default 64-bit integer type (`unique_rowid()`). |
 | `DECIMAL` / `NUMERIC` | `decimal.Decimal` | Exact arbitrary-precision decimal arithmetic. |
 | `TIMESTAMPTZ` / `TIMESTAMP` | `datetime.datetime` | Timezone-aware and naive timestamp mapping. |
 | `BYTES` / `BYTEA` | `bytes` / `bytearray` | Binary wire transport. |
 
-- **Automatic 40001 Serialization Retry**: CockroachDB runs transactions at `SERIALIZABLE` isolation by default. Contended transactions raise `SQLSTATE 40001` (`SerializationConflictError`); when `enable_auto_retry=True` (default), SQLSpec retries operations using `CockroachAsyncpgRetryConfig` / `CockroachPsycopgRetryConfig` (`max_retries`, `retry_delay_base_ms`, `retry_delay_max_ms`, `enable_retry_logging`) with cryptographically jittered exponential backoff.
+- **Automatic 40001 Serialization Retry**: CockroachDB runs transactions at `SERIALIZABLE` isolation by default. Contended transactions raise `SQLSTATE 40001` (`SerializationConflictError`); when `enable_auto_retry=True` (default), SQLSpec retries operations using `CockroachAsyncpgRetryConfig` / `CockroachPsycopgRetryConfig` (`max_retries`, `retry_delay_base_ms`, `retry_delay_max_ms`, `enable_retry_logging`) with jittered exponential backoff.
 - **Follower Reads (`AS OF SYSTEM TIME`)**: When `enable_follower_reads=True`, read-only queries execute inside an explicit read-only transaction with `SET TRANSACTION AS OF SYSTEM TIME <default_staleness>` (such as `"-10s"` or `"follower_read_timestamp()"`) and commit cleanly afterward so pooled connections never leak stale-read state.
 - **Distributed Primary Keys**: Prefer `UUID DEFAULT gen_random_uuid()` over monotonic `SERIAL` sequences on write-heavy tables to avoid single-range hotspotting across CockroachDB nodes.
 - **Transactional Event Queue**: Because CockroachDB does not implement PostgreSQL `LISTEN/NOTIFY`, `EventChannel` uses SQLSpec's transactional table-backed queue store (`CockroachAsyncpgEventQueueStore`, `CockroachPsycopgSyncEventQueueStore`, `CockroachPsycopgAsyncEventQueueStore`) automatically.

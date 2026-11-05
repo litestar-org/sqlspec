@@ -84,7 +84,7 @@ Choose `AdbcConfig` when your primary workload extracts or ingests Arrow, Polars
 
 | Driver | Underlying Engine | Arrow Path | Pool / Reuse Model |
 | --- | --- | --- | --- |
-| `AdbcConfig` (`driver="postgres"`) | `adbc-driver-postgresql` (`>= 1.12.0`) | C Data Interface (`__arrow_c_stream__` + binary `COPY` ingest) | Optional `AdbcPostgresConnectionPool` via `pool_config={"max_size": 4, "timeout": 30.0}` (`DISCARD ALL` reset on return; `pool_config=None` opens per-session connections). |
+| `AdbcConfig` (`driver="postgres"`) | `adbc-driver-postgresql` | C Data Interface (`__arrow_c_stream__` + binary `COPY` ingest) | Optional `AdbcConnectionPool` via `pool_config={"max_size": 4, "timeout": 30.0}` (`DISCARD ALL` reset on return; `pool_config=None` opens per-session connections). |
 | `AdbcConfig` (`duckdb`, `sqlite`, `snowflake`, `bigquery`, `oracle`, `db2`, `flightsql`) | Respective ADBC C/Go/C++ driver | C Data Interface (`__arrow_c_stream__` + `adbc_ingest`) | Per-session connection (or caller-managed `connection_instance`); supports dynamic `auth_token_provider` in `connection_config`. |
 | [`ArrowOdbcConfig`](arrow-odbc.md) | Rust `arrow-odbc` over unixODBC / Windows ODBC | Pre-allocated Rust ODBC columnar batch buffers | Process-wide ODBC Driver Manager connection pooling (`driver_features={"enable_pooling": True}`). |
 
@@ -174,7 +174,7 @@ Pass `AdbcDriverFeatures` keys inside `driver_features={...}` on `AdbcConfig`:
 | Arrow `float32` / `float64` / `decimal128` | `float` / `decimal.Decimal` | Enforced via `enable_strict_type_coercion` during parameter and ingest conversion. |
 | Arrow `utf8` / `large_utf8` / `binary` | `str` / `bytes` | Columnar string and binary buffers. |
 | `JSON` / `JSONB` | `dict` / `list` | Serialized and deserialized via `json_serializer` and `json_deserializer`. |
-| `VECTOR` (`pgvector`) | `list[float]` / `numpy.ndarray` | Bound via `?::text::vector` when `enable_pgvector=True` on PostgreSQL ADBC connections. |
+| `VECTOR` (`pgvector`) | `list[float]` / `numpy.ndarray` | Supported on PostgreSQL ADBC connections when `enable_pgvector=True` (defaults to `True` when `pgvector` is installed); explicit `::vector` casts are detected by `enable_cast_detection`. |
 | `TIMESTAMP` / `DATE` | `datetime.datetime` / `datetime.date` | Arrow timestamp arrays with timezone metadata preserved. |
 
 - **Zero-Copy adbc_ingest**: `session.load_from_arrow(table, arrow_table_or_reader)` passes `pyarrow.Table` and `pyarrow.RecordBatchReader` objects straight to `cursor.adbc_ingest` over `__arrow_c_stream__` without materializing intermediate rows.
