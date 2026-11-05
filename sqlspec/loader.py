@@ -34,7 +34,6 @@ from sqlspec.storage.registry import storage_registry as default_storage_registr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import slugify
-from sqlspec.utils.type_guards import is_local_path
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -764,6 +763,10 @@ class SQLFileLoader:
     def _read_file_content(self, path: str | Path) -> str:
         """Read file content using storage backend.
 
+        Local paths, including bare relative file names such as ``products.sql``,
+        resolve against the current working directory before the storage registry
+        is consulted, matching how ``load_sql`` classifies them.
+
         Args:
             path: File path (can be local path or URI).
 
@@ -777,9 +780,13 @@ class SQLFileLoader:
         path_str = str(path)
 
         try:
+            parts = path_str.split("/", 1)
+            if "://" not in path_str and not self.storage_registry.is_alias_registered(parts[0]):
+                local_path = Path(path_str).absolute()
+                return self.storage_registry.get(local_path).read_text_sync(local_path.name, encoding=self.encoding)
+
             backend = self.storage_registry.get(path)
 
-            parts = path_str.split("/", 1)
             if len(parts) > 1 and self.storage_registry.is_alias_registered(parts[0]):
                 return backend.read_text_sync(parts[1], encoding=self.encoding)
 
@@ -789,9 +796,6 @@ class SQLFileLoader:
                 if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
                     file_path = file_path[1:]
                 return backend.read_text_sync(Path(file_path).name, encoding=self.encoding)
-
-            if isinstance(path, Path) or is_local_path(path_str):
-                return backend.read_text_sync(Path(path_str).name, encoding=self.encoding)
 
             return backend.read_text_sync(path_str, encoding=self.encoding)
         except KeyError as e:

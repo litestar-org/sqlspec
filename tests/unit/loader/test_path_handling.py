@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from sqlspec.loader import SQLFileLoader
 
 
@@ -57,3 +59,19 @@ def test_load_directory_is_namespaced(tmp_path: Path) -> None:
     loader.load_sql(tmp_path)
 
     assert loader.has_query("nested.dir.query1")
+
+
+@pytest.mark.parametrize("path_type", [str, Path], ids=["str", "path"])
+def test_load_relative_single_file_resolves_against_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path_type: "type[str | Path]"
+) -> None:
+    """A bare relative file name loads from the current working directory, like relative directories."""
+    (tmp_path / "products.sql").write_text("-- name: list_products\nSELECT * FROM products;")
+    monkeypatch.chdir(tmp_path)
+
+    loader = SQLFileLoader()
+    loader.load_sql(path_type("products.sql"))
+
+    assert loader.has_query("list_products")
+    assert loader.list_files() == ["products.sql"]
+    assert loader._reload_changed_files() == []
