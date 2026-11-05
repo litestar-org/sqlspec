@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, ClassVar, Protocol, cast
 from sqlglot import Dialect, exp
 from sqlglot.generator import Generator
 
-from sqlspec.builder._generation import invalidate_generator_dispatch
+from sqlspec.builder._generation import generator_class_for_dialect, invalidate_generator_dispatch
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -20,16 +20,12 @@ class _GeneratorClass(Protocol):
     TRANSFORMS: ClassVar[MutableMapping[type[exp.Lock], Callable[[Generator, exp.Lock], str]]]
 
 
-class _DialectClass(Protocol):
-    Generator: ClassVar[type[_GeneratorClass]]
-
-
 _REGISTERED_LOCK_GENERATORS: set[type[_GeneratorClass]] = set()
 
 
 def register_lock_generator(dialect: "DialectType | str | None") -> None:
     """Register lock-clause rendering for the dialect being rendered."""
-    generator_class = _generator_class_for_dialect(dialect)
+    generator_class = cast("type[_GeneratorClass]", generator_class_for_dialect(dialect))
     if generator_class in _REGISTERED_LOCK_GENERATORS:
         return
 
@@ -79,20 +75,3 @@ def _lock_sql(generator: "Generator", expression: exp.Lock) -> str:
             wait = " NOWAIT" if wait else " SKIP LOCKED"
 
     return f"{lock_type}{target_sql}{wait or ''}"
-
-
-def _generator_class_for_dialect(dialect: "DialectType | str | None") -> "type[_GeneratorClass]":
-    if dialect is None:
-        return cast("type[_GeneratorClass]", Generator)
-
-    dialect_class: type[Dialect]
-    if isinstance(dialect, str):
-        dialect_class = type(Dialect.get_or_raise(dialect))
-    elif isinstance(dialect, type) and issubclass(dialect, Dialect):
-        dialect_class = dialect
-    elif isinstance(dialect, Dialect):
-        dialect_class = type(dialect)
-    else:
-        dialect_class = type(Dialect.get_or_raise(str(dialect)))
-
-    return cast("_DialectClass", dialect_class).Generator

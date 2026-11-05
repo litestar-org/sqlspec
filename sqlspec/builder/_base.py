@@ -28,7 +28,7 @@ from sqlglot.schema import MappingSchema
 
 from sqlspec.builder._locking import register_lock_generator
 from sqlspec.builder._parsing_utils import _normalize_dialect, _resolve_dialect
-from sqlspec.builder._vector_distance import has_vector_distance_ancestor
+from sqlspec.builder._vector_distance import has_vector_distance_ancestor, register_vector_distance_generator
 from sqlspec.core import (
     SQL,
     ParameterStyle,
@@ -350,6 +350,7 @@ class QueryBuilder:
                 identify = self._should_identify(target_dialect)
                 if normalized_expression.find(exp.Lock) and target_dialect != "db2":
                     register_lock_generator(target_dialect)
+                register_vector_distance_generator(target_dialect)
                 sql_string = normalized_expression.sql(
                     dialect=target_dialect, pretty=True, identify=identify, copy=False
                 )
@@ -534,6 +535,7 @@ class QueryBuilder:
         identify = self._should_identify(target_dialect)
         if expr.find(exp.Lock) and target_dialect != "db2":
             register_lock_generator(target_dialect)
+        register_vector_distance_generator(target_dialect)
         sql_string = expr.sql(dialect=target_dialect, pretty=True, identify=identify, copy=not copy)
         sql_string = self._postprocess_built_sql(sql_string, dialect=dialect)
         return BuiltQuery(
@@ -1192,6 +1194,7 @@ class QueryBuilder:
 
         if statement_expression.find(exp.Lock) and resolved_dialect != "db2":
             register_lock_generator(resolved_dialect)
+        register_vector_distance_generator(resolved_dialect)
         if self._folds_unquoted_to_upper(resolved_dialect):
             statement_expression = self._unquote_identifiers(statement_expression)
         return _BuilderCacheEntry(statement_expression, resolved_dialect)

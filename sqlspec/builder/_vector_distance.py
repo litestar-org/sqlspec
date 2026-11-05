@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlglot import exp
 
-from sqlspec.builder._generation import invalidate_generator_dispatch
+from sqlspec.builder._generation import generator_class_for_dialect, invalidate_generator_dispatch
+from sqlspec.exceptions import DialectNotSupportedError
 
 if TYPE_CHECKING:
     from sqlglot.generator import Generator
@@ -19,6 +20,7 @@ __all__ = (
     "build_oracle_hybrid_rrf_sql",
     "has_vector_distance_ancestor",
     "is_vector_distance_expression",
+    "register_vector_distance_generator",
     "render_vector_distance_bigquery",
     "render_vector_distance_duckdb",
     "render_vector_distance_generic",
@@ -55,6 +57,8 @@ _MYSQL_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _ORACLE_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _BIGQUERY_OPERATOR_TRANSFORM: _OperatorTransform | None = None
 _DUCKDB_OPERATOR_TRANSFORM: _OperatorTransform | None = None
+_CHECKED_VECTOR_DIALECTS: set[str] = set()
+_UNSUPPORTED_VECTOR_DIALECTS: Final[frozenset[str]] = frozenset({"TSQL"})
 
 
 _ORACLE_MIN_ACCURACY: Final[int] = 1
@@ -92,6 +96,26 @@ def VectorDistance(*, this: exp.Expr, expression: exp.Expr, metric: Any = "eucli
     """Build a SQLSpec vector-distance expression."""
     _register_with_sqlglot()
     return _build_vector_distance(this=this, expression=expression, metric=metric)
+
+
+def register_vector_distance_generator(dialect: "str | None") -> None:
+    """Install vector-distance rendering on a dialect generator created before registration.
+
+    Dialect generators copy ``Generator.TRANSFORMS`` when their module is imported, so
+    a dialect imported before the first ``VectorDistance`` call would otherwise keep
+    sqlglot's ``OPERATOR(...)`` rendering. Each dialect is checked once.
+
+    Args:
+        dialect: Normalized target dialect name, or ``None`` for the base generator.
+    """
+    if not _SQLGLOT_VECTOR_DISTANCE_REGISTERED or dialect is None or dialect in _CHECKED_VECTOR_DIALECTS:
+        return
+    generator_class = generator_class_for_dialect(dialect)
+    transforms = cast("MutableMapping[type[exp.Expr], _OperatorTransform]", generator_class.TRANSFORMS)
+    if transforms.get(exp.Operator) is _BASE_OPERATOR_TRANSFORM:
+        _register_operator_transform(transforms, _operator_sql_base)
+        invalidate_generator_dispatch(generator_class)
+    _CHECKED_VECTOR_DIALECTS.add(dialect)
 
 
 def render_vector_distance_postgres(left: str, right: str, metric: str) -> str:
@@ -361,6 +385,9 @@ def _render_with_metric(generator: "Generator", expression: exp.Operator, dialec
     dialect_class = getattr(generator.dialect, "__class__", None)
     if dialect_class is not None and dialect_class.__name__ == "Spangres":
         dialect = "bigquery"
+    if dialect_class is not None and dialect_class.__name__ in _UNSUPPORTED_VECTOR_DIALECTS:
+        msg = f"Vector distance is not supported for dialect '{dialect_class.__name__.lower()}'."
+        raise DialectNotSupportedError(msg)
 
     if dialect == "postgres":
         return render_vector_distance_postgres(left_sql, right_sql, metric)

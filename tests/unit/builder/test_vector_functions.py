@@ -4,6 +4,9 @@ Tests VectorDistance expression creation, dialect-specific SQL generation,
 and Column.vector_distance()/Column.cosine_similarity() methods.
 """
 
+import subprocess
+import sys
+
 import pytest
 from sqlglot import exp
 
@@ -16,6 +19,7 @@ from sqlspec.builder import (
     build_oracle_hybrid_rrf_sql,
 )
 from sqlspec.builder._vector_distance import is_vector_distance_expression, vector_distance_metric
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_vector_distance_expression_creation() -> None:
@@ -665,3 +669,26 @@ def test_build_oracle_hnsw_subquery_and_hybrid_rrf_exact_fallback() -> None:
         approximate=True,
     )
     assert "FETCH APPROX FIRST :top_k ROWS ONLY WITH TARGET ACCURACY 85" in approx_rrf_query
+
+
+def test_vector_distance_tsql_raises_instead_of_emitting_invalid_sql() -> None:
+    """T-SQL has no vector-distance mapping, so building raises instead of emitting OPERATOR(...)."""
+    query = sql.select(Column("embedding").vector_distance([0.1, 0.2], metric="cosine")).from_("docs")
+    with pytest.raises(SQLBuilderError, match="not supported for dialect 'tsql'"):
+        query.build(dialect="tsql")
+
+
+def test_vector_distance_renders_for_dialects_imported_before_registration() -> None:
+    """Dialect generators created before the first VectorDistance call still render VECTOR_DISTANCE."""
+    code = (
+        "import sqlglot.dialects.sqlite\n"
+        "from sqlspec import sql\n"
+        "from sqlspec.builder import Column\n"
+        "query = sql.select(Column('e').vector_distance([0.1, 0.2], metric='cosine')).from_('docs')\n"
+        "print(query.build(dialect='sqlite').sql)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert "VECTOR_DISTANCE(" in result.stdout
+    assert "OPERATOR(" not in result.stdout
