@@ -80,7 +80,7 @@ Choose `AdbcConfig` when your primary workload extracts or ingests Arrow, Polars
 
 ## Connection & Pool Configuration
 
-### Arrow Driver and Connection Reuse Comparison
+### PostgreSQL Connection Reuse
 
 | Driver | Underlying Engine | Arrow Path | Pool / Reuse Model |
 | --- | --- | --- | --- |

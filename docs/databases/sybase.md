@@ -38,6 +38,8 @@
     poetry add "sqlspec[sybase]"
     ```
 
+### Connection Setup and Protocol Negotiation
+
 Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 either when `TDSVER=5.0` is set in the environment before process start or when a FreeTDS server section alias is defined in `freetds.conf`:
 
 === "Environment Variable (TDSVER=5.0)"

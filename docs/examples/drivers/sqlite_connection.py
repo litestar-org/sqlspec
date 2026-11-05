@@ -9,18 +9,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 spec = SQLSpec()
 config = spec.add_config(
     SqliteConfig(
-        connection_config={
-            "database": ":memory:",
-            "pool_recycle_seconds": 3600,
-            "health_check_interval": 30.0,
-        },
+        connection_config={"database": ":memory:", "pool_recycle_seconds": 3600, "health_check_interval": 30.0},
         driver_features={
-            "pragmas": {
-                "journal_mode": "WAL",
-                "synchronous": "NORMAL",
-                "foreign_keys": "ON",
-                "busy_timeout": 5000,
-            }
+            "pragmas": {"journal_mode": "WAL", "synchronous": "NORMAL", "foreign_keys": "ON", "busy_timeout": 5000}
         },
     )
 )

@@ -7,11 +7,7 @@ from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgSyncConfig
 spec = SQLSpec()
 config = spec.add_config(
     CockroachPsycopgSyncConfig(
-        connection_config={
-            "conninfo": "postgresql://root@localhost:26257/defaultdb",
-            "min_size": 2,
-            "max_size": 10,
-        },
+        connection_config={"conninfo": "postgresql://root@localhost:26257/defaultdb", "min_size": 2, "max_size": 10},
         driver_features={"enable_auto_retry": True, "max_retries": 5},
     )
 )

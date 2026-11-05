@@ -6,7 +6,9 @@ from sqlspec.adapters.mysqlconnector import (
     MysqlConnectorAsyncConnectionParams,
     MysqlConnectorAsyncDriver,
     MysqlConnectorAsyncExceptionHandler,
+    MysqlConnectorCursorParams,
     MysqlConnectorDriverFeatures,
+    MysqlConnectorFailoverTarget,
     MysqlConnectorPoolParams,
     MysqlConnectorSyncConfig,
     MysqlConnectorSyncConnectionParams,
@@ -51,6 +53,18 @@ Synchronous and asynchronous MySQL and MariaDB adapters built on `mysql-connecto
 ::: sqlspec.adapters.mysqlconnector.MysqlConnectorDriverFeatures
     options:
       heading_level: 3
+      separate_signature: false
+      show_signature_annotations: true
+
+::: sqlspec.adapters.mysqlconnector.MysqlConnectorCursorParams
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
+
+::: sqlspec.adapters.mysqlconnector.MysqlConnectorFailoverTarget
+    options:
+      heading_level: 4
       separate_signature: false
       show_signature_annotations: true
 

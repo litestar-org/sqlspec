@@ -2,12 +2,16 @@
 
 ```python
 from sqlspec.adapters.sqlite import (
+    SqliteAggregateConfig,
+    SqliteCollationConfig,
     SqliteConfig,
     SqliteConnectionParams,
     SqliteConnectionPool,
     SqliteDriver,
     SqliteDriverFeatures,
     SqliteExceptionHandler,
+    SqliteFunctionConfig,
+    SqliteWindowFunctionConfig,
 )
 ```
 
@@ -31,6 +35,26 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
       heading_level: 3
       separate_signature: false
       show_signature_annotations: true
+
+::: sqlspec.adapters.sqlite.SqliteFunctionConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.sqlite.SqliteCollationConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.sqlite.SqliteAggregateConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.sqlite.SqliteWindowFunctionConfig
+    options:
+      heading_level: 4
+      members: false
 
 ## Driver, Pool & Data Dictionary
 

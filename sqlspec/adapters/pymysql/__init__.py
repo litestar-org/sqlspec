@@ -6,6 +6,7 @@ from sqlspec.adapters.pymysql.config import (
     PyMysqlConnectionParams,
     PyMysqlDriverFeatures,
     PyMysqlPoolParams,
+    PyMysqlSslParams,
     build_connection_config,
 )
 from sqlspec.adapters.pymysql.core import default_statement_config
@@ -20,6 +21,7 @@ __all__ = (
     "PyMysqlDriverFeatures",
     "PyMysqlExceptionHandler",
     "PyMysqlPoolParams",
+    "PyMysqlSslParams",
     "build_connection_config",
     "default_statement_config",
 )

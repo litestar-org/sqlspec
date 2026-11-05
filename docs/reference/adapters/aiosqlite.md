@@ -2,13 +2,17 @@
 
 ```python
 from sqlspec.adapters.aiosqlite import (
+    AiosqliteAggregateConfig,
+    AiosqliteCollationConfig,
     AiosqliteConfig,
     AiosqliteConnectionParams,
     AiosqliteConnectionPool,
     AiosqliteDriver,
     AiosqliteDriverFeatures,
     AiosqliteExceptionHandler,
+    AiosqliteFunctionConfig,
     AiosqlitePoolParams,
+    AiosqliteWindowFunctionConfig,
 )
 ```
 
@@ -38,6 +42,26 @@ Asynchronous SQLite adapter built on `aiosqlite`. Inherited execution methods ar
       heading_level: 3
       separate_signature: false
       show_signature_annotations: true
+
+::: sqlspec.adapters.aiosqlite.AiosqliteFunctionConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.aiosqlite.AiosqliteCollationConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.aiosqlite.AiosqliteAggregateConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.aiosqlite.AiosqliteWindowFunctionConfig
+    options:
+      heading_level: 4
+      members: false
 
 ## Driver, Pool & Data Dictionary
 

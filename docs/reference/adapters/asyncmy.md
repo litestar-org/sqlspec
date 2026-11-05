@@ -8,6 +8,7 @@ from sqlspec.adapters.asyncmy import (
     AsyncmyDriverFeatures,
     AsyncmyExceptionHandler,
     AsyncmyPoolParams,
+    AsyncmySSLParams,
 )
 ```
 
@@ -35,6 +36,12 @@ Asynchronous MySQL and MariaDB adapter built on `asyncmy`. Inherited execution m
 ::: sqlspec.adapters.asyncmy.AsyncmyDriverFeatures
     options:
       heading_level: 3
+      separate_signature: false
+      show_signature_annotations: true
+
+::: sqlspec.adapters.asyncmy.AsyncmySSLParams
+    options:
+      heading_level: 4
       separate_signature: false
       show_signature_annotations: true
 

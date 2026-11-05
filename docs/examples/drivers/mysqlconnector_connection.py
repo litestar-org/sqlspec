@@ -2,10 +2,7 @@
 
 # --8<-- [start:example]
 from sqlspec import SQLSpec
-from sqlspec.adapters.mysqlconnector import (
-    MysqlConnectorAsyncConfig,
-    MysqlConnectorSyncConfig,
-)
+from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
 
 spec = SQLSpec()
 sync_config = spec.add_config(
@@ -22,13 +19,7 @@ sync_config = spec.add_config(
 )
 async_config = spec.add_config(
     MysqlConnectorAsyncConfig(
-        connection_config={
-            "host": "localhost",
-            "port": 3306,
-            "user": "app",
-            "password": "secret",
-            "database": "app_db",
-        }
+        connection_config={"host": "localhost", "port": 3306, "user": "app", "password": "secret", "database": "app_db"}
     )
 )
 # --8<-- [end:example]

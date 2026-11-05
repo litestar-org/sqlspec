@@ -38,14 +38,7 @@ __all__ = (
     "sync_markdown_markers",
 )
 
-UNMIGRATED_ADAPTER_REFS: frozenset[str] = frozenset({
-    "oracledb",
-    "sqlite",
-    "aiosqlite",
-    "asyncmy",
-    "pymysql",
-    "mysqlconnector",
-})
+UNMIGRATED_ADAPTER_REFS: frozenset[str] = frozenset()
 
 _TYPEDDICT_BASES: frozenset[str] = frozenset({"TypedDict", "typing.TypedDict", "typing_extensions.TypedDict"})
 _MIN_QUOTED_LEN: Final[int] = 2

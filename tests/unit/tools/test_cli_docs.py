@@ -248,11 +248,13 @@ def test_sync_markdown_markers_and_adapter_parity_check(tmp_path: Path, capsys: 
 
     default_parity_errors = check_adapter_reference_parity()
     assert default_parity_errors == []
-    assert "oracledb" in UNMIGRATED_ADAPTER_REFS
+    assert UNMIGRATED_ADAPTER_REFS == frozenset()
 
-    strict_parity_errors = check_adapter_reference_parity(unmigrated_allowlist=frozenset())
-    assert len(strict_parity_errors) >= 6
-    assert any("oracledb" in err and "OracleTopologyConfig" in err for err in strict_parity_errors)
+    adapter_docs_dir = tmp_path / "reference" / "adapters"
+    adapter_docs_dir.mkdir(parents=True)
+    (adapter_docs_dir / "oracledb.md").write_text("# oracledb\n", encoding="utf-8")
+    synthetic_errors = check_adapter_reference_parity(docs_dir=tmp_path)
+    assert any("oracledb" in err and "OracleTopologyConfig" in err for err in synthetic_errors)
 
 
 def test_scan_public_docstrings_detects_struct_field_violations_and_leak_phrases(tmp_path: Path) -> None:
