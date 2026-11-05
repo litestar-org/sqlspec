@@ -28,9 +28,14 @@
     poetry add sqlspec dishka
     ```
 
-## Provider Pattern (Scope.APP + Scope.REQUEST)
+## Provider Pattern for App and Request Scopes
 
 Register `SQLSpec` and your adapter `*Config` at `Scope.APP` (created once per process, closing the pool when the application container closes) and yield the driver session from `sqlspec.provide_session(config)` at `Scope.REQUEST`:
+
+| Dishka Scope | SQLSpec Object | Lifecycle | Responsibility |
+| --- | --- | --- | --- |
+| `Scope.APP` | `SQLSpec` registry + `*Config` (`AsyncpgConfig`, `SqliteConfig`, etc.) | Created once at process startup; `await config.close_pool()` / `config.close_pool()` runs on container shutdown | Owns the underlying database connection pool, statement cache, and `SQLFileLoader` |
+| `Scope.REQUEST` | `*Driver` (`AsyncpgDriver`, `SqliteDriver`, etc.) and `SQLSpecAsyncService` / `SQLSpecSyncService` | Entered per HTTP request, CLI command, or worker task via `async with spec.provide_session(config) as driver:` | Borrows one connection from the `Scope.APP` pool, executes queries/transactions, and returns the connection on scope exit |
 
 ```python
 from collections.abc import AsyncIterator

@@ -1,5 +1,6 @@
 """Register SQLSpecPlugin with a Sanic application and query an async SQLite session."""
 
+# --8<-- [start:example]
 from sanic import Request, Sanic, response
 from sanic.response import HTTPResponse
 
@@ -7,12 +8,9 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.extensions.sanic import SQLSpecPlugin
 
-__all__ = ("main",)
 
-
-def main() -> Sanic:
+def create_app() -> Sanic:
     """Create a Sanic application wired with SQLSpecPlugin."""
-    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         AiosqliteConfig(
@@ -30,8 +28,17 @@ def main() -> Sanic:
         return response.json(await db.select_one("SELECT 1 AS ok"))
 
     db_plugin.init_app(app)
-    # --8<-- [end:example]
     return app
+
+
+# --8<-- [end:example]
+
+__all__ = ("create_app", "main")
+
+
+def main() -> Sanic:
+    """Create and return the configured Sanic application."""
+    return create_app()
 
 
 if __name__ == "__main__":

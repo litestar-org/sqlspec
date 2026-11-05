@@ -1,5 +1,6 @@
 """Register SQLSpecPlugin with a Litestar application and inject a named database session."""
 
+# --8<-- [start:example]
 from typing import Any
 
 from litestar import Litestar, get
@@ -9,10 +10,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
-__all__ = ("app", "health_check", "main")
 
-
-# --8<-- [start:example]
 @get("/health", sync_to_thread=False)
 def health_check(db_session: NamedDependency[SqliteDriver]) -> dict[str, Any]:
     """Execute a health-check query against the injected SQLite session."""
@@ -27,6 +25,8 @@ spec.add_config(
 )
 app = Litestar(route_handlers=[health_check], plugins=[SQLSpecPlugin(sqlspec=spec)])
 # --8<-- [end:example]
+
+__all__ = ("app", "health_check", "main")
 
 
 def main() -> Litestar:
