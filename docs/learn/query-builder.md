@@ -107,7 +107,7 @@ filtered = (
 
 | AND Method | OR Method | Compiled SQL |
 | --- | --- | --- |
-| `.where_eq(c, v)` / `.where_neq(c, v)` | `.or_where_eq(c, v)` / `.or_where_neq(c, v)` | `c = :c` / `c <> :c`; `None` binds as a value, so use `.where_is_null(c)` for null checks |
+| `.where_eq(c, v)` / `.where_neq(c, v)` | `.or_where_eq(c, v)` / `.or_where_neq(c, v)` | `c = :c` / `c <> :c`; `None` renders `c IS NULL` / `NOT c IS NULL` |
 | `.where_lt(c, v)` / `.where_lte(c, v)` | `.or_where_lt(c, v)` / `.or_where_lte(c, v)` | `c < :c` / `c <= :c` |
 | `.where_gt(c, v)` / `.where_gte(c, v)` | `.or_where_gt(c, v)` / `.or_where_gte(c, v)` | `c > :c` / `c >= :c` |
 | `.where_between(c, lo, hi)` | `.or_where_between(c, lo, hi)` | `BETWEEN` bounds bound as `:c_low` / `:c_high` |
@@ -149,7 +149,7 @@ built = joined.build(dialect="bigquery")
 
 ## Subqueries, CTEs and Set Operations
 
-Use `.where_exists(subq)`, `.where(sql.exists_(subq))`, or `.where_in(col, subq)` to embed subqueries; their parameters merge into the outer query. Attach CTEs with `.with_(name, query, recursive=False, columns=[...])` and combine queries with `.union(other, all_=True)`, `.intersect(other)`, or `.except_(other)`:
+Use `.where_exists(subq)`, `.where_in(col, subq)`, or the `sql.exists_(subq)`, `sql.any_(subq)`, and `sql.all_(subq)` fragments (for example `.where(col > sql.any_(subq))`) to embed subqueries; their parameters merge into the outer query. `sql.in_(subq)` has no left operand, so passing it to `.where()` raises `SQLBuilderError`; use `.where_in(col, subq)`. Attach CTEs with `.with_(name, query, recursive=False, columns=[...])` and combine queries with `.union(other, all_=True)`, `.intersect(other)`, or `.except_(other)`:
 
 ```{ .python title="docs/examples/builder/subquery_cte.py" }
 --8<-- "docs/examples/builder/subquery_cte.py:example"
