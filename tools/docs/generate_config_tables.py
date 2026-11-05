@@ -51,9 +51,9 @@ _TYPEDDICT_BASES: frozenset[str] = frozenset({"TypedDict", "typing.TypedDict", "
 _MIN_QUOTED_LEN: Final[int] = 2
 _MAX_DEFAULT_VAL_LEN: Final[int] = 48
 _MARKER_BLOCK_PATTERN = re.compile(
-    r"(<!-- GENERATED:START (?P<spec>config-table:[A-Za-z0-9_.,\s]+|filter-catalog) -->)\n"
-    r"(?P<body>.*?)\n"
-    r"(<!-- GENERATED:END (?P=spec) -->)",
+    r"(?P<indent>[ \t]*)(<!-- GENERATED:START (?P<spec>config-table:[A-Za-z0-9_.,\s]+|filter-catalog) -->)\n"
+    r"(?:(?P<body>.*?)\n)?"
+    r"(?P=indent)(<!-- GENERATED:END (?P=spec) -->)",
     re.DOTALL,
 )
 _MARKER_START_PATTERN = re.compile(r"<!-- GENERATED:START (?P<spec>[^>]+?) -->")
@@ -308,12 +308,14 @@ def _sync_single_file_markers(md_path: Path, original: str) -> tuple[list[str], 
     file_stale: list[str] = []
 
     def _replace_block(match: re.Match[str]) -> str:
+        indent = match.group("indent")
         spec = match.group("spec").strip()
-        current_body = match.group("body").strip()
-        expected_body = _render_marker_spec(spec).strip()
-        if current_body != expected_body:
+        current_body = match.group("body") or ""
+        raw_expected = _render_marker_spec(spec).strip()
+        expected_body = "\n".join(f"{indent}{line}" if line else "" for line in raw_expected.splitlines())
+        if current_body.strip() != expected_body.strip() or (indent and not current_body.startswith(indent)):
             file_stale.append(f"{md_path}: out-of-date marker block '{spec}'")
-        return f"{match.group(1)}\n{expected_body}\n{match.group(4)}"
+        return f"{indent}{match.group(2)}\n{expected_body}\n{indent}{match.group(5)}"
 
     updated = _MARKER_BLOCK_PATTERN.sub(_replace_block, original)
     return file_stale, updated
