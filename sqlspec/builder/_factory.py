@@ -1101,18 +1101,6 @@ class SQLFactory:
         return FunctionExpression(exp.Any(this=values))
 
     @staticmethod
-    def not_any_(values: list[Any] | exp.Expr | str) -> FunctionExpression:
-        """Create a NOT ANY expression for use with comparison operators.
-
-        Args:
-            values: Values, expression, or subquery for the NOT ANY clause.
-
-        Returns:
-            NOT ANY expression.
-        """
-        return FunctionExpression(exp.Not(this=SQLFactory.any(values).expression))
-
-    @staticmethod
     def concat(*expressions: str | exp.Expr) -> StringExpression:
         """Create a CONCAT expression.
 

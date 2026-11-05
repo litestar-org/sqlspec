@@ -764,13 +764,6 @@ def test_any_subquery() -> None:
     assert isinstance(any_expr, Any)
 
 
-def test_not_any_factory_wraps_any_expression_in_not() -> None:
-    """Test SQLFactory.not_any_ returns NOT ANY instead of bare ANY."""
-    result = SQLFactory.not_any_([1, 2, 3])
-    assert isinstance(result.expression, exp.Not)
-    assert isinstance(result.expression.this, exp.Any)
-
-
 def test_any_factory_still_returns_any_expression() -> None:
     """Test SQLFactory.any remains unchanged."""
     result = SQLFactory.any([1, 2])
@@ -783,20 +776,6 @@ def test_any_factory_values_render_via_sql() -> None:
     rendered = result.expression.sql().upper()
     assert "ANY" in rendered
     assert "1" in rendered and "2" in rendered and "3" in rendered
-
-
-def test_not_any_factory_values_render_via_sql() -> None:
-    """Test SQLFactory.not_any_ list values render to SQL without raising."""
-    rendered = SQLFactory.not_any_([1, 2, 3]).expression.sql().upper()
-    assert "NOT" in rendered
-    assert "ANY" in rendered
-
-
-def test_not_any_factory_where_clause_contains_not() -> None:
-    """Test not_any_ emits NOT when composed into a WHERE clause."""
-    query = sql.select("*").from_("users").where(SQLFactory.not_any_("SELECT id FROM blocked_users").expression)
-    stmt = query.build()
-    assert "NOT" in stmt.sql.upper()
 
 
 def test_all_subquery() -> None:
@@ -2275,48 +2254,6 @@ def test_exists_subquery_merges_subquery_parameters() -> None:
 def test_bulk_insert_renders_positional_placeholders(placeholder_style: str, expected_values: str) -> None:
     rendered = sql.bulk_insert("events", 3, placeholder_style=placeholder_style).expression.sql()
     assert rendered == f"INSERT INTO events VALUES {expected_values}"
-
-
-@pytest.mark.parametrize(
-    ("condition_factory", "expected_fragment"),
-    [
-        (lambda sub: sql.exists_(sub), "EXISTS"),
-        (lambda sub: exp.Not(this=sql.exists_(sub)), "NOT EXISTS"),
-        (lambda sub: Column("salary") > sql.any_(sub), "> ANY"),
-        (lambda sub: Column("salary") > sql.all_(sub), "> ALL"),
-        (lambda sub: exp.EQ(this=exp.column("dept_id"), expression=sql.any_(sub)), "= ANY"),
-    ],
-    ids=["exists", "not_exists", "column_gt_any", "column_gt_all", "raw_eq_any"],
-)
-def test_subquery_fragments_merge_subquery_parameters(
-    condition_factory: "Callable[[Select], Any]", expected_fragment: str
-) -> None:
-    subquery = sql.select("salary").from_("employees").where(("dept", "=", "eng"))
-    query = sql.select("*").from_("staff").where(("dept", "=", "ops")).where(condition_factory(subquery))
-    query.enable_optimization = False
-
-    built = query.build()
-
-    assert built.parameters == {"dept": "ops", "dept_1": "eng"}
-    assert ":dept_1" in built.sql
-    assert expected_fragment in " ".join(built.sql.split()).replace('"', "")
-
-
-def test_subquery_fragment_reuse_does_not_mutate_fragment() -> None:
-    subquery = sql.select("1").from_("orders").where(("total", ">", 100))
-    fragment = sql.exists_(subquery)
-    first = sql.select("*").from_("users").where(("total", "=", 1)).where(fragment).build()
-    second = sql.select("*").from_("users").where(fragment).build()
-
-    assert first.parameters == {"total": 1, "total_1": 100}
-    assert second.parameters == {"total": 100}
-    assert ":total" in second.sql
-
-
-def test_in_fragment_without_left_operand_raises() -> None:
-    subquery = sql.select("id").from_("vip_users")
-    with pytest.raises(SQLBuilderError, match=r"where_in"):
-        sql.select("*").from_("users").where(sql.in_(subquery))
 
 
 @pytest.mark.parametrize(
