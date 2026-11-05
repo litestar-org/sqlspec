@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
+import pytest
 from sqlglot import exp
 
 from sqlspec import sql
@@ -353,3 +354,15 @@ def test_to_statement_expression_select_to_statement_keeps_raw_expression() -> N
 def test_to_statement_expression_factory_returning_dml_keeps_raw_expression() -> None:
     stmt = sql("INSERT INTO t VALUES (:x) RETURNING id")
     assert isinstance(stmt.raw_expression, exp.Expr)
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "bigquery", "duckdb", "sqlite", None])
+def test_to_sql_show_parameters_substitutes_dialect_placeholder_style(dialect: "str | None") -> None:
+    """show_parameters inlines values for every named placeholder style the builder renders."""
+    query = sql.select("*", dialect=dialect).from_("users").where(("id", "=", 5)).where(("name", "=", "o'neil"))
+    rendered = " ".join(query.to_sql(show_parameters=True).split())
+    assert rendered.endswith("= 5 AND " + rendered.split(" AND ")[1].split(" = ")[0] + " = 'o''neil'")
+    assert "%(" not in rendered
+    assert "@id" not in rendered
+    assert "$id" not in rendered
+    assert ":id" not in rendered

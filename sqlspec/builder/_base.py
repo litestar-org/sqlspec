@@ -368,7 +368,9 @@ class QueryBuilder:
 
         Args:
             show_parameters: If True, replace parameter placeholders with actual values (for debugging).
-                If False (default), return SQL with parameter placeholders.
+                If False (default), return SQL with parameter placeholders. Every named
+                placeholder style the builder renders is substituted (``:name``, ``%(name)s``,
+                ``@name``, and ``$name``).
             dialect: Optional dialect override. If provided, generates SQL for this dialect
                 instead of the builder's default dialect.
 
@@ -390,10 +392,11 @@ class QueryBuilder:
             return sql
 
         sorted_names = sorted(parameters, key=len, reverse=True)
-        pattern = re.compile(r":(" + "|".join(re.escape(name) for name in sorted_names) + r")\b")
+        names_pattern = "|".join(re.escape(name) for name in sorted_names)
+        pattern = re.compile(rf"%\(({names_pattern})\)s|(?<![:\w])[:@$]({names_pattern})\b")
 
         def _replace_match(match: "re.Match[str]") -> str:
-            param_name = match.group(1)
+            param_name = match.group(1) or match.group(2)
             param_value = parameters[param_name]
             if isinstance(param_value, str):
                 escaped = param_value.replace("'", "''")
