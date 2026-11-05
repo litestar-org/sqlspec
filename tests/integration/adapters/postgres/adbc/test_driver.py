@@ -215,22 +215,25 @@ def test_postgresql_lone_uuid_parameter_survives_statement_cache_hits(postgresql
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.adbc
 def test_postgresql_uuid_row_stream_and_arrow_boundary(postgresql_session: AdbcDriver) -> None:
-    """Row APIs decode UUIDs while the Arrow API preserves the opaque extension."""
+    """Row APIs decode UUIDs while the Arrow API preserves the native schema and values."""
     value = UUID("550e8400-e29b-41d4-a716-446655440000")
-    statement = f"SELECT CAST('{value}' AS UUID) AS value"
+    statement = "SELECT CAST($1 AS UUID) AS value"
+    parameter = str(value)
 
-    buffered = postgresql_session.select_one(statement)
-    with postgresql_session.select_stream(statement, native_only=True, chunk_size=1) as stream:
+    with postgresql_session.connection.cursor() as cursor:
+        cursor.execute(statement, (parameter,))
+        native_table = cursor.fetch_arrow_table()
+
+    buffered = postgresql_session.select_one(statement, parameter)
+    with postgresql_session.select_stream(statement, parameter, native_only=True, chunk_size=1) as stream:
         streamed = list(stream)
-    arrow_result = postgresql_session.select_to_arrow(statement)
+    arrow_result = postgresql_session.select_to_arrow(statement, parameter)
     arrow_table = arrow_result.data
-    arrow_type = arrow_table.schema.field("value").type
 
     assert buffered == {"value": value}
     assert streamed == [buffered]
-    assert arrow_type.extension_name == "arrow.opaque"
-    assert arrow_type.type_name == "uuid"
-    assert arrow_table.to_pylist() == [{"value": value.bytes}]
+    assert arrow_table.schema == native_table.schema
+    assert arrow_table.to_pylist() == native_table.to_pylist()
 
 
 @pytest.mark.xdist_group("postgres")
