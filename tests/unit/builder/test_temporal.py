@@ -144,3 +144,9 @@ def test_create_temporal_table_registers_version_generators_lazily() -> None:
     table_expr = create_temporal_table("users", exp.Literal.string("2024-01-01"))
 
     assert "AS OF TIMESTAMP '2024-01-01'" in normalize_sql(table_expr.sql(dialect="oracle"))
+
+
+def test_as_of_with_string_alias() -> None:
+    query = sql.select("*").from_("users", alias="u", as_of="2024-01-01")
+    built = normalize_sql(query.build(dialect="oracle").sql)
+    assert built == "SELECT * FROM users AS OF TIMESTAMP '2024-01-01' u"

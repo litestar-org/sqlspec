@@ -377,9 +377,9 @@ def _attach_as_of_version(
         target_alias = inner_table.alias
         inner_table = inner_table.this
     elif isinstance(inner_table, exp.Table):
-        alias_expr = inner_table.args.get("alias")
-        if alias_expr is not None:
-            target_alias = alias_expr.this
+        table_alias = inner_table.alias
+        if table_alias:
+            target_alias = table_alias
             inner_table.set("alias", None)
 
     version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
