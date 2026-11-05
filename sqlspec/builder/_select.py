@@ -1259,11 +1259,7 @@ class Select(
                 )
             ]
             if statement_hints:
-                hint_expressions: list[exp.Expr] = [
-                    _parse_hint_expression(hint, target_dialect) for hint in statement_hints
-                ]
-                if hint_expressions:
-                    base_expr.set("hint", exp.Hint(expressions=hint_expressions))
+                base_expr.set("hint", exp.Hint(expressions=[_hint_expression(hint) for hint in statement_hints]))
         return base_expr
 
     def _postprocess_built_sql(self, sql_string: str, dialect: "DialectType" = None) -> str:
@@ -1409,10 +1405,11 @@ def _ensure_select_expression(
     return expression
 
 
-def _parse_hint_expression(hint: Any, dialect: "DialectType | str | None") -> exp.Expr:
-    try:
-        hint_str = str(hint)
-        hint_expr: exp.Expr | None = exp.maybe_parse(hint_str, dialect=dialect)
-        return hint_expr or exp.Anonymous(this=hint_str)
-    except Exception:
-        return exp.Anonymous(this=str(hint))
+def _hint_expression(hint: Any) -> exp.Expr:
+    """Wrap a statement hint as verbatim text.
+
+    Hint bodies such as ``INDEX(users idx_users_email)`` are not SQL expressions:
+    parsing them fails or rewrites identifiers, so the text is emitted unchanged
+    inside ``/*+ ... */``.
+    """
+    return exp.Var(this=str(hint))
