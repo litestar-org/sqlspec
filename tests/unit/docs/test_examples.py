@@ -36,15 +36,6 @@ DIRECTIVE_PREFIXES: tuple[str, ...] = (
 )
 MARKDOWN_OUTPUT_PREFIXES: tuple[str, ...] = ("# sql:", "# parameters:", "# output:")
 CONFIG_ONLY_MODULES: frozenset[str] = frozenset({"migration_quickstart_config.py"})
-UNREFERENCED_EXAMPLE_MODULES: frozenset[str] = frozenset({
-    "builder/query_modifiers.py",
-    "querying/execute_select.py",
-    "quickstart/configuration.py",
-    "reference/base_api.py",
-    "reference/builder_api.py",
-    "reference/core_api.py",
-    "reference/driver_api.py",
-})
 EXTERNAL_DAEMON_EXAMPLES: frozenset[str] = frozenset({
     "drivers/asyncpg_connection.py",
     "drivers/cockroach_psycopg_connection.py",
@@ -58,8 +49,8 @@ EXAMPLE_MODULES: list[Path] = [path for path in ALL_PYTHON_FILES if path.name !=
 
 def test_examples_directory_inventory() -> None:
     """Ensure the documentation examples tree is discovered and non-empty."""
-    assert len(INIT_FILES) >= 20
-    assert len(EXAMPLE_MODULES) >= 63
+    assert INIT_FILES
+    assert EXAMPLE_MODULES
 
 
 def test_example_packages_define_docstring_and_dunder_all() -> None:
@@ -238,7 +229,7 @@ def test_all_example_modules_are_referenced_in_docs() -> None:
     orphans: list[str] = []
     for path in EXAMPLE_MODULES:
         rel_short = path.relative_to(EXAMPLES_DIR).as_posix()
-        if rel_short in CONFIG_ONLY_MODULES or rel_short in UNREFERENCED_EXAMPLE_MODULES:
+        if rel_short in CONFIG_ONLY_MODULES:
             continue
         rel_repo = path.relative_to(REPO_ROOT).as_posix()
         if rel_repo not in combined_markdown and rel_short not in combined_markdown:

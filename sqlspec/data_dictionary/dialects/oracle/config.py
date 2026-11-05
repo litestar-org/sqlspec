@@ -77,7 +77,7 @@ ORACLE_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_upsert": True,
     "supports_window_functions": True,
     "supports_cte": True,
-    "supports_arrays": True,
+    "supports_arrays": False,
 }
 
 ORACLE_TYPE_MAPPINGS: dict[str, str] = {

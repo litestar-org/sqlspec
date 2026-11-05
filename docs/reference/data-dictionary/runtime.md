@@ -1,5 +1,9 @@
 # Runtime Introspection & DDL Synthesis
 
+```python
+from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
+```
+
 Runtime introspection, DDL extraction, and column profiling methods provided by `driver.data_dictionary` on [`SyncDriverAdapterBase`](../driver/sync.md) and [`AsyncDriverAdapterBase`](../driver/async.md). For dialect-specific system catalog SQL queries (`-- name: ...`) and capability profiles, see [Dialect SQL Catalogs](dialects/index.md).
 
 ## Synchronous Introspection

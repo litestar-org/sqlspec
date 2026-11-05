@@ -37,7 +37,7 @@ Each dialect pack declares boolean `feature_flags` and version-gated `feature_ve
 | [DuckDB](duckdb.md) | `Yes` | `>=0.8.0` | `>=0.8.0` | `Yes` | `Yes` | `Yes` | `Yes` | `No` | `Yes` |
 | [MySQL](mysql.md) | `Yes` | `No` | `Yes` | `>=8.0.2` | `>=8.0.1` | `>=5.7.8` | `No` | `No` | `Yes` |
 | [MariaDB](mariadb.md) | `Yes` | `Yes` | `Yes` | `>=10.2.0` | `>=10.2.1` | `>=10.2.7` | `No` | `No` | `Yes` |
-| [Oracle Database](oracle.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=12.1.0` | `Yes` | `>=23.4.0` | `Yes` |
+| [Oracle Database](oracle.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=12.1.0` | `No` | `>=23.4.0` | `Yes` |
 | [SQL Server](mssql.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=13.0.0` | `No` | `No` | `Yes` |
 | [Sybase ASE](sybase.md) | `Yes` | `No` | `No` | `No` | `No` | `No` | `No` | `No` | `Yes` |
 | [SAP SQL Anywhere](sqlanywhere.md) | `Yes` | `No` | `Yes` | `>=10.0.0` | `>=10.0.0` | `No` | `No` | `No` | `Yes` |

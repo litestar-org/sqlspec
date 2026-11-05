@@ -194,7 +194,7 @@ DIALECT_SPECS: tuple[DialectDocSpec, ...] = (
 
 
 def render_all_dialect_docs() -> dict[str, str]:
-    """Render the dialect index and all 13 per-dialect Markdown pages.
+    """Render the dialect index and every per-dialect Markdown page.
 
     Returns:
         Mapping of filename (such as ``"index.md"`` or ``"postgres.md"``) to Markdown content.
@@ -218,7 +218,7 @@ def render_dialect_index() -> str:
         "from sqlspec.data_dictionary import DialectConfig, get_data_dictionary_loader, get_dialect_config",
         "```",
         "",
-        "SQLSpec ships 13 dialect-specific SQL catalog packs under `sqlspec/data_dictionary/dialects/` containing named [`SQLFileLoader`](../../loader.md) queries (`-- name: ...`), version-gated feature profiles (`DialectConfig`), and logical-to-physical type mappings. See the [Data Dictionary Guide](../../../learn/data-dictionary.md) and [Data Dictionary Reference](../index.md) for programmatic usage.",
+        f"SQLSpec ships {len(DIALECT_SPECS)} dialect-specific SQL catalog packs under `sqlspec/data_dictionary/dialects/` containing named [`SQLFileLoader`](../../loader.md) queries (`-- name: ...`), version-gated feature profiles (`DialectConfig`), and logical-to-physical type mappings. See the [Data Dictionary Guide](../../../learn/data-dictionary.md) and [Data Dictionary Reference](../index.md) for programmatic usage.",
         "",
         "## Dialect Catalog Matrix",
         "",

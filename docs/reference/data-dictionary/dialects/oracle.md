@@ -22,7 +22,7 @@ Introspects `ALL_TABLES`, `ALL_TAB_COLS`, `ALL_INDEXES`, `ALL_IND_COLUMNS`, `ALL
 
 | Capability | Status / Minimum Version | Logical Type | Target Physical Type |
 | --- | --- | --- | --- |
-| `supports_arrays` | `True` | `bigint` | `NUMBER(19)` |
+| `supports_arrays` | `False` | `bigint` | `NUMBER(19)` |
 | `supports_cte` | `True` | `blob` | `BLOB` |
 | `supports_for_update` | `True` | `boolean` | `NUMBER(1)` |
 | `supports_in_memory` | `True` | `float` | `BINARY_DOUBLE` |

@@ -107,8 +107,8 @@ class LifecycleConfig(TypedDict):
 
     Each hook accepts a list of callables receiving a single
     :data:`~sqlspec.observability.LifecycleContext` (``dict[str, Any]``)
-    mapping containing base keys (``config``, ``bind_key``,
-    ``correlation_id``) plus event-specific payload keys.
+    mapping containing the ``config`` key (plus ``bind_key`` and
+    ``correlation_id`` when set) and event-specific payload keys.
     """
 
     on_connection_create: NotRequired[list[Callable[[dict[str, Any]], Any]]]
