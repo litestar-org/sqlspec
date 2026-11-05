@@ -124,18 +124,28 @@ class CaseBuilder:
 
 
 class SubqueryBuilder:
-    """Helper to build subquery expressions for EXISTS/IN/ANY/ALL operations."""
+    """Helper to build subquery expressions for EXISTS/IN/ANY/ALL operations.
+
+    ``EXISTS`` is a complete predicate, so a parameterized builder subquery returns a
+    ``SQL`` object that carries the bound parameters; ``.where()`` merges them into
+    the outer query. ``IN``/``ANY``/``ALL`` return bare expression fragments for
+    composition, so parameterized subqueries belong in ``.where_in()`` /
+    ``.where_any()``, which merge parameters.
+    """
 
     __slots__ = ("_operation",)
 
     def __init__(self, operation: str) -> None:
         self._operation = operation
 
-    def __call__(self, subquery: Any) -> exp.Expr:
+    def __call__(self, subquery: Any) -> "exp.Expr | SQL":
+        parameters: dict[str, Any] = {}
         if isinstance(subquery, exp.Expr):
             subquery_expr = subquery
         elif has_parameter_builder(subquery):
-            subquery_expr = cast("QueryBuilder", subquery)._build_final_expression(copy=True)
+            subquery_builder = cast("QueryBuilder", subquery)
+            subquery_expr = subquery_builder._build_final_expression(copy=True)
+            parameters = subquery_builder.parameters
         else:
             dialect = subquery.dialect if isinstance(subquery, (QueryBuilder, BuiltQuery)) else None
             parsed_expr: exp.Expression | None = exp.maybe_parse(str(subquery), dialect=dialect)
@@ -145,7 +155,8 @@ class SubqueryBuilder:
             subquery_expr = parsed_expr
 
         if self._operation == "exists":
-            return exp.Exists(this=subquery_expr)
+            exists_expr = exp.Exists(this=subquery_expr)
+            return SQL(exists_expr, parameters) if parameters else exists_expr
         if self._operation == "in":
             return exp.In(this=exp.Var(this=""), expressions=[subquery_expr])
         if self._operation == "any":

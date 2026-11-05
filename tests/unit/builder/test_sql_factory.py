@@ -2254,3 +2254,14 @@ def test_having_tuple_condition_binds_named_parameter(
     rendered = " ".join(built.sql.split()).replace('"', "")
     assert rendered.endswith(f"HAVING {expected_having}")
     assert built.parameters == expected_parameters
+
+
+def test_exists_subquery_merges_subquery_parameters() -> None:
+    subquery = sql.select("1").from_("orders").where(("total", ">", 100))
+    query = sql.select("*").from_("users").where(("total", "=", 5)).where(sql.exists_(subquery))
+
+    built = query.build()
+
+    assert built.parameters == {"total": 5, "total_1": 100}
+    assert ":total_1" in built.sql
+    assert "EXISTS" in built.sql
