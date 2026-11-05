@@ -80,6 +80,7 @@ _BARE_KEYWORDS: Final[frozenset[str]] = frozenset({
     "where",
 })
 _PARAMETER_VALIDATOR = ParameterValidator()
+_NON_IDENTIFIER_PATTERN: Final["re.Pattern[str]"] = re.compile(r"\W+")
 _DIALECT_ALIASES: Final[dict[str, str]] = {
     "ase": "sybase",
     "cockroach": "postgres",
@@ -94,6 +95,9 @@ _DIALECT_ALIASES: Final[dict[str, str]] = {
 def extract_column_name(column: str | exp.Column) -> str:
     """Extract column name from column expression for parameter naming.
 
+    Non-column expressions such as ``COUNT(*)`` or ``SUM(o.amount)`` become
+    identifier-safe names (``count``, ``sum_o_amount``) so placeholders stay valid.
+
     Args:
         column: Column expression (string or SQLGlot Column)
 
@@ -104,7 +108,7 @@ def extract_column_name(column: str | exp.Column) -> str:
         col_expr: exp.Expr | None = exp.maybe_parse(column)
         if isinstance(col_expr, exp.Column):
             return col_expr.name
-        return column.split(".")[-1] if "." in column else column
+        return _NON_IDENTIFIER_PATTERN.sub("_", column).strip("_").lower() or "column"
     if isinstance(column, exp.Column):
         return column.name
     return "column"

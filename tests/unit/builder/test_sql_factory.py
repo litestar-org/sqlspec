@@ -2234,3 +2234,23 @@ def test_where_not_any_negates_any_comparison() -> None:
     query.enable_optimization = False
     rendered = " ".join(query.build().sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
     assert rendered.endswith("WHERE NOT c = ANY(ARRAY(:c_not_any_1, :c_not_any_2))")
+
+
+@pytest.mark.parametrize(
+    ("condition", "expected_having", "expected_parameters"),
+    [
+        (("COUNT(*)", ">", 5), "COUNT(*) > :count", {"count": 5}),
+        (("SUM(o.amount)", ">=", 10), "SUM(o.amount) >= :sum_o_amount", {"sum_o_amount": 10}),
+        (("total", 7), "total = :total", {"total": 7}),
+    ],
+    ids=["count_star", "qualified_sum", "column_pair"],
+)
+def test_having_tuple_condition_binds_named_parameter(
+    condition: "tuple[Any, ...]", expected_having: str, expected_parameters: "dict[str, Any]"
+) -> None:
+    query = sql.select("dept").from_("t").group_by("dept").having(condition)
+    query.enable_optimization = False
+    built = query.build()
+    rendered = " ".join(built.sql.split()).replace('"', "")
+    assert rendered.endswith(f"HAVING {expected_having}")
+    assert built.parameters == expected_parameters
