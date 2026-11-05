@@ -1,8 +1,18 @@
 # SAP Adaptive Server Enterprise (Sybase ASE)
 
-`sqlspec.adapters.sybase` provides first-class support for SAP Adaptive Server Enterprise (SAP ASE) 16.0+ via `pymssql` (`>= 2.4.4`) over FreeTDS TDS 5.0 wire protocol, featuring connection pooling (`SybaseConfig`), custom SQLGlot `sybase` dialect compilation, system catalog introspection, and Litestar, Events, and Google ADK session/memory store extensions.
+`sqlspec.adapters.sybase` provides synchronous support for SAP Adaptive Server Enterprise (SAP ASE) 16.0+ via `pymssql` (`>= 2.4.4`) over FreeTDS TDS 5.0 wire protocol, featuring thread-local connection pooling (`SybaseConfig`), custom SQLGlot `sybase` dialect compilation, system catalog introspection, and Litestar, Events, and Google ADK session/memory store extensions.
 
-## Install and When to Choose
+## Overview & Capabilities
+
+| Capability | Details |
+| --- | --- |
+| **Adapter Config** | `SybaseConfig` (`sqlspec.adapters.sybase`) |
+| **Driver Extra** | `sqlspec[sybase]` (`pymssql >= 2.4.4` with FreeTDS TDS 5.0) |
+| **Execution Mode** | Synchronous |
+| **Pool Architecture** | `SybaseConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`) |
+| **Dialect & Extensions** | Custom SQLGlot `sybase` dialect, Litestar store, Events queue store, Google ADK session & memory stores |
+
+## Installation & Quickstart
 
 === "uv"
 
@@ -28,19 +38,9 @@
     poetry add "sqlspec[sybase]"
     ```
 
-- Choose **`SybaseConfig`** for transactional OLTP applications communicating with SAP ASE database instances.
-- Prebuilt `pymssql` wheels ship statically linked FreeTDS with native TDS 5.0 wire support across Linux, macOS, and Windows.
-- Note: Neither Apache Arrow ADBC nor GizmoData provides native ADBC drivers for SAP ASE, so SQLSpec communicates with ASE directly via FreeTDS TDS 5.0 DB-API connections.
+Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 either when `TDSVER=5.0` is set in the environment before process start or when a FreeTDS server section alias is defined in `freetds.conf`:
 
-## Connection Setup and Protocol Negotiation
-
-Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 either when an environment variable `TDSVER=5.0` is set before process start, or when a FreeTDS server section alias is defined in `freetds.conf`:
-
-=== "Environment Variable (`TDSVER=5.0`)"
-
-    ```bash
-    export TDSVER=5.0
-    ```
+=== "Environment Variable (TDSVER=5.0)"
 
     ```python
     from sqlspec import SQLSpec
@@ -61,7 +61,7 @@ Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 eit
     )
     ```
 
-=== "FreeTDS Server Alias (`server_alias`)"
+=== "FreeTDS Server Alias (server_alias)"
 
     ```python
     from sqlspec import SQLSpec
@@ -81,35 +81,77 @@ Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 eit
     )
     ```
 
-An alias supplies the host and TDS version. Set `port` as well, even if it is in `freetds.conf`. `pymssql` replaces the port from that file with the value you pass. A missing, empty, or zero port raises `ImproperConfigurationError`.
+An alias supplies the host and TDS version; always set `port` explicitly as well, because `pymssql` overrides the port from `freetds.conf` and a missing or zero port raises `ImproperConfigurationError`.
 
-## Key Configuration Parameters
+## Connection & Pool Configuration
 
-| Setting | Location | Description |
+### Connection and Pool Parameters
+
+Pass `SybaseConnectionParams` and `SybasePoolParams` keys inside `connection_config={...}` on `SybaseConfig`:
+
+<!-- GENERATED:START config-table:sqlspec.adapters.sybase.config.SybaseConnectionParams,sqlspec.adapters.sybase.config.SybasePoolParams -->
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `server` | `str` | - | Database server host, IP, or FreeTDS server definition name. |
+| `host` | `str` | - | Alias for `server`. |
+| `freetds_server` | `str` | - | FreeTDS server configuration section name; requires an explicit port. |
+| `server_alias` | `str` | - | FreeTDS server configuration section name; requires an explicit port. |
+| `is_server_alias` | `bool` | - | Treat `server` as a FreeTDS configuration section name; requires an explicit port. |
+| `user` | `str` | - | Login user name. |
+| `username` | `str` | - | Alias for `user`. |
+| `password` | `str` | - | Authentication password. |
+| `database` | `str` | - | Initial database name to connect to. |
+| `db` | `str` | - | Alias for `database`. |
+| `port` | `int or str` | - | TCP port number; required for section aliases, otherwise defaults to 5000. |
+| `timeout` | `SybaseTimeout` | - | Query execution timeout in seconds. |
+| `login_timeout` | `SybaseTimeout` | - | Login and connection timeout in seconds. |
+| `charset` | `str` | - | Client character set encoding. |
+| `as_dict` | `bool` | - | Return query result rows as dictionaries. |
+| `appname` | `str` | - | Application name sent to the server for connection identification. |
+| `conn_properties` | `str` | - | Session initialization SQL; replaces the default connection properties when supplied. |
+| `autocommit` | `bool` | - | Enable autocommit mode for transactions. |
+| `tds_version` | `str` | - | TDS protocol version (such as `'5.0'` or `'7.4'`). |
+| `encryption` | `Literal['off', 'request', 'require']` | - | TDS connection encryption level. |
+| `arraysize` | `int` | - | Default cursor fetch array size. |
+| `conv` | `Mapping[int or type[Any], Callable[..., Any]]` | - | Custom datatype conversion dictionary mapping TDS types to python types. |
+| `read_only` | `bool` | - | Native pymssql login intent; does not enforce ASE read-only permissions. |
+| `pool_recycle_seconds` | `int` | - | Maximum age in seconds before a pooled connection is recycled. |
+| `health_check_interval` | `float` | - | Idle duration in seconds before a connection is checked on checkout. |
+| `extra` | `dict[str, Any]` | - | Additional driver connection arguments. |
+<!-- GENERATED:END config-table:sqlspec.adapters.sybase.config.SybaseConnectionParams,sqlspec.adapters.sybase.config.SybasePoolParams -->
+
+### Driver Features
+
+Pass `SybaseDriverFeatures` keys inside `driver_features={...}` on `SybaseConfig`:
+
+<!-- GENERATED:START config-table:sqlspec.adapters.sybase.config.SybaseDriverFeatures -->
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `json_serializer` | `Callable[[Any], str]` | - | Custom callable for serializing objects to JSON strings. |
+| `json_deserializer` | `Callable[[str], Any]` | - | Custom callable for deserializing JSON strings. |
+| `on_connection_create` | `Callable[[SybaseConnection], None]` | - | Callback invoked immediately when a new connection is established. |
+| `enable_events` | `bool` | - | Enable database event listening. |
+| `events_backend` | `Literal['poll_queue']` | - | Backend mechanism used for dispatching events. |
+<!-- GENERATED:END config-table:sqlspec.adapters.sybase.config.SybaseDriverFeatures -->
+
+## Type Mappings & Dialect Notes
+
+| Database Type | Python Type | Notes / Feature Flag |
 | --- | --- | --- |
-| `server` / `host` | `connection_config` | Database host name or IP address (default port `5000`). |
-| `server_alias` / `freetds_server` | `connection_config` | Section name in `freetds.conf` configured with `tds version = 5.0`; requires an explicit `port`. |
-| `is_server_alias` | `connection_config` | Set to `True` when `server` names a FreeTDS section. The same explicit-port requirement applies. |
-| `database` / `db` | `connection_config` | Target database catalog name. |
-| `user` / `username` | `connection_config` | Authentication login principal. |
-| `password` | `connection_config` | Authentication password credentials. |
-| `autocommit` | `connection_config` | Defaults to `True` to allow DDL execution outside implicit transactions. |
-| `conn_properties` | `connection_config` | Defaults to `SET CHAINED OFF`, `SET QUOTED_IDENTIFIER ON`, `SET ANSINULL ON`, and `SET TEXTSIZE 2147483647`. A supplied value replaces these defaults. |
-| `read_only` | `connection_config` | Passed as native pymssql login intent. It does not enforce read-only access in ASE; use database permissions. |
-| `pool_recycle_seconds` | `connection_config` | Maximum connection age in seconds before recycling (defaults to 24 hours). |
-| `health_check_interval` | `connection_config` | Minimum idle time in seconds before running liveness probes. |
-| `json_serializer` / `json_deserializer` | `driver_features` | Custom JSON text serialization/deserialization callables. |
+| `BIT` | `bool` / `int` | In SAP ASE, `BIT` columns are non-nullable by default (`BIT DEFAULT 0 NOT NULL`) unless explicitly altered. |
+| `MONEY` / `SMALLMONEY` | `decimal.Decimal` | Fixed-scale currency types mapped to exact `Decimal` values. |
+| `DATETIME` / `SMALLDATETIME` / `BIGDATETIME` | `datetime.datetime` | `CreateTable.from_arrow_schema()` maps Arrow timestamps to `BIGDATETIME` (ASE's `TIMESTAMP` keyword denotes a binary row-version column). Normalize timezone-aware values to UTC beforehand. |
+| `IMAGE` / `TEXT` / `UNITEXT` | `bytes` / `str` | Large object (LOB) columns governed by `SET TEXTSIZE 2147483647` in default `conn_properties`. |
+| `VARCHAR(36)` / `VARBINARY(16)` | `uuid.UUID` / `str` | UUID parameters serialize cleanly to character or binary representations. |
+| `TEXT` / `VARCHAR` (`XML` / JSON) | `dict` / `list` / `str` | JSON payloads serialize via `json_serializer` and `json_deserializer`. |
 
-## Dialect and Catalog Notes
+- **Autocommit and DDL in Transactions**: In Sybase ASE, statements like `CREATE TABLE` and `CREATE INDEX` raise error `2762` inside multi-statement transactions unless database option `ddl in tran` is enabled. `SybaseConfig` defaults `autocommit=True` and begins explicit transactions on demand via `session.begin()`.
+- **Pagination (`SELECT TOP n` vs `ROWS LIMIT`)**: Zero-offset bounded queries (including ADK session, event, and memory queries) emit `SELECT TOP n` without an `OFFSET` clause. Positive offsets emit `ROWS LIMIT n OFFSET m` on ASE 16.0+ modes that support it.
+- **Arrow Schema Inference and Staged Storage Loads**: `CreateTable.from_arrow_schema()` maps string primary keys to `VARCHAR(255)` and raises `SQLBuilderError` for decimal precision above `38`. During staged storage loads (`load_from_arrow` / `load_from_storage`) with `conflict_keys`, SQLSpec updates matching rows first and inserts new rows in a second statement; coordinate concurrent loads that target the same keys.
+- **System Catalog Introspection**: Schema discovery queries `dbo.sysobjects`, `dbo.syscolumns`, `dbo.sysindexes`, `dbo.sysreferences`, and `dbo.systypes`.
 
-- **Autocommit and DDL in Transactions**: In Sybase ASE, statements like `CREATE TABLE` and `CREATE INDEX` raise error 2762 inside multi-statement transactions unless database option `ddl in tran` is enabled. `SybaseConfig` defaults `autocommit=True` and begins explicit transactions on demand via `driver.begin()`.
-- **Pagination**: Bounded ADK session, event, and memory queries use `SELECT TOP n` with no offset. Positive offsets use `ROWS LIMIT n OFFSET m`; check that your ASE version and server mode support it.
-- **System Catalogs**: Reflection queries introspect `dbo.sysobjects`, `dbo.syscolumns`, `dbo.sysindexes`, `dbo.sysreferences`, and `dbo.systypes`.
+## See Also
 
-## Arrow and Staged Storage Loads
-
-`CreateTable.from_arrow_schema()` maps Arrow timestamps to `BIGDATETIME`. ASE's `TIMESTAMP` type holds a row version. `BIGDATETIME` has no time-zone field, so normalize zone-aware values before loading them. String primary keys use `VARCHAR(255)`. Decimal precision above 38 raises `SQLBuilderError`.
-
-With `conflict_keys`, staged loads update matching rows, then insert new rows in a separate statement. Coordinate concurrent loads that use the same keys. See [Arrow and Storage](../learn/arrow-and-storage.md#sap-column-types-and-staged-loads) for conflict options and SQL Anywhere differences.
-
-See the [adapter matrix](index.md), [configuration guide](../learn/configuration.md), and [Sybase API reference](../reference/adapters/sybase.md) for shared features and configuration details.
+- [Sybase API Reference](/reference/adapters/sybase/)
+- [Sybase ASE Dialect Reference](/reference/data-dictionary/dialects/sybase/)
+- [Arrow and Storage Guide](../learn/arrow-and-storage.md)
