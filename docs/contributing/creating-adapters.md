@@ -34,14 +34,38 @@ sqlspec/adapters/<name>/
 └── events/            # Optional Events queue store
 ```
 
-### Module Responsibilities
+#### Module Responsibilities
 
 - **`config.py`**: Subclasses `SyncDatabaseConfig` or `AsyncDatabaseConfig`, declares `<Name>ConnectionParams`, `<Name>PoolParams`, and `<Name>DriverFeatures` `TypedDict` schemas (with inline PEP 257 field docstrings for every key), and implements `create_connection`, `provide_connection`, `provide_session`, and pool lifecycle methods.
 - **`core.py`**: Defines `default_statement_config` (SQLGlot dialect, parameter style, and parameter coercions), `apply_driver_features(statement_config, driver_features)`, and `create_mapped_exception(error)` translating native driver exceptions into `sqlspec.exceptions.SQLSpecError` subclasses (`UniqueViolationError`, `ForeignKeyViolationError`, `NotNullViolationError`, `CheckViolationError`, `DeadlockError`, `DatabaseConnectionError`, `OperationalError`, `DataError`, `SQLParsingError`).
 - **`driver.py`**: Subclasses `SyncDriverAdapterBase` or `AsyncDriverAdapterBase`, implementing `dispatch_execute`, `dispatch_execute_many`, `dispatch_execute_script`, `begin`, `commit`, `rollback`, `with_cursor`, `handle_database_exceptions`, `_connection_in_transaction`, and `data_dictionary`.
 - **`data_dictionary.py`**: Subclasses `SyncDataDictionaryBase` or `AsyncDataDictionaryBase`, binding the dialect's SQL query pack from `sqlspec/data_dictionary/dialects/<dialect>/` to introspect tables, columns, indexes, foreign keys, and server versions.
 
-## Import Contract
+## CI-Enforced Adapter Invariants
+
+Every SQLSpec database adapter is verified by automated repository gates that enforce compilation boundaries, import isolation, schema documentation, and runtime parity across all 22 adapters:
+
+| Invariant | Enforcing Gate or Test | Requirement |
+| --- | --- | --- |
+| **MyPyC Compilation Boundary** | `python3 tools/scripts/mypyc_inventory.py --check` | `<adapter>/core.py` is MyPyC-compiled (`200` compiled modules across `22` adapters); `<adapter>/driver.py` and `<adapter>/config.py` remain interpreted. |
+| **Self-Contained Core Module** | AST parity suites (`mysql_four_way`, `test_mssql_store_parity.py`) | Duplicate adapter-family helpers directly inside `<adapter>/core.py`; never create cross-adapter shared helper modules (`mysql_common.py`, etc.). |
+| **Adapter Import Contract** | `tests/unit/test_import_time.py` (`ADAPTER_DRIVERS`) | Import only the adapter's own primary driver eagerly in `_typing.py`; never import optional secondary packages at module import time. |
+| **ClassVar and MRO Store Resolution** | `sqlspec/utils/adapters.py` (`resolve_adapter_name`, `resolve_extension_store_class`) | Resolve adapter names and extension stores via `adapter_name` and `*_store_class` `ClassVar` attributes or MRO, never by slicing `__module__.split(".")[2]`. |
+| **Inline Field Docstrings and Feature Key Parity** | `python -m tools.docs.scan_public_docstrings --check-leaks --check-overloads --check-typeddicts sqlspec` & `test_driver_feature_keys_read_by_adapter_are_declared` | Every `TypedDict` and `msgspec.Struct` field must have an inline PEP 257 triple-quoted docstring, and every key read from `driver_features` must be declared on `<Name>DriverFeatures`. |
+| **Type Coercion Capabilities and Parameter Profile** | `sqlspec/core/capabilities.py` & `sqlspec/core/parameters.py` | Declare `type_coercion_capabilities: ClassVar[TypeCoercionCapabilities]` and register a `DriverParameterProfile` via `register_driver_profile` / `get_driver_profile`. |
+
+### MyPyC Compilation Boundary
+
+SQLSpec compiles `200` performance-critical modules across its core pipeline and all `22` adapters into native C extensions using MyPyC (`python3 tools/scripts/mypyc_inventory.py --check`):
+
+- **Compiled (`<adapter>/core.py`, `<adapter>/data_dictionary.py`, `<adapter>/type_converter.py`)**: Keep hot-path parameter normalization, row collection, statement configuration, and exception mapping in `core.py` with strict static typing and MyPyC-compatible constructs.
+- **Interpreted (`<adapter>/driver.py`, `<adapter>/config.py`, `<adapter>/_typing.py`, extension stores)**: Leave `driver.py` and `config.py` on the `MYPYC_INTERPRETED_BOUNDARY_MODULES` allowlist so user and framework code can subclass configurations, inspect generic type arguments, and attach dynamic hooks without C ABI metaclass conflicts.
+
+### Self-Contained Adapter Core Module
+
+Each of the 22 adapters is completely self-contained. Adapter families that share wire conventions or SQL dialects (such as `asyncmy`, `aiomysql`, `pymysql`, and `mysqlconnector`, or `mssql_python` and `pymssql`) duplicate family-level helper functions directly inside each adapter's own MyPyC-compiled `<adapter>/core.py`. Never introduce cross-adapter shared helper modules (such as `sqlspec/adapters/mysql_common.py`). AST parity test suites (`mysql_four_way`, `test_mssql_store_parity.py`) verify structural equivalence across sibling adapters.
+
+### Adapter Import Contract
 
 Every driver is optional: users install only the extras for the adapters they use, and any one adapter (or all of them) works without the other drivers installed. Each adapter follows the same import rules:
 
@@ -53,7 +77,54 @@ Every driver is optional: users install only the extras for the adapters they us
 
 Register a new adapter's driver module(s) in `ADAPTER_DRIVERS` in `tests/unit/test_import_time.py`. The import-contract tests fail for unregistered adapters and check that the adapter raises the driver's own error when the driver is missing, imports with every other driver blocked, and loads no secondary optional module at import. If the driver package itself imports an optional module, list it in `DRIVER_OWNED_OPTIONAL_IMPORTS` with the reason. For development, add the driver to the `extras` dependency group in `pyproject.toml`; dependency groups are not published to PyPI.
 
-## The apply_driver_features Contract
+### Inline Field Docstrings and Feature Key Parity
+
+All public `TypedDict` classes (`<Name>ConnectionParams`, `<Name>PoolParams`, `<Name>DriverFeatures`) and `msgspec.Struct` classes must include PEP 257 inline triple-quoted docstrings immediately below every field declaration. In addition, every key accessed from `driver_features` inside `core.py`, `config.py`, or `driver.py` must be declared on `<Name>DriverFeatures` (verified by `test_driver_feature_keys_read_by_adapter_are_declared` and `python -m tools.docs.scan_public_docstrings --check-leaks --check-overloads --check-typeddicts sqlspec`).
+
+### Type Coercion Capabilities and Driver Parameter Profile Registration
+
+Each adapter declares its wire-level binding behavior via `TypeCoercionCapabilities` (`sqlspec/core/capabilities.py`) and registers a `DriverParameterProfile` (`sqlspec/core/parameters.py`) specifying supported `ParameterStyle` formats and custom Python-to-driver type coercions:
+
+```python
+from typing import ClassVar
+
+from sqlspec.core import (
+    DriverParameterProfile,
+    ParameterStyle,
+    TypeCoercionCapabilities,
+    get_driver_profile,
+    register_driver_profile,
+)
+
+EXAMPLE_PROFILE = DriverParameterProfile(
+    name="Example",
+    default_style=ParameterStyle.QMARK,
+    supported_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+    default_execution_style=ParameterStyle.QMARK,
+    supported_execution_styles={ParameterStyle.QMARK},
+    has_native_list_expansion=False,
+    preserve_parameter_format=True,
+    needs_static_script_compilation=False,
+    default_dialect="sqlite",
+)
+register_driver_profile("example", EXAMPLE_PROFILE, allow_override=True)
+resolved_profile = get_driver_profile("example")
+
+
+class ExampleCapabilitiesMixin:
+    """Declare wire-level parameter binding capabilities."""
+
+    type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = (
+        TypeCoercionCapabilities(
+            datetime_binding="iso_text",
+            timestamp_precision="microsecond",
+            json_columns_decoded=False,
+            uuid_binding="text",
+        )
+    )
+```
+
+## Driver Features Normalization Contract
 
 Each adapter's `core.py` normalizes user-supplied `driver_features` and applies custom JSON serializers or type converters to the adapter's `StatementConfig`:
 
@@ -89,7 +160,7 @@ def apply_driver_features(
 
 SQLSpec extensions (`events`, `adk`, `litestar`) and their associated migration loaders resolve the underlying database adapter name and extension store classes through `sqlspec.utils.adapters.resolve_adapter_name` and `sqlspec.utils.adapters.resolve_extension_store_class`.
 
-### Adapter Name Resolution
+#### Adapter Name Resolution
 
 `resolve_adapter_name(config_or_store)` determines the adapter identifier using a two-stage hierarchy:
 
@@ -98,7 +169,7 @@ SQLSpec extensions (`events`, `adk`, `litestar`) and their associated migration 
 
 If an instance wraps an inner configuration (accessible via `_config`), resolution recursively inspects the wrapped object.
 
-### Extension Store Class Resolution
+#### Extension Store Class Resolution
 
 When instantiating stores or running extension migrations, `resolve_extension_store_class` resolves the concrete store implementation:
 
@@ -162,7 +233,7 @@ Run all repository quality gates before submitting a pull request:
 
 ```bash
 make lint
-make type-check
-make test
-make docs
+python3 tools/scripts/mypyc_inventory.py --check
+uv run --no-sync pytest tests/unit -q
+uv run --no-sync make docs
 ```
