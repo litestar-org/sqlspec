@@ -18,6 +18,7 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.SqliteConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.sqlite.SqliteConnectionParams
     options:
@@ -46,6 +47,7 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.SqliteConnectionPool
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.sqlite.data_dictionary.SqliteDataDictionary
     options:
@@ -63,6 +65,7 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.litestar.SqliteStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sqlite.adk.SqliteADKConfig
     options:
@@ -73,10 +76,12 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.adk.SqliteADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sqlite.events.SqliteEventsConfig
     options:
@@ -87,3 +92,4 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.events.SqliteEventQueueStore
     options:
       heading_level: 4
+      members: false

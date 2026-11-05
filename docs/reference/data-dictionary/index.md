@@ -31,6 +31,7 @@ Cross-database catalog introspection metadata, DDL extraction, column profiling,
 ::: sqlspec.data_dictionary._loader.DataDictionaryLoader
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.data_dictionary._loader.get_data_dictionary_loader
     options:
@@ -57,42 +58,52 @@ Cross-database catalog introspection metadata, DDL extraction, column profiling,
 ::: sqlspec.data_dictionary._types.VersionInfo
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.TableMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ColumnMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ColumnProfileMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.IndexMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ForeignKeyMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ConstraintMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ViewMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.RoutineMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.TriggerMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.DDLResult
     options:
@@ -104,10 +115,12 @@ Cross-database catalog introspection metadata, DDL extraction, column profiling,
 ::: sqlspec.data_dictionary._types.DialectConfig
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.MetadataCapabilityProfile
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.MetadataResult
     options:
@@ -117,20 +130,24 @@ Cross-database catalog introspection metadata, DDL extraction, column profiling,
 ::: sqlspec.data_dictionary._types.SystemMetadataRequest
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.SystemMetadataResult
     options:
       heading_level: 4
+      members: false
 
 ## Dependency Graph & Topological Sorting
 
 ::: sqlspec.data_dictionary._dependencies.DependencyEdge
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._dependencies.DependencySortResult
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._dependencies.dependency_edges_from_foreign_keys
     options:

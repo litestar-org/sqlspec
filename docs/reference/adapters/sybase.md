@@ -21,6 +21,7 @@ Synchronous SAP Adaptive Server Enterprise (Sybase ASE) 16.0+ adapter built on `
 ::: sqlspec.adapters.sybase.SybaseConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.sybase.SybaseConnectionParams
     options:
@@ -55,6 +56,7 @@ Synchronous SAP Adaptive Server Enterprise (Sybase ASE) 16.0+ adapter built on `
 ::: sqlspec.adapters.sybase.SybaseConnectionPool
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.sybase.data_dictionary.SybaseSyncDataDictionary
     options:
@@ -71,15 +73,19 @@ Synchronous SAP Adaptive Server Enterprise (Sybase ASE) 16.0+ adapter built on `
 ::: sqlspec.adapters.sybase.litestar.SybaseStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sybase.adk.SybaseADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sybase.adk.SybaseADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sybase.events.SybaseEventQueueStore
     options:
       heading_level: 4
+      members: false

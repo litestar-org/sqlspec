@@ -19,6 +19,7 @@ Asynchronous SQLite adapter built on `aiosqlite`. Inherited execution methods ar
 ::: sqlspec.adapters.aiosqlite.AiosqliteConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.aiosqlite.AiosqliteConnectionParams
     options:
@@ -53,6 +54,7 @@ Asynchronous SQLite adapter built on `aiosqlite`. Inherited execution methods ar
 ::: sqlspec.adapters.aiosqlite.AiosqliteConnectionPool
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.aiosqlite.data_dictionary.AiosqliteDataDictionary
     options:
@@ -70,6 +72,7 @@ Asynchronous SQLite adapter built on `aiosqlite`. Inherited execution methods ar
 ::: sqlspec.adapters.aiosqlite.litestar.AiosqliteStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.aiosqlite.adk.AiosqliteADKConfig
     options:
@@ -80,10 +83,12 @@ Asynchronous SQLite adapter built on `aiosqlite`. Inherited execution methods ar
 ::: sqlspec.adapters.aiosqlite.adk.AiosqliteADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.aiosqlite.adk.AiosqliteADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.aiosqlite.events.AiosqliteEventsConfig
     options:
@@ -94,3 +99,4 @@ Asynchronous SQLite adapter built on `aiosqlite`. Inherited execution methods ar
 ::: sqlspec.adapters.aiosqlite.events.AiosqliteEventQueueStore
     options:
       heading_level: 4
+      members: false

@@ -32,28 +32,9 @@ Runtime introspection, DDL extraction, and column profiling methods provided by 
 
 ## Asynchronous Introspection
 
+`AsyncDataDictionaryBase` exposes `async` counterparts for every method on `SyncDataDictionaryBase` above:
+
 ::: sqlspec.driver._async.AsyncDataDictionaryBase
     options:
       heading_level: 3
-      members:
-        - get_version
-        - get_feature_flag
-        - get_optimal_type
-        - list_available_features
-        - get_metadata_capabilities
-        - get_schemas
-        - get_tables
-        - get_columns
-        - get_indexes
-        - get_foreign_keys
-        - get_constraints
-        - get_views
-        - get_routines
-        - get_sequences
-        - get_types
-        - get_ddl
-        - get_object_ddl
-        - get_schema_ddl
-        - get_table_profile
-        - infer_table_ddl_from_data
-        - get_system_metadata
+      members: false

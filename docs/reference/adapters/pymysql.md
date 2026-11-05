@@ -18,6 +18,7 @@ Synchronous MySQL and MariaDB adapter built on `pymysql`. Inherited execution me
 ::: sqlspec.adapters.pymysql.PyMysqlConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.pymysql.PyMysqlConnectionParams
     options:
@@ -65,6 +66,7 @@ Synchronous MySQL and MariaDB adapter built on `pymysql`. Inherited execution me
 ::: sqlspec.adapters.pymysql.litestar.PyMysqlStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.pymysql.adk.PyMysqlADKConfig
     options:
@@ -75,11 +77,14 @@ Synchronous MySQL and MariaDB adapter built on `pymysql`. Inherited execution me
 ::: sqlspec.adapters.pymysql.adk.PyMysqlADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.pymysql.adk.PyMysqlADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.pymysql.events.PyMysqlEventQueueStore
     options:
       heading_level: 4
+      members: false

@@ -17,6 +17,7 @@ Apache Arrow over ODBC adapter built on `arrow-odbc` for zero-copy Arrow batch s
 ::: sqlspec.adapters.arrow_odbc.ArrowOdbcConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.arrow_odbc.ArrowOdbcConnectionParams
     options:
@@ -53,6 +54,7 @@ Apache Arrow over ODBC adapter built on `arrow-odbc` for zero-copy Arrow batch s
 ::: sqlspec.adapters.arrow_odbc.litestar.ArrowOdbcStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKConfig
     options:
@@ -63,11 +65,14 @@ Apache Arrow over ODBC adapter built on `arrow-odbc` for zero-copy Arrow batch s
 ::: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.arrow_odbc.events.ArrowOdbcEventQueueStore
     options:
       heading_level: 4
+      members: false

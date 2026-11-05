@@ -21,10 +21,12 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 ::: sqlspec.adapters.oracledb.OracleSyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.oracledb.OracleAsyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.oracledb.OracleConnectionParams
     options:
@@ -87,10 +89,12 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 ::: sqlspec.adapters.oracledb.litestar.OracleSyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.litestar.OracleAsyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.adk.OracleADKConfig
     options:
@@ -101,18 +105,22 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 ::: sqlspec.adapters.oracledb.adk.OracleSyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.adk.OracleAsyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.adk.OracleSyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.adk.OracleAsyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleEventsConfig
     options:
@@ -123,23 +131,29 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 ::: sqlspec.adapters.oracledb.events.OracleSyncEventQueueStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleAsyncEventQueueStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleSyncAQEventBackend
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleAsyncAQEventBackend
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleSyncTxEventQEventBackend
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleAsyncTxEventQEventBackend
     options:
       heading_level: 4
+      members: false

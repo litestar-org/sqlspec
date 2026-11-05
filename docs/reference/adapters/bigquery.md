@@ -17,6 +17,7 @@ Google Cloud BigQuery analytical adapter built on `google-cloud-bigquery` and `g
 ::: sqlspec.adapters.bigquery.BigQueryConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.bigquery.BigQueryConnectionParams
     options:
@@ -59,6 +60,7 @@ Google Cloud BigQuery analytical adapter built on `google-cloud-bigquery` and `g
 ::: sqlspec.adapters.bigquery.litestar.BigQueryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.bigquery.adk.BigQueryADKConfig
     options:
@@ -69,12 +71,14 @@ Google Cloud BigQuery analytical adapter built on `google-cloud-bigquery` and `g
 ::: sqlspec.adapters.bigquery.adk.BigQueryADKRetentionConfig
     options:
       heading_level: 4
+      members: false
       separate_signature: false
       show_signature_annotations: true
 
 ::: sqlspec.adapters.bigquery.adk.BigQueryADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.bigquery.events.BigQueryEventsConfig
     options:
@@ -85,3 +89,4 @@ Google Cloud BigQuery analytical adapter built on `google-cloud-bigquery` and `g
 ::: sqlspec.adapters.bigquery.events.BigQueryEventQueueStore
     options:
       heading_level: 4
+      members: false

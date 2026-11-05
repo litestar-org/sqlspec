@@ -22,10 +22,12 @@ Synchronous and asynchronous MySQL and MariaDB adapters built on `mysql-connecto
 ::: sqlspec.adapters.mysqlconnector.MysqlConnectorSyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.mysqlconnector.MysqlConnectorAsyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.mysqlconnector.MysqlConnectorSyncConnectionParams
     options:
@@ -66,22 +68,22 @@ Synchronous and asynchronous MySQL and MariaDB adapters built on `mysql-connecto
 
 ::: sqlspec.adapters.mysqlconnector.MysqlConnectorSyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.mysqlconnector.MysqlConnectorAsyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.mysqlconnector.data_dictionary.MysqlConnectorSyncDataDictionary
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.mysqlconnector.data_dictionary.MysqlConnectorAsyncDataDictionary
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ## Extension Stores & Configs
@@ -95,10 +97,12 @@ Synchronous and asynchronous MySQL and MariaDB adapters built on `mysql-connecto
 ::: sqlspec.adapters.mysqlconnector.litestar.MysqlConnectorSyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mysqlconnector.litestar.MysqlConnectorAsyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mysqlconnector.adk.MysqlConnectorADKConfig
     options:
@@ -109,23 +113,29 @@ Synchronous and asynchronous MySQL and MariaDB adapters built on `mysql-connecto
 ::: sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mysqlconnector.adk.MysqlConnectorAsyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mysqlconnector.adk.MysqlConnectorSyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mysqlconnector.adk.MysqlConnectorAsyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mysqlconnector.events.MysqlConnectorSyncEventQueueStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mysqlconnector.events.MysqlConnectorAsyncEventQueueStore
     options:
       heading_level: 4
+      members: false

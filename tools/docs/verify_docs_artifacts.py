@@ -18,6 +18,9 @@ BANNED_PHRASES: tuple[str, ...] = (
     "Made with Zensical",
     "--8<--",
     "--8 < --",
+    "PyCapsule",
+    "Sentinel.UNSET",
+    "Cython",
 )
 
 _REQUIRED_ROOT_FILES: tuple[str, ...] = ("objects.inv", "llms.txt", "llms-full.txt")
@@ -32,7 +35,7 @@ class DocsVerificationError(RuntimeError):
 
 
 def verify_site_artifacts(
-    site_dir: Path, *, max_page_bytes: int = 180_000, max_reference_bytes: int = 650_000, max_toc_items: int = 16
+    site_dir: Path, *, max_page_bytes: int = 160_000, max_reference_bytes: int = 120_000, max_toc_items: int = 14
 ) -> list[str]:
     """Verify built Zensical site artifacts and raise DocsVerificationError on violations."""
     violations: list[str] = []
@@ -83,6 +86,16 @@ def verify_site_artifacts(
             if fragment not in parser.element_ids and unquote(fragment) not in parser.element_ids
         )
 
+        violations.extend(
+            f"{rel_posix}: prose heading contains inline <code> element ({item})"
+            for item in parser.heading_code_violations
+        )
+
+        violations.extend(
+            f"{rel_posix}: table <code> span contains literal escaped pipe: {item}"
+            for item in parser.table_pipe_violations
+        )
+
         if rel_posix == "index.html" and "sqlspec-hero" in text and "sqlspec-brand-text" not in text:
             violations.append(f"{rel_posix}: missing glowing brand text element 'sqlspec-brand-text'")
 
@@ -108,12 +121,12 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint for built documentation verification."""
     parser = argparse.ArgumentParser(description="Verify built Zensical site artifacts.")
     parser.add_argument("--site-dir", type=Path, default=Path("site"), help="Built site directory.")
-    parser.add_argument("--max-page-bytes", type=int, default=180_000, help="Max HTML byte budget for guide pages.")
+    parser.add_argument("--max-page-bytes", type=int, default=160_000, help="Max HTML byte budget for guide pages.")
     parser.add_argument(
-        "--max-reference-bytes", type=int, default=650_000, help="Max HTML byte budget for API reference pages."
+        "--max-reference-bytes", type=int, default=120_000, help="Max HTML byte budget for API reference pages."
     )
     parser.add_argument(
-        "--max-toc-items", type=int, default=16, help="Max links allowed in the secondary On-this-page TOC."
+        "--max-toc-items", type=int, default=14, help="Max links allowed in the secondary On-this-page TOC."
     )
     args = parser.parse_args(argv)
 
@@ -148,15 +161,21 @@ def _is_toc_exempt(rel_posix: str) -> bool:
 
 
 class _PageArtifactParser(HTMLParser):
-    """Single-pass HTML parser extracting element IDs, #fragment links, and secondary TOC counts."""
+    """Single-pass HTML parser extracting element IDs, #fragment links, TOC counts, and heading/table violations."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.element_ids: set[str] = set()
         self.same_page_fragments: list[str] = []
+        self.heading_code_violations: list[str] = []
+        self.table_pipe_violations: list[str] = []
         self._secondary_nav_stack: list[bool] = []
         self._current_secondary_links: int = 0
         self._secondary_toc_counts: list[int] = []
+        self._prose_heading_stack: list[str] = []
+        self._table_depth: int = 0
+        self._table_cell_depth: int = 0
+        self._table_code_depth: int = 0
 
     @property
     def max_secondary_toc_links(self) -> int:
@@ -173,6 +192,22 @@ class _PageArtifactParser(HTMLParser):
             raw_name = attr_map.get("name")
             if raw_name:
                 self.element_ids.add(raw_name)
+
+        if tag in {"h2", "h3", "h4"}:
+            classes = set((attr_map.get("class") or "").split())
+            if "doc-heading" not in classes:
+                label = f"{tag}#{raw_id}" if raw_id else tag
+                self._prose_heading_stack.append(label)
+
+        if tag == "code" and self._prose_heading_stack:
+            self.heading_code_violations.append(self._prose_heading_stack[-1])
+
+        if tag == "table":
+            self._table_depth += 1
+        elif tag in {"td", "th"} and self._table_depth > 0:
+            self._table_cell_depth += 1
+        elif tag == "code" and self._table_cell_depth > 0:
+            self._table_code_depth += 1
 
         if tag == "nav":
             classes = set((attr_map.get("class") or "").split())
@@ -192,7 +227,21 @@ class _PageArtifactParser(HTMLParser):
                 if any(self._secondary_nav_stack):
                     self._current_secondary_links += 1
 
+    def handle_data(self, data: str) -> None:
+        if self._table_code_depth > 0 and r"\|" in data:
+            self.table_pipe_violations.append(data.strip())
+
     def handle_endtag(self, tag: str) -> None:
+        if tag in {"h2", "h3", "h4"} and self._prose_heading_stack and self._prose_heading_stack[-1].startswith(tag):
+            self._prose_heading_stack.pop()
+
+        if tag == "code" and self._table_code_depth > 0:
+            self._table_code_depth -= 1
+        elif tag in {"td", "th"} and self._table_cell_depth > 0:
+            self._table_cell_depth -= 1
+        elif tag == "table" and self._table_depth > 0:
+            self._table_depth -= 1
+
         if tag == "nav" and self._secondary_nav_stack:
             was_secondary = self._secondary_nav_stack.pop()
             if was_secondary and not any(self._secondary_nav_stack):

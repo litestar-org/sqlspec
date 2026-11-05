@@ -31,37 +31,39 @@ Coordinated L1/L2 LRU caching (`StatementCacheHolder`, `QueryCache`, `Namespaced
 ::: sqlspec.core.cache.StatementCacheHolder
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core.cache.QueryCache
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core.cache.CachedQuery
     options:
       heading_level: 3
+      members: false
 
 ## Cache Configuration & Statistics (L2)
 
 ::: sqlspec.core.cache.CacheConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core.cache.CacheStats
     options:
       heading_level: 3
-      members:
-        - record_hit
-        - record_miss
-        - record_eviction
-        - reset
+      members: false
 
 ::: sqlspec.core.cache.CachedStatement
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core.cache.CacheKey
     options:
       heading_level: 3
+      members: false
 
 ## Cache Implementations
 

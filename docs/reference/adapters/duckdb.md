@@ -21,6 +21,7 @@ Embedded analytical database adapter built on `duckdb` with zero-copy Apache Arr
 ::: sqlspec.adapters.duckdb.DuckDBConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.duckdb.DuckDBConnectionParams
     options:
@@ -43,12 +44,14 @@ Embedded analytical database adapter built on `duckdb` with zero-copy Apache Arr
 ::: sqlspec.adapters.duckdb.DuckDBExtensionConfig
     options:
       heading_level: 3
+      members: false
       separate_signature: false
       show_signature_annotations: true
 
 ::: sqlspec.adapters.duckdb.DuckDBSecretConfig
     options:
       heading_level: 3
+      members: false
       separate_signature: false
       show_signature_annotations: true
 
@@ -67,6 +70,7 @@ Embedded analytical database adapter built on `duckdb` with zero-copy Apache Arr
 ::: sqlspec.adapters.duckdb.DuckDBConnectionPool
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.duckdb.data_dictionary.DuckDBDataDictionary
     options:
@@ -78,6 +82,7 @@ Embedded analytical database adapter built on `duckdb` with zero-copy Apache Arr
 ::: sqlspec.adapters.duckdb.litestar.DuckDBStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.duckdb.adk.DuckDBADKConfig
     options:
@@ -88,17 +93,21 @@ Embedded analytical database adapter built on `duckdb` with zero-copy Apache Arr
 ::: sqlspec.adapters.duckdb.adk.DuckDBADKFTSOptions
     options:
       heading_level: 4
+      members: false
       separate_signature: false
       show_signature_annotations: true
 
 ::: sqlspec.adapters.duckdb.adk.DuckDBADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.duckdb.adk.DuckDBADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.duckdb.events.DuckDBEventQueueStore
     options:
       heading_level: 4
+      members: false

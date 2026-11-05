@@ -18,6 +18,7 @@ from tools.docs.generate_data_dictionary_docs import DIALECT_SPECS, render_all_d
 from tools.docs.generate_data_dictionary_docs import main as dialect_docs_main
 from tools.docs.scan_public_docstrings import main as scan_docstrings_main
 from tools.docs.scan_public_docstrings import scan_public_docstring_leaks, scan_undocumented_structs
+from tools.docs.verify_docs_artifacts import BANNED_PHRASES, DocsVerificationError, verify_site_artifacts
 
 import sqlspec.cli as cli_module
 
@@ -30,6 +31,7 @@ __all__ = (
     "test_render_typeddict_table_renders_inheritance_types_defaults_and_or_unions",
     "test_scan_public_docstrings_detects_struct_field_violations_and_leak_phrases",
     "test_sync_markdown_markers_and_adapter_parity_check",
+    "test_verify_site_artifacts_rejects_heading_code_table_pipes_and_budget_breaches",
 )
 
 
@@ -283,3 +285,45 @@ def test_scan_public_docstrings_detects_struct_field_violations_and_leak_phrases
         scan_docstrings_main(["--check-leaks", "--check-overloads", "--check-typeddicts", "--check-structs", "sqlspec"])
         == 0
     )
+
+
+def test_verify_site_artifacts_rejects_heading_code_table_pipes_and_budget_breaches(tmp_path: Path) -> None:
+    for required in ("objects.inv", "llms.txt", "llms-full.txt"):
+        (tmp_path / required).write_text("ok\n", encoding="utf-8")
+
+    index_html = tmp_path / "index.html"
+    index_html.write_text(
+        "<html><body>"
+        '<h2 id="clean">Clean Heading</h2>'
+        '<h3 class="doc doc-heading" id="sym"><code>symbol</code></h3>'
+        "<table><tr><td><code>str or None</code></td></tr></table>"
+        "</body></html>\n",
+        encoding="utf-8",
+    )
+    assert verify_site_artifacts(tmp_path) == []
+    assert "PyCapsule" in BANNED_PHRASES
+    assert "Sentinel.UNSET" in BANNED_PHRASES
+    assert "Cython" in BANNED_PHRASES
+
+    index_html.write_text(
+        "<html><body>"
+        '<h2 id="bad-heading">Heading with <code>inline code</code></h2>'
+        '<h3 class="doc doc-heading" id="sym"><code>symbol</code></h3>'
+        r"<table><tr><td><code>str \| None</code></td></tr></table>"
+        "</body></html>\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(DocsVerificationError) as exc_info:
+        verify_site_artifacts(tmp_path)
+
+    joined = "\n".join(exc_info.value.violations)
+    assert "bad-heading" in joined or "inline code" in joined
+    assert r"str \| None" in joined
+    assert "sym" not in joined
+
+    ref_dir = tmp_path / "reference"
+    ref_dir.mkdir()
+    (ref_dir / "oversized.html").write_text("<html><body>" + ("x" * 121_000) + "</body></html>", encoding="utf-8")
+    index_html.write_text("<html><body><h2>Clean</h2></body></html>\n", encoding="utf-8")
+    with pytest.raises(DocsVerificationError, match="exceeds limit of 120000 bytes"):
+        verify_site_artifacts(tmp_path)

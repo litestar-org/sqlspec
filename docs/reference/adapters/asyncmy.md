@@ -18,6 +18,7 @@ Asynchronous MySQL and MariaDB adapter built on `asyncmy`. Inherited execution m
 ::: sqlspec.adapters.asyncmy.AsyncmyConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.asyncmy.AsyncmyConnectionParams
     options:
@@ -65,6 +66,7 @@ Asynchronous MySQL and MariaDB adapter built on `asyncmy`. Inherited execution m
 ::: sqlspec.adapters.asyncmy.litestar.AsyncmyStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.asyncmy.adk.AsyncmyADKConfig
     options:
@@ -75,11 +77,14 @@ Asynchronous MySQL and MariaDB adapter built on `asyncmy`. Inherited execution m
 ::: sqlspec.adapters.asyncmy.adk.AsyncmyADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.asyncmy.adk.AsyncmyADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.asyncmy.events.AsyncmyEventQueueStore
     options:
       heading_level: 4
+      members: false

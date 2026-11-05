@@ -2,7 +2,6 @@
 
 ```python
 from sqlspec.utils import (
-    arrow_helpers,
     correlation,
     deprecation,
     env,
@@ -17,7 +16,7 @@ from sqlspec.utils import (
 )
 ```
 
-Reusable helpers for runtime type narrowing, JSON serialization, schema model conversion, Apache Arrow streaming and PostgreSQL binary `COPY` framing, UUID/NanoID generation, table fixture loading/exporting, correlation tracking, and sync/async bridging.
+Reusable helpers for runtime type narrowing, JSON serialization, schema model conversion, UUID/NanoID generation, table fixture loading/exporting, correlation tracking, and sync/async bridging.
 
 ## Schema, Serialization & Identifiers
 
@@ -53,39 +52,15 @@ Reusable helpers for runtime type narrowing, JSON serialization, schema model co
     options:
       heading_level: 4
 
-## Apache Arrow & Binary COPY Helpers
-
-::: sqlspec.utils.arrow_helpers.coerce_arrow_table
-    options:
-      heading_level: 4
-
-::: sqlspec.utils.arrow_helpers.coerce_arrow_batches
-    options:
-      heading_level: 4
-
-::: sqlspec.utils.arrow_helpers.encode_arrow_batch_pg_binary
-    options:
-      heading_level: 4
-
-::: sqlspec.utils.arrow_helpers.iter_pgcopy_binary_chunks
-    options:
-      heading_level: 4
-
 ## Table Fixtures & Environment Helpers
+
+`load_table_fixtures_async` and `export_table_fixtures_async` provide asynchronous counterparts to the synchronous fixture helpers below:
 
 ::: sqlspec.utils.fixtures.load_table_fixtures_sync
     options:
       heading_level: 4
 
-::: sqlspec.utils.fixtures.load_table_fixtures_async
-    options:
-      heading_level: 4
-
 ::: sqlspec.utils.fixtures.export_table_fixtures_sync
-    options:
-      heading_level: 4
-
-::: sqlspec.utils.fixtures.export_table_fixtures_async
     options:
       heading_level: 4
 
@@ -128,6 +103,7 @@ Reusable helpers for runtime type narrowing, JSON serialization, schema model co
 ::: sqlspec.utils.correlation.CorrelationContext
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.utils.deprecation.deprecated
     options:

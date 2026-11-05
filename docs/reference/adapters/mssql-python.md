@@ -20,6 +20,7 @@ Microsoft SQL Server and Azure SQL adapter built on Microsoft's official `mssql-
 ::: sqlspec.adapters.mssql_python.MssqlPythonConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.mssql_python.MssqlPythonConnectionParams
     options:
@@ -50,6 +51,7 @@ Microsoft SQL Server and Azure SQL adapter built on Microsoft's official `mssql-
 ::: sqlspec.adapters.mssql_python.MssqlPythonBulkCopyResult
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.mssql_python.MssqlPythonExceptionHandler
     options:
@@ -59,6 +61,7 @@ Microsoft SQL Server and Azure SQL adapter built on Microsoft's official `mssql-
 ::: sqlspec.adapters.mssql_python.MssqlPythonConnectionPool
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.mssql_python.data_dictionary.MssqlPythonSyncDataDictionary
     options:
@@ -70,6 +73,7 @@ Microsoft SQL Server and Azure SQL adapter built on Microsoft's official `mssql-
 ::: sqlspec.adapters.mssql_python.litestar.MssqlPythonStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mssql_python.adk.MssqlPythonADKConfig
     options:
@@ -80,11 +84,14 @@ Microsoft SQL Server and Azure SQL adapter built on Microsoft's official `mssql-
 ::: sqlspec.adapters.mssql_python.adk.MssqlPythonADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mssql_python.adk.MssqlPythonADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.mssql_python.events.MssqlPythonEventQueueStore
     options:
       heading_level: 4
+      members: false

@@ -19,6 +19,7 @@ Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited
 ::: sqlspec.adapters.pymssql.PymssqlConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.pymssql.PymssqlConnectionParams
     options:
@@ -53,6 +54,7 @@ Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited
 ::: sqlspec.adapters.pymssql.PymssqlConnectionPool
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.pymssql.data_dictionary.PymssqlSyncDataDictionary
     options:
@@ -64,6 +66,7 @@ Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited
 ::: sqlspec.adapters.pymssql.litestar.PymssqlStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.pymssql.adk.PymssqlADKConfig
     options:
@@ -74,11 +77,14 @@ Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited
 ::: sqlspec.adapters.pymssql.adk.PymssqlADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.pymssql.adk.PymssqlADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.pymssql.events.PymssqlEventQueueStore
     options:
       heading_level: 4
+      members: false

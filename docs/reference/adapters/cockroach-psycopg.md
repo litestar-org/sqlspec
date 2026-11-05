@@ -22,10 +22,12 @@ Synchronous and asynchronous CockroachDB adapters built on `psycopg` v3 with `SQ
 ::: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgSyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgAsyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgConnectionConfig
     options:
@@ -48,6 +50,7 @@ Synchronous and asynchronous CockroachDB adapters built on `psycopg` v3 with `SQ
 ::: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgRetryConfig
     options:
       heading_level: 3
+      members: false
 
 ## Driver, Pool & Data Dictionary
 
@@ -65,22 +68,22 @@ Synchronous and asynchronous CockroachDB adapters built on `psycopg` v3 with `SQ
 
 ::: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgSyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgAsyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.data_dictionary.CockroachPsycopgSyncDataDictionary
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.data_dictionary.CockroachPsycopgAsyncDataDictionary
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ## Extension Stores & Configs
@@ -94,10 +97,12 @@ Synchronous and asynchronous CockroachDB adapters built on `psycopg` v3 with `SQ
 ::: sqlspec.adapters.cockroach_psycopg.litestar.CockroachPsycopgSyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.litestar.CockroachPsycopgAsyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgADKConfig
     options:
@@ -108,23 +113,29 @@ Synchronous and asynchronous CockroachDB adapters built on `psycopg` v3 with `SQ
 ::: sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgAsyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgAsyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.events.CockroachPsycopgSyncEventQueueStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_psycopg.events.CockroachPsycopgAsyncEventQueueStore
     options:
       heading_level: 4
+      members: false

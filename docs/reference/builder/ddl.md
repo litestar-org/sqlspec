@@ -137,13 +137,7 @@ Schema, sequence, table, column, constraint, index, view, materialized view, and
 ::: sqlspec.builder._ddl.CreateIndex
     options:
       heading_level: 4
-      members:
-        - on_table
-        - columns
-        - include
-        - unique
-        - where
-        - from_metadata
+      members: false
 
 ::: sqlspec.builder._ddl.DropIndex
     options:
