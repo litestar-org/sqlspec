@@ -52,7 +52,7 @@ observability = ObservabilityConfig(
 
 ## OpenTelemetry, Prometheus, and Cloud Log Formatters
 
-Enable OpenTelemetry spans (`uv add "sqlspec[opentelemetry]"`) and Prometheus counters/histograms (`uv add "sqlspec[prometheus]"`) declaratively through `extension_config` on any adapter config, or format structured logs for Google Cloud Logging and AWS CloudWatch:
+Enable OpenTelemetry spans (`opentelemetry` extra) and Prometheus counters/histograms (`prometheus` extra) declaratively through `extension_config` on any adapter config, or format structured logs for Google Cloud Logging and AWS CloudWatch:
 
 ```python
 from sqlspec.adapters.sqlite import SqliteConfig

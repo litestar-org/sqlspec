@@ -4,7 +4,7 @@ By default, `select`, `select_one`, `select_one_or_none`, and their `fetch*` ali
 
 ## Mapping Rows to msgspec.Struct
 
-`msgspec.Struct` is the fastest and lowest-memory target for typed row hydration in SQLSpec (`uv add "sqlspec[msgspec]"`):
+`msgspec.Struct` is the fastest and lowest-memory target for typed row hydration in SQLSpec (`msgspec` extra):
 
 ```{ .python title="docs/examples/querying/schema_mapping.py" }
 --8<-- "docs/examples/querying/schema_mapping.py:example"

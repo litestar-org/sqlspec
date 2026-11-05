@@ -14,7 +14,7 @@ When the same named parameter (`:status`) appears multiple times in a query, SQL
 
 ### Reusable SQL Statement Objects
 
-In addition to passing SQL strings directly to `session.select(...)` (see the Unified Query Authoring Mental Model in [Querying and Results](querying.md) and named queries in [SQL Files and SQLFileLoader](sql-files.md)), you can construct an explicit `SQL` statement object with pre-bound positional or named parameters and execute or inspect it across sessions:
+In addition to passing SQL strings directly to `session.select(...)` (see [Querying](querying.md) and named queries in [SQL Files](sql-files.md)), you can construct an explicit `SQL` statement object with pre-bound positional or named parameters and execute or inspect it across sessions:
 
 ```python
 from sqlspec import SQL, SQLSpec
@@ -63,11 +63,11 @@ flowchart LR
     Profile --> Wire["Compiled SQL + Bound Wire Args"]
 ```
 
-| Input Style Written in SQL | Example | Compiled Output (`asyncpg`) | Compiled Output (`sqlite` / `duckdb`) | Compiled Output (`spanner`) |
-| --- | --- | --- | --- | --- |
-| Named colon (`:name`) | `WHERE status = :status` | `WHERE status = $1` | `WHERE status = ?` | `WHERE status = @status` |
-| Positional qmark (`?`) | `WHERE id = ?` | `WHERE id = $1` | `WHERE id = ?` | `WHERE id = @p1` |
-| Positional numeric (`$1`) | `WHERE id = $1` | `WHERE id = $1` | `WHERE id = ?` | `WHERE id = @p1` |
+| Input Style Written in SQL | Example | `asyncpg` | `sqlite` | `duckdb` | `spanner` |
+| --- | --- | --- | --- | --- | --- |
+| Named colon (`:name`) | `WHERE status = :status` | `WHERE status = $1` | `WHERE status = :status` | `WHERE status = ?` | `WHERE status = @status` |
+| Positional qmark (`?`) | `WHERE id = ?` | `WHERE id = $1` | `WHERE id = ?` | `WHERE id = ?` | `WHERE id = @param_0` |
+| Positional numeric (`$1`) | `WHERE id = $1` | `WHERE id = $1` | `WHERE id = ?` | `WHERE id = $1` | `WHERE id = @param_0` |
 
 String literals (`'active:1'`), SQL comments, PostgreSQL type casts (`value::text`), and JSONB operators are preserved by the lexer without false-positive placeholder rewriting.
 

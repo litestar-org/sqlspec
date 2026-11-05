@@ -132,7 +132,7 @@ Several adapters accelerate `load_from_arrow`, `load_from_records`, and `load_fr
 - **SQL Server (`mssql_python`) and Arrow ODBC (`arrow_odbc`)**: Streams Arrow batches directly into native `BulkCopy` (`BCP`) or Rust ODBC batch writers (`bulk_insert_arrow`).
 - **DuckDB and ADBC**: Zero-copy Arrow C Data Interface (`__arrow_c_stream__`) registration and native Parquet reads/writes.
 - **Oracle Autonomous Database (`oracledb`)**: Supports `DBMS_CLOUD.COPY_DATA` server-side object-store ingestion when `driver_features={"dbms_cloud_credential": "..."}` is configured.
-- **BigQuery and Cloud Spanner**: Streams columnar reads via the BigQuery Storage Read API, loads Parquet/Arrow via Storage Write / load jobs, and splits Spanner batch mutations automatically under Spanner's per-commit mutation budget (`estimate_batch_mutations`).
+- **BigQuery and Cloud Spanner**: Streams columnar reads via the BigQuery Storage Read API, loads Parquet/Arrow via Storage Write / load jobs, and splits Spanner batch mutations automatically under Spanner's per-commit mutation limit (`chunk_mutation_rows`).
 
 ## Multi-Shard Fan-Out, Staged Bulk Upserts, and Index Drop/Restore
 

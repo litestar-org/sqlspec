@@ -10,7 +10,7 @@ flowchart LR
     Normalize --> DDL["Native / AST DDL & Transpilation"]
 ```
 
-For the complete catalog of SQL introspection queries and `DialectConfig` profiles executed per engine, see the [Dialect SQL Catalogs Reference](/reference/data-dictionary/dialects/).
+For the complete catalog of SQL introspection queries and `DialectConfig` profiles executed per engine, see the [Dialect SQL Catalogs Reference](../reference/data-dictionary/dialects/index.md).
 
 ## Introspecting Tables, Columns, Indexes, and Foreign Keys
 

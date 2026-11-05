@@ -1,6 +1,6 @@
 # Filtering and Pagination
 
-List endpoints in APIs routinely combine pagination, search, date-range bounds, collection membership, and multi-column sorting. SQLSpec provides 15 composable `StatementFilter` value objects (`FilterTypes`) in `sqlspec.core` along with offset (`OffsetPagination[T]`) and keyset cursor (`CursorPagination[T]`) pagination helpers.
+List endpoints in APIs routinely combine pagination, search, date-range bounds, collection membership, and multi-column sorting. SQLSpec provides composable `StatementFilter` value objects (`FilterTypes`) in `sqlspec.core` along with offset (`OffsetPagination[T]`) and keyset cursor (`CursorPagination[T]`) pagination helpers.
 
 ## Built-In Statement Filters
 
@@ -83,7 +83,7 @@ Chain `.paginate(page=..., page_size=...)` on a `SQL` statement and call `sessio
 
 ## Keyset Cursor Pagination
 
-Large tables degrade under deep `OFFSET 100000` scans because the engine must read and discard skipped rows. `CursorFilter` and `CursorKey(field_name, sort_order="desc", nulls="last", result_name=None)` implement indexed keyset seek pagination with opaque forward (`next_cursor`) and backward (`previous_cursor`) tokens:
+Large tables degrade under deep `OFFSET 100000` scans because the engine must read and discard skipped rows. `CursorFilter` and `CursorKey(field_name, sort_order="asc", nulls=None, result_name=None)` implement indexed keyset seek pagination with opaque forward (`next_cursor`) and backward (`previous_cursor`) tokens:
 
 ```python
 --8<-- "docs/examples/patterns/cursor_pagination.py:example"
@@ -95,7 +95,7 @@ Large tables degrade under deep `OFFSET 100000` scans because the engine must re
 
 ## Declarative HTTP Filter Providers (Litestar)
 
-In Litestar services, `create_filter_dependencies` generates typed query-parameter dependency providers (`id_filter`, `created_at`, `updated_at`, `search`, `sort_field`, and `limit_offset`) from a single `FilterConfig` dictionary:
+In Litestar services, `create_filter_dependencies` generates typed query-parameter dependency providers (`id_filter`, `created_filter`, `updated_filter`, `search_filter`, `order_by_filter`, `limit_offset_filter`) plus an aggregate `filters` dependency from a single `FilterConfig` dictionary:
 
 ```python
 --8<-- "docs/examples/patterns/filter_dependencies.py:example"
@@ -103,24 +103,22 @@ In Litestar services, `create_filter_dependencies` generates typed query-paramet
 
 ### Wiring Filters in a Litestar Controller
 
-Mount `create_filter_dependencies({...})` inline on `Controller.dependencies` and pass `*filters` into `await db_session.select_with_total(..., count_with_window=True)` (or `await service.paginate(spec.get_sql("list-products"), *filters, schema_type=Product)` when using a `SQLSpecAsyncService` subclass):
+Mount `create_filter_dependencies({...})` on `Controller.dependencies` and pass `*filters` into `await db_session.select_with_total(..., count_with_window=True)` (or `await service.paginate(statement, *filters, schema_type=Product)` when using a `SQLSpecAsyncService` subclass):
 
 ```python
 from typing import Annotated
 
-from litestar import Controller, get
-from litestar.di import Dependency
 import msgspec
+from litestar import Controller, get
+from litestar.params import Dependency
 
-from sqlspec import SQLSpec
+from sqlspec import SQL
 from sqlspec.adapters.asyncpg import AsyncpgDriver
-from sqlspec.core import FilterTypes, OffsetPagination
+from sqlspec.core import FilterTypes, LimitOffsetFilter, OffsetPagination
 from sqlspec.extensions.litestar.providers import create_filter_dependencies
 
 
 class Product(msgspec.Struct):
-    """Typed product entity."""
-
     id: int
     name: str
     price_cents: int
@@ -140,15 +138,17 @@ class ProductController(Controller):
     async def list_products(
         self,
         db_session: AsyncpgDriver,
-        spec: SQLSpec,
         filters: Annotated[list[FilterTypes], Dependency(skip_validation=True)],
     ) -> OffsetPagination[Product]:
-        """Filter, sort, and paginate products into an OffsetPagination envelope."""
+        """Filter, sort, and paginate products."""
         items, total = await db_session.select_with_total(
-            spec.get_sql("list-products"),
+            SQL("SELECT id, name, price_cents FROM products"),
             *filters,
             schema_type=Product,
             count_with_window=True,
         )
-        return OffsetPagination(items=items, limit=25, offset=0, total=total)
+        page = next(f for f in filters if isinstance(f, LimitOffsetFilter))
+        return OffsetPagination(
+            items=items, limit=page.limit, offset=page.offset, total=total
+        )
 ```

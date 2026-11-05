@@ -76,16 +76,13 @@ Always call `await config.close_pool()` during application shutdown (or let a fr
 
 ## Typed Row Mapping
 
-By default, `select` and `select_one` return `dict[str, Any]` rows. Pass `schema_type=` to decode rows directly into `msgspec.Struct`, `TypedDict`, `pydantic.BaseModel`, `dataclass`, or `attrs` instances (`uv add "sqlspec[msgspec]"`):
+By default, `select` and `select_one` return `dict[str, Any]` rows. Pass `schema_type=` to decode rows directly into `msgspec.Struct`, `TypedDict`, `pydantic.BaseModel`, `dataclass`, or `attrs` instances (`msgspec` ships with the `sqlspec[msgspec]` extra):
 
 ```python
 --8<-- "docs/examples/quickstart/typed_mapping.py:example"
 ```
 
-```python
-print(user)
-# Output: User(id=1, name='Ada', points=42)
-```
+`user` is a `User(id=1, name='Ada', points=42)` instance.
 
 Defining a `msgspec.Struct` model gives you typed attribute access, static type checking, and lower allocation overhead than plain dictionaries (see [Performance](performance.md) for optional garbage-collector tuning on hot paths).
 
@@ -115,5 +112,5 @@ When you are ready to point the same queries at PostgreSQL, Oracle, DuckDB, Span
 | Choose between `select`, `fetch` aliases, `select_with_total`, `execute_many`, and `select_stream` | [Querying](querying.md) |
 | Move multi-line SQL out of Python strings into `-- name:` `.sql` files | [SQL Files](sql-files.md) |
 | Manage schema revisions with the `sqlspec` CLI | [Migrations](migrations.md) |
-| Connect to PostgreSQL, Oracle, DuckDB, Spanner, BigQuery, MySQL, SQL Server, or Db2 | [Databases](/databases/) |
-| Wire request-scoped sessions into Litestar, FastAPI, Google ADK, or Dishka | [Integrations](/integrations/) |
+| Connect to PostgreSQL, Oracle, DuckDB, Spanner, BigQuery, MySQL, SQL Server, or Db2 | [Databases](../databases/index.md) |
+| Wire request-scoped sessions into Litestar, FastAPI, Google ADK, or Dishka | [Integrations](../integrations/index.md) |

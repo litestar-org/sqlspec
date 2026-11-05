@@ -2,7 +2,7 @@
 
 This curriculum walks through SQLSpec from your first in-memory SQLite query to production connection management, Arrow analytics, observability, and multi-database recipes.
 
-Every core guide runs out of the box against Python's built-in `sqlite3` module (or `aiosqlite` for `asyncio`) so you can copy and run examples locally without starting external database containers. When you are ready to connect to PostgreSQL, CockroachDB, Oracle, DuckDB, Spanner, BigQuery, MySQL, MariaDB, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, ADBC, or Arrow ODBC, pair these guides with the adapter setup pages under [Databases](/databases/).
+Every core guide runs out of the box against Python's built-in `sqlite3` module (or `aiosqlite` for `asyncio`) so you can copy and run examples locally without starting external database containers. When you are ready to connect to PostgreSQL, CockroachDB, Oracle, DuckDB, Spanner, BigQuery, MySQL, MariaDB, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, ADBC, or Arrow ODBC, pair these guides with the adapter setup pages under [Databases](../databases/index.md).
 
 ## Execution Architecture
 
@@ -21,9 +21,9 @@ SQLSpec keeps each layer explicit:
 2. **Driver Session**: Short-lived `session` context managers expose consistent `select*`, `fetch*`, `execute*`, `select_stream`, and `select_to_arrow` methods across all database adapters.
 3. **Statement Compiler**: Parameter styles (`:name`, `?`, `$1`, `@name`), `StatementFilter` predicates, and fluent `sql.*` builders compile once per SQL shape and reuse cached plans across sessions.
 
-## Unified Query Authoring and Execution Mental Model
+## Query Authoring
 
-SQLSpec offers four ways to author queries, and every authoring surface feeds into the exact same driver execution methods (`session.select*`, `session.fetch*`, `session.execute*`) and accepts composable `*filters: StatementFilter` arguments:
+Raw SQL strings, `SQL(...)` statements, named `.sql` files, and fluent builders all feed the same driver execution methods (`session.select*`, `session.fetch*`, `session.execute*`) and accept composable `*filters: StatementFilter` arguments. [Querying](querying.md) compares them side by side.
 
 ```mermaid
 flowchart LR
@@ -33,13 +33,6 @@ flowchart LR
     Builder["QueryBuilder (sql.select)"] --> Compiler
     Compiler --> Session["session.select* / fetch* / execute*"]
 ```
-
-| Authoring Surface | Entry Point | Runtime Modifiers & Filters | Best For |
-| --- | --- | --- | --- |
-| Raw SQL string | `"SELECT id, name FROM users WHERE active = :active"` | Accepts positional `*filters: StatementFilter` (`LimitOffsetFilter`, `OrderByFilter`, `SearchFilter`) and `**params` at execution time | Concise inline queries, health probes, and one-off statements |
-| Immutable `SQL` object | `SQL("SELECT id, name FROM users", active=1).where(...)` | Supports `.where(...)`, `.where_eq(...)`, `.order_by(...)`, `.paginate(...)`, and `*filters: StatementFilter` | Reusable SQL templates that append dynamic `WHERE` or pagination clauses |
-| Named `.sql` file (`SQLFileLoader`) | `spec.get_sql("list_users")` | Returns a `SQL` object supporting `-- param:` validation, slots, `.where(...)`, and `*filters: StatementFilter` | Multi-line reporting queries, CTEs, and SQL-first repositories |
-| Fluent `QueryBuilder` (`sql.*`) | `sql.select("id", "name").from_("users").where_eq("active", 1)` | Chains `.where*`, `.join`, `.order_by`, `.limit`, dialect upserts/merges, and `*filters: StatementFilter` | Programmatic query construction, dynamic column selection, and cross-dialect DML/DDL |
 
 ## How to Read This Guide
 
@@ -54,7 +47,7 @@ Start here to install `sqlspec`, run your first parameterized query, and wire da
 | Guide | Focus |
 | --- | --- |
 | [Installation](installation.md) | Install `sqlspec` with `uv`, `pip`, `pdm`, or `poetry` and select optional extras by database family, web framework, serializer, or storage backend. |
-| [Quickstart](quickstart.md) | Execute synchronous and asynchronous SQLite queries and decode rows into `msgspec.Struct` models in under five minutes. |
+| [Quickstart](quickstart.md) | Execute synchronous and asynchronous SQLite queries and decode rows into `msgspec.Struct` models. |
 | [Configuration](configuration.md) | Register single or multiple databases on `SQLSpec`, choose pooled vs direct configs, customize `StatementConfig`, and attach lifecycle hooks. |
 
 ## Core Querying and Transactions
@@ -77,7 +70,7 @@ Organize larger query suites without giving up SQL readability or composable run
 | [SQL Files](sql-files.md) | Load `-- name:` SQL blocks from disk or cloud storage, validate `-- param:` headers, and append dynamic `WHERE` clauses. |
 | [Query Builder: SELECT & Joins](query-builder.md) | Construct parameterized `SELECT` queries, `Column` expressions, `WHERE`/`OR WHERE` predicates, joins, CTEs, set operations, locking, and `EXPLAIN` plans. |
 | [Expressions, Windows & Vector](query-builder-expressions.md) | Compose aggregates, `ROLLUP`/`CUBE`/`GROUPING SETS`, scalar/math/string helpers, `CASE`, window functions, and cross-dialect vector distance / Oracle Hybrid RRF. |
-| [DML, MERGE & DDL Builders](query-builder-dml-ddl.md) | Build `INSERT`, `UPDATE`, `DELETE`, `RETURNING`, model-bound mutations, `ON CONFLICT` / `MERGE` upserts, and all 16 DDL builders with schema inference. |
+| [DML, MERGE & DDL Builders](query-builder-dml-ddl.md) | Build `INSERT`, `UPDATE`, `DELETE`, `RETURNING`, model-bound mutations, `ON CONFLICT` / `MERGE` upserts, and DDL builders with schema inference. |
 | [Filtering and Pagination](filtering-and-pagination.md) | Apply composable `StatementFilter` objects (`LimitOffsetFilter`, `BeforeAfterFilter`, `SearchFilter`, `OrderByFilter`) and keyset cursors. |
 
 ## Operations, Analytics, and Quality
@@ -92,7 +85,7 @@ Operate schemas, move columnar data, instrument production queries, and keep tes
 | [Data Dictionary](data-dictionary.md) | Introspect tables, columns, indexes, foreign keys, server versions, and dialect-optimal column types across engines. |
 | [Observability](observability.md) | Configure `StatementObserver` callbacks, OpenTelemetry spans, Prometheus metrics, wire-level `sqlcommenter`, and log redaction. |
 | [Testing](testing.md) | Combine in-memory SQLite unit tests, `pytest-databases` container fixtures, and JSONL table fixtures. |
-| [Performance](performance.md) | Understand per-config statement caching, `SlotPooledStatement`, `msgspec` hydration, `sqlspec[mypyc]` wheels, and Arrow batch sizing. |
+| [Performance](performance.md) | Understand per-config statement caching, `msgspec` hydration, `sqlspec[mypyc]` wheels, and Arrow batch sizing. |
 
 ## Production Recipes
 

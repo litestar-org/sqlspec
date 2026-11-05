@@ -1,14 +1,14 @@
 # Configuration
 
-SQLSpec separates **adapter configuration** (connection credentials, pool bounds, dialect defaults, and extension settings) from **active sessions** (checked-out connections executing SQL). Every adapter inherits from one of four base configuration classes in `sqlspec.config`.
+SQLSpec separates **adapter configuration** (connection credentials, pool bounds, dialect defaults, and extension settings) from **active sessions** (checked-out connections executing SQL). Every adapter inherits from one of these base configuration classes in `sqlspec.config`.
 
 ## Pooled vs Non-Pooled Configs
 
 | Base Class | Mode | Connection Lifecycle | Typical Adapters |
 | --- | --- | --- | --- |
-| `SyncDatabaseConfig` | Sync | Managed thread-safe connection pool (`create_pool`, `close_pool`, `provide_session`) | `SqliteConfig`, `PsycopgSyncConfig`, `OracleSyncConfig`, `DuckDBConfig`, `Db2SyncConfig`, `PymssqlConfig` |
+| `SyncDatabaseConfig` | Sync | Managed thread-safe connection pool (`create_pool`, `close_pool`, `provide_session`) | `SqliteConfig`, `PsycopgSyncConfig`, `OracleSyncConfig`, `DuckDBConfig`, `Db2SyncConfig`, `PymssqlConfig`, `AdbcConfig` |
 | `AsyncDatabaseConfig` | Async | Managed `asyncio` connection pool (`await create_pool`, `await close_pool`, `async with provide_session`) | `AsyncpgConfig`, `PsycopgAsyncConfig`, `PsqlpyConfig`, `AiosqliteConfig`, `OracleAsyncConfig`, `AsyncmyConfig` |
-| `NoPoolSyncConfig` | Sync | Stateless client or per-session direct connection | `BigQueryConfig`, `ArrowOdbcConfig`, `AdbcConfig` |
+| `NoPoolSyncConfig` | Sync | Stateless client or per-session direct connection | `BigQueryConfig`, `ArrowOdbcConfig` |
 | `NoPoolAsyncConfig` | Async | Async client managing its own multiplexed transport | Custom stateless async adapters |
 
 You can open sessions either through the `SQLSpec` registry (`spec.provide_session(config)`) or directly on any config object (`config.provide_session()`).
@@ -32,7 +32,7 @@ A single `SQLSpec` instance can coordinate multiple databases—such as an OLTP 
     --8<-- "docs/examples/configuration/multi_database.py:example"
     ```
 
-When integrating with the CLI or web frameworks, assign `bind_key="primary"` and `bind_key="analytics"` on each config so migrations (`sqlspec --bind-key analytics upgrade`) and framework dependency keys (`db_session`, `analytics_session`) address each database unambiguously. For multi-pool web and background worker composition roots (`app/config.py`), see [Service Layer](recipes/service-layer.md#production-composition-root).
+When integrating with the CLI or web frameworks, assign `bind_key="primary"` and `bind_key="analytics"` on each config so migrations (`sqlspec --bind-key analytics upgrade`) address each database unambiguously, and give each config its own framework session key (for example `extension_config={"litestar": {"session_key": "analytics_session"}}`; the default is `db_session`). For multi-pool web and background worker composition roots (`app/config.py`), see [Service Layer](recipes/service-layer.md#production-composition-root).
 
 ## Customizing StatementConfig
 
@@ -56,7 +56,7 @@ config = SqliteConfig(
 Key `StatementConfig` options:
 
 - `enable_caching`: Caches parsed SQLGlot ASTs and compiled driver parameter plans in a thread-safe `StatementCacheHolder` shared across sessions from the same config.
-- `enable_optimization`: Runs SQLGlot AST optimization on fluent `QueryBuilder` queries (`True` by default; pass `False` when verbatim identifier casing is required, such as on BigQuery).
+- `enable_expression_simplification` and `enable_column_pruning`: Opt-in SQLGlot simplification and unused-column pruning for statements (both `False` by default). Fluent builders control their own optimizer separately through `enable_optimization` (on by default).
 - `enable_sqlcommenter`: Appends OpenTelemetry/correlation comments at wire dispatch time without invalidating compiled statement cache keys.
 
 ## Connection and Query Lifecycle Hooks
@@ -111,4 +111,4 @@ When you integrate SQLSpec through `SQLSpecPlugin` (Litestar), an ASGI lifespan 
 
 - Prefer `config.provide_session()` or `spec.provide_session(config)` over constructing driver instances directly so per-config statement caches and lifecycle hooks remain attached.
 - Assign `bind_key` whenever an application registers more than one database config.
-- Keep pool sizing and driver-specific options inside each adapter's typed `connection_config` and `driver_features` dictionaries (documented per engine in [Databases](/databases/)).
+- Keep pool sizing and driver-specific options inside each adapter's typed `connection_config` and `driver_features` dictionaries (documented per engine in [Databases](../databases/index.md)).

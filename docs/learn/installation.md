@@ -56,7 +56,7 @@ Combine multiple optional extras in a single install command when adding drivers
 
 ## Database Driver Extras
 
-Install only the driver extras needed by your deployment target. See [Databases](/databases/) for adapter-by-adapter connection and pool configuration.
+Install only the driver extras needed by your deployment target. See [Databases](../databases/index.md) for adapter-by-adapter connection and pool configuration.
 
 | Family | Extra | Installed Driver Package(s) |
 | --- | --- | --- |
@@ -76,7 +76,7 @@ Install only the driver extras needed by your deployment target. See [Databases]
 
 ## Web and AI Framework Extras
 
-See [Integrations](/integrations/) for plugin wiring, request-scoped sessions, and store setup.
+See [Integrations](../integrations/index.md) for plugin wiring, request-scoped sessions, and store setup.
 
 | Extra | Target Integration |
 | --- | --- |
@@ -87,7 +87,7 @@ See [Integrations](/integrations/) for plugin wiring, request-scoped sessions, a
 | `flask` | Flask `teardown_appcontext` and `g`-scoped synchronous sessions |
 | `sanic` | Sanic `before_server_start` / middleware async session lifecycle |
 
-For Dishka dependency injection, install `dishka` alongside `sqlspec` and see the [Dishka integration guide](/integrations/dishka/).
+For Dishka dependency injection, install `dishka` alongside `sqlspec` and see the [Dishka integration guide](../integrations/dishka.md).
 
 ## Schema, Serialization, and Identifier Extras
 

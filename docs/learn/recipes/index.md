@@ -32,7 +32,7 @@ Every recipe in this section works unchanged inside SQLSpec's first-party framew
 - **FastAPI and Starlette**: Resolve tenant-scoped sessions inside `Depends(...)` functions and attach `CorrelationContext` IDs in ASGI middleware.
 - **Google ADK**: Pair domain service layers alongside `SQLSpecSessionService` and `SQLSpecMemoryService` on the same underlying database pool.
 
-See [Integrations](/integrations/) for framework-specific wiring examples.
+See [Integrations](../../integrations/index.md) for framework-specific wiring examples.
 
 ## Composition Architecture
 
@@ -61,7 +61,7 @@ flowchart TD
 
 ## Production Checklist Before Launch
 
-1. **Pool Bounds Match Database Limits**: Verify `(worker_processes * pool_max_size)` stays safely below PostgreSQL `max_connections`, MySQL `max_connections`, or Oracle session limits (or deploy behind a pooler configured in [Databases](/databases/)).
+1. **Pool Bounds Match Database Limits**: Verify `(worker_processes * pool_max_size)` stays safely below PostgreSQL `max_connections`, MySQL `max_connections`, or Oracle session limits (or deploy behind a pooler configured in [Databases](../../databases/index.md)).
 2. **Explicit Shutdown Hooks**: Confirm `config.close_pool()` / `await config.close_pool()` runs during ASGI lifespan teardown or worker exit.
 3. **Observability and Redaction Enabled**: Enable `RedactionConfig(mask_parameters=True)` and `SamplingConfig(force_sample_on_error=True)` before routing live customer traffic.
 4. **Migration Dry-Run in CI**: Run `uv run sqlspec upgrade --dry-run` in pull request checks alongside `pytest`.

@@ -22,9 +22,9 @@ When constructed with `config=`, a service checks out a short-lived pooled sessi
 | `provide_session()` | Context manager yielding a pooled read/write driver session. |
 | `begin_transaction()` | Context manager yielding a session inside an active transaction that commits on exit and rolls back on exception. |
 
-## Production Service Architecture Patterns
+## Service Session Lifetimes
 
-In real-world architectures, services follow either a bounded-session or request-scoped lifetime pattern:
+Services use either a bounded-session or a request-scoped lifetime:
 
 ### Bounded-Session Domain Services
 

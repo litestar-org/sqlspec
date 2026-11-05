@@ -165,7 +165,7 @@ if should_retry_fallback:
 
 ## Framework Commit Modes
 
-Web integrations (`Litestar`, `FastAPI`, `Starlette`, `Flask`, `Sanic`) support three request-scoped commit strategies:
+Web integrations (`Litestar`, `FastAPI`, `Starlette`, `Flask`, `Sanic`) support these request-scoped commit modes:
 
 - `manual` (default): Handlers or services call `commit()` explicitly; ideal for strict boundary control and read-heavy routes.
 - `autocommit`: Commits automatically on `2xx` HTTP responses and rolls back on `4xx`/`5xx` responses or unhandled exceptions.

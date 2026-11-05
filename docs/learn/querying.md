@@ -12,7 +12,7 @@ flowchart LR
 
 ## Unified Query Authoring and Execution Mental Model
 
-Every execution method (`session.select*`, `session.fetch*`, `session.execute*`) accepts any of SQLSpec's four query authoring surfaces alongside positional `*filters: StatementFilter` and keyword parameters:
+Every execution method (`session.select*`, `session.fetch*`, `session.execute*`) accepts any of these query forms alongside positional `*filters: StatementFilter` and keyword parameters:
 
 | Authoring Surface | Entry Point | Runtime Modifiers & Filters | Best For |
 | --- | --- | --- | --- |
@@ -33,7 +33,7 @@ SQLSpec provides both `select*` methods and `asyncpg`-style `fetch*` aliases wit
 | `select_one_or_none(sql, ...)` | `fetch_one_or_none(sql, ...)` | `dict[str, Any] or SchemaT or None` | Returns `None` (raises if multiple rows match) |
 | `select_value(sql, ..., value_type=...)` | `fetch_value(sql, ...)` | Scalar value (`Any` or `ValueT`) | Raises `NotFoundError` |
 | `select_value_or_none(sql, ...)` | `fetch_value_or_none(sql, ...)` | Scalar value or `None` | Returns `None` |
-| `select_with_total(sql, ...)` | `fetch_with_total(sql, ...)` | `tuple[list[...], int]` | Returns `([], 0)` alongside the total unpaginated count |
+| `select_with_total(sql, ...)` | `fetch_with_total(sql, ...)` | `tuple[list[...], int]` | Returns an empty page with the total unpaginated count |
 | `select_stream(sql, ...)` | `fetch_stream(sql, ...)` | `SyncRowStream` or `AsyncRowStream` | Yields rows in bounded `chunk_size` batches |
 | `select_to_arrow(sql, ...)` | `fetch_to_arrow(sql, ...)` | `ArrowResult` | Returns an empty Arrow `Table` or `RecordBatch` |
 | `execute_many(sql, seq_of_params)` | — | `SQLResult` | Executes batched DML across a sequence of parameter tuples or dicts |
@@ -118,23 +118,14 @@ Materializing millions of rows with `select()` buffers the entire result set in 
 --8<-- "docs/examples/querying/streaming_results.py:example"
 ```
 
-=== "Sync"
+Async drivers return an `AsyncRowStream`; use `async with` and `async for`:
 
-    ```python
-    query = "SELECT id, payload FROM events ORDER BY id"
-    with session.select_stream(query, chunk_size=500) as stream:
-        for row in stream:
-            process_row(row)
-    ```
-
-=== "Async"
-
-    ```python
-    query = "SELECT id, payload FROM events ORDER BY id"
-    async with session.select_stream(query, chunk_size=500) as stream:
-        async for row in stream:
-            await process_row(row)
-    ```
+```python
+query = "SELECT id, payload FROM events ORDER BY id"
+async with session.select_stream(query, chunk_size=500) as stream:
+    async for row in stream:
+        await process_row(row)
+```
 
 For columnar analytics or Parquet export over large result sets, prefer `session.select_to_arrow(...)` (covered in [Arrow and Storage](arrow-and-storage.md)).
 

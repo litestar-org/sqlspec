@@ -66,17 +66,19 @@ VALUES (:account_id, :plan)
 ON CONFLICT (account_id) DO UPDATE SET plan = EXCLUDED.plan;
 ```
 
-| Input Alias (`DIALECT_ALIASES`) | Normalized SQLGlot Dialect | Canonical SQLSpec Dialects |
-| --- | --- | --- |
-| `postgresql`, `pg`, `pgplsql` | `postgres` | `postgres`, `mysql`, `mariadb`, `oracle`, `mssql`, `sqlite`, `duckdb` |
-| `plsql`, `oracledb` | `oracle` | `bigquery`, `spanner`, `spangres`, `cockroach`, `db2`, `sybase`, `sqlanywhere` |
-| `tsql` | `mssql` | — |
+The loader normalizes these aliases (`DIALECT_ALIASES`) before handing the name to SQLGlot; any other value passes through unchanged:
+
+| Input Alias | Normalized Dialect |
+| --- | --- |
+| `postgresql`, `pg`, `pgplsql` | `postgres` |
+| `plsql`, `oracledb` | `oracle` |
+| `tsql` | `mssql` |
 
 <span id="anatomy-of-a-multi-query-sql-file"></span>
 
 ## Parameter Type Declarations {#parameter-type-declarations}
 
-Declare `-- param: <name> <type>[?] <description>` headers below `-- name:` to document parameters and enforce three validation layers:
+Declare `-- param: <name> <type>[?] <description>` headers below `-- name:` to document parameters and validate them:
 
 === "teams.sql"
 
@@ -98,9 +100,9 @@ Declare `-- param: <name> <type>[?] <description>` headers below `-- name:` to d
     --8<-- "docs/examples/sql_files/declared_params.py:example"
     ```
 
-1. **Load-Time Placeholder Drift Check** (`SQLFileLoader._check_declared_parameters`): Raises `SQLFileParseError` if a declared `-- param:` name is absent from the query's `:placeholder` tokens or positional counts mismatch (evaluated at `get_sql()` time when a query uses fragments or slots).
-2. **Runtime Required vs Nullable (`?`) Execution**: Omitting a required parameter raises `SQLSpecError` before acquiring a cursor. Suffixing the type with `?` (or trailing `(optional)` in the description) defaults omitted keyword arguments to `None` (`NULL`), enabling `(:name IS NULL OR name = :name)` or `COALESCE(:name, name)` predicates that reuse a single prepared-statement execution plan.
-3. **Runtime Type Registry & Custom Types**: Non-`None` values are checked against `_TYPE_REGISTRY` (`str`, `int`, `float`, `bool`, `bytes`, `date`, `datetime`, `time`, `decimal`, `uuid`, `dict`, `json`, `jsonb`, `list`, `list[int]`, `list[str]`, `list[float]`, `list[bool]`, `tuple`). Unknown type strings act as documentation-only unless registered via `register_param_type("money", Decimal)`. Pass `SQLFileLoader(strict_parameter_annotations=True)` to raise `SQLFileParseError` on malformed `-- param:` lines.
+- **Placeholder drift check at load time**: The loader raises `SQLFileParseError` when a declared `-- param:` name is missing from the query's `:placeholder` tokens or positional counts differ. Queries that use fragments or slots are checked at `get_sql()` time instead.
+- **Required vs optional at execution**: Omitting a required parameter raises `SQLSpecError` before a cursor is acquired. A `?` type suffix (or a description ending in `(optional)`) defaults an omitted keyword argument to `None`, so `(:name IS NULL OR name = :name)` or `COALESCE(:name, name)` predicates reuse one prepared-statement plan.
+- **Runtime type checks**: Non-`None` values are checked against the declared type: `str`, `int`, `float`, `bool`, `bytes`, `date`, `datetime`, `time`, `decimal`, `uuid`, `dict`, `json`, `jsonb`, `list`, `list[int]`, `list[str]`, `list[float]`, `list[bool]`, or `tuple`. Unknown type strings are documentation only unless registered with `register_param_type("money", Decimal)`. Pass `SQLFileLoader(strict_parameter_annotations=True)` to raise `SQLFileParseError` on malformed `-- param:` lines.
 
 <span id="sql-fragments-and-slots"></span>
 
@@ -162,7 +164,7 @@ Reuse static SQL blocks across queries with `-- fragment: <name>` and `/* includ
     config = spec.add_config(
         SqliteConfig(connection_config={"database": ":memory:"})
     )
-    spec.load_sql_files(Path("products.sql"))
+    spec.load_sql_files(Path("sql"))
     with spec.provide_session(config) as session:
         product = session.select_one(
             spec.get_sql("get-product"), id=1, schema_type=Product

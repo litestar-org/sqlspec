@@ -11,8 +11,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 async def main() -> list[dict[str, Any]]:
     """Insert and read a note using an asynchronous SQLite session."""
     spec = SQLSpec()
-    db_config = AiosqliteConfig(connection_config={"database": ":memory:"})
-    config = spec.add_config(db_config)
+    config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
 
     try:
         async with spec.provide_session(config) as session:
