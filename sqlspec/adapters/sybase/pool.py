@@ -1,4 +1,4 @@
-"""Sybase ASE connection pool with thread-locked TDSVER='5.0' negotiation."""
+"""Sybase ASE thread-local connection pool with TDS 5.0 configuration validation."""
 
 import contextlib
 import logging
@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sybase._typing import PYMSSQL_MODULE, SybaseConnection
-from sqlspec.adapters.sybase.core import DEFAULT_SYBASE_CONN_PROPERTIES, DEFAULT_SYBASE_TDS_VERSION
+from sqlspec.adapters.sybase.core import DEFAULT_SYBASE_TDS_VERSION, build_connection_config
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -51,15 +51,19 @@ class SybaseConnectionPool:
         """Initialize the thread-local Sybase ASE connection manager.
 
         Args:
-            connection_parameters: Normalized Sybase connection parameters.
+            connection_parameters: Raw or normalized Sybase connection parameters.
             recycle_seconds: Connection recycle time in seconds (default 24h).
             health_check_interval: Seconds of idle time before running health check.
             on_connection_create: Callback executed when a connection is created.
         """
-        params = dict(connection_parameters)
-        freetds_alias = params.get("freetds_server") or params.get("server_alias") or params.get("is_server_alias")
-        if freetds_alias and isinstance(freetds_alias, str):
-            params["server"] = freetds_alias
+        params = build_connection_config(connection_parameters)
+        freetds_alias = params.pop("_sybase_server_alias", False)
+        if freetds_alias and params.get("port") in (None, "", 0, "0"):
+            msg = (
+                "FreeTDS server aliases require an explicit nonzero port: "
+                "pymssql overrides the port configured in freetds.conf."
+            )
+            raise ImproperConfigurationError(msg)
         tdsver = os.environ.get("TDSVER")
         if not freetds_alias and tdsver != "5.0":
             msg = (
@@ -71,8 +75,6 @@ class SybaseConnectionPool:
         self._tds_version = str(
             params.pop("_sybase_tds_version", params.pop("tds_version", DEFAULT_SYBASE_TDS_VERSION))
         )
-        params.setdefault("conn_properties", DEFAULT_SYBASE_CONN_PROPERTIES)
-        params.setdefault("autocommit", True)
         self._connection_parameters = params
         self._thread_local = threading.local()
         self._connection_registry: set[SybaseConnection] = set()
@@ -110,14 +112,18 @@ class SybaseConnectionPool:
         Yields:
             A thread-local database connection.
         """
+        depth = getattr(self._thread_local, "depth", 0)
         connection = self.acquire()
+        self._thread_local.depth = depth + 1
         try:
             yield connection
         except Exception:
-            with contextlib.suppress(Exception):
-                self._close_thread_connection()
+            if getattr(self._thread_local, "depth", 1) <= 1:
+                with contextlib.suppress(Exception):
+                    self._close_thread_connection()
             raise
         finally:
+            self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
             self.release(connection)
 
     def close(self) -> None:

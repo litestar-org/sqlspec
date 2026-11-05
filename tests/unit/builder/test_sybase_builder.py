@@ -3,10 +3,21 @@
 import pytest
 
 from sqlspec import sql
+from sqlspec.builder import CreateTable
 from sqlspec.core import get_cache
 from sqlspec.exceptions import DialectNotSupportedError
 
 __all__ = ()
+
+
+def test_sybase_arrow_timestamps_preserve_bigdatetime_precision() -> None:
+    """Keep both Arrow timestamp kinds as BIGDATETIME through DDL compilation."""
+    pa = pytest.importorskip("pyarrow")
+    schema = pa.schema([("created_at", pa.timestamp("us")), ("observed_at", pa.timestamp("us", tz="UTC"))])
+
+    ddl = CreateTable.from_arrow_schema("events", schema, dialect="sybase").to_sql()
+
+    assert ddl == "CREATE TABLE [events] (\n  [created_at] BIGDATETIME,\n  [observed_at] BIGDATETIME\n)"
 
 
 def test_sybase_builder_select_limit_offset_and_optimizer_cache() -> None:

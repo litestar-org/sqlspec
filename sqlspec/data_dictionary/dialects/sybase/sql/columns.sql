@@ -6,7 +6,8 @@ SELECT
     c.name AS column_name,
     t.name AS data_type,
     CASE WHEN (c.status & 8) = 8 THEN 'YES' ELSE 'NO' END AS is_nullable,
-    cm.text AS column_default,
+    CASE WHEN cm.id = c.cdefault AND (COALESCE(cm.status, 0) & 1) = 0
+        THEN cm.text ELSE NULL END AS column_default,
     c.colid AS ordinal_position,
     c.length AS char_length,
     c.length AS max_length,
@@ -16,15 +17,21 @@ SELECT
     CASE WHEN uq.col_name IS NOT NULL THEN 1 ELSE 0 END AS is_unique,
     CASE WHEN (c.status & 128) = 128 THEN 1 ELSE 0 END AS is_identity,
     CASE WHEN (c.status & 128) = 128 THEN 'ALWAYS' ELSE NULL END AS identity_generation,
-    0 AS is_generated,
-    NULL AS generation_expression,
-    0 AS is_hidden,
+    CASE WHEN (COALESCE(c.status2, 0) & 112) <> 0 THEN 1 ELSE 0 END AS is_generated,
+    CASE WHEN cm.id = c.computedcol AND (COALESCE(cm.status, 0) & 1) = 0
+        THEN cm.text ELSE NULL END AS generation_expression,
+    CASE WHEN (COALESCE(c.status3, 0) & 1) = 1 THEN 1 ELSE 0 END AS is_hidden,
+    cm.id AS _definition_id,
+    cm.number AS _definition_number,
+    cm.colid2 AS _definition_colid2,
+    cm.colid AS _definition_colid,
     NULL AS column_comment
 FROM dbo.syscolumns c
 JOIN dbo.sysobjects o ON c.id = o.id
 JOIN dbo.sysusers u ON o.uid = u.uid
 JOIN dbo.systypes t ON c.usertype = t.usertype
-LEFT JOIN dbo.syscomments cm ON c.cdefault = cm.id AND cm.colid = 1
+LEFT JOIN dbo.syscomments cm
+    ON (cm.id = c.cdefault OR cm.id = c.computedcol) AND cm.texttype = 0
 LEFT JOIN (
     SELECT DISTINCT
         i.id,
@@ -58,7 +65,7 @@ LEFT JOIN (
 WHERE o.type IN ('U', 'V')
   AND u.name = COALESCE(:schema_name, USER_NAME())
   AND (:table_name IS NULL OR o.name = :table_name)
-ORDER BY u.name, o.name, c.colid;
+ORDER BY u.name, o.name, c.colid, cm.id, cm.number, cm.colid2, cm.colid;
 
 -- name: by_table
 -- dialect: sybase
@@ -68,7 +75,8 @@ SELECT
     c.name AS column_name,
     t.name AS data_type,
     CASE WHEN (c.status & 8) = 8 THEN 'YES' ELSE 'NO' END AS is_nullable,
-    cm.text AS column_default,
+    CASE WHEN cm.id = c.cdefault AND (COALESCE(cm.status, 0) & 1) = 0
+        THEN cm.text ELSE NULL END AS column_default,
     c.colid AS ordinal_position,
     c.length AS char_length,
     c.length AS max_length,
@@ -78,15 +86,21 @@ SELECT
     CASE WHEN uq.col_name IS NOT NULL THEN 1 ELSE 0 END AS is_unique,
     CASE WHEN (c.status & 128) = 128 THEN 1 ELSE 0 END AS is_identity,
     CASE WHEN (c.status & 128) = 128 THEN 'ALWAYS' ELSE NULL END AS identity_generation,
-    0 AS is_generated,
-    NULL AS generation_expression,
-    0 AS is_hidden,
+    CASE WHEN (COALESCE(c.status2, 0) & 112) <> 0 THEN 1 ELSE 0 END AS is_generated,
+    CASE WHEN cm.id = c.computedcol AND (COALESCE(cm.status, 0) & 1) = 0
+        THEN cm.text ELSE NULL END AS generation_expression,
+    CASE WHEN (COALESCE(c.status3, 0) & 1) = 1 THEN 1 ELSE 0 END AS is_hidden,
+    cm.id AS _definition_id,
+    cm.number AS _definition_number,
+    cm.colid2 AS _definition_colid2,
+    cm.colid AS _definition_colid,
     NULL AS column_comment
 FROM dbo.syscolumns c
 JOIN dbo.sysobjects o ON c.id = o.id
 JOIN dbo.sysusers u ON o.uid = u.uid
 JOIN dbo.systypes t ON c.usertype = t.usertype
-LEFT JOIN dbo.syscomments cm ON c.cdefault = cm.id AND cm.colid = 1
+LEFT JOIN dbo.syscomments cm
+    ON (cm.id = c.cdefault OR cm.id = c.computedcol) AND cm.texttype = 0
 LEFT JOIN (
     SELECT DISTINCT
         i.id,
@@ -120,4 +134,4 @@ LEFT JOIN (
 WHERE o.type IN ('U', 'V')
   AND o.name = :table_name
   AND u.name = COALESCE(:schema_name, USER_NAME())
-ORDER BY c.colid;
+ORDER BY c.colid, cm.id, cm.number, cm.colid2, cm.colid;

@@ -96,6 +96,13 @@ def test_sybase_type_mappings() -> None:
     assert parse_one("CAST(x AS VARBINARY(MAX))", read="tsql").sql("sybase") == "CAST(x AS IMAGE)"
 
 
+def test_sybase_native_datetime_types_roundtrip() -> None:
+    """Preserve the distinct legacy and high-precision native datetime types."""
+    ddl = "CREATE TABLE events (legacy DATETIME, precise BIGDATETIME)"
+
+    assert transpile(ddl, read="sybase", write="sybase") == [ddl]
+
+
 def test_sybase_columndef_identity_and_nullable_boolean() -> None:
     """Verify Sybase ASE renders bare IDENTITY and converts nullable BIT/BOOLEAN to TINYINT NULL."""
     ddl = parse_one(

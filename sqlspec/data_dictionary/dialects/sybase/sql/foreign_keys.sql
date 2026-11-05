@@ -32,7 +32,9 @@ JOIN dbo.syscolumns rc ON rc.id = ro.id AND rc.colid = CASE k.pos
     WHEN 9 THEN r.refkey9 WHEN 10 THEN r.refkey10 WHEN 11 THEN r.refkey11 WHEN 12 THEN r.refkey12
     WHEN 13 THEN r.refkey13 WHEN 14 THEN r.refkey14 WHEN 15 THEN r.refkey15 WHEN 16 THEN r.refkey16
 END
-WHERE k.pos <= r.frgcnt
+WHERE k.pos <= r.keycnt
+  AND (r.pmrydbname IS NULL OR r.pmrydbname = DB_NAME())
+  AND (r.frgndbname IS NULL OR r.frgndbname = DB_NAME())
   AND u.name = COALESCE(:schema_name, USER_NAME())
   AND (:table_name IS NULL OR o.name = :table_name)
 ORDER BY u.name, o.name, co.name, k.pos;
@@ -71,7 +73,9 @@ JOIN dbo.syscolumns rc ON rc.id = ro.id AND rc.colid = CASE k.pos
     WHEN 9 THEN r.refkey9 WHEN 10 THEN r.refkey10 WHEN 11 THEN r.refkey11 WHEN 12 THEN r.refkey12
     WHEN 13 THEN r.refkey13 WHEN 14 THEN r.refkey14 WHEN 15 THEN r.refkey15 WHEN 16 THEN r.refkey16
 END
-WHERE k.pos <= r.frgcnt
+WHERE k.pos <= r.keycnt
+  AND (r.pmrydbname IS NULL OR r.pmrydbname = DB_NAME())
+  AND (r.frgndbname IS NULL OR r.frgndbname = DB_NAME())
   AND o.name = :table_name
   AND u.name = COALESCE(:schema_name, USER_NAME())
 ORDER BY co.name, k.pos;

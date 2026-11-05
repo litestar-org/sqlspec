@@ -23,7 +23,7 @@ _PYARROW_JSON_BLOCK_SIZE = 1 << 20
 
 
 def batches_to_arrow_table(batches: Any) -> "ArrowTable":
-    """Coalesce an Arrow RecordBatchReader, RecordBatch, Table, or batch iterable into an ArrowTable."""
+    """Coalesce Arrow batches, tables, readers, or C stream exporters into a table."""
     pa = import_pyarrow()
     if isinstance(batches, pa.Table):
         return cast("ArrowTable", batches)
@@ -31,6 +31,8 @@ def batches_to_arrow_table(batches: Any) -> "ArrowTable":
         return cast("ArrowTable", batches.read_all())
     if isinstance(batches, pa.RecordBatch):
         return cast("ArrowTable", pa.Table.from_batches([batches]))
+    if hasattr(batches, "__arrow_c_stream__"):
+        return cast("ArrowTable", pa.RecordBatchReader.from_stream(batches).read_all())
     batch_list = list(batches)
     if not batch_list:
         return cast("ArrowTable", pa.table({}))

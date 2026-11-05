@@ -58,7 +58,9 @@ __all__ = (
     "split_schema_and_table",
 )
 
-DEFAULT_SYBASE_CONN_PROPERTIES: Final[str] = "SET QUOTED_IDENTIFIER ON; SET ANSINULL ON; SET TEXTSIZE 2147483647;"
+DEFAULT_SYBASE_CONN_PROPERTIES: Final[str] = (
+    "SET CHAINED OFF; SET QUOTED_IDENTIFIER ON; SET ANSINULL ON; SET TEXTSIZE 2147483647;"
+)
 DEFAULT_SYBASE_TDS_VERSION: Final[str] = "5.0"
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
@@ -342,11 +344,10 @@ def extract_error_number(exc: BaseException | None) -> int | None:
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build a normalized Sybase ASE connection configuration dictionary.
 
-    Injects ``DEFAULT_SYBASE_CONN_PROPERTIES``, ``autocommit=True``, ``port=5000``,
-    and ``charset='UTF-8'`` by default, and strips ``tds_version`` into
-    ``_sybase_tds_version`` so ``SybaseConnectionPool`` can negotiate TDS 5.0
-    via ``os.environ['TDSVER']`` without triggering ``pymssql._mssql``'s Cython
-    ``tds_version`` validator.
+    Host connections default to port 5000. FreeTDS section aliases retain an
+    explicit port and a private marker for pool validation. Session properties,
+    autocommit and charset receive ASE defaults unless supplied by the caller.
+    The pool validates protocol configuration without modifying ``TDSVER``.
 
     Args:
         connection_config: Raw connection configuration mapping.
@@ -360,8 +361,19 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         for extra_key, extra_value in extra.items():
             if extra_value is not None:
                 config.setdefault(str(extra_key), extra_value)
+    freetds_server = config.pop("freetds_server", None)
+    server_alias = config.pop("server_alias", None)
+    alias_flag = config.pop("is_server_alias", False)
+    is_server_alias = bool(config.pop("_sybase_server_alias", False) or alias_flag)
+    alias = freetds_server or server_alias
+    if alias:
+        config["server"] = alias
+        is_server_alias = True
     config.setdefault("server", config.pop("host", "localhost"))
-    config.setdefault("port", 5000)
+    if is_server_alias:
+        config["_sybase_server_alias"] = True
+    else:
+        config.setdefault("port", 5000)
     config.setdefault("charset", "UTF-8")
     config.setdefault("autocommit", True)
     config.setdefault("conn_properties", DEFAULT_SYBASE_CONN_PROPERTIES)

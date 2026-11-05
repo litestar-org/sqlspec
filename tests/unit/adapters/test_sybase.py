@@ -3,14 +3,18 @@
 import os
 import socket
 import threading
+from collections.abc import Generator
 from contextlib import nullcontext
 from datetime import UTC, datetime
-from typing import Any, cast
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pymssql
 import pytest
 
+import sqlspec.adapters.sybase.pool as sybase_pool
 from sqlspec.adapters.sybase import (
     DEFAULT_SYBASE_CONN_PROPERTIES,
     DEFAULT_SYBASE_TDS_VERSION,
@@ -131,6 +135,151 @@ class FakeConnection:
         self.autocommit_state = value
 
 
+@pytest.fixture
+def recording_sybase_config(monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[SybaseConfig, FakeCursor], None, None]:
+    """Record native DB-API calls while using the real config, pool, driver and stores."""
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    monkeypatch.setenv("TDSVER", "5.0")
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: connection))
+    config = SybaseConfig(extension_config={"adk": {}, "litestar": {"session_table": "sessions"}})
+    try:
+        yield config, cursor
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("table", "object_name"), [("event_queue", "[event_queue]"), ("audit.event_queue", "[audit].[event_queue]")]
+)
+def test_sybase_event_queue_guards_resolve_same_owner(table: str, object_name: str) -> None:
+    store = SybaseEventQueueStore(SybaseConfig(extension_config={"events": {"queue_table": table}}))
+
+    create_table, create_index = store.create_statements()
+    drop_table = store.drop_statements()[0]
+
+    assert create_table.startswith(f"IF OBJECT_ID('{object_name}') IS NULL EXECUTE('CREATE TABLE {store.table_name} ")
+    assert f"AND id = OBJECT_ID('{object_name}')) EXECUTE('CREATE INDEX " in create_index
+    assert drop_table == f"IF OBJECT_ID('{object_name}') IS NOT NULL EXECUTE('DROP TABLE {store.table_name}');"
+
+
+def test_sybase_tracking_table_guard_uses_native_object_id(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor],
+) -> None:
+    config, cursor = recording_sybase_config
+    with config.provide_session() as driver:
+        SybaseSyncMigrationTracker(version_table_name="audit.ddl_migrations").ensure_tracking_table(driver)
+
+    assert cursor.calls[0][0].startswith(
+        "IF OBJECT_ID('[audit].[ddl_migrations]') IS NULL EXECUTE('CREATE TABLE [audit].[ddl_migrations]"
+    )
+
+
+def test_sybase_adk_lifecycle_uses_native_object_id(recording_sybase_config: tuple[SybaseConfig, FakeCursor]) -> None:
+    config, cursor = recording_sybase_config
+    sessions = SybaseADKStore(config)
+    memory = SybaseADKMemoryStore(config)
+    sessions.create_tables()
+    memory.create_tables()
+    sessions.drop_tables()
+    memory.drop_tables()
+
+    statements = [sql for sql, _params in cursor.calls]
+    for table in ("adk_session", "adk_event", "adk_app_state", "adk_user_state", "adk_internal_metadata", "adk_memory"):
+        reference = f"[dbo].[{table}]"
+        assert any(
+            statement.startswith(f"IF OBJECT_ID('{reference}') IS NULL EXECUTE('CREATE TABLE {reference}")
+            for statement in statements
+        )
+        assert any(
+            statement.startswith(f"IF OBJECT_ID('{reference}') IS NOT NULL EXECUTE('DROP TABLE {reference}')")
+            for statement in statements
+        )
+
+
+@pytest.mark.anyio
+async def test_sybase_litestar_create_uses_native_object_id(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor],
+) -> None:
+    config, cursor = recording_sybase_config
+    await SybaseStore(config).create_table()
+
+    assert any(
+        sql.startswith("IF OBJECT_ID('[dbo].[sessions]') IS NULL EXECUTE('CREATE TABLE [dbo].[sessions]")
+        for sql, _params in cursor.calls
+    )
+
+
+@pytest.mark.parametrize(
+    ("limit", "after"), [(None, None), (5, None), (5, datetime(2026, 1, 1, tzinfo=UTC)), (0, None)]
+)
+def test_sybase_adk_events_use_top_for_bounded_queries(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor], limit: int | None, after: datetime | None
+) -> None:
+    config, cursor = recording_sybase_config
+    assert SybaseADKStore(config).get_events("app", "user", "session", after_timestamp=after, limit=limit) == []
+    if limit == 0:
+        assert cursor.calls == []
+        return
+
+    statement, parameters = cursor.calls[-1]
+    sql = " ".join(statement.split())
+    prefix = "SELECT TOP %s id," if limit is not None else "SELECT id,"
+    assert sql.startswith(prefix)
+    assert sql.endswith("ORDER BY timestamp ASC")
+    expected: tuple[Any, ...] = ("app", "user", "session")
+    if limit is not None:
+        expected = (limit, *expected)
+    if after is not None:
+        expected = (*expected, after)
+        assert "AND timestamp > %s" in sql
+    assert parameters == expected
+
+
+@pytest.mark.parametrize(("limit", "offset"), [(None, None), (5, None), (5, 0), (5, 2), (0, None)])
+def test_sybase_adk_session_pages_use_top_only_without_offset(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor], limit: int | None, offset: int | None
+) -> None:
+    config, cursor = recording_sybase_config
+    assert SybaseADKStore(config).list_sessions("app", "user", limit=limit, offset=offset) == []
+    if limit == 0:
+        assert cursor.calls == []
+        return
+
+    statement, parameters = cursor.calls[-1]
+    sql = " ".join(statement.split())
+    if limit is not None and not offset:
+        assert sql.startswith("SELECT TOP %s id,")
+        assert parameters == (limit, "app", "user")
+    else:
+        assert sql.startswith("SELECT id,")
+        assert parameters == (("app", "user", limit, offset) if offset else ("app", "user"))
+    ordering = "ORDER BY update_time DESC, id DESC"
+    assert sql.endswith(f"{ordering} ROWS LIMIT %s OFFSET %s" if offset else ordering)
+
+
+@pytest.mark.parametrize(
+    ("scope", "scope_parameters"), [("all", ("app", "user")), ("user", ("app", "user")), ("app", ("app",))]
+)
+@pytest.mark.parametrize(("limit", "expected_limit"), [(7, 7), (None, 20), (0, 20)])
+def test_sybase_memory_search_uses_top_and_preserves_scope_and_like_values(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor],
+    scope: Literal["all", "user", "app"],
+    scope_parameters: tuple[str, ...],
+    limit: int | None,
+    expected_limit: int,
+) -> None:
+    config, cursor = recording_sybase_config
+    assert (
+        SybaseADKMemoryStore(config).search_entries(r"50%_[x]\\", "app", "user", limit=limit, scope_filter=scope) == []
+    )
+    statement, parameters = cursor.calls[-1]
+    sql = " ".join(statement.split())
+    assert sql.startswith("SELECT TOP %s id,")
+    assert sql.endswith("ORDER BY timestamp DESC")
+    assert parameters == (expected_limit, *scope_parameters, r"%50\%\_\[x]\\\\%")
+
+
 def test_build_connection_config_defaults_and_normalization() -> None:
     """build_connection_config sets Sybase ASE defaults and strips tds_version='5.0' for pool TDSVER negotiation."""
     cfg = build_connection_config({
@@ -155,6 +304,197 @@ def test_build_connection_config_defaults_and_normalization() -> None:
     assert "tds_version" not in cfg
     assert cfg["appname"] == "sqlspec_sybase"
     assert "extra" not in cfg
+
+
+@pytest.mark.parametrize("entry_point", ["config", "pool"])
+@pytest.mark.parametrize("alias_key", ["freetds_server", "server_alias", "is_server_alias"])
+def test_sybase_alias_connections_pass_only_native_kwargs(
+    monkeypatch: pytest.MonkeyPatch, entry_point: str, alias_key: str
+) -> None:
+    """Both connection entry points preserve aliases and accepted native options."""
+    monkeypatch.delenv("TDSVER", raising=False)
+    captured: list[dict[str, Any]] = []
+    connection = FakeConnection()
+
+    def connect(
+        *,
+        server: str,
+        user: str,
+        database: str,
+        port: int | str,
+        charset: str,
+        autocommit: bool,
+        conn_properties: str,
+        read_only: bool,
+    ) -> FakeConnection:
+        captured.append({
+            "server": server,
+            "user": user,
+            "database": database,
+            "port": port,
+            "charset": charset,
+            "autocommit": autocommit,
+            "conn_properties": conn_properties,
+            "read_only": read_only,
+        })
+        return connection
+
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=connect))
+    parameters = {
+        alias_key: True if alias_key == "is_server_alias" else "SQLSPEC_ASE",
+        "server": "SQLSPEC_ASE" if alias_key == "is_server_alias" else "ignored-host",
+        "username": "sa",
+        "db": "pubs2",
+        "port": "5100",
+        "read_only": True,
+    }
+    if entry_point == "config":
+        config = SybaseConfig(connection_config=parameters)
+        pool = config.provide_pool()
+    else:
+        pool = SybaseConnectionPool(parameters)
+    try:
+        with pool.get_connection() as acquired:
+            assert cast("object", acquired) is connection
+        assert captured == [
+            {
+                "server": "SQLSPEC_ASE",
+                "user": "sa",
+                "database": "pubs2",
+                "port": "5100",
+                "charset": "UTF-8",
+                "autocommit": True,
+                "conn_properties": DEFAULT_SYBASE_CONN_PROPERTIES,
+                "read_only": True,
+            }
+        ]
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("port_parameters", [{}, {"port": None}, {"port": ""}, {"port": 0}, {"port": "0"}])
+def test_sybase_alias_requires_explicit_nonzero_port(
+    monkeypatch: pytest.MonkeyPatch, port_parameters: dict[str, Any]
+) -> None:
+    monkeypatch.delenv("TDSVER", raising=False)
+    config = SybaseConfig(connection_config={"server_alias": "SQLSPEC_ASE", **port_parameters})
+
+    with pytest.raises(ImproperConfigurationError, match=r"explicit.*port"):
+        config.provide_pool()
+
+
+def test_sybase_alias_normalization_is_idempotent_and_keeps_session_overrides() -> None:
+    parameters = {
+        "extra": {"freetds_server": "SQLSPEC_ASE", "port": 5100, "username": "sa", "db": "pubs2"},
+        "conn_properties": "SET TEXTSIZE 1000;",
+        "autocommit": False,
+    }
+    normalized = build_connection_config(parameters)
+
+    assert normalized["server"] == "SQLSPEC_ASE"
+    assert normalized["port"] == 5100
+    assert normalized["conn_properties"] == "SET TEXTSIZE 1000;"
+    assert normalized["autocommit"] is False
+    assert build_connection_config(normalized) == normalized
+    assert "SET CHAINED OFF;" in DEFAULT_SYBASE_CONN_PROPERTIES
+
+
+def test_sybase_nested_pool_checkouts_keep_outer_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TDSVER", "5.0")
+    connection = FakeConnection()
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: connection))
+    pool = SybaseConnectionPool({"server": "ase.example.test"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pool.get_connection() as outer:
+            assert cast("object", outer) is connection
+            assert pool.checked_out() == 1
+            with pytest.raises(ValueError, match="inner failure"), pool.get_connection() as inner:
+                assert inner is outer
+                assert pool.checked_out() == 2
+                raise ValueError("inner failure")
+            assert connection.closed is False
+            assert pool.checked_out() == 1
+        assert connection.closed is False
+        assert pool.checked_out() == 0
+    finally:
+        pool.close()
+    assert connection.closed is True
+
+
+def test_sybase_nested_pool_checkouts_are_thread_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TDSVER", "5.0")
+    opened: list[FakeConnection] = []
+    errors: list[BaseException] = []
+
+    def connect(**_kwargs: Any) -> FakeConnection:
+        connection = FakeConnection()
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=connect))
+    pool = SybaseConnectionPool({"server": "ase.example.test"}, recycle_seconds=0, health_check_interval=0)
+
+    def worker() -> None:
+        try:
+            with pool.get_connection() as outer:
+                with pytest.raises(ValueError, match="worker failure"), pool.get_connection() as inner:
+                    assert outer is inner
+                    assert pool.checked_out() == 3
+                    raise ValueError("worker failure")
+                assert cast("FakeConnection", outer).closed is False
+        except BaseException as exc:
+            errors.append(exc)
+
+    try:
+        with pool.get_connection() as outer:
+            thread = threading.Thread(target=worker, daemon=True)
+            thread.start()
+            thread.join(timeout=3)
+            assert not thread.is_alive()
+            assert errors == []
+            assert len(opened) == 2
+            assert pool.checked_out() == 1
+            assert pool.size() == 1
+            assert opened[1].closed is True
+            assert cast("FakeConnection", outer).closed is False
+        assert pool.checked_out() == 0
+    finally:
+        pool.close()
+
+
+def test_sybase_pool_recovers_acquisition_failure_and_retires_outer_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TDSVER", "5.0")
+    failed_connection = FakeConnection()
+    clean_connection = FakeConnection()
+    outcomes = [OSError("login timed out"), failed_connection, clean_connection]
+
+    def connect(**_kwargs: Any) -> FakeConnection:
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, OSError):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=connect))
+    pool = SybaseConnectionPool({"server": "ase.example.test"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pytest.raises(OSError, match="login timed out"), pool.get_connection():
+            pytest.fail("Failed acquisition must not enter the checkout body")
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+        with pytest.raises(ValueError, match="outer failure"), pool.get_connection() as connection:
+            assert cast("object", connection) is failed_connection
+            with pool.get_connection() as nested:
+                assert nested is connection
+                raise ValueError("outer failure")
+        assert failed_connection.closed is True
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+        with pool.get_connection() as replacement:
+            assert cast("object", replacement) is clean_connection
+            assert clean_connection.closed is False
+        assert pool.checked_out() == 0
+    finally:
+        pool.close()
 
 
 def test_sybase_pool_requires_tdsver_or_server_alias(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,16 +523,25 @@ def test_sybase_pool_requires_tdsver_or_server_alias(monkeypatch: pytest.MonkeyP
     assert os.environ.get("TDSVER") == "5.0"
 
     monkeypatch.delenv("TDSVER", raising=False)
-    cfg_alias = build_connection_config({"server_alias": "SYBASE_ASE", "user": "sa", "database": "master"})
+    cfg_alias = build_connection_config({
+        "server_alias": "SYBASE_ASE",
+        "port": 5000,
+        "user": "sa",
+        "database": "master",
+    })
     pool_alias = SybaseConnectionPool(cfg_alias)
     conn_alias = pool_alias.acquire()
     pool_alias.release(conn_alias)
     assert cast("object", conn_alias) is fake_conn
 
 
-def test_sybase_pool_transmits_native_tds_50_login_packet_over_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("use_alias", [False, True], ids=["host", "freetds-alias"])
+def test_sybase_pool_transmits_native_tds_50_login_packet_over_loopback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, use_alias: bool
+) -> None:
     """SybaseConnectionPool.new_connection transmits a native 619-byte TDS 5.0 login packet via FreeTDS."""
     monkeypatch.setenv("TDSVER", "5.0")
+    monkeypatch.delenv("TDSPORT", raising=False)
     received_packets: list[bytes] = []
     ready = threading.Event()
 
@@ -210,15 +559,26 @@ def test_sybase_pool_transmits_native_tds_50_login_packet_over_loopback(monkeypa
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind(("127.0.0.1", 0))
+        server_sock.settimeout(2.0)
         port = server_sock.getsockname()[1]
         server_sock.listen(1)
+
+        alias_config: dict[str, Any] = {"server": "127.0.0.1"}
+        if use_alias:
+            freetds_config = tmp_path / "freetds.conf"
+            freetds_config.write_text(
+                f"[SQLSPEC_ASE_TEST]\nhost = 127.0.0.1\nport = {port}\ntds version = 5.0\n", encoding="utf-8"
+            )
+            monkeypatch.setenv("FREETDSCONF", str(freetds_config))
+            monkeypatch.delenv("TDSVER", raising=False)
+            alias_config = {"server_alias": "SQLSPEC_ASE_TEST"}
 
         listener_thread = threading.Thread(target=_listener, args=(server_sock,), daemon=True)
         listener_thread.start()
         ready.wait(timeout=2.0)
 
         cfg = build_connection_config({
-            "server": "127.0.0.1",
+            **alias_config,
             "port": port,
             "user": "sa",
             "password": "secret",
@@ -227,7 +587,7 @@ def test_sybase_pool_transmits_native_tds_50_login_packet_over_loopback(monkeypa
             "timeout": 1,
         })
         pool = SybaseConnectionPool(cfg)
-        with pytest.raises(Exception):
+        with pytest.raises(pymssql.OperationalError):
             pool.new_connection()
 
         listener_thread.join(timeout=2.0)

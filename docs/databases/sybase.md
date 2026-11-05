@@ -72,6 +72,7 @@ Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 eit
         SybaseConfig(
             connection_config={
                 "server_alias": "SYBASE_PROD",
+                "port": 5000,
                 "user": "sa",
                 "password": "secret_password",
                 "database": "app_db",
@@ -80,17 +81,21 @@ Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 eit
     )
     ```
 
+An alias supplies the host and TDS version. Set `port` as well, even if it is in `freetds.conf`. `pymssql` replaces the port from that file with the value you pass. A missing, empty, or zero port raises `ImproperConfigurationError`.
+
 ## Key Configuration Parameters
 
 | Setting | Location | Description |
 | --- | --- | --- |
 | `server` / `host` | `connection_config` | Database host name or IP address (default port `5000`). |
-| `server_alias` / `freetds_server` | `connection_config` | Section name in `freetds.conf` configured with `tds version = 5.0`. |
+| `server_alias` / `freetds_server` | `connection_config` | Section name in `freetds.conf` configured with `tds version = 5.0`; requires an explicit `port`. |
+| `is_server_alias` | `connection_config` | Set to `True` when `server` names a FreeTDS section. The same explicit-port requirement applies. |
 | `database` / `db` | `connection_config` | Target database catalog name. |
 | `user` / `username` | `connection_config` | Authentication login principal. |
 | `password` | `connection_config` | Authentication password credentials. |
 | `autocommit` | `connection_config` | Defaults to `True` to allow DDL execution outside implicit transactions. |
-| `conn_properties` | `connection_config` | Sybase session initialization commands (defaults to quoted identifier and ANSINULL options). |
+| `conn_properties` | `connection_config` | Defaults to `SET CHAINED OFF`, `SET QUOTED_IDENTIFIER ON`, `SET ANSINULL ON`, and `SET TEXTSIZE 2147483647`. A supplied value replaces these defaults. |
+| `read_only` | `connection_config` | Passed as native pymssql login intent. It does not enforce read-only access in ASE; use database permissions. |
 | `pool_recycle_seconds` | `connection_config` | Maximum connection age in seconds before recycling (defaults to 24 hours). |
 | `health_check_interval` | `connection_config` | Minimum idle time in seconds before running liveness probes. |
 | `json_serializer` / `json_deserializer` | `driver_features` | Custom JSON text serialization/deserialization callables. |
@@ -98,5 +103,13 @@ Sybase ASE requires TDS 5.0 protocol negotiation. FreeTDS negotiates TDS 5.0 eit
 ## Dialect and Catalog Notes
 
 - **Autocommit and DDL in Transactions**: In Sybase ASE, statements like `CREATE TABLE` and `CREATE INDEX` raise error 2762 inside multi-statement transactions unless database option `ddl in tran` is enabled. `SybaseConfig` defaults `autocommit=True` and begins explicit transactions on demand via `driver.begin()`.
-- **Pagination**: Supports both unparenthesized `SELECT TOP n ...` and ANSI SQL pagination `ROWS LIMIT n OFFSET m`.
+- **Pagination**: Bounded ADK session, event, and memory queries use `SELECT TOP n` with no offset. Positive offsets use `ROWS LIMIT n OFFSET m`; check that your ASE version and server mode support it.
 - **System Catalogs**: Reflection queries introspect `dbo.sysobjects`, `dbo.syscolumns`, `dbo.sysindexes`, `dbo.sysreferences`, and `dbo.systypes`.
+
+## Arrow and Staged Storage Loads
+
+`CreateTable.from_arrow_schema()` maps Arrow timestamps to `BIGDATETIME`. ASE's `TIMESTAMP` type holds a row version. `BIGDATETIME` has no time-zone field, so normalize zone-aware values before loading them. String primary keys use `VARCHAR(255)`. Decimal precision above 38 raises `SQLBuilderError`.
+
+With `conflict_keys`, staged loads update matching rows, then insert new rows in a separate statement. Coordinate concurrent loads that use the same keys. See [Arrow and Storage](../learn/arrow-and-storage.md#sap-column-types-and-staged-loads) for conflict options and SQL Anywhere differences.
+
+See the [adapter matrix](index.md), [configuration guide](../learn/configuration.md), and [Sybase API reference](../reference/adapters/sybase.md) for shared features and configuration details.

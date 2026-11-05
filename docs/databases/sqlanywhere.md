@@ -71,3 +71,13 @@ config = spec.add_config(
 - **Pagination**: Supports standard suffix `SELECT ... LIMIT n OFFSET m` as well as SQL Anywhere `TOP n START AT (m + 1)` syntax.
 - **Identity Resync**: Fixture seeding supports primary key identity resetting via `CALL sa_reset_identity('<table>', '<schema>', <max_id>)`.
 - **System Catalogs**: Schema discovery queries `SYS.SYSTAB`, `SYS.SYSTABCOL`, `SYS.SYSIDX`, `SYS.SYSIDXCOL`, `SYS.SYSFKEY`, and `SYS.SYSDOMAIN`.
+
+## Arrow and Staged Storage Loads
+
+When `CreateTable.from_arrow_schema()` builds a table, it maps Arrow timestamps to `TIMESTAMP` or `TIMESTAMP WITH TIME ZONE`. String primary keys use `VARCHAR(255)`. Inferred decimal types support up to 127 digits of precision; wider types raise `SQLBuilderError`.
+
+Staged loads use `MERGE` and the keys in `conflict_keys`. A key need not be the primary key. Set `on_conflict="nothing"` to preserve matching rows, or use `exclude_update_columns` to preserve selected columns. Coordinate concurrent loads that use the same keys.
+
+With `drop_indexes=True`, SQLSpec drops eligible secondary indexes using their owner, table, and index names, then rebuilds them on exit.
+
+See [Arrow and Storage](../learn/arrow-and-storage.md) for empty results and shared load options, and [Query Builder](../learn/query-builder.md#ddl-builders-and-schema-inference) for schema inference.

@@ -10,6 +10,8 @@ __all__ = ("compute_sql_hash", "get_trace_context", "redact_sql_literals", "reso
 _LITERAL_PATTERN = re.compile(r"\$([A-Za-z0-9_]*)\$.*?\$\1\$|'(?:''|\\.|[^'\\])*'", re.DOTALL)
 
 _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
+    ("sqlanywhere", "sqlanywhere"),
+    ("sybase", "sybase"),
     ("cockroach", "cockroachdb"),
     ("asyncpg", "postgresql"),
     ("psycopg", "postgresql"),

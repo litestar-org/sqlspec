@@ -38,9 +38,11 @@ class SybaseConnectionParams(TypedDict):
     host: NotRequired[str]
     """Alias for ``server``."""
     freetds_server: NotRequired[str]
-    """FreeTDS server configuration section name."""
+    """FreeTDS server configuration section name; requires an explicit port."""
     server_alias: NotRequired[str]
-    """Alias for ``server``."""
+    """FreeTDS server configuration section name; requires an explicit port."""
+    is_server_alias: NotRequired[bool]
+    """Treat ``server`` as a FreeTDS configuration section name; requires an explicit port."""
     user: NotRequired[str]
     """Login user name."""
     username: NotRequired[str]
@@ -52,7 +54,7 @@ class SybaseConnectionParams(TypedDict):
     db: NotRequired[str]
     """Alias for ``database``."""
     port: NotRequired[int | str]
-    """TCP port number of the Sybase ASE server."""
+    """TCP port number; required for section aliases, otherwise defaults to 5000."""
     timeout: NotRequired[SybaseTimeout]
     """Query execution timeout in seconds."""
     login_timeout: NotRequired[SybaseTimeout]
@@ -64,7 +66,7 @@ class SybaseConnectionParams(TypedDict):
     appname: NotRequired[str]
     """Application name sent to the server for connection identification."""
     conn_properties: NotRequired[str]
-    """Additional connection properties string."""
+    """Session initialization SQL; replaces the default connection properties when supplied."""
     autocommit: NotRequired[bool]
     """Enable autocommit mode for transactions."""
     tds_version: NotRequired[str]
@@ -76,11 +78,11 @@ class SybaseConnectionParams(TypedDict):
     conv: NotRequired[Mapping[int | type[Any], Callable[..., Any]]]
     """Custom datatype conversion dictionary mapping TDS types to python types."""
     read_only: NotRequired[bool]
-    """Enforce read-only transactions on connections."""
+    """Native pymssql login intent; does not enforce ASE read-only permissions."""
     pool_recycle_seconds: NotRequired[int]
     """Maximum age in seconds before a pooled connection is recycled."""
     health_check_interval: NotRequired[float]
-    """Interval in seconds between background health checks."""
+    """Idle duration in seconds before a connection is checked on checkout."""
     extra: NotRequired["dict[str, Any]"]
     """Additional driver connection arguments."""
 

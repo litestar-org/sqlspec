@@ -34,13 +34,49 @@ with spec.provide_session(config) as session:
     arrow_table = arrow_result.data
 ```
 
-Adapters with native columnar wire protocols—including **DuckDB**, **ADBC**, **Arrow ODBC**, **BigQuery** (Storage Read API), and **Oracle 23ai/26ai** (zero-copy PyCapsule `fetch_df_all` / `fetch_df_batches`)—transfer Arrow buffers without materializing intermediate Python row dictionaries. Other DB-API adapters convert rows automatically using schema-guided Arrow builders when `native_only=False` (the default).
+Adapters with native Arrow support include DuckDB, ADBC, Arrow ODBC, BigQuery's Storage Read API, and Oracle's DataFrame APIs. These paths avoid intermediate Python row dictionaries. Other DB-API adapters convert rows when `native_only=False` (the default).
 
 Convert an `ArrowResult` to DataFrame libraries in one call:
 
-- `arrow_result.data`: Underlying `pyarrow.Table` (when `return_format="table"`) or `RecordBatchReader` (`return_format="batches"`).
+- `arrow_result.data`: Underlying `pyarrow.Table` (when `return_format="table"`) or `RecordBatchReader` (`return_format="reader"`).
 - `arrow_result.to_polars()`: Converts to a `polars.DataFrame` (`uv add "sqlspec[polars]"`).
 - `arrow_result.to_pandas()`: Converts to a `pandas.DataFrame` (`uv add "sqlspec[pandas]"`).
+
+### Empty Results and Explicit Schemas
+
+Row-based drivers keep column names when a query has no rows. Without adapter type hints, each empty column has the Arrow `null` type. Set `arrow_schema=` to choose each column's type. Install PyArrow with `uv add pyarrow` before running this standalone example:
+
+```python
+import pyarrow as pa
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+
+--8<-- "docs/examples/querying/empty_arrow_schema.py:example"
+```
+
+The result has zero rows and the schema `host: string, cpu_pct: double`. Empty `table`, `batch`, and `reader` results retain this schema. Empty `batches` results are an empty list, so they cannot carry a schema.
+
+Use `table`, `batch`, or `reader` for empty exports that retain column names. Parquet and Arrow IPC also retain Arrow types; CSV retains header names.
+
+### SAP Column Types and Staged Loads
+
+`CreateTable.from_arrow_schema()` chooses these types when building SAP tables. These mappings also apply to type inference from Python records:
+
+| Arrow category | SAP ASE | SAP SQL Anywhere |
+| --- | --- | --- |
+| Timestamp without time zone | `BIGDATETIME` | `TIMESTAMP` |
+| Timestamp with time zone | `BIGDATETIME` | `TIMESTAMP WITH TIME ZONE` |
+| Date | `DATE` | `DATE` |
+| Time | `BIGTIME` | `TIME` |
+| String primary key | `VARCHAR(255)` | `VARCHAR(255)` |
+| Maximum decimal precision | 38 | 127 |
+
+ASE `TIMESTAMP` stores a row version. Arrow timestamp values use `BIGDATETIME`, which has no time-zone field. Normalize zone-aware values before loading them.
+
+A decimal wider than the dialect's limit raises `SQLBuilderError`. Choose a narrower type only if the values fit, or store them as text.
+
+With `conflict_keys`, staged ASE loads update matching rows, then insert new rows in a separate statement. SQL Anywhere uses `MERGE`; both match the supplied keys. Set `on_conflict="nothing"` to preserve matching rows, or use `exclude_update_columns` to preserve selected columns. Coordinate concurrent loads that use the same keys.
 
 ## Unified Object Storage (`StorageRegistry`)
 

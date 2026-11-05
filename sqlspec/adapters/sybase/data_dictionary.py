@@ -11,7 +11,11 @@ from sqlspec.data_dictionary import (
     IndexMetadata,
     MetadataCapabilityProfile,
     MetadataResult,
+    MetadataSource,
+    ObjectIdentity,
     TableMetadata,
+    dependency_edges_from_foreign_keys,
+    sort_dependencies,
 )
 from sqlspec.data_dictionary.dialects.sybase import (
     SYBASE_CONFIG,
@@ -65,26 +69,54 @@ def build_column_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ColumnMetad
             table_name=str(r.get("table_name", "")),
             column_name=str(r.get("column_name", "")),
             data_type=str(r.get("data_type", "")),
-            is_nullable=bool(r.get("is_nullable", True)),
+            is_nullable=_catalog_flag(r.get("is_nullable", True)),
             column_default=str(r["column_default"]) if r.get("column_default") is not None else None,
             ordinal_position=int(r.get("ordinal_position", 1)),
             max_length=int(r.get("max_length", 0)) if r.get("max_length") is not None else 0,
             numeric_precision=int(r.get("numeric_precision", 0)) if r.get("numeric_precision") is not None else 0,
             numeric_scale=int(r.get("numeric_scale", 0)) if r.get("numeric_scale") is not None else 0,
-            is_primary=bool(r.get("is_primary")),
-            is_unique=bool(r.get("is_unique")),
-            is_identity=bool(r.get("is_identity")),
+            is_primary=_catalog_flag(r.get("is_primary")),
+            is_unique=_catalog_flag(r.get("is_unique")),
+            is_identity=_catalog_flag(r.get("is_identity")),
             identity_generation=str(r["identity_generation"])
             if r.get("identity_generation")
-            else ("ALWAYS" if r.get("is_identity") else None),
-            is_generated=bool(r.get("is_generated")),
+            else ("ALWAYS" if _catalog_flag(r.get("is_identity")) else None),
+            is_generated=_catalog_flag(r.get("is_generated")),
             generation_expression=str(r["generation_expression"])
             if r.get("generation_expression") is not None
             else None,
-            is_hidden=bool(r.get("is_hidden")),
+            is_hidden=_catalog_flag(r.get("is_hidden")),
         )
-        for r in rows
+        for r in _merge_definition_rows(
+            rows, ("schema_name", "table_name", "column_name"), ("column_default", "generation_expression")
+        )
     ]
+
+
+def _catalog_flag(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().upper() in {"YES", "Y", "TRUE", "1"}
+    return bool(value)
+
+
+def _merge_definition_rows(
+    rows: "Iterable[dict[str, Any]]", identity_fields: "tuple[str, ...]", text_fields: "tuple[str, ...]"
+) -> "list[dict[str, Any]]":
+    """Assemble catalog definition chunks without changing their whitespace or multiplicity."""
+    chunk_fields = ("_definition_id", "_definition_number", "_definition_colid2", "_definition_colid")
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = tuple(row.get(field) for field in identity_fields)
+        grouped.setdefault(key, []).append(row)
+    result: list[dict[str, Any]] = []
+    for chunks in grouped.values():
+        ordered = sorted(chunks, key=lambda row: tuple(int(row.get(field) or 0) for field in chunk_fields))
+        merged = {field: value for field, value in ordered[0].items() if field not in chunk_fields}
+        for field in text_fields:
+            parts = [str(row[field]) for row in ordered if row.get(field) is not None]
+            merged[field] = "".join(parts) if parts else None
+        result.append(merged)
+    return result
 
 
 def build_index_metadata(rows: "Iterable[dict[str, Any]]") -> "list[IndexMetadata]":
@@ -198,7 +230,43 @@ class SybaseSyncDataDictionary(SyncDataDictionaryBase):
                 schema_type=TableMetadata,
             ),
         )
-        return merge_sybase_table_lists(ordered_rows, all_rows)
+        rows = merge_sybase_table_lists(ordered_rows, all_rows)
+        table_rows = {
+            ObjectIdentity(
+                row["table_name"],
+                "table",
+                schema=row.get("schema_name"),
+                dialect="sybase",
+                source=MetadataSource.CATALOG,
+            ): row
+            for row in rows
+            if row.get("table_name") and row.get("table_type", "TABLE").upper() != "VIEW"
+        }
+        if not table_rows:
+            return rows
+        identities = sorted(table_rows, key=lambda node: (node.schema or "", node.name))
+        edges = tuple(
+            edge
+            for edge in dependency_edges_from_foreign_keys(
+                self.get_foreign_keys(driver, schema=schema_name), dialect="sybase"
+            )
+            if edge.from_object in table_rows and edge.to_object in table_rows
+        )
+        dependencies: dict[ObjectIdentity, set[ObjectIdentity]] = {node: set() for node in identities}
+        for edge in edges:
+            dependencies[edge.from_object].add(edge.to_object)
+        ordered = sort_dependencies(identities, edges).ordered
+        levels: dict[ObjectIdentity, int] = {}
+        result: list[TableMetadata] = []
+        for node in ordered:
+            level = max((levels[parent] + 1 for parent in dependencies[node]), default=0)
+            levels[node] = level
+            result.append({**table_rows[node], "dependency_level": level, "level": level})
+        result.extend(
+            {**table_rows[node], "dependency_level": 0, "level": 0} for node in identities if node not in levels
+        )
+        result.extend(row for row in rows if row.get("table_type", "TABLE").upper() == "VIEW")
+        return result
 
     def get_columns(
         self, driver: "SybaseDriver", table: str | None = None, schema: str | None = None
@@ -255,14 +323,23 @@ class SybaseSyncDataDictionary(SyncDataDictionaryBase):
         table_name = self.resolve_identifier(table) if table is not None else None
         query = self.get_query("constraints", "by_table" if table_name else "by_schema")
         rows = driver.select(query, schema_name=schema_name, table_name=table_name)
-        return MetadataResult("constraints", items=tuple(rows))
+        return MetadataResult(
+            "constraints",
+            items=tuple(
+                _merge_definition_rows(
+                    rows, ("schema_name", "table_name", "constraint_name", "constraint_type"), ("check_clause",)
+                )
+            ),
+        )
 
     def get_views(self, driver: "SybaseDriver", schema: str | None = None) -> MetadataResult:
         """Get Sybase ASE view metadata."""
         schema_name = self.resolve_schema(schema)
         query = self.get_query("views", "by_schema")
         rows = driver.select(query, schema_name=schema_name, view_name=None)
-        return MetadataResult("views", items=tuple(rows))
+        return MetadataResult(
+            "views", items=tuple(_merge_definition_rows(rows, ("schema_name", "view_name"), ("definition",)))
+        )
 
     def get_objects(self, driver: "SybaseDriver", schema: "str | None" = None) -> MetadataResult:
         """Get tables, views, and procedures from the Sybase ASE catalog."""

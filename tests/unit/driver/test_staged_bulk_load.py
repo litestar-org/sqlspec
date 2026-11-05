@@ -1,23 +1,30 @@
 """Unit tests for staged bulk load, dialect-aware upsert/merge, type casts, and load_from_records."""
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pytest
 
-from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.spanner._typing import SpannerTransaction
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.sybase import SybaseDriver
+from sqlspec.adapters.sybase._typing import SybaseConnection
+from sqlspec.adapters.sybase.core import default_statement_config as sybase_statement_config
 from sqlspec.driver._storage_helpers import (
     build_drop_stage_table_sql,
     build_stage_merge_sql,
     build_stage_table_ddl,
     resolve_stage_table_name,
 )
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.storage import StorageBridgeJob
 
 
 def test_resolve_stage_table_name_auto_and_custom() -> None:
@@ -195,3 +202,227 @@ def test_spanner_load_from_arrow_uses_insert_or_ignore_when_on_conflict_nothing(
     driver.load_from_arrow("users", table, conflict_keys=["id"], on_conflict="nothing")
     assert mock_tx.insert_or_ignore.called
     assert not mock_tx.insert_or_update.called
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("sybase", "SELECT TOP 0 * INTO audit.staged FROM audit.items"),
+        ("sqlanywhere", "SELECT * INTO audit.staged FROM audit.items WHERE 1=0"),
+    ],
+)
+def test_sap_stage_table_ddl_uses_select_into(dialect: str, expected: str) -> None:
+    assert build_stage_table_ddl(dialect, "audit.items", "audit.staged") == [expected]
+
+
+def test_sybase_stage_upsert_updates_then_inserts_with_composite_keys_and_casts() -> None:
+    statement = build_stage_merge_sql(
+        "sybase",
+        "audit.items",
+        "audit.staged",
+        ["tenant_id", "id", "value", "created_at"],
+        conflict_keys=["tenant_id", "id"],
+        exclude_update_columns=["created_at"],
+        type_casts={"value": "INTEGER"},
+    )
+    assert statement == (
+        "UPDATE audit.items SET value = CAST(stg.value AS INTEGER) "
+        "FROM audit.items tgt, audit.staged stg "
+        "WHERE tgt.tenant_id = stg.tenant_id AND tgt.id = stg.id; "
+        "INSERT INTO audit.items (tenant_id, id, value, created_at) "
+        "SELECT stg.tenant_id, stg.id, CAST(stg.value AS INTEGER), stg.created_at FROM audit.staged stg "
+        "WHERE NOT EXISTS (SELECT 1 FROM audit.items tgt "
+        "WHERE tgt.tenant_id = stg.tenant_id AND tgt.id = stg.id)"
+    )
+
+
+@pytest.mark.parametrize(("on_conflict", "exclude"), [("nothing", []), ("update", ["value"])])
+def test_sybase_stage_insert_only_when_updates_are_disabled(
+    on_conflict: Literal["update", "nothing"], exclude: list[str]
+) -> None:
+    assert build_stage_merge_sql(
+        "sybase",
+        "items",
+        "staged",
+        ["id", "value"],
+        conflict_keys=["id"],
+        on_conflict=on_conflict,
+        exclude_update_columns=exclude,
+    ) == (
+        "INSERT INTO items (id, value) SELECT stg.id, stg.value FROM staged stg "
+        "WHERE NOT EXISTS (SELECT 1 FROM items tgt WHERE tgt.id = stg.id)"
+    )
+    assert build_drop_stage_table_sql("sybase", "audit.staged") == "DROP TABLE audit.staged"
+
+
+def test_sqlanywhere_stage_merge_preserves_non_primary_conflict_keys() -> None:
+    assert build_stage_merge_sql(
+        "sqlanywhere",
+        "items",
+        "staged",
+        ["id", "external_key", "value"],
+        conflict_keys=["external_key"],
+        exclude_update_columns=["id"],
+    ) == (
+        "MERGE INTO items tgt USING staged stg ON (tgt.external_key = stg.external_key)"
+        " WHEN MATCHED THEN UPDATE SET tgt.value = stg.value"
+        " WHEN NOT MATCHED THEN INSERT (id, external_key, value) VALUES (stg.id, stg.external_key, stg.value)"
+    )
+
+
+class _StorageNativeCursor:
+    description = None
+    lastrowid = None
+
+    def __init__(self, connection: "_StorageNativeConnection") -> None:
+        self.connection = connection
+        self.rowcount = 1
+        self.closed = False
+        connection.open_cursors += 1
+
+    def execute(self, statement: str, parameters: Any = None) -> None:
+        self.connection.statements.append(statement)
+        if self.connection.fail_merge and statement.startswith("UPDATE"):
+            raise RuntimeError("native merge failure")
+
+    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> None:
+        self.connection.statements.append(statement)
+        self.connection.inserted_rows.extend(tuple(row) for row in parameters)
+        self.rowcount = len(parameters)
+
+    def fetchall(self) -> list[Any]:
+        return []
+
+    def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            self.connection.open_cursors -= 1
+
+
+class _StorageNativeConnection:
+    in_transaction = True
+
+    def __init__(self, *, fail_merge: bool) -> None:
+        self.fail_merge = fail_merge
+        self.statements: list[str] = []
+        self.inserted_rows: list[tuple[Any, ...]] = []
+        self.open_cursors = 0
+
+    def cursor(self) -> _StorageNativeCursor:
+        return _StorageNativeCursor(self)
+
+    def execute(self, statement: str, parameters: Any = None) -> _StorageNativeCursor:
+        cursor = self.cursor()
+        try:
+            cursor.execute(statement, parameters)
+        except BaseException:
+            cursor.close()
+            raise
+        return cursor
+
+
+class _StorageAsyncNativeCursor:
+    description = None
+    lastrowid = None
+
+    def __init__(self, cursor: _StorageNativeCursor) -> None:
+        self.cursor = cursor
+
+    @property
+    def rowcount(self) -> int:
+        return self.cursor.rowcount
+
+    async def execute(self, statement: str, parameters: Any = None) -> None:
+        self.cursor.execute(statement, parameters)
+
+    async def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> None:
+        self.cursor.executemany(statement, parameters)
+
+    async def close(self) -> None:
+        self.cursor.close()
+
+
+class _StorageAsyncNativeConnection:
+    in_transaction = True
+
+    def __init__(self, connection: _StorageNativeConnection) -> None:
+        self._conn = connection
+
+    async def cursor(self) -> _StorageAsyncNativeCursor:
+        return _StorageAsyncNativeCursor(self._conn.cursor())
+
+    async def _execute(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        return function(*args, **kwargs)
+
+
+class _SybaseAsyncStorageDriver(AiosqliteDriver):
+    __slots__ = ()
+
+    dialect = "sybase"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("from_storage", [False, True], ids=["arrow", "storage"])
+@pytest.mark.parametrize("fail_merge", [False, True], ids=["success", "failure"])
+async def test_sybase_staged_upserts_execute_native_inserts_and_always_cleanup(
+    tmp_path: Path, asynchronous: bool, from_storage: bool, fail_merge: bool
+) -> None:
+    import pyarrow.parquet as pq
+
+    source = pa.table({"id": [1], "value": ["value"]})
+    native = _StorageNativeConnection(fail_merge=fail_merge)
+    config = sybase_statement_config.replace(enable_caching=False)
+    features = {"storage_capabilities": {"arrow_import_enabled": True}}
+    driver = (
+        _SybaseAsyncStorageDriver(
+            cast("AiosqliteConnection", _StorageAsyncNativeConnection(native)),
+            statement_config=config,
+            driver_features=features,
+        )
+        if asynchronous
+        else SybaseDriver(cast("SybaseConnection", native), statement_config=config, driver_features=features)
+    )
+    source_path = tmp_path / "input.parquet"
+    pq.write_table(source, source_path)
+
+    async def run_load() -> StorageBridgeJob:
+        if isinstance(driver, _SybaseAsyncStorageDriver):
+            if from_storage:
+                return await driver.load_from_storage(
+                    "items", source_path, file_format="parquet", stage_table="staged", conflict_keys=["id"]
+                )
+            return await driver.load_from_arrow("items", source, stage_table="staged", conflict_keys=["id"])
+        if from_storage:
+            return driver.load_from_storage(
+                "items", source_path, file_format="parquet", stage_table="staged", conflict_keys=["id"]
+            )
+        return driver.load_from_arrow("items", source, stage_table="staged", conflict_keys=["id"])
+
+    if fail_merge:
+        error_type = RuntimeError if asynchronous else SQLSpecError
+        with pytest.raises(error_type, match="native merge failure"):
+            await run_load()
+    else:
+        result = await run_load()
+        assert result.telemetry["rows_processed"] == 1
+
+    bulk_insert = (
+        'INSERT INTO "staged" ("id", "value") VALUES (?, ?)'
+        if asynchronous
+        else "INSERT INTO [staged] ([id], [value]) VALUES (%s, %s)"
+    )
+    expected = [
+        "SELECT TOP 0 * INTO staged FROM items",
+        bulk_insert,
+        "UPDATE items SET value = stg.value FROM items tgt, staged stg WHERE tgt.id = stg.id",
+    ]
+    if not fail_merge:
+        expected.append(
+            "INSERT INTO items (id, value) SELECT stg.id, stg.value FROM staged stg "
+            "WHERE NOT EXISTS (SELECT 1 FROM items tgt WHERE tgt.id = stg.id)"
+        )
+    expected.append("DROP TABLE staged")
+    assert native.statements == expected
+    assert native.inserted_rows == [(1, "value")]
+    assert native.open_cursors == 0

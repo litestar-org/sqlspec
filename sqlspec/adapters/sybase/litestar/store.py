@@ -83,7 +83,7 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
         )
         create_index_sql = escape_sql_literal(f"CREATE INDEX {index_name} ON {table_ref}(expires_at)")
         return (
-            f"IF OBJECT_ID('{escaped_table_ref}', 'U') IS NULL EXECUTE('{create_table_sql}');\n"
+            f"IF OBJECT_ID('{escaped_table_ref}') IS NULL EXECUTE('{create_table_sql}');\n"
             f"IF NOT EXISTS (SELECT 1 FROM dbo.sysindexes WHERE name = '{escaped_index_bare}' "
             f"AND id = OBJECT_ID('{escaped_table_ref}')) EXECUTE('{create_index_sql}');"
         )
@@ -92,7 +92,7 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
         """Get Sybase ASE DROP TABLE statements."""
         table_ref = _table_ref(self._table_name)
         escaped = escape_sql_literal(table_ref)
-        return [f"IF OBJECT_ID('{escaped}', 'U') IS NOT NULL EXECUTE('DROP TABLE {escaped}');"]
+        return [f"IF OBJECT_ID('{escaped}') IS NOT NULL EXECUTE('DROP TABLE {escaped}');"]
 
     def _create_table(self) -> None:
         with self._config.provide_session() as driver:

@@ -55,7 +55,7 @@ class SybaseMigrationTrackerMixin:
         """Wrap CREATE TABLE in a Sybase ASE OBJECT_ID existence probe with dynamic EXECUTE."""
         table_ref = escape_sql_literal(format_identifier(self.version_table))
         create_sql = escape_sql_literal(self._tracking_table_ddl_text().rstrip().rstrip(";"))
-        return f"IF OBJECT_ID('{table_ref}', 'U') IS NULL EXECUTE('{create_sql}');"
+        return f"IF OBJECT_ID('{table_ref}') IS NULL EXECUTE('{create_sql}');"
 
     def _tracking_table_ddl_text(self) -> str:
         """Render CREATE TABLE text with Sybase ASE native column types."""

@@ -4,33 +4,34 @@ SELECT
     u.name AS schema_name,
     o.name AS table_name,
     co.name AS constraint_name,
-    CASE
-        WHEN (c.status & 1) = 1 THEN 'PRIMARY KEY'
-        WHEN (c.status & 2) = 2 THEN 'UNIQUE'
-        WHEN (c.status & 64) = 64 THEN 'FOREIGN KEY'
-        WHEN (c.status & 128) = 128 THEN 'CHECK'
-        ELSE 'CONSTRAINT'
-    END AS constraint_type,
-    cm.text AS check_clause,
-    'Y' AS is_enforced
+    CASE WHEN (co.sysstat & 15) = 9 THEN 'FOREIGN KEY' ELSE 'CHECK' END AS constraint_type,
+    CASE WHEN (co.sysstat & 15) = 10 AND (COALESCE(cm.status, 0) & 1) = 0
+        THEN cm.text ELSE NULL END AS check_clause,
+    'Y' AS is_enforced,
+    cm.id AS _definition_id,
+    cm.number AS _definition_number,
+    cm.colid2 AS _definition_colid2,
+    cm.colid AS _definition_colid
 FROM dbo.sysconstraints c
 JOIN dbo.sysobjects o ON c.tableid = o.id
 JOIN dbo.sysusers u ON o.uid = u.uid
 JOIN dbo.sysobjects co ON c.constrid = co.id
-LEFT JOIN dbo.syscomments cm ON co.id = cm.id AND cm.colid = 1
-WHERE u.name = COALESCE(:schema_name, USER_NAME())
+LEFT JOIN dbo.syscomments cm ON co.id = cm.id AND cm.texttype = 0
+WHERE (co.sysstat & 15) IN (9, 10)
+  AND u.name = COALESCE(:schema_name, USER_NAME())
   AND (:table_name IS NULL OR o.name = :table_name)
-UNION
+UNION ALL
 SELECT
     u.name AS schema_name,
     o.name AS table_name,
     i.name AS constraint_name,
-    CASE
-        WHEN (i.status & 2048) = 2048 THEN 'PRIMARY KEY'
-        WHEN (i.status & 2) = 2 THEN 'UNIQUE'
-    END AS constraint_type,
+    CASE WHEN (i.status & 2048) = 2048 THEN 'PRIMARY KEY' ELSE 'UNIQUE' END AS constraint_type,
     NULL AS check_clause,
-    'Y' AS is_enforced
+    'Y' AS is_enforced,
+    0 AS _definition_id,
+    0 AS _definition_number,
+    0 AS _definition_colid2,
+    0 AS _definition_colid
 FROM dbo.sysindexes i
 JOIN dbo.sysobjects o ON i.id = o.id
 JOIN dbo.sysusers u ON o.uid = u.uid
@@ -38,13 +39,7 @@ WHERE o.type = 'U'
   AND ((i.status & 2048) = 2048 OR (i.status & 2) = 2)
   AND u.name = COALESCE(:schema_name, USER_NAME())
   AND (:table_name IS NULL OR o.name = :table_name)
-  AND NOT EXISTS (
-      SELECT 1
-      FROM dbo.sysconstraints sc
-      JOIN dbo.sysobjects sco ON sc.constrid = sco.id
-      WHERE sc.tableid = o.id AND sco.name = i.name
-  )
-ORDER BY schema_name, table_name, constraint_name;
+ORDER BY schema_name, table_name, constraint_name, _definition_number, _definition_colid2, _definition_colid;
 
 -- name: by_table
 -- dialect: sybase
@@ -52,44 +47,39 @@ SELECT
     u.name AS schema_name,
     o.name AS table_name,
     co.name AS constraint_name,
-    CASE
-        WHEN (c.status & 1) = 1 THEN 'PRIMARY KEY'
-        WHEN (c.status & 2) = 2 THEN 'UNIQUE'
-        WHEN (c.status & 64) = 64 THEN 'FOREIGN KEY'
-        WHEN (c.status & 128) = 128 THEN 'CHECK'
-        ELSE 'CONSTRAINT'
-    END AS constraint_type,
-    cm.text AS check_clause,
-    'Y' AS is_enforced
+    CASE WHEN (co.sysstat & 15) = 9 THEN 'FOREIGN KEY' ELSE 'CHECK' END AS constraint_type,
+    CASE WHEN (co.sysstat & 15) = 10 AND (COALESCE(cm.status, 0) & 1) = 0
+        THEN cm.text ELSE NULL END AS check_clause,
+    'Y' AS is_enforced,
+    cm.id AS _definition_id,
+    cm.number AS _definition_number,
+    cm.colid2 AS _definition_colid2,
+    cm.colid AS _definition_colid
 FROM dbo.sysconstraints c
 JOIN dbo.sysobjects o ON c.tableid = o.id
 JOIN dbo.sysusers u ON o.uid = u.uid
 JOIN dbo.sysobjects co ON c.constrid = co.id
-LEFT JOIN dbo.syscomments cm ON co.id = cm.id AND cm.colid = 1
-WHERE o.name = :table_name
+LEFT JOIN dbo.syscomments cm ON co.id = cm.id AND cm.texttype = 0
+WHERE (co.sysstat & 15) IN (9, 10)
   AND u.name = COALESCE(:schema_name, USER_NAME())
-UNION
+  AND o.name = :table_name
+UNION ALL
 SELECT
     u.name AS schema_name,
     o.name AS table_name,
     i.name AS constraint_name,
-    CASE
-        WHEN (i.status & 2048) = 2048 THEN 'PRIMARY KEY'
-        WHEN (i.status & 2) = 2 THEN 'UNIQUE'
-    END AS constraint_type,
+    CASE WHEN (i.status & 2048) = 2048 THEN 'PRIMARY KEY' ELSE 'UNIQUE' END AS constraint_type,
     NULL AS check_clause,
-    'Y' AS is_enforced
+    'Y' AS is_enforced,
+    0 AS _definition_id,
+    0 AS _definition_number,
+    0 AS _definition_colid2,
+    0 AS _definition_colid
 FROM dbo.sysindexes i
 JOIN dbo.sysobjects o ON i.id = o.id
 JOIN dbo.sysusers u ON o.uid = u.uid
 WHERE o.type = 'U'
   AND ((i.status & 2048) = 2048 OR (i.status & 2) = 2)
-  AND o.name = :table_name
   AND u.name = COALESCE(:schema_name, USER_NAME())
-  AND NOT EXISTS (
-      SELECT 1
-      FROM dbo.sysconstraints sc
-      JOIN dbo.sysobjects sco ON sc.constrid = sco.id
-      WHERE sc.tableid = o.id AND sco.name = i.name
-  )
-ORDER BY constraint_name;
+  AND o.name = :table_name
+ORDER BY schema_name, table_name, constraint_name, _definition_number, _definition_colid2, _definition_colid;

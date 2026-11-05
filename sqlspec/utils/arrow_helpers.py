@@ -89,19 +89,31 @@ _PLAIN_CATEGORY_TYPES: "dict[str, str]" = {
     "time": "TIME",
     "interval": "INTERVAL",
 }
-_NAIVE_TIMESTAMP_TYPES: "dict[str, str]" = {"mssql": "DATETIME2(6)", "bigquery": "DATETIME"}
+_NAIVE_TIMESTAMP_TYPES: "dict[str, str]" = {"mssql": "DATETIME2(6)", "bigquery": "DATETIME", "sybase": "BIGDATETIME"}
 _AWARE_TIMESTAMP_TYPES: "dict[str, str]" = {
     "postgres": "TIMESTAMP WITH TIME ZONE",
     "cockroachdb": "TIMESTAMPTZ",
     "duckdb": "TIMESTAMP WITH TIME ZONE",
     "oracle": "TIMESTAMP WITH TIME ZONE",
     "mssql": "DATETIMEOFFSET(6)",
+    "sybase": "BIGDATETIME",
+    "sqlanywhere": "TIMESTAMP WITH TIME ZONE",
 }
-_BOUNDED_KEY_TEXT_DIALECTS: "frozenset[str]" = frozenset({"mysql", "mariadb", "oracle", "mssql", "db2"})
+_BOUNDED_KEY_TEXT_DIALECTS: "frozenset[str]" = frozenset({
+    "mysql",
+    "mariadb",
+    "oracle",
+    "mssql",
+    "db2",
+    "sybase",
+    "sqlanywhere",
+})
 _KEY_TEXT_LENGTH = 255
 _DEFAULT_DECIMAL_PRECISION = 38
 _DEFAULT_DECIMAL_SCALE = 9
 _DECIMAL_MAX_PRECISION: "dict[str, int]" = {
+    "sybase": 38,
+    "sqlanywhere": 127,
     "duckdb": 38,
     "mssql": 38,
     "oracle": 38,
@@ -333,38 +345,34 @@ def convert_dict_to_arrow_with_schema(
     batch_size: int | None = None,
     arrow_schema: Any = None,
     column_types: "Mapping[str, str] | None" = None,
+    column_names: "Sequence[str] | None" = None,
 ) -> "ArrowTable | ArrowRecordBatch | ArrowRecordBatchReader | list[ArrowRecordBatch]":
     """Convert dict rows to Arrow, optionally casting to an explicit schema.
 
     An explicit ``arrow_schema`` always wins; ``column_types`` only fills in
-    columns that would otherwise infer as Arrow ``null``.
+    columns that would otherwise infer as Arrow ``null``. Empty results retain
+    ``column_names`` with reported types or Arrow ``null`` when types are unknown.
     """
     table = convert_dict_to_arrow(data, return_format="table", batch_size=batch_size, column_types=column_types)
-    if arrow_schema is not None:
-        ensure_pyarrow()
+    if arrow_schema is not None or (not data and column_names):
         import pyarrow as pa
 
-        if not isinstance(arrow_schema, pa.Schema):
-            msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
-            raise TypeError(msg)
-        if not data:
-            table = pa.Table.from_pydict({name: [] for name in arrow_schema.names}, schema=arrow_schema)
+        if arrow_schema is not None:
+            if not isinstance(arrow_schema, pa.Schema):
+                msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
+                raise TypeError(msg)
+            if not data:
+                table = pa.Table.from_pydict({name: [] for name in arrow_schema.names}, schema=arrow_schema)
+            else:
+                table = table.cast(arrow_schema)
         else:
-            table = table.cast(arrow_schema)
-
-    if return_format == "table":
-        return table
-
-    ensure_pyarrow()
-    import pyarrow as pa
-
-    if return_format == "reader":
-        batches = table.to_batches(max_chunksize=batch_size)
-        return pa.RecordBatchReader.from_batches(table.schema, batches)
-    if return_format == "batches":
-        return table.to_batches(max_chunksize=batch_size)
-    batches = table.to_batches(max_chunksize=batch_size)
-    return batches[0] if batches else pa.RecordBatch.from_pydict({})
+            hints = column_types or {}
+            schema = pa.schema([
+                (name, arrow_type_from_token(hints[name]) if name in hints else pa.null())
+                for name in column_names or ()
+            ])
+            table = pa.Table.from_pydict({name: [] for name in schema.names}, schema=schema)
+    return arrow_table_to_return_format(table, return_format=return_format, batch_size=batch_size)
 
 
 def records_to_arrow_table(
@@ -554,7 +562,7 @@ def arrow_table_to_return_format(
         return pa.RecordBatchReader.from_batches(table.schema, batches)
     if return_format == "batches":
         return batches
-    return batches[0] if batches else pa.RecordBatch.from_pydict({})
+    return batches[0] if batches else pa.RecordBatch.from_pylist([], schema=table.schema)
 
 
 def arrow_table_to_rows(

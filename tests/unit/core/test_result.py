@@ -3,6 +3,7 @@
 import importlib.util
 import inspect
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 from unittest.mock import patch
 
@@ -889,6 +890,28 @@ def test_arrow_result_to_polars(arrow_result: ArrowResult) -> None:
     assert len(df) == 3
     assert df.columns == ["id", "name", "age"]
     assert df["name"].to_list() == ["Alice", "Bob", "Charlie"]
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("values", ([], [1]))
+async def test_arrow_result_writes_polars_stream_to_storage(tmp_path: Path, is_async: bool, values: list[int]) -> None:
+    import pyarrow.parquet as pq
+
+    polars = pytest.importorskip("polars")
+    frame = polars.DataFrame({"id": values}, schema={"id": polars.Int64})
+    result = ArrowResult(statement=SQL("SELECT id FROM example"), data=frame)
+    path = tmp_path / "polars.parquet"
+
+    if is_async:
+        await result.write_to_storage_async(path, format_hint="parquet")
+    else:
+        result.write_to_storage_sync(path, format_hint="parquet")
+    restored = pq.read_table(path)
+
+    assert restored.to_pydict() == {"id": values}
+    assert restored.schema == pa.schema([("id", pa.int64())])
 
 
 def test_arrow_result_to_dict(arrow_result: ArrowResult) -> None:
