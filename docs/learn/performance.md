@@ -2,7 +2,7 @@
 
 SQLSpec is engineered so SQL-first convenience adds minimal overhead above raw C/Rust database drivers. Understanding how statement caching, compiled wheels, typed hydration, and columnar fetches interact helps you get peak throughput across OLTP and analytical workloads.
 
-## Per-Config Statement Caching (StatementCacheHolder)
+## Per-Config Statement Caching
 
 Every adapter config (`AsyncpgConfig`, `SqliteConfig`, `OracleAsyncConfig`, etc.) owns a thread-safe `StatementCacheHolder` shared across all sessions opened via `config.provide_session()`.
 
@@ -59,9 +59,35 @@ with spec.provide_session(config) as session:
         assert len(rows) == 1
 ```
 
-## Pre-Compiled mypyc Wheels and sqlglot[c]
+### Configuring and Inspecting Caches and Telemetry
 
-SQLSpec compiles `162` hot-path modules—covering `core`, `driver`, `builder`, `dialects`, `migrations`, `data_dictionary`, `storage`, `service`, `observability`, `utils`, `extensions`, and adapter cores/pools/type converters—to native C extensions via `mypyc`.
+`SQLSpec` and `sqlspec.core` expose global cache size controls, hit/miss statistics, cache eviction helpers, and aggregated telemetry snapshots:
+
+| Method / Function | Purpose |
+| --- | --- |
+| `SQLSpec.configure_cache(sql_cache_size=..., fragment_cache_size=..., optimized_cache_size=..., compiled_cache_enabled=...)` | Tunes the global LRU capacities and feature flags for statement, fragment, and optimized AST caches. |
+| `SQLSpec.get_cache_stats()` / `SQLSpec.reset_stats_only()` | Returns current cache hit/miss counters or resets statistics without evicting cached entries. |
+| `clear_all_caches()` (`from sqlspec.core import clear_all_caches`) | Evicts all global statement, builder, fragment, and parameter caches across configs. |
+| `spec.clear_sql_cache()` | Clears the `SQLFileLoader` cache on a specific `SQLSpec` registry instance. |
+| `spec.telemetry_snapshot()` | Returns aggregated lifecycle, pool, and loader diagnostics across all configs registered on `spec`. |
+
+```python
+from sqlspec import SQLSpec
+from sqlspec.core import clear_all_caches
+
+SQLSpec.configure_cache(sql_cache_size=2048, fragment_cache_size=1024)
+stats = SQLSpec.get_cache_stats()
+SQLSpec.reset_stats_only()
+
+spec = SQLSpec()
+snapshot = spec.telemetry_snapshot()
+spec.clear_sql_cache()
+clear_all_caches()
+```
+
+## Pre-Compiled MyPyC Wheels and SQLGlot C Extension
+
+SQLSpec compiles `200` hot-path modules—covering `core`, `driver`, `builder`, `dialects`, `migrations`, `data_dictionary`, `storage`, `service`, `observability`, `utils`, `extensions`, and all `22` database adapters (`core`, `pool`, `_typing`, `type_converter`)—to native C extensions via `mypyc`.
 
 Install the `mypyc` and `performance` extras in production deployments so SQLGlot also uses its compiled C tokenizer/parser (`sqlglot[c]`) alongside `msgspec`:
 
@@ -91,7 +117,7 @@ Install the `mypyc` and `performance` extras in production deployments so SQLGlo
 
 ## Fast Typed Hydration with msgspec.Struct
 
-When mapping rows into Python objects, `msgspec.Struct(..., frozen=True, gc=False)` avoids per-row Pydantic validator overhead and omits CPython's `PyGC_Head` cyclic garbage-collection tracking header:
+When mapping rows into Python objects on latency-critical hot paths, `msgspec.Struct(..., frozen=True, gc=False)` avoids per-row Pydantic validator overhead and omits CPython's `PyGC_Head` cyclic garbage-collection tracking header:
 
 ```python
 import msgspec
@@ -108,8 +134,8 @@ For serialization on hot HTTP or queue paths, pair `msgspec.Struct` with SQLSpec
 ## Batched Writes and Arrow Thresholds
 
 - **Prefer `execute_many` or `select_to_arrow` over row loops**: Single-pass parameter preparation in `execute_many` avoids repeated per-row compilation.
-- **DuckDB Hybrid Materialization & Container Memory Clamping**: Small DuckDB point lookups (`< 64` rows) and Arrow-divergent types (`HUGEINT`, `MAP`, `INTERVAL`, `TIMETZ`) materialize directly via `fetchall()` to avoid ~110 µs Arrow conversion overhead on 1-row reads, while larger analytical scans stream natively through Arrow. In containerized deployments (Kubernetes / Cloud Run), `DuckDBConfig` inspects Linux cgroup v1/v2 memory limits (`resolve_cgroup_memory_limit`) so DuckDB's buffer manager sizes its default `memory_limit` to the container quota rather than host physical RAM.
-- **Large Analytical Exports & Streaming Coercion**: Use `session.select_to_arrow(..., return_format="batches")`, `pipeline.read_arrow_batches(...)`, or `session.select_stream(..., chunk_size=1000)` to bound resident memory on multi-million-row reads and bulk loads.
+- **DuckDB Hybrid Materialization and Container Memory Clamping**: Small DuckDB point lookups (`< 64` rows) and Arrow-divergent types (`HUGEINT`, `MAP`, `INTERVAL`, `TIMETZ`) materialize directly via `fetchall()` to avoid ~110 µs Arrow conversion overhead on 1-row reads, while larger analytical scans stream natively through Arrow. In containerized deployments (Kubernetes / Cloud Run), `DuckDBConfig` inspects Linux cgroup v1/v2 memory limits (`resolve_cgroup_memory_limit`) so DuckDB's buffer manager sizes its default `memory_limit` to the container quota rather than host physical RAM.
+- **Large Analytical Exports and Streaming Coercion**: Use `session.select_to_arrow(..., return_format="batches")`, `pipeline.read_arrow_batches(...)`, or `session.select_stream(..., chunk_size=1000)` to bound resident memory on multi-million-row reads and bulk loads.
 - **Multi-Tier Metadata Caching (`MultiTierCache`)**: Pair in-process `UnifiedCache` (L1) with an external `CacheBackendProtocol` (L2, such as Redis or Memcached via `MultiTierCache`) when sharing expensive catalog introspection or schema metadata across multi-worker processes.
 
 ## Summary Checklist
@@ -117,7 +143,7 @@ For serialization on hot HTTP or queue paths, pair `msgspec.Struct` with SQLSpec
 | Lever | Recommendation |
 | --- | --- |
 | **Session Creation** | Always use `config.provide_session()` / `spec.provide_session(config)` so `StatementCacheHolder` is shared across requests. |
-| **Compiled Runtime** | Install `sqlspec[mypyc,performance]` to pair compiled `sqlspec` wheels with `sqlglot[c]` and `msgspec`. |
+| **Compiled Runtime** | Install `sqlspec[mypyc,performance]` to pair `200` compiled `sqlspec` modules with `sqlglot[c]` and `msgspec`. |
 | **Row Models** | Use `msgspec.Struct(..., frozen=True, gc=False)` or `TypedDict` on latency-sensitive endpoints. |
 | **Parameter Style** | Pass a dict/kwargs or tuple directly to `session.select(sql, ...)` so calls hit the direct statement cache path. |
-| **Bulk Reads/Writes** | Use `execute_many` for multi-row DML and `select_to_arrow` for columnar exports. |
+| **Bulk Reads/Writes** | Use `execute_many` for multi-row DML and `select_to_arrow` / `load_from_arrow` for columnar workloads. |

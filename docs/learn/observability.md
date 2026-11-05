@@ -70,7 +70,7 @@ config = SqliteConfig(
 --8<-- "docs/examples/patterns/observability/cloud_formatters.py:example"
 ```
 
-## Request Correlation and Wire-Level sqlcommenter
+## Request Correlation and Wire-Level SQLCommenter
 
 Bind request IDs with `CorrelationContext` (or enable `enable_correlation_middleware` in Litestar) so logs, spans, and database slow-query logs share the same trace context:
 
