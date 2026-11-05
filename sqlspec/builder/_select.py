@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, Self, Union, cast
 from mypy_extensions import trait
 from sqlglot import exp
 
-from sqlspec.builder._base import BuiltQuery, QueryBuilder
+from sqlspec.builder._base import BuiltQuery, QueryBuilder, register_subquery_fragment
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.builder._join import JoinClauseMixin, _attach_as_of_version
@@ -126,11 +126,9 @@ class CaseBuilder:
 class SubqueryBuilder:
     """Helper to build subquery expressions for EXISTS/IN/ANY/ALL operations.
 
-    ``EXISTS`` is a complete predicate, so a parameterized builder subquery returns a
-    ``SQL`` object that carries the bound parameters; ``.where()`` merges them into
-    the outer query. ``IN``/``ANY``/``ALL`` return bare expression fragments for
-    composition, so parameterized subqueries belong in ``.where_in()`` /
-    ``.where_any()``, which merge parameters.
+    Fragments built from a parameterized subquery builder carry its parameters in
+    expression metadata; ``.where()``, ``.having()``, and ``Column`` comparisons merge
+    them into the outer query.
     """
 
     __slots__ = ("_operation",)
@@ -138,7 +136,7 @@ class SubqueryBuilder:
     def __init__(self, operation: str) -> None:
         self._operation = operation
 
-    def __call__(self, subquery: Any) -> "exp.Expr | SQL":
+    def __call__(self, subquery: Any) -> exp.Expr:
         parameters: dict[str, Any] = {}
         if isinstance(subquery, exp.Expr):
             subquery_expr = subquery
@@ -154,17 +152,19 @@ class SubqueryBuilder:
                 raise SQLBuilderError(msg)
             subquery_expr = parsed_expr
 
+        fragment: exp.Expr
         if self._operation == "exists":
-            exists_expr = exp.Exists(this=subquery_expr)
-            return SQL(exists_expr, parameters) if parameters else exists_expr
-        if self._operation == "in":
-            return exp.In(this=exp.Var(this=""), expressions=[subquery_expr])
-        if self._operation == "any":
-            return exp.Any(this=subquery_expr)
-        if self._operation == "all":
-            return exp.All(this=subquery_expr)
-        msg = f"Unknown subquery operation: {self._operation}"
-        raise SQLBuilderError(msg)
+            fragment = exp.Exists(this=subquery_expr)
+        elif self._operation == "in":
+            fragment = exp.In(this=exp.Var(this=""), expressions=[subquery_expr])
+        elif self._operation == "any":
+            fragment = exp.Any(this=subquery_expr)
+        elif self._operation == "all":
+            fragment = exp.All(this=subquery_expr)
+        else:
+            msg = f"Unknown subquery operation: {self._operation}"
+            raise SQLBuilderError(msg)
+        return register_subquery_fragment(fragment, parameters)
 
 
 class WindowFunctionBuilder:
@@ -844,11 +844,12 @@ class WhereClauseMixin:
                 raise SQLBuilderError(msg)
 
         builder = cast("SQLBuilderProtocol", self)
+        query_builder = cast("QueryBuilder", self)
 
         if isinstance(condition, str):
             return parse_condition_expression(condition)
         if isinstance(condition, exp.Expr):
-            return _normalize_condition_expression(condition)
+            return query_builder._merge_subquery_fragments(_normalize_condition_expression(condition))
         if isinstance(condition, tuple):
             return self._process_tuple_condition(condition)
         if has_parameter_builder(condition):
@@ -861,7 +862,8 @@ class WhereClauseMixin:
         if has_sqlglot_expression(condition):
             raw_expr = condition.sqlglot_expression
             if isinstance(raw_expr, exp.Expr):
-                return builder._parameterize_expression(_normalize_condition_expression(raw_expr))
+                merged_expr = query_builder._merge_subquery_fragments(_normalize_condition_expression(raw_expr))
+                return builder._parameterize_expression(merged_expr)
             return parse_condition_expression(str(condition))
         if has_expression_and_sql(condition) or has_expression_and_parameters(condition):
             return _normalize_condition_expression(
@@ -934,7 +936,7 @@ class HavingClauseMixin:
             where_mixin = cast("WhereClauseMixin", self)
             having_expr = where_mixin._process_tuple_condition(condition)
         else:
-            having_expr = parse_condition_expression(condition)
+            having_expr = cast("QueryBuilder", self)._merge_subquery_fragments(parse_condition_expression(condition))
 
         builder.set_expression(current_expr.having(having_expr, copy=False))
         return cast("Self", builder)

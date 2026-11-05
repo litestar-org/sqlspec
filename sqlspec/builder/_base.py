@@ -46,13 +46,21 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, is_expression
 from sqlspec.utils.uuids import uuid4
 
-__all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
+__all__ = (
+    "SUBQUERY_PARAMETERS_META_KEY",
+    "BuiltQuery",
+    "ExpressionBuilder",
+    "QueryBuilder",
+    "register_subquery_fragment",
+)
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
 _PARAMETER_SUFFIX_PATTERN = re.compile(r"^(?P<base>.+)_(?P<index>\d+)$")
 _UPPER_FOLDING_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "db2"})
 _UNQUOTED_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][\w$#]*$")
+SUBQUERY_PARAMETERS_META_KEY: Final[str] = "sqlspec_subquery_parameters"
+_SUBQUERY_FRAGMENTS_ISSUED = False
 
 
 logger = get_logger(__name__)
@@ -843,6 +851,49 @@ class QueryBuilder:
         else:
             self._parameter_name_counters.setdefault(name, 0)
 
+    def _merge_subquery_fragments(self, expression: exp.Expr) -> exp.Expr:
+        """Merge parameters carried by ``sql.exists_`` / ``sql.in_`` / ``sql.any_`` / ``sql.all_`` fragments.
+
+        Fragments built from parameterized subquery builders carry their parameters in
+        ``SUBQUERY_PARAMETERS_META_KEY`` metadata. The expression is copied before
+        placeholders are renamed, so one fragment can be reused across builders. The
+        tree is only scanned once any fragment has been created in the process.
+
+        Args:
+            expression: Condition expression about to be attached to this builder.
+
+        Returns:
+            The expression with fragment parameters merged into this builder.
+        """
+        if not _SUBQUERY_FRAGMENTS_ISSUED:
+            return expression
+        has_carriers = False
+        for node in expression.walk():
+            if isinstance(node, exp.In) and isinstance(node.this, exp.Var) and not node.this.name:
+                self._raise_builder_error(
+                    "sql.in_() returns an IN fragment without a left operand; use .where_in(column, subquery) instead."
+                )
+            if node.meta_get(SUBQUERY_PARAMETERS_META_KEY) is not None:
+                has_carriers = True
+        if not has_carriers:
+            return expression
+
+        merged = expression.copy()
+        for node in list(merged.walk()):
+            parameters = node.meta_get(SUBQUERY_PARAMETERS_META_KEY)
+            if parameters is None:
+                continue
+            del node.meta[SUBQUERY_PARAMETERS_META_KEY]
+            param_mapping: dict[str, str] = {}
+            for name, value in parameters.items():
+                target_name = self._next_parameter_name(name) if name in self._parameters else name
+                _, actual_name = self.add_parameter(value, name=target_name)
+                if actual_name != name:
+                    param_mapping[name] = actual_name
+            if param_mapping:
+                self._update_placeholders(node, param_mapping)
+        return merged
+
     def _next_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name when collision occurs.
 
@@ -1421,3 +1472,20 @@ def _unquote_identifier(node: exp.Expr) -> exp.Expr:
     ):
         node.set("quoted", False)
     return node
+
+
+def register_subquery_fragment(expression: exp.Expr, parameters: "Mapping[str, Any]") -> exp.Expr:
+    """Mark a subquery fragment and attach its bound parameters for later merging.
+
+    Args:
+        expression: The ``EXISTS`` / ``IN`` / ``ANY`` / ``ALL`` fragment.
+        parameters: Parameters bound by the fragment's subquery builder.
+
+    Returns:
+        The same expression, carrying ``parameters`` in its metadata when any exist.
+    """
+    global _SUBQUERY_FRAGMENTS_ISSUED
+    _SUBQUERY_FRAGMENTS_ISSUED = True
+    if parameters:
+        expression.meta[SUBQUERY_PARAMETERS_META_KEY] = dict(parameters)
+    return expression
