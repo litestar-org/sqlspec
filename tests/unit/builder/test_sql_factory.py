@@ -578,8 +578,8 @@ def test_parameter_values_preserved_correctly() -> None:
         assert stmt.parameters[column_name] == expected_value
     none_query = sql.select("*").from_("test").where_eq("none_col", None)
     none_stmt = none_query.build()
-    assert "none_col" in none_stmt.parameters
-    assert none_stmt.parameters["none_col"] is None
+    assert none_stmt.parameters == {}
+    assert "IS NULL" in none_stmt.sql
 
 
 def test_case_expression_basic_syntax() -> None:
@@ -2317,3 +2317,68 @@ def test_in_fragment_without_left_operand_raises() -> None:
     subquery = sql.select("id").from_("vip_users")
     with pytest.raises(SQLBuilderError, match=r"where_in"):
         sql.select("*").from_("users").where(sql.in_(subquery))
+
+
+@pytest.mark.parametrize(
+    ("condition_factory", "expected_fragment"),
+    [
+        (lambda sub: sql.exists_(sub), "EXISTS"),
+        (lambda sub: exp.Not(this=sql.exists_(sub)), "NOT EXISTS"),
+        (lambda sub: Column("salary") > sql.any_(sub), "> ANY"),
+        (lambda sub: Column("salary") > sql.all_(sub), "> ALL"),
+        (lambda sub: exp.EQ(this=exp.column("dept_id"), expression=sql.any_(sub)), "= ANY"),
+    ],
+    ids=["exists", "not_exists", "column_gt_any", "column_gt_all", "raw_eq_any"],
+)
+def test_subquery_fragments_merge_subquery_parameters(
+    condition_factory: "Callable[[Select], Any]", expected_fragment: str
+) -> None:
+    subquery = sql.select("salary").from_("employees").where(("dept", "=", "eng"))
+    query = sql.select("*").from_("staff").where(("dept", "=", "ops")).where(condition_factory(subquery))
+    query.enable_optimization = False
+
+    built = query.build()
+
+    assert built.parameters == {"dept": "ops", "dept_1": "eng"}
+    assert ":dept_1" in built.sql
+    assert expected_fragment in " ".join(built.sql.split()).replace('"', "")
+
+
+def test_subquery_fragment_reuse_does_not_mutate_fragment() -> None:
+    subquery = sql.select("1").from_("orders").where(("total", ">", 100))
+    fragment = sql.exists_(subquery)
+    first = sql.select("*").from_("users").where(("total", "=", 1)).where(fragment).build()
+    second = sql.select("*").from_("users").where(fragment).build()
+
+    assert first.parameters == {"total": 1, "total_1": 100}
+    assert second.parameters == {"total": 100}
+    assert ":total" in second.sql
+
+
+def test_in_fragment_without_left_operand_raises() -> None:
+    subquery = sql.select("id").from_("vip_users")
+    with pytest.raises(SQLBuilderError, match=r"where_in"):
+        sql.select("*").from_("users").where(sql.in_(subquery))
+
+
+@pytest.mark.parametrize(
+    ("apply_condition", "expected_where"),
+    [
+        (lambda q: q.where_eq("deleted_at", None), "deleted_at IS NULL"),
+        (lambda q: q.where_neq("deleted_at", None), "NOT deleted_at IS NULL"),
+        (lambda q: q.where(("deleted_at", None)), "deleted_at IS NULL"),
+        (lambda q: q.where(("deleted_at", "=", None)), "deleted_at IS NULL"),
+        (lambda q: q.where(("deleted_at", "!=", None)), "NOT deleted_at IS NULL"),
+        (lambda q: q.where_eq("id", 1).or_where_eq("deleted_at", None), "id = :id OR deleted_at IS NULL"),
+        (lambda q: q.where_eq("id", 1).or_where_neq("deleted_at", None), "id = :id OR NOT deleted_at IS NULL"),
+    ],
+    ids=["where_eq", "where_neq", "pair", "eq_tuple", "neq_tuple", "or_where_eq", "or_where_neq"],
+)
+def test_equality_with_none_renders_null_predicate(
+    apply_condition: "Callable[[Select], Select]", expected_where: str
+) -> None:
+    query = sql.select("*").from_("users")
+    query.enable_optimization = False
+    built = apply_condition(query).build()
+    assert " ".join(built.sql.split()).replace('"', "").endswith(f"WHERE {expected_where}")
+    assert None not in built.parameters.values()

@@ -767,6 +767,8 @@ class SQL:
     def where_eq(self, column: "str | exp.Column", value: Any) -> "SQL":
         """Add WHERE column = value condition.
 
+        ``None`` renders ``column IS NULL``, because ``column = NULL`` is never true.
+
         Args:
             column: Column name or expression
             value: Value to compare against
@@ -774,11 +776,15 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
+        if value is None:
+            return self.where_is_null(column)
         return self._where_comparison(column, value, expr_eq)
 
     def where_neq(self, column: "str | exp.Column", value: Any) -> "SQL":
         """Add WHERE column != value condition.
 
+        ``None`` renders ``column IS NOT NULL``, because ``column <> NULL`` is never true.
+
         Args:
             column: Column name or expression
             value: Value to compare against
@@ -786,6 +792,8 @@ class SQL:
         Returns:
             New SQL instance with WHERE condition applied
         """
+        if value is None:
+            return self.where_is_not_null(column)
         return self._where_comparison(column, value, expr_neq)
 
     def where_lt(self, column: "str | exp.Column", value: Any) -> "SQL":

@@ -411,10 +411,10 @@ class WhereClauseMixin:
         raise SQLBuilderError(msg)
 
     def where_eq(self, column: str | exp.Column, value: Any) -> Self:
-        return self.where(self._create_parameterized_condition(column, value, expr_eq))
+        return self.where(self._equality_condition(column, value, negate=False))
 
     def where_neq(self, column: str | exp.Column, value: Any) -> Self:
-        return self.where(self._create_parameterized_condition(column, value, expr_neq))
+        return self.where(self._equality_condition(column, value, negate=True))
 
     def where_lt(self, column: str | exp.Column, value: Any) -> Self:
         return self.where(self._create_parameterized_condition(column, value, expr_lt))
@@ -470,10 +470,10 @@ class WhereClauseMixin:
         return self.where(or_condition)
 
     def or_where_eq(self, column: str | exp.Column, value: Any) -> Self:
-        return self._combine_with_or(self._create_parameterized_condition(column, value, expr_eq))
+        return self._combine_with_or(self._equality_condition(column, value, negate=False))
 
     def or_where_neq(self, column: str | exp.Column, value: Any) -> Self:
-        return self._combine_with_or(self._create_parameterized_condition(column, value, expr_neq))
+        return self._combine_with_or(self._equality_condition(column, value, negate=True))
 
     def or_where_lt(self, column: str | exp.Column, value: Any) -> Self:
         return self._combine_with_or(self._create_parameterized_condition(column, value, expr_lt))
@@ -552,6 +552,16 @@ class WhereClauseMixin:
     ) -> Self:
         or_condition = self._process_where_condition(condition, values, operator, kwargs)
         return self._combine_with_or(or_condition)
+
+    def _equality_condition(self, column: str | exp.Column, value: Any, *, negate: bool) -> exp.Expr:
+        """Build ``column = :param`` / ``column <> :param``, or a NULL test for ``None``.
+
+        ``column = NULL`` is never true, so ``None`` renders ``IS NULL`` /
+        ``NOT ... IS NULL`` instead of binding a NULL parameter.
+        """
+        if value is None:
+            return self._build_is_not_null_condition(column) if negate else self._build_is_null_condition(column)
+        return self._create_parameterized_condition(column, value, expr_neq if negate else expr_eq)
 
     def _create_parameterized_condition(
         self, column: str | exp.Column, value: Any, condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]"
@@ -767,7 +777,7 @@ class WhereClauseMixin:
     def _process_tuple_condition(self, condition: "tuple[Any, ...]") -> exp.Expr:
         if len(condition) == PAIR_LENGTH:
             column, value = condition
-            return self._create_parameterized_condition(column, value, expr_eq)
+            return self._equality_condition(column, value, negate=False)
 
         if len(condition) != TRIPLE_LENGTH:
             msg = f"Condition tuple must have 2 or 3 elements, got {len(condition)}"
@@ -778,6 +788,8 @@ class WhereClauseMixin:
         column_expr = parse_column_expression(column_raw)
         column_name = extract_column_name(column_raw)
 
+        if value is None and operator_upper in _EQUALITY_OPERATORS:
+            return self._equality_condition(column_raw, value, negate=operator_upper in {"!=", "<>"})
         if operator_upper in _SIMPLE_OPERATOR_MAP:
             return self._create_parameterized_condition(column_raw, value, _SIMPLE_OPERATOR_MAP[operator_upper])
 
@@ -1375,6 +1387,7 @@ def _expr_like_exp(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr
     return exp.Like(this=col, expression=placeholder)
 
 
+_EQUALITY_OPERATORS: Final[frozenset[str]] = frozenset({"=", "==", "!=", "<>"})
 _SIMPLE_OPERATOR_MAP: dict[str, Any] = {
     "=": expr_eq,
     "==": expr_eq,
