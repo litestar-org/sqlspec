@@ -14,7 +14,7 @@ When the same named parameter (`:status`) appears multiple times in a query, SQL
 
 ### Reusable SQL Statement Objects
 
-In addition to passing SQL strings directly to `session.select(...)`, you can construct an explicit `SQL` statement object with pre-bound positional or named parameters and execute or inspect it across sessions:
+In addition to passing SQL strings directly to `session.select(...)` (see the Unified Query Authoring Mental Model in [Querying and Results](querying.md) and named queries in [SQL Files and SQLFileLoader](sql-files.md)), you can construct an explicit `SQL` statement object with pre-bound positional or named parameters and execute or inspect it across sessions:
 
 ```python
 from sqlspec import SQL, SQLSpec
@@ -40,7 +40,7 @@ with spec.provide_session(config) as session:
     assert admins == [{"id": 1, "email": "ada@example.com"}]
 ```
 
-### Batched Parameter Sequences (execute_many)
+### Batched Parameter Sequences
 
 `execute_many` accepts either a sequence of positional tuples or a sequence of named parameter dictionaries, compiling the parameter layout once for the entire batch:
 

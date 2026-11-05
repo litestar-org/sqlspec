@@ -10,7 +10,7 @@ flowchart LR
     Verify --> Squash["squash & dump-schema"]
 ```
 
-## Configure migration_config and pyproject.toml
+## Configure Migration Settings and pyproject.toml
 
 Enable migrations on any adapter configuration by supplying `migration_config`:
 
@@ -120,7 +120,7 @@ When `upgrade()` runs against downstream environments after a squash has been co
 - **Read-Only `verify`**: Checks applied tracker rows against migration files on disk without creating `version_table_name` on empty databases. Combine `--strict` with `--fail-on-pending` as a pre-deploy CI gate.
 - **Deterministic `dump-schema`**: Exports live schema DDL excluding `version_table_name` by default (`--include-migrations-table` includes it; `--target-dialect` transpiles across SQLGlot dialects). Omitting `--output` writes pure SQL to stdout so `sqlspec dump-schema > schema.sql` produces a clean SQL script.
 
-### How --from-data Classifies Sources
+### How Data Bootstrap Classifies Sources
 
 `create-migration --from-data <source>` classifies `<source>` deterministically from its spelling rather than checking local filesystem state first:
 
