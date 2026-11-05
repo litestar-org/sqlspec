@@ -8,17 +8,33 @@ from sqlspec.core import (
     ChoicesFilter,
     ConditionFactory,
     CursorFilter,
+    CursorKey,
+    CursorKeys,
+    CursorPagination,
+    FilterTypes,
+    FilterTypeT,
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
     NotNullFilter,
     NullFilter,
     NullsPlacement,
+    OffsetPagination,
     OrderByFilter,
+    Pagination,
     SearchFilter,
     StatementFilter,
     apply_filter,
     canonicalize_filters,
+    normalize_cursor_keys,
+)
+from sqlspec.core.filters import (
+    InAnyFilter,
+    NotAnyCollectionFilter,
+    NotInSearchFilter,
+    OnBeforeAfterFilter,
+    PaginationFilter,
+    find_filter,
 )
 ```
 
@@ -37,31 +53,48 @@ Composable `StatementFilter` classes that append `WHERE`, `ORDER BY`, `LIMIT`, `
 ::: sqlspec.core.filters.LimitOffsetFilter
     options:
       heading_level: 3
-      members:
-        - limit
-        - offset
-        - append_to_statement
+      members: false
 
 ::: sqlspec.core.filters.CursorFilter
     options:
       heading_level: 3
       members:
-        - keys
-        - limit
-        - cursor
-        - backward
         - encode
         - build_page
         - append_to_statement
 
+::: sqlspec.core.filters.CursorKey
+    options:
+      heading_level: 3
+      members: false
+
 ::: sqlspec.core.filters.OrderByFilter
     options:
       heading_level: 3
-      members:
-        - field_name
-        - sort_order
-        - nulls
-        - append_to_statement
+      members: false
+
+::: sqlspec.core.filters.PaginationFilter
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.core.filters.CursorKeys
+    options:
+      heading_level: 4
+
+::: sqlspec.core._pagination.OffsetPagination
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.core._pagination.CursorPagination
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.core._pagination.Pagination
+    options:
+      heading_level: 4
 
 ::: sqlspec.core._ordering.NullsPlacement
     options:
@@ -78,19 +111,41 @@ Composable `StatementFilter` classes that append `WHERE`, `ORDER BY`, `LIMIT`, `
 ::: sqlspec.core.filters.SearchFilter
     options:
       heading_level: 3
-      members: false
+      members:
+        - escape_like_value
+        - like_pattern
 
 ::: sqlspec.core.filters.InCollectionFilter
     options:
       heading_level: 3
       members: false
 
+::: sqlspec.core.filters.OnBeforeAfterFilter
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.core.filters.NotInSearchFilter
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.core.filters.InAnyFilter
+    options:
+      heading_level: 4
+      members: false
+
 ::: sqlspec.core.filters.NotInCollectionFilter
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.core.filters.AnyCollectionFilter
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.core.filters.NotAnyCollectionFilter
     options:
       heading_level: 4
       members: false
@@ -115,9 +170,21 @@ Composable `StatementFilter` classes that append `WHERE`, `ORDER BY`, `LIMIT`, `
       heading_level: 4
       members: false
 
-## Filter Application & Condition Factory
+## Filter Application & Helpers
+
+::: sqlspec.core.filters.FilterTypes
+    options:
+      heading_level: 4
+
+::: sqlspec.core.filters.FilterTypeT
+    options:
+      heading_level: 4
 
 ::: sqlspec.core.filters.apply_filter
+    options:
+      heading_level: 4
+
+::: sqlspec.core.filters.find_filter
     options:
       heading_level: 4
 
@@ -125,7 +192,11 @@ Composable `StatementFilter` classes that append `WHERE`, `ORDER BY`, `LIMIT`, `
     options:
       heading_level: 4
 
+::: sqlspec.core.filters.normalize_cursor_keys
+    options:
+      heading_level: 4
+
 ::: sqlspec.core.query_modifiers.ConditionFactory
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
