@@ -1,28 +1,40 @@
 # Filtering and Pagination
 
-List endpoints in APIs routinely combine pagination, search, date-range bounds, collection membership, and multi-column sorting. SQLSpec provides composable `StatementFilter` value objects in `sqlspec.core` along with offset and keyset cursor pagination helpers.
+List endpoints in APIs routinely combine pagination, search, date-range bounds, collection membership, and multi-column sorting. SQLSpec provides 15 composable `StatementFilter` value objects (`FilterTypes`) in `sqlspec.core` along with offset (`OffsetPagination[T]`) and keyset cursor (`CursorPagination[T]`) pagination helpers.
 
-## Built-In StatementFilter Classes
+## Built-In Statement Filters
 
 Pass any combination of `StatementFilter` instances as positional arguments to `session.select(...)`, `session.select_with_total(...)`, or `service.paginate(...)`:
 
-| Filter Class | Appended SQL Semantics | Key Arguments |
-| --- | --- | --- |
-| `LimitOffsetFilter` | `LIMIT :limit OFFSET :offset` (or `FETCH FIRST` on Oracle/Db2/MSSQL) | `limit`, `offset` |
-| `OrderByFilter` | `ORDER BY <field> ASC / DESC [NULLS FIRST / LAST]` | `field_name`, `sort_order="asc"`, `nulls=None` |
-| `SearchFilter` | Case-sensitive or case-insensitive `LIKE` / `ILIKE` across one or more columns | `field_name`, `value`, `ignore_case=False` |
-| `BeforeAfterFilter` | `< :before` and/or `> :after` timestamp range bounds (`OnBeforeAfterFilter` for inclusive `<=`/`>=`) | `field_name`, `before=None`, `after=None` |
-| `InCollectionFilter` | `WHERE <field> IN (:p1, ...)` (`NotInCollectionFilter` for `NOT IN`) | `field_name`, `values` |
-| `NullFilter` / `NotNullFilter` | `WHERE <field> IS NULL` / `IS NOT NULL` | `field_name` |
+<!-- GENERATED:START filter-catalog -->
+| Filter Class | Constructor Signature | SQL Clause Generated | Description |
+| --- | --- | --- | --- |
+| `BeforeAfterFilter` | `BeforeAfterFilter(field_name, before=None, after=None)` | `WHERE col < :col_before AND col > :col_after` | Filter for datetime range queries. |
+| `OnBeforeAfterFilter` | `OnBeforeAfterFilter(field_name, on_or_before=None, on_or_after=None)` | `WHERE col <= :col_on_or_before AND col >= :col_on_or_after` | Filter for inclusive datetime range queries. |
+| `InCollectionFilter` | `InCollectionFilter(field_name, values=None)` | `WHERE col IN (:col_in_0, :col_in_1, ...)` | Filter for IN clause queries. |
+| `NotInCollectionFilter` | `NotInCollectionFilter(field_name, values=None)` | `WHERE col NOT IN (:col_notin_0, :col_notin_1, ...)` | Filter for NOT IN clause queries. |
+| `AnyCollectionFilter` | `AnyCollectionFilter(field_name, values=None)` | `WHERE col = ANY ([:col_any_0, :col_any_1, ...])` | Filter for PostgreSQL-style ANY clause queries. |
+| `NotAnyCollectionFilter` | `NotAnyCollectionFilter(field_name, values=None)` | `WHERE NOT (col = ANY ([:col_not_any_0, ...]))` | Filter for PostgreSQL-style NOT ANY clause queries. |
+| `ChoicesFilter` | `ChoicesFilter(field_name, values=None)` | `WHERE col IN (:col_choices_0, :col_choices_1, ...)` | Filter for field matching a defined set of choice values. |
+| `LimitOffsetFilter` | `LimitOffsetFilter(limit, offset)` | `LIMIT :limit OFFSET :offset` | Filter for LIMIT and OFFSET clauses. |
+| `CursorFilter` | `CursorFilter(keys, limit, cursor=None, secret=None)` | `WHERE (col, id) > (:cursor_k0, :cursor_k1) ORDER BY col ASC, id ASC LIMIT :cursor_limit` | Paginate by ordered keys whose last key uniquely identifies each row. |
+| `OrderByFilter` | `OrderByFilter(field_name, sort_order='asc', nulls=None)` | `ORDER BY col ASC / DESC [NULLS FIRST / LAST]` | Filter for ORDER BY clauses. |
+| `SearchFilter` | `SearchFilter(field_name, value, ignore_case=False)` | `WHERE col LIKE :col_search (or ILIKE when ignore_case=True)` | Filter for text search queries. |
+| `NotInSearchFilter` | `NotInSearchFilter(field_name, value, ignore_case=False)` | `WHERE col NOT LIKE :col_not_search (or NOT ILIKE when ignore_case=True)` | Filter for negated text search queries. |
+| `NullFilter` | `NullFilter(field_name)` | `WHERE col IS NULL` | Filter for IS NULL queries. |
+| `NotNullFilter` | `NotNullFilter(field_name)` | `WHERE col IS NOT NULL` | Filter for IS NOT NULL queries. |
+| `BooleanFilter` | `BooleanFilter(field_name, value)` | `WHERE col = :col_boolean` | Filter for boolean comparison queries. |
+<!-- GENERATED:END filter-catalog -->
 
-Because `StatementFilter` objects bind named parameters (`:limit`, `:offset`, etc.), always bind any additional base-query parameters as **named** keyword arguments (`status="active"`), never positional tuples.
+- **Multi-column and escaped `LIKE` search**: `SearchFilter` and `NotInSearchFilter` accept `set[str]` to filter across multiple columns (`OR` for `SearchFilter`, `AND` for `NotInSearchFilter`). Call `SearchFilter.escape_like_value(raw)` to escape literal `%`, `_`, and `\` wildcards before passing user input.
+- **Named parameter binding**: Because `StatementFilter` objects bind named parameters (`:limit`, `:offset`, etc.), always bind any additional base-query parameters as **named** keyword arguments (`status="active"`), never positional tuples.
 
 ### Combining Multiple Filters on One Query
 
 Filters compose in any order without mutating the underlying `SQL` statement:
 
 ```python
-from datetime import UTC, datetime
+import datetime as dt
 
 from sqlspec import SQL, SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
@@ -41,72 +53,45 @@ config = spec.add_config(
 
 with spec.provide_session(config) as session:
     session.execute(
-        """
-        CREATE TABLE articles (
-            id INTEGER PRIMARY KEY,
-            title TEXT,
-            status TEXT,
-            published_at TEXT
-        )
-        """
+        "CREATE TABLE articles ("
+        "id INTEGER PRIMARY KEY, title TEXT, status TEXT, published_at TIMESTAMP)"
     )
-    session.execute_many(
-        """
-        INSERT INTO articles (title, status, published_at)
-        VALUES (:title, :status, :published_at)
-        """,
-        [
-            {
-                "title": "SQLite WAL Tuning",
-                "status": "published",
-                "published_at": "2026-03-01T10:00:00Z",
-            },
-            {
-                "title": "Postgres Poolers",
-                "status": "published",
-                "published_at": "2026-04-15T12:00:00Z",
-            },
-            {
-                "title": "Draft Notes",
-                "status": "draft",
-                "published_at": "2026-04-20T09:00:00Z",
-            },
-        ],
-    )
-
-    base_query = SQL("SELECT id, title, status FROM articles")
     rows = session.select(
-        base_query,
+        SQL("SELECT id, title, status FROM articles"),
         InCollectionFilter("status", ["published"]),
-        SearchFilter("title", "Pool", ignore_case=True),
+        SearchFilter(
+            {"title", "status"},
+            SearchFilter.escape_like_value("Pool"),
+            ignore_case=True,
+        ),
         BeforeAfterFilter(
-            "published_at", after=datetime(2026, 1, 1, tzinfo=UTC).isoformat()
+            "published_at",
+            after=dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc),
         ),
         OrderByFilter("published_at", sort_order="desc"),
         LimitOffsetFilter(limit=10, offset=0),
     )
-    assert [row["title"] for row in rows] == ["Postgres Poolers"]
 ```
 
 ## Offset Pagination and Total Counts
 
-For classic page-number navigation, chain `.paginate(page=..., page_size=...)` on a `SQL` statement and call `session.select_with_total(...)` (or `service.paginate_limit_offset(...)` to receive an `OffsetPagination` envelope):
+Chain `.paginate(page=..., page_size=...)` on a `SQL` statement and call `session.select_with_total(..., count_with_window=True)` to compute `COUNT(*) OVER()` in a single database round-trip (or omit `count_with_window` to run a separate scalar `COUNT(*)` query). Service layers expose `SQLSpecSyncService.paginate_limit_offset` and `SQLSpecAsyncService.paginate_limit_offset` to return an `OffsetPagination[T]` envelope directly:
 
 ```python
 --8<-- "docs/examples/patterns/pagination.py:example"
 ```
 
-When paginating complex queries containing `JOIN`, `GROUP BY`, or CTEs with named parameters, running an explicit scalar `SELECT COUNT(*)` query alongside `session.select(query, LimitOffsetFilter(...), **named_params)` avoids wrapping large projections inside a derived count subquery.
-
 ## Keyset Cursor Pagination
 
-Large tables degrade under deep `OFFSET 100000` scans because the database must read and discard skipped rows. `CursorFilter` and `SQLSpecSyncService.paginate_cursor` / `SQLSpecAsyncService.paginate_cursor` implement indexed keyset seek pagination with opaque forward (`next_cursor`) and backward (`previous_cursor`) tokens:
+Large tables degrade under deep `OFFSET 100000` scans because the engine must read and discard skipped rows. `CursorFilter` and `CursorKey(field_name, sort_order="desc", nulls="last", result_name=None)` implement indexed keyset seek pagination with opaque forward (`next_cursor`) and backward (`previous_cursor`) tokens:
 
 ```python
 --8<-- "docs/examples/patterns/cursor_pagination.py:example"
 ```
 
-Always include a unique tie-breaker column (such as `("id", "desc")`) as the final key in `CursorKeys` so rows with identical timestamps paginate deterministically without duplicates or gaps.
+- **Unique tie-breaker key**: Always include a unique column (such as `CursorKey("id", "desc")`) as the final key in `CursorKeys` so rows with identical timestamps paginate deterministically.
+- **HMAC-SHA256 cursor signing**: Pass `secret="your-signing-key"` to `CursorFilter(keys, limit=20, cursor=token, secret=...)` so tampered tokens or sort-order mismatches raise `InvalidCursorError`.
+- **Direct driver vs service assembly**: Call `cursor_filter.build_page(rows)` when executing via a raw driver session (`session.select(query, cursor_filter)`), or call `service.paginate_cursor(query, cursor_filter)` on `SQLSpecSyncService` / `SQLSpecAsyncService`.
 
 ## Declarative HTTP Filter Providers (Litestar)
 
@@ -116,11 +101,9 @@ In Litestar services, `create_filter_dependencies` generates typed query-paramet
 --8<-- "docs/examples/patterns/filter_dependencies.py:example"
 ```
 
-Always pass an explicit `sort_field` allowlist (and optional `sort_field_aliases`) so untrusted query strings can only sort by indexed, permitted columns.
-
 ### Wiring Filters in a Litestar Controller
 
-Mount filter dependencies on a `Controller` class and inject the resolved `filters: list[FilterTypes]` list into route handlers:
+Mount `create_filter_dependencies({...})` inline on `Controller.dependencies` and pass `*filters` into `await db_session.select_with_total(..., count_with_window=True)` (or `await service.paginate(spec.get_sql("list-products"), *filters, schema_type=Product)` when using a `SQLSpecAsyncService` subclass):
 
 ```python
 from typing import Annotated
@@ -132,10 +115,7 @@ import msgspec
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.core import FilterTypes, OffsetPagination
-from sqlspec.extensions.litestar.providers import (
-    FilterConfig,
-    create_filter_dependencies,
-)
+from sqlspec.extensions.litestar.providers import create_filter_dependencies
 
 
 class Product(msgspec.Struct):
@@ -146,18 +126,15 @@ class Product(msgspec.Struct):
     price_cents: int
 
 
-product_filters: FilterConfig = {
-    "sort_field": ["name", "price_cents", "created_at"],
-    "sort_order": "asc",
-    "pagination_type": "limit_offset",
-    "pagination_size": 25,
-    "search": "name",
-}
-
-
 class ProductController(Controller):
     path = "/products"
-    dependencies = create_filter_dependencies(product_filters)
+    dependencies = create_filter_dependencies({
+        "sort_field": ["name", "price_cents", "created_at"],
+        "sort_order": "asc",
+        "pagination_type": "limit_offset",
+        "pagination_size": 25,
+        "search": "name",
+    })
 
     @get()
     async def list_products(
@@ -167,12 +144,11 @@ class ProductController(Controller):
         filters: Annotated[list[FilterTypes], Dependency(skip_validation=True)],
     ) -> OffsetPagination[Product]:
         """Filter, sort, and paginate products into an OffsetPagination envelope."""
-        query = spec.get_sql("list-products")
-        return await db_session.paginate(query, *filters, schema_type=Product)
+        items, total = await db_session.select_with_total(
+            spec.get_sql("list-products"),
+            *filters,
+            schema_type=Product,
+            count_with_window=True,
+        )
+        return OffsetPagination(items=items, limit=25, offset=0, total=total)
 ```
-
-## Recap
-
-- Compose `SearchFilter`, `BeforeAfterFilter`, `InCollectionFilter`, `OrderByFilter`, and `LimitOffsetFilter` onto base `SQL` or builder queries instead of hand-rolling conditional SQL strings.
-- Keep all base-query parameters named (`**params`) whenever attaching `StatementFilter` instances.
-- Prefer `CursorFilter` keyset pagination with a unique tie-breaker key for infinite-scroll feeds and high-cardinality tables.

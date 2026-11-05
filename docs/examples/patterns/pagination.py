@@ -11,26 +11,22 @@ __all__ = ("main",)
 
 def main() -> tuple[list[dict[str, Any]], int]:
     """Run offset pagination via SQL.paginate, select_with_total, and the fluent builder."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute(
-            """
-            CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)
-            """
-        )
+        session.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
         session.execute_many("INSERT INTO items (name) VALUES (?)", [(f"Item {i}",) for i in range(1, 51)])
 
-        # --8<-- [start:example]
         page_two = session.select(SQL("SELECT id, name FROM items ORDER BY id").paginate(page=2, page_size=10))
         page_one, total = session.select_with_total(
-            SQL("SELECT id, name FROM items ORDER BY id").paginate(page=1, page_size=10)
+            SQL("SELECT id, name FROM items ORDER BY id").paginate(page=1, page_size=10), count_with_window=True
         )
         builder_rows = session.execute(
             sql.select("id", "name").from_("items").where_like("name", "Item%").order_by("id").limit(10).offset(0)
         ).all()
-        # --8<-- [end:example]
+    # --8<-- [end:example]
 
     assert len(page_two) == 10
     assert page_two[0]["name"] == "Item 11"
