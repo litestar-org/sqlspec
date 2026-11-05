@@ -96,6 +96,7 @@ Run live SQLite queries directly in your browser in the [Interactive Playground]
 | **[Integrations](/integrations/)** | Unified plugin, dependency injection, session store, event queue, and agent memory guides for Litestar, Google ADK, Events, FastAPI, Starlette, Flask, Sanic, and Dishka. |
 | **[Playground](playground.md)** | Zero-install WebAssembly (Pyodide) SQLite environment running `SQLSpec` directly in your browser tab. |
 | **[Reference](/reference/)** | Focused API reference pages for `SQLSpec`, configurations, drivers, statements, builders, migrations, storage, data dictionaries, extensions, CLI commands, and adapter classes. |
+| **[Project](contributing/index.md)** | Contribution guidelines, local test setup, adapter authoring guide, release history, and changelog. |
 
 ## Core Capabilities
 

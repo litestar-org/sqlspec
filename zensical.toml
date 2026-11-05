@@ -21,7 +21,6 @@ nav = [
       { "Installation" = "learn/installation.md" },
       { "Quickstart" = "learn/quickstart.md" },
       { "Configuration" = "learn/configuration.md" },
-      { "Interactive Playground" = "playground.md" },
     ] },
     { "Core Execution" = [
       { "Querying" = "learn/querying.md" },
@@ -49,12 +48,6 @@ nav = [
       { "Multi-Tenancy" = "learn/recipes/multi-tenancy.md" },
       { "Health Checks" = "learn/recipes/health-checks.md" },
       { "ETL & Bulk Ingest" = "learn/recipes/etl-and-bulk-ingest.md" },
-    ] },
-    { "Project & Contributing" = [
-      { "Contribution Guide" = "contributing/index.md" },
-      { "Creating Adapters" = "contributing/creating-adapters.md" },
-      { "Releases" = "releases.md" },
-      { "Changelog" = "changelog.md" },
     ] },
   ] },
   { "Databases" = [
@@ -128,7 +121,7 @@ nav = [
       { "CLI" = "reference/cli.md" },
       { "Storage & Arrow" = "reference/storage.md" },
       { "Data Dictionary" = [
-        "reference/data-dictionary.md",
+        "reference/data-dictionary/index.md",
         { "Runtime & DDL" = "reference/data-dictionary/runtime.md" },
         { "Dialect SQL Catalogs" = [
           "reference/data-dictionary/dialects/index.md",
@@ -190,9 +183,17 @@ nav = [
       { "arrow-odbc" = "reference/adapters/arrow-odbc.md" },
     ] },
   ] },
+  { "Playground" = "playground.md" },
+  { "Project" = [
+    "contributing/index.md",
+    { "Creating Adapters" = "contributing/creating-adapters.md" },
+    { "Releases" = "releases.md" },
+    { "Changelog" = "changelog.md" },
+  ] },
 ]
 
 [project.theme]
+variant = "modern"
 language = "en"
 logo = "assets/logo.svg"
 favicon = "assets/favicon.svg"
@@ -292,7 +293,7 @@ generator = false
 "reference/core/splitter.md" = "reference/core/compiler.md"
 "reference/core/sqlcommenter.md" = "reference/core/compiler.md"
 "reference/core/type-converters.md" = "reference/core/compiler.md"
-"reference/data_dictionary.md" = "reference/data-dictionary.md"
+"reference/data_dictionary.md" = "reference/data-dictionary/index.md"
 "reference/extensions/otel.md" = "reference/extensions/opentelemetry.md"
 "reference/query-stack.md" = "reference/core/statement.md"
 

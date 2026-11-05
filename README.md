@@ -40,7 +40,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
 
-class User(msgspec.Struct, frozen=True, gc=False):
+class User(msgspec.Struct):
     id: int
     name: str
 

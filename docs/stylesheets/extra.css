@@ -318,6 +318,19 @@
   color: #ffffff;
 }
 
+.md-grid {
+  max-width: 86rem;
+}
+
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--primary {
+    width: 11rem;
+  }
+  .md-sidebar--secondary {
+    width: 10.5rem;
+  }
+}
+
 .md-sidebar__scrollwrap,
 .md-sidebar__scrollwrap:focus-within,
 .md-sidebar__scrollwrap:hover {
@@ -427,7 +440,7 @@
 .md-typeset :not(pre) > code {
   background-color: var(--sqlspec-inline-code-bg);
   color: var(--sqlspec-inline-code-fg);
-  border: 1px solid var(--sqlspec-inline-code-border);
+  border: 1px solid transparent;
   border-radius: 5px;
   padding: 0.1em 0.38em;
   font-size: 0.85em;
@@ -819,7 +832,9 @@
 }
 
 .md-typeset > .md-typeset__scrollwrap table:not([class]) td code {
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .md-typeset pre.mermaid,

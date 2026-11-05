@@ -11,7 +11,7 @@ __all__ = ("User", "get_user", "main")
 
 
 # --8<-- [start:example]
-class User(msgspec.Struct, frozen=True, gc=False):
+class User(msgspec.Struct):
     """Typed user row returned from SQLite."""
 
     id: int
@@ -20,7 +20,7 @@ class User(msgspec.Struct, frozen=True, gc=False):
 
 
 def get_user(session: Any) -> User:
-    """Fetch Ada's record decoded into a frozen msgspec.Struct."""
+    """Fetch Ada's record decoded into a msgspec.Struct."""
     return session.select_one(
         """
         SELECT id, name, points
@@ -36,7 +36,7 @@ def get_user(session: Any) -> User:
 
 
 def main() -> User:
-    """Insert a user record and decode it into a frozen msgspec.Struct."""
+    """Insert a user record and decode it into a msgspec.Struct."""
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 

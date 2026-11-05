@@ -20,7 +20,7 @@ Curated module-by-module and per-adapter API reference for SQLSpec. Every page o
 | `sqlspec.migrations` | [Migrations](migrations.md) | `SyncMigrationCommands`, `AsyncMigrationCommands`, runners, trackers, loaders, and squash helpers. |
 | `sqlspec.storage` | [Storage & Pipelines](storage.md) | `StorageRegistry`, `SyncStoragePipeline`, `AsyncStoragePipeline`, and Arrow storage bridge jobs. |
 | `sqlspec.service` | [Service Layer](service.md) | `SQLSpecSyncService` and `SQLSpecAsyncService` base classes for framework-agnostic data services. |
-| `sqlspec.data_dictionary` | [Data Dictionary](data-dictionary.md) | Cross-database schema introspection metadata (`TableMetadata`, `ColumnMetadata`, `IndexMetadata`, `VersionInfo`) and topological dependency sorting. |
+| `sqlspec.data_dictionary` | [Data Dictionary](data-dictionary/index.md) | Cross-database schema introspection metadata (`TableMetadata`, `ColumnMetadata`, `IndexMetadata`, `VersionInfo`) and topological dependency sorting. |
 | `sqlspec.dialects` | [SQLGlot Dialects](dialects.md) | Custom SQLGlot dialects (`Spanner`, `Spangres`, `DB2`, `PGVector`, `ParadeDB`, `PGTextSearch`). |
 | `sqlspec.observability` | [Observability](observability.md) | `ObservabilityConfig`, `TelemetryConfig`, `StatementEvent`, `RedactionConfig`, and cloud log formatters. |
 | `sqlspec.cli` | [CLI Reference](cli.md) | `sqlspec` command-line interface options, migration subcommands, and ADK maintenance commands. |

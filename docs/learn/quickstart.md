@@ -56,7 +56,7 @@ By default, `select` and `select_one` return `dict[str, Any]` rows. Pass `schema
 --8<-- "docs/examples/quickstart/typed_mapping.py:example"
 ```
 
-Defining `msgspec.Struct(..., frozen=True, gc=False)` gives you immutable attribute access, static type checking, and lower allocation overhead than plain dictionaries.
+Defining a `msgspec.Struct` model gives you typed attribute access, static type checking, and lower allocation overhead than plain dictionaries.
 
 ## Moving from `:memory:` to a Local File
 
