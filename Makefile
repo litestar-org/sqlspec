@@ -324,7 +324,7 @@ docs-serve: docs-clean                             ## Serve documentation locall
 .PHONY: docs
 docs: docs-clean                                   ## Build documentation
 	@echo "${INFO} Building documentation... 📝"
-	@uv run --no-sync python -m tools.docs.scan_public_docstrings --check-leaks --check-overloads --check-typeddicts sqlspec
+	@uv run --no-sync python -m tools.docs.scan_public_docstrings --check-leaks --check-overloads --check-typeddicts --check-structs sqlspec
 	@uv run --no-sync python -m tools.docs.generate_cli_docs --check
 	@uv run --no-sync python -m tools.docs.generate_data_dictionary_docs --check
 	@uv run --no-sync python -m tools.docs.generate_config_tables --check

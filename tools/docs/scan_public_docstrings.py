@@ -1,4 +1,4 @@
-"""AST scanner for public docstring compiler leaks, @overload docstrings, and TypedDict field docstrings."""
+"""AST scanner for public docstring compiler leaks, @overload docstrings, TypedDict and Struct field docstrings."""
 
 import argparse
 import ast
@@ -11,10 +11,12 @@ from typing import NamedTuple
 __all__ = (
     "DocstringLeakViolation",
     "OverloadDocstringViolation",
+    "StructDocstringViolation",
     "TypedDictDocstringViolation",
     "main",
     "scan_overload_docstrings",
     "scan_public_docstring_leaks",
+    "scan_undocumented_structs",
     "scan_undocumented_typeddicts",
 )
 
@@ -25,9 +27,14 @@ _LEAK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("ABI boundary", re.compile(r"\babi\s+boundar(?:y|ies)\b", re.IGNORECASE)),
     ("Private/internal methods", re.compile(r"private/internal\s+methods", re.IGNORECASE)),
     ("cross-trait attribute", re.compile(r"cross-trait\s+attribute", re.IGNORECASE)),
+    ("PEP 604 union leak", re.compile(r"Represent a PEP 604 union type", re.IGNORECASE)),
+    ("PyCapsule", re.compile(r"\bPyCapsule\b", re.IGNORECASE)),
+    ("Sentinel.UNSET", re.compile(r"\bSentinel\.UNSET\b", re.IGNORECASE)),
+    ("Cython", re.compile(r"\bCython\b", re.IGNORECASE)),
 )
 _ATTRIBUTES_HEADER_PATTERN = re.compile(r"^\s*Attributes:\s*$", re.MULTILINE)
 _OVERLOAD_DECORATORS: frozenset[str] = frozenset({"overload", "typing.overload", "typing_extensions.overload"})
+_STRUCT_BASES: frozenset[str] = frozenset({"Struct", "msgspec.Struct"})
 _TYPEDDICT_BASES: frozenset[str] = frozenset({"TypedDict", "typing.TypedDict", "typing_extensions.TypedDict"})
 
 
@@ -77,6 +84,26 @@ class TypedDictDocstringViolation(NamedTuple):
         return f"{self.path}:{self.line}: {self.symbol}: {'; '.join(details)}"
 
 
+class StructDocstringViolation(NamedTuple):
+    """Public or inherited msgspec.Struct missing inline PEP 257 field docstrings or duplicating class Attributes."""
+
+    path: Path
+    line: int
+    symbol: str
+    missing_fields: tuple[str, ...]
+    has_duplicate_class_attributes: bool
+
+    def format(self) -> str:
+        """Render a concise diagnostic line."""
+        details: list[str] = []
+        if self.missing_fields:
+            joined = ", ".join(self.missing_fields)
+            details.append(f"missing PEP 257 field docstrings ({len(self.missing_fields)}): {joined}")
+        if self.has_duplicate_class_attributes:
+            details.append("duplicate class-level Attributes/field list in class docstring")
+        return f"{self.path}:{self.line}: {self.symbol}: {'; '.join(details)}"
+
+
 def scan_public_docstring_leaks(paths: Sequence[Path]) -> list[DocstringLeakViolation]:
     """Scan Python files for public symbol docstrings containing compiler or internal-layout leaks."""
     violations: list[DocstringLeakViolation] = []
@@ -103,10 +130,21 @@ def scan_undocumented_typeddicts(paths: Sequence[Path]) -> list[TypedDictDocstri
     return violations
 
 
+def scan_undocumented_structs(paths: Sequence[Path]) -> list[StructDocstringViolation]:
+    """Scan Python files for public msgspec.Struct classes missing PEP 257 field docstrings or duplicating Attributes."""
+    violations: list[StructDocstringViolation] = []
+    for file_path in _iter_python_files(paths):
+        violations.extend(_scan_module_structs(file_path))
+    return violations
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entrypoint for public docstring, overload, and TypedDict hygiene checks."""
+    """CLI entrypoint for public docstring, overload, TypedDict, and msgspec.Struct hygiene checks."""
     parser = argparse.ArgumentParser(
-        description="Verify public docstrings for compiler leaks, @overload docstrings, and TypedDict field coverage."
+        description=(
+            "Verify public docstrings for compiler leaks, @overload docstrings, "
+            "and TypedDict/msgspec.Struct field coverage."
+        )
     )
     parser.add_argument(
         "--check-leaks",
@@ -120,6 +158,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Fail when public TypedDict fields lack PEP 257 inline docstrings or duplicate class Attributes.",
     )
     parser.add_argument(
+        "--check-structs",
+        action="store_true",
+        help="Fail when public msgspec.Struct fields lack PEP 257 inline docstrings or duplicate class Attributes.",
+    )
+    parser.add_argument(
         "paths",
         nargs="*",
         type=Path,
@@ -128,7 +171,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    run_all = not (args.check_leaks or args.check_overloads or args.check_typeddicts)
+    run_all = not (args.check_leaks or args.check_overloads or args.check_typeddicts or args.check_structs)
     messages: list[str] = []
 
     if args.check_leaks or run_all:
@@ -137,6 +180,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         messages.extend(item.format() for item in scan_overload_docstrings(args.paths))
     if args.check_typeddicts or run_all:
         messages.extend(item.format() for item in scan_undocumented_typeddicts(args.paths))
+    if args.check_structs or run_all:
+        messages.extend(item.format() for item in scan_undocumented_structs(args.paths))
 
     if messages:
         sys.stderr.write(f"Docstring hygiene check failed ({len(messages)} violation(s)):\n")
@@ -339,6 +384,60 @@ def _scan_module_typeddicts(file_path: Path) -> list[TypedDictDocstringViolation
         if missing_fields or has_duplicate:
             violations.append(
                 TypedDictDocstringViolation(
+                    path=file_path,
+                    line=cls_node.lineno,
+                    symbol=cls_node.name,
+                    missing_fields=missing_fields,
+                    has_duplicate_class_attributes=has_duplicate,
+                )
+            )
+    return violations
+
+
+def _resolve_effective_structs(classes: dict[str, ast.ClassDef]) -> list[ast.ClassDef]:
+    """Resolve public msgspec.Struct classes and any intra-module private Struct base classes they inherit."""
+    all_structs: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, cls_node in classes.items():
+            if name in all_structs:
+                continue
+            if any(ast.unparse(base) in _STRUCT_BASES or ast.unparse(base) in all_structs for base in cls_node.bases):
+                all_structs.add(name)
+                changed = True
+
+    effective: set[str] = {name for name in all_structs if not name.startswith("_")}
+    changed = True
+    while changed:
+        changed = False
+        for name in tuple(effective):
+            cls_node = classes[name]
+            for base in cls_node.bases:
+                base_name = ast.unparse(base)
+                if base_name in all_structs and base_name not in effective:
+                    effective.add(base_name)
+                    changed = True
+
+    return [classes[name] for name in sorted(effective, key=lambda key: classes[key].lineno)]
+
+
+def _scan_module_structs(file_path: Path) -> list[StructDocstringViolation]:
+    """Inspect public and inherited msgspec.Struct classes in file_path for missing or duplicated field docs."""
+    tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    if not classes:
+        return []
+
+    violations: list[StructDocstringViolation] = []
+    for cls_node in _resolve_effective_structs(classes):
+        field_names, missing_fields = _extract_typeddict_field_status(cls_node)
+        if not field_names:
+            continue
+        has_duplicate = _has_duplicate_class_attributes(ast.get_docstring(cls_node), field_names)
+        if missing_fields or has_duplicate:
+            violations.append(
+                StructDocstringViolation(
                     path=file_path,
                     line=cls_node.lineno,
                     symbol=cls_node.name,

@@ -16,6 +16,8 @@ from tools.docs.generate_config_tables import (
 from tools.docs.generate_config_tables import main as config_tables_main
 from tools.docs.generate_data_dictionary_docs import DIALECT_SPECS, render_all_dialect_docs
 from tools.docs.generate_data_dictionary_docs import main as dialect_docs_main
+from tools.docs.scan_public_docstrings import main as scan_docstrings_main
+from tools.docs.scan_public_docstrings import scan_public_docstring_leaks, scan_undocumented_structs
 
 import sqlspec.cli as cli_module
 
@@ -26,6 +28,7 @@ __all__ = (
     "test_render_cli_reference_renders_all_commands_arguments_and_options_cleanly",
     "test_render_filter_catalog_table_covers_all_15_filter_types",
     "test_render_typeddict_table_renders_inheritance_types_defaults_and_or_unions",
+    "test_scan_public_docstrings_detects_struct_field_violations_and_leak_phrases",
     "test_sync_markdown_markers_and_adapter_parity_check",
 )
 
@@ -248,3 +251,35 @@ def test_sync_markdown_markers_and_adapter_parity_check(tmp_path: Path, capsys: 
     strict_parity_errors = check_adapter_reference_parity(unmigrated_allowlist=frozenset())
     assert len(strict_parity_errors) >= 6
     assert any("oracledb" in err and "OracleTopologyConfig" in err for err in strict_parity_errors)
+
+
+def test_scan_public_docstrings_detects_struct_field_violations_and_leak_phrases(tmp_path: Path) -> None:
+    sample_py = tmp_path / "sample_module.py"
+    sample_py.write_text(
+        '"""Sample module."""\n\n'
+        "import msgspec\n\n"
+        "class SampleStruct(msgspec.Struct, frozen=True, gc=False):\n"
+        '    """Sample struct."""\n'
+        "    documented_field: str\n"
+        '    """Documented field."""\n'
+        "    undocumented_field: int\n\n"
+        "def leaky_function() -> None:\n"
+        '    """Uses PyCapsule, Sentinel.UNSET, Cython, and Represent a PEP 604 union type."""\n'
+        "    return None\n",
+        encoding="utf-8",
+    )
+
+    struct_violations = scan_undocumented_structs([tmp_path])
+    assert len(struct_violations) == 1
+    assert struct_violations[0].symbol == "SampleStruct"
+    assert struct_violations[0].missing_fields == ("undocumented_field",)
+
+    leak_violations = scan_public_docstring_leaks([tmp_path])
+    assert len(leak_violations) == 1
+    assert leak_violations[0].symbol == "leaky_function"
+    assert set(leak_violations[0].matched_patterns) == {"PEP 604 union leak", "PyCapsule", "Sentinel.UNSET", "Cython"}
+
+    assert (
+        scan_docstrings_main(["--check-leaks", "--check-overloads", "--check-typeddicts", "--check-structs", "sqlspec"])
+        == 0
+    )

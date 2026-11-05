@@ -33,23 +33,20 @@ _AT_PARAM_PATTERN = re.compile(r"@([a-zA-Z_][a-zA-Z0-9_]*)")
 
 
 class DialectDocSpec(msgspec.Struct, frozen=True, gc=False):
-    """Metadata describing a data dictionary dialect pack and its adapter classes.
-
-    Attributes:
-        dialect: Canonical dialect directory name under ``sqlspec/data_dictionary/dialects/``.
-        title: Human-readable engine title.
-        ddl_strategy: Primary DDL extraction strategy description.
-        guide_link: Relative link to the corresponding database guide.
-        summary: Concise description of the dialect's system catalog introspection.
-        adapter_classes: Fully qualified adapter DataDictionary class paths.
-    """
+    """Metadata describing a data dictionary dialect pack and its adapter classes."""
 
     dialect: str
+    """Canonical dialect directory name under ``sqlspec/data_dictionary/dialects/``."""
     title: str
+    """Human-readable engine title."""
     ddl_strategy: str
+    """Primary DDL extraction strategy description."""
     guide_link: str
+    """Relative link to the corresponding database guide."""
     summary: str
+    """Concise description of the dialect's system catalog introspection."""
     adapter_classes: tuple[str, ...]
+    """Fully qualified adapter DataDictionary class paths."""
 
 
 DIALECT_SPECS: tuple[DialectDocSpec, ...] = (
