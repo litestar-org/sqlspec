@@ -2265,3 +2265,13 @@ def test_exists_subquery_merges_subquery_parameters() -> None:
     assert built.parameters == {"total": 5, "total_1": 100}
     assert ":total_1" in built.sql
     assert "EXISTS" in built.sql
+
+
+@pytest.mark.parametrize(
+    ("placeholder_style", "expected_values"),
+    [("?", "(?, ?, ?)"), ("%s", "(%s, %s, %s)"), (":1", "(:1, :2, :3)"), ("$1", "($1, $2, $3)")],
+    ids=["qmark", "format", "oracle_numeric", "postgres_numeric"],
+)
+def test_bulk_insert_renders_positional_placeholders(placeholder_style: str, expected_values: str) -> None:
+    rendered = sql.bulk_insert("events", 3, placeholder_style=placeholder_style).expression.sql()
+    assert rendered == f"INSERT INTO events VALUES {expected_values}"

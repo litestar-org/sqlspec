@@ -1325,19 +1325,25 @@ class SQLFactory:
         Args:
             table_name: Name of the table to insert into
             column_count: Number of columns (for placeholder generation)
-            placeholder_style: Placeholder style ("?" for SQLite/PostgreSQL, "%s" for MySQL, ":1" for Oracle)
+            placeholder_style: Positional placeholder style: ``"?"`` (qmark), ``"%s"`` (format),
+                ``":1"`` (Oracle numeric), or ``"$1"`` (PostgreSQL numeric). Numeric styles
+                number the placeholders from 1.
 
         Returns:
             INSERT expression with placeholders for bulk operations
         """
+        placeholders: list[exp.Expr]
+        if placeholder_style == "?":
+            placeholders = [exp.Placeholder() for _ in range(column_count)]
+        elif placeholder_style[:1] in {":", "$"} and placeholder_style[1:].isdigit():
+            prefix = placeholder_style[0]
+            placeholders = [exp.Var(this=f"{prefix}{index}") for index in range(1, column_count + 1)]
+        else:
+            placeholders = [exp.Var(this=placeholder_style) for _ in range(column_count)]
         return FunctionExpression(
             exp.Insert(
                 this=exp.Table(this=exp.to_identifier(table_name)),
-                expression=exp.Values(
-                    expressions=[
-                        exp.Tuple(expressions=[exp.Placeholder(this=placeholder_style) for _ in range(column_count)])
-                    ]
-                ),
+                expression=exp.Values(expressions=[exp.Tuple(expressions=placeholders)]),
             )
         )
 
