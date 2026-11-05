@@ -75,7 +75,9 @@ Organize larger query suites without giving up SQL readability or composable run
 | Guide | Focus |
 | --- | --- |
 | [SQL Files](sql-files.md) | Load `-- name:` SQL blocks from disk or cloud storage, validate `-- param:` headers, and append dynamic `WHERE` clauses. |
-| [Query Builder](query-builder.md) | Construct parameterized `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, upsert, join, and `RETURNING` statements with `sql`. |
+| [Query Builder: SELECT & Joins](query-builder.md) | Construct parameterized `SELECT` queries, `Column` expressions, `WHERE`/`OR WHERE` predicates, joins, CTEs, set operations, locking, and `EXPLAIN` plans. |
+| [Expressions, Windows & Vector](query-builder-expressions.md) | Compose aggregates, `ROLLUP`/`CUBE`/`GROUPING SETS`, scalar/math/string helpers, `CASE`, window functions, and cross-dialect vector distance / Oracle Hybrid RRF. |
+| [DML, MERGE & DDL Builders](query-builder-dml-ddl.md) | Build `INSERT`, `UPDATE`, `DELETE`, `RETURNING`, model-bound mutations, `ON CONFLICT` / `MERGE` upserts, and all 16 DDL builders with schema inference. |
 | [Filtering and Pagination](filtering-and-pagination.md) | Apply composable `StatementFilter` objects (`LimitOffsetFilter`, `BeforeAfterFilter`, `SearchFilter`, `OrderByFilter`) and keyset cursors. |
 
 ## Operations, Analytics, and Quality

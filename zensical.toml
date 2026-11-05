@@ -30,7 +30,9 @@ nav = [
     ] },
     { "SQL Files & Builder" = [
       { "SQL Files" = "learn/sql-files.md" },
-      { "Query Builder" = "learn/query-builder.md" },
+      { "Query Builder: SELECT & Joins" = "learn/query-builder.md" },
+      { "Expressions, Windows & Vector" = "learn/query-builder-expressions.md" },
+      { "DML, MERGE & DDL Builders" = "learn/query-builder-dml-ddl.md" },
       { "Filtering & Pagination" = "learn/filtering-and-pagination.md" },
     ] },
     { "Operations & Analytics" = [
