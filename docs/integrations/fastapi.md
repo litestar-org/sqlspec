@@ -55,7 +55,7 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which shares `Starlett
 | `session_key` | `str` | `"db_session"` | Identifier passed to `provide_session(key)` and stored on `request.state`. |
 | `connection_key` | `str` | `"db_connection"` | Identifier used for raw connection dependencies. |
 | `pool_key` | `str` | `"db_pool"` | Attribute key on `app.state` storing the adapter connection pool. |
-| `commit_mode` | `"manual" | "autocommit" | "autocommit_include_redirect"` | `"manual"` | Controls automatic transaction commit or rollback based on response status codes. |
+| `commit_mode` | `"manual" / "autocommit" / "autocommit_include_redirect"` | `"manual"` | Controls automatic transaction commit or rollback based on response status codes. |
 | `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic commit. |
 | `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic rollback. |
 | `enable_correlation_middleware` | `bool` | `True` | Extracts or generates `X-Request-ID` correlation IDs into `CorrelationContext`. |

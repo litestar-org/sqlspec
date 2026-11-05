@@ -46,14 +46,14 @@ Configure distinct `session_key`, `connection_key`, and `pool_key` values under 
 --8<-- "docs/examples/frameworks/flask/multi_database.py:example"
 ```
 
-## `FlaskConfig` Options
+## FlaskConfig Options
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `session_key` | `str` | `"db_session"` | Key passed to `plugin.get_session(key)` and cached on `flask.g`. |
 | `connection_key` | `str` | `"db_connection"` | Key passed to `plugin.get_connection(key)` on `flask.g`. |
 | `pool_key` | `str` | `"db_pool"` | Key stored in `app.extensions["sqlspec"]` for the connection pool. |
-| `commit_mode` | `"manual" | "autocommit" | "autocommit_include_redirect"` | `"manual"` | Commits on `2xx` (`autocommit`) or `2xx`/`3xx` (`autocommit_include_redirect`) in `after_request` and rolls back on errors. |
+| `commit_mode` | `"manual" / "autocommit" / "autocommit_include_redirect"` | `"manual"` | Commits on `2xx` (`autocommit`) or `2xx`/`3xx` (`autocommit_include_redirect`) in `after_request` and rolls back on errors. |
 | `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic commit. |
 | `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic rollback. |
 | `enable_correlation_middleware` | `bool` | `True` | Binds request correlation headers into `CorrelationContext`. |

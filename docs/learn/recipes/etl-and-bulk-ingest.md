@@ -108,7 +108,7 @@ with (
     assert import_job.telemetry["rows_processed"] == 2
 ```
 
-### Inspecting `StorageBridgeJob` Telemetry
+### Inspecting StorageBridgeJob Telemetry
 
 `select_to_storage`, `load_from_storage`, and `load_from_arrow` return a `StorageBridgeJob` carrying structured telemetry you can emit to job metrics or audit tables:
 

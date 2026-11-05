@@ -11,7 +11,7 @@ __all__ = ("User", "fetch_users", "main")
 
 
 # --8<-- [start:example]
-class User(msgspec.Struct, frozen=True, gc=False):
+class User(msgspec.Struct):
     """Typed user row projection."""
 
     id: int

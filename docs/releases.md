@@ -42,7 +42,7 @@ make release bump=patch
 make pre-release version=0.70.0-alpha.1
 ```
 
-### Automated Publishing (`.github/workflows/publish.yml`)
+### Automated Publishing (.github/workflows/publish.yml)
 
 When a GitHub Release is published, CI automatically executes:
 

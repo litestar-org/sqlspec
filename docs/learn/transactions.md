@@ -2,7 +2,7 @@
 
 Database reliability depends on clear, predictable transaction boundaries. SQLSpec provides explicit `begin`, `commit`, and `rollback` controls on every driver session, atomic `begin_transaction()` helpers on services, and configurable request commit modes in web framework integrations.
 
-## Explicit `begin`, `commit`, and `rollback`
+## Explicit begin, commit, and rollback
 
 Call `session.begin()`, `session.commit()`, and `session.rollback()` (`await session.begin()`, `await session.commit()`, `await session.rollback()` on async drivers) to group multiple statements into an atomic unit of work:
 
@@ -12,7 +12,7 @@ Call `session.begin()`, `session.commit()`, and `session.rollback()` (`await ses
 
 If an unhandled exception escapes a `provide_session()` context while a transaction is active, SQLSpec rolls back uncommitted changes before returning the connection to the pool.
 
-## Atomic Blocks with `begin_transaction`
+## Atomic Blocks with begin_transaction
 
 When coordinating writes in domain services, `SQLSpecSyncService.begin_transaction()` and `SQLSpecAsyncService.begin_transaction()` open a session, start a transaction, commit automatically on normal exit, and roll back automatically if any exception is raised:
 

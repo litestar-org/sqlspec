@@ -10,7 +10,7 @@ For small query registries, register named statements directly on `SQLSpec` with
 --8<-- "docs/examples/sql_files/named_queries.py:example"
 ```
 
-## Loading `.sql` Files from Disk or Storage
+## Loading .sql Files from Disk or Storage
 
 Group related queries inside `.sql` files using `-- name: <query_name>` comment headers and load individual files or entire directories with `spec.load_sql_files(...)` (or `SQLFileLoader` directly):
 
@@ -41,7 +41,7 @@ When `spec.load_sql_files(Path("app/sql"))` scans a directory tree, you can keep
 
 <span id="anatomy-of-a-multi-query-sql-file"></span>
 
-## Declared Parameter Headers (`-- param:`)
+## Declared Parameter Headers (-- param:)
 
 Each `-- name:` block can start with `-- dialect:` and `-- param:` headers. The following file groups two related queries.
 
@@ -114,7 +114,7 @@ Fragments may include other fragments, and a fragment may contain slot markers. 
 
 For namespaced files, lookup rules, inspection methods, and cache behavior, see the [loader composition reference](../reference/loader.md#composition-rules).
 
-## Composing Dynamic `WHERE` Clauses onto Named SQL
+## Composing Dynamic WHERE Clauses onto Named SQL
 
 Static `.sql` files often need optional runtime predicates for search, tenant scoping, or pagination. Because `spec.get_sql(...)` returns an immutable `SQL` statement object, calling `.where(...)`, `.where_eq(...)`, `.where_like(...)`, or `.paginate(...)` returns a new derived `SQL` instance without mutating the cached base template:
 
@@ -165,7 +165,7 @@ In production services, organize queries using `kebab-case` identifiers (`-- nam
     from sqlspec.adapters.sqlite import SqliteConfig
 
 
-    class Product(msgspec.Struct, frozen=True, gc=False):
+    class Product(msgspec.Struct):
         """Typed product projection."""
 
         id: int

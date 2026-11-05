@@ -2,7 +2,7 @@
 
 When queries depend on conditional joins, dynamic column lists, cross-dialect upsert syntax, or portable DDL generation, SQLSpec's fluent `sql` builder constructs SQLGlot AST statements that compile cleanly to your active adapter's SQL dialect.
 
-## Building `SELECT`, `INSERT`, and `UPDATE` Queries
+## Building SELECT, INSERT, and UPDATE Queries
 
 Import `sql` from `sqlspec` to compose `SELECT`, `INSERT`, `UPDATE`, and `DELETE` queries with automatic parameter binding:
 
@@ -79,7 +79,7 @@ summary = (
 )
 ```
 
-## Upserts (`ON CONFLICT` and `sql.merge`)
+## Upserts (ON CONFLICT and sql.merge)
 
 Use `.on_conflict(...).do_nothing()` or `.on_conflict(...).do_update(...)` for conflict-tolerant inserts on SQLite, PostgreSQL, CockroachDB, and DuckDB, or `sql.merge(...)` for ANSI `MERGE INTO` workflows on Oracle, SQL Server, BigQuery, and PostgreSQL 15+:
 
@@ -133,7 +133,7 @@ events_ddl = CreateTable.from_records(
 
 `CreateTable.from_metadata`, `CreateTable.from_arrow_schema`, and `CreateTable.from_records` map types and constraints into dialect-valid SQL across PostgreSQL, CockroachDB, SQLite, DuckDB, MySQL, MariaDB, Oracle, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, Spanner, and BigQuery.
 
-## Raw SQL Fragments and `RETURNING`
+## Raw SQL Fragments and RETURNING
 
 Embed dialect-specific aggregate or window expressions inside builder projections with `sql.raw(...)`, and chain `.returning(...)` on `INSERT`, `UPDATE`, or `DELETE` builders to fetch mutated columns in a single round-trip:
 

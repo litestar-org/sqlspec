@@ -53,7 +53,7 @@ Every driver is optional: users install only the extras for the adapters they us
 
 Register a new adapter's driver module(s) in `ADAPTER_DRIVERS` in `tests/unit/test_import_time.py`. The import-contract tests fail for unregistered adapters and check that the adapter raises the driver's own error when the driver is missing, imports with every other driver blocked, and loads no secondary optional module at import. If the driver package itself imports an optional module, list it in `DRIVER_OWNED_OPTIONAL_IMPORTS` with the reason. For development, add the driver to the `extras` dependency group in `pyproject.toml`; dependency groups are not published to PyPI.
 
-## The `apply_driver_features` Contract
+## The apply_driver_features Contract
 
 Each adapter's `core.py` normalizes user-supplied `driver_features` and applies custom JSON serializers or type converters to the adapter's `StatementConfig`:
 

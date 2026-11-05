@@ -148,7 +148,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
 
-class Account(msgspec.Struct, frozen=True, gc=False):
+class Account(msgspec.Struct):
     """Account projection entity."""
 
     id: int

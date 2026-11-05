@@ -1,6 +1,6 @@
 # Oracle Database
 
-`sqlspec.adapters.oracledb` wraps `python-oracledb` (`>= 3.4`) across Oracle Database 11g through 26ai, supporting synchronous (`OracleSyncConfig`) and `asyncio` (`OracleAsyncConfig`) pools, zero-client Thin mode, Instant Client Thick mode, mTLS/PKCS#12 wallets, TNS topologies, Oracle 26ai `VECTOR` and Hybrid RRF search, PyCapsule Arrow streaming, and server-side `DBMS_CLOUD.COPY_DATA`.
+`sqlspec.adapters.oracledb` wraps `python-oracledb` (`>= 3.4`) across Oracle Database 11g through 26ai, supporting synchronous (`OracleSyncConfig`) and `asyncio` (`OracleAsyncConfig`) pools, zero-client Thin mode, Instant Client Thick mode, mTLS/PKCS#12 wallets, TNS topologies, Oracle 26ai `VECTOR` and Hybrid RRF search, zero-copy Arrow streaming, and server-side `DBMS_CLOUD.COPY_DATA`.
 
 ## Install and When to Choose
 
@@ -28,7 +28,7 @@
     poetry add "sqlspec[oracledb]"
     ```
 
-`python-oracledb` runs in pure-Python/Cython **Thin mode** by default with zero Oracle Instant Client dependencies. Enable **Thick mode** only when connecting to legacy encryption suites, Kerberos/Radius OS authentication, or Continuous Query Notification features requiring Oracle Client libraries.
+`python-oracledb` runs in pure-Python **Thin mode** by default with zero Oracle Instant Client dependencies. Enable **Thick mode** only when connecting to legacy encryption suites, Kerberos/Radius OS authentication, or Continuous Query Notification features requiring Oracle Client libraries.
 
 ## Minimal Connection and Pool Setup
 
@@ -115,5 +115,5 @@ See [OracleDB API Reference](/reference/adapters/oracledb/) for `OracleConnectio
 
 - **Version-Aware JSON Storage**: Oracle 21c+ and 26ai bind Python dicts/lists via native binary OSON (`DB_TYPE_JSON`), while pre-21c connections route JSON automatically to `CLOB`/`BLOB` converters using idempotent type handlers.
 - **Oracle 26ai Vectors, HNSW, and Hybrid RRF**: `OracleAsyncADKMemoryStore` and `OracleSyncADKMemoryStore` isolate HNSW `VECTOR_DISTANCE` subqueries so the Cost-Based Optimizer uses approximate vector indexes cleanly, combining vector ranks and Oracle Text `CONTAINS` / `NEAR((...))` scores via single-round-trip Reciprocal Rank Fusion.
-- **Zero-Copy PyCapsule Arrow Streaming**: `session.select_to_arrow(..., return_format="batches")` streams `RecordBatch` chunks directly via `pa.RecordBatch.from_pyarrow(...)` without intermediate row dicts.
+- **Zero-Copy Arrow Streaming**: `session.select_to_arrow(..., return_format="batches")` streams `RecordBatch` chunks directly via `pa.RecordBatch.from_pyarrow(...)` without intermediate row dicts.
 - **Oracle AQ Events**: `EventChannel` supports both transactional table queues and native Oracle Advanced Queuing (`DBMS_AQ`) via `driver_features={"events_backend": "aq"}`.

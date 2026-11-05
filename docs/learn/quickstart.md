@@ -58,7 +58,7 @@ By default, `select` and `select_one` return `dict[str, Any]` rows. Pass `schema
 
 Defining a `msgspec.Struct` model gives you typed attribute access, static type checking, and lower allocation overhead than plain dictionaries.
 
-## Moving from `:memory:` to a Local File
+## Moving from :memory: to a Local File
 
 Replace `":memory:"` with a file path to persist SQLite state across process restarts while keeping the rest of your query code identical:
 

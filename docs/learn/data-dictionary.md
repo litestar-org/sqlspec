@@ -79,7 +79,7 @@ with spec.provide_session(config) as session:
 | `get_schema_ddl()` | `MetadataResult` | Emits ordered `CREATE` or reverse-ordered `DROP` statements across a schema. |
 | `get_table_profile()` | `list[ColumnProfileMetadata]` | Samples live rows to compute nulls, cardinality, and narrower types. |
 | `infer_table_ddl_from_data()` | `DDLResult` | Generates a typed `CREATE TABLE` statement from profiled column values. |
-| `get_version()` | `VersionInfo &#124; None` | Returns database server major, minor, and patch version. |
+| `get_version()` | `VersionInfo or None` | Returns database server major, minor, and patch version. |
 | `get_optimal_type()` | `str` | Resolves optimal DDL types for abstract categories like `json` or `uuid`. |
 
 ### Metadata Record Fields

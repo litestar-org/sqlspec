@@ -17,7 +17,7 @@ flowchart LR
 | `execute(sql, ...)` | `SQLResult` | Returns metadata (`rows_affected`) and row helpers (`.all()`, `.one()`, `.one_or_none()`) |
 | `select(sql, ...)` | `list[dict[str, Any]]` or `list[SchemaT]` | Returns `[]` |
 | `select_one(sql, ...)` | `dict[str, Any]` or `SchemaT` | Raises `NotFoundError` (and raises if multiple rows match) |
-| `select_one_or_none(sql, ...)` | `dict[str, Any] \| SchemaT \| None` | Returns `None` (raises if multiple rows match) |
+| `select_one_or_none(sql, ...)` | `dict[str, Any] or SchemaT or None` | Returns `None` (raises if multiple rows match) |
 | `select_value(sql, ..., value_type=...)` | Scalar value (`Any` or `ValueT`) | Raises `NotFoundError` |
 | `select_value_or_none(sql, ...)` | Scalar value or `None` | Returns `None` |
 | `select_with_total(sql, ...)` | `tuple[list[...], int]` | Returns `([], 0)` alongside the total unpaginated count |
@@ -26,7 +26,7 @@ flowchart LR
 
 Note that there is no `select_value_list` method on driver sessions; to extract a list of values from a single column, call `select(...)` and project the column key from each returned row.
 
-## Inspecting `SQLResult` Metadata
+## Inspecting SQLResult Metadata
 
 While `select*` helpers return rows or scalars directly, `session.execute(...)` returns a `SQLResult` carrying affected row counts, column names, and convenience accessors for `INSERT ... RETURNING` or `UPDATE` statements:
 
@@ -74,7 +74,7 @@ Use `execute_many` for multi-row inserts or updates, `select_value` / `select_va
 --8<-- "docs/examples/querying/batch_operations.py:example"
 ```
 
-## Multi-Step Execution with `StatementStack`
+## Multi-Step Execution with StatementStack
 
 When you want to group ordered DDL, batched DML, and `SELECT` operations into a single logical sequence—taking advantage of native driver pipelining where supported (such as PostgreSQL `asyncpg` or Oracle 23ai/26ai)—compose a `StatementStack` and pass it to `session.execute_stack(stack)`:
 

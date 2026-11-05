@@ -12,7 +12,7 @@ Pass named parameters either as keyword arguments (`status="active"`) or as a di
 
 When the same named parameter (`:status`) appears multiple times in a query, SQLSpec binds the value once by name and expands positional placeholders (`$1`, `?`, `%s`) in occurrence order automatically for drivers that only support positional wire binding.
 
-### Reusable `SQL` Statement Objects
+### Reusable SQL Statement Objects
 
 In addition to passing SQL strings directly to `session.select(...)`, you can construct an explicit `SQL` statement object with pre-bound positional or named parameters and execute or inspect it across sessions:
 
@@ -40,7 +40,7 @@ with spec.provide_session(config) as session:
     assert admins == [{"id": 1, "email": "ada@example.com"}]
 ```
 
-### Batched Parameter Sequences (`execute_many`)
+### Batched Parameter Sequences (execute_many)
 
 `execute_many` accepts either a sequence of positional tuples or a sequence of named parameter dictionaries, compiling the parameter layout once for the entire batch:
 

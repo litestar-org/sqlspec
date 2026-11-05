@@ -15,7 +15,7 @@ SQLSpec ships first-party framework plugins and ecosystem extensions under `sqls
 | **[Sanic](sanic.md)** | `sqlspec.extensions.sanic` | `sqlspec[sanic]` | `db_plugin.get_session(request)` / `ext.dependency` | `manual`, `autocommit`, `autocommit_include_redirect` | — | — | `sqlspec` CLI |
 | **[Dishka](dishka.md)** | `dishka` | `dishka` | `FromDishka[DriverT]` (`Scope.REQUEST`) | Explicit session or service scope | Combines with any adapter store | Combines with `SQLSpecAsyncService` / `SQLSpecSyncService` | Shared `Scope.APP` container across web, CLI, and workers |
 
-## Shared `extension_config` Pattern
+## Shared extension_config Pattern
 
 Framework and extension settings live on each adapter configuration inside `extension_config`, keeping pool settings, statement compilation, and framework integration in one typed declaration:
 

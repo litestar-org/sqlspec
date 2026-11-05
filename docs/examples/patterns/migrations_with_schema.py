@@ -40,17 +40,17 @@ def main() -> tuple[str, str]:
             },
         )
 
+        with config.provide_session() as session:
+            session.execute("CREATE SCHEMA app_schema")
+            session.execute("CREATE SCHEMA admin_schema")
+
+        commands = SyncMigrationCommands(config)
+        commands.init(str(migration_dir), package=True)
+        (migration_dir / "0001_create_users.py").write_text(MIGRATION_SCRIPT, encoding="utf-8")
+        commands.upgrade()
+        # --8<-- [end:example]
+
         try:
-            with config.provide_session() as session:
-                session.execute("CREATE SCHEMA app_schema")
-                session.execute("CREATE SCHEMA admin_schema")
-
-            commands = SyncMigrationCommands(config)
-            commands.init(str(migration_dir), package=True)
-            (migration_dir / "0001_create_users.py").write_text(MIGRATION_SCRIPT, encoding="utf-8")
-            commands.upgrade()
-            # --8<-- [end:example]
-
             with config.provide_session() as session:
                 users_table = str(
                     session.select_value(

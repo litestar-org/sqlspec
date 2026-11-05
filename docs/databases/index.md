@@ -17,7 +17,7 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 | [`aiomysql`](mysql.md) | `sqlspec[aiomysql]` | Async | `%s` (`format`) | `aiomysql.Pool` | Row / `LOAD DATA` | Table Queue | Sessions + Memory (`FULLTEXT`, `LIKE`) |
 | [`pymysql`](mysql.md) | `sqlspec[pymysql]` | Sync | `%s` (`format`) | `PyMySQLConnectionPool` | Row / `LOAD DATA` | Table Queue | Sessions + Memory (`FULLTEXT`, `LIKE`) |
 | [`mysqlconnector`](mysql.md) | `sqlspec[mysql-connector]` | Sync + Async | `%s` (`format`) | `MySQLConnectionPool` / Async Pool | Row / `LOAD DATA` | Table Queue | Sessions + Memory (`FULLTEXT`, `LIKE`) |
-| [`oracledb`](oracledb.md) | `sqlspec[oracledb]` | Sync + Async | `:1` / `:name` | `ConnectionPool` / `AsyncConnectionPool` + DRCP | PyCapsule Batches | Oracle AQ (`DBMS_AQ`) + Table Queue | Sessions + Memory (Oracle 26ai `VECTOR` HNSW, Oracle Text, RRF) |
+| [`oracledb`](oracledb.md) | `sqlspec[oracledb]` | Sync + Async | `:1` / `:name` | `ConnectionPool` / `AsyncConnectionPool` + DRCP | Zero-Copy Batches | Oracle AQ (`DBMS_AQ`) + Table Queue | Sessions + Memory (Oracle 26ai `VECTOR` HNSW, Oracle Text, RRF) |
 | [`mssql_python`](mssql.md) | `sqlspec[mssql-python]` | Sync | `?` (`qmark`) | `MssqlPythonConnectionPool` | Native `BulkCopy` | Table Queue | Sessions + Memory (`LIKE`) |
 | [`pymssql`](mssql.md) | `sqlspec[pymssql]` | Sync | `%(name)s` / `%s` | `PymssqlConnectionPool` | Row | Table Queue | Sessions + Memory (`LIKE`) |
 | [`sybase`](sybase.md) | `sqlspec[sybase]` | Sync | `?` (`qmark`) / `%(name)s` | `SybaseConnectionPool` | Row / Stream | Table Queue | Sessions + Memory (`LIKE`) |
@@ -35,7 +35,7 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 - **[CockroachDB](cockroachdb.md)**: Distributed `cockroach_asyncpg` and `cockroach_psycopg` pools with automatic `40001` serialization retry and `AS OF SYSTEM TIME` follower reads.
 - **[SQLite and Aiosqlite](sqlite.md)**: Zero-dependency local persistence, WAL pragma tuning, shared-memory `:memory:` URIs, and custom SQL functions.
 - **[MySQL and MariaDB](mysql.md)**: Side-by-side setup for `asyncmy`, `pymysql`, `aiomysql`, and `mysql-connector-python`, TLS verification, and `LOAD DATA LOCAL INFILE` bulk loading.
-- **[Oracle Database](oracledb.md)**: Thin and Thick modes, mTLS/PKCS#12 wallets, TNS topologies, Oracle 26ai `VECTOR` + Hybrid RRF search, PyCapsule Arrow streaming, and `DBMS_CLOUD.COPY_DATA`.
+- **[Oracle Database](oracledb.md)**: Thin and Thick modes, mTLS/PKCS#12 wallets, TNS topologies, Oracle 26ai `VECTOR` + Hybrid RRF search, zero-copy Arrow streaming, and `DBMS_CLOUD.COPY_DATA`.
 - **[Microsoft SQL Server](mssql.md)**: Microsoft's official `mssql-python` driver with streaming Arrow `BulkCopy` alongside FreeTDS `pymssql`.
 - **[SAP Adaptive Server Enterprise](sybase.md)**: Sybase ASE 16.0+ via FreeTDS TDS 5.0 (`pymssql`), transactional DDL behavior, and catalog introspection.
 - **[SAP SQL Anywhere](sqlanywhere.md)**: Embedded and client-server SQL Anywhere 12+ via `sqlanydb`, recursive dependency analysis, and automatic rollback on context exit.

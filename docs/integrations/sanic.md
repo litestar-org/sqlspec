@@ -52,7 +52,7 @@ Assign distinct `bind_key`, `session_key`, `connection_key`, and `pool_key` valu
 --8<-- "docs/examples/frameworks/sanic/multi_database.py:example"
 ```
 
-## Pool-Only Mode (`disable_di=True`) and Observability Middleware
+## Pool-Only Mode (disable_di=True) and Observability Middleware
 
 For high-throughput endpoints that only acquire connections on demand rather than opening a request-scoped session on every request, set `disable_di: True` and use `request.app.ctx.<pool_key>` directly:
 

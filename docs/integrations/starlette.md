@@ -44,14 +44,14 @@ Bind multiple async or sync configurations by specifying unique `session_key`, `
 --8<-- "docs/examples/frameworks/starlette/multi_database.py:example"
 ```
 
-## `StarletteConfig` Options
+## StarletteConfig Options
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `session_key` | `str` | `"db_session"` | Key on `request.state` used by `db_plugin.get_session(request, key)`. |
 | `connection_key` | `str` | `"db_connection"` | Key on `request.state` used by `db_plugin.get_connection(request, key)`. |
 | `pool_key` | `str` | `"db_pool"` | Key on `app.state` storing the active connection pool. |
-| `commit_mode` | `"manual" | "autocommit" | "autocommit_include_redirect"` | `"manual"` | Controls automatic commit/rollback middleware behavior based on response status codes. |
+| `commit_mode` | `"manual" / "autocommit" / "autocommit_include_redirect"` | `"manual"` | Controls automatic commit/rollback middleware behavior based on response status codes. |
 | `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic commit. |
 | `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic rollback. |
 | `enable_correlation_middleware` | `bool` | `True` | Propagates `X-Request-ID` / `X-Correlation-ID` headers into `CorrelationContext`. |

@@ -78,7 +78,7 @@ A decimal wider than the dialect's limit raises `SQLBuilderError`. Choose a narr
 
 With `conflict_keys`, staged ASE loads update matching rows, then insert new rows in a separate statement. SQL Anywhere uses `MERGE`; both match the supplied keys. Set `on_conflict="nothing"` to preserve matching rows, or use `exclude_update_columns` to preserve selected columns. Coordinate concurrent loads that use the same keys.
 
-## Unified Object Storage (`StorageRegistry`)
+## Unified Object Storage (StorageRegistry)
 
 `storage_registry` resolves local paths and cloud URIs (`s3://`, `gs://`, `az://`, `file://`) behind a consistent `ObjectStoreProtocol` backed by `local`, `obstore` (`uv add "sqlspec[obstore]"`), or `fsspec` (`uv add "sqlspec[fsspec]"`):
 
@@ -110,14 +110,14 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 
 You can also write an `ArrowResult` directly to any storage destination via `arrow_result.write_to_storage_sync("alias://exports/metrics.parquet")` (or `await arrow_result.write_to_storage_async(...)`). On Windows environments where `obstore` is installed alongside local filesystem paths, pass `backend="local"` when registering local directory aliases so Windows drive prefixes resolve cleanly.
 
-### Streaming `RecordBatch` Coercion & Schema Validation
+### Streaming RecordBatch Coercion & Schema Validation
 
 For datasets larger than available RAM, `SyncStoragePipeline` and `AsyncStoragePipeline` expose `read_arrow_batches(...)` and `write_arrow_batches(...)` alongside `coerce_arrow_batches(...)` and `validate_arrow_schema(...)` from `sqlspec.utils.arrow_helpers`:
 
 - **Bounded-Memory Streaming**: `read_arrow_batches` yields `pyarrow.RecordBatch` chunks lazily from Parquet, Arrow IPC, or JSONL sources without materializing a full `pyarrow.Table`.
 - **Single-Pass Target Schema Coercion**: When `target_schema` (or target table `ColumnMetadata`) is supplied to `load_from_arrow` or `load_from_storage`, SQLSpec validates and coerces incoming batches (`DECIMAL`, `TIMESTAMP`, `UUID`, binary, and `FIXED_SIZE_LIST` vector columns) one `RecordBatch` at a time before streaming to the database driver.
 
-## Schema-Aware Table Fixtures (`.jsonl` / `.json.gz`)
+## Schema-Aware Table Fixtures (.jsonl / .json.gz)
 
 `sqlspec.utils.fixtures` exports and loads per-table `.json`, `.json.gz`, `.jsonl`, and `.jsonl.gz` files while introspecting live column types (`UUID`, ISO timestamps, `Decimal`, base64 `bytes`, `JSON`/`JSONB`, identity columns, and sequence resyncing) via `driver.data_dictionary`:
 

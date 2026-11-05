@@ -42,7 +42,7 @@ SQLSpec provides MySQL and MariaDB adapters sharing unified error translation (`
 
 | Adapter | Extra | Mode | Best Fit |
 | --- | --- | --- | --- |
-| `asyncmy` | `sqlspec[asyncmy]` | Async | Recommended Cython-accelerated `asyncio` driver for MySQL 8+ and MariaDB. |
+| `asyncmy` | `sqlspec[asyncmy]` | Async | Recommended compiled `asyncio` driver for MySQL 8+ and MariaDB. |
 | `pymysql` | `sqlspec[pymysql]` | Sync | Pure-Python synchronous driver with Google Cloud SQL connector support (`sqlspec[cloud-sql]`). |
 | `aiomysql` | `sqlspec[aiomysql]` | Async | Pure-Python `asyncio` driver built over `PyMySQL` for PyPy or pure-Python environments. |
 | `mysqlconnector` | `sqlspec[mysql-connector]` | Sync + Async | Official Oracle MySQL Connector/Python supporting both sync pools and native async connections. |

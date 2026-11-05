@@ -26,7 +26,7 @@ When constructed with `config=`, a service checks out a short-lived pooled sessi
 
 In real-world architectures, services follow either a bounded-session or request-scoped lifetime pattern:
 
-### Bounded-Session Domain Services (`config=` + `provide_session()`)
+### Bounded-Session Domain Services (config= + provide_session())
 
 When a service coordinates external asynchronous I/O (such as password hashing, third-party REST APIs, or LLM embeddings), do not keep a database connection checked out during the entire operation. Instead, initialize the service with `config=` and check out short-lived sessions only when executing database commands:
 
@@ -57,7 +57,7 @@ When a service coordinates external asynchronous I/O (such as password hashing, 
     from sqlspec.service import SQLSpecAsyncService
 
 
-    class Customer(msgspec.Struct, frozen=True, gc=False):
+    class Customer(msgspec.Struct):
         """Customer entity representation."""
 
         id: int
@@ -117,7 +117,7 @@ When a service coordinates external asynchronous I/O (such as password hashing, 
                 await session.execute_stack(stack)
     ```
 
-### Request-Scoped Driver Services (`session=driver`)
+### Request-Scoped Driver Services (session=driver)
 
 When using dependency injection frameworks like Dishka or Litestar where a driver connection is already checked out for the lifetime of an HTTP request, inject the `driver` directly into `SQLSpecAsyncService(session)`:
 
@@ -147,7 +147,7 @@ When using dependency injection frameworks like Dishka or Litestar where a drive
     from sqlspec.service import SQLSpecAsyncService
 
 
-    class Product(msgspec.Struct, frozen=True, gc=False):
+    class Product(msgspec.Struct):
         """Product domain entity."""
 
         id: int

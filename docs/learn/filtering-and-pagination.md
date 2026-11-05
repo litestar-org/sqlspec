@@ -2,14 +2,14 @@
 
 List endpoints in APIs routinely combine pagination, search, date-range bounds, collection membership, and multi-column sorting. SQLSpec provides composable `StatementFilter` value objects in `sqlspec.core` along with offset and keyset cursor pagination helpers.
 
-## Built-In `StatementFilter` Classes
+## Built-In StatementFilter Classes
 
 Pass any combination of `StatementFilter` instances as positional arguments to `session.select(...)`, `session.select_with_total(...)`, or `service.paginate(...)`:
 
 | Filter Class | Appended SQL Semantics | Key Arguments |
 | --- | --- | --- |
 | `LimitOffsetFilter` | `LIMIT :limit OFFSET :offset` (or `FETCH FIRST` on Oracle/Db2/MSSQL) | `limit`, `offset` |
-| `OrderByFilter` | `ORDER BY <field> ASC\|DESC [NULLS FIRST\|LAST]` | `field_name`, `sort_order="asc"`, `nulls=None` |
+| `OrderByFilter` | `ORDER BY <field> ASC / DESC [NULLS FIRST / LAST]` | `field_name`, `sort_order="asc"`, `nulls=None` |
 | `SearchFilter` | Case-sensitive or case-insensitive `LIKE` / `ILIKE` across one or more columns | `field_name`, `value`, `ignore_case=False` |
 | `BeforeAfterFilter` | `< :before` and/or `> :after` timestamp range bounds (`OnBeforeAfterFilter` for inclusive `<=`/`>=`) | `field_name`, `before=None`, `after=None` |
 | `InCollectionFilter` | `WHERE <field> IN (:p1, ...)` (`NotInCollectionFilter` for `NOT IN`) | `field_name`, `values` |
@@ -138,7 +138,7 @@ from sqlspec.extensions.litestar.providers import (
 )
 
 
-class Product(msgspec.Struct, frozen=True, gc=False):
+class Product(msgspec.Struct):
     """Typed product entity."""
 
     id: int

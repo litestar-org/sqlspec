@@ -21,7 +21,7 @@ Set `extension_config["events"]["backend"]` according to your delivery and durab
 | `"aq"` | `oracledb` (sync & async) | Durable Oracle Advanced Queuing table | Native `DBMS_AQ` enqueue/dequeue in `python-oracledb` Thin mode | Opt-in on Oracle 21c+ / 26ai |
 | `"txeventq"` | `oracledb` (sync & async) | Durable Oracle Transactional Event Queue | Native high-throughput partitioned TxEventQ in Thin mode | Opt-in on Oracle 21c+ / 26ai |
 
-## Configuring `EventsConfig` and Publishing Events
+## Configuring EventsConfig and Publishing Events
 
 Configure the `events` extension on your database config, provision the queue table when using a durable table backend (`notify_queue` or `poll_queue`), and publish/consume events through `spec.event_channel(config)`:
 
@@ -68,11 +68,11 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-### Batch Publication (`publish_many`)
+### Batch Publication (publish_many)
 
 Both `AsyncEventChannel` and `SyncEventChannel` provide `publish_many(events)` where each item is a `(channel, payload, metadata)` tuple. On `poll_queue` and `notify_queue`, SQLSpec bulk-inserts all rows in a single publisher transaction; on `notify_queue`, it emits a single compact wakeup marker (`marker_id` + `batch_size`) per channel in the same transaction so consumers drain the batch immediately.
 
-## PostgreSQL `ListenerHub` and Pooler Routing
+## PostgreSQL ListenerHub and Pooler Routing
 
 On PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`), `notify` and `notify_queue` manage a single persistent `LISTEN` connection per backend instance via `ListenerHub`:
 
@@ -104,7 +104,7 @@ config = AsyncpgConfig(
 )
 ```
 
-### Checking PostgreSQL `NOTIFY` Payload Budgets (`7,999` Bytes)
+### Checking PostgreSQL NOTIFY Payload Budgets (7,999 Bytes)
 
 PostgreSQL caps `NOTIFY` payloads at `7,999` UTF-8 bytes across the full encoded event envelope (`event_id`, `payload`, `metadata`, and timestamp). Use `fits_notify_payload` and `measure_notify_payload` before publishing to a transient `notify` channel, or use `notify_queue` so arbitrary-sized payloads live in the durable queue table while `NOTIFY` carries only a compact wakeup marker.
 

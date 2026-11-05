@@ -1,6 +1,6 @@
 # PostgreSQL — asyncpg
 
-`sqlspec.adapters.asyncpg` wraps MagicStack's Cython `asyncpg` driver, delivering low-latency binary-protocol execution, managed `asyncio` connection pooling, Cloud SQL and AlloyDB IAM connectors, `LISTEN/NOTIFY` events, and `pgvector` / ParadeDB ADK stores.
+`sqlspec.adapters.asyncpg` wraps MagicStack's compiled `asyncpg` driver, delivering low-latency binary-protocol execution, managed `asyncio` connection pooling, Cloud SQL and AlloyDB IAM connectors, `LISTEN/NOTIFY` events, and `pgvector` / ParadeDB ADK stores.
 
 ## Install and When to Choose
 
@@ -76,6 +76,6 @@ See [AsyncPG API Reference](/reference/adapters/asyncpg/) for the complete `Asyn
 
 - **Untyped Parameters Inside Polymorphic Functions**: Because `asyncpg` prepares statements over PostgreSQL's binary protocol, untyped parameters inside functions like `jsonb_build_object(:k, :v)` require an explicit SQL cast such as `CAST(:k AS text)` so PostgreSQL can resolve the parameter OID.
 - **Binding JSON String Primitives**: When `enable_json_codecs=True` (default), `asyncpg`'s JSON encoder treats Python `dict`, `list`, `int`, and `bool` values by serializing them with `json_serializer`, while treating bare Python `str` values as pre-serialized JSON text. If you store a bare JSON string literal (rather than an object or array) into a `jsonb` column, pass `to_json("value")` so it is sent over the wire as valid quoted JSON (`'"value"'`).
-- **`StatementStack` Execution**: `asyncpg`'s Cython protocol forbids concurrent overlapping operations on a single connection; `session.execute_stack(stack)` executes steps sequentially against cached prepared statements and records `sequential_prepared` in observer telemetry.
+- **`StatementStack` Execution**: `asyncpg`'s binary protocol forbids concurrent overlapping operations on a single connection; `session.execute_stack(stack)` executes steps sequentially against cached prepared statements and records `sequential_prepared` in observer telemetry.
 - **Binary `COPY` and Arrow Ingest**: `load_from_arrow` streams Arrow batches into PostgreSQL via binary `COPY ... FROM STDIN` for high-throughput bulk loads.
 - **Row-Locking with CTEs**: When combining `FOR UPDATE SKIP LOCKED` with a parameter CTE (`FROM jobs, ctx`), qualify the target table explicitly (`FOR UPDATE OF jobs SKIP LOCKED`) because PostgreSQL cannot row-lock a CTE alias.

@@ -331,7 +331,7 @@ important operational fixes.
 
 **Changed:**
 
-* Oracle `select_to_arrow(..., return_format="batches")` now streams PyCapsule
+* Oracle `select_to_arrow(..., return_format="batches")` now streams native Arrow
   `RecordBatch` chunks directly via `pa.RecordBatch.from_pyarrow(odf)` without
   converting full tables into memory.
   ([#849](https://github.com/litestar-org/sqlspec/pull/849))

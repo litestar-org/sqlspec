@@ -43,7 +43,7 @@ flowchart LR
 | **Long-Term Memory Store** | `SQLSpecMemoryService` | `BaseAsyncADKMemoryStore` / `BaseSyncADKMemoryStore` | Indexes conversation turns and tool outputs into `adk_memory_entries` with substring (`simple`), full-text (`fts`), vector (`vector`), and Reciprocal Rank Fusion (`hybrid`) search. |
 | **Artifact Store** | `SQLSpecArtifactService` | `BaseAsyncADKArtifactStore` / `BaseSyncADKArtifactStore` | Stores versioned binary and text artifacts scoped by `(app_name, user_id, session_id, filename, version)` with `user:`-prefixed cross-session sharing and `artifact://` resolution. |
 
-## Configuring `extension_config["adk"]`
+## Configuring extension_config["adk"]
 
 Configure table names, full-text indexing, vector dimensions, and optional owner foreign keys on any adapter via `extension_config["adk"]` (`ADKConfig`):
 
@@ -51,7 +51,7 @@ Configure table names, full-text indexing, vector dimensions, and optional owner
 --8<-- "docs/examples/extensions/adk/backend_config.py:example"
 ```
 
-### Key `ADKConfig` Options
+### Key ADKConfig Options
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -62,7 +62,7 @@ Configure table names, full-text indexing, vector dimensions, and optional owner
 | `memory_use_fts` | `bool` | `False` | Enables native full-text search indexing (`FTS5` on SQLite, `tsvector`/GIN or `ParadeDB` BM25 on PostgreSQL, `CONTAINS` on Oracle Text, `FULLTEXT` on MySQL/MSSQL, `SEARCH` on Spanner). |
 | `memory_use_vector` | `bool` | `False` | Adds vector embedding storage and index DDL (`pgvector`, Oracle 26ai `VECTOR`, Spanner `ARRAY<FLOAT32>`, DuckDB `FLOAT[N]`). |
 | `memory_vector_dimensions` | `int` | `768` | Embedding vector dimensionality when `memory_use_vector=True`. |
-| `owner_id_column` | `str | None` | `None` | Optional DDL definition (for example, `"tenant_id UUID NOT NULL REFERENCES tenants(id)"`) linking sessions to an application table. |
+| `owner_id_column` | `str or None` | `None` | Optional DDL definition (for example, `"tenant_id UUID NOT NULL REFERENCES tenants(id)"`) linking sessions to an application table. |
 
 ## Persisting Sessions and Events
 

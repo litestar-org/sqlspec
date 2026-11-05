@@ -2,9 +2,9 @@
 
 By default, `select`, `select_one`, and `select_one_or_none` return `dict[str, Any]` rows. Passing `schema_type=` hydrates rows directly into typed Python structures while preserving static type inference in `mypy` and `pyright`.
 
-## Mapping Rows to `msgspec.Struct`
+## Mapping Rows to msgspec.Struct
 
-`msgspec.Struct` is the fastest and lowest-memory target for typed row hydration in SQLSpec (`uv add "sqlspec[msgspec]"`). Declaring `frozen=True, gc=False` omits CPython cyclic garbage-collection headers on every row object:
+`msgspec.Struct` is the fastest and lowest-memory target for typed row hydration in SQLSpec (`uv add "sqlspec[msgspec]"`):
 
 ```{ .python title="docs/examples/querying/schema_mapping.py" }
 --8<-- "docs/examples/querying/schema_mapping.py:example"
@@ -38,7 +38,7 @@ All supported schema types plug into the exact same `schema_type=` keyword argum
     import msgspec
 
 
-    class AccountRow(msgspec.Struct, frozen=True, gc=False):
+    class AccountRow(msgspec.Struct):
         id: int
         email: str
         is_active: bool = True
@@ -91,6 +91,6 @@ Schema mapping matches SQL result column names to schema field names:
 
 ## Recap
 
-- Start with `msgspec.Struct(..., frozen=True, gc=False)` for fast, immutable row objects, or `TypedDict` when you want static types with zero runtime allocation beyond the driver dictionary.
+- Start with `msgspec.Struct` for fast, typed row objects, or `TypedDict` when you want static types with zero runtime allocation beyond the driver dictionary.
 - Pass `schema_type=` directly to `select`, `select_one`, `select_one_or_none`, `select_with_total`, or `SQLResult.all(schema_type=...)`.
 - Use explicit `AS field_name` SQL aliases for calculated columns so projections remain decoupled from underlying expression text.

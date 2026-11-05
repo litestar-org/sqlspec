@@ -28,7 +28,7 @@
     poetry add sqlspec dishka
     ```
 
-## Provider Pattern (`Scope.APP` + `Scope.REQUEST`)
+## Provider Pattern (Scope.APP + Scope.REQUEST)
 
 Register `SQLSpec` and your adapter `*Config` at `Scope.APP` (created once per process, closing the pool when the application container closes) and yield the driver session from `sqlspec.provide_session(config)` at `Scope.REQUEST`:
 

@@ -13,7 +13,7 @@ SQLSpec separates **adapter configuration** (connection credentials, pool bounds
 
 You can open sessions either through the `SQLSpec` registry (`spec.provide_session(config)`) or directly on any config object (`config.provide_session()`).
 
-## Multi-Database Registration and `bind_key`
+## Multi-Database Registration and bind_key
 
 A single `SQLSpec` instance can coordinate multiple databases—such as an OLTP primary database alongside an analytical or audit store—and share loaded `.sql` files across them:
 
@@ -34,7 +34,7 @@ A single `SQLSpec` instance can coordinate multiple databases—such as an OLTP 
 
 When integrating with the CLI or web frameworks, assign `bind_key="primary"` and `bind_key="analytics"` on each config so migrations (`sqlspec --bind-key analytics upgrade`) and framework dependency keys (`db_session`, `analytics_session`) address each database unambiguously.
 
-## Production Composition Root (`app/config.py`) and Settings
+## Production Composition Root (app/config.py) and Settings
 
 In production web applications and background worker services, isolate connection settings and registry assembly into a dedicated composition root module (`app/config.py`). This pattern keeps configuration evaluation lazy (using PEP 562 `__getattr__`), separates short-lived web requests from long-running background tasks, and registers CLI migrations directly in `pyproject.toml`.
 
@@ -150,7 +150,7 @@ Point the CLI migration runner directly to `app.config.db` in `pyproject.toml`:
 config = "app.config.db"
 ```
 
-## Customizing `StatementConfig`
+## Customizing StatementConfig
 
 Every adapter supplies a dialect-tuned `StatementConfig` automatically. Pass `statement_config=` on the adapter config when you want to override caching, parameter styles, or SQLGlot optimization defaults across all sessions created from that config:
 

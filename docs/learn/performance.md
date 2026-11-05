@@ -2,7 +2,7 @@
 
 SQLSpec is engineered so SQL-first convenience adds minimal overhead above raw C/Rust database drivers. Understanding how statement caching, compiled wheels, typed hydration, and columnar fetches interact helps you get peak throughput across OLTP and analytical workloads.
 
-## Per-Config Statement Caching (`StatementCacheHolder`)
+## Per-Config Statement Caching (StatementCacheHolder)
 
 Every adapter config (`AsyncpgConfig`, `SqliteConfig`, `OracleAsyncConfig`, etc.) owns a thread-safe `StatementCacheHolder` shared across all sessions opened via `config.provide_session()`.
 
@@ -59,7 +59,7 @@ with spec.provide_session(config) as session:
         assert len(rows) == 1
 ```
 
-## Pre-Compiled `mypyc` Wheels and `sqlglot[c]`
+## Pre-Compiled mypyc Wheels and sqlglot[c]
 
 SQLSpec compiles `162` hot-path modules—covering `core`, `driver`, `builder`, `dialects`, `migrations`, `data_dictionary`, `storage`, `service`, `observability`, `utils`, `extensions`, and adapter cores/pools/type converters—to native C extensions via `mypyc`.
 
@@ -89,7 +89,7 @@ Install the `mypyc` and `performance` extras in production deployments so SQLGlo
     poetry add "sqlspec[mypyc,performance]"
     ```
 
-## Fast Typed Hydration with `msgspec.Struct`
+## Fast Typed Hydration with msgspec.Struct
 
 When mapping rows into Python objects, `msgspec.Struct(..., frozen=True, gc=False)` avoids per-row Pydantic validator overhead and omits CPython's `PyGC_Head` cyclic garbage-collection tracking header:
 

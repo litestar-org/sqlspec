@@ -105,7 +105,7 @@ For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-
 
 | `driver_features` Key | Type | Description |
 | --- | --- | --- |
-| `pooler_mode` | `"session" \| "transaction" \| "statement"` | Disables protocol-level prepared statement caching automatically in `"transaction"` and `"statement"` modes (PgBouncer, Supavisor, Odyssey). |
+| `pooler_mode` | `"session" / "transaction" / "statement"` | Disables protocol-level prepared statement caching automatically in `"transaction"` and `"statement"` modes (PgBouncer, Supavisor, Odyssey). |
 | `direct_dsn` | `str` | Unpooled PostgreSQL DSN used by `config.derive_direct_config()` so DDL migrations and `ListenerHub` (`LISTEN/NOTIFY`) bypass transaction poolers. |
 | `enable_alloydb_columnar` | `bool` | Enables `google_columnar_engine.enable_columnar_scan = 'on'` on Google Cloud AlloyDB connections or transaction-locally via `SET LOCAL`. |
 | `enable_pgvector` | `bool` | Registers `pgvector` distance operators (`<->`, `<=>`, `<#>`) and vector codecs when available. |
@@ -114,7 +114,7 @@ For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-
 | `auth_token_provider` | `Callable` | Sync or async callable invoked on connection creation to mint short-lived IAM authentication tokens (Google Cloud SQL IAM, AlloyDB IAM, AWS RDS IAM, Azure AD) without restarting pools. |
 | `json_serializer` / `json_deserializer` | `Callable` | Customizes `json` and `jsonb` wire encoding (defaults to SQLSpec's centralized `msgspec` serializers). |
 
-### Running Behind PgBouncer (`pooler_mode` + `direct_dsn`)
+### Running Behind PgBouncer (pooler_mode + direct_dsn)
 
 Transaction-mode poolers multiplex backend server connections across clients after each transaction commits, breaking session-scoped prepared statements, advisory locks, and `LISTEN/NOTIFY` channels. Configure `pooler_mode="transaction"` alongside `direct_dsn`:
 

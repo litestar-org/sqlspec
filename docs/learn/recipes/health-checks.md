@@ -25,7 +25,7 @@ Execute a lightweight scalar query inside a bounded timeout and return structure
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
 
 
-    class DatabaseHealth(msgspec.Struct, frozen=True, gc=False):
+    class DatabaseHealth(msgspec.Struct):
         bind_key: str
         healthy: bool
         latency_ms: float
@@ -68,7 +68,7 @@ Execute a lightweight scalar query inside a bounded timeout and return structure
     from sqlspec.adapters.sqlite import SqliteConfig
 
 
-    class DatabaseHealth(msgspec.Struct, frozen=True, gc=False):
+    class DatabaseHealth(msgspec.Struct):
         bind_key: str
         healthy: bool
         latency_ms: float

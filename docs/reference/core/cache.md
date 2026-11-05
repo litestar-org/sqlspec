@@ -26,7 +26,7 @@ from sqlspec.core import (
 
 Coordinated L1/L2 LRU caching (`StatementCacheHolder`, `QueryCache`, `NamespacedCache`) and deterministic structural hashing for SQL statements, SQLGlot AST expressions, and parameter bindings. See the [Performance Guide](../../learn/performance.md) for tuning guidance.
 
-## Per-Config Fast-Path Cache (`L1`)
+## Per-Config Fast-Path Cache (L1)
 
 ::: sqlspec.core.cache.StatementCacheHolder
     options:
@@ -40,7 +40,7 @@ Coordinated L1/L2 LRU caching (`StatementCacheHolder`, `QueryCache`, `Namespaced
     options:
       heading_level: 3
 
-## Cache Configuration & Statistics (`L2`)
+## Cache Configuration & Statistics (L2)
 
 ::: sqlspec.core.cache.CacheConfig
     options:

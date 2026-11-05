@@ -35,7 +35,7 @@ def db_config(tmp_path: Path) -> Iterator[SqliteConfig]:
 
 When testing `:memory:` SQLite across multiple pooled connections or threads, use a shared-cache URI (`"file:test_mem?mode=memory&cache=shared"` with `uri=True`) so every pooled checkout sees the same in-memory schema.
 
-## Containerized Dialect Tests with `pytest-databases`
+## Containerized Dialect Tests with pytest-databases
 
 Dialect-specific features—such as PostgreSQL `JSONB` / `pgvector` / `LISTEN/NOTIFY`, Oracle 26ai `VECTOR`, Spanner `INTERLEAVE`, or DuckDB Parquet pipelines—should be verified against real database containers using [`pytest-databases`](https://github.com/litestar-org/pytest-databases):
 
