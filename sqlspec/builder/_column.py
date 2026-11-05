@@ -178,13 +178,12 @@ class _ScalarExpressionMixin:
         )
 
     def not_any_(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL <> ANY(...) clause."""
-        converted_values = [self._convert_value(v) for v in values]
-        return ColumnExpression(
-            exp.NEQ(
-                this=self._expression, expression=exp.Any(this=exp.Paren(this=exp.Array(expressions=converted_values)))
-            )
-        )
+        """SQL NOT (column = ANY(...)) clause.
+
+        ``column <> ANY(...)`` is true when any element differs, so the negation
+        wraps the ``= ANY`` comparison, matching ``NotAnyCollectionFilter``.
+        """
+        return ColumnExpression(exp.Not(this=self.any_(values)._expression))
 
     def cast(self, data_type: str) -> "FunctionColumn":
         """SQL CAST() function."""

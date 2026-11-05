@@ -74,7 +74,7 @@ def test_column_any_renders_operand_array() -> None:
 
 def test_column_not_any_renders_operand_array() -> None:
     rendered = Column("status").not_any_(["a", "b"]).sqlglot_expression.sql(dialect="postgres")
-    assert rendered == "status <> ANY(ARRAY['a', 'b'])"
+    assert rendered == "NOT status = ANY(ARRAY['a', 'b'])"
 
 
 def test_builder_expressions_satisfy_required_sqlglot_arguments() -> None:

@@ -2215,3 +2215,22 @@ def test_column_expression_boolean_combinators_preserve_precedence(
     for index, name in enumerate(built.parameters, start=1):
         rendered = rendered.replace(f":{name}", f":p{index}")
     assert rendered.endswith(f"WHERE {expected_where}")
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected_condition"),
+    [(None, "c = ANY(ARRAY(:c_any_1, :c_any_2))"), ("postgres", "c = ANY(ARRAY[%(c_any_1)s, %(c_any_2)s])")],
+    ids=["default", "postgres"],
+)
+def test_where_any_with_values_renders_array_operand(dialect: "str | None", expected_condition: str) -> None:
+    query = sql.select("*", dialect=dialect).from_("t").where_any("c", [1, 2])
+    query.enable_optimization = False
+    rendered = " ".join(query.build().sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+    assert rendered.endswith(f"WHERE {expected_condition}")
+
+
+def test_where_not_any_negates_any_comparison() -> None:
+    query = sql.select("*").from_("t").where_not_any("c", [1, 2])
+    query.enable_optimization = False
+    rendered = " ".join(query.build().sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+    assert rendered.endswith("WHERE NOT c = ANY(ARRAY(:c_not_any_1, :c_not_any_2))")
