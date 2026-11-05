@@ -105,29 +105,32 @@ DRIVER_FEATURE_LIFECYCLE_HOOKS: dict[str, str | None] = {
 class LifecycleConfig(TypedDict):
     """Lifecycle callback hooks for database adapters.
 
-    Each hook accepts a list of callables to support multiple handlers.
+    Each hook accepts a list of callables receiving a single
+    :data:`~sqlspec.observability.LifecycleContext` (``dict[str, Any]``)
+    mapping containing base keys (``config``, ``bind_key``,
+    ``correlation_id``) plus event-specific payload keys.
     """
 
-    on_connection_create: NotRequired[list[Callable[[Any], None]]]
-    """Callbacks invoked immediately after a raw driver connection is established."""
-    on_connection_destroy: NotRequired[list[Callable[[Any], None]]]
-    """Callbacks invoked before closing or destroying a driver connection."""
-    on_pool_create: NotRequired[list[Callable[[Any], None]]]
-    """Callbacks invoked after the adapter connection pool is initialized."""
-    on_pool_destroying: NotRequired[list[Callable[[Any], Any]]]
-    """Callbacks invoked immediately before shutting down the connection pool."""
-    on_pool_destroy: NotRequired[list[Callable[[Any], None]]]
-    """Callbacks invoked after the connection pool has finished closing."""
-    on_session_start: NotRequired[list[Callable[[Any], None]]]
-    """Callbacks invoked when a driver session context begins."""
-    on_session_end: NotRequired[list[Callable[[Any], None]]]
-    """Callbacks invoked when a driver session context exits."""
-    on_query_start: NotRequired[list[Callable[[str, dict[str, Any]], None]]]
-    """Callbacks invoked before statement execution with a ``LifecycleContext`` mapping (``sql``, ``parameters``, ``driver``, ``operation``)."""
-    on_query_complete: NotRequired[list[Callable[[str, dict[str, Any], Any], None]]]
-    """Callbacks invoked on completion with a ``LifecycleContext`` mapping (including ``rows_affected``, ``sql``, ``parameters``, ``driver``, ``operation``)."""
-    on_error: NotRequired[list[Callable[[Exception, str, dict[str, Any]], None]]]
-    """Callbacks invoked on query failure with a ``LifecycleContext`` mapping (including ``exception``, ``sql``, ``parameters``, ``driver``, ``operation``)."""
+    on_connection_create: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked after a raw driver connection is created (``connection`` key)."""
+    on_connection_destroy: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked before closing or destroying a driver connection (``connection`` key)."""
+    on_pool_create: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked after the adapter connection pool is initialized (``pool`` key)."""
+    on_pool_destroying: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked immediately before shutting down the connection pool (``pool`` key)."""
+    on_pool_destroy: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked after the connection pool has finished closing (``pool`` key)."""
+    on_session_start: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked when a driver session context begins (``session`` key)."""
+    on_session_end: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked when a driver session context exits (``session`` key)."""
+    on_query_start: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked before statement execution with ``LifecycleContext`` keys ``sql``, ``parameters``, ``driver``, ``operation``, ``is_many``, and ``is_script``."""
+    on_query_complete: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked on completion with ``LifecycleContext`` keys ``sql``, ``parameters``, ``driver``, ``operation``, ``is_many``, ``is_script``, and ``rows_affected``."""
+    on_error: NotRequired[list[Callable[[dict[str, Any]], Any]]]
+    """Callbacks invoked on query failure with ``LifecycleContext`` keys ``exception``, ``sql``, ``parameters``, ``driver``, ``operation``, ``is_many``, and ``is_script``."""
 
 
 class SQLTemplateOverride(TypedDict):
