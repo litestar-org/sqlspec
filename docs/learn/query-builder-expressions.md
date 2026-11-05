@@ -4,7 +4,7 @@ Compose typed aggregate, scalar, conditional, window, and vector search expressi
 
 ## Aggregations and GROUP BY Extensions
 
-Aggregate helpers are available on `sql` (`sql.count()`, `sql.count_distinct()`, `sql.sum()`, `sql.avg()`, `sql.min()`, `sql.max()`) and on `Column` (`col.count()`, `col.count_distinct()`, `col.sum()`, `col.avg()`, `col.min()`, `col.max()`, `Column.count_all()`). Group rows with `.group_by(...)`, `.group_by_rollup(...)`, `.group_by_cube(...)`, `.group_by_grouping_sets(...)`, or `sql.rollup()` / `sql.cube()` / `sql.grouping_sets()`, and filter aggregates with `.having(...)`. The `# SQL:` comments omit identifier quoting and table qualification, as on the [SELECT page](query-builder.md#inspecting-and-executing-built-queries):
+Aggregate helpers are available on `sql` (`sql.count()`, `sql.count_distinct()`, `sql.sum()`, `sql.avg()`, `sql.min()`, `sql.max()`) and on `Column` (`col.count()`, `col.count_distinct()`, `col.sum()`, `col.avg()`, `col.min()`, `col.max()`, `Column.count_all()`). Group rows with `.group_by(...)`, `.group_by_rollup(...)`, `.group_by_cube(...)`, `.group_by_grouping_sets(...)`, or `sql.rollup()` / `sql.cube()` / `sql.grouping_sets()`, and filter aggregates with `.having(...)`, which also accepts `.where()`-style tuples (`("COUNT(*)", ">", 5)` renders `COUNT(*) > :count`). The `# SQL:` comments omit identifier quoting and table qualification, as on the [SELECT page](query-builder.md#inspecting-and-executing-built-queries):
 
 ```python
 from sqlspec import sql
@@ -119,7 +119,7 @@ Call `Column.vector_distance(query_vec, metric=...)` (`"euclidean"`, `"cosine"`,
 | `bigquery` | `euclidean`, `cosine`, `inner_product` | `COSINE_DISTANCE(embedding, [0.1, 0.2, 0.3])` |
 | No dialect | All four | `VECTOR_DISTANCE(embedding, ARRAY(0.1, 0.2, 0.3), 'COSINE')` |
 
-Metrics without a native form for a dialect fall back to the generic `VECTOR_DISTANCE(...)` call.
+Metrics without a native form for a dialect fall back to the generic `VECTOR_DISTANCE(...)` call. Building a vector distance for `tsql` raises `SQLBuilderError`, because SQL Server's `VECTOR_DISTANCE` takes a different argument order and typed `VECTOR` inputs.
 
 For Oracle 26ai, `build_oracle_hnsw_subquery()` isolates `ORDER BY VECTOR_DISTANCE(...) FETCH APPROX FIRST :top_k ROWS ONLY` in a derived table and assigns `ROWNUM` in the outer query, because `ROW_NUMBER() OVER (...)` in the same query block disables the `VECTOR INDEX HNSW SCAN` plan. `build_oracle_hybrid_rrf_sql()` returns a SQL string that fuses HNSW vector search with Oracle Text `CONTAINS(..., 1) > 0` / `SCORE(1)` through Reciprocal Rank Fusion:
 

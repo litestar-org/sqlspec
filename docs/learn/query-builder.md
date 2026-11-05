@@ -60,13 +60,13 @@ Values compared through `Column` operators bind as generated parameters (`:where
 | Ordering | `col < 10`, `col <= 10`, `col > 0`, `col >= 0` | `col < :p`, `col <= :p`, `col > :p`, `col >= :p` |
 | Logical | `&` for AND, the pipe operator for OR, `~` for NOT | `a = :p AND b = :p`, `a = :p OR b = :p`, `NOT ...` |
 | Membership | `col.in_(["a", "b"])`, `col.not_in(["a", "b"])` | `col IN (:p1, :p2)`, `NOT col IN (:p1, :p2)` |
-| Array Any | `col.any_(["a", "b"])`, `col.not_any_(["a", "b"])` | `col = ANY(ARRAY(:p1, :p2))`, `col <> ANY(ARRAY(:p1, :p2))` |
+| Array Any | `col.any_(["a", "b"])`, `col.not_any_(["a", "b"])` | `col = ANY(ARRAY(:p1, :p2))`, `col <> ALL(ARRAY(:p1, :p2))` |
 | Range and Null | `col.between(1, 5)`, `col.is_null()`, `col.is_not_null()` | `BETWEEN` bounds, `col IS NULL`, `NOT col IS NULL` |
 | Pattern | `col.like("%x%")`, `col.not_like(...)`, `col.ilike(...)`, `col.not_ilike(...)` | `col LIKE :p`, `NOT col LIKE :p`, `col ILIKE :p` |
 | Sort and Alias | `col.asc(nulls="last")`, `col.desc(nulls="first")`, `col.alias("n")`, `col.as_("n")` | `col ASC NULLS LAST`, `col AS n` |
 
 !!! warning "Operator precedence and grouping"
-    Python evaluates `&`, `|`, and `~` before `==`, `<`, or `>=`, so wrap every comparison in parentheses. Never use `and` / `or`; they raise `TypeError` on column expressions. Put each `OR` group in its own `.where()` call so the builder wraps it in parentheses:
+    Python evaluates `&`, `|`, and `~` before `==`, `<`, or `>=`, so wrap every comparison in parentheses. Never use `and` / `or`; they raise `TypeError` on column expressions. `&` parenthesizes `OR` operands and `~` parenthesizes `AND` / `OR` operands, so the Python grouping carries into SQL:
 
     ```python
     from sqlspec import sql
@@ -77,8 +77,7 @@ Values compared through `Column` operators bind as generated parameters (`:where
         sql
         .select("id")
         .from_("users")
-        .where(age >= 18)
-        .where((role == "admin") | (role == "owner"))
+        .where((age >= 18) & ((role == "admin") | (role == "owner")))
     )
     # SQL: SELECT id FROM users WHERE age >= :where_param_1
     # SQL: AND (role = :where_param_2 OR role = :where_param_3)
@@ -117,12 +116,12 @@ filtered = (
 | `.where_like_any(c, ps)` | None | `c LIKE :c OR c LIKE :c_1` |
 | `.where_is_null(c)` / `.where_is_not_null(c)` | `.or_where_is_null(c)` / `.or_where_is_not_null(c)` | `c IS NULL` / `NOT c IS NULL` |
 | `.where_in(c, vs)` / `.where_not_in(c, vs)` | `.or_where_in(c, vs)` / `.or_where_not_in(c, vs)` | `c IN (:c_1, :c_2)` / `NOT c IN (...)`; also accepts a `Select` subquery |
-| `.where_any(c, vs)` / `.where_not_any(c, vs)` | `.or_where_any(c, vs)` / `.or_where_not_any(c, vs)` | `c = ANY (...)` / `c <> ANY (...)` |
+| `.where_any(c, vs)` / `.where_not_any(c, vs)` | `.or_where_any(c, vs)` / `.or_where_not_any(c, vs)` | `c = ANY(ARRAY(:c_any_1, ...))` / `c <> ALL(ARRAY(...))` |
 | `.where_exists(subq)` / `.where_not_exists(subq)` | `.or_where_exists(subq)` / `.or_where_not_exists(subq)` | `EXISTS (SELECT ...)` |
 
 ## Joins and Time-Travel Queries
 
-Chain `.inner_join()`, `.left_join()`, `.right_join()`, `.full_join()`, `.cross_join()`, `.lateral_join()`, `.left_lateral_join()`, or `.cross_lateral_join()`, or build join clauses with `sql.inner_join_`, `sql.left_join_`, and `sql.lateral_join_`. Pass `as_of` to `.from_()` or call `.as_of()` on a join builder for time-travel reads. The timestamp renders as a literal: `FOR SYSTEM_TIME AS OF` on BigQuery, `AS OF TIMESTAMP` on Oracle, `AS OF SYSTEM TIME` on CockroachDB, and `AT (TIMESTAMP => ...)` on DuckDB and Snowflake:
+Chain `.inner_join()`, `.left_join()`, `.right_join()`, `.full_join()`, `.cross_join()`, `.lateral_join()`, `.left_lateral_join()`, or `.cross_lateral_join()`, or build join clauses with `sql.inner_join_`, `sql.left_join_`, and `sql.lateral_join_`. Pass `as_of` to `.from_()` or call `.as_of()` on a join builder for time-travel reads. The timestamp renders as a literal: `FOR SYSTEM_TIME AS OF` on BigQuery, `AS OF TIMESTAMP` on Oracle, `AS OF SYSTEM TIME` on CockroachDB, and `AT (TIMESTAMP => ...)` on DuckDB and Snowflake. Lateral joins render as `JOIN LATERAL`, `LEFT JOIN LATERAL`, or `CROSS JOIN LATERAL`, with `ON TRUE` when no condition is given:
 
 ```{ .python title="docs/examples/builder/complex_joins.py" }
 --8<-- "docs/examples/builder/complex_joins.py:example"
@@ -150,7 +149,7 @@ built = joined.build(dialect="bigquery")
 
 ## Subqueries, CTEs and Set Operations
 
-Use `.where_exists(subq)` and `.where_in(col, subq)` to embed subqueries; their parameters merge into the outer query. Attach CTEs with `.with_(name, query, recursive=False, columns=[...])` and combine queries with `.union(other, all_=True)`, `.intersect(other)`, or `.except_(other)`:
+Use `.where_exists(subq)`, `.where(sql.exists_(subq))`, or `.where_in(col, subq)` to embed subqueries; their parameters merge into the outer query. Attach CTEs with `.with_(name, query, recursive=False, columns=[...])` and combine queries with `.union(other, all_=True)`, `.intersect(other)`, or `.except_(other)`:
 
 ```{ .python title="docs/examples/builder/subquery_cte.py" }
 --8<-- "docs/examples/builder/subquery_cte.py:example"
@@ -174,7 +173,7 @@ combined = (
 
 ## Row Locking, Hints, PIVOT and EXPLAIN
 
-The builder also supports row locks (`.for_update(skip_locked=True, nowait=False, of="orders")`, `.for_share()`, `.for_key_share()`, `.for_no_key_update()`), optimizer hints (`.with_hint(...)`, `.approx_limit(...)`), `.pivot(...)` / `.unpivot(...)`, and execution plans (`sql.explain(...)` / `query.explain(...)`). Lock clauses render only when the build targets a dialect that supports them:
+The builder also supports row locks (`.for_update(skip_locked=True, nowait=False, of="orders")`, `.for_share()`, `.for_key_share()`, `.for_no_key_update()`), optimizer hints (`.with_hint(...)`, `.approx_limit(...)`), `.pivot(...)` / `.unpivot(...)`, and execution plans (`sql.explain(...)` / `query.explain(...)`). Hint text renders verbatim inside `/*+ ... */`. Lock clauses render for builds without a dialect and for dialects with row locking; dialects without it, such as `sqlite`, raise `SQLBuilderError`:
 
 ```python
 from sqlspec import sql

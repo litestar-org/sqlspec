@@ -16,7 +16,7 @@ Keeping non-trivial queries in dedicated `.sql` files gives you full editor synt
 
 ## Loading SQL Files and Directory Namespaces
 
-Load `.sql` files or directory trees with `spec.load_sql_files(...)` (or register inline strings via `spec.add_named_sql(...)`):
+Load `.sql` files or directory trees with `spec.load_sql_files(...)` (or register inline strings via `spec.add_named_sql(...)`). Relative file and directory paths, including bare names such as `"queries.sql"`, resolve against the current working directory:
 
 === "queries.sql"
 
