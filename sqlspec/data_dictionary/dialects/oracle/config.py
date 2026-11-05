@@ -4,10 +4,10 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
-from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
+from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo, register_dialect
 
 if TYPE_CHECKING:
-    from sqlspec.data_dictionary import TableMetadata, VersionInfo
+    from sqlspec.data_dictionary import TableMetadata
 
 __all__ = (
     "ORACLE_CONFIG",
@@ -59,7 +59,10 @@ ORACLE_DYNAMIC_FEATURES: Final[tuple[str, ...]] = (
     "supports_json",
 )
 
-ORACLE_FEATURE_VERSIONS: "FeatureVersions" = {}
+ORACLE_FEATURE_VERSIONS: "FeatureVersions" = {
+    "supports_json": VersionInfo(12, 1, 0),
+    "supports_vectors": VersionInfo(23, 4, 0),
+}
 
 ORACLE_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_transactions": True,
@@ -70,6 +73,11 @@ ORACLE_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_skip_locked": True,
     "supports_on_conflict": False,
     "supports_update_from": False,
+    "supports_returning": True,
+    "supports_upsert": True,
+    "supports_window_functions": True,
+    "supports_cte": True,
+    "supports_arrays": True,
 }
 
 ORACLE_TYPE_MAPPINGS: dict[str, str] = {

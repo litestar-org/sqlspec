@@ -4,8 +4,8 @@ from pathlib import Path
 
 import click
 import pytest
+from tools.docs.generate_cli_docs import _format_param_type, render_cli_reference
 from tools.docs.generate_cli_docs import main as cli_docs_main
-from tools.docs.generate_cli_docs import render_cli_reference
 from tools.docs.generate_data_dictionary_docs import DIALECT_SPECS, render_all_dialect_docs
 from tools.docs.generate_data_dictionary_docs import main as dialect_docs_main
 
@@ -37,32 +37,37 @@ def test_render_cli_reference_renders_all_commands_arguments_and_options_cleanly
     assert "`--validate-config`" in markdown
 
     expected_commands = (
-        "#### `sqlspec show-config`",
-        "#### `sqlspec show-current-revision`",
-        "#### `sqlspec verify`",
-        "#### `sqlspec init`",
-        "#### `sqlspec create-migration`",
-        "#### `sqlspec upgrade`",
-        "#### `sqlspec downgrade`",
-        "#### `sqlspec stamp`",
-        "#### `sqlspec squash`",
-        "#### `sqlspec fix`",
-        "#### `sqlspec dump-schema`",
-        "#### `sqlspec adk memory cleanup`",
-        "#### `sqlspec adk memory verify`",
+        "#### sqlspec show-config",
+        "#### sqlspec show-current-revision",
+        "#### sqlspec verify",
+        "#### sqlspec init",
+        "#### sqlspec create-migration",
+        "#### sqlspec upgrade",
+        "#### sqlspec downgrade",
+        "#### sqlspec stamp",
+        "#### sqlspec squash",
+        "#### sqlspec fix",
+        "#### sqlspec dump-schema",
+        "#### sqlspec adk memory cleanup",
+        "#### sqlspec adk memory verify",
     )
     for heading in expected_commands:
         assert heading in markdown
+    assert "#### `" not in markdown
 
     adk_section_pos = markdown.index("## ADK Extension Commands")
-    assert markdown.index("#### `sqlspec verify`") < adk_section_pos
-    assert markdown.index("#### `sqlspec dump-schema`") < adk_section_pos
+    assert markdown.index("#### sqlspec verify") < adk_section_pos
+    assert markdown.index("#### sqlspec dump-schema") < adk_section_pos
 
     assert "| `revision` |" in markdown
     assert "| `directory` |" in markdown
     assert "| `version_range` |" in markdown
     assert "| `-m`, `--message` |" in markdown
     assert "| `--bind-key` |" in markdown
+    assert "`choice(sql / py)`" in markdown
+    assert "`choice(ddl / schema / concat)`" in markdown
+    assert "choice(sql | py)" not in markdown
+    assert _format_param_type(click.Option(["--format"], type=click.Choice(["sql", "py"]))) == "choice(sql / py)"
 
     assert "Sentinel.UNSET" not in markdown
     assert "--help" not in markdown
@@ -102,7 +107,26 @@ def test_dialect_docs_generator_renders_all_dialects_and_checks_staleness(
     assert "index.md" in rendered
     assert len(rendered) == len(DIALECT_SPECS) + 1
     assert "spanner" in rendered["index.md"]
+    assert "[Data Dictionary Reference](../index.md)" in rendered["index.md"]
+    assert (
+        "| [Oracle Database](oracle.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=12.1.0` | `Yes` | `>=23.4.0` | `Yes` |"
+        in rendered["index.md"]
+    )
+    assert (
+        "| [SQL Server](mssql.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=13.0.0` | `No` | `No` | `Yes` |"
+        in rendered["index.md"]
+    )
+    assert (
+        "| [Google Cloud Spanner](spanner.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `No` | `Yes` |"
+        in rendered["index.md"]
+    )
     assert "columns.sql" in rendered["postgres.md"]
+    assert "::: sqlspec.adapters." not in rendered["postgres.md"]
+    assert "??? code" not in rendered["postgres.md"]
+    assert "| Domain Pack | Source File | Named Queries | Bind Parameters |" in rendered["postgres.md"]
+    assert "`sqlspec/data_dictionary/dialects/postgres/sql/columns.sql`" in rendered["postgres.md"]
+    assert "1 named query" in rendered["postgres.md"]
+    assert "1 named queries" not in rendered["postgres.md"]
     assert "SYS.SYSTABCOL" in rendered["sqlanywhere.md"]
     assert "sysobjects" in rendered["sybase.md"]
 

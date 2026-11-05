@@ -1508,6 +1508,8 @@ class FeatureFlags(TypedDict, total=False):
     """Whether atomic upsert (``ON CONFLICT``, ``ON DUPLICATE KEY``, or ``MERGE``) is supported."""
     supports_uuid: bool
     """Whether a native 128-bit ``UUID`` column type is supported."""
+    supports_vectors: bool
+    """Whether native vector embedding column types and similarity search are supported."""
     supports_window_functions: bool
     """Whether SQL ``OVER (...)`` window functions are supported."""
 
@@ -1551,6 +1553,8 @@ class FeatureVersions(TypedDict, total=False):
     """Minimum engine version supporting temporal system-versioned tables."""
     supports_upsert: "VersionInfo"
     """Minimum engine version supporting native upsert statements."""
+    supports_vectors: "VersionInfo"
+    """Minimum engine version supporting native vector column types and similarity search."""
     supports_window_functions: "VersionInfo"
     """Minimum engine version supporting SQL window functions."""
 

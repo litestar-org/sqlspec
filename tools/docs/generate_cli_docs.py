@@ -173,7 +173,7 @@ def _render_command_section(full_name: str, command: click.Command) -> list[str]
     usage_line = f"{full_name}{opt_synopsis}" + (f" {arg_synopsis}" if arg_synopsis else "")
 
     summary = _clean_text(command.help or command.short_help or "")
-    section: list[str] = [f"#### `{full_name}`", ""]
+    section: list[str] = [f"#### {full_name}", ""]
     if summary:
         section.extend([summary, ""])
     section.extend(["```bash", usage_line, "```", ""])
@@ -215,7 +215,7 @@ def _render_options_table(options: list[click.Option]) -> list[str]:
 def _format_param_type(param: click.Parameter) -> str:
     """Return a clean human-readable type name for a Click parameter."""
     if isinstance(param.type, click.Choice):
-        choices = " | ".join(str(c) for c in param.type.choices)
+        choices = " / ".join(str(c) for c in param.type.choices)
         return f"choice({choices})"
     type_name = getattr(param.type, "name", None) or type(param.type).__name__
     return str(type_name).lower()

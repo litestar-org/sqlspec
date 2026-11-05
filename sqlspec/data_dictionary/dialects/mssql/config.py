@@ -144,7 +144,7 @@ MSSQL_SENSITIVE_SYSTEM_KEYS: Final[frozenset[str]] = frozenset({
     "user_name",
 })
 
-MSSQL_FEATURE_VERSIONS: "FeatureVersions" = {}
+MSSQL_FEATURE_VERSIONS: "FeatureVersions" = {"supports_json": VersionInfo(13, 0, 0)}
 
 MSSQL_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_transactions": True,
@@ -155,6 +155,10 @@ MSSQL_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_skip_locked": False,
     "supports_on_conflict": False,
     "supports_update_from": True,
+    "supports_returning": True,
+    "supports_upsert": True,
+    "supports_window_functions": True,
+    "supports_cte": True,
 }
 
 MSSQL_TYPE_MAPPINGS: dict[str, str] = {

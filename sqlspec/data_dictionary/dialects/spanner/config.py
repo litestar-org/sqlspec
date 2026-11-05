@@ -17,7 +17,14 @@ SPANNER_VERSION_PATTERN = re.compile(r".*")
 SPANNER_FEATURE_VERSIONS: "FeatureVersions" = {}
 
 SPANNER_FEATURE_FLAGS: "FeatureFlags" = {
+    "supports_schemas": True,
+    "supports_returning": True,
+    "supports_upsert": True,
+    "supports_window_functions": True,
+    "supports_cte": True,
     "supports_json": True,
+    "supports_arrays": True,
+    "supports_transactions": True,
     "supports_generators": False,
     "supports_index_clustering": True,
     "supports_interleaved_tables": True,

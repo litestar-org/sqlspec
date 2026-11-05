@@ -4,7 +4,7 @@
 from sqlspec.data_dictionary import DialectConfig, get_data_dictionary_loader, get_dialect_config
 ```
 
-SQLSpec ships 13 dialect-specific SQL catalog packs under `sqlspec/data_dictionary/dialects/` containing named [`SQLFileLoader`](../../loader.md) queries (`-- name: ...`), version-gated feature profiles (`DialectConfig`), and logical-to-physical type mappings. See the [Data Dictionary Guide](../../../learn/data-dictionary.md) and [Data Dictionary Reference](../../data-dictionary.md) for programmatic usage.
+SQLSpec ships 13 dialect-specific SQL catalog packs under `sqlspec/data_dictionary/dialects/` containing named [`SQLFileLoader`](../../loader.md) queries (`-- name: ...`), version-gated feature profiles (`DialectConfig`), and logical-to-physical type mappings. See the [Data Dictionary Guide](../../../learn/data-dictionary.md) and [Data Dictionary Reference](../index.md) for programmatic usage.
 
 ## Dialect Catalog Matrix
 
@@ -37,19 +37,19 @@ Each dialect pack declares boolean `feature_flags` and version-gated `feature_ve
 | [DuckDB](duckdb.md) | `Yes` | `>=0.8.0` | `>=0.8.0` | `Yes` | `Yes` | `Yes` | `Yes` | `No` | `Yes` |
 | [MySQL](mysql.md) | `Yes` | `No` | `Yes` | `>=8.0.2` | `>=8.0.1` | `>=5.7.8` | `No` | `No` | `Yes` |
 | [MariaDB](mariadb.md) | `Yes` | `Yes` | `Yes` | `>=10.2.0` | `>=10.2.1` | `>=10.2.7` | `No` | `No` | `Yes` |
-| [Oracle Database](oracle.md) | `Yes` | `No` | `No` | `No` | `No` | `No` | `No` | `No` | `Yes` |
-| [SQL Server](mssql.md) | `Yes` | `No` | `No` | `No` | `No` | `No` | `No` | `No` | `Yes` |
+| [Oracle Database](oracle.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=12.1.0` | `Yes` | `>=23.4.0` | `Yes` |
+| [SQL Server](mssql.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=13.0.0` | `No` | `No` | `Yes` |
 | [Sybase ASE](sybase.md) | `Yes` | `No` | `No` | `No` | `No` | `No` | `No` | `No` | `Yes` |
 | [SAP SQL Anywhere](sqlanywhere.md) | `Yes` | `No` | `Yes` | `>=10.0.0` | `>=10.0.0` | `No` | `No` | `No` | `Yes` |
 | [IBM Db2](db2.md) | `Yes` | `No` | `No` | `>=8.1.0` | `>=8.1.0` | `No` | `No` | `No` | `Yes` |
 | [Google BigQuery](bigquery.md) | `Yes` | `No` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `No` | `Yes` |
-| [Google Cloud Spanner](spanner.md) | `No` | `No` | `No` | `No` | `No` | `Yes` | `No` | `No` | `No` |
+| [Google Cloud Spanner](spanner.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `No` | `Yes` |
 
 ## Logical-to-Physical Type Mappings
 
 `driver.data_dictionary.get_optimal_type(driver, type_category)` resolves portable logical type categories using each dialect's `DialectConfig.type_mappings` and active engine version:
 
-| Dialect | `json` | `uuid` | `boolean` | `timestamp` | `text` | `blob` | `vector` |
+| Dialect | json | uuid | boolean | timestamp | text | blob | vector |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [PostgreSQL](postgres.md) | `JSONB` | `UUID` | `BOOLEAN` | `TIMESTAMP WITH TIME ZONE` | `TEXT` | `BYTEA` | `-` |
 | [CockroachDB](cockroachdb.md) | `JSONB` | `UUID` | `BOOL` | `TIMESTAMPTZ` | `STRING` | `BYTES` | `-` |
