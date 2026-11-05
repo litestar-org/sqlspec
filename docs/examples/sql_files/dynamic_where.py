@@ -10,38 +10,25 @@ __all__ = ("main",)
 
 def main() -> list[dict[str, Any]]:
     """Chain where, where_eq, and where_like filters onto a named SQL query."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
     spec.add_named_sql("list_users", "SELECT id, name, status FROM users")
 
     with spec.provide_session(config) as session:
+        session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, status TEXT)")
         session.execute(
-            """
-            CREATE TABLE users (
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                status TEXT
-            )
-            """
-        )
-        session.execute(
-            """
-            INSERT INTO users (name, status)
-            VALUES ('Alice', 'active'),
-                   ('Bob', 'inactive'),
-                   ('Charlie', 'active')
-            """
+            "INSERT INTO users (name, status) VALUES ('Alice', 'active'), ('Bob', 'inactive'), ('Charlie', 'active')"
         )
 
-        # --8<-- [start:example]
         base_query = spec.get_sql("list_users")
-        active_users = session.select(base_query.where("status = 'active'"))
-        bob = session.select(base_query.where_eq("name", "Bob"))
+        active_users = session.select(base_query.where_eq("status", "active").order_by("name"))
+        bob = session.select(base_query.where_in("name", ["Bob"]).select_only("id", "name"))
         alice_only = session.select(base_query.where_eq("status", "active").where_like("name", "A%"))
-        # --8<-- [end:example]
+    # --8<-- [end:example]
 
     assert len(active_users) == 2
-    assert len(bob) == 1
+    assert bob == [{"id": 2, "name": "Bob"}]
     assert alice_only == [{"id": 1, "name": "Alice", "status": "active"}]
     return alice_only
 
