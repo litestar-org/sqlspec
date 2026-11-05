@@ -2192,3 +2192,26 @@ def test_explain_oracle_and_factory_dialect_preservation() -> None:
     assert returning_stmt.statement_config.dialect == "postgres"
     trunc = sql.truncate("users", dialect="postgresql")
     assert trunc.dialect_name == "postgres"
+
+
+@pytest.mark.parametrize(
+    ("condition_factory", "expected_where"),
+    [
+        (lambda a, b: (a >= 1) & ((b == 1) | (b == 2)), "a >= :p1 AND (b = :p2 OR b = :p3)"),
+        (lambda a, b: ((b == 1) | (b == 2)) & (a >= 1), "(b = :p1 OR b = :p2) AND a >= :p3"),
+        (lambda a, b: (a >= 1) | ((b == 1) & (b == 2)), "a >= :p1 OR b = :p2 AND b = :p3"),
+        (lambda a, b: ~((a == 1) | (b == 2)), "NOT (a = :p1 OR b = :p2)"),
+        (lambda a, b: ~(a == 1), "NOT a = :p1"),
+    ],
+    ids=["and_with_or_right", "and_with_or_left", "or_with_and", "not_over_or", "not_over_comparison"],
+)
+def test_column_expression_boolean_combinators_preserve_precedence(
+    condition_factory: "Callable[[Column, Column], Any]", expected_where: str
+) -> None:
+    query = sql.select("*").from_("t").where(condition_factory(Column("a"), Column("b")))
+    query.enable_optimization = False
+    built = query.build()
+    rendered = " ".join(built.sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+    for index, name in enumerate(built.parameters, start=1):
+        rendered = rendered.replace(f":{name}", f":p{index}")
+    assert rendered.endswith(f"WHERE {expected_where}")
