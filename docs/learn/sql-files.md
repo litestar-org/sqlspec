@@ -1,20 +1,24 @@
 # SQL Files
 
-Keeping non-trivial queries in dedicated `.sql` files gives you full editor syntax highlighting, formatter support, DBA reviewability, and zero Python string-escaping noise while retaining SQLSpec's parameter binding, validation, and dynamic predicate composition.
+Keeping non-trivial queries in dedicated `.sql` files gives you full editor syntax highlighting, formatter support, and DBA reviewability while retaining SQLSpec's parameter binding, runtime type validation, and AST composition. `SQLFileLoader` and `SQLSpec` parse structured comment directives and inline markers without custom template engines.
 
-## Inline Named Queries
+## Directive and Marker Cheat Sheet
 
-For small query registries, register named statements directly on `SQLSpec` with `add_named_sql` and retrieve a reusable `SQL` object via `get_sql`:
+| Directive or Marker | Scope | Syntax | Purpose |
+| --- | --- | --- | --- |
+| `-- name:` | Statement header | `-- name: list-users` | Starts a named query block; hyphens normalize to underscores (`list_users`) on lookup. |
+| `-- dialect:` | Statement header | `-- dialect: postgres` | Sets the SQLGlot dialect for expression slots, `.builder()`, and `.explain()`. |
+| `-- param:` | Statement header | `-- param: status str? Optional filter` | Declares parameter name, runtime type (`?` = optional, defaults to `None`), and description. |
+| `-- fragment:` | File section | `-- fragment: active_users_cte` | Declares a reusable static SQL fragment (cannot declare `-- dialect:`, `-- param:`, or `-- slot:`). |
+| `/* include: */` | Statement or fragment body | `/* include: active_users_cte */` | Splices a registered fragment (supports nested includes and `<namespace>.<name>` lookup). |
+| `-- slot:` | Statement header | `-- slot: ordering = id ASC` | Declares an optional default SQL fill for a matching `/* slot: name */` marker in the body. |
+| `/* slot: */` | Statement or fragment body | `/* slot: ordering */` | Reserves a fill point replaced at `spec.get_sql(name, **slots)` retrieval time. |
 
-```python
---8<-- "docs/examples/sql_files/named_queries.py:example"
-```
+## Loading SQL Files and Directory Namespaces
 
-## Loading .sql Files from Disk or Storage
+Load `.sql` files or directory trees with `spec.load_sql_files(...)` (or register inline strings via `spec.add_named_sql(...)`):
 
-Group related queries inside `.sql` files using `-- name: <query_name>` comment headers and load individual files or entire directories with `spec.load_sql_files(...)` (or `SQLFileLoader` directly):
-
-=== "SQL (`queries.sql`)"
+=== "queries.sql"
 
     ```sql
     -- name: list_teams
@@ -23,54 +27,80 @@ Group related queries inside `.sql` files using `-- name: <query_name>` comment 
     ORDER BY id;
     ```
 
-=== "Python"
+=== "app.py"
 
     ```python
     --8<-- "docs/examples/sql_files/load_sql_files.py:example"
     ```
 
-Query names inside nested directories can be organized by namespace (or hyphenated identifiers normalized automatically when accessed) and shared across any session opened from `spec`. `SQLFileLoader` also integrates with `StorageRegistry` so SQL bundles can be loaded from local directories or registered object storage aliases.
+=== "Inline Registration"
 
-### Organizing Query Directories
+    ```python
+    --8<-- "docs/examples/sql_files/named_queries.py:example"
+    ```
 
-When `spec.load_sql_files(Path("app/sql"))` scans a directory tree, you can keep queries organized per domain (`app/sql/billing.sql`, `app/sql/users.sql`) and inspect loaded definitions at startup:
+When `spec.load_sql_files(Path("app/sql"))` scans a directory tree, top-level files register bare query names while nested subdirectories prepend dot-separated relative directory namespaces:
 
-- `spec.list_sql_queries()`: Returns all registered query names so startup tests can assert expected SQL assets are present.
-- `spec.get_sql("list_customer_invoices")`: Returns the immutable `SQL` template ready for execution or filter composition.
-- `SQLFileLoader(storage_registry=...)`: Loads `.sql` files from S3, GCS, Azure Blob Storage, or embedded package paths registered in `StorageRegistry`.
+```text
+app/sql/
+├── users.sql            # -- name: list-users   -> "list_users"
+└── billing/
+    ├── invoices.sql     # -- name: list-overdue -> "billing.list_overdue"
+    └── reports/
+        └── mrr.sql      # -- name: monthly-mrr  -> "billing.reports.monthly_mrr"
+```
+
+- `spec.list_sql_queries()` / `spec.has_sql_query(name)` / `spec.get_sql_files()`: Inspect registered query names and file paths at startup.
+- `spec.reload_sql_files(reload=True)`: Re-reads only `.sql` files whose MD5 checksum changed and invalidates cached statement instances.
+- `SQLFileLoader(storage_registry=...)`: Loads `.sql` bundles from S3, GCS, Azure Blob Storage, or `fsspec` aliases registered in `StorageRegistry`.
+
+## Dialect Declarations
+
+Add `-- dialect: <name>` under `-- name:` so SQLGlot expression slots, `SQL.builder()`, and `SQL.explain()` target the exact engine syntax:
+
+```sql
+-- name: upsert_subscription
+-- dialect: postgres
+INSERT INTO subscriptions (account_id, plan)
+VALUES (:account_id, :plan)
+ON CONFLICT (account_id) DO UPDATE SET plan = EXCLUDED.plan;
+```
+
+| Input Alias (`DIALECT_ALIASES`) | Normalized SQLGlot Dialect | Canonical SQLSpec Dialects |
+| --- | --- | --- |
+| `postgresql`, `pg`, `pgplsql` | `postgres` | `postgres`, `mysql`, `mariadb`, `oracle`, `mssql`, `sqlite`, `duckdb` |
+| `plsql`, `oracledb` | `oracle` | `bigquery`, `spanner`, `spangres`, `cockroach`, `db2`, `sybase`, `sqlanywhere` |
+| `tsql` | `mssql` | — |
 
 <span id="anatomy-of-a-multi-query-sql-file"></span>
 
-## Declared Parameter Headers (-- param:)
+## Parameter Type Declarations {#parameter-type-declarations}
 
-Each `-- name:` block can start with `-- dialect:` and `-- param:` headers. The following file groups two related queries.
+Declare `-- param: <name> <type>[?] <description>` headers below `-- name:` to document parameters and enforce three validation layers:
 
-Add `-- param: <name> <type>[?]  <description>` headers immediately below `-- name:` to document expected arguments and enforce automatic required-parameter validation before a query ever touches the database connection:
-
-=== "SQL (`teams.sql`)"
+=== "teams.sql"
 
     ```sql
     -- name: get_team_by_name
     -- param: name str  The team name to look up
-    SELECT id, name
-    FROM teams
-    WHERE name = :name;
+    SELECT id, name FROM teams WHERE name = :name;
 
     -- name: list_teams
     -- param: name str?  Optional team name filter
-    SELECT id, name
-    FROM teams
+    SELECT id, name FROM teams
     WHERE (:name IS NULL OR name = :name)
     ORDER BY id;
     ```
 
-=== "Python"
+=== "app.py"
 
     ```python
     --8<-- "docs/examples/sql_files/declared_params.py:example"
     ```
 
-Suffixing the type with `?` (such as `str?` or `int?`) marks the parameter optional and defaults omitted keyword arguments to `None` (`NULL`), enabling clean `(:name IS NULL OR name = :name)` filter patterns in pure SQL. Omitting a required parameter raises `SQLSpecError` immediately with the missing parameter name.
+1. **Load-Time Placeholder Drift Check** (`SQLFileLoader._check_declared_parameters`): Raises `SQLFileParseError` if a declared `-- param:` name is absent from the query's `:placeholder` tokens or positional counts mismatch (evaluated at `get_sql()` time when a query uses fragments or slots).
+2. **Runtime Required vs Nullable (`?`) Execution**: Omitting a required parameter raises `SQLSpecError` before acquiring a cursor. Suffixing the type with `?` (or trailing `(optional)` in the description) defaults omitted keyword arguments to `None` (`NULL`), enabling `(:name IS NULL OR name = :name)` or `COALESCE(:name, name)` predicates that reuse a single prepared-statement execution plan.
+3. **Runtime Type Registry & Custom Types**: Non-`None` values are checked against `_TYPE_REGISTRY` (`str`, `int`, `float`, `bool`, `bytes`, `date`, `datetime`, `time`, `decimal`, `uuid`, `dict`, `json`, `jsonb`, `list`, `list[int]`, `list[str]`, `list[float]`, `list[bool]`, `tuple`). Unknown type strings act as documentation-only unless registered via `register_param_type("money", Decimal)`. Pass `SQLFileLoader(strict_parameter_annotations=True)` to raise `SQLFileParseError` on malformed `-- param:` lines.
 
 <span id="sql-fragments-and-slots"></span>
 

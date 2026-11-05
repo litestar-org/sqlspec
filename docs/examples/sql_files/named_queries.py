@@ -10,9 +10,9 @@ __all__ = ("main",)
 
 def main() -> dict[str, Any]:
     """Register find_team on SQLSpec and execute it by name."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-    # --8<-- [start:example]
     spec.add_named_sql(
         "find_team",
         """
@@ -25,10 +25,10 @@ def main() -> dict[str, Any]:
     with spec.provide_session(config) as session:
         session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
         session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
-        row = session.execute(spec.get_sql("find_team"), name="SQLSpec").one()
-        # --8<-- [end:example]
-        assert row == {"id": 2, "name": "SQLSpec"}
-        return row
+        row = session.select_one(spec.get_sql("find_team"), name="SQLSpec")
+    # --8<-- [end:example]
+    assert row == {"id": 2, "name": "SQLSpec"}
+    return row
 
 
 if __name__ == "__main__":
