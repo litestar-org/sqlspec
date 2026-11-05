@@ -35,6 +35,7 @@ Introspects `sys.tables`, `sys.columns`, `sys.types`, `sys.indexes`, `sys.foreig
 | `supports_upsert` | `True` | `timestamptz` | `DATETIMEOFFSET(6)` |
 | `supports_window_functions` | `True` | `uuid` | `UNIQUEIDENTIFIER` |
 | `supports_json` | `>= 13.0.0` | `varchar` | `NVARCHAR({length})` |
+| `supports_vectors` | `>= 17.0.0` | - | - |
 
 ## Adapter Data Dictionary Classes
 

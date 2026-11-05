@@ -144,7 +144,10 @@ MSSQL_SENSITIVE_SYSTEM_KEYS: Final[frozenset[str]] = frozenset({
     "user_name",
 })
 
-MSSQL_FEATURE_VERSIONS: "FeatureVersions" = {"supports_json": VersionInfo(13, 0, 0)}
+MSSQL_FEATURE_VERSIONS: "FeatureVersions" = {
+    "supports_json": VersionInfo(13, 0, 0),
+    "supports_vectors": VersionInfo(17, 0, 0),
+}
 
 MSSQL_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_transactions": True,

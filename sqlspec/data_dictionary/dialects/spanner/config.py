@@ -24,6 +24,7 @@ SPANNER_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_cte": True,
     "supports_json": True,
     "supports_arrays": True,
+    "supports_vectors": True,
     "supports_transactions": True,
     "supports_generators": False,
     "supports_index_clustering": True,

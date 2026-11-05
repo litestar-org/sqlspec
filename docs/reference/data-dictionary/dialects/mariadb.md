@@ -44,6 +44,7 @@ Extends MySQL `information_schema` catalog queries with MariaDB native `SEQUENCE
 | `supports_sequences` | `>= 10.3.0` | - | - |
 | `supports_skip_locked` | `>= 10.6.0` | - | - |
 | `supports_system_versioned_tables` | `>= 10.3.0` | - | - |
+| `supports_vectors` | `>= 11.7.0` | - | - |
 | `supports_window_functions` | `>= 10.2.0` | - | - |
 
 ## Catalog SQL Queries

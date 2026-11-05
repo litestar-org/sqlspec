@@ -32,18 +32,18 @@ Each dialect pack declares boolean `feature_flags` and version-gated `feature_ve
 | Dialect | Schemas | Returning | Upsert | Window | CTE | JSON | Arrays | Vectors | Transactions |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | [PostgreSQL](postgres.md) | `Yes` | `>=8.2.0` | `>=9.5.0` | `>=8.4.0` | `>=8.4.0` | `>=9.2.0` | `Yes` | `No` | `Yes` |
-| [CockroachDB](cockroachdb.md) | `Yes` | `>=20.1.0` | `>=19.2.0` | `>=19.1.0` | `>=19.1.0` | `>=20.1.0` | `Yes` | `No` | `Yes` |
+| [CockroachDB](cockroachdb.md) | `Yes` | `>=20.1.0` | `>=19.2.0` | `>=19.1.0` | `>=19.1.0` | `>=20.1.0` | `Yes` | `>=24.2.0` | `Yes` |
 | [SQLite](sqlite.md) | `No` | `>=3.35.0` | `>=3.24.0` | `>=3.25.0` | `>=3.8.3` | `>=3.38.0` | `No` | `No` | `Yes` |
-| [DuckDB](duckdb.md) | `Yes` | `>=0.8.0` | `>=0.8.0` | `Yes` | `Yes` | `Yes` | `Yes` | `No` | `Yes` |
+| [DuckDB](duckdb.md) | `Yes` | `>=0.8.0` | `>=0.8.0` | `Yes` | `Yes` | `Yes` | `Yes` | `>=0.10.0` | `Yes` |
 | [MySQL](mysql.md) | `Yes` | `No` | `Yes` | `>=8.0.2` | `>=8.0.1` | `>=5.7.8` | `No` | `No` | `Yes` |
-| [MariaDB](mariadb.md) | `Yes` | `Yes` | `Yes` | `>=10.2.0` | `>=10.2.1` | `>=10.2.7` | `No` | `No` | `Yes` |
+| [MariaDB](mariadb.md) | `Yes` | `Yes` | `Yes` | `>=10.2.0` | `>=10.2.1` | `>=10.2.7` | `No` | `>=11.7.0` | `Yes` |
 | [Oracle Database](oracle.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=12.1.0` | `No` | `>=23.4.0` | `Yes` |
-| [SQL Server](mssql.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=13.0.0` | `No` | `No` | `Yes` |
+| [SQL Server](mssql.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=13.0.0` | `No` | `>=17.0.0` | `Yes` |
 | [Sybase ASE](sybase.md) | `Yes` | `No` | `No` | `No` | `No` | `No` | `No` | `No` | `Yes` |
 | [SAP SQL Anywhere](sqlanywhere.md) | `Yes` | `No` | `Yes` | `>=10.0.0` | `>=10.0.0` | `No` | `No` | `No` | `Yes` |
 | [IBM Db2](db2.md) | `Yes` | `No` | `No` | `>=8.1.0` | `>=8.1.0` | `No` | `No` | `No` | `Yes` |
-| [Google BigQuery](bigquery.md) | `Yes` | `No` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `No` | `Yes` |
-| [Google Cloud Spanner](spanner.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `No` | `Yes` |
+| [Google BigQuery](bigquery.md) | `Yes` | `No` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` |
+| [Google Cloud Spanner](spanner.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` |
 
 ## Logical-to-Physical Type Mappings
 

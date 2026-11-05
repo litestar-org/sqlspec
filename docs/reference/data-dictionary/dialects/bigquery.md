@@ -39,6 +39,7 @@ Introspects dataset-scoped `INFORMATION_SCHEMA` views (`TABLES`, `COLUMNS`, `COL
 | `supports_update_from` | `True` | `varchar` | `STRING` |
 | `supports_upsert` | `True` | - | - |
 | `supports_uuid` | `False` | - | - |
+| `supports_vectors` | `True` | - | - |
 | `supports_window_functions` | `True` | - | - |
 
 ## Adapter Data Dictionary Classes

@@ -110,6 +110,7 @@ MARIADB_FEATURE_VERSIONS: "FeatureVersions" = {
     "supports_events": VersionInfo(5, 1, 6),
     "supports_sequences": VersionInfo(10, 3, 0),
     "supports_system_versioned_tables": VersionInfo(10, 3, 0),
+    "supports_vectors": VersionInfo(11, 7, 0),
 }
 
 MARIADB_FEATURE_FLAGS: "FeatureFlags" = {

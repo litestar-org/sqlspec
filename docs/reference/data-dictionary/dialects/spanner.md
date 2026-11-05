@@ -36,7 +36,8 @@ Provides dual SQL catalog packs (`googlesql` and `postgresql`) introspecting `IN
 | `supports_transactions` | `True` | `timestamp` | `TIMESTAMP` |
 | `supports_update_from` | `False` | `tokenlist` | `TOKENLIST` |
 | `supports_upsert` | `True` | `uuid` | `BYTES(16)` |
-| `supports_window_functions` | `True` | `varchar` | `STRING({length})` |
+| `supports_vectors` | `True` | `varchar` | `STRING({length})` |
+| `supports_window_functions` | `True` | - | - |
 
 ## Adapter Data Dictionary Classes
 

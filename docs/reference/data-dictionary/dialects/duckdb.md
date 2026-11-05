@@ -38,6 +38,7 @@ Introspects DuckDB table functions (`duckdb_tables()`, `duckdb_columns()`, `duck
 | `supports_window_functions` | `True` | - | - |
 | `supports_returning` | `>= 0.8.0` | - | - |
 | `supports_upsert` | `>= 0.8.0` | - | - |
+| `supports_vectors` | `>= 0.10.0` | - | - |
 
 ## Adapter Data Dictionary Classes
 

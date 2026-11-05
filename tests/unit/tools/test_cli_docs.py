@@ -147,8 +147,8 @@ def test_cli_docs_main_writes_and_checks_staleness(tmp_path: Path, capsys: pytes
             "[Oracle Database](oracle.md)",
             "`Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=12.1.0` | `No` | `>=23.4.0` | `Yes`",
         ),
-        ("[SQL Server](mssql.md)", "`Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=13.0.0` | `No` | `No` | `Yes`"),
-        ("[Google Cloud Spanner](spanner.md)", "`Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `No` | `Yes`"),
+        ("[SQL Server](mssql.md)", "`Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=13.0.0` | `No` | `>=17.0.0` | `Yes`"),
+        ("[Google Cloud Spanner](spanner.md)", "`Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes`"),
         (
             "[SQLite](sqlite.md)",
             "`No` | `>=3.35.0` | `>=3.24.0` | `>=3.25.0` | `>=3.8.3` | `>=3.38.0` | `No` | `No` | `Yes`",

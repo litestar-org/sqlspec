@@ -36,6 +36,7 @@ Introspects `crdb_internal` (`create_statements`, `tables`) and `pg_catalog` com
 | `supports_json` | `>= 20.1.0` | - | - |
 | `supports_returning` | `>= 20.1.0` | - | - |
 | `supports_upsert` | `>= 19.2.0` | - | - |
+| `supports_vectors` | `>= 24.2.0` | - | - |
 | `supports_window_functions` | `>= 19.1.0` | - | - |
 
 ## Adapter Data Dictionary Classes
