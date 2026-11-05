@@ -6,6 +6,14 @@ import click
 import pytest
 from tools.docs.generate_cli_docs import _format_param_type, render_cli_reference
 from tools.docs.generate_cli_docs import main as cli_docs_main
+from tools.docs.generate_config_tables import (
+    UNMIGRATED_ADAPTER_REFS,
+    check_adapter_reference_parity,
+    render_filter_catalog_table,
+    render_typeddict_table,
+    sync_markdown_markers,
+)
+from tools.docs.generate_config_tables import main as config_tables_main
 from tools.docs.generate_data_dictionary_docs import DIALECT_SPECS, render_all_dialect_docs
 from tools.docs.generate_data_dictionary_docs import main as dialect_docs_main
 
@@ -16,6 +24,9 @@ __all__ = (
     "test_dialect_docs_generator_renders_all_dialects_and_checks_staleness",
     "test_lazy_cli_attribute_resolves_click_group",
     "test_render_cli_reference_renders_all_commands_arguments_and_options_cleanly",
+    "test_render_filter_catalog_table_covers_all_15_filter_types",
+    "test_render_typeddict_table_renders_inheritance_types_defaults_and_or_unions",
+    "test_sync_markdown_markers_and_adapter_parity_check",
 )
 
 
@@ -147,3 +158,93 @@ def test_dialect_docs_generator_renders_all_dialects_and_checks_staleness(
     stale_rc = dialect_docs_main(["--check", "--output-dir", str(out_dir)])
     assert stale_rc == 1
     assert "out of date" in capsys.readouterr().err.lower()
+
+
+def test_render_typeddict_table_renders_inheritance_types_defaults_and_or_unions() -> None:
+    asyncpg_table = render_typeddict_table([
+        "sqlspec.adapters.asyncpg.config.AsyncpgConnectionConfig",
+        "sqlspec.adapters.asyncpg.config.AsyncpgPoolConfig",
+    ])
+    assert asyncpg_table.startswith("| Key | Type | Default | Description |\n| --- | --- | --- | --- |")
+    assert "| `dsn` | `str` | - |" in asyncpg_table
+    assert "| `port` | `int` | `5432` |" in asyncpg_table
+    assert "| `min_size` | `int` |" in asyncpg_table
+    assert "NotRequired" not in asyncpg_table
+    assert " | " not in "".join(part for line in asyncpg_table.splitlines() for part in line.split("`")[1::2])
+    assert asyncpg_table.count("| `dsn` |") == 1
+
+    flask_table = render_typeddict_table(["sqlspec.config.FlaskConfig"])
+    assert "| `session_key` | `str` | `'db_session'` |" in flask_table
+    assert "| `commit_mode` |" in flask_table
+    assert "`'manual'`" in flask_table
+
+    filter_config_table = render_typeddict_table(["sqlspec.extensions.litestar.providers.FilterConfig"])
+    assert '| `id_field` | `str` | `"id"` |' in filter_config_table
+    assert "| `pagination_max_size` | `int` | `1000` |" in filter_config_table
+    assert " or " in filter_config_table
+
+
+def test_render_filter_catalog_table_covers_all_15_filter_types() -> None:
+    table = render_filter_catalog_table()
+    assert table.startswith(
+        "| Filter Class | Constructor Signature | SQL Clause Generated | Description |\n| --- | --- | --- | --- |"
+    )
+    expected_filters = (
+        "BeforeAfterFilter",
+        "OnBeforeAfterFilter",
+        "InCollectionFilter",
+        "NotInCollectionFilter",
+        "AnyCollectionFilter",
+        "NotAnyCollectionFilter",
+        "ChoicesFilter",
+        "LimitOffsetFilter",
+        "CursorFilter",
+        "OrderByFilter",
+        "SearchFilter",
+        "NotInSearchFilter",
+        "NullFilter",
+        "NotNullFilter",
+        "BooleanFilter",
+    )
+    for filter_name in expected_filters:
+        assert f"`{filter_name}`" in table
+    code_spans = [part for line in table.splitlines()[2:] for part in line.split("`")[1::2]]
+    assert all("|" not in span for span in code_spans)
+
+
+def test_sync_markdown_markers_and_adapter_parity_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    md_file = tmp_path / "sample.md"
+    md_file.write_text(
+        "# Sample\n\n"
+        "<!-- GENERATED:START config-table:sqlspec.config.FlaskConfig -->\n"
+        "stale\n"
+        "<!-- GENERATED:END config-table:sqlspec.config.FlaskConfig -->\n\n"
+        "<!-- GENERATED:START filter-catalog -->\n"
+        "stale\n"
+        "<!-- GENERATED:END filter-catalog -->\n",
+        encoding="utf-8",
+    )
+
+    check_stale = sync_markdown_markers(tmp_path, check=True)
+    assert len(check_stale) == 2
+
+    rc_stale = config_tables_main(["--check", "--docs-dir", str(tmp_path), "--skip-adapter-parity"])
+    assert rc_stale == 1
+    assert "sample.md" in capsys.readouterr().err
+
+    rc_write = config_tables_main(["--docs-dir", str(tmp_path), "--skip-adapter-parity"])
+    assert rc_write == 0
+    updated_text = md_file.read_text(encoding="utf-8")
+    assert "| `session_key` |" in updated_text
+    assert "`BeforeAfterFilter`" in updated_text
+
+    rc_clean = config_tables_main(["--check", "--docs-dir", str(tmp_path), "--skip-adapter-parity"])
+    assert rc_clean == 0
+
+    default_parity_errors = check_adapter_reference_parity()
+    assert default_parity_errors == []
+    assert "oracledb" in UNMIGRATED_ADAPTER_REFS
+
+    strict_parity_errors = check_adapter_reference_parity(unmigrated_allowlist=frozenset())
+    assert len(strict_parity_errors) >= 6
+    assert any("oracledb" in err and "OracleTopologyConfig" in err for err in strict_parity_errors)

@@ -327,6 +327,7 @@ docs: docs-clean                                   ## Build documentation
 	@uv run --no-sync python -m tools.docs.scan_public_docstrings --check-leaks --check-overloads --check-typeddicts sqlspec
 	@uv run --no-sync python -m tools.docs.generate_cli_docs --check
 	@uv run --no-sync python -m tools.docs.generate_data_dictionary_docs --check
+	@uv run --no-sync python -m tools.docs.generate_config_tables --check
 	@uv run --no-sync zensical build --clean
 	@uv run --no-sync python -m tools.docs.postbuild --config zensical.toml --docs-dir docs --site-dir site
 	@uv run --no-sync python -m tools.docs.verify_docs_artifacts --site-dir site
