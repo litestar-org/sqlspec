@@ -1,6 +1,6 @@
 # Schema Mapping
 
-By default, `select`, `select_one`, and `select_one_or_none` return `dict[str, Any]` rows. Passing `schema_type=` hydrates rows directly into typed Python structures while preserving static type inference in `mypy` and `pyright`.
+By default, `select`, `select_one`, `select_one_or_none`, and their `fetch*` aliases return `dict[str, Any]` rows. Passing `schema_type=` hydrates rows directly into typed Python structures while preserving static type inference in `mypy` and `pyright`.
 
 ## Mapping Rows to msgspec.Struct
 

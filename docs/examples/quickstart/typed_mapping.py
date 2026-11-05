@@ -2,15 +2,13 @@
 
 from typing import Any
 
+# --8<-- [start:example]
 import msgspec
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
-__all__ = ("User", "get_user", "main")
 
-
-# --8<-- [start:example]
 class User(msgspec.Struct):
     """Typed user row returned from SQLite."""
 
@@ -32,34 +30,35 @@ def get_user(session: Any) -> User:
     )
 
 
+spec = SQLSpec()
+config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+
+with spec.provide_session(config) as session:
+    session.execute(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            points INTEGER
+        )
+        """
+    )
+    session.execute(
+        """
+        INSERT INTO users (name, points)
+        VALUES (:name, :points)
+        """,
+        name="Ada",
+        points=42,
+    )
+    user = get_user(session)
 # --8<-- [end:example]
+
+__all__ = ("User", "get_user", "main")
 
 
 def main() -> User:
     """Insert a user record and decode it into a msgspec.Struct."""
-    spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-
-    with spec.provide_session(config) as session:
-        session.execute(
-            """
-            CREATE TABLE users (
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                points INTEGER
-            )
-            """
-        )
-        session.execute(
-            """
-            INSERT INTO users (name, points)
-            VALUES (:name, :points)
-            """,
-            name="Ada",
-            points=42,
-        )
-        user = get_user(session)
-
     assert isinstance(user, User)
     assert user.name == "Ada"
     assert user.points == 42
