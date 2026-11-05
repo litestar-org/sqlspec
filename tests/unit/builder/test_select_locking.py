@@ -1,6 +1,7 @@
 """Unit tests for SELECT locking functionality (FOR UPDATE, FOR SHARE, etc)."""
 
 import re
+from typing import Any
 
 import pytest
 
@@ -330,3 +331,15 @@ def test_mariadb_rejects_lock_targets() -> None:
     ):
         with pytest.raises(SQLBuilderError, match="do not support OF targets"):
             query.build(dialect="mariadb")
+
+
+@pytest.mark.parametrize(
+    ("lock_options", "expected_clause"),
+    [({}, "FOR UPDATE"), ({"skip_locked": True}, "FOR UPDATE SKIP LOCKED"), ({"of": "job"}, "FOR UPDATE OF job")],
+    ids=["plain", "skip_locked", "of_table"],
+)
+def test_for_update_without_dialect_preserves_lock_clause(lock_options: "dict[str, Any]", expected_clause: str) -> None:
+    """Builds without a dialect keep the lock clause instead of silently dropping it."""
+    query = sql.select("*").from_("job").for_update(**lock_options)
+    assert query.build().sql.replace('"', "").rstrip().endswith(expected_clause)
+    assert query.to_sql().replace('"', "").rstrip().endswith(expected_clause)

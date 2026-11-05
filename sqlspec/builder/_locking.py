@@ -50,7 +50,14 @@ def _render_lock_targets(generator: "Generator", expressions: "Iterable[exp.Expr
 
 
 def _lock_sql(generator: "Generator", expression: exp.Lock) -> str:
-    if not generator.LOCKING_READS_SUPPORTED and type(generator.dialect).__name__ != "Spanner":
+    """Render a lock clause.
+
+    The dialect-neutral base generator keeps lock clauses so builds without a
+    dialect preserve ``FOR UPDATE`` / ``FOR SHARE``; dialects that cannot express
+    locking reads still drop them.
+    """
+    dialect_class = type(generator.dialect)
+    if not generator.LOCKING_READS_SUPPORTED and dialect_class is not Dialect and dialect_class.__name__ != "Spanner":
         generator.unsupported("Locking reads using 'FOR UPDATE/SHARE' are not supported")
         return ""
 
