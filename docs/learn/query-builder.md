@@ -60,7 +60,7 @@ Values compared through `Column` operators bind as generated parameters (`:where
 | Ordering | `col < 10`, `col <= 10`, `col > 0`, `col >= 0` | `col < :p`, `col <= :p`, `col > :p`, `col >= :p` |
 | Logical | `&` for AND, the pipe operator for OR, `~` for NOT | `a = :p AND b = :p`, `a = :p OR b = :p`, `NOT ...` |
 | Membership | `col.in_(["a", "b"])`, `col.not_in(["a", "b"])` | `col IN (:p1, :p2)`, `NOT col IN (:p1, :p2)` |
-| Array Any | `col.any_(["a", "b"])`, `col.not_any_(["a", "b"])` | `col = ANY(ARRAY(:p1, :p2))`, `col <> ALL(ARRAY(:p1, :p2))` |
+| Array Any | `col.any_(["a", "b"])`, `col.not_any_(["a", "b"])`, `sql.not_any_("col", subq)` | `col = ANY(ARRAY(:p1, :p2))`, `col <> ALL(ARRAY(:p1, :p2))`, `col <> ALL (SELECT ...)` |
 | Range and Null | `col.between(1, 5)`, `col.is_null()`, `col.is_not_null()` | `BETWEEN` bounds, `col IS NULL`, `NOT col IS NULL` |
 | Pattern | `col.like("%x%")`, `col.not_like(...)`, `col.ilike(...)`, `col.not_ilike(...)` | `col LIKE :p`, `NOT col LIKE :p`, `col ILIKE :p` |
 | Sort and Alias | `col.asc(nulls="last")`, `col.desc(nulls="first")`, `col.alias("n")`, `col.as_("n")` | `col ASC NULLS LAST`, `col AS n` |

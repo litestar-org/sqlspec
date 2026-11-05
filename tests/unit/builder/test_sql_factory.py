@@ -2319,3 +2319,70 @@ def test_equality_with_none_renders_null_predicate(
     built = apply_condition(query).build()
     assert " ".join(built.sql.split()).replace('"', "").endswith(f"WHERE {expected_where}")
     assert None not in built.parameters.values()
+
+
+@pytest.mark.parametrize(
+    ("column", "dialect", "expected"),
+    [
+        ("status", None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
+        ("status", "postgres", 'WHERE "t"."status" <> ALL ( ARRAY[%(where_param_1)s, %(where_param_2)s] )'),
+        ("t.status", None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
+        (Column("status"), None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
+        (exp.column("status"), None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
+    ],
+    ids=["name", "name_postgres", "qualified_name", "column_object", "sqlglot_column"],
+)
+def test_not_any_with_values_renders_negated_any_condition(column: Any, dialect: str | None, expected: str) -> None:
+    built = sql.select("*").from_("t").where(sql.not_any_(column, ["banned", "suspended"])).build(dialect=dialect)
+
+    assert " ".join(built.sql.split()).endswith(expected)
+    assert built.parameters == {"where_param_1": "banned", "where_param_2": "suspended"}
+
+
+def test_not_any_without_optimization_wraps_any_comparison_in_not() -> None:
+    condition = sql.not_any_("status", ["banned"])
+
+    assert condition.sqlglot_expression.sql() == "NOT status = ANY(ARRAY('banned'))"
+
+
+def test_not_any_matches_column_not_any() -> None:
+    from_factory = sql.select("*").from_("t").where(sql.not_any_("status", [1, 2])).build()
+    from_column = sql.select("*").from_("t").where(Column("status").not_any_([1, 2])).build()
+
+    assert from_factory.sql == from_column.sql
+    assert from_factory.parameters == from_column.parameters
+
+
+@pytest.mark.parametrize("dialect", [None, "postgres"], ids=["default", "postgres"])
+def test_not_any_with_subquery_keeps_all_comparison_and_merges_parameters(dialect: str | None) -> None:
+    banned = sql.select("user_id").from_("bans").where_gt("severity", 3)
+
+    built = (
+        sql.select("*").from_("users").where_gt("severity", 1).where(sql.not_any_("id", banned)).build(dialect=dialect)
+    )
+    rendered = " ".join(built.sql.split())
+
+    assert built.parameters == {"severity": 1, "severity_1": 3}
+    assert '"users"."id" <> ALL ( SELECT "bans"."user_id"' in rendered
+    assert "LEFT JOIN" not in rendered
+
+
+def test_not_any_subquery_fragment_is_reusable() -> None:
+    fragment = sql.not_any_("id", sql.select("user_id").from_("bans").where_gt("severity", 3))
+
+    first = sql.select("*").from_("a").where(fragment).build()
+    second = sql.select("*").from_("b").where(fragment).build()
+
+    assert first.parameters == {"severity": 3}
+    assert second.parameters == {"severity": 3}
+
+
+def test_not_any_composes_with_boolean_operators() -> None:
+    condition = sql.not_any_("status", ["banned"]) & (Column("age") >= 18)
+
+    built = sql.select("*").from_("t").where(condition).build()
+    rendered = " ".join(built.sql.split())
+
+    assert '"t"."status" <> ALL ( ARRAY(:where_param_1) )' in rendered
+    assert '"t"."age" >= :where_param_2' in rendered
+    assert built.parameters == {"where_param_1": "banned", "where_param_2": 18}

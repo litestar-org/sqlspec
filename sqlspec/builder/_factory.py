@@ -13,7 +13,8 @@ from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._column import Column
+from sqlspec.builder._column import Column, ColumnExpression
+from sqlspec.builder._column import _convert_value as convert_column_value
 from sqlspec.builder._ddl import (
     AlterTable,
     CommentOn,
@@ -55,6 +56,7 @@ from sqlspec.builder._parsing_utils import (
     _resolve_dialect,
     _rollup_expression,
     extract_expression,
+    parse_column_expression,
     to_expression,
 )
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
@@ -1099,6 +1101,37 @@ class SQLFactory:
             parsed: exp.Expr = exp.maybe_parse(values)
             return FunctionExpression(exp.Any(this=parsed))
         return FunctionExpression(exp.Any(this=values))
+
+    @staticmethod
+    def not_any_(column: "str | Column | exp.Expr", values: Any) -> ColumnExpression:
+        """Create a ``NOT (column = ANY(...))`` condition.
+
+        ``column <> ANY(...)`` is true whenever any element differs, so the negation
+        wraps the ``= ANY`` comparison. The result matches ``Column.not_any_`` and
+        ``NotAnyCollectionFilter`` and renders as ``column <> ALL (...)`` on optimizing
+        dialects such as PostgreSQL.
+
+        Args:
+            column: Column name (``"status"`` or ``"t.status"``), ``Column``, or expression.
+            values: Iterable of values bound as parameters, or a subquery given as a
+                query builder, sqlglot expression, or SQL string. Parameters bound by a
+                subquery builder are merged into the outer query. Subqueries stay
+                parenthesized so the optimizer keeps ``<> ALL (subquery)`` instead of
+                rewriting it into an anti-join, which would change the result when the
+                subquery returns ``NULL``.
+
+        Returns:
+            Condition usable with ``.where()``, ``.having()``, ``&``, ``|``, and ``~``.
+        """
+        left = column.sqlglot_expression if isinstance(column, Column) else parse_column_expression(column)
+        any_expression: exp.Expr
+        if isinstance(values, (list, tuple, set, frozenset)):
+            converted = [convert_column_value(value) for value in values]
+            any_expression = exp.Any(this=exp.Paren(this=exp.Array(expressions=converted)))
+        else:
+            any_expression = SubqueryBuilder("any")(values)
+            any_expression.set("this", exp.paren(any_expression.this, copy=False))
+        return ColumnExpression(exp.Not(this=exp.EQ(this=left, expression=any_expression)))
 
     @staticmethod
     def concat(*expressions: str | exp.Expr) -> StringExpression:

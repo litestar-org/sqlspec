@@ -14,9 +14,9 @@ important operational fixes.
 * `.where_eq(col, None)` / `.where_neq(col, None)` (including `or_` variants, `("col", None)` tuples, and `SQL.where_eq` / `SQL.where_neq`) render `col IS NULL` / `NOT col IS NULL` instead of binding a NULL parameter.
 * `sql.exists_()`, `sql.any_()`, and `sql.all_()` fragments built from parameterized subqueries merge their parameters into the outer query when used in `.where()`, `.having()`, or `Column` comparisons. Passing `sql.in_()` directly to `.where()` raises `SQLBuilderError` pointing to `.where_in()`.
 
-**Removed:**
+**Changed:**
 
-* Removed `SQLFactory.not_any_`, which could only produce invalid `NOT ANY(...)` SQL. Use `Column.not_any_()` or `.where_not_any()`, which render `NOT (col = ANY(...))`.
+* `sql.not_any_()` now takes `(column, values)` and returns the full `NOT (column = ANY(...))` condition, matching `Column.not_any_()`, `.where_not_any()`, and `NotAnyCollectionFilter`. `values` accepts a value list (bound as parameters) or a subquery whose parameters merge into the outer query. The previous one-argument form only produced invalid `NOT ANY(...)` SQL.
 
 ### v0.71.0 - SAP fixes, Arrow schemas, and SQL file guides
 
