@@ -10,7 +10,7 @@ from sqlspec.driver import (
 )
 ```
 
-Base asynchronous driver adapter class inherited by all asynchronous SQLSpec database adapters (`AsyncpgDriver`, `PsycopgAsyncDriver`, `PsqlpyDriver`, `AiosqliteDriver`, `AsyncmyDriver`, `AiomysqlDriver`, `OracleAsyncDriver`, `SpannerAsyncDriver`, `Db2AsyncDriver`, `CockroachAsyncpgDriver`, `CockroachPsycopgAsyncDriver`). See [Querying](../../learn/querying.md) for usage examples.
+Base asynchronous driver adapter class inherited by all asynchronous SQLSpec database adapters (`AsyncpgDriver`, `PsycopgAsyncDriver`, `PsqlpyDriver`, `CockroachAsyncpgDriver`, `CockroachPsycopgAsyncDriver`, `AiosqliteDriver`, `AsyncmyDriver`, `AiomysqlDriver`, `MysqlConnectorAsyncDriver`, `OracleAsyncDriver`, `SpannerAsyncDriver`, `Db2AsyncDriver`). See [Querying](../../learn/querying.md) for usage examples.
 
 ## Asynchronous Driver Adapter
 

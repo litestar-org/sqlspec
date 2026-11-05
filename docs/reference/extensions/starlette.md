@@ -2,18 +2,16 @@
 
 ```python
 from sqlspec.extensions.starlette import (
-    SQLSpecAsyncService,
     SQLSpecAutocommitMiddleware,
     SQLSpecConfigState,
     SQLSpecManualMiddleware,
     SQLSpecPlugin,
-    SQLSpecSyncService,
     get_connection_from_request,
     get_or_create_session,
 )
 ```
 
-Starlette lifespan management, autocommit and manual transaction ASGI middlewares, and `request.state` session extraction helpers. See the [Starlette Integration Guide](../../integrations/starlette.md) for usage examples.
+Starlette lifespan management, autocommit and manual transaction ASGI middlewares, and `request.state` session extraction helpers (`SQLSpecSyncService` and `SQLSpecAsyncService` are documented in [Service Layer](../service.md)). See the [Starlette Integration Guide](../../integrations/starlette.md) for usage examples.
 
 ## Plugin & State
 

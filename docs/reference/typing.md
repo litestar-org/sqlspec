@@ -2,13 +2,11 @@
 
 ```python
 from sqlspec.typing import (
-    UNSET,
     ArrowReturnFormat,
     ConnectionT,
     DataclassProtocol,
     DictLike,
-    Empty,
-    EmptyType,
+    EmptyEnum,
     PoolT,
     SchemaT,
     StatementParameters,

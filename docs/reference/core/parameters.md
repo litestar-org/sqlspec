@@ -17,8 +17,10 @@ from sqlspec.core import (
     TypeCoercionCapabilities,
     TypedParameter,
     get_driver_profile,
+    matches_param_type,
     register_driver_profile,
     register_param_type,
+    resolve_param_type,
     wrap_with_type,
 )
 ```
@@ -114,6 +116,14 @@ Parameter extraction, validation, placeholder style rewriting (`?`, `$1`, `:name
       heading_level: 4
 
 ::: sqlspec.core.parameters.register_param_type
+    options:
+      heading_level: 4
+
+::: sqlspec.core.parameters.matches_param_type
+    options:
+      heading_level: 4
+
+::: sqlspec.core.parameters.resolve_param_type
     options:
       heading_level: 4
 

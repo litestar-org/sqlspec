@@ -32,6 +32,6 @@ Curated module-by-module and per-adapter API reference for SQLSpec. Every page o
 | `sqlspec.exceptions` | [Exceptions](exceptions.md) | `SQLSpecError` hierarchy (`IntegrityError`, `UniqueViolationError`, `DeadlockError`, `SerializationConflictError`) and `map_sqlstate_to_exception`. |
 | `sqlspec.protocols` | [Protocols](protocols.md) | Runtime-checkable structural protocols for drivers, cursors, builders, and Arrow results. |
 | `sqlspec.typing` | [Typing & Schema Aliases](typing.md) | `SupportedSchemaModel`, `StatementParameters`, `ArrowReturnFormat`, and optional dependency sentinels. |
-| `sqlspec.utils` | [Utilities](utils.md) | Type guards, serializers, schema converters, UUID/NanoID generators, fixture loaders, and sync/async bridges. |
+| `sqlspec.utils.*` | [Utilities](utils.md) | Type guards, serializers, schema converters, UUID/NanoID generators, fixture loaders, and sync/async bridges. |
 | `sqlspec.extensions.*` | [Extensions](extensions/index.md) | [Litestar](extensions/litestar.md), [Google ADK](extensions/adk.md), [Events](extensions/events.md), [FastAPI](extensions/fastapi.md), [Starlette](extensions/starlette.md), [Flask](extensions/flask.md), [Sanic](extensions/sanic.md), [OpenTelemetry](extensions/opentelemetry.md), and [Prometheus](extensions/prometheus.md). |
 | `sqlspec.adapters.*` | [Database Adapters](adapters/index.md) | Adapter-specific configurations, connection/pool `TypedDict` parameters, drivers, and extension stores across all database adapters. |

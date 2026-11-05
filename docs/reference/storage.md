@@ -13,6 +13,9 @@ from sqlspec.storage import (
     StorageTelemetry,
     SyncStoragePipeline,
     create_storage_bridge_job,
+    get_storage_bridge_diagnostics,
+    get_storage_bridge_metrics,
+    reset_storage_bridge_metrics,
     resolve_storage_path,
     storage_registry,
 )
@@ -26,9 +29,21 @@ Multi-backend object storage registry (`local`, `fsspec`, `obstore`) and Apache 
     options:
       heading_level: 3
 
+::: sqlspec.storage.registry.storage_registry
+    options:
+      heading_level: 4
+
 ::: sqlspec.storage._paths.resolve_storage_path
     options:
       heading_level: 3
+
+::: sqlspec.storage.pipeline.StorageDestination
+    options:
+      heading_level: 4
+
+::: sqlspec.storage.pipeline.StorageFormat
+    options:
+      heading_level: 4
 
 ## Storage Pipelines
 

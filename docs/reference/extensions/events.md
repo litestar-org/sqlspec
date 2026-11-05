@@ -14,7 +14,11 @@ from sqlspec.extensions.events import (
     SyncEventListener,
     SyncTableEventQueue,
     build_queue_backend,
+    decode_notify_payload,
+    encode_notify_payload,
+    fits_notify_payload,
     get_runtime_hints,
+    measure_notify_payload,
 )
 ```
 
@@ -120,5 +124,13 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
       heading_level: 4
 
 ::: sqlspec.extensions.events._payload.decode_notify_payload
+    options:
+      heading_level: 4
+
+::: sqlspec.extensions.events._payload.fits_notify_payload
+    options:
+      heading_level: 4
+
+::: sqlspec.extensions.events._payload.measure_notify_payload
     options:
       heading_level: 4

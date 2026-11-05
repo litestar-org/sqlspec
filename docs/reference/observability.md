@@ -17,8 +17,10 @@ from sqlspec.observability import (
     SamplingConfig,
     SpanManager,
     StatementEvent,
+    StatementObserver,
     TelemetryConfig,
     TelemetryDiagnostics,
+    create_event,
     create_statement_observer,
     default_statement_observer,
     format_statement_event,
@@ -77,6 +79,10 @@ Structured statement observers, parameter redaction, OpenTelemetry span manageme
     options:
       heading_level: 3
       members: false
+
+::: sqlspec.observability._observer.StatementObserver
+    options:
+      heading_level: 4
 
 ::: sqlspec.observability._observer.create_event
     options:

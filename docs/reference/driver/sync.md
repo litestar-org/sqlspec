@@ -10,7 +10,7 @@ from sqlspec.driver import (
 )
 ```
 
-Base synchronous driver adapter class inherited by all synchronous SQLSpec database adapters (`SqliteDriver`, `PsycopgSyncDriver`, `PymysqlDriver`, `OracleSyncDriver`, `DuckDBDriver`, `BigQueryDriver`, `SpannerSyncDriver`, `Db2SyncDriver`, `MssqlSyncDriver`, `PymssqlDriver`, `SybaseSyncDriver`, `SqlAnywhereSyncDriver`, `AdbcDriver`, `ArrowOdbcDriver`). See [Querying](../../learn/querying.md) for usage examples.
+Base synchronous driver adapter class inherited by all synchronous SQLSpec database adapters (`SqliteDriver`, `PsycopgSyncDriver`, `CockroachPsycopgSyncDriver`, `PyMysqlDriver`, `MysqlConnectorSyncDriver`, `OracleSyncDriver`, `DuckDBDriver`, `BigQueryDriver`, `SpannerSyncDriver`, `Db2SyncDriver`, `MssqlPythonDriver`, `PymssqlDriver`, `SybaseDriver`, `SqlanywhereDriver`, `AdbcDriver`, `ArrowOdbcDriver`). See [Querying](../../learn/querying.md) for usage examples.
 
 ## Synchronous Driver Adapter
 

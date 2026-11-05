@@ -3,15 +3,13 @@
 ```python
 from sqlspec.extensions.sanic import (
     SanicConfigState,
-    SQLSpecAsyncService,
     SQLSpecPlugin,
-    SQLSpecSyncService,
     get_connection_from_request,
     get_or_create_session,
 )
 ```
 
-Sanic server listener and request/response middleware extension for pool lifecycle management and `request.ctx` session injection. See the [Sanic Integration Guide](../../integrations/sanic.md) for usage examples.
+Sanic server listener and request/response middleware extension for pool lifecycle management and `request.ctx` session injection (`SQLSpecSyncService` and `SQLSpecAsyncService` are documented in [Service Layer](../service.md)). See the [Sanic Integration Guide](../../integrations/sanic.md) for usage examples.
 
 ## Plugin & Configuration State
 

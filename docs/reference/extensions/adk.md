@@ -20,10 +20,15 @@ from sqlspec.extensions.adk import (
     StoredMemory,
     StoredSession,
     prune_artifacts,
+    prune_artifacts_sync,
     prune_events,
+    prune_events_sync,
     prune_memory,
+    prune_memory_sync,
     prune_sessions,
+    prune_sessions_sync,
     prune_user_state,
+    prune_user_state_sync,
 )
 ```
 
@@ -34,6 +39,8 @@ Session, event, long-term memory, and artifact metadata services and base stores
 ::: sqlspec.extensions.adk.service.SQLSpecSessionService
     options:
       heading_level: 3
+      separate_signature: false
+      show_docstring_parameters: false
       members:
         - create_session
         - get_session
@@ -118,6 +125,10 @@ Session, event, long-term memory, and artifact metadata services and base stores
       heading_level: 4
       members: false
 
+::: sqlspec.extensions.adk._types.SessionOrderBy
+    options:
+      heading_level: 4
+
 ## Maintenance & Pruning Helpers
 
 ::: sqlspec.extensions.adk.maintenance.PruneReport
@@ -128,3 +139,59 @@ Session, event, long-term memory, and artifact metadata services and base stores
 ::: sqlspec.extensions.adk.maintenance.prune_sessions
     options:
       heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_sessions_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_events
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_events_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_memory
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_memory_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_artifacts
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_artifacts_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_user_state
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_user_state_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
