@@ -94,7 +94,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     the sqlspec.core modules for statement processing and caching.
     """
 
-    __slots__ = ("_created_profile_path", "_data_dictionary", "_transaction_active")
+    __slots__ = ("_created_profile_path", "_data_dictionary", "_migration_schema_restore", "_transaction_active")
     dialect = "duckdb"
 
     def __init__(
@@ -113,6 +113,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self._created_profile_path: Path | None = None
         self._data_dictionary: DuckDBDataDictionary | None = None
         self._transaction_active = False
+        self._migration_schema_restore: str | None = None
 
     def close(self) -> None:
         """Close driver and clean up temporary statement profile files."""
@@ -355,12 +356,31 @@ class DuckDBDriver(SyncDriverAdapterBase):
         raise NotImplementedError(msg)
 
     def set_migration_session_schema(self, schema: str) -> None:
-        """Set DuckDB search_path for migration SQL."""
+        """Set DuckDB search_path for migration SQL, remembering the path in effect on the first switch.
+
+        Args:
+            schema: Schema to place on the search path.
+        """
         handler = self.handle_database_exceptions()
-        self._run_with_exception_handler(
-            handler, self.connection.execute, f"SET search_path = {quote_identifier(schema)}"
-        )
+        self._run_with_exception_handler(handler, self._switch_migration_search_path, schema)
         self._check_pending_exception(handler)
+
+    def reset_migration_session_schema(self) -> None:
+        """Restore the search path captured by ``set_migration_session_schema``."""
+        previous_path = self._migration_schema_restore
+        if previous_path is None:
+            return
+        literal = previous_path.replace("'", "''")
+        handler = self.handle_database_exceptions()
+        self._run_with_exception_handler(handler, self.connection.execute, f"SET search_path = '{literal}'")
+        self._check_pending_exception(handler)
+        self._migration_schema_restore = None
+
+    def _switch_migration_search_path(self, schema: str) -> None:
+        if self._migration_schema_restore is None:
+            row = self.connection.execute("SELECT current_setting('search_path')").fetchone()
+            self._migration_schema_restore = "" if row is None else str(row[0])
+        self.connection.execute(f"SET search_path = {quote_identifier(schema)}")
 
     def has_schema(self, schema: str) -> bool:
         """Return whether a DuckDB schema exists."""
