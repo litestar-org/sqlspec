@@ -2,7 +2,6 @@
 
 import argparse
 import ast
-import importlib
 import inspect
 import re
 import sys
@@ -88,6 +87,7 @@ _TYPE_WRAPPERS_TO_UNWRAP: frozenset[str] = frozenset({
     "typing_extensions.Required",
 })
 _LITERAL_TYPE_NAMES: frozenset[str] = frozenset({"Literal", "typing.Literal", "typing_extensions.Literal"})
+_TYPEDDICT_BASE_NAMES: frozenset[str] = frozenset({"TypedDict", "typing.TypedDict", "typing_extensions.TypedDict"})
 _EXCLUDED_ADAPTER_SYMBOL_SUFFIXES: tuple[str, ...] = (
     "Connection",
     "ConnectionContext",
@@ -346,59 +346,146 @@ def _render_marker_spec(spec: str) -> str:
     return render_typeddict_table([item.strip() for item in raw_symbols if item.strip()])
 
 
+def _find_module_source_path(module_name: str) -> Path | None:
+    """Resolve a dotted module name to its Python source file on sys.path without importing it."""
+    rel_parts = module_name.split(".")
+    rel_module = Path(*rel_parts).with_suffix(".py")
+    rel_pkg_init = Path(*rel_parts, "__init__.py")
+    search_roots = [*(Path(entry) for entry in sys.path if entry), Path.cwd()]
+    for root in search_roots:
+        module_candidate = root / rel_module
+        if module_candidate.is_file():
+            return module_candidate.resolve()
+        pkg_candidate = root / rel_pkg_init
+        if pkg_candidate.is_file():
+            return pkg_candidate.resolve()
+    return None
+
+
 @cache
+def _parse_source_file_ast(source_path: Path, module_name: str) -> tuple[dict[str, ast.ClassDef], dict[str, str]]:
+    """Parse a Python source file once and index its top-level ClassDefs and import bindings."""
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    package_parts = module_name.split(".") if source_path.name == "__init__.py" else module_name.split(".")[:-1]
+    imports: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                local_name = alias.asname or alias.name
+                imports[local_name] = alias.name
+        elif isinstance(node, ast.ImportFrom):
+            base_parts = list(package_parts)
+            if node.level > 0:
+                trim = node.level - 1
+                base_parts = base_parts[: len(base_parts) - trim] if trim <= len(base_parts) else []
+            if node.module:
+                target_module = ".".join([*base_parts, node.module]) if node.level > 0 else node.module
+            else:
+                target_module = ".".join(base_parts)
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                local_name = alias.asname or alias.name
+                imports[local_name] = f"{target_module}.{alias.name}" if target_module else alias.name
+    return classes, imports
+
+
+def _parse_module_ast(module_name: str) -> tuple[dict[str, ast.ClassDef], dict[str, str]]:
+    """Locate a module on disk without importing it and return its AST class and import maps."""
+    source_path = _find_module_source_path(module_name)
+    if source_path is None:
+        return {}, {}
+    return _parse_source_file_ast(source_path, module_name)
+
+
 def _module_class_nodes(module_name: str) -> dict[str, ast.ClassDef]:
     """Parse a module's source once and index its top-level class definitions by name."""
-    module = importlib.import_module(module_name)
-    source_file = getattr(module, "__file__", None)
-    if not source_file:
-        return {}
-    tree = ast.parse(Path(source_file).read_text(encoding="utf-8"), filename=source_file)
-    return {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    classes, _ = _parse_module_ast(module_name)
+    return classes
 
 
-def _is_typeddict_class(obj: object) -> bool:
-    """Return whether obj is a TypedDict class from ``typing`` or ``typing_extensions``."""
-    return isinstance(obj, type) and issubclass(obj, dict) and hasattr(obj, "__required_keys__")
+def _resolve_symbol_class_node(
+    symbol_path: str, seen_aliases: set[str] | None = None
+) -> tuple[str, ast.ClassDef] | None:
+    """Resolve a dotted class path to its defining module name and AST ClassDef without importing."""
+    visited = seen_aliases if seen_aliases is not None else set()
+    if symbol_path in visited:
+        return None
+    visited.add(symbol_path)
+
+    module_name, _, class_name = symbol_path.rpartition(".")
+    if not module_name or not class_name:
+        return None
+    classes, imports = _parse_module_ast(module_name)
+    cls_node = classes.get(class_name)
+    if cls_node is not None:
+        return module_name, cls_node
+    imported_target = imports.get(class_name)
+    if imported_target is not None:
+        return _resolve_symbol_class_node(imported_target, visited)
+    return None
 
 
-def _collect_typeddict_class_nodes(cls_obj: type) -> list[ast.ClassDef]:
+def _resolve_base_symbol_path(module_name: str, base_expr: ast.expr) -> str | None:
+    """Resolve an AST base class expression against its defining module's AST scope."""
+    target_expr = base_expr.value if isinstance(base_expr, ast.Subscript) else base_expr
+    raw_base = ast.unparse(target_expr).strip()
+    if raw_base in _TYPEDDICT_BASE_NAMES:
+        return "TypedDict"
+    classes, imports = _parse_module_ast(module_name)
+    if raw_base in imports:
+        target = imports[raw_base]
+        if target in _TYPEDDICT_BASE_NAMES or target.endswith(".TypedDict"):
+            return "TypedDict"
+        return target
+    if raw_base in classes:
+        return f"{module_name}.{raw_base}"
+    if "." in raw_base:
+        prefix, _, attr = raw_base.rpartition(".")
+        if prefix in imports:
+            resolved = f"{imports[prefix]}.{attr}"
+            if resolved in _TYPEDDICT_BASE_NAMES or resolved.endswith(".TypedDict"):
+                return "TypedDict"
+            return resolved
+        return raw_base
+    return None
+
+
+def _collect_typeddict_class_nodes(symbol_path: str) -> list[ast.ClassDef]:
     """Return AST nodes for a TypedDict and all TypedDict ancestors in base-first order.
 
-    Base expressions are resolved against each class's defining module at runtime,
-    so inheritance works within one module and across modules on every supported
-    Python version (``typing.TypedDict`` only records ``__orig_bases__`` on 3.12+).
+    Base expressions are resolved against each class's defining module via AST and
+    filesystem lookup, so inheritance works within one module and across modules
+    without importing optional third-party database driver dependencies.
     """
     ordered: list[ast.ClassDef] = []
-    seen: set[tuple[str, str]] = set()
+    typeddict_status: dict[str, bool] = {}
 
-    def _visit(current: type) -> None:
-        identity = (current.__module__, current.__qualname__)
-        if identity in seen:
-            return
-        seen.add(identity)
-        cls_node = _module_class_nodes(current.__module__).get(current.__name__)
-        if cls_node is None:
-            return
-        module = sys.modules[current.__module__]
+    def _visit(current_symbol: str) -> bool:
+        resolved = _resolve_symbol_class_node(current_symbol)
+        if resolved is None:
+            return False
+        canonical_module, cls_node = resolved
+        canonical_symbol = f"{canonical_module}.{cls_node.name}"
+        if canonical_symbol in typeddict_status:
+            return typeddict_status[canonical_symbol]
+        typeddict_status[canonical_symbol] = False
+
+        is_td = False
         for base_expr in cls_node.bases:
-            base_obj = _resolve_dotted_name(module, ast.unparse(base_expr))
-            if isinstance(base_obj, type) and _is_typeddict_class(base_obj):
-                _visit(base_obj)
-        ordered.append(cls_node)
+            base_target = _resolve_base_symbol_path(canonical_module, base_expr)
+            if base_target == "TypedDict" or (base_target is not None and _visit(base_target)):
+                is_td = True
+        typeddict_status[canonical_symbol] = is_td
+        if is_td:
+            ordered.append(cls_node)
+        return is_td
 
-    _visit(cls_obj)
+    if not _visit(symbol_path):
+        msg = f"{symbol_path!r} is not a TypedDict class"
+        raise TypeError(msg)
     return ordered
-
-
-def _resolve_dotted_name(module: object, dotted: str) -> object | None:
-    """Resolve a dotted attribute path such as ``config.BaseParams`` against a module namespace."""
-    current: object | None = module
-    for part in dotted.split("."):
-        current = getattr(current, part, None)
-        if current is None:
-            return None
-    return current
 
 
 def _extract_typeddict_chain_fields(symbol_path: str) -> list[tuple[str, str, str, str]]:
@@ -408,13 +495,12 @@ def _extract_typeddict_chain_fields(symbol_path: str) -> list[tuple[str, str, st
         msg = f"Invalid TypedDict symbol path: {symbol_path!r}"
         raise ValueError(msg)
 
-    cls_obj = getattr(importlib.import_module(module_name), class_name)
-    if not _is_typeddict_class(cls_obj):
-        msg = f"{symbol_path!r} is not a TypedDict class"
-        raise TypeError(msg)
+    if _resolve_symbol_class_node(symbol_path) is None:
+        msg = f"Unable to resolve TypedDict symbol: {symbol_path!r}"
+        raise ValueError(msg)
 
     collected: dict[str, tuple[str, str, str]] = {}
-    for cls_node in _collect_typeddict_class_nodes(cls_obj):
+    for cls_node in _collect_typeddict_class_nodes(symbol_path):
         for key, type_cell, default_cell, desc_cell in _extract_ast_class_fields(cls_node):
             collected[key] = (type_cell, default_cell, desc_cell)
     return [(key, *values) for key, values in collected.items()]

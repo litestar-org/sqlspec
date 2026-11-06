@@ -221,7 +221,10 @@ class SelectClauseMixin:
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
 
-    def select(self, *columns: Union[str, exp.Expr, "Column", "FunctionColumn", SQL, Case]) -> Self:
+    def select(
+        self,
+        *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case],
+    ) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="Cannot add columns to non-SELECT expression.")
         for column in columns:
@@ -230,7 +233,10 @@ class SelectClauseMixin:
         self.set_expression(select_expr)
         return cast("Self", builder)
 
-    def select_only(self, *columns: Union[str, exp.Expr, "Column", "FunctionColumn", SQL, Case]) -> Self:
+    def select_only(
+        self,
+        *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case],
+    ) -> Self:
         """Replace currently selected columns with new ones."""
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="Cannot add columns to non-SELECT expression.")
@@ -241,7 +247,9 @@ class SelectClauseMixin:
         self.set_expression(select_expr)
         return cast("Self", builder)
 
-    def distinct(self, *columns: Union[str, exp.Expr, "Column", "FunctionColumn", SQL]) -> Self:
+    def distinct(
+        self, *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL]
+    ) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="Cannot add DISTINCT to non-SELECT expression.")
         if not columns:

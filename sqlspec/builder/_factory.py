@@ -13,7 +13,7 @@ from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._column import Column, ColumnExpression
+from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._column import _convert_value as convert_column_value
 from sqlspec.builder._ddl import (
     AlterTable,
@@ -79,7 +79,9 @@ __all__ = ("SQLFactory", "build_copy_from_statement", "build_copy_statement", "b
 logger = get_logger("sqlspec.builder.factory")
 
 BuilderT = TypeVar("BuilderT", bound=QueryBuilder)
-ColumnLike: TypeAlias = Union[str, exp.Expr, "ExpressionWrapper", "Case", "Column"]
+ColumnLike: TypeAlias = Union[
+    str, exp.Expr, "ExpressionWrapper", "Case", "Column", "FunctionColumn", "ColumnExpression"
+]
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
@@ -360,7 +362,11 @@ class SQLFactory:
         return create_join_builder("cross join", lateral=True)
 
     def select(
-        self, *columns_or_sql: Union[str, exp.Expr, Column, "SQL", "Case"], dialect: DialectType = None
+        self,
+        *columns_or_sql: Union[
+            str, exp.Expr, Column, FunctionColumn, ColumnExpression, "ExpressionWrapper", "SQL", "Case"
+        ],
+        dialect: DialectType = None,
     ) -> "Select":
         builder_dialect = _resolve_dialect(dialect, self.dialect)
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):

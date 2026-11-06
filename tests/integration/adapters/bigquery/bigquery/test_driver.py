@@ -237,49 +237,34 @@ def test_bigquery_for_update_generates_sql_but_unsupported(
     bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService"
 ) -> None:
     """Test that FOR UPDATE is stripped by sqlglot for BigQuery since it's not supported."""
-
-    # BigQuery doesn't support FOR UPDATE - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").for_update()
-    stmt = query.build()
+    stmt = query.build(dialect=bigquery_session.dialect)
 
-    # sqlglot now strips out unsupported FOR UPDATE for BigQuery
     assert "FOR UPDATE" not in stmt.sql
-    assert "SELECT" in stmt.sql  # But the rest of the query works
-
-    # Note: BigQuery is a columnar, analytics-focused database that doesn't support row-level locking
+    assert "SELECT" in stmt.sql
 
 
 def test_bigquery_for_share_generates_sql_but_unsupported(
     bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService"
 ) -> None:
     """Test that FOR SHARE is stripped by sqlglot for BigQuery since it's not supported."""
-
-    # BigQuery doesn't support FOR SHARE - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").for_share()
-    stmt = query.build()
+    stmt = query.build(dialect=bigquery_session.dialect)
 
-    # sqlglot now strips out unsupported FOR SHARE for BigQuery
     assert "FOR SHARE" not in stmt.sql
-    assert "SELECT" in stmt.sql  # But the rest of the query works
-
-    # BigQuery is designed for analytical workloads and doesn't support transactional locking
+    assert "SELECT" in stmt.sql
 
 
 def test_bigquery_for_update_skip_locked_generates_sql_but_unsupported(
     bigquery_session: "BigQueryDriver", bigquery_service: "BigQueryService"
 ) -> None:
     """Test that FOR UPDATE SKIP LOCKED is stripped by sqlglot for BigQuery since it's not supported."""
-
-    # BigQuery doesn't support FOR UPDATE SKIP LOCKED - sqlglot automatically strips it out
     query = sql.select("*").from_("test_table").for_update(skip_locked=True)
-    stmt = query.build()
+    stmt = query.build(dialect=bigquery_session.dialect)
 
-    # sqlglot now strips out unsupported FOR UPDATE for BigQuery
     assert "FOR UPDATE" not in stmt.sql
     assert "SKIP LOCKED" not in stmt.sql
-    assert "SELECT" in stmt.sql  # But the rest of the query works
-
-    # BigQuery doesn't support row-level locking or transaction isolation at the row level
+    assert "SELECT" in stmt.sql
 
 
 def test_bigquery_execute_many_qmark_with_dict_params(

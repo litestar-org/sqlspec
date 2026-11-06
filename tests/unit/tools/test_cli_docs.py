@@ -1,6 +1,7 @@
 """Behavioral unit tests for the SQLSpec CLI, data dictionary, and config table Markdown generators."""
 
 import inspect
+import sys
 from pathlib import Path
 
 import click
@@ -30,6 +31,7 @@ __all__ = (
     "test_lazy_cli_attribute_resolves_click_group",
     "test_render_cli_reference_renders_all_commands_arguments_and_options_cleanly",
     "test_render_typeddict_table_cross_module_inheritance_forward_refs_and_defaults",
+    "test_render_typeddict_table_does_not_import_optional_adapter_drivers",
     "test_render_typeddict_table_keeps_full_multiline_docstrings_with_lists",
     "test_render_typeddict_table_renders_inheritance_types_defaults_and_or_unions",
     "test_sync_markdown_markers_preserves_tab_indentation_and_is_idempotent",
@@ -265,6 +267,26 @@ def test_render_typeddict_table_cross_module_inheritance_forward_refs_and_defaul
         "| `timeout` | `int` | `60` | Timeout in whole seconds. Default: 60. |",
         "| `owner` | `type[Owner] or None` | - | Owner class. Default: the configured owner. |",
     ]
+    with pytest.raises(TypeError, match="is not a TypedDict class"):
+        render_typeddict_table(["doc_table_pkg.derived.Owner"])
+
+
+def test_render_typeddict_table_does_not_import_optional_adapter_drivers(monkeypatch: pytest.MonkeyPatch) -> None:
+    for mod_name in [
+        name for name in sys.modules if name == "sqlspec.adapters.adbc" or name.startswith("sqlspec.adapters.adbc.")
+    ]:
+        monkeypatch.delitem(sys.modules, mod_name, raising=False)
+    monkeypatch.setitem(sys.modules, "adbc_driver_manager", None)
+    monkeypatch.setitem(sys.modules, "adbc_driver_manager.dbapi", None)
+
+    table = render_typeddict_table([
+        "sqlspec.adapters.adbc.config.AdbcConnectionParams",
+        "sqlspec.adapters.adbc.config.AdbcDriverFeatures",
+    ])
+
+    assert "| `uri` |" in table
+    assert "| `enable_strict_type_coercion` |" in table
+    assert "sqlspec.adapters.adbc" not in sys.modules
 
 
 def test_render_typeddict_table_keeps_full_multiline_docstrings_with_lists(
