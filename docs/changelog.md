@@ -7,16 +7,30 @@ important operational fixes.
 
 ## Recent Updates
 
-### Unreleased
+### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
-**Fixed:**
+**Added:**
 
-* `.where_eq(col, None)` / `.where_neq(col, None)` (including `or_` variants, `("col", None)` tuples, and `SQL.where_eq` / `SQL.where_neq`) render `col IS NULL` / `NOT col IS NULL` instead of binding a NULL parameter.
-* `sql.exists_()`, `sql.any_()`, and `sql.all_()` fragments built from parameterized subqueries merge their parameters into the outer query when used in `.where()`, `.having()`, or `Column` comparisons. Passing `sql.in_()` directly to `.where()` raises `SQLBuilderError` pointing to `.where_in()`.
+* Added `tools.docs.generate_config_tables` (`render_typeddict_table`, `render_filter_catalog_table`, `sync_markdown_markers`, and `check_adapter_reference_parity`) to synchronize deterministic `TypedDict` configuration tables, `StatementFilter` catalog tables, and adapter reference symbol parity across `docs/`.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+* Added `supports_vectors` capability metadata across the PostgreSQL, CockroachDB, DuckDB, Oracle, BigQuery, and Spanner data dictionary dialect configurations.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+* Overhauled the documentation suite (`docs/learn/`, `docs/databases/`, `docs/integrations/`, `docs/reference/`, `docs/contributing/`, and `docs/examples/`) with runnable `pymdownx.snippets`, generated configuration tables across all 22 adapters and framework extensions, and expanded Query Builder, SQL File Loader, and CLI reference guides.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
 
 **Changed:**
 
 * `sql.not_any_()` now takes `(column, values)` and returns the full `NOT (column = ANY(...))` condition, matching `Column.not_any_()`, `.where_not_any()`, and `NotAnyCollectionFilter`. `values` accepts a value list (bound as parameters) or a subquery whose parameters merge into the outer query. The previous one-argument form only produced invalid `NOT ANY(...)` SQL.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+
+**Fixed:**
+
+* `.where_eq(col, None)` / `.where_neq(col, None)` (including `or_` variants, `("col", None)` tuples, and `SQL.where_eq` / `SQL.where_neq`) render `col IS NULL` / `NOT col IS NULL` instead of binding a NULL parameter.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+* `sql.exists_()`, `sql.any_()`, and `sql.all_()` fragments built from parameterized subqueries merge their parameters into the outer query when used in `.where()`, `.having()`, or `Column` comparisons. Passing `sql.in_()` directly to `.where()` raises `SQLBuilderError` pointing to `.where_in()`.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+* Fixed `Select` query builder lock preservation (`for_update` / `for_share` when `dialect=None`), `ExpressionWrapper` alias delegation in `SQLFactory.select()` and `Select`, `CaseBuilder` parameter propagation in `Select` / `WhereClauseMixin` / `HavingClauseMixin`, `Update.table(...)` clause ordering when called after `.set(...)` / `.where(...)`, `Insert.columns()` clearing when switching to `.from_select(...)`, `Delete` / `Update` CTE `.with_(...)` rendering, `Merge` source alias inference and `USING (<subquery>)` parenthesization, `CreateIndex` expression and `where` clause building, and `SQLFileLoader` hyphenated query name validation and reload cache invalidation.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
 
 ### v0.71.0 - SAP fixes, Arrow schemas, and SQL file guides
 
