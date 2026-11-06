@@ -784,14 +784,15 @@ class WhereClauseMixin:
 
     def _process_tuple_condition(self, condition: "tuple[Any, ...]") -> exp.Expr:
         if len(condition) == PAIR_LENGTH:
-            column, value = condition
-            return self._equality_condition(column, value, negate=False)
+            return self._equality_condition(condition[0], condition[1], negate=False)
 
         if len(condition) != TRIPLE_LENGTH:
             msg = f"Condition tuple must have 2 or 3 elements, got {len(condition)}"
             raise SQLBuilderError(msg)
 
-        column_raw, operator, value = condition
+        column_raw: Any = condition[0]
+        operator: Any = condition[1]
+        value: Any = condition[2]
         operator_upper = str(operator).upper()
         column_expr = parse_column_expression(column_raw)
         column_name = extract_column_name(column_raw)
