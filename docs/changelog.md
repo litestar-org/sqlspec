@@ -13,7 +13,7 @@ important operational fixes.
 
 * Added `tools.docs.generate_config_tables` (`render_typeddict_table`, `render_filter_catalog_table`, `sync_markdown_markers`, and `check_adapter_reference_parity`) to synchronize deterministic `TypedDict` configuration tables, `StatementFilter` catalog tables, and adapter reference symbol parity across `docs/`.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
-* Added `supports_vectors` capability metadata across the PostgreSQL, CockroachDB, DuckDB, Oracle, BigQuery, and Spanner data dictionary dialect configurations.
+* Added `supports_vectors` capability metadata across the CockroachDB, DuckDB, MariaDB, Oracle, SQL Server, BigQuery, and Spanner data dictionary dialect configurations.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
 * Overhauled the documentation suite (`docs/learn/`, `docs/databases/`, `docs/integrations/`, `docs/reference/`, `docs/contributing/`, and `docs/examples/`) with runnable `pymdownx.snippets`, generated configuration tables across all 22 adapters and framework extensions, and expanded Query Builder, SQL File Loader, and CLI reference guides.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
