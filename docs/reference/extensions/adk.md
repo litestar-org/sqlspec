@@ -20,10 +20,15 @@ from sqlspec.extensions.adk import (
     StoredMemory,
     StoredSession,
     prune_artifacts,
+    prune_artifacts_sync,
     prune_events,
+    prune_events_sync,
     prune_memory,
+    prune_memory_sync,
     prune_sessions,
+    prune_sessions_sync,
     prune_user_state,
+    prune_user_state_sync,
 )
 ```
 
@@ -34,6 +39,8 @@ Session, event, long-term memory, and artifact metadata services and base stores
 ::: sqlspec.extensions.adk.service.SQLSpecSessionService
     options:
       heading_level: 3
+      separate_signature: false
+      show_docstring_parameters: false
       members:
         - create_session
         - get_session
@@ -46,113 +53,49 @@ Session, event, long-term memory, and artifact metadata services and base stores
 ::: sqlspec.extensions.adk.memory.SQLSpecMemoryService
     options:
       heading_level: 3
-      members:
-        - add_session_to_memory
-        - add_events_to_memory
-        - add_memory
-        - search_memory
+      members: false
 
 ::: sqlspec.extensions.adk.memory.SQLSpecSyncMemoryService
     options:
       heading_level: 3
-      members:
-        - add_session_to_memory
-        - add_events_to_memory
-        - add_memory
-        - search_memory
+      members: false
 
 ::: sqlspec.extensions.adk.artifact.SQLSpecArtifactService
     options:
       heading_level: 3
-      members:
-        - save_artifact
-        - load_artifact
-        - list_artifact_keys
-        - list_versions
-        - delete_artifact
-        - delete_artifacts_older_than
+      members: false
 
 ## Base ADK Stores
 
 ::: sqlspec.extensions.adk.store.BaseAsyncADKStore
     options:
       heading_level: 4
-      members:
-        - create_tables
-        - ensure_tables
-        - reconcile_schema
-        - create_session
-        - get_session
-        - list_sessions
-        - delete_session
-        - append_event
-        - append_event_and_update_state
-        - get_events
+      members: false
 
 ::: sqlspec.extensions.adk.store.BaseSyncADKStore
     options:
       heading_level: 4
-      members:
-        - create_tables
-        - ensure_tables
-        - reconcile_schema
-        - create_session
-        - get_session
-        - list_sessions
-        - delete_session
-        - append_event
-        - append_event_and_update_state
-        - get_events
+      members: false
 
 ::: sqlspec.extensions.adk.memory.BaseAsyncADKMemoryStore
     options:
       heading_level: 4
-      members:
-        - create_tables
-        - ensure_tables
-        - reconcile_schema
-        - insert_memory_entries
-        - search_entries
-        - delete_entries_by_session
-        - delete_entries_older_than
+      members: false
 
 ::: sqlspec.extensions.adk.memory.BaseSyncADKMemoryStore
     options:
       heading_level: 4
-      members:
-        - create_tables
-        - ensure_tables
-        - reconcile_schema
-        - insert_memory_entries
-        - search_entries
-        - delete_entries_by_session
-        - delete_entries_older_than
+      members: false
 
 ::: sqlspec.extensions.adk.artifact.BaseAsyncADKArtifactStore
     options:
       heading_level: 4
-      members:
-        - create_table
-        - ensure_table
-        - insert_artifact
-        - get_artifact
-        - list_artifact_keys
-        - list_artifact_versions
-        - delete_artifact
-        - delete_artifacts_older_than
+      members: false
 
 ::: sqlspec.extensions.adk.artifact.BaseSyncADKArtifactStore
     options:
       heading_level: 4
-      members:
-        - create_table
-        - ensure_table
-        - insert_artifact
-        - get_artifact
-        - list_artifact_keys
-        - list_artifact_versions
-        - delete_artifact
-        - delete_artifacts_older_than
+      members: false
 
 ## Configuration & Record Schemas
 
@@ -165,16 +108,24 @@ Session, event, long-term memory, and artifact metadata services and base stores
 ::: sqlspec.extensions.adk._types.StoredSession
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.extensions.adk._types.StoredEvent
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.extensions.adk.memory.StoredMemory
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.extensions.adk.artifact.StoredArtifact
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.extensions.adk._types.SessionOrderBy
     options:
       heading_level: 4
 
@@ -183,23 +134,64 @@ Session, event, long-term memory, and artifact metadata services and base stores
 ::: sqlspec.extensions.adk.maintenance.PruneReport
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.extensions.adk.maintenance.prune_sessions
     options:
       heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_sessions_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
 
 ::: sqlspec.extensions.adk.maintenance.prune_events
     options:
       heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_events_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
 
 ::: sqlspec.extensions.adk.maintenance.prune_memory
     options:
       heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_memory_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
 
 ::: sqlspec.extensions.adk.maintenance.prune_artifacts
     options:
       heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_artifacts_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
 
 ::: sqlspec.extensions.adk.maintenance.prune_user_state
     options:
       heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk.maintenance.prune_user_state_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false

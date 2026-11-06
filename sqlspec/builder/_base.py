@@ -28,7 +28,7 @@ from sqlglot.schema import MappingSchema
 
 from sqlspec.builder._locking import register_lock_generator
 from sqlspec.builder._parsing_utils import _normalize_dialect, _resolve_dialect
-from sqlspec.builder._vector_distance import has_vector_distance_ancestor
+from sqlspec.builder._vector_distance import has_vector_distance_ancestor, register_vector_distance_generator
 from sqlspec.core import (
     SQL,
     ParameterStyle,
@@ -46,13 +46,21 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, is_expression
 from sqlspec.utils.uuids import uuid4
 
-__all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
+__all__ = (
+    "SUBQUERY_PARAMETERS_META_KEY",
+    "BuiltQuery",
+    "ExpressionBuilder",
+    "QueryBuilder",
+    "register_subquery_fragment",
+)
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
 _PARAMETER_SUFFIX_PATTERN = re.compile(r"^(?P<base>.+)_(?P<index>\d+)$")
 _UPPER_FOLDING_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "db2"})
 _UNQUOTED_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][\w$#]*$")
+SUBQUERY_PARAMETERS_META_KEY: Final[str] = "sqlspec_subquery_parameters"
+_SUBQUERY_FRAGMENTS_ISSUED = False
 
 
 logger = get_logger(__name__)
@@ -350,6 +358,7 @@ class QueryBuilder:
                 identify = self._should_identify(target_dialect)
                 if normalized_expression.find(exp.Lock) and target_dialect != "db2":
                     register_lock_generator(target_dialect)
+                register_vector_distance_generator(target_dialect)
                 sql_string = normalized_expression.sql(
                     dialect=target_dialect, pretty=True, identify=identify, copy=False
                 )
@@ -367,7 +376,9 @@ class QueryBuilder:
 
         Args:
             show_parameters: If True, replace parameter placeholders with actual values (for debugging).
-                If False (default), return SQL with parameter placeholders.
+                If False (default), return SQL with parameter placeholders. Every named
+                placeholder style the builder renders is substituted (``:name``, ``%(name)s``,
+                ``@name``, and ``$name``).
             dialect: Optional dialect override. If provided, generates SQL for this dialect
                 instead of the builder's default dialect.
 
@@ -389,10 +400,11 @@ class QueryBuilder:
             return sql
 
         sorted_names = sorted(parameters, key=len, reverse=True)
-        pattern = re.compile(r":(" + "|".join(re.escape(name) for name in sorted_names) + r")\b")
+        names_pattern = "|".join(re.escape(name) for name in sorted_names)
+        pattern = re.compile(rf"%\(({names_pattern})\)s|(?<![:\w])[:@$]({names_pattern})\b")
 
         def _replace_match(match: "re.Match[str]") -> str:
-            param_name = match.group(1)
+            param_name = match.group(1) or match.group(2)
             param_value = parameters[param_name]
             if isinstance(param_value, str):
                 escaped = param_value.replace("'", "''")
@@ -534,6 +546,7 @@ class QueryBuilder:
         identify = self._should_identify(target_dialect)
         if expr.find(exp.Lock) and target_dialect != "db2":
             register_lock_generator(target_dialect)
+        register_vector_distance_generator(target_dialect)
         sql_string = expr.sql(dialect=target_dialect, pretty=True, identify=identify, copy=not copy)
         sql_string = self._postprocess_built_sql(sql_string, dialect=dialect)
         return BuiltQuery(
@@ -837,6 +850,49 @@ class QueryBuilder:
             self._parameter_name_counters[base_name] = max(self._parameter_name_counters.get(base_name, 0), index)
         else:
             self._parameter_name_counters.setdefault(name, 0)
+
+    def _merge_subquery_fragments(self, expression: exp.Expr) -> exp.Expr:
+        """Merge parameters carried by ``sql.exists_`` / ``sql.in_`` / ``sql.any_`` / ``sql.all_`` fragments.
+
+        Fragments built from parameterized subquery builders carry their parameters in
+        ``SUBQUERY_PARAMETERS_META_KEY`` metadata. The expression is copied before
+        placeholders are renamed, so one fragment can be reused across builders. The
+        tree is only scanned once any fragment has been created in the process.
+
+        Args:
+            expression: Condition expression about to be attached to this builder.
+
+        Returns:
+            The expression with fragment parameters merged into this builder.
+        """
+        if not _SUBQUERY_FRAGMENTS_ISSUED:
+            return expression
+        has_carriers = False
+        for node in expression.walk():
+            if isinstance(node, exp.In) and isinstance(node.this, exp.Var) and not node.this.name:
+                self._raise_builder_error(
+                    "sql.in_() returns an IN fragment without a left operand; use .where_in(column, subquery) instead."
+                )
+            if node.meta_get(SUBQUERY_PARAMETERS_META_KEY) is not None:
+                has_carriers = True
+        if not has_carriers:
+            return expression
+
+        merged = expression.copy()
+        for node in list(merged.walk()):
+            parameters = node.meta_get(SUBQUERY_PARAMETERS_META_KEY)
+            if parameters is None:
+                continue
+            del node.meta[SUBQUERY_PARAMETERS_META_KEY]
+            param_mapping: dict[str, str] = {}
+            for name, value in parameters.items():
+                target_name = self._next_parameter_name(name) if name in self._parameters else name
+                _, actual_name = self.add_parameter(value, name=target_name)
+                if actual_name != name:
+                    param_mapping[name] = actual_name
+            if param_mapping:
+                self._update_placeholders(node, param_mapping)
+        return merged
 
     def _next_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name when collision occurs.
@@ -1192,6 +1248,7 @@ class QueryBuilder:
 
         if statement_expression.find(exp.Lock) and resolved_dialect != "db2":
             register_lock_generator(resolved_dialect)
+        register_vector_distance_generator(resolved_dialect)
         if self._folds_unquoted_to_upper(resolved_dialect):
             statement_expression = self._unquote_identifiers(statement_expression)
         return _BuilderCacheEntry(statement_expression, resolved_dialect)
@@ -1415,3 +1472,20 @@ def _unquote_identifier(node: exp.Expr) -> exp.Expr:
     ):
         node.set("quoted", False)
     return node
+
+
+def register_subquery_fragment(expression: exp.Expr, parameters: "Mapping[str, Any]") -> exp.Expr:
+    """Mark a subquery fragment and attach its bound parameters for later merging.
+
+    Args:
+        expression: The ``EXISTS`` / ``IN`` / ``ANY`` / ``ALL`` fragment.
+        parameters: Parameters bound by the fragment's subquery builder.
+
+    Returns:
+        The same expression, carrying ``parameters`` in its metadata when any exist.
+    """
+    global _SUBQUERY_FRAGMENTS_ISSUED
+    _SUBQUERY_FRAGMENTS_ISSUED = True
+    if parameters:
+        expression.meta[SUBQUERY_PARAMETERS_META_KEY] = dict(parameters)
+    return expression

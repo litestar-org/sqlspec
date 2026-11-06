@@ -5,16 +5,14 @@ from sqlspec.extensions.fastapi import (
     DependencyDefaults,
     FieldNameType,
     FilterConfig,
-    SQLSpecAsyncService,
     SQLSpecAutocommitMiddleware,
     SQLSpecManualMiddleware,
     SQLSpecPlugin,
-    SQLSpecSyncService,
     provide_filters,
 )
 ```
 
-FastAPI lifespan plugin, request-scoped `Depends()` session/connection providers, and declarative query-parameter filter dependency builders. See the [FastAPI Integration Guide](../../integrations/fastapi.md) for usage examples.
+FastAPI lifespan plugin, request-scoped `Depends()` session/connection providers, and declarative query-parameter filter dependency builders (`SQLSpecSyncService` and `SQLSpecAsyncService` are documented in [Service Layer](../service.md)). See the [FastAPI Integration Guide](../../integrations/fastapi.md) for usage examples.
 
 ## Plugin & Middlewares
 
@@ -51,3 +49,7 @@ FastAPI lifespan plugin, request-scoped `Depends()` session/connection providers
 ::: sqlspec.extensions.fastapi.providers.DependencyDefaults
     options:
       heading_level: 3
+
+::: sqlspec.extensions.fastapi.providers.FieldNameType
+    options:
+      heading_level: 4

@@ -1,5 +1,6 @@
 """Query multiple async and sync SQLSpec database binds inside a Sanic route."""
 
+# --8<-- [start:example]
 from sanic import Request, Sanic, response
 from sanic.response import HTTPResponse
 
@@ -8,12 +9,9 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.extensions.sanic import SQLSpecPlugin
 
-__all__ = ("main",)
 
-
-def main() -> Sanic:
+def create_app() -> Sanic:
     """Create a Sanic application wired to primary async and analytics sync databases."""
-    # --8<-- [start:example]
     spec = SQLSpec()
     spec.add_config(
         AiosqliteConfig(
@@ -49,21 +47,22 @@ def main() -> Sanic:
     async def report(request: Request) -> HTTPResponse:
         primary: AiosqliteDriver = db_plugin.get_session(request, "primary_db")
         analytics: SqliteDriver = db_plugin.get_session(request, "analytics_db")
-        users = await primary.select(
-            """
-            SELECT 1 AS id, 'Alice' AS name
-            """
-        )
-        metrics = analytics.select(
-            """
-            SELECT 'active_users' AS name, 100 AS value
-            """
-        )
+        users = await primary.select("SELECT 1 AS id, 'Alice' AS name")
+        metrics = analytics.select("SELECT 'active_users' AS name, 100 AS value")
         return response.json({"users": users, "metrics": metrics})
 
     db_plugin.init_app(app)
-    # --8<-- [end:example]
     return app
+
+
+# --8<-- [end:example]
+
+__all__ = ("create_app", "main")
+
+
+def main() -> Sanic:
+    """Create and return the multi-database Sanic application."""
+    return create_app()
 
 
 if __name__ == "__main__":

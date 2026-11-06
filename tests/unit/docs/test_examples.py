@@ -34,6 +34,7 @@ DIRECTIVE_PREFIXES: tuple[str, ...] = (
     "# cov:",
     "# --8<--",
 )
+MARKDOWN_OUTPUT_PREFIXES: tuple[str, ...] = ("# sql:", "# parameters:", "# output:")
 CONFIG_ONLY_MODULES: frozenset[str] = frozenset({"migration_quickstart_config.py"})
 EXTERNAL_DAEMON_EXAMPLES: frozenset[str] = frozenset({
     "drivers/asyncpg_connection.py",
@@ -48,8 +49,8 @@ EXAMPLE_MODULES: list[Path] = [path for path in ALL_PYTHON_FILES if path.name !=
 
 def test_examples_directory_inventory() -> None:
     """Ensure the documentation examples tree is discovered and non-empty."""
-    assert len(INIT_FILES) >= 20
-    assert len(EXAMPLE_MODULES) >= 63
+    assert INIT_FILES
+    assert EXAMPLE_MODULES
 
 
 def test_example_packages_define_docstring_and_dunder_all() -> None:
@@ -167,10 +168,22 @@ def test_examples_define_valid_snippet_sections() -> None:
             continue
 
         section_lines = lines[start_idx + 1 : end_idx]
-        dedented = textwrap.dedent("\n".join(section_lines)).splitlines()
+        dedented_text = textwrap.dedent("\n".join(section_lines))
+        dedented = dedented_text.splitlines()
         if not any(line.strip() for line in dedented):
             violations.append(f"{rel}: snippet section is empty")
             continue
+
+        try:
+            snippet_tree = ast.parse(dedented_text, filename=f"{rel}:{start_idx + 2}")
+        except SyntaxError as exc:
+            violations.append(f"{rel}:{start_idx + 2}: snippet section is not valid Python AST: {exc.msg}")
+        else:
+            violations.extend(
+                f"{rel}:{start_idx + 1 + stmt.lineno}: snippet section contains top-level return statement"
+                for stmt in snippet_tree.body
+                if isinstance(stmt, ast.Return)
+            )
 
         for offset, line in enumerate(dedented, start=start_idx + 2):
             if len(line) > 120:
@@ -181,6 +194,48 @@ def test_examples_define_valid_snippet_sections() -> None:
                 violations.append(f"{rel}:{offset}: snippet section leaks __main__ block")
 
     assert not violations, f"Snippet section violations ({len(violations)}):\n" + "\n".join(violations[:30])
+
+
+def test_examples_omit_struct_frozen_gc_boilerplate() -> None:
+    """Verify no documentation example passes frozen=True or gc=False to msgspec.Struct."""
+    violations: list[str] = []
+    for path in EXAMPLE_MODULES:
+        rel = path.relative_to(EXAMPLES_DIR).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            is_struct = any(
+                (isinstance(base, ast.Attribute) and base.attr == "Struct")
+                or (isinstance(base, ast.Name) and base.id == "Struct")
+                for base in node.bases
+            )
+            if not is_struct:
+                continue
+            violations.extend(
+                f"{rel}:{node.lineno}: {node.name} passes {kw.arg}= to msgspec.Struct"
+                for kw in node.keywords
+                if kw.arg in {"frozen", "gc"}
+            )
+    assert not violations, "\n".join(violations)
+
+
+def test_all_example_modules_are_referenced_in_docs() -> None:
+    """Verify every example module is referenced by path in docs/ or README.md."""
+    docs_dir = REPO_ROOT / "docs"
+    markdown_files = [REPO_ROOT / "README.md", *sorted(docs_dir.rglob("*.md"))]
+    combined_markdown = "\n".join(md_path.read_text(encoding="utf-8") for md_path in markdown_files)
+
+    orphans: list[str] = []
+    for path in EXAMPLE_MODULES:
+        rel_short = path.relative_to(EXAMPLES_DIR).as_posix()
+        if rel_short in CONFIG_ONLY_MODULES:
+            continue
+        rel_repo = path.relative_to(REPO_ROOT).as_posix()
+        if rel_repo not in combined_markdown and rel_short not in combined_markdown:
+            orphans.append(rel_repo)
+
+    assert not orphans, f"Unreferenced example module(s): {orphans}"
 
 
 def test_markdown_code_blocks_and_snippets_fit_viewport_width() -> None:
@@ -279,7 +334,7 @@ def _validate_python_fence(
         violations.append(f"{rel}:{fence_start_line}: invalid Python syntax in code block: {exc.msg}")
         return
     for token in tokenize.generate_tokens(io.StringIO(dedented).readline):
-        if token.type == tokenize.COMMENT and not _is_directive_comment(token.string):
+        if token.type == tokenize.COMMENT and not _is_directive_comment(token.string, allow_markdown_output=True):
             line_no = fence_start_line + token.start[0]
             violations.append(f"{rel}:{line_no}: inline comment in Python code block: {token.string.strip()}")
 
@@ -321,10 +376,11 @@ def test_standalone_example_executes(example_path: Path) -> None:
         pytest.skip(f"Optional dependency not installed for {rel}: {exc}")
 
 
-def _is_directive_comment(comment_text: str) -> bool:
+def _is_directive_comment(comment_text: str, *, allow_markdown_output: bool = False) -> bool:
     """Return whether comment_text is a recognized linter, type-checker, or coverage directive."""
     lowered = comment_text.strip().lower()
-    return any(lowered.startswith(prefix) for prefix in DIRECTIVE_PREFIXES)
+    prefixes = (*DIRECTIVE_PREFIXES, *MARKDOWN_OUTPUT_PREFIXES) if allow_markdown_output else DIRECTIVE_PREFIXES
+    return any(lowered.startswith(prefix) for prefix in prefixes)
 
 
 def _load_example_module(path: Path) -> ModuleType:

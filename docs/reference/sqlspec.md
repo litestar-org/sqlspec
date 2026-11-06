@@ -13,6 +13,8 @@ Central registry for database configurations, connection pools, driver sessions,
       heading_level: 3
       members:
         - __init__
+        - configs
+        - loader
         - add_config
         - get_connection
         - get_session

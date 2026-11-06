@@ -2,7 +2,7 @@
 
 SQLSpec installs a `sqlspec` command-line interface (powered by `rich-click`) for inspecting adapter configurations, managing schema migrations, verifying checksums, exporting schema DDL, and maintaining Google ADK memory tables.
 
-See [CLI Reference](/reference/cli/) for the complete generated option and argument tables across every command.
+See [CLI Reference](../reference/cli.md) for the complete generated option and argument tables across every command.
 
 ## Configuration Discovery
 
@@ -91,4 +91,4 @@ uv run sqlspec adk memory cleanup --days 30 --bind-key agent_db
 
 - Configure `[tool.sqlspec]` in `pyproject.toml` once so developers and CI jobs run `uv run sqlspec ...` without repeating module paths.
 - Use `sqlspec verify --strict --fail-on-pending` in deployment checks and `sqlspec dump-schema` to maintain reviewable schema snapshots.
-- Consult [CLI Reference](/reference/cli/) for every flag, environment variable, and subcommand signature.
+- Consult [CLI Reference](../reference/cli.md) for every flag, environment variable, and subcommand signature.

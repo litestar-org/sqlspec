@@ -33,23 +33,20 @@ _AT_PARAM_PATTERN = re.compile(r"@([a-zA-Z_][a-zA-Z0-9_]*)")
 
 
 class DialectDocSpec(msgspec.Struct, frozen=True, gc=False):
-    """Metadata describing a data dictionary dialect pack and its adapter classes.
-
-    Attributes:
-        dialect: Canonical dialect directory name under ``sqlspec/data_dictionary/dialects/``.
-        title: Human-readable engine title.
-        ddl_strategy: Primary DDL extraction strategy description.
-        guide_link: Relative link to the corresponding database guide.
-        summary: Concise description of the dialect's system catalog introspection.
-        adapter_classes: Fully qualified adapter DataDictionary class paths.
-    """
+    """Metadata describing a data dictionary dialect pack and its adapter classes."""
 
     dialect: str
+    """Canonical dialect directory name under ``sqlspec/data_dictionary/dialects/``."""
     title: str
+    """Human-readable engine title."""
     ddl_strategy: str
+    """Primary DDL extraction strategy description."""
     guide_link: str
+    """Relative link to the corresponding database guide."""
     summary: str
+    """Concise description of the dialect's system catalog introspection."""
     adapter_classes: tuple[str, ...]
+    """Fully qualified adapter DataDictionary class paths."""
 
 
 DIALECT_SPECS: tuple[DialectDocSpec, ...] = (
@@ -197,7 +194,7 @@ DIALECT_SPECS: tuple[DialectDocSpec, ...] = (
 
 
 def render_all_dialect_docs() -> dict[str, str]:
-    """Render the dialect index and all 13 per-dialect Markdown pages.
+    """Render the dialect index and every per-dialect Markdown page.
 
     Returns:
         Mapping of filename (such as ``"index.md"`` or ``"postgres.md"``) to Markdown content.
@@ -221,7 +218,7 @@ def render_dialect_index() -> str:
         "from sqlspec.data_dictionary import DialectConfig, get_data_dictionary_loader, get_dialect_config",
         "```",
         "",
-        "SQLSpec ships 13 dialect-specific SQL catalog packs under `sqlspec/data_dictionary/dialects/` containing named [`SQLFileLoader`](../../loader.md) queries (`-- name: ...`), version-gated feature profiles (`DialectConfig`), and logical-to-physical type mappings. See the [Data Dictionary Guide](../../../learn/data-dictionary.md) and [Data Dictionary Reference](../../data-dictionary.md) for programmatic usage.",
+        f"SQLSpec ships {len(DIALECT_SPECS)} dialect-specific SQL catalog packs under `sqlspec/data_dictionary/dialects/` containing named [`SQLFileLoader`](../../loader.md) queries (`-- name: ...`), version-gated feature profiles (`DialectConfig`), and logical-to-physical type mappings. See the [Data Dictionary Guide](../../../learn/data-dictionary.md) and [Data Dictionary Reference](../index.md) for programmatic usage.",
         "",
         "## Dialect Catalog Matrix",
         "",
@@ -276,7 +273,7 @@ def render_dialect_index() -> str:
         "",
         "`driver.data_dictionary.get_optimal_type(driver, type_category)` resolves portable logical type categories using each dialect's `DialectConfig.type_mappings` and active engine version:",
         "",
-        "| Dialect | `json` | `uuid` | `boolean` | `timestamp` | `text` | `blob` | `vector` |",
+        "| Dialect | json | uuid | boolean | timestamp | text | blob | vector |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ])
 
@@ -320,7 +317,7 @@ def render_dialect_page(spec: DialectDocSpec) -> str:
         f"| **Default Schema** | {default_schema} |",
         f"| **Version Pattern** | `{config.version_pattern.pattern}` |",
         f"| **DDL Strategy** | {spec.ddl_strategy} |",
-        f"| **Catalog `.sql` Files** | `{len(sql_files)}` files (`{total_queries}` named queries) |",
+        f"| **Catalog `.sql` Files** | `{len(sql_files)}` files ({_pluralize_queries(total_queries)}) |",
         "",
     ]
 
@@ -329,34 +326,31 @@ def render_dialect_page(spec: DialectDocSpec) -> str:
     if spec.adapter_classes:
         lines.extend(["## Adapter Data Dictionary Classes", ""])
         for cls_path in spec.adapter_classes:
-            lines.extend([f"::: {cls_path}", "    options:", "      heading_level: 3", ""])
+            parts = cls_path.split(".")
+            adapter_slug = parts[2].replace("_", "-")
+            cls_name = parts[-1]
+            lines.append(f"- [`{cls_name}`](../../adapters/{adapter_slug}.md)")
+        lines.append("")
 
     lines.extend([
         "## Catalog SQL Queries",
         "",
-        f"The `{spec.dialect}` dialect pack defines `{total_queries}` named queries across `{len(sql_files)}` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/{spec.dialect}/`):",
+        f"The `{spec.dialect}` dialect pack defines {_pluralize_queries(total_queries)} across `{len(sql_files)}` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/{spec.dialect}/`):",
         "",
-        "| Domain Pack | Named Queries | Bind Parameters |",
-        "| --- | --- | --- |",
+        "| Domain Pack | Source File | Named Queries | Bind Parameters |",
+        "| --- | --- | --- | --- |",
     ])
 
     for label, path in sql_files:
         text = path.read_text(encoding="utf-8")
         query_names = _extract_query_names(text)
         params = _extract_bind_params(text)
-        queries_cell = ", ".join(f"`{name}`" for name in query_names) if query_names else "-"
+        queries_list = ", ".join(f"`{name}`" for name in query_names)
+        queries_cell = f"{queries_list} ({_pluralize_queries(len(query_names))})" if query_names else "-"
         params_cell = ", ".join(f"`{p}`" for p in params) if params else "*none*"
-        lines.append(f"| `{label}` | {queries_cell} | {params_cell} |")
+        lines.append(f"| `{label}` | `{path.as_posix()}` | {queries_cell} | {params_cell} |")
 
     lines.append("")
-
-    for label, path in sql_files:
-        text = path.read_text(encoding="utf-8").strip()
-        query_names = _extract_query_names(text)
-        lines.extend([f'??? code "`{label}` ({len(query_names)} named queries)"', "", "    ```sql"])
-        lines.extend(f"    {sql_line}" if sql_line else "" for sql_line in text.splitlines())
-        lines.extend(["    ```", ""])
-
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -412,6 +406,11 @@ def main(argv: list[str] | None = None) -> int:
         (output_dir / filename).write_text(content, encoding="utf-8")
     sys.stdout.write(f"Wrote {len(expected_files)} data dictionary dialect docs to {output_dir}\n")
     return 0
+
+
+def _pluralize_queries(count: int) -> str:
+    """Format a named query count with singular or plural noun."""
+    return "1 named query" if count == 1 else f"{count} named queries"
 
 
 def _collect_sql_files(dialect: str) -> list[tuple[str, Path]]:

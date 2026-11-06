@@ -50,6 +50,18 @@ def test_sql_where_eq_where_eq_chains_with_and() -> None:
     assert "param_role" in modified.named_parameters
 
 
+@pytest.mark.parametrize(
+    ("method", "expected_condition"),
+    [("where_eq", "deleted_at IS NULL"), ("where_neq", "NOT deleted_at IS NULL")],
+    ids=["where_eq", "where_neq"],
+)
+def test_sql_where_equality_with_none_renders_null_predicate(method: str, expected_condition: str) -> None:
+    """Test that comparing with None renders IS NULL / IS NOT NULL instead of binding NULL."""
+    modified = getattr(SQL("SELECT * FROM users"), method)("deleted_at", None)
+    assert " ".join(modified.raw_sql.split()).replace('"', "").endswith(f"WHERE {expected_condition}")
+    assert modified.named_parameters == {}
+
+
 def test_sql_where_neq_where_neq_creates_not_equal_condition() -> None:
     """Test that where_neq creates WHERE column != :param."""
     stmt = SQL("SELECT * FROM users")

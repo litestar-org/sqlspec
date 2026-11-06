@@ -28,9 +28,14 @@
     poetry add sqlspec dishka
     ```
 
-## Provider Pattern (`Scope.APP` + `Scope.REQUEST`)
+## Provider Pattern for App and Request Scopes
 
 Register `SQLSpec` and your adapter `*Config` at `Scope.APP` (created once per process, closing the pool when the application container closes) and yield the driver session from `sqlspec.provide_session(config)` at `Scope.REQUEST`:
+
+| Dishka Scope | SQLSpec Object | Lifecycle | Responsibility |
+| --- | --- | --- | --- |
+| `Scope.APP` | `SQLSpec` registry + `*Config` (`AsyncpgConfig`, `SqliteConfig`, etc.) | Created once at process startup; `await config.close_pool()` / `config.close_pool()` runs on container shutdown | Owns the underlying database connection pool, statement cache, and `SQLFileLoader` |
+| `Scope.REQUEST` | `*Driver` (`AsyncpgDriver`, `SqliteDriver`, etc.) and `SQLSpecAsyncService` / `SQLSpecSyncService` | Entered per HTTP request, CLI command, or worker task via `async with spec.provide_session(config) as driver:` | Borrows one connection from the `Scope.APP` pool, executes queries/transactions, and returns the connection on scope exit |
 
 ```python
 from collections.abc import AsyncIterator
@@ -72,23 +77,23 @@ class DatabaseProvider(Provider):
 
 ## Injecting Drivers into Domain Services
 
-Combine `FromDishka[DriverT]` with `SQLSpecAsyncService` (or `SQLSpecSyncService`) so domain services receive a request-scoped driver automatically:
+Register `SQLSpecAsyncService` (or `SQLSpecSyncService`) subclasses at `Scope.REQUEST`. Dishka resolves the constructor's driver annotation from the request-scoped provider, so each service receives the driver for the current request:
 
 ```python
 from typing import Any
 
-from dishka import FromDishka, Provider, Scope, make_async_container, provide
+from dishka import Provider, Scope, provide
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.service import SQLSpecAsyncService
 
 
 class UserService(SQLSpecAsyncService[AsyncpgDriver]):
-    def __init__(self, driver: FromDishka[AsyncpgDriver]) -> None:
+    def __init__(self, driver: AsyncpgDriver) -> None:
         super().__init__(session=driver)
 
-    async def get_user(self, user_id: int) -> dict[str, Any] | None:
-        return await self.get_one_or_none(
+    async def get_user(self, user_id: int) -> dict[str, Any]:
+        return await self.get_one(
             "SELECT id, email FROM users WHERE id = :id", id=user_id
         )
 
@@ -99,19 +104,23 @@ class ServiceProvider(Provider):
 
 ## Reusing the Container Across Entrypoints
 
+Build one container per process and open a request scope for each unit of work, whether it comes from an HTTP route, a CLI command, or a worker task:
+
 ```python
 from dishka import make_async_container
 
-container = make_async_container(DatabaseProvider(), ServiceProvider())
 
-async with container() as request_container:
-    users = await request_container.get(UserService)
-    user = await users.get_user(1)
-
-await container.close()
+async def main() -> None:
+    container = make_async_container(DatabaseProvider(), ServiceProvider())
+    try:
+        async with container() as request_container:
+            users = await request_container.get(UserService)
+            await users.get_user(1)
+    finally:
+        await container.close()
 ```
 
 ## Recap
 
 - Provide `SQLSpec` and `*Config` at `Scope.APP` (closing pools in `finally:`) and yield `spec.provide_session(config)` at `Scope.REQUEST`.
-- Pair `FromDishka` with [Service Layer](../learn/recipes/service-layer.md) classes (`SQLSpecAsyncService` / `SQLSpecSyncService`) to share query logic across web routes, CLI commands, and background workers.
+- Register [Service Layer](../learn/recipes/service-layer.md) classes (`SQLSpecAsyncService` / `SQLSpecSyncService`) at `Scope.REQUEST` to share query logic across web routes, CLI commands, and background workers, and use `FromDishka[...]` in framework route handlers.

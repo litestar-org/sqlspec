@@ -72,11 +72,28 @@ Result containers for row dictionaries, hydrated schema models, scalar values, A
 ::: sqlspec.core._pagination.Pagination
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core._pagination.OffsetPagination
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core._pagination.CursorPagination
     options:
       heading_level: 3
+      members: false
+
+## Result Factory Helpers
+
+::: sqlspec.core.result.create_sql_result
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.core.result.create_arrow_result
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false

@@ -22,6 +22,7 @@ __all__ = (
     "test_verify_site_artifacts_accepts_clean_site_and_exemptions",
     "test_verify_site_artifacts_rejects_bloated_secondary_toc",
     "test_verify_site_artifacts_rejects_broken_same_page_anchors",
+    "test_verify_site_artifacts_rejects_code_in_prose_headings_and_escaped_table_pipes",
     "test_verify_site_artifacts_rejects_leaked_docstrings_and_tmp_path",
     "test_verify_site_artifacts_rejects_made_with_zensical",
     "test_verify_site_artifacts_rejects_missing_inventories",
@@ -183,10 +184,46 @@ def test_verify_site_artifacts_rejects_oversized_pages(tmp_path: Path) -> None:
     site_dir = tmp_path / "site"
     _write_clean_site(site_dir)
     bloated_ref = site_dir / "reference" / "bloated.html"
-    bloated_ref.write_text("<!doctype html><html><body>" + ("a" * 660_000) + "</body></html>", encoding="utf-8")
+    bloated_ref.write_text("<!doctype html><html><body>" + ("a" * 121_000) + "</body></html>", encoding="utf-8")
 
     with pytest.raises(DocsVerificationError, match=r"bloated\.html"):
         verify_site_artifacts(site_dir)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_fragment"),
+    [
+        (
+            '<h2 id="bad-heading">Heading with <code>inline code</code></h2>',
+            "prose heading contains inline <code> element (h2#bad-heading)",
+        ),
+        ('<h4 id="opt">Option <code>flag</code></h4>', "prose heading contains inline <code> element (h4#opt)"),
+        (
+            r"<table><tr><td><code>str \| None</code></td></tr></table>",
+            r"table <code> span contains literal escaped pipe: str \| None",
+        ),
+    ],
+    ids=["h2-code", "h4-code", "table-escaped-pipe"],
+)
+def test_verify_site_artifacts_rejects_code_in_prose_headings_and_escaped_table_pipes(
+    tmp_path: Path, body: str, expected_fragment: str
+) -> None:
+    site_dir = tmp_path / "site"
+    _write_clean_site(site_dir)
+    page = site_dir / "reference" / "page.html"
+    clean_markup = (
+        '<h3 class="doc doc-heading" id="sym"><code>symbol</code></h3>'
+        "<table><tr><td><code>str or None</code></td></tr></table>"
+        r"<p><code>a \| b</code></p>"
+    )
+    page.write_text(f"<!doctype html><html><body>{clean_markup}</body></html>", encoding="utf-8")
+    assert verify_site_artifacts(site_dir) == []
+
+    page.write_text(f"<!doctype html><html><body>{clean_markup}{body}</body></html>", encoding="utf-8")
+    with pytest.raises(DocsVerificationError) as exc_info:
+        verify_site_artifacts(site_dir)
+
+    assert exc_info.value.violations == [f"reference/page.html: {expected_fragment}"]
 
 
 def test_verify_site_artifacts_rejects_bloated_secondary_toc(tmp_path: Path) -> None:

@@ -1,6 +1,8 @@
 """Persist and reload Google ADK session events using AiosqliteADKStore."""
 
 import asyncio
+
+# --8<-- [start:example]
 from datetime import UTC, datetime
 
 from google.adk.events.event import Event
@@ -11,14 +13,11 @@ from sqlspec.adapters.aiosqlite.adk import AiosqliteADKStore
 from sqlspec.extensions.adk import StoredEvent
 from sqlspec.extensions.adk.converters import event_to_record
 
-__all__ = ("main",)
 
-
-async def main() -> list[StoredEvent]:
+async def persist_session_events() -> list[StoredEvent]:
     """Create an ADK session, append a user event, and fetch stored events."""
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     try:
-        # --8<-- [start:example]
         store = AiosqliteADKStore(config)
         await store.ensure_tables()
 
@@ -35,12 +34,21 @@ async def main() -> list[StoredEvent]:
         )
         event_record = event_to_record(event, session["app_name"], session["user_id"], session["id"])
         await store.append_event(event_record)
-        events = await store.get_events(session["app_name"], session["user_id"], session["id"])
-        # --8<-- [end:example]
-        assert len(events) == 1
-        return events
+        return await store.get_events(session["app_name"], session["user_id"], session["id"])
     finally:
         await config.close_pool()
+
+
+# --8<-- [end:example]
+
+__all__ = ("main", "persist_session_events")
+
+
+async def main() -> list[StoredEvent]:
+    """Execute the ADK session persistence example and verify stored events."""
+    events = await persist_session_events()
+    assert len(events) == 1
+    return events
 
 
 if __name__ == "__main__":

@@ -4,33 +4,43 @@
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     ColumnProfileMetadata,
+    ConstraintMetadata,
     DataDictionaryLoader,
     DDLResult,
+    DependencyEdge,
     DependencySortResult,
     DialectConfig,
     ForeignKeyMetadata,
     IndexMetadata,
     MetadataCapabilityProfile,
     MetadataResult,
+    RoutineMetadata,
+    SystemMetadataRequest,
+    SystemMetadataResult,
     TableMetadata,
+    TriggerMetadata,
     VersionInfo,
+    ViewMetadata,
     dependency_edges_from_foreign_keys,
     dependency_edges_from_metadata,
     get_data_dictionary_loader,
     get_dialect_config,
     list_registered_dialects,
+    normalize_dialect_name,
+    register_dialect,
     sort_ddl_results,
     sort_dependencies,
 )
 ```
 
-Cross-database catalog introspection metadata, DDL extraction, column profiling, capability profiles, dialect registry, and foreign-key topological sorting. Access runtime introspection through `driver.data_dictionary` on any [`SyncDriverAdapterBase`](driver/sync.md) or [`AsyncDriverAdapterBase`](driver/async.md) session (see [Runtime Introspection & DDL Synthesis](data-dictionary/runtime.md) and the [Dialect SQL Catalogs](data-dictionary/dialects/index.md)).
+Cross-database catalog introspection metadata, DDL extraction, column profiling, capability profiles, dialect registry, and foreign-key topological sorting. Access runtime introspection through `driver.data_dictionary` on any [`SyncDriverAdapterBase`](../driver/sync.md) or [`AsyncDriverAdapterBase`](../driver/async.md) session (see [Runtime Introspection & DDL Synthesis](runtime.md) and the [Dialect SQL Catalogs](dialects/index.md)).
 
 ## Loader & Dialect Registry
 
 ::: sqlspec.data_dictionary._loader.DataDictionaryLoader
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.data_dictionary._loader.get_data_dictionary_loader
     options:
@@ -57,42 +67,52 @@ Cross-database catalog introspection metadata, DDL extraction, column profiling,
 ::: sqlspec.data_dictionary._types.VersionInfo
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.TableMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ColumnMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ColumnProfileMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.IndexMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ForeignKeyMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ConstraintMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.ViewMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.RoutineMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.TriggerMetadata
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.DDLResult
     options:
@@ -104,10 +124,12 @@ Cross-database catalog introspection metadata, DDL extraction, column profiling,
 ::: sqlspec.data_dictionary._types.DialectConfig
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.MetadataCapabilityProfile
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.MetadataResult
     options:
@@ -117,20 +139,24 @@ Cross-database catalog introspection metadata, DDL extraction, column profiling,
 ::: sqlspec.data_dictionary._types.SystemMetadataRequest
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._types.SystemMetadataResult
     options:
       heading_level: 4
+      members: false
 
 ## Dependency Graph & Topological Sorting
 
 ::: sqlspec.data_dictionary._dependencies.DependencyEdge
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._dependencies.DependencySortResult
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.data_dictionary._dependencies.dependency_edges_from_foreign_keys
     options:

@@ -17,6 +17,7 @@ from sqlspec.core import (
     get_cache_config,
     get_cache_statistics,
     hash_expression,
+    hash_parameters,
     hash_sql_statement,
     log_cache_stats,
     reset_stats_only,
@@ -26,42 +27,44 @@ from sqlspec.core import (
 
 Coordinated L1/L2 LRU caching (`StatementCacheHolder`, `QueryCache`, `NamespacedCache`) and deterministic structural hashing for SQL statements, SQLGlot AST expressions, and parameter bindings. See the [Performance Guide](../../learn/performance.md) for tuning guidance.
 
-## Per-Config Fast-Path Cache (`L1`)
+## Per-Config Fast-Path Cache
 
 ::: sqlspec.core.cache.StatementCacheHolder
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core.cache.QueryCache
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core.cache.CachedQuery
     options:
       heading_level: 3
+      members: false
 
-## Cache Configuration & Statistics (`L2`)
+## Cache Configuration & Statistics
 
 ::: sqlspec.core.cache.CacheConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core.cache.CacheStats
     options:
       heading_level: 3
-      members:
-        - record_hit
-        - record_miss
-        - record_eviction
-        - reset
+      members: false
 
 ::: sqlspec.core.cache.CachedStatement
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.core.cache.CacheKey
     options:
       heading_level: 3
+      members: false
 
 ## Cache Implementations
 
@@ -87,6 +90,14 @@ Coordinated L1/L2 LRU caching (`StatementCacheHolder`, `QueryCache`, `Namespaced
         - clear_namespace
 
 ## Cache Management & Hashing Functions
+
+::: sqlspec.core.cache.get_cache
+    options:
+      heading_level: 4
+
+::: sqlspec.core.cache.create_cache_key
+    options:
+      heading_level: 4
 
 ::: sqlspec.core.cache.get_cache_config
     options:

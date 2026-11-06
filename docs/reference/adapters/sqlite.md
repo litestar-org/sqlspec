@@ -2,12 +2,16 @@
 
 ```python
 from sqlspec.adapters.sqlite import (
+    SqliteAggregateConfig,
+    SqliteCollationConfig,
     SqliteConfig,
     SqliteConnectionParams,
     SqliteConnectionPool,
     SqliteDriver,
     SqliteDriverFeatures,
     SqliteExceptionHandler,
+    SqliteFunctionConfig,
+    SqliteWindowFunctionConfig,
 )
 ```
 
@@ -18,6 +22,7 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.SqliteConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.sqlite.SqliteConnectionParams
     options:
@@ -30,6 +35,26 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
       heading_level: 3
       separate_signature: false
       show_signature_annotations: true
+
+::: sqlspec.adapters.sqlite.SqliteFunctionConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.sqlite.SqliteCollationConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.sqlite.SqliteAggregateConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.sqlite.SqliteWindowFunctionConfig
+    options:
+      heading_level: 4
+      members: false
 
 ## Driver, Pool & Data Dictionary
 
@@ -46,6 +71,7 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.SqliteConnectionPool
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.sqlite.data_dictionary.SqliteDataDictionary
     options:
@@ -63,6 +89,7 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.litestar.SqliteStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sqlite.adk.SqliteADKConfig
     options:
@@ -73,10 +100,12 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.adk.SqliteADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sqlite.events.SqliteEventsConfig
     options:
@@ -87,3 +116,4 @@ Synchronous SQLite adapter built on Python's standard library `sqlite3` with thr
 ::: sqlspec.adapters.sqlite.events.SqliteEventQueueStore
     options:
       heading_level: 4
+      members: false

@@ -18,6 +18,7 @@ Asynchronous MySQL and MariaDB adapter built on `aiomysql`. Inherited execution 
 ::: sqlspec.adapters.aiomysql.AiomysqlConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.aiomysql.AiomysqlConnectionParams
     options:
@@ -65,6 +66,7 @@ Asynchronous MySQL and MariaDB adapter built on `aiomysql`. Inherited execution 
 ::: sqlspec.adapters.aiomysql.litestar.AiomysqlStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.aiomysql.adk.AiomysqlADKConfig
     options:
@@ -75,11 +77,14 @@ Asynchronous MySQL and MariaDB adapter built on `aiomysql`. Inherited execution 
 ::: sqlspec.adapters.aiomysql.adk.AiomysqlADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.aiomysql.adk.AiomysqlADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.aiomysql.events.AiomysqlEventQueueStore
     options:
       heading_level: 4
+      members: false

@@ -2,7 +2,7 @@
 
 This curriculum walks through SQLSpec from your first in-memory SQLite query to production connection management, Arrow analytics, observability, and multi-database recipes.
 
-Every core guide runs out of the box against Python's built-in `sqlite3` module (or `aiosqlite` for `asyncio`) so you can copy and run examples locally without starting external database containers. When you are ready to connect to PostgreSQL, CockroachDB, Oracle, DuckDB, Spanner, BigQuery, MySQL, MariaDB, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, ADBC, or Arrow ODBC, pair these guides with the adapter setup pages under [Databases](/databases/).
+Every core guide runs out of the box against Python's built-in `sqlite3` module (or `aiosqlite` for `asyncio`) so you can copy and run examples locally without starting external database containers. When you are ready to connect to PostgreSQL, CockroachDB, Oracle, DuckDB, Spanner, BigQuery, MySQL, MariaDB, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, ADBC, or Arrow ODBC, pair these guides with the adapter setup pages under [Databases](../databases/index.md).
 
 ## Execution Architecture
 
@@ -18,8 +18,21 @@ flowchart LR
 SQLSpec keeps each layer explicit:
 
 1. **Registry and Config**: `SQLSpec` and typed `*Config` classes own connection pools, statement caches, named `.sql` loaders, and observability hooks.
-2. **Driver Session**: Short-lived `session` context managers expose consistent `select*`, `execute*`, `select_stream`, and `select_to_arrow` methods across all database adapters.
+2. **Driver Session**: Short-lived `session` context managers expose consistent `select*`, `fetch*`, `execute*`, `select_stream`, and `select_to_arrow` methods across all database adapters.
 3. **Statement Compiler**: Parameter styles (`:name`, `?`, `$1`, `@name`), `StatementFilter` predicates, and fluent `sql.*` builders compile once per SQL shape and reuse cached plans across sessions.
+
+## Query Authoring
+
+Raw SQL strings, `SQL(...)` statements, named `.sql` files, and fluent builders all feed the same driver execution methods (`session.select*`, `session.fetch*`, `session.execute*`) and accept composable `*filters: StatementFilter` arguments. [Querying](querying.md) compares them side by side.
+
+```mermaid
+flowchart LR
+    Raw["Raw SQL String"] --> Compiler["Statement + Filter Compiler"]
+    Stmt["SQL(...) Statement"] --> Compiler
+    Loader["SQLFileLoader (spec.get_sql)"] --> Compiler
+    Builder["QueryBuilder (sql.select)"] --> Compiler
+    Compiler --> Session["session.select* / fetch* / execute*"]
+```
 
 ## How to Read This Guide
 
@@ -33,10 +46,9 @@ Start here to install `sqlspec`, run your first parameterized query, and wire da
 
 | Guide | Focus |
 | --- | --- |
-| [Installation](installation.md) | Install `sqlspec` with `uv` or `pip` and select optional extras by database family, web framework, serializer, or storage backend. |
-| [Quickstart](quickstart.md) | Execute synchronous and asynchronous SQLite queries and decode rows into `msgspec.Struct` models in under five minutes. |
+| [Installation](installation.md) | Install `sqlspec` with `uv`, `pip`, `pdm`, or `poetry` and select optional extras by database family, web framework, serializer, or storage backend. |
+| [Quickstart](quickstart.md) | Execute synchronous and asynchronous SQLite queries and decode rows into `msgspec.Struct` models. |
 | [Configuration](configuration.md) | Register single or multiple databases on `SQLSpec`, choose pooled vs direct configs, customize `StatementConfig`, and attach lifecycle hooks. |
-| [Interactive Playground](../playground.md) | Run live SQLSpec and SQLite queries in your browser via WebAssembly and Pyodide without installing local tools. |
 
 ## Core Querying and Transactions
 
@@ -44,10 +56,10 @@ Master day-to-day query execution, parameter safety, typed row hydration, and ex
 
 | Guide | Focus |
 | --- | --- |
-| [Querying](querying.md) | Choose between `execute`, `select`, `select_one`, `select_one_or_none`, `select_value`, `execute_many`, `StatementStack`, and `select_stream`. |
+| [Querying](querying.md) | Choose between `execute`, `select*`, `fetch*` aliases, `select_with_total`, `execute_many`, `StatementStack`, and `select_stream`. |
 | [Parameters](parameters.md) | Bind named and positional parameters safely across dialects and avoid mixed-parameter pitfalls when composing filters. |
 | [Schema Mapping](schema-mapping.md) | Project result rows into `msgspec.Struct`, `TypedDict`, `pydantic.BaseModel`, `dataclasses`, and `attrs` classes with `schema_type`. |
-| [Transactions](transactions.md) | Manage explicit `begin`, `commit`, `rollback`, nested savepoints, and framework request commit modes. |
+| [Transactions](transactions.md) | Manage `with session.transaction():` context managers, explicit `begin`/`commit`/`rollback`, nested savepoints, and framework commit modes. |
 
 ## SQL Files, Query Builder, and Filtering
 
@@ -56,7 +68,9 @@ Organize larger query suites without giving up SQL readability or composable run
 | Guide | Focus |
 | --- | --- |
 | [SQL Files](sql-files.md) | Load `-- name:` SQL blocks from disk or cloud storage, validate `-- param:` headers, and append dynamic `WHERE` clauses. |
-| [Query Builder](query-builder.md) | Construct parameterized `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, upsert, join, and `RETURNING` statements with `sql`. |
+| [Query Builder: SELECT & Joins](query-builder.md) | Construct parameterized `SELECT` queries, `Column` expressions, `WHERE`/`OR WHERE` predicates, joins, CTEs, set operations, locking, and `EXPLAIN` plans. |
+| [Expressions, Windows & Vector](query-builder-expressions.md) | Compose aggregates, `ROLLUP`/`CUBE`/`GROUPING SETS`, scalar/math/string helpers, `CASE`, window functions, and cross-dialect vector distance / Oracle Hybrid RRF. |
+| [DML, MERGE & DDL Builders](query-builder-dml-ddl.md) | Build `INSERT`, `UPDATE`, `DELETE`, `RETURNING`, model-bound mutations, `ON CONFLICT` / `MERGE` upserts, and DDL builders with schema inference. |
 | [Filtering and Pagination](filtering-and-pagination.md) | Apply composable `StatementFilter` objects (`LimitOffsetFilter`, `BeforeAfterFilter`, `SearchFilter`, `OrderByFilter`) and keyset cursors. |
 
 ## Operations, Analytics, and Quality
@@ -71,20 +85,13 @@ Operate schemas, move columnar data, instrument production queries, and keep tes
 | [Data Dictionary](data-dictionary.md) | Introspect tables, columns, indexes, foreign keys, server versions, and dialect-optimal column types across engines. |
 | [Observability](observability.md) | Configure `StatementObserver` callbacks, OpenTelemetry spans, Prometheus metrics, wire-level `sqlcommenter`, and log redaction. |
 | [Testing](testing.md) | Combine in-memory SQLite unit tests, `pytest-databases` container fixtures, and JSONL table fixtures. |
-| [Performance](performance.md) | Understand per-config statement caching, `SlotPooledStatement`, `msgspec` hydration, `sqlspec[mypyc]` wheels, and Arrow batch sizing. |
+| [Performance](performance.md) | Understand per-config statement caching, `msgspec` hydration, `sqlspec[mypyc]` wheels, and Arrow batch sizing. |
 
 ## Production Recipes
 
 Combine SQLSpec primitives into reusable application patterns in [Production Recipes](recipes/index.md):
 
-- [Service Layer](recipes/service-layer.md) — encapsulate short-lived reads and atomic write transactions with `SQLSpecSyncService` and `SQLSpecAsyncService`.
+- [Service Layer](recipes/service-layer.md) — encapsulate short-lived reads, atomic write transactions, and multi-pool composition roots with `SQLSpecSyncService` and `SQLSpecAsyncService`.
 - [Multi-Tenancy](recipes/multi-tenancy.md) — isolate tenants by `bind_key`, schema search paths, or row-level predicates.
 - [Health Checks](recipes/health-checks.md) — build lightweight readiness and liveness probes across pooled sync and async adapters.
 - [ETL and Bulk Ingest](recipes/etl-and-bulk-ingest.md) — stream chunks, Arrow batches, and batched writes between operational and analytical stores.
-
-## Project and Contributing
-
-- [Contribution Guide](../contributing/index.md) — local `uv` setup, test and lint workflows, and pull request standards.
-- [Creating Adapters](../contributing/creating-adapters.md) — implement custom database adapters, parameter profiles, and extension stores.
-- [Releases](../releases.md) — release cadence, versioning policy, and pre-compiled wheel distribution.
-- [Changelog](../changelog.md) — release history, new capabilities, and upgrade notes.

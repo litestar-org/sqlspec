@@ -17,6 +17,7 @@ DUCKDB_VERSION_PATTERN = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
 DUCKDB_FEATURE_VERSIONS: "FeatureVersions" = {
     "supports_returning": VersionInfo(0, 8, 0),
     "supports_upsert": VersionInfo(0, 8, 0),
+    "supports_vectors": VersionInfo(0, 10, 0),
 }
 
 DUCKDB_FEATURE_FLAGS: "FeatureFlags" = {

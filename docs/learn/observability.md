@@ -10,7 +10,7 @@ Register one or more `StatementObserver` functions on `ObservabilityConfig` to i
 --8<-- "docs/examples/patterns/observability/custom_observer.py:example"
 ```
 
-### `StatementEvent` Fields
+### StatementEvent Fields
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -18,17 +18,17 @@ Register one or more `StatementObserver` functions on `ObservabilityConfig` to i
 | `parameters` | `Any` | Bound parameters (masked automatically when `RedactionConfig.mask_parameters` is enabled). |
 | `driver` | `str` | Adapter driver class name (such as `"SqliteDriver"` or `"AsyncpgDriver"`). |
 | `adapter` | `str` | Adapter identifier (such as `"sqlite"`, `"asyncpg"`, or `"oracledb"`). |
-| `bind_key` | `str \| None` | Optional `bind_key` assigned on the owning database configuration. |
+| `bind_key` | `str or None` | Optional `bind_key` assigned on the owning database configuration. |
 | `operation` | `str` | Normalized SQL operation label (`"SELECT"`, `"INSERT"`, `"UPDATE"`, `"DELETE"`, `"DDL"`). |
 | `execution_mode` | `str` | Driver execution path (such as `"single"`, `"many"`, `"script"`, or `"stream"`). |
 | `is_many` / `is_script` | `bool` | Flags indicating batched `execute_many` or multi-statement `execute_script` execution. |
-| `rows_affected` | `int \| None` | Driver-reported affected or fetched row count when available. |
+| `rows_affected` | `int or None` | Driver-reported affected or fetched row count when available. |
 | `duration_s` | `float` | Wall-clock driver execution latency in seconds. |
-| `correlation_id` | `str \| None` | Active `CorrelationContext` identifier bound for the current request or task. |
-| `storage_backend` | `str \| None` | Storage backend name when emitted during `select_to_storage` or `load_from_storage` jobs. |
+| `correlation_id` | `str or None` | Active `CorrelationContext` identifier bound for the current request or task. |
+| `storage_backend` | `str or None` | Storage backend name when emitted during `select_to_storage` or `load_from_storage` jobs. |
 | `started_at` | `float` | Epoch timestamp when statement execution began. |
-| `profile` | `dict[str, Any] \| None` | Parsed execution plan payload when DuckDB `enable_statement_profiling` is enabled. |
-| `script_ordinal` / `script_statement_count` | `int \| None` | Statement index and total count when profiling multi-statement scripts. |
+| `profile` | `dict[str, Any] or None` | Parsed execution plan payload when DuckDB `enable_statement_profiling` is enabled. |
+| `script_ordinal` / `script_statement_count` | `int or None` | Statement index and total count when profiling multi-statement scripts. |
 
 ## Sampling and Parameter Redaction
 
@@ -52,7 +52,7 @@ observability = ObservabilityConfig(
 
 ## OpenTelemetry, Prometheus, and Cloud Log Formatters
 
-Enable OpenTelemetry spans (`uv add "sqlspec[opentelemetry]"`) and Prometheus counters/histograms (`uv add "sqlspec[prometheus]"`) declaratively through `extension_config` on any adapter config, or format structured logs for Google Cloud Logging and AWS CloudWatch:
+Enable OpenTelemetry spans (`opentelemetry` extra) and Prometheus counters/histograms (`prometheus` extra) declaratively through `extension_config` on any adapter config, or format structured logs for Google Cloud Logging and AWS CloudWatch:
 
 ```python
 from sqlspec.adapters.sqlite import SqliteConfig
@@ -70,7 +70,7 @@ config = SqliteConfig(
 --8<-- "docs/examples/patterns/observability/cloud_formatters.py:example"
 ```
 
-## Request Correlation and Wire-Level `sqlcommenter`
+## Request Correlation and Wire-Level SQLCommenter
 
 Bind request IDs with `CorrelationContext` (or enable `enable_correlation_middleware` in Litestar) so logs, spans, and database slow-query logs share the same trace context:
 

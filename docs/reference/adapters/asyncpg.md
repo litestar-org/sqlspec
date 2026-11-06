@@ -19,6 +19,7 @@ Asynchronous PostgreSQL adapter built on `asyncpg`. Inherited execution methods 
 ::: sqlspec.adapters.asyncpg.AsyncpgConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.asyncpg.AsyncpgConnectionConfig
     options:
@@ -71,6 +72,7 @@ Asynchronous PostgreSQL adapter built on `asyncpg`. Inherited execution methods 
 ::: sqlspec.adapters.asyncpg.litestar.AsyncpgStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig
     options:
@@ -81,10 +83,12 @@ Asynchronous PostgreSQL adapter built on `asyncpg`. Inherited execution methods 
 ::: sqlspec.adapters.asyncpg.adk.AsyncpgADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.asyncpg.adk.AsyncpgADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.asyncpg.events.AsyncpgEventsConfig
     options:
@@ -95,7 +99,9 @@ Asynchronous PostgreSQL adapter built on `asyncpg`. Inherited execution methods 
 ::: sqlspec.adapters.asyncpg.events.AsyncpgEventQueueStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.asyncpg.events.AsyncpgEventsBackend
     options:
       heading_level: 4
+      members: false

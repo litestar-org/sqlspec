@@ -27,25 +27,24 @@ ORDER BY id;
 
 def main() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Load declared parameter metadata from a SQL file and verify automatic validation."""
-    spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-
     with tempfile.TemporaryDirectory() as tmp_dir:
         sql_file = Path(tmp_dir) / "teams.sql"
         sql_file.write_text(TEAMS_SQL, encoding="utf-8")
+        # --8<-- [start:example]
+        spec = SQLSpec()
+        config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
         spec.load_sql_files(sql_file)
 
-    # --8<-- [start:example]
-    declarations = spec.get_query_parameters("get_team_by_name")
-    query = spec.get_sql("get_team_by_name")
+        declarations = spec.get_query_parameters("get_team_by_name")
+        query = spec.get_sql("get_team_by_name")
 
-    with spec.provide_session(config) as session:
-        session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
-        session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
+        with spec.provide_session(config) as session:
+            session.execute("CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT)")
+            session.execute("INSERT INTO teams (name) VALUES ('Litestar'), ('SQLSpec')")
 
-        row = session.execute(query, name="SQLSpec").one()
-        optional_rows = session.execute(spec.get_sql("list_teams")).all()
-    # --8<-- [end:example]
+            row = session.select_one(query, name="SQLSpec")
+            optional_rows = session.select(spec.get_sql("list_teams"))
+        # --8<-- [end:example]
     assert query.declared_parameters == declarations
 
     with spec.provide_session(config) as session:

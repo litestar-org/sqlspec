@@ -1,10 +1,64 @@
 # Transactions
 
-Database reliability depends on clear, predictable transaction boundaries. SQLSpec provides explicit `begin`, `commit`, and `rollback` controls on every driver session, atomic `begin_transaction()` helpers on services, and configurable request commit modes in web framework integrations.
+Database reliability depends on clear, predictable transaction boundaries. SQLSpec provides a context manager (`session.transaction()`), explicit `begin`, `commit`, and `rollback` controls, portable savepoint methods (`create_savepoint`, `rollback_to_savepoint`, `release_savepoint`), atomic `begin_transaction()` helpers on services, and configurable request commit modes in web framework integrations.
 
-## Explicit `begin`, `commit`, and `rollback`
+## Transaction Context Manager
 
-Call `session.begin()`, `session.commit()`, and `session.rollback()` (`await session.begin()`, `await session.commit()`, `await session.rollback()` on async drivers) to group multiple statements into an atomic unit of work:
+The recommended way to manage transactions on a driver session is `with session.transaction():` (`async with session.transaction():` on async drivers). Entering `session.transaction()` begins a transaction, commits automatically on normal exit, and rolls back if an exception is raised. When nested inside an already-active transaction (or `service.begin_transaction()`), `session.transaction()` automatically creates, releases, or rolls back a savepoint:
+
+=== "Sync"
+
+    ```python
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.exceptions import SQLSpecError
+
+    spec = SQLSpec()
+    config = spec.add_config(
+        SqliteConfig(connection_config={"database": ":memory:"})
+    )
+
+    with spec.provide_session(config) as session:
+        session.execute("CREATE TABLE tags (name TEXT PRIMARY KEY)")
+        with session.transaction():
+            session.execute("INSERT INTO tags (name) VALUES ('python')")
+            try:
+                with session.transaction():
+                    session.execute("INSERT INTO tags (name) VALUES ('python')")
+            except SQLSpecError:
+                pass
+        rows = session.select("SELECT name FROM tags")
+        assert rows == [{"name": "python"}]
+    ```
+
+=== "Async"
+
+    ```python
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.exceptions import SQLSpecError
+
+    spec = SQLSpec()
+    config = spec.add_config(
+        AiosqliteConfig(connection_config={"database": ":memory:"})
+    )
+
+    async with spec.provide_session(config) as session:
+        await session.execute("CREATE TABLE tags (name TEXT PRIMARY KEY)")
+        async with session.transaction():
+            await session.execute("INSERT INTO tags (name) VALUES ('python')")
+            try:
+                async with session.transaction():
+                    await session.execute(
+                        "INSERT INTO tags (name) VALUES ('python')"
+                    )
+            except SQLSpecError:
+                pass
+    ```
+
+## Explicit Begin, Commit, and Rollback
+
+When you need imperative control across conditionals or loops, call `session.begin()`, `session.commit()`, and `session.rollback()` (`await session.begin()`, `await session.commit()`, `await session.rollback()` on async drivers):
 
 ```{ .python title="docs/examples/drivers/transaction_handling.py" }
 --8<-- "docs/examples/drivers/transaction_handling.py:example"
@@ -12,7 +66,7 @@ Call `session.begin()`, `session.commit()`, and `session.rollback()` (`await ses
 
 If an unhandled exception escapes a `provide_session()` context while a transaction is active, SQLSpec rolls back uncommitted changes before returning the connection to the pool.
 
-## Atomic Blocks with `begin_transaction`
+## Service-Layer Atomic Blocks
 
 When coordinating writes in domain services, `SQLSpecSyncService.begin_transaction()` and `SQLSpecAsyncService.begin_transaction()` open a session, start a transaction, commit automatically on normal exit, and roll back automatically if any exception is raised:
 
@@ -66,7 +120,7 @@ When coordinating writes in domain services, `SQLSpecSyncService.begin_transacti
 
 ## Savepoints and Partial Rollbacks
 
-Inside an outer transaction, standard SQL savepoints let you isolate optional or retryable operations without aborting earlier writes in the same transaction:
+In addition to automatic nested savepoints via `with session.transaction():`, every driver exposes explicit savepoint methods (`create_savepoint`, `rollback_to_savepoint`, and `release_savepoint`; `await` on async drivers) that validate the savepoint identifier and emit the dialect's savepoint syntax:
 
 ```python
 from sqlspec import SQLSpec
@@ -80,18 +134,17 @@ config = spec.add_config(
 
 with spec.provide_session(config) as session:
     session.execute("CREATE TABLE tags (name TEXT PRIMARY KEY)")
-    session.begin()
-    session.execute("INSERT INTO tags (name) VALUES ('python')")
-    session.execute("SAVEPOINT optional_tag")
-    try:
+    with session.transaction():
         session.execute("INSERT INTO tags (name) VALUES ('python')")
-    except SQLSpecError:
-        session.execute("ROLLBACK TO SAVEPOINT optional_tag")
-    session.execute("RELEASE SAVEPOINT optional_tag")
-    session.commit()
+        session.create_savepoint("optional_tag")
+        try:
+            session.execute("INSERT INTO tags (name) VALUES ('python')")
+        except SQLSpecError:
+            session.rollback_to_savepoint("optional_tag")
+        session.release_savepoint("optional_tag")
 ```
 
-Note dialect syntax differences when writing raw savepoint statements: SQL Server uses `SAVE TRANSACTION <name>` / `ROLLBACK TRANSACTION <name>`, and IBM Db2 requires `SAVEPOINT <name> ON ROLLBACK RETAIN CURSORS`.
+Note dialect syntax differences if you ever write raw savepoint SQL: SQL Server uses `SAVE TRANSACTION <name>` / `ROLLBACK TRANSACTION <name>`, and IBM Db2 requires `SAVEPOINT <name> ON ROLLBACK RETAIN CURSORS`.
 
 ## Exception Handling Around Compiled Drivers
 
@@ -112,7 +165,7 @@ if should_retry_fallback:
 
 ## Framework Commit Modes
 
-Web integrations (`Litestar`, `FastAPI`, `Starlette`, `Flask`, `Sanic`) support three request-scoped commit strategies:
+Web integrations (`Litestar`, `FastAPI`, `Starlette`, `Flask`, `Sanic`) support these request-scoped commit modes:
 
 - `manual` (default): Handlers or services call `commit()` explicitly; ideal for strict boundary control and read-heavy routes.
 - `autocommit`: Commits automatically on `2xx` HTTP responses and rolls back on `4xx`/`5xx` responses or unhandled exceptions.
@@ -120,6 +173,6 @@ Web integrations (`Litestar`, `FastAPI`, `Starlette`, `Flask`, `Sanic`) support 
 
 ## Recap
 
-- Keep transactions as short as possible—never hold an open transaction across external HTTP calls or LLM generation requests.
-- Use `service.begin_transaction()` for self-contained domain commands and `manual` commit mode when mixing read-only and write endpoints.
-- On Cloud Spanner, wrap contended read-write mutations in `driver.run_in_transaction(...)` so `Aborted` (`409`) conflicts retry automatically.
+- Prefer `with session.transaction():` / `async with session.transaction():` (including nested savepoint blocks) or `service.begin_transaction()` for atomic writes.
+- Use `session.create_savepoint(name)`, `session.rollback_to_savepoint(name)`, and `session.release_savepoint(name)` when managing named savepoints imperatively.
+- Keep transactions short—never hold an open transaction across external HTTP calls or LLM generation requests.

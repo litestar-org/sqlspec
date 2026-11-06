@@ -1,5 +1,31 @@
 # Quickstart
 
+Install `sqlspec` in your virtual environment (the built-in `sqlite3` adapter requires no extra drivers):
+
+=== "uv"
+
+    ```bash
+    uv add sqlspec
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install sqlspec
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add sqlspec
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add sqlspec
+    ```
+
 Run your first parameterized query with zero external setup using Python's built-in SQLite driver:
 
 ```python
@@ -50,15 +76,17 @@ Always call `await config.close_pool()` during application shutdown (or let a fr
 
 ## Typed Row Mapping
 
-By default, `select` and `select_one` return `dict[str, Any]` rows. Pass `schema_type=` to decode rows directly into `msgspec.Struct`, `TypedDict`, `pydantic.BaseModel`, `dataclass`, or `attrs` instances (`uv add "sqlspec[msgspec]"`):
+By default, `select` and `select_one` return `dict[str, Any]` rows. Pass `schema_type=` to decode rows directly into `msgspec.Struct`, `TypedDict`, `pydantic.BaseModel`, `dataclass`, or `attrs` instances (`msgspec` ships with the `sqlspec[msgspec]` extra):
 
 ```python
 --8<-- "docs/examples/quickstart/typed_mapping.py:example"
 ```
 
-Defining `msgspec.Struct(..., frozen=True, gc=False)` gives you immutable attribute access, static type checking, and lower allocation overhead than plain dictionaries.
+`user` is a `User(id=1, name='Ada', points=42)` instance.
 
-## Moving from `:memory:` to a Local File
+Defining a `msgspec.Struct` model gives you typed attribute access, static type checking, and lower allocation overhead than plain dictionaries (see [Performance](performance.md) for optional garbage-collector tuning on hot paths).
+
+## Moving from In-Memory to a Local File
 
 Replace `":memory:"` with a file path to persist SQLite state across process restarts while keeping the rest of your query code identical:
 
@@ -81,8 +109,8 @@ When you are ready to point the same queries at PostgreSQL, Oracle, DuckDB, Span
 | Goal | Recommended Guide |
 | --- | --- |
 | Register multiple pools, `bind_key` names, or custom statement settings | [Configuration](configuration.md) |
-| Choose between `select`, `select_one_or_none`, `execute_many`, `StatementStack`, and `select_stream` | [Querying](querying.md) |
+| Choose between `select`, `fetch` aliases, `select_with_total`, `execute_many`, and `select_stream` | [Querying](querying.md) |
 | Move multi-line SQL out of Python strings into `-- name:` `.sql` files | [SQL Files](sql-files.md) |
 | Manage schema revisions with the `sqlspec` CLI | [Migrations](migrations.md) |
-| Connect to PostgreSQL, Oracle, DuckDB, Spanner, BigQuery, MySQL, SQL Server, or Db2 | [Databases](/databases/) |
-| Wire request-scoped sessions into Litestar, FastAPI, Google ADK, or Dishka | [Integrations](/integrations/) |
+| Connect to PostgreSQL, Oracle, DuckDB, Spanner, BigQuery, MySQL, SQL Server, or Db2 | [Databases](../databases/index.md) |
+| Wire request-scoped sessions into Litestar, FastAPI, Google ADK, or Dishka | [Integrations](../integrations/index.md) |

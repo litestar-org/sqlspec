@@ -26,6 +26,7 @@ BIGQUERY_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_arrays": True,
     "supports_structs": True,
     "supports_geography": True,
+    "supports_vectors": True,
     "supports_returning": False,
     "supports_upsert": True,
     "supports_window_functions": True,

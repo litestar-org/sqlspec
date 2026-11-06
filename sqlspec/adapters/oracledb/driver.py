@@ -776,7 +776,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """Execute query and return results as Apache Arrow format using Oracle native support.
 
         This implementation uses Oracle's native execute_df()/fetch_df_all() methods
-        which return OracleDataFrame objects with Arrow PyCapsule interface, providing
+        which return OracleDataFrame objects with Arrow C Stream interface, providing
         zero-copy data transfer and 5-10x performance improvement over dict conversion.
         If native Arrow is unavailable and native_only is False, it falls back to the
         conversion path.
@@ -1709,7 +1709,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """Execute query and return results as Apache Arrow format using Oracle native support.
 
         This implementation uses Oracle's native execute_df()/fetch_df_all() methods
-        which return OracleDataFrame objects with Arrow PyCapsule interface, providing
+        which return OracleDataFrame objects with Arrow C Stream interface, providing
         zero-copy data transfer and 5-10x performance improvement over dict conversion.
         If native Arrow is unavailable and native_only is False, it falls back to the
         conversion path.

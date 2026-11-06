@@ -7,6 +7,31 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
+
+**Added:**
+
+* Added `tools.docs.generate_config_tables` (`render_typeddict_table`, `render_filter_catalog_table`, `sync_markdown_markers`, and `check_adapter_reference_parity`) to synchronize deterministic `TypedDict` configuration tables, `StatementFilter` catalog tables, and adapter reference symbol parity across `docs/`.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+* Added `supports_vectors` capability metadata across the PostgreSQL, CockroachDB, DuckDB, Oracle, BigQuery, and Spanner data dictionary dialect configurations.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+* Overhauled the documentation suite (`docs/learn/`, `docs/databases/`, `docs/integrations/`, `docs/reference/`, `docs/contributing/`, and `docs/examples/`) with runnable `pymdownx.snippets`, generated configuration tables across all 22 adapters and framework extensions, and expanded Query Builder, SQL File Loader, and CLI reference guides.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+
+**Changed:**
+
+* `sql.not_any_()` now takes `(column, values)` and returns the full `NOT (column = ANY(...))` condition, matching `Column.not_any_()`, `.where_not_any()`, and `NotAnyCollectionFilter`. `values` accepts a value list (bound as parameters) or a subquery whose parameters merge into the outer query. The previous one-argument form only produced invalid `NOT ANY(...)` SQL.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+
+**Fixed:**
+
+* `.where_eq(col, None)` / `.where_neq(col, None)` (including `or_` variants, `("col", None)` tuples, and `SQL.where_eq` / `SQL.where_neq`) render `col IS NULL` / `NOT col IS NULL` instead of binding a NULL parameter.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+* `sql.exists_()`, `sql.any_()`, and `sql.all_()` fragments built from parameterized subqueries merge their parameters into the outer query when used in `.where()`, `.having()`, or `Column` comparisons. Passing `sql.in_()` directly to `.where()` raises `SQLBuilderError` pointing to `.where_in()`.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+* Fixed `Select` query builder lock preservation (`for_update` / `for_share` when `dialect=None`), `ExpressionWrapper` alias delegation in `SQLFactory.select()` and `Select`, `CaseBuilder` parameter propagation in `Select` / `WhereClauseMixin` / `HavingClauseMixin`, `Update.table(...)` clause ordering when called after `.set(...)` / `.where(...)`, `Insert.columns()` clearing when switching to `.from_select(...)`, `Delete` / `Update` CTE `.with_(...)` rendering, `Merge` source alias inference and `USING (<subquery>)` parenthesization, `CreateIndex` expression and `where` clause building, and `SQLFileLoader` hyphenated query name validation and reload cache invalidation.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+
 ### v0.71.0 - SAP fixes, Arrow schemas, and SQL file guides
 
 **Changed:**
@@ -27,7 +52,7 @@ important operational fixes.
   ([#886](https://github.com/litestar-org/sqlspec/pull/886))
 * Fixed SAP staging tables, checkpoints, and index SQL. ASE staged upserts update matching rows, then insert new rows. SQL Anywhere uses `MERGE` with the supplied `conflict_keys`. Both honor `on_conflict="nothing"` and `exclude_update_columns`.
   ([#886](https://github.com/litestar-org/sqlspec/pull/886))
-* Fixed SAP types inferred by `CreateTable.from_arrow_schema()` and `CreateTable.from_records()`. ASE timestamps keep `BIGDATETIME`; SQL Anywhere keeps timestamps with time zones. String primary keys use `VARCHAR(255)`. Decimal precision above the dialect limit raises `SQLBuilderError`. ASE `BIGDATETIME` has no time-zone field, so normalize zone-aware values before loading them. See [SAP column types and staged loads](learn/arrow-and-storage.md#sap-column-types-and-staged-loads).
+* Fixed SAP types inferred by `CreateTable.from_arrow_schema()` and `CreateTable.from_records()`. ASE timestamps keep `BIGDATETIME`; SQL Anywhere keeps timestamps with time zones. String primary keys use `VARCHAR(255)`. Decimal precision above the dialect limit raises `SQLBuilderError`. ASE `BIGDATETIME` has no time-zone field, so normalize zone-aware values before loading them. See [SAP ASE type mappings](databases/sybase.md#type-mappings-dialect-notes).
   ([#886](https://github.com/litestar-org/sqlspec/pull/886))
 * Empty row-based Arrow `table`, `batch`, and `reader` results now keep column names, including in storage exports. An explicit `arrow_schema` sets the types; fields without type hints use Arrow `null`. Empty Oracle native readers also keep supplied schemas. Sync native readers keep their schema metadata. See [empty Arrow results](learn/arrow-and-storage.md#empty-results-and-explicit-schemas).
   ([#886](https://github.com/litestar-org/sqlspec/pull/886))
@@ -331,7 +356,7 @@ important operational fixes.
 
 **Changed:**
 
-* Oracle `select_to_arrow(..., return_format="batches")` now streams PyCapsule
+* Oracle `select_to_arrow(..., return_format="batches")` now streams native Arrow
   `RecordBatch` chunks directly via `pa.RecordBatch.from_pyarrow(odf)` without
   converting full tables into memory.
   ([#849](https://github.com/litestar-org/sqlspec/pull/849))

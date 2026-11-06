@@ -1,16 +1,17 @@
 """Configure structured GCP Cloud Logging and AWS CloudWatch log formatters."""
 
-from sqlspec.observability import AWSLogFormatter, GCPLogFormatter, ObservabilityConfig
+# --8<-- [start:example]
+from sqlspec import observability as obs
 
-__all__ = ("main",)
+gcp_logs = obs.ObservabilityConfig(cloud_formatter=obs.GCPLogFormatter())
+aws_logs = obs.ObservabilityConfig(cloud_formatter=obs.AWSLogFormatter())
+# --8<-- [end:example]
+
+__all__ = ("aws_logs", "gcp_logs", "main")
 
 
-def main() -> tuple[ObservabilityConfig, ObservabilityConfig]:
+def main() -> tuple[obs.ObservabilityConfig, obs.ObservabilityConfig]:
     """Create ObservabilityConfig instances for GCP and AWS structured log output."""
-    # --8<-- [start:example]
-    gcp_logs = ObservabilityConfig(cloud_formatter=GCPLogFormatter())
-    aws_logs = ObservabilityConfig(cloud_formatter=AWSLogFormatter())
-    # --8<-- [end:example]
     assert gcp_logs.cloud_formatter is not None
     assert aws_logs.cloud_formatter is not None
     return gcp_logs, aws_logs

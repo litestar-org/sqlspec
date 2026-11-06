@@ -12,9 +12,9 @@ Pass named parameters either as keyword arguments (`status="active"`) or as a di
 
 When the same named parameter (`:status`) appears multiple times in a query, SQLSpec binds the value once by name and expands positional placeholders (`$1`, `?`, `%s`) in occurrence order automatically for drivers that only support positional wire binding.
 
-### Reusable `SQL` Statement Objects
+### Reusable SQL Statement Objects
 
-In addition to passing SQL strings directly to `session.select(...)`, you can construct an explicit `SQL` statement object with pre-bound positional or named parameters and execute or inspect it across sessions:
+In addition to passing SQL strings directly to `session.select(...)` (see [Querying](querying.md) and named queries in [SQL Files](sql-files.md)), you can construct an explicit `SQL` statement object with pre-bound positional or named parameters and execute or inspect it across sessions:
 
 ```python
 from sqlspec import SQL, SQLSpec
@@ -40,7 +40,7 @@ with spec.provide_session(config) as session:
     assert admins == [{"id": 1, "email": "ada@example.com"}]
 ```
 
-### Batched Parameter Sequences (`execute_many`)
+### Batched Parameter Sequences
 
 `execute_many` accepts either a sequence of positional tuples or a sequence of named parameter dictionaries, compiling the parameter layout once for the entire batch:
 
@@ -63,11 +63,11 @@ flowchart LR
     Profile --> Wire["Compiled SQL + Bound Wire Args"]
 ```
 
-| Input Style Written in SQL | Example | Compiled Output (`asyncpg`) | Compiled Output (`sqlite` / `duckdb`) | Compiled Output (`spanner`) |
-| --- | --- | --- | --- | --- |
-| Named colon (`:name`) | `WHERE status = :status` | `WHERE status = $1` | `WHERE status = ?` | `WHERE status = @status` |
-| Positional qmark (`?`) | `WHERE id = ?` | `WHERE id = $1` | `WHERE id = ?` | `WHERE id = @p1` |
-| Positional numeric (`$1`) | `WHERE id = $1` | `WHERE id = $1` | `WHERE id = ?` | `WHERE id = @p1` |
+| Input Style Written in SQL | Example | `asyncpg` | `sqlite` | `duckdb` | `spanner` |
+| --- | --- | --- | --- | --- | --- |
+| Named colon (`:name`) | `WHERE status = :status` | `WHERE status = $1` | `WHERE status = :status` | `WHERE status = ?` | `WHERE status = @status` |
+| Positional qmark (`?`) | `WHERE id = ?` | `WHERE id = $1` | `WHERE id = ?` | `WHERE id = ?` | `WHERE id = @param_0` |
+| Positional numeric (`$1`) | `WHERE id = $1` | `WHERE id = $1` | `WHERE id = ?` | `WHERE id = $1` | `WHERE id = @param_0` |
 
 String literals (`'active:1'`), SQL comments, PostgreSQL type casts (`value::text`), and JSONB operators are preserved by the lexer without false-positive placeholder rewriting.
 

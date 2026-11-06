@@ -14,7 +14,11 @@ from sqlspec.extensions.events import (
     SyncEventListener,
     SyncTableEventQueue,
     build_queue_backend,
+    decode_notify_payload,
+    encode_notify_payload,
+    fits_notify_payload,
     get_runtime_hints,
+    measure_notify_payload,
 )
 ```
 
@@ -47,20 +51,17 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
 ::: sqlspec.extensions.events._channel.SyncEventListener
     options:
       heading_level: 3
-      members:
-        - start
-        - stop
+      members: false
 
 ::: sqlspec.extensions.events._channel.AsyncEventListener
     options:
       heading_level: 3
-      members:
-        - start
-        - stop
+      members: false
 
 ::: sqlspec.extensions.events._models.EventMessage
     options:
       heading_level: 3
+      members: false
 
 ## Durable Table Queues & Stores
 
@@ -91,13 +92,7 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
 ::: sqlspec.extensions.events._store.BaseEventQueueStore
     options:
       heading_level: 3
-      members:
-        - create_statements
-        - drop_statements
-        - prepare_schema_sync
-        - prepare_schema_async
-        - reconcile_schema_sync
-        - reconcile_schema_async
+      members: false
 
 ::: sqlspec.extensions.events._queue.build_queue_backend
     options:
@@ -108,6 +103,7 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
 ::: sqlspec.extensions.events._hints.EventRuntimeHints
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.extensions.events._hints.get_runtime_hints
     options:
@@ -116,15 +112,25 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
 ::: sqlspec.extensions.events._protocols.SyncEventBackendProtocol
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.extensions.events._protocols.AsyncEventBackendProtocol
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.extensions.events._payload.encode_notify_payload
     options:
       heading_level: 4
 
 ::: sqlspec.extensions.events._payload.decode_notify_payload
+    options:
+      heading_level: 4
+
+::: sqlspec.extensions.events._payload.fits_notify_payload
+    options:
+      heading_level: 4
+
+::: sqlspec.extensions.events._payload.measure_notify_payload
     options:
       heading_level: 4

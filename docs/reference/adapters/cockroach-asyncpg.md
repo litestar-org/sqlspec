@@ -20,6 +20,7 @@ Asynchronous CockroachDB adapter built on `asyncpg` with `SQLSTATE 40001` serial
 ::: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgConnectionConfig
     options:
@@ -42,6 +43,7 @@ Asynchronous CockroachDB adapter built on `asyncpg` with `SQLSTATE 40001` serial
 ::: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgRetryConfig
     options:
       heading_level: 3
+      members: false
 
 ## Driver, Pool & Data Dictionary
 
@@ -77,6 +79,7 @@ Asynchronous CockroachDB adapter built on `asyncpg` with `SQLSTATE 40001` serial
 ::: sqlspec.adapters.cockroach_asyncpg.litestar.CockroachAsyncpgStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKConfig
     options:
@@ -87,11 +90,14 @@ Asynchronous CockroachDB adapter built on `asyncpg` with `SQLSTATE 40001` serial
 ::: sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.cockroach_asyncpg.events.CockroachAsyncpgEventQueueStore
     options:
       heading_level: 4
+      members: false

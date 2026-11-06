@@ -138,3 +138,13 @@ def test_subquery_no_roundtrip_where_in_query_builder_subquery_still_renames_col
     query = sql.select("*").from_("orders").where_eq("status", "pending").where_in("user_id", subquery)
     assert query.parameters["status"] == "pending"
     assert query.parameters["status_1"] == "active"
+
+
+@pytest.mark.parametrize(
+    "hint",
+    ["INDEX(users idx_users_email)", "FULL(u) PARALLEL(u, 4)", "NO_INDEX(users)"],
+    ids=["index", "multi", "no_index"],
+)
+def test_select_statement_hint_renders_verbatim(hint: str) -> None:
+    query = sql.select("*", dialect="oracle").from_("users").with_hint(hint, dialect="oracle")
+    assert query.build().sql.startswith(f"SELECT /*+ {hint} */")

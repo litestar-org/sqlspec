@@ -1,20 +1,24 @@
 # SQL Files
 
-Keeping non-trivial queries in dedicated `.sql` files gives you full editor syntax highlighting, formatter support, DBA reviewability, and zero Python string-escaping noise while retaining SQLSpec's parameter binding, validation, and dynamic predicate composition.
+Keeping non-trivial queries in dedicated `.sql` files gives you full editor syntax highlighting, formatter support, and DBA reviewability while retaining SQLSpec's parameter binding, runtime type validation, and AST composition. `SQLFileLoader` and `SQLSpec` parse structured comment directives and inline markers without custom template engines.
 
-## Inline Named Queries
+## Directive and Marker Cheat Sheet
 
-For small query registries, register named statements directly on `SQLSpec` with `add_named_sql` and retrieve a reusable `SQL` object via `get_sql`:
+| Directive or Marker | Scope | Syntax | Purpose |
+| --- | --- | --- | --- |
+| `-- name:` | Statement header | `-- name: list-users` | Starts a named query block; hyphens normalize to underscores (`list_users`) on lookup. |
+| `-- dialect:` | Statement header | `-- dialect: postgres` | Sets the SQLGlot dialect for expression slots, `.builder()`, and `.explain()`. |
+| `-- param:` | Statement header | `-- param: status str? Optional filter` | Declares parameter name, runtime type (`?` = optional, defaults to `None`), and description. |
+| `-- fragment:` | File section | `-- fragment: active_users_cte` | Declares a reusable static SQL fragment (cannot declare `-- dialect:`, `-- param:`, or `-- slot:`). |
+| `/* include: */` | Statement or fragment body | `/* include: active_users_cte */` | Splices a registered fragment (supports nested includes and `<namespace>.<name>` lookup). |
+| `-- slot:` | Statement header | `-- slot: ordering = id ASC` | Declares an optional default SQL fill for a matching `/* slot: name */` marker in the body. |
+| `/* slot: */` | Statement or fragment body | `/* slot: ordering */` | Reserves a fill point replaced at `spec.get_sql(name, **slots)` retrieval time. |
 
-```python
---8<-- "docs/examples/sql_files/named_queries.py:example"
-```
+## Loading SQL Files and Directory Namespaces
 
-## Loading `.sql` Files from Disk or Storage
+Load `.sql` files or directory trees with `spec.load_sql_files(...)` (or register inline strings via `spec.add_named_sql(...)`). Relative file and directory paths, including bare names such as `"queries.sql"`, resolve against the current working directory:
 
-Group related queries inside `.sql` files using `-- name: <query_name>` comment headers and load individual files or entire directories with `spec.load_sql_files(...)` (or `SQLFileLoader` directly):
-
-=== "SQL (`queries.sql`)"
+=== "queries.sql"
 
     ```sql
     -- name: list_teams
@@ -23,139 +27,124 @@ Group related queries inside `.sql` files using `-- name: <query_name>` comment 
     ORDER BY id;
     ```
 
-=== "Python"
+=== "app.py"
 
     ```python
     --8<-- "docs/examples/sql_files/load_sql_files.py:example"
     ```
 
-Query names inside nested directories can be organized by namespace (or hyphenated identifiers normalized automatically when accessed) and shared across any session opened from `spec`. `SQLFileLoader` also integrates with `StorageRegistry` so SQL bundles can be loaded from local directories or registered object storage aliases.
+=== "Inline Registration"
 
-### Organizing Query Directories
+    ```python
+    --8<-- "docs/examples/sql_files/named_queries.py:example"
+    ```
 
-When `spec.load_sql_files(Path("app/sql"))` scans a directory tree, you can keep queries organized per domain (`app/sql/billing.sql`, `app/sql/users.sql`) and inspect loaded definitions at startup:
+When `spec.load_sql_files(Path("app/sql"))` scans a directory tree, top-level files register bare query names while nested subdirectories prepend dot-separated relative directory namespaces:
 
-- `spec.list_sql_queries()`: Returns all registered query names so startup tests can assert expected SQL assets are present.
-- `spec.get_sql("list_customer_invoices")`: Returns the immutable `SQL` template ready for execution or filter composition.
-- `SQLFileLoader(storage_registry=...)`: Loads `.sql` files from S3, GCS, Azure Blob Storage, or embedded package paths registered in `StorageRegistry`.
+```text
+app/sql/
+├── users.sql            # -- name: list-users   -> "list_users"
+└── billing/
+    ├── invoices.sql     # -- name: list-overdue -> "billing.list_overdue"
+    └── reports/
+        └── mrr.sql      # -- name: monthly-mrr  -> "billing.reports.monthly_mrr"
+```
+
+- `spec.list_sql_queries()` / `spec.has_sql_query(name)` / `spec.get_sql_files()`: Inspect registered query names and file paths at startup.
+- `spec.reload_sql_files(reload=True)`: Re-reads only `.sql` files whose MD5 checksum changed and invalidates cached statement instances.
+- `SQLFileLoader(storage_registry=...)`: Loads `.sql` bundles from S3, GCS, Azure Blob Storage, or `fsspec` aliases registered in `StorageRegistry`.
+
+## Dialect Declarations
+
+Add `-- dialect: <name>` under `-- name:` so SQLGlot expression slots, `SQL.builder()`, and `SQL.explain()` target the exact engine syntax:
+
+```sql
+-- name: upsert_subscription
+-- dialect: postgres
+INSERT INTO subscriptions (account_id, plan)
+VALUES (:account_id, :plan)
+ON CONFLICT (account_id) DO UPDATE SET plan = EXCLUDED.plan;
+```
+
+The loader normalizes these aliases (`DIALECT_ALIASES`) before handing the name to SQLGlot; any other value passes through unchanged:
+
+| Input Alias | Normalized Dialect |
+| --- | --- |
+| `postgresql`, `pg`, `pgplsql` | `postgres` |
+| `plsql`, `oracledb` | `oracle` |
+| `tsql` | `mssql` |
 
 <span id="anatomy-of-a-multi-query-sql-file"></span>
 
-## Declared Parameter Headers (`-- param:`)
+## Parameter Type Declarations {#parameter-type-declarations}
 
-Each `-- name:` block can start with `-- dialect:` and `-- param:` headers. The following file groups two related queries.
+Declare `-- param: <name> <type>[?] <description>` headers below `-- name:` to document parameters and validate them:
 
-Add `-- param: <name> <type>[?]  <description>` headers immediately below `-- name:` to document expected arguments and enforce automatic required-parameter validation before a query ever touches the database connection:
-
-=== "SQL (`teams.sql`)"
+=== "teams.sql"
 
     ```sql
     -- name: get_team_by_name
     -- param: name str  The team name to look up
-    SELECT id, name
-    FROM teams
-    WHERE name = :name;
+    SELECT id, name FROM teams WHERE name = :name;
 
     -- name: list_teams
     -- param: name str?  Optional team name filter
-    SELECT id, name
-    FROM teams
+    SELECT id, name FROM teams
     WHERE (:name IS NULL OR name = :name)
     ORDER BY id;
     ```
 
-=== "Python"
+=== "app.py"
 
     ```python
     --8<-- "docs/examples/sql_files/declared_params.py:example"
     ```
 
-Suffixing the type with `?` (such as `str?` or `int?`) marks the parameter optional and defaults omitted keyword arguments to `None` (`NULL`), enabling clean `(:name IS NULL OR name = :name)` filter patterns in pure SQL. Omitting a required parameter raises `SQLSpecError` immediately with the missing parameter name.
+- **Placeholder drift check at load time**: The loader raises `SQLFileParseError` when a declared `-- param:` name is missing from the query's `:placeholder` tokens or positional counts differ. Queries that use fragments or slots are checked at `get_sql()` time instead.
+- **Required vs optional at execution**: Omitting a required parameter raises `SQLSpecError` before a cursor is acquired. A `?` type suffix (or a description ending in `(optional)`) defaults an omitted keyword argument to `None`, so `(:name IS NULL OR name = :name)` or `COALESCE(:name, name)` predicates reuse one prepared-statement plan.
+- **Runtime type checks**: Non-`None` values are checked against the declared type: `str`, `int`, `float`, `bool`, `bytes`, `date`, `datetime`, `time`, `decimal`, `uuid`, `dict`, `json`, `jsonb`, `list`, `list[int]`, `list[str]`, `list[float]`, `list[bool]`, or `tuple`. Unknown type strings are documentation only unless registered with `register_param_type("money", Decimal)`. Pass `SQLFileLoader(strict_parameter_annotations=True)` to raise `SQLFileParseError` on malformed `-- param:` lines.
 
 <span id="sql-fragments-and-slots"></span>
 
 ## Fragments and Slots
 
-Reuse a query's SQL structure with **fragments**, and choose parts of that SQL at retrieval time with **slots**. Both features work with `SQLFileLoader` and `SQLSpec`.
+Reuse static SQL blocks across queries with `-- fragment: <name>` and `/* include: <name> */`, and fill controlled dynamic SQL markers at retrieval time with `-- slot: <name> = <default>` and `/* slot: <name> */`:
 
-Declare a shared section with `-- fragment: name`, then insert it with `/* include: name */`. In this example, both queries use the same common table expression to select teams in one workspace:
-
-```sql
---8<-- "docs/examples/sql_files/fragments_and_slots.sql:queries"
-```
-
-A `/* slot: name */` marker reserves a place for SQL text. Put `-- slot: name = default SQL` in the query's leading header block to supply a default. Here, `list_teams` defaults to all teams ordered by ID. The `count_teams` predicate has no default, so callers must fill it.
-
-Save that SQL as `teams.sql` and pass its path as `sql_file` in the following example:
-
-```python
-from pathlib import Path
-
-from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.core import SQL
-
-sql_file = Path("teams.sql")
-
---8<-- "docs/examples/sql_files/fragments_and_slots.py:example"
-```
-
-The default query returns the two teams in workspace 42. Changing `ordering` puts SQLSpec first. Filling `predicates` with the bound `SQL` value selects SQLSpec, and the count query returns `1`. The third team belongs to another workspace and stays outside both results.
-
-Pass slot values to `get_sql()`, then pass the query's remaining data values to `session.select()` or another execution method. A `SQL` slot carries its own named bindings; `team_name` travels with the predicate while `workspace_id` is bound at execution.
-
-### Choosing Safe Slot Values
-
-Slots accept trusted SQL strings, SQLGlot expressions, and `SQL` objects. Strings are inserted as SQL text. Use a `SQL` object with named placeholders for user data, as shown above. Choose ordering expressions and identifiers from trusted code or an allowlist.
-
-A missing required slot or unknown slot name raises `SQLSlotError`. Positional bindings and statement filters on a `SQL` slot also raise this error. Apply filters to the completed statement returned by `get_sql()` instead. Use distinct names for slot bindings and the outer query's placeholders, such as `team_name` and `workspace_id`. Reusing an outer placeholder name in a bound slot raises `SQLSlotError`.
-
-Fragments may include other fragments, and a fragment may contain slot markers. Defaults belong to the named query's header; fragments cannot declare `-- slot:`, `-- param:`, or `-- dialect:` headers. Load all referenced fragments before retrieving a query.
-
-For namespaced files, lookup rules, inspection methods, and cache behavior, see the [loader composition reference](../reference/loader.md#composition-rules).
-
-## Composing Dynamic `WHERE` Clauses onto Named SQL
-
-Static `.sql` files often need optional runtime predicates for search, tenant scoping, or pagination. Because `spec.get_sql(...)` returns an immutable `SQL` statement object, calling `.where(...)`, `.where_eq(...)`, `.where_like(...)`, or `.paginate(...)` returns a new derived `SQL` instance without mutating the cached base template:
-
-=== "SQL (`users.sql`)"
+=== "teams.sql"
 
     ```sql
-    -- name: list_users
-    SELECT id, name, status
-    FROM users
+    --8<-- "docs/examples/sql_files/fragments_and_slots.sql:queries"
     ```
 
-=== "Python"
+=== "app.py"
+
+    ```python
+    --8<-- "docs/examples/sql_files/fragments_and_slots.py:example"
+    ```
+
+| Value Type | Example | Splicing Semantics | Parameter Binding |
+| --- | --- | --- | --- |
+| `str` | `ordering="t.name DESC"` | Spliced verbatim as trusted SQL text (use allowlists for identifiers and directions). | None (bind user data separately). |
+| `sqlglot.exp.Expr` | `ordering=exp.column("name", table="t").desc()` | Rendered to SQL in the query's `-- dialect:`. | None. |
+| `SQL` | `predicates=SQL("t.name = :team_name", team_name="SQLSpec")` | Splices `SQL.sql` into the marker and merges `SQL.named_parameters` onto the returned statement. | Carries named parameters (`:team_name`) safely into execution. |
+
+!!! warning "Slot Validation and SQLSlotError Rules"
+    - **Missing or unknown slots**: A `/* slot: name */` marker without a `-- slot: name = default` header or `get_sql()` keyword argument, or an unknown slot keyword, raises `SQLSlotError`.
+    - **Positional binds and filters**: Passing a `SQL` slot value with positional parameters or attached `StatementFilter` objects raises `SQLSlotError` (attach filters to the completed `SQL` returned by `get_sql()`).
+    - **Parameter collisions**: Overlapping parameter names between a `SQL` slot and the outer query (or between two slots with unequal values) raise `SQLSlotError`.
+    - **Fragment headers and cycles**: Fragments cannot declare `-- dialect:`, `-- param:`, or `-- slot:` headers (`SQLFileParseError`), and cyclic `/* include: */` chains raise `SQLFileParseError`.
+
+## Statement Modifiers and the Builder Bridge
+
+`spec.get_sql(...)` returns an immutable `SQL` instance that supports runtime predicate chaining (`.where_eq()`, `.where_in()`, `.where_like()`, `.order_by()`, `.paginate()`), column projection narrowing (`.select_only(*cols, prune_columns=True)`), execution plan inspection (`.explain(analyze=True, format="json")`), and conversion into a fluent SQLGlot AST builder via `.builder()`:
+
+=== "Dynamic Modifiers"
 
     ```python
     --8<-- "docs/examples/sql_files/dynamic_where.py:example"
     ```
 
-You can also pass `StatementFilter` objects (`LimitOffsetFilter`, `SearchFilter`, `OrderByFilter`) alongside `spec.get_sql("...")` inside `session.select(...)`—remembering to keep all bound parameters named when filters are attached.
-
-## Kebab-Case Named Queries and Schema Projection
-
-In production services, organize queries using `kebab-case` identifiers (`-- name: list-products`, `-- name: get-product`) matching domain entity routes. Combine loaded statements with `.where(...)` and decode rows directly into immutable `msgspec.Struct` models:
-
-=== "SQL (`products.sql`)"
-
-    ```sql
-    -- name: list-products
-    -- param: sku str?  Optional SKU match
-    SELECT id, sku, name, price_cents
-    FROM products
-    WHERE (:sku IS NULL OR sku = :sku)
-    ORDER BY id;
-
-    -- name: get-product
-    -- param: id int  Product identifier
-    SELECT id, sku, name, price_cents
-    FROM products
-    WHERE id = :id;
-    ```
-
-=== "Python"
+=== "Schema Projection & Builder Bridge"
 
     ```python
     from pathlib import Path
@@ -165,35 +154,46 @@ In production services, organize queries using `kebab-case` identifiers (`-- nam
     from sqlspec.adapters.sqlite import SqliteConfig
 
 
-    class Product(msgspec.Struct, frozen=True, gc=False):
-        """Typed product projection."""
-
+    class Product(msgspec.Struct):
         id: int
         sku: str
         name: str
         price_cents: int
 
-
     spec = SQLSpec()
     config = spec.add_config(
         SqliteConfig(connection_config={"database": ":memory:"})
     )
-    spec.load_sql_files(Path("products.sql"))
-
+    spec.load_sql_files(Path("sql"))
     with spec.provide_session(config) as session:
-        query = spec.get_sql("get-product")
-        product = session.select_one(query, id=1, schema_type=Product)
-
-        active_query = spec.get_sql("list-products").where(
-            "price_cents >= :min_price"
+        product = session.select_one(
+            spec.get_sql("get-product"), id=1, schema_type=Product
         )
         catalog = session.select(
-            active_query, min_price=1000, sku=None, schema_type=Product
+            spec.get_sql("list-products")
+            .where("price_cents >= :min_price")
+            .select_only("id", "sku", "name", "price_cents", prune_columns=True),
+            min_price=1000,
+            sku=None,
+            schema_type=Product,
+        )
+        plan = session.select(spec.get_sql("list-products").explain(), sku=None)
+        ranked_query = (
+            spec.get_sql("list-products")
+            .builder()
+            .join("inventory", on="inventory.product_id = products.id")
+            .build()
         )
     ```
 
-## Recap
+<span id="composition-rules"></span>
 
-- Store multi-line CTEs, window functions, and analytical queries in `.sql` files under `-- name:` blocks and load them once at startup via `spec.load_sql_files(...)`.
-- Declare `-- param:` headers on shared SQL queries to catch missing required arguments early and expose parameter metadata via `spec.get_query_parameters(...)`.
-- Chain `.where_eq(...)`, `.where_like(...)`, or `StatementFilter` arguments onto `spec.get_sql(...)` instead of concatenating raw `WHERE` strings in Python.
+## Query Composition Decision Matrix
+
+| Mechanism | Phase | Mutates SQL Structure? | Parameter-Safe? | Best For |
+| --- | --- | --- | --- | --- |
+| `-- param:` (`:name`, `str?`) | Execution bind | No (fixed SQL plan) | Yes (driver bind) | Scalar filters and optional `(:p IS NULL OR col = :p)` predicates that maximize prepared-statement cache hits. |
+| `-- fragment:` + `/* include: */` | Load / `get_sql()` | Static splice | N/A (template text) | Sharing CTEs, `FROM` / `JOIN` blocks, or column lists across queries in `.sql` files. |
+| `-- slot:` + `/* slot: */` | `get_sql(**slots)` | Controlled marker fill | Yes when filled with `SQL(..., key=val)` | Swapping trusted `ORDER BY` expressions, table/view names, or optional multi-clause predicates at retrieval time. |
+| `SQL.where*()` / `StatementFilter` | Pre-execution AST | Appends `WHERE` / `ORDER BY` / `LIMIT` | Yes (auto-named binds) | Attaching HTTP query filters (`SearchFilter`, `InCollectionFilter`, `CursorFilter`) or `.select_only()` onto a base query. |
+| [`sql.select()` / `SQL.builder()`](query-builder.md) | Runtime AST builder | Full AST construction | Yes (auto-named binds) | Dynamic multi-join queries, conditional `GROUP BY` or window functions, cross-dialect vector distance, and programmatic DDL/DML. |

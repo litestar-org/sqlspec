@@ -2,16 +2,14 @@
 
 from typing import Any
 
+# --8<-- [start:example]
 import msgspec
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
-__all__ = ("User", "fetch_users", "main")
 
-
-# --8<-- [start:example]
-class User(msgspec.Struct, frozen=True, gc=False):
+class User(msgspec.Struct):
     """Typed user row projection."""
 
     id: int
@@ -48,23 +46,20 @@ def fetch_users(session: Any) -> tuple[list[User], User, User | None]:
     return users, alice, nobody
 
 
+spec = SQLSpec()
+config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+
+with spec.provide_session(config) as session:
+    session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    session.execute("INSERT INTO users (name) VALUES ('Alice'), ('Bob')")
+    users, alice, nobody = fetch_users(session)
 # --8<-- [end:example]
+
+__all__ = ("User", "fetch_users", "main")
 
 
 def main() -> tuple[list[User], User, User | None]:
     """Fetch dictionary rows and typed User structs via select, select_one, and select_one_or_none."""
-    spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-
-    with spec.provide_session(config) as session:
-        session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
-        session.execute("INSERT INTO users (name) VALUES ('Alice'), ('Bob')")
-
-        raw_rows = session.select("SELECT id, name FROM users ORDER BY id")
-        assert raw_rows == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
-
-        users, alice, nobody = fetch_users(session)
-
     assert isinstance(users[0], User)
     assert alice.name == "Alice"
     assert nobody is None

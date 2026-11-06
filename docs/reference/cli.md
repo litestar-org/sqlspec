@@ -23,7 +23,7 @@ Configuration resolution prefers CLI flag, SQLSPEC_CONFIG env var, and finally t
 
 ## Inspection & Setup
 
-#### `sqlspec show-config`
+#### sqlspec show-config
 
 Show all configurations with migrations enabled.
 
@@ -35,7 +35,7 @@ sqlspec show-config [OPTIONS]
 | --- | --- | --- | --- |
 | `--bind-key` | `text` | - | Specify which SQLSpec config to use by bind key |
 
-#### `sqlspec show-current-revision`
+#### sqlspec show-current-revision
 
 Shows the current revision for the database.
 
@@ -50,7 +50,7 @@ sqlspec show-current-revision [OPTIONS]
 | `--include` | `text` | - | Include only specific configurations (can be used multiple times) |
 | `--exclude` | `text` | - | Exclude specific configurations (can be used multiple times) |
 
-#### `sqlspec verify`
+#### sqlspec verify
 
 Verify database migration tracking records against migration files on disk.
 
@@ -68,7 +68,7 @@ sqlspec verify [OPTIONS]
 | `--use-logger` | `flag` | `False` | Emit migration output via structured logger instead of console output |
 | `--no-echo` | `flag` | `False` | Disable console output for migration commands |
 
-#### `sqlspec init`
+#### sqlspec init
 
 Initialize migrations for the project.
 
@@ -88,7 +88,7 @@ sqlspec init [OPTIONS] [DIRECTORY]
 
 ## Schema Migrations
 
-#### `sqlspec create-migration`
+#### sqlspec create-migration
 
 Create a new migration revision.
 
@@ -100,14 +100,14 @@ sqlspec create-migration [OPTIONS]
 | --- | --- | --- | --- |
 | `--bind-key` | `text` | - | Specify which SQLSpec config to use by bind key |
 | `-m`, `--message` | `text` | - | Revision message |
-| `--format`, `--file-type` | `choice(sql | py)` | - | File format for the generated migration (defaults to template profile) |
+| `--format`, `--file-type` | `choice(sql / py)` | - | File format for the generated migration (defaults to template profile) |
 | `--from-schema` | `flag` | `False` | Bootstrap migration with current database schema DDL. |
 | `--from-data` | `text` | - | Bootstrap migration DDL from a data file or existing staging table. Values containing a path separator or ending in a data suffix are files; other values are table names. |
 | `--schema` | `text` | - | Database schema name for --from-schema or --from-data. |
 | `--target-table` | `text` | - | Target table name when bootstrapping from data. |
 | `--no-prompt` | `flag` | `False` | Do not prompt for confirmation before executing the command. |
 
-#### `sqlspec upgrade`
+#### sqlspec upgrade
 
 Upgrade database to a specific revision.
 
@@ -132,7 +132,7 @@ sqlspec upgrade [OPTIONS] [REVISION]
 | `--no-auto-sync` | `flag` | `False` | Disable automatic version reconciliation when migrations have been renamed |
 | `--allow-missing` | `flag` | `False` | Allow out-of-order migrations even when strict ordering is enabled. |
 
-#### `sqlspec downgrade`
+#### sqlspec downgrade
 
 Downgrade database to a specific revision.
 
@@ -155,7 +155,7 @@ sqlspec downgrade [OPTIONS] [REVISION]
 | `--no-echo` | `flag` | `False` | Disable console output for migration commands |
 | `--summary` | `flag` | `False` | Emit a single summary log entry when logger output is enabled |
 
-#### `sqlspec stamp`
+#### sqlspec stamp
 
 Stamp the revision table with the given revision
 
@@ -171,7 +171,7 @@ sqlspec stamp [OPTIONS] <REVISION>
 | --- | --- | --- | --- |
 | `--bind-key` | `text` | - | Specify which SQLSpec config to use by bind key |
 
-#### `sqlspec squash`
+#### sqlspec squash
 
 Squash multiple sequential migrations into a single file.
 
@@ -198,11 +198,11 @@ sqlspec squash [OPTIONS] [VERSION_RANGE]
 | `--no-echo` | `flag` | `False` | Disable console output for migration commands |
 | `--no-database` | `flag` | `False` | Skip database record updates |
 | `--allow-gaps` | `flag` | `False` | Allow gaps in version sequence |
-| `--output-format` | `choice(sql | py)` | `"sql"` | Output format for squashed migration (default: sql) |
-| `--strategy` | `choice(ddl | schema | concat)` | `"concat"` | Squash strategy: keep every statement in order (concat), fold DDL into its final shape and refuse ranges that cannot be folded faithfully (ddl), or reflect the live database schema (schema). |
+| `--output-format` | `choice(sql / py)` | `"sql"` | Output format for squashed migration (default: sql) |
+| `--strategy` | `choice(ddl / schema / concat)` | `"concat"` | Squash strategy: keep every statement in order (concat), fold DDL into its final shape and refuse ranges that cannot be folded faithfully (ddl), or reflect the live database schema (schema). |
 | `--single-file`, `--split` | `flag` | `False` | Force a single squashed file (--single-file) or split when file types or execution directives change (--split). |
 
-#### `sqlspec fix`
+#### sqlspec fix
 
 Convert timestamp migrations to sequential format.
 
@@ -222,7 +222,7 @@ sqlspec fix [OPTIONS]
 | `--no-echo` | `flag` | `False` | Disable console output for migration commands |
 | `--no-database` | `flag` | `False` | Skip database record updates |
 
-#### `sqlspec dump-schema`
+#### sqlspec dump-schema
 
 Export the current database schema DDL.
 
@@ -244,7 +244,7 @@ sqlspec dump-schema [OPTIONS]
 
 ## ADK Extension Commands
 
-#### `sqlspec adk memory cleanup`
+#### sqlspec adk memory cleanup
 
 Delete memory entries older than N days
 
@@ -257,7 +257,7 @@ sqlspec adk memory cleanup [OPTIONS]
 | `--bind-key` | `text` | - | Specify which SQLSpec config to use by bind key |
 | `--days` | `integer` | - | **Required.** Delete entries older than this many days |
 
-#### `sqlspec adk memory verify`
+#### sqlspec adk memory verify
 
 Verify memory table exists and is reachable
 

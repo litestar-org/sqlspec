@@ -21,7 +21,6 @@ nav = [
       { "Installation" = "learn/installation.md" },
       { "Quickstart" = "learn/quickstart.md" },
       { "Configuration" = "learn/configuration.md" },
-      { "Interactive Playground" = "playground.md" },
     ] },
     { "Core Execution" = [
       { "Querying" = "learn/querying.md" },
@@ -31,7 +30,9 @@ nav = [
     ] },
     { "SQL Files & Builder" = [
       { "SQL Files" = "learn/sql-files.md" },
-      { "Query Builder" = "learn/query-builder.md" },
+      { "Query Builder: SELECT & Joins" = "learn/query-builder.md" },
+      { "Expressions, Windows & Vector" = "learn/query-builder-expressions.md" },
+      { "DML, MERGE & DDL Builders" = "learn/query-builder-dml-ddl.md" },
       { "Filtering & Pagination" = "learn/filtering-and-pagination.md" },
     ] },
     { "Operations & Analytics" = [
@@ -49,12 +50,6 @@ nav = [
       { "Multi-Tenancy" = "learn/recipes/multi-tenancy.md" },
       { "Health Checks" = "learn/recipes/health-checks.md" },
       { "ETL & Bulk Ingest" = "learn/recipes/etl-and-bulk-ingest.md" },
-    ] },
-    { "Project & Contributing" = [
-      { "Contribution Guide" = "contributing/index.md" },
-      { "Creating Adapters" = "contributing/creating-adapters.md" },
-      { "Releases" = "releases.md" },
-      { "Changelog" = "changelog.md" },
     ] },
   ] },
   { "Databases" = [
@@ -128,7 +123,7 @@ nav = [
       { "CLI" = "reference/cli.md" },
       { "Storage & Arrow" = "reference/storage.md" },
       { "Data Dictionary" = [
-        "reference/data-dictionary.md",
+        "reference/data-dictionary/index.md",
         { "Runtime & DDL" = "reference/data-dictionary/runtime.md" },
         { "Dialect SQL Catalogs" = [
           "reference/data-dictionary/dialects/index.md",
@@ -190,9 +185,17 @@ nav = [
       { "arrow-odbc" = "reference/adapters/arrow-odbc.md" },
     ] },
   ] },
+  { "Playground" = "playground.md" },
+  { "Project" = [
+    "contributing/index.md",
+    { "Creating Adapters" = "contributing/creating-adapters.md" },
+    { "Releases" = "releases.md" },
+    { "Changelog" = "changelog.md" },
+  ] },
 ]
 
 [project.theme]
+variant = "modern"
 language = "en"
 logo = "assets/logo.svg"
 favicon = "assets/favicon.svg"
@@ -292,7 +295,7 @@ generator = false
 "reference/core/splitter.md" = "reference/core/compiler.md"
 "reference/core/sqlcommenter.md" = "reference/core/compiler.md"
 "reference/core/type-converters.md" = "reference/core/compiler.md"
-"reference/data_dictionary.md" = "reference/data-dictionary.md"
+"reference/data_dictionary.md" = "reference/data-dictionary/index.md"
 "reference/extensions/otel.md" = "reference/extensions/opentelemetry.md"
 "reference/query-stack.md" = "reference/core/statement.md"
 
@@ -342,7 +345,7 @@ heading_level = 3
 inherited_members = false
 line_length = 80
 members_order = "source"
-merge_init_into_class = true
+merge_init_into_class = false
 modernize_annotations = true
 annotations_path = "brief"
 preload_modules = ["sqlspec"]
@@ -350,17 +353,17 @@ separate_signature = true
 show_bases = true
 show_category_heading = false
 show_if_no_docstring = true
-show_labels = true
+show_labels = false
 show_object_full_path = false
 show_overloads = false
 show_root_full_path = false
 show_root_heading = true
 show_root_toc_entry = true
-show_signature_annotations = true
+show_signature_annotations = false
 show_source = false
 show_symbol_type_heading = true
 show_symbol_type_toc = false
-signature_crossrefs = true
+signature_crossrefs = false
 summary = false
 unwrap_annotated = true
 filters = ["!^_"]

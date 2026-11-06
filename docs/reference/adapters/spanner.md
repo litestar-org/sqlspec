@@ -21,10 +21,12 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
 ::: sqlspec.adapters.spanner.SpannerSyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.spanner.SpannerAsyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.spanner.SpannerConnectionParams
     options:
@@ -101,10 +103,12 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
 ::: sqlspec.adapters.spanner.litestar.SpannerSyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.spanner.litestar.SpannerAsyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.spanner.adk.SpannerADKConfig
     options:
@@ -115,37 +119,46 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
 ::: sqlspec.adapters.spanner.adk.SpannerADKRetentionConfig
     options:
       heading_level: 4
+      members: false
       separate_signature: false
       show_signature_annotations: true
 
 ::: sqlspec.adapters.spanner.adk.SpannerSyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.spanner.adk.SpannerAsyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.spanner.adk.SpannerSyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.spanner.adk.SpannerAsyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.spanner.adk.SpannerSyncADKArtifactStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.spanner.adk.SpannerAsyncADKArtifactStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.spanner.events.SpannerSyncEventQueueStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.spanner.events.SpannerAsyncEventQueueStore
     options:
       heading_level: 4
+      members: false

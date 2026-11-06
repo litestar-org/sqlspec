@@ -6,7 +6,7 @@
 flowchart LR
     Pub["Publisher (publish / publish_many)"] --> Channel["Sync / AsyncEventChannel"]
     Channel --> Backend["Backend (notify / notify_queue / poll_queue / aq)"]
-    Backend --> Consumer["Consumer (dequeue / iter_events -> ack / nack)"]
+    Backend --> Consumer["Consumer (iter_events / listen -> ack / nack)"]
 ```
 
 ## Choosing a Transport Backend
@@ -21,14 +21,33 @@ Set `extension_config["events"]["backend"]` according to your delivery and durab
 | `"aq"` | `oracledb` (sync & async) | Durable Oracle Advanced Queuing table | Native `DBMS_AQ` enqueue/dequeue in `python-oracledb` Thin mode | Opt-in on Oracle 21c+ / 26ai |
 | `"txeventq"` | `oracledb` (sync & async) | Durable Oracle Transactional Event Queue | Native high-throughput partitioned TxEventQ in Thin mode | Opt-in on Oracle 21c+ / 26ai |
 
-## Configuring `EventsConfig` and Publishing Events
+## Configuring EventsConfig and Publishing Events
 
-Configure the `events` extension on your database config, provision the queue table when using a durable table backend (`notify_queue` or `poll_queue`), and publish/consume events through `spec.event_channel(config)`:
+Configure the `events` extension on your database config (`EventsConfig`). When `manage_schema=True` and `create_schema=True` (the defaults), `sqlspec upgrade` automatically provisions and reconciles the queue table (`sqlspec_event_queue` by default); for standalone in-memory setups without running CLI migrations, call `await store.reconcile_schema_async(driver)` (or `store.reconcile_schema_sync(driver)`) on the adapter's `*EventQueueStore`. Channel names must be valid SQL identifiers (`^[A-Za-z_][A-Za-z0-9_]*$`, such as `"orders_created"`):
+
+<!-- GENERATED:START config-table:sqlspec.config.EventsConfig -->
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `migrations_path` | `str or Path` | - | Directory containing this extension's migrations, or a `'<dotted.module>:<subdir>'` specification. Overrides the default `sqlspec.extensions.<name>` lookup. Setting this auto-includes the extension in `migration_config["include_extensions"]`. |
+| `manage_schema` | `bool` | `True` | Apply additive target-schema reconciliation. Default: True. |
+| `create_schema` | `bool` | `True` | Create the queue table during managed reconciliation. Default: True. |
+| `backend` | `Literal['notify', 'notify_queue', 'poll_queue', 'aq', 'txeventq']` | - | Backend implementation. PostgreSQL adapters default to 'notify', others to 'poll_queue'. notify: Transient PostgreSQL LISTEN/NOTIFY wakeup; not a durable event ledger; notify_queue: Durable table queue with PostgreSQL LISTEN/NOTIFY wakeups; poll_queue: Durable table queue discovered by polling; aq: Oracle Advanced Queuing; txeventq: Oracle Transactional Event Queues |
+| `queue_table` | `str` | - | Name of the fallback queue table. Defaults to 'sqlspec_event_queue'. |
+| `lease_seconds` | `int` | `30` | Lease duration for claimed events before they can be retried. Defaults to 30 seconds. |
+| `retention_seconds` | `int` | `86400` | Retention window for acknowledged events before cleanup. Defaults to 86400 (24 hours). |
+| `poll_interval` | `float` | `1.0` | Compatibility alias for event_poll_interval. Defaults to 1.0. |
+| `event_poll_interval` | `float` | - | Durable event reconciliation interval in seconds. Takes precedence over poll_interval. |
+| `select_for_update` | `bool` | `False` | Use SELECT FOR UPDATE locking when claiming events. Defaults to False. |
+| `skip_locked` | `bool` | `False` | Use SKIP LOCKED for non-blocking event claims. Defaults to False. |
+| `shard_count` | `int` | `1` | Number of hash shards for queue table and index prefixing (e.g. Cloud Spanner). Defaults to 1. |
+<!-- GENERATED:END config-table:sqlspec.config.EventsConfig -->
 
 ```python
 import asyncio
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite.events import AiosqliteEventQueueStore
+from sqlspec.extensions.events import EventMessage
 
 
 async def main() -> None:
@@ -48,19 +67,35 @@ async def main() -> None:
         )
     )
     try:
-        channel = spec.event_channel(config)
-        await channel.store.create_table()
+        store = AiosqliteEventQueueStore(config)
+        async with config.provide_session() as driver:
+            await store.reconcile_schema_async(driver)
 
+        channel = spec.event_channel(config)
         event_id = await channel.publish(
-            "orders.created",
+            "orders_created",
             {"order_id": 101, "status": "paid"},
             metadata={"source": "checkout"},
         )
 
-        message = await channel.dequeue("orders.created", poll_interval=0.1)
-        if message is not None:
+        async for message in channel.iter_events(
+            "orders_created", poll_interval=0.1
+        ):
             assert message.event_id == event_id
             await channel.ack(message.event_id)
+            break
+
+        async def handle_order(msg: EventMessage) -> None:
+            if msg.payload.get("retry"):
+                await channel.nack(msg.event_id)
+                return
+            await channel.ack(msg.event_id)
+
+        listener = channel.listen(
+            "orders_created", handle_order, auto_ack=False
+        )
+        await channel.stop_listener(listener.id)
+        await channel.shutdown()
     finally:
         await config.close_pool()
 
@@ -68,11 +103,11 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-### Batch Publication (`publish_many`)
+### Batch Publication
 
 Both `AsyncEventChannel` and `SyncEventChannel` provide `publish_many(events)` where each item is a `(channel, payload, metadata)` tuple. On `poll_queue` and `notify_queue`, SQLSpec bulk-inserts all rows in a single publisher transaction; on `notify_queue`, it emits a single compact wakeup marker (`marker_id` + `batch_size`) per channel in the same transaction so consumers drain the batch immediately.
 
-## PostgreSQL `ListenerHub` and Pooler Routing
+## PostgreSQL ListenerHub and Pooler Routing
 
 On PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`), `notify` and `notify_queue` manage a single persistent `LISTEN` connection per backend instance via `ListenerHub`:
 
@@ -104,7 +139,7 @@ config = AsyncpgConfig(
 )
 ```
 
-### Checking PostgreSQL `NOTIFY` Payload Budgets (`7,999` Bytes)
+### Checking PostgreSQL NOTIFY Payload Budgets
 
 PostgreSQL caps `NOTIFY` payloads at `7,999` UTF-8 bytes across the full encoded event envelope (`event_id`, `payload`, `metadata`, and timestamp). Use `fits_notify_payload` and `measure_notify_payload` before publishing to a transient `notify` channel, or use `notify_queue` so arbitrary-sized payloads live in the durable queue table while `NOTIFY` carries only a compact wakeup marker.
 
@@ -112,9 +147,9 @@ PostgreSQL caps `NOTIFY` payloads at `7,999` UTF-8 bytes across the full encoded
 
 Several adapters export typed `EventsConfig` subclasses under `sqlspec.adapters.<adapter>.events` for storage-level optimizations:
 
-- **PostgreSQL (`AsyncpgEventsConfig`, `PsycopgEventsConfig`, `PsqlpyEventsConfig`)**: `fillfactor` (`10`–`100`) and `listener_queue_capacity`.
+- **PostgreSQL (`AsyncpgEventsConfig`, `PsycopgEventsConfig`, `PsqlpyEventsConfig`)**: `fillfactor` (`10`–`100`) and autovacuum scale factors on all three, plus `listener_queue_capacity` on `AsyncpgEventsConfig` and `PsycopgEventsConfig`.
 - **SQLite (`SqliteEventsConfig`, `AiosqliteEventsConfig`)**: PRAGMA profile and overrides for high-concurrency WAL queue polling.
-- **Cloud Spanner (`EventsConfig` on `SpannerSyncConfig` / `SpannerAsyncConfig`)**: `shard_count > 1` hash-shard prefixing to prevent queue-head hotspots, snapshot-read candidate polling, and native `ROW DELETION POLICY` TTL cleanup (`cleanup_on_ack=False`).
+- **Cloud Spanner (base `EventsConfig` on `SpannerSyncConfig` / `SpannerAsyncConfig`)**: `shard_count > 1` hash-shard prefixing to prevent queue-head hotspots. The adapter also uses snapshot-read candidate polling and keeps acknowledged rows for native `ROW DELETION POLICY` TTL cleanup instead of deleting them on `ack`.
 - **BigQuery (`BigQueryEventsConfig`)**: `partitioning=True` (`DATE(available_at)` partitioning), `partition_expiration_days`, and `require_partition_filter`.
 - **Oracle (`OracleEventsConfig`)**: `backend="aq"` or `"txeventq"`, `aq_queue` (`"SQLSPEC_EVT_{channel}"` per-channel routing), `aq_visibility` (`"DEQ_ON_COMMIT"` / `"DEQ_IMMEDIATE"`), `OracleEventsPartitionConfig`, and `OracleEventsCompressionConfig`.
 

@@ -2,9 +2,6 @@
 
 This module provides utilities for converting Python dictionaries to Apache Arrow
 format, handling empty results, NULL values, and type inference.
-
-NOTE: This module is excluded from mypyc compilation to avoid segmentation faults
-when compiled drivers touch Arrow objects.
 """
 
 import contextlib
@@ -1476,7 +1473,7 @@ class _AsyncBytesIterator:
 
 
 def oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None) -> "ArrowTable":
-    """Convert an Oracle DataFrame to a PyArrow Table using zero-copy PyCapsule when supported."""
+    """Convert an Oracle DataFrame to a PyArrow Table using the zero-copy Arrow C Stream interface when supported."""
     if pa_module is None:
         ensure_pyarrow()
         pa_module = import_optional("pyarrow")
@@ -1502,7 +1499,7 @@ def coerce_oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow
 def coerce_oracle_df_to_arrow_batches(
     oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None
 ) -> "list[ArrowRecordBatch]":
-    """Convert an Oracle DataFrame batch into PyArrow RecordBatches via PyCapsule when supported."""
+    """Convert an Oracle DataFrame batch into PyArrow RecordBatches via the Arrow C Stream interface when supported."""
     if pa_module is None:
         ensure_pyarrow()
         pa_module = import_optional("pyarrow")

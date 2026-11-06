@@ -44,6 +44,7 @@ COCKROACHDB_FEATURE_VERSIONS: "FeatureVersions" = {
     "supports_upsert": VersionInfo(19, 2, 0),
     "supports_window_functions": VersionInfo(19, 1, 0),
     "supports_cte": VersionInfo(19, 1, 0),
+    "supports_vectors": VersionInfo(24, 2, 0),
 }
 
 COCKROACHDB_FEATURE_FLAGS: "FeatureFlags" = {

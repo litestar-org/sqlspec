@@ -25,10 +25,19 @@ class ColumnExpression:
         self._expression = expression
 
     def __and__(self, other: "ColumnExpression") -> "ColumnExpression":
-        """Combine with AND operator (&)."""
+        """Combine with AND operator (&).
+
+        ``OR`` operands are wrapped in parentheses because ``AND`` binds tighter
+        than ``OR`` in SQL, so ``a & (b | c)`` must not render as ``a AND b OR c``.
+        """
         if not isinstance(other, ColumnExpression):
             return NotImplemented
-        return ColumnExpression(exp.And(this=self._expression.copy(), expression=other._expression.copy()))
+        return ColumnExpression(
+            exp.And(
+                this=_wrap_operand(self._expression.copy(), exp.Or),
+                expression=_wrap_operand(other._expression.copy(), exp.Or),
+            )
+        )
 
     def __or__(self, other: "ColumnExpression") -> "ColumnExpression":
         """Combine with OR operator (|)."""
@@ -37,8 +46,12 @@ class ColumnExpression:
         return ColumnExpression(exp.Or(this=self._expression.copy(), expression=other._expression.copy()))
 
     def __invert__(self) -> "ColumnExpression":
-        """Apply NOT operator (~)."""
-        return ColumnExpression(exp.Not(this=self._expression.copy()))
+        """Apply NOT operator (~).
+
+        ``AND`` / ``OR`` operands are wrapped in parentheses because ``NOT`` binds
+        tighter than both connectors, so ``~(a & b)`` must render as ``NOT (a AND b)``.
+        """
+        return ColumnExpression(exp.Not(this=_wrap_operand(self._expression.copy(), exp.Connector)))
 
     def __bool__(self) -> bool:
         """Prevent accidental use of 'and'/'or' keywords."""
@@ -165,13 +178,12 @@ class _ScalarExpressionMixin:
         )
 
     def not_any_(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL <> ANY(...) clause."""
-        converted_values = [self._convert_value(v) for v in values]
-        return ColumnExpression(
-            exp.NEQ(
-                this=self._expression, expression=exp.Any(this=exp.Paren(this=exp.Array(expressions=converted_values)))
-            )
-        )
+        """SQL NOT (column = ANY(...)) clause.
+
+        ``column <> ANY(...)`` is true when any element differs, so the negation
+        wraps the ``= ANY`` comparison, matching ``NotAnyCollectionFilter``.
+        """
+        return ColumnExpression(exp.Not(this=self.any_(values)._expression))
 
     def cast(self, data_type: str) -> "FunctionColumn":
         """SQL CAST() function."""
@@ -386,6 +398,21 @@ class FunctionColumn(_ScalarExpressionMixin):
     def __hash__(self) -> int:
         """Hash based on the expression identity."""
         return hash(id(self._expression))
+
+
+def _wrap_operand(expression: exp.Expr, lower_precedence: type[exp.Expr]) -> exp.Expr:
+    """Parenthesize an operand whose operator binds looser than its new parent.
+
+    Args:
+        expression: The operand expression.
+        lower_precedence: Expression type that needs parentheses under the parent operator.
+
+    Returns:
+        The operand, wrapped in ``exp.Paren`` when required.
+    """
+    if isinstance(expression, lower_precedence):
+        return exp.Paren(this=expression)
+    return expression
 
 
 def _convert_value(value: Any) -> exp.Expr:

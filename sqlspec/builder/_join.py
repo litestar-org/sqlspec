@@ -350,19 +350,54 @@ def _join_for_type(table_expr: exp.Expr, on_expr: exp.Expr | None, join_type: st
 
 
 def _apply_lateral_modifier(join_expr: exp.Join) -> None:
-    current_kind = join_expr.args.get("kind")
-    current_side = join_expr.args.get("side")
+    """Turn a join into a LATERAL join.
 
-    if current_kind == "CROSS":
-        join_expr.set("kind", "CROSS LATERAL")
-    elif current_kind == "OUTER" and current_side == "FULL":
-        join_expr.set("side", "FULL")
-        join_expr.set("kind", "OUTER LATERAL")
-    elif current_side:
-        join_expr.set("kind", f"{current_side} LATERAL")
-        join_expr.set("side", None)
+    The join target is wrapped in ``exp.Lateral`` so sqlglot renders the standard
+    ``JOIN LATERAL`` / ``LEFT JOIN LATERAL`` / ``CROSS JOIN LATERAL`` form accepted by
+    PostgreSQL, MySQL, DuckDB, and Snowflake. Non-cross lateral joins without a
+    condition get ``ON TRUE`` because PostgreSQL requires a join qualifier for them.
+    """
+    join_expr.set("this", _lateral_source(join_expr.this))
+    if join_expr.args.get("kind") != "CROSS" and join_expr.args.get("on") is None:
+        join_expr.set("on", exp.true())
+
+
+def _lateral_source(table_expr: exp.Expr) -> exp.Expr:
+    """Wrap a join target in ``exp.Lateral``, moving its alias onto the LATERAL node.
+
+    Args:
+        table_expr: Parsed join target (aliased subquery, table function, or table).
+
+    Returns:
+        The ``exp.Lateral`` join target.
+    """
+    if isinstance(table_expr, exp.Lateral):
+        return table_expr
+
+    source = table_expr
+    alias_node: exp.Expr | None = None
+    if isinstance(source, exp.Alias):
+        alias_node = exp.TableAlias(this=exp.to_identifier(source.alias))
+        source = source.this
     else:
-        join_expr.set("kind", "LATERAL")
+        raw_alias = source.args.get("alias")
+        if raw_alias is not None:
+            source = source.copy()
+            source.set("alias", None)
+            if isinstance(raw_alias, exp.TableAlias):
+                alias_node = raw_alias.copy()
+            else:
+                alias_identifier = (
+                    raw_alias.copy() if isinstance(raw_alias, exp.Identifier) else exp.to_identifier(str(raw_alias))
+                )
+                alias_node = exp.TableAlias(this=alias_identifier)
+
+    if isinstance(source, exp.Paren) and isinstance(source.this, exp.Query):
+        source = exp.Subquery(this=source.this)
+    elif isinstance(source, exp.Table) and isinstance(source.this, exp.Func):
+        source = source.this
+
+    return exp.Lateral(this=source, alias=alias_node)
 
 
 def _attach_as_of_version(
@@ -377,9 +412,9 @@ def _attach_as_of_version(
         target_alias = inner_table.alias
         inner_table = inner_table.this
     elif isinstance(inner_table, exp.Table):
-        alias_expr = inner_table.args.get("alias")
-        if alias_expr is not None:
-            target_alias = alias_expr.this
+        table_alias = inner_table.alias
+        if table_alias:
+            target_alias = table_alias
             inner_table.set("alias", None)
 
     version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))

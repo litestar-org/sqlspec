@@ -119,7 +119,7 @@ def _train_query_cache() -> None:
             input_named_parameters=(),
             applied_wrap_types=False,
             parameter_casts={},
-            operation_type="SELECT",  # type: ignore[arg-type]
+            operation_type="SELECT",
             operation_profile=operation_profile,
             param_count=parameter_profile.total_count,
             processed_state=processed_state,
@@ -343,30 +343,26 @@ def _train_builder_and_where() -> None:
 
     # INSERT builder
     for _ in range(1000):
-        q = Insert().into("users").columns("name", "email", "active").values("Alice", "alice@test.com", True)
-        q.build()
+        Insert().into("users").columns("name", "email", "active").values("Alice", "alice@test.com", True).build()
 
     # UPDATE with WHERE
     for _ in range(1000):
-        q = Update().table("users").set(name="Bob", active=False).where("id = :id", id=1)
-        q.build()
+        Update().table("users").set(name="Bob", active=False).where("id = :id", id=1).build()
 
     # DELETE with WHERE
     for _ in range(1000):
-        q = Delete().from_("sessions").where("expired = :expired", expired=True)
-        q.build()
+        Delete().from_("sessions").where("expired = :expired", expired=True).build()
 
     # MERGE (exercises TypeDispatcher for type inference)
     for _ in range(500):
-        q = (
+        (
             Merge()
             .into("target_table")
             .using("source_table", alias="s")
             .on("target_table.id = s.id")
             .when_matched_then_update(name="s.name", updated_at="NOW()")
             .when_not_matched_then_insert(columns=["id", "name"], values=["s.id", "s.name"])
-        )
-        q.build()
+        ).build()
 
 
 def _train_adbc_sqlite() -> None:

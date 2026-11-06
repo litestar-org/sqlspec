@@ -3,17 +3,20 @@
 import tempfile
 from pathlib import Path
 
+# --8<-- [start:example]
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.migrations.commands import SyncMigrationCommands
-
-__all__ = ("main",)
 
 MIGRATION_SCRIPT = '''"""Create users."""
 
 
 def up() -> list[str]:
     """Create an unqualified table in app_schema."""
-    return ["CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL)"]
+    return [
+        """
+        CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL)
+        """
+    ]
 
 
 def down() -> list[str]:
@@ -22,35 +25,43 @@ def down() -> list[str]:
 '''
 
 
+def run_multi_schema_migration(base_dir: Path) -> DuckDBConfig:
+    """Apply a migration across app_schema and admin_schema in DuckDB."""
+    migration_dir = base_dir / "migrations"
+    db_path = base_dir / "app.duckdb"
+    config = DuckDBConfig(
+        connection_config={"database": str(db_path)},
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": "schema_versions",
+            "default_schema": "app_schema",
+            "version_table_schema": "admin_schema",
+        },
+    )
+
+    with config.provide_session() as session:
+        session.execute("CREATE SCHEMA app_schema")
+        session.execute("CREATE SCHEMA admin_schema")
+
+    commands = SyncMigrationCommands(config)
+    commands.init(str(migration_dir), package=True)
+    revision_file = migration_dir / "0001_create_users.py"
+    revision_file.write_text(MIGRATION_SCRIPT, encoding="utf-8")
+    commands.upgrade()
+    return config
+
+
+# --8<-- [end:example]
+
+__all__ = ("MIGRATION_SCRIPT", "main", "run_multi_schema_migration")
+
+
 def main() -> tuple[str, str]:
     """Apply a Python migration script across app_schema and admin_schema in DuckDB."""
     with tempfile.TemporaryDirectory() as tmp_dir:
-        base_dir = Path(tmp_dir)
-        migration_dir = base_dir / "migrations"
-        db_path = base_dir / "app.duckdb"
-
-        # --8<-- [start:example]
-        config = DuckDBConfig(
-            connection_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "schema_versions",
-                "default_schema": "app_schema",
-                "version_table_schema": "admin_schema",
-            },
-        )
+        config = run_multi_schema_migration(Path(tmp_dir))
 
         try:
-            with config.provide_session() as session:
-                session.execute("CREATE SCHEMA app_schema")
-                session.execute("CREATE SCHEMA admin_schema")
-
-            commands = SyncMigrationCommands(config)
-            commands.init(str(migration_dir), package=True)
-            (migration_dir / "0001_create_users.py").write_text(MIGRATION_SCRIPT, encoding="utf-8")
-            commands.upgrade()
-            # --8<-- [end:example]
-
             with config.provide_session() as session:
                 users_table = str(
                     session.select_value(

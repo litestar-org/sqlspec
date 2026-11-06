@@ -7,6 +7,7 @@ from tools.docs.scan_public_docstrings import main as scan_main
 from tools.docs.scan_public_docstrings import (
     scan_overload_docstrings,
     scan_public_docstring_leaks,
+    scan_undocumented_structs,
     scan_undocumented_typeddicts,
 )
 
@@ -14,6 +15,7 @@ __all__ = (
     "test_scan_overload_docstrings_flags_documented_overloads",
     "test_scan_public_docstring_leaks_detects_compiler_and_layout_leaks",
     "test_scan_public_docstrings_cli_main",
+    "test_scan_undocumented_structs_flags_missing_fields_and_inherited_private_bases",
     "test_scan_undocumented_typeddicts_resolves_inheritance_and_duplicate_blocks",
     "test_sqlspec_public_docstrings_have_zero_leaks_and_zero_overload_docs",
 )
@@ -157,6 +159,59 @@ def test_scan_undocumented_typeddicts_resolves_inheritance_and_duplicate_blocks(
     assert by_symbol["DuplicateAttributesConfig"].has_duplicate_class_attributes is True
     assert "DuplicateFieldListConfig" in by_symbol
     assert by_symbol["DuplicateFieldListConfig"].has_duplicate_class_attributes is True
+
+
+@pytest.mark.parametrize("leak_phrase", ["Represent a PEP 604 union type", "PyCapsule", "Sentinel.UNSET", "Cython"])
+def test_scan_public_docstring_leaks_flags_rendered_api_noise(tmp_path: Path, leak_phrase: str) -> None:
+    module_file = tmp_path / "noise.py"
+    module_file.write_text(
+        f'def leaky_function() -> None:\n    """Returns data via {leak_phrase} internals."""\n'
+        'def clean_function() -> None:\n    """Return data through the Arrow C Stream interface."""\n',
+        encoding="utf-8",
+    )
+
+    violations = scan_public_docstring_leaks([module_file])
+
+    assert [item.symbol for item in violations] == ["leaky_function"]
+    assert len(violations[0].matched_patterns) == 1
+
+
+def test_scan_undocumented_structs_flags_missing_fields_and_inherited_private_bases(tmp_path: Path) -> None:
+    module_file = tmp_path / "structs.py"
+    module_file.write_text(
+        "import msgspec\n"
+        "from msgspec import Struct\n\n"
+        "class CleanStruct(msgspec.Struct, frozen=True, gc=False):\n"
+        '    """Clean struct."""\n\n'
+        "    name: str\n"
+        '    """Name."""\n\n'
+        "class _PrivateBase(Struct):\n"
+        "    shared: int\n\n"
+        "class PublicChild(_PrivateBase):\n"
+        '    """Child struct."""\n\n'
+        "    extra: str\n"
+        '    """Extra."""\n\n'
+        "class _UnusedPrivate(Struct):\n"
+        "    hidden: int\n\n"
+        "class DuplicateAttributes(Struct):\n"
+        '    """Struct.\n\n'
+        "    Attributes:\n"
+        "        value: The value.\n"
+        '    """\n\n'
+        "    value: int\n"
+        '    """The value."""\n\n'
+        "class NotAStruct:\n"
+        "    plain: int\n",
+        encoding="utf-8",
+    )
+
+    by_symbol = {item.symbol: item for item in scan_undocumented_structs([module_file])}
+
+    assert set(by_symbol) == {"_PrivateBase", "DuplicateAttributes"}
+    assert by_symbol["_PrivateBase"].missing_fields == ("shared",)
+    assert by_symbol["_PrivateBase"].has_duplicate_class_attributes is False
+    assert by_symbol["DuplicateAttributes"].missing_fields == ()
+    assert by_symbol["DuplicateAttributes"].has_duplicate_class_attributes is True
 
 
 def test_scan_public_docstrings_cli_main(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

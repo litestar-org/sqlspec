@@ -17,8 +17,10 @@ from sqlspec.observability import (
     SamplingConfig,
     SpanManager,
     StatementEvent,
+    StatementObserver,
     TelemetryConfig,
     TelemetryDiagnostics,
+    create_event,
     create_statement_observer,
     default_statement_observer,
     format_statement_event,
@@ -39,18 +41,22 @@ Structured statement observers, parameter redaction, OpenTelemetry span manageme
 ::: sqlspec.observability._config.TelemetryConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.observability._config.LoggingConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.observability._config.RedactionConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.observability._sampling.SamplingConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.observability._runtime.ObservabilityRuntime
     options:
@@ -72,6 +78,11 @@ Structured statement observers, parameter redaction, OpenTelemetry span manageme
 ::: sqlspec.observability._observer.StatementEvent
     options:
       heading_level: 3
+      members: false
+
+::: sqlspec.observability._observer.StatementObserver
+    options:
+      heading_level: 4
 
 ::: sqlspec.observability._observer.create_event
     options:
@@ -94,44 +105,51 @@ Structured statement observers, parameter redaction, OpenTelemetry span manageme
 ::: sqlspec.observability._spans.SpanManager
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.observability._dispatcher.LifecycleDispatcher
     options:
       heading_level: 4
-      members:
-        - register_hook
-        - snapshot
+      members: false
 
 ::: sqlspec.observability._dispatcher.LifecycleContext
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.observability._diagnostics.TelemetryDiagnostics
     options:
       heading_level: 4
+      members: false
 
 ## Cloud & OpenTelemetry Log Formatters
 
 ::: sqlspec.observability._formatters.CloudLogFormatter
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.observability._formatters.GCPLogFormatter
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.observability._formatters.AWSLogFormatter
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.observability._formatters.AzureLogFormatter
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.observability._formatting.OTelJSONFormatter
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.observability._formatting.OTelConsoleFormatter
     options:
       heading_level: 4
+      members: false

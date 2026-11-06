@@ -1,20 +1,20 @@
 """Structure isolated database fixtures and seed helpers for integration tests."""
 
 import tempfile
+
+# --8<-- [start:example]
 from pathlib import Path
 from typing import Any
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
-__all__ = ("create_test_spec", "main", "seed_database")
 
-
-# --8<-- [start:example]
 def create_test_spec(db_path: Path) -> tuple[SQLSpec, SqliteConfig]:
     """Create an isolated SQLSpec instance and SQLite configuration."""
     spec = SQLSpec()
-    config = spec.add_config(SqliteConfig(connection_config={"database": str(db_path)}))
+    conn_cfg = {"database": str(db_path)}
+    config = spec.add_config(SqliteConfig(connection_config=conn_cfg))
     return spec, config
 
 
@@ -40,6 +40,8 @@ def seed_database(spec: SQLSpec, config: SqliteConfig) -> None:
 
 
 # --8<-- [end:example]
+
+__all__ = ("create_test_spec", "main", "seed_database")
 
 
 def main() -> dict[str, Any]:

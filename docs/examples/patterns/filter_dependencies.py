@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from sqlspec.extensions.litestar.providers import FilterConfig, create_filter_dependencies
+from sqlspec.extensions.litestar.providers import create_filter_dependencies
 
 __all__ = ("main",)
 
@@ -10,7 +10,7 @@ __all__ = ("main",)
 def main() -> dict[str, Any]:
     """Build filter, sort, search, and pagination dependency providers for a users endpoint."""
     # --8<-- [start:example]
-    user_filters: FilterConfig = {
+    deps = create_filter_dependencies({
         "id_filter": str,
         "id_field": "id",
         "sort_field": ["created_at", "uploaded_collections", "name"],
@@ -22,8 +22,7 @@ def main() -> dict[str, Any]:
         "search_ignore_case": True,
         "created_at": True,
         "updated_at": True,
-    }
-    deps = create_filter_dependencies(user_filters)
+    })
     # --8<-- [end:example]
     assert deps
     return deps

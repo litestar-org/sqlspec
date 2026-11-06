@@ -10,7 +10,7 @@ from sqlspec.driver import (
 )
 ```
 
-Base synchronous driver adapter class inherited by all synchronous SQLSpec database adapters (`SqliteDriver`, `PsycopgSyncDriver`, `PymysqlDriver`, `OracleSyncDriver`, `DuckDBDriver`, `BigQueryDriver`, `SpannerSyncDriver`, `Db2SyncDriver`, `MssqlSyncDriver`, `PymssqlDriver`, `SybaseSyncDriver`, `SqlAnywhereSyncDriver`, `AdbcDriver`, `ArrowOdbcDriver`). See [Querying](../../learn/querying.md) for usage examples.
+Base synchronous driver adapter class inherited by all synchronous SQLSpec database adapters (`SqliteDriver`, `PsycopgSyncDriver`, `CockroachPsycopgSyncDriver`, `PyMysqlDriver`, `MysqlConnectorSyncDriver`, `OracleSyncDriver`, `DuckDBDriver`, `BigQueryDriver`, `SpannerSyncDriver`, `Db2SyncDriver`, `MssqlPythonDriver`, `PymssqlDriver`, `SybaseDriver`, `SqlanywhereDriver`, `AdbcDriver`, `ArrowOdbcDriver`). See [Querying](../../learn/querying.md) for usage examples.
 
 ## Synchronous Driver Adapter
 
@@ -30,10 +30,7 @@ Base synchronous driver adapter class inherited by all synchronous SQLSpec datab
         - select_with_total
         - select_stream
         - select_to_arrow
-        - select_to_storage
         - load_from_arrow
-        - load_from_storage
-        - without_indexes
         - begin
         - commit
         - rollback
@@ -51,13 +48,16 @@ See [Runtime Introspection & DDL Synthesis](../data-dictionary/runtime.md) and [
 ::: sqlspec.driver._stream.SyncRowStream
     options:
       heading_level: 3
+      members: false
 
 ## Pool Context Managers
 
 ::: sqlspec.driver._sync.SyncPoolConnectionContext
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.driver._sync.SyncPoolSessionFactory
     options:
       heading_level: 3
+      members: false

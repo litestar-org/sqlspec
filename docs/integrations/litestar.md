@@ -1,6 +1,6 @@
 # Litestar Integration
 
-`sqlspec.extensions.litestar` provides `SQLSpecPlugin`, wiring SQLSpec connection pools into Litestar's application lifespan, registering request-scoped session and connection dependencies, mounting `litestar database` CLI migration commands, providing declarative query filter dependencies, and supplying server-side Litestar `Store` implementations across supported database adapters.
+`sqlspec.extensions.litestar` provides `SQLSpecPlugin`, wiring SQLSpec connection pools into Litestar's application lifespan, registering request-scoped session and connection dependencies, mounting `litestar db` / `litestar database` and `litestar sessions delete-expired` CLI commands, providing declarative query filter dependencies, and supplying server-side Litestar `Store` and `ChannelsBackend` implementations across supported database adapters.
 
 ## Installation
 
@@ -46,6 +46,32 @@ Register one or more database configurations on a `SQLSpec` instance, configure 
 
 By default, a single configuration registers `db_session`, `db_connection`, and `db_pool` in Litestar's dependency graph. Override `session_key`, `connection_key`, or `pool_key` inside `extension_config["litestar"]` to customize parameter names.
 
+## Configuration Options
+
+Configure `extension_config["litestar"]` (`LitestarConfig`) per database configuration:
+
+<!-- GENERATED:START config-table:sqlspec.config.LitestarConfig -->
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `migrations_path` | `str or Path` | - | Directory containing this extension's migrations, or a `'<dotted.module>:<subdir>'` specification. Overrides the default `sqlspec.extensions.<name>` lookup. Setting this auto-includes the extension in `migration_config["include_extensions"]`. |
+| `session_table` | `bool or str` | - | Enable session table for server-side session storage. `True`: Use default table name ('litestar_session'); `"custom_name"`: Use custom table name. When set, litestar extension migrations are auto-included to create the session table. If you're only using litestar for DI/connection management (not session storage), leave this unset to skip the migrations. |
+| `connection_key` | `str` | `'db_connection'` | Key for storing connection in ASGI scope. Default: 'db_connection' |
+| `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in application state. Default: 'db_pool' |
+| `session_key` | `str` | `'db_session'` | Key for storing session in ASGI scope. Default: 'db_session' |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual' |
+| `enable_correlation_middleware` | `bool` | `True` | Enable request correlation ID middleware. Default: True |
+| `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
+| `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
+| `auto_trace_headers` | `bool` | `True` | Read standard trace context headers as correlation ID fallbacks. Default: True. |
+| `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger commit. Default: set() |
+| `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger rollback. Default: set() |
+| `disable_di` | `bool` | `False` | Disable built-in dependency injection. Default: False. When True, the Litestar plugin will not register dependency providers for database connections, pools, and sessions, or the per-request handler that commits and closes request connections. Pool startup and shutdown follow `manage_lifespan`, which defaults to False when `disable_di` is True. |
+| `manage_lifespan` | `bool` | - | Register the plugin's pool lifespan handler. Default: the inverse of `disable_di`. When True, the Litestar plugin creates the configuration's pool on application startup, stores it in application state under `pool_key`, and closes it on shutdown, whether or not `disable_di` is set. Set to True alongside `disable_di=True` to keep pool lifecycle management while another DI solution provides connections and sessions. When False, the application creates and closes the pool itself; with dependency injection enabled, the plugin's providers still read the pool from application state under `pool_key`. |
+| `enable_sqlcommenter_middleware` | `bool` | `True` | Control automatic SQLCommenter middleware registration. Default: True. When the driver's :class:`~sqlspec.core.statement.StatementConfig` has `enable_sqlcommenter=True`, the middleware is registered automatically. Set to `False` to explicitly disable middleware registration even when SQLCommenter is enabled on the driver config. |
+| `manage_schema` | `bool` | `True` | Apply additive session-table reconciliation. Default: True. |
+| `create_schema` | `bool` | `True` | Create a missing session table during managed reconciliation. Default: True. |
+<!-- GENERATED:END config-table:sqlspec.config.LitestarConfig -->
+
 ## Multi-Database Dependency Keys
 
 When an application connects to multiple databases (for example, a transactional primary database and a read-heavy analytics database), assign a distinct `bind_key` and `session_key` to each configuration:
@@ -53,6 +79,21 @@ When an application connects to multiple databases (for example, a transactional
 ```python
 --8<-- "docs/examples/extensions/litestar/dependency_keys.py:example"
 ```
+
+## On-Demand Session and Connection Acquisition
+
+In custom guards, middleware, or event hooks where standard route dependency injection is not active, `SQLSpecPlugin` exposes direct scope-backed session and connection accessors that reuse or lazily acquire a connection from the pool and clean it up automatically in `before_send`:
+
+- `plugin.provide_request_session(key, state, scope)` and `plugin.provide_request_connection(key, state, scope)` (when the connection already exists in ASGI scope).
+- `plugin.provide_request_session_sync(key, state, scope)` and `plugin.provide_request_connection_sync(key, state, scope)` (acquires a sync connection on demand if not yet present in `scope`).
+- `await plugin.provide_request_session_async(key, state, scope)` and `await plugin.provide_request_connection_async(key, state, scope)` (acquires an async connection on demand if not yet present in `scope`).
+
+## Automatic HTTP 404 and 409 Exception Mapping
+
+During `SQLSpecPlugin.on_app_init`, the plugin registers two default exception handlers unless your application already defines custom handlers for those exception types:
+
+- `not_found_error_handler`: Maps `sqlspec.exceptions.NotFoundError` (such as `select_one` returning zero rows) to an HTTP `404 NotFoundException` response.
+- `integrity_error_handler`: Maps `sqlspec.exceptions.IntegrityError` (including `UniqueViolationError`, `ForeignKeyViolationError`, and `CheckViolationError`) to an HTTP `409 Conflict` response.
 
 ## Transaction Commit Modes
 
@@ -116,73 +157,92 @@ async def list_users(
     )
 ```
 
-For bidirectional keyset pagination (`CursorPagination`), set `cursor_key="id"` (or pass `CursorKey` specs) on `FilterConfig`; see [Filtering and Pagination](../learn/filtering-and-pagination.md).
+For bidirectional keyset pagination (`CursorPagination`), set `pagination_type="cursor"` and `cursor_keys="id"` (or pass `CursorKey` specs) on `FilterConfig`; see [Filtering and Pagination](../learn/filtering-and-pagination.md).
 
 ## Server-Side Session Stores
 
-Supported database adapters expose a Litestar `Store` implementation under `sqlspec.adapters.<adapter>.litestar` (`AsyncpgStore`, `PsycopgSyncStore`, `PsycopgAsyncStore`, `PsqlpyStore`, `CockroachAsyncpgStore`, `CockroachPsycopgSyncStore`, `CockroachPsycopgAsyncStore`, `AiosqliteStore`, `SqliteStore`, `AsyncmyStore`, `AiomysqlStore`, `PyMysqlStore`, `MysqlConnectorSyncStore`, `MysqlConnectorAsyncStore`, `OracleSyncStore`, `OracleAsyncStore`, `MssqlPythonStore`, `PymssqlStore`, `SybaseStore`, `SqlanywhereStore`, `Db2SyncStore`, `Db2AsyncStore`, `DuckDBStore`, `BigQueryStore`, `SpannerSyncStore`, `SpannerAsyncStore`, `AdbcStore`, and `ArrowOdbcStore`):
+Supported database adapters export a Litestar `Store` implementation under `sqlspec.adapters.<adapter>.litestar` (for example, `AiosqliteStore`, `AsyncpgStore`, `OracleAsyncStore`, or `SpannerAsyncStore`; see the [Database Capability Matrix](../databases/index.md) for per-adapter store support):
 
 ```python
 --8<-- "docs/examples/frameworks/litestar/session_stores.py:example"
 ```
 
-Call `await store.create_table()` during application startup (or include the extension migration via `include_extensions=["litestar"]` in `migration_config`) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
+Call `await store.create_table()` during application startup (or configure `session_table=True` in `extension_config["litestar"]`, which auto-includes the `litestar_session` table in migrations) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
 
-## Production Litestar + Dishka Architecture
+### Litestar Channels Backend
+
+`SQLSpecChannelsBackend` implements Litestar's `ChannelsBackend` on top of `spec.event_channel(config)`, allowing `ChannelsPlugin` to broadcast WebSocket and SSE messages through PostgreSQL `LISTEN`/`NOTIFY`, hybrid `notify_queue`, Oracle AQ, or portable `poll_queue` tables without a separate Redis broker:
+
+```python
+from litestar import Litestar
+from litestar.channels import ChannelsPlugin
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.extensions.litestar import SQLSpecChannelsBackend, SQLSpecPlugin
+
+spec = SQLSpec()
+config = spec.add_config(
+    AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/app"},
+        extension_config={"events": {"backend": "notify_queue"}},
+    )
+)
+channels_backend = SQLSpecChannelsBackend(
+    spec.event_channel(config),
+    channel_prefix="litestar",
+    poll_interval=0.2,
+)
+app = Litestar(
+    plugins=[
+        SQLSpecPlugin(sqlspec=spec),
+        ChannelsPlugin(backend=channels_backend, channels=["notifications"]),
+    ]
+)
+```
+
+### Litestar CLI Commands
+
+Registering `SQLSpecPlugin` mounts SQLSpec's migration commands under `litestar db` (aliased as `litestar database`) and adds a `delete-expired` maintenance command under Litestar's `sessions` CLI group:
+
+```bash
+litestar db show-current-revision
+litestar db upgrade
+litestar sessions delete-expired --verbose
+```
+
+## Production Litestar and Dishka Architecture
 
 In enterprise microservices, teams often combine Litestar's HTTP routing, OpenAPI documentation, and lifecycle management with Dishka's unified dependency container. To prevent conflicting dependency injection providers while allowing Litestar to manage database pool startup and teardown, configure `SQLSpecPlugin` with `disable_di=True` and `manage_lifespan=True`:
 
 ```python
-"""Production Litestar and Dishka composition root."""
-
 from collections.abc import AsyncIterator
-from typing import Annotated
 
-from dishka import FromDishka, Provider, Scope, make_async_container, provide
-from dishka.integrations.litestar import DishkaPlugin, setup_dishka
-from litestar import Controller, Litestar, get
 import msgspec
+from dishka import Provider, Scope, make_async_container, provide
+from dishka.integrations.litestar import FromDishka, inject, setup_dishka
+from litestar import Controller, Litestar, get
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
 
-class Account(msgspec.Struct, frozen=True, gc=False):
-    """Account projection entity."""
-
+class Account(msgspec.Struct):
     id: int
     name: str
 
 
 class DatabaseProvider(Provider):
-    """Scoped Dishka provider managing config and driver lifecycles."""
+    """Provide request-scoped drivers from the shared SQLSpec registry."""
 
-    @provide(scope=Scope.APP)
-    def provide_spec(self) -> tuple[SQLSpec, AsyncpgConfig]:
-        spec = SQLSpec()
-        config = spec.add_config(
-            AsyncpgConfig(
-                bind_key="primary",
-                connection_config={"dsn": "postgresql://localhost/app"},
-                extension_config={
-                    "litestar": {
-                        "disable_di": True,
-                        "manage_lifespan": True,
-                        "session_table": "app_session",
-                    }
-                },
-                migration_config={"include_extensions": ["litestar", "adk"]},
-            )
-        )
-        return spec, config
+    def __init__(self, spec: SQLSpec, config: AsyncpgConfig) -> None:
+        super().__init__()
+        self._spec = spec
+        self._config = config
 
     @provide(scope=Scope.REQUEST)
-    async def provide_driver(
-        self, app_deps: tuple[SQLSpec, AsyncpgConfig]
-    ) -> AsyncIterator[AsyncpgDriver]:
-        spec, config = app_deps
-        async with spec.provide_session(config) as session:
+    async def provide_driver(self) -> AsyncIterator[AsyncpgDriver]:
+        async with self._spec.provide_session(self._config) as session:
             yield session
 
 
@@ -190,38 +250,41 @@ class AccountController(Controller):
     path = "/accounts"
 
     @get("/{account_id:int}")
+    @inject
     async def get_account(
-        self, account_id: int, driver: Annotated[AsyncpgDriver, FromDishka()]
+        self, account_id: int, driver: FromDishka[AsyncpgDriver]
     ) -> Account:
-        """Fetch account record using Dishka-injected driver session."""
         return await driver.select_one(
-            """
-            SELECT id, name
-            FROM accounts
-            WHERE id = :id
-            """,
+            "SELECT id, name FROM accounts WHERE id = :id",
             id=account_id,
             schema_type=Account,
         )
 
 
 def create_app() -> Litestar:
-    """Build Litestar application wired with SQLSpec and Dishka."""
-    provider = DatabaseProvider()
-    spec, _ = provider.provide_spec()
-    container = make_async_container(provider)
-
+    spec = SQLSpec()
+    config = spec.add_config(
+        AsyncpgConfig(
+            connection_config={"dsn": "postgresql://localhost/app"},
+            extension_config={
+                "litestar": {"disable_di": True, "manage_lifespan": True}
+            },
+        )
+    )
+    container = make_async_container(DatabaseProvider(spec, config))
     app = Litestar(
         route_handlers=[AccountController],
-        plugins=[SQLSpecPlugin(sqlspec=spec), DishkaPlugin()],
+        plugins=[SQLSpecPlugin(sqlspec=spec)],
     )
     setup_dishka(container, app)
     return app
 ```
 
+Create the `SQLSpec` registry once and hand the same instance to both `SQLSpecPlugin` and the Dishka provider. If the provider built its own registry, Dishka sessions would draw from a second pool that the plugin never opens or closes.
+
 ## Recap
 
-- `SQLSpecPlugin` manages pool lifecycles, injects `db_session` / `db_connection` / `db_pool`, and registers `litestar database` CLI commands automatically.
-- Set `commit_mode`, `session_key`, `enable_correlation_middleware`, and `enable_sqlcommenter_middleware` in `extension_config["litestar"]`.
+- `SQLSpecPlugin` manages pool lifecycles, injects `db_session` / `db_connection` / `db_pool`, maps `NotFoundError` (`404`) and `IntegrityError` (`409`), and registers `litestar db` and `litestar sessions delete-expired` CLI commands automatically.
+- Set `commit_mode`, `session_key`, `enable_correlation_middleware`, and `enable_sqlcommenter_middleware` in `extension_config["litestar"]` (`LitestarConfig`).
 - When integrating with Dishka, set `disable_di=True` and `manage_lifespan=True` on `extension_config["litestar"]`.
-- See the [Litestar Extension Reference](/reference/extensions/litestar/) for `SQLSpecPlugin`, `LitestarConfig`, and `FilterConfig` signatures.
+- See the [Litestar Extension Reference](/reference/extensions/litestar/) for `SQLSpecPlugin`, `SQLSpecChannelsBackend`, `LitestarConfig`, and `FilterConfig` signatures.

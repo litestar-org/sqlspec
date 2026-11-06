@@ -40,24 +40,29 @@ Calling `plugin.get_session()` multiple times within the same HTTP request retur
 
 ## Multi-Database Binds
 
-Configure distinct `session_key`, `connection_key`, and `pool_key` values under `extension_config["flask"]` (`FlaskConfig`) and pass the key to `plugin.get_session("<key>")`:
+Configure distinct `session_key` and optional `connection_key` values under `extension_config["flask"]` (`FlaskConfig`; when `connection_key` is omitted, SQLSpec derives an internal `flask.g` key automatically from `session_key`) and pass the key to `plugin.get_session("<key>")`:
 
 ```{ .python title="docs/examples/frameworks/flask/multi_database.py" }
 --8<-- "docs/examples/frameworks/flask/multi_database.py:example"
 ```
 
-## `FlaskConfig` Options
+## Configuration Options
 
+<!-- GENERATED:START config-table:sqlspec.config.FlaskConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_key` | `str` | `"db_session"` | Key passed to `plugin.get_session(key)` and cached on `flask.g`. |
-| `connection_key` | `str` | `"db_connection"` | Key passed to `plugin.get_connection(key)` on `flask.g`. |
-| `pool_key` | `str` | `"db_pool"` | Key stored in `app.extensions["sqlspec"]` for the connection pool. |
-| `commit_mode` | `"manual" | "autocommit" | "autocommit_include_redirect"` | `"manual"` | Commits on `2xx` (`autocommit`) or `2xx`/`3xx` (`autocommit_include_redirect`) in `after_request` and rolls back on errors. |
-| `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic commit. |
-| `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger an automatic rollback. |
-| `enable_correlation_middleware` | `bool` | `True` | Binds request correlation headers into `CorrelationContext`. |
-| `enable_sqlcommenter_middleware` | `bool` | `False` | Populates `SQLCommenterContext` (`framework="flask"`, route endpoint, method) for wire-level SQL comments. |
+| `connection_key` | `str` | - | Key for storing connection in Flask g object. Default: auto-generated from session_key. |
+| `session_key` | `str` | `'db_session'` | Key for accessing session via plugin.get_session(). Default: 'db_session'. |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commits, user handles explicitly; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |
+| `extra_commit_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger commit. Default: None. |
+| `extra_rollback_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger rollback. Default: None. |
+| `disable_di` | `bool` | `False` | Disable built-in dependency injection. Default: False. When True, the Flask extension will not register request hooks for managing database connections and sessions. Users are responsible for managing the database lifecycle manually via their own DI solution. |
+| `enable_sqlcommenter_middleware` | `bool` | `True` | Control automatic SQLCommenter context population. Default: True. When the driver's :class:`~sqlspec.core.statement.StatementConfig` has `enable_sqlcommenter=True`, request attributes are populated automatically. Set to `False` to explicitly disable this behavior. |
+| `enable_correlation_middleware` | `bool` | `True` | Enable request correlation ID middleware. Default: True |
+| `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
+| `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
+| `auto_trace_headers` | `bool` | `True` | Read standard trace context headers as correlation ID fallbacks. Default: True. |
+<!-- GENERATED:END config-table:sqlspec.config.FlaskConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
 

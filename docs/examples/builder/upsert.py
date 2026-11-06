@@ -10,25 +10,18 @@ __all__ = ("main",)
 
 def main() -> dict[str, Any]:
     """Insert a default setting and upsert a replacement value on conflict."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute(
-            """
-            CREATE TABLE settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
+        session.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
 
         insert_ignore = (
             sql.insert("settings").columns("key", "value").values("theme", "dark").on_conflict("key").do_nothing()
         )
         session.execute(insert_ignore)
 
-        # --8<-- [start:example]
         upsert = (
             sql
             .insert("settings")
@@ -38,17 +31,22 @@ def main() -> dict[str, Any]:
             .do_update(value="light")
         )
         session.execute(upsert)
-        # --8<-- [end:example]
 
-        row = session.select_one(
-            """
-            SELECT value
-            FROM settings
-            WHERE key = 'theme'
-            """
+        merge_built = (
+            sql
+            .merge("settings", dialect="postgres")
+            .using([{"key": "theme", "value": "dark"}], alias="src")
+            .on("settings.key = src.key")
+            .when_matched_then_update(value="src.value")
+            .when_not_matched_then_insert(key="src.key", value="src.value")
+            .build()
         )
+        assert "MERGE INTO" in merge_built.sql
+
+        row = session.select_one("SELECT value FROM settings WHERE key = :key", key="theme")
         assert row["value"] == "light"
-        return row
+    # --8<-- [end:example]
+    return row
 
 
 if __name__ == "__main__":

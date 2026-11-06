@@ -1,8 +1,18 @@
 # IBM Db2
 
-`sqlspec.adapters.db2` supports IBM Db2 LUW 11.5+ via `ibm_db` (`>= 3.3.0`), offering both synchronous (`Db2SyncConfig`) and `asyncio` (`Db2AsyncConfig`) managed connection pools, custom SQLGlot `db2` dialect transpilation, automatic lowercase column normalization, and Litestar/Events/ADK stores.
+`sqlspec.adapters.db2` supports IBM Db2 LUW 11.5+ via `ibm_db` (`>= 3.3.0`), offering both synchronous (`Db2SyncConfig`) and `asyncio` (`Db2AsyncConfig`) managed connection pools, custom SQLGlot `db2` dialect transpilation, automatic lowercase column normalization, and Litestar, Events, and Google ADK session/memory store extensions.
 
-## Install and When to Choose
+## Overview & Capabilities
+
+| Adapter Config | Driver Extra | Execution | Pool Architecture | Best For |
+| --- | --- | --- | --- | --- |
+| `Db2AsyncConfig` | `sqlspec[db2]` | Async (`asyncio`) | `Db2AsyncConnectionPool` (`max_size`, `acquire_timeout`, `pool_recycle_seconds`, `health_check_interval`) | Async HTTP services and ADK agents communicating with IBM Db2 over DRDA. |
+| `Db2SyncConfig` | `sqlspec[db2]` | Sync | `Db2SyncConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`) | Synchronous applications, batch jobs, and CLI migrations targeting IBM Db2 LUW. |
+
+> [!NOTE]
+> IBM publishes prebuilt `clidriver` wheels for Linux `x86_64`, macOS `arm64`, and Windows. On Linux `aarch64` hosts, connect to Db2 via [`adbc`](adbc.md) (`adbc-driver-db2` pure-Go DRDA wheel) or pair [`arrow_odbc`](arrow-odbc.md) (`dialect="db2"` over 64-bit `libdb2o.so`).
+
+## Installation & Quickstart
 
 === "uv"
 
@@ -28,13 +38,7 @@
     poetry add "sqlspec[db2]"
     ```
 
-- Choose **`Db2SyncConfig`** or **`Db2AsyncConfig`** for transactional OLTP workloads over IBM's native `clidriver` (`ibm_db` / `ibm_db_dbi`).
-- Note on Linux `aarch64`: IBM publishes prebuilt `clidriver` wheels for Linux `x86_64`, macOS `arm64`, and Windows. On Linux ARM64 hosts, connect to Db2 via [`adbc`](adbc.md) (`adbc-driver-db2` pure-Go DRDA wheel) or guard `ibm-db` with environment markers.
-- For high-volume columnar Arrow extracts on `x86_64`, you can also pair [`arrow_odbc`](arrow-odbc.md) (`dialect="db2"` over 64-bit `libdb2o.so`).
-
-## Minimal Connection and Pool Setup
-
-=== "Async (`Db2AsyncConfig`)"
+=== "Async (Db2AsyncConfig)"
 
     ```python
     from sqlspec import SQLSpec
@@ -57,7 +61,7 @@
     )
     ```
 
-=== "Sync (`Db2SyncConfig`)"
+=== "Sync (Db2SyncConfig)"
 
     ```python
     from sqlspec import SQLSpec
@@ -78,26 +82,69 @@
     )
     ```
 
-## Key Driver Features and Pool Tuning
+## Connection & Pool Configuration
 
-SQLSpec provides `Db2SyncConnectionPool` and `Db2AsyncConnectionPool` with health-check pings and recycle intervals rather than relying on `ibm_db.pconnect` (which can retain dropped `SQL0900N` sockets):
+### Connection and Pool Parameters
 
-| Setting | Location | Description |
+Pass `Db2ConnectionParams`, `Db2PoolParams`, and `Db2AsyncPoolParams` keys inside `connection_config={...}` on `Db2SyncConfig` or `Db2AsyncConfig`:
+
+<!-- GENERATED:START config-table:sqlspec.adapters.db2.config.Db2ConnectionParams,sqlspec.adapters.db2.config.Db2PoolParams,sqlspec.adapters.db2.config.Db2AsyncPoolParams -->
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `database` | `str` | - | Database name or cataloged alias mapped to the `DATABASE` CLI keyword. |
+| `hostname` | `str` | - | Db2 server hostname mapped to `HOSTNAME` (omit for cataloged local aliases). |
+| `port` | `int` | `50000` | Db2 TCP listener port mapped to `PORT` (defaults to `50000` when `hostname` is set). |
+| `protocol` | `str` | `'TCPIP'` | Communications protocol mapped to `PROTOCOL` (defaults to `'TCPIP'` when `hostname` is set). |
+| `user` | `str` | - | Authentication username mapped to the `UID` CLI keyword. |
+| `password` | `str` | - | Authentication password mapped to the `PWD` CLI keyword. |
+| `current_schema` | `str` | - | Default SQL schema mapped to the `CURRENTSCHEMA` CLI keyword. |
+| `security` | `str` | - | Transport security mode mapped to `SECURITY` (for example `'SSL'`). |
+| `ssl_server_certificate` | `str` | - | Server certificate file path mapped to the `SSLSERVERCERTIFICATE` CLI keyword. |
+| `authentication` | `str` | - | Db2 authentication mechanism mapped to the `AUTHENTICATION` CLI keyword. |
+| `connect_timeout` | `int` | - | Connection establishment timeout in seconds mapped to `CONNECTTIMEOUT`. |
+| `autocommit` | `bool` | - | Initial connection autocommit state applied via `ibm_db_dbi` outside the DSN. |
+| `dsn` | `str` | - | Base `KEY=VALUE;...` string or `db2://` URL overridden by explicit keyword parameters. |
+| `extra` | `dict[str, str or int or bool]` | - | Additional CLI keywords appended verbatim to the compiled DSN string. |
+| `pool_recycle_seconds` | `int` | `86400` | Maximum connection age in seconds before replacement (defaults to `86400`). |
+| `health_check_interval` | `float` | `30.0` | Idle seconds elapsed before a pooled connection is pinged on reuse (defaults to `30.0`). |
+| `max_size` | `int` | `10` | Maximum number of connections checked out or opening concurrently (defaults to `10`). |
+| `acquire_timeout` | `float` | `30.0` | Maximum seconds to wait for a free connection before raising `ConnectionTimeoutError` (defaults to `30.0`). |
+<!-- GENERATED:END config-table:sqlspec.adapters.db2.config.Db2ConnectionParams,sqlspec.adapters.db2.config.Db2PoolParams,sqlspec.adapters.db2.config.Db2AsyncPoolParams -->
+
+### Driver Features
+
+Pass `Db2DriverFeatures` keys inside `driver_features={...}` on `Db2SyncConfig` or `Db2AsyncConfig`:
+
+<!-- GENERATED:START config-table:sqlspec.adapters.db2.config.Db2DriverFeatures -->
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `json_serializer` | `Callable[[Any], str]` | `sqlspec.utils.serializers.to_json` | Serializer converting dict/list parameters to JSON text (defaults to `sqlspec.utils.serializers.to_json`). |
+| `json_deserializer` | `Callable[[str], Any]` | `sqlspec.utils.serializers.from_json` | Deserializer parsing JSON text payloads (defaults to `sqlspec.utils.serializers.from_json`). |
+| `on_connection_create` | `Callable[[Any], Any]` | - | Callback invoked with the raw `ibm_db_dbi` sync or async connection after open. |
+| `enable_events` | `bool` | - | Enable SQLSpec table-backed event channel support. |
+| `events_backend` | `Literal['poll_queue']` | - | Event queue backend name (`'poll_queue'`). |
+| `enable_lowercase_column_names` | `bool` | `True` | Normalize unquoted uppercase Db2 column names to lowercase (defaults to `True`). |
+<!-- GENERATED:END config-table:sqlspec.adapters.db2.config.Db2DriverFeatures -->
+
+## Type Mappings & Dialect Notes
+
+| Database Type | Python Type | Notes / Feature Flag |
 | --- | --- | --- |
-| `dsn` / `database`, `hostname`, `port`, `protocol` | `connection_config` | Full DRDA DSN (`DATABASE=...;HOSTNAME=...;PORT=...;`) or validated discrete connection keys (note `hostname` and `user`, not `host` or `username`). |
-| `current_schema` | `connection_config` | Default Db2 schema applied to unqualified table references (`CURRENT SCHEMA`). |
-| `security` / `ssl_server_certificate` | `connection_config` | Enables TLS transport (`security="SSL"`) and server CA certificate verification. |
-| `max_size` / `acquire_timeout` | `connection_config` | Pool concurrency cap and checkout timeout in seconds. |
-| `health_check_interval` / `pool_recycle_seconds` | `connection_config` | Idle liveness probe interval (`VALUES (1)`) and maximum connection age before rotation. |
-| `enable_lowercase_column_names` | `driver_features` | Converts Db2's default uppercase unquoted column identifiers (`USER_ID`) to lowercase (`user_id`) (`True` by default). |
-| `json_serializer` / `json_deserializer` | `driver_features` | Customizes JSON text/CLOB serialization callables. |
+| `CLOB` / `VARCHAR` (JSON) | `dict` / `list` | Serialized and deserialized via `json_serializer` and `json_deserializer`. |
+| `DECIMAL` / `DECFLOAT` | `decimal.Decimal` | Exact arbitrary-precision decimal arithmetic. |
+| `TIMESTAMP` / `DATE` | `datetime.datetime` / `datetime.date` | Native Db2 timestamp and date conversion. |
+| `BLOB` / `VARBINARY` | `bytes` / `bytearray` | Binary payload storage. |
+| `BOOLEAN` / `SMALLINT` | `bool` / `int` | Native Db2 `BOOLEAN` and `0`/`1` integer flags. |
+| `VARCHAR(36)` / `CHAR(16) FOR BIT DATA` | `uuid.UUID` / `str` | UUID string and binary parameter coercion. |
 
-See [Db2 API Reference](/reference/adapters/db2/) for complete `Db2ConnectionParams`, `Db2PoolParams`, and `Db2DriverFeatures` TypedDict tables.
-
-## Type Mapping and Dialect Notes
-
+- **Data-Change-Table Returning Syntax (`FINAL TABLE`)**: Db2 compiles `INSERT ... RETURNING` projections using `SELECT ... FROM FINAL TABLE (INSERT INTO ...)` syntax via SQLSpec's custom `db2` SQLGlot dialect, and supports standard `MERGE INTO` upserts.
 - **Strict Connection Key Validation**: `Db2SyncConfig` and `Db2AsyncConfig` validate `connection_config` keys eagerly, raising `ImproperConfigurationError` if unknown aliases such as `host`, `username`, or `min_size` are passed instead of `hostname`, `user`, and `max_size`.
 - **Savepoint Cursor Retention**: Db2 closes open cursors on savepoint rollback unless `ON ROLLBACK RETAIN CURSORS` is specified; SQLSpec emits `SAVEPOINT <name> ON ROLLBACK RETAIN CURSORS` and `RELEASE SAVEPOINT <name>` automatically.
-- **Schema-Guided Arrow Export**: `select_to_arrow` converts fetched rows using cursor `column_types` metadata so even empty or all-`NULL` columns preserve exact PyArrow types.
-- **SQLCODE and SQLSTATE Normalization**: Db2 error codes (`-803` unique, `-530`/`-532` foreign key, `-407` not null, `-911` deadlock/lock timeout, `-952` query timeout, `-551` permission denied, `-104`/`-204` syntax/undefined object) map into SQLSpec's unified exception hierarchy.
-- **Events and ADK Stores**: `Db2EventQueueStore` uses `FETCH FIRST n ROWS ONLY` with `FOR UPDATE WITH RS SKIP LOCKED DATA` for lock-free concurrent queue workers, and `Db2ADKMemoryStore` uses `POSSTR(LOWER(content_text), LOWER(?)) > 0` for case-insensitive text search.
+- **Event Queue and ADK Stores**: `Db2SyncEventQueueStore` and `Db2AsyncEventQueueStore` claim rows with `FETCH FIRST n ROWS ONLY` and `WITH RS USE AND KEEP UPDATE LOCKS SKIP LOCKED DATA` so concurrent queue workers skip rows that are already claimed. `Db2SyncADKMemoryStore` and `Db2AsyncADKMemoryStore` match text with `LOCATE(LOWER(?), LOWER(content_text)) > 0` for case-insensitive search.
+
+## See Also
+
+- [Db2 API Reference](/reference/adapters/db2/)
+- [IBM Db2 Dialect Reference](/reference/data-dictionary/dialects/db2/)
+- [Apache Arrow ADBC Guide](adbc.md)
+- [Arrow ODBC Guide](arrow-odbc.md)

@@ -13,7 +13,8 @@ from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._column import Column
+from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
+from sqlspec.builder._column import _convert_value as convert_column_value
 from sqlspec.builder._ddl import (
     AlterTable,
     CommentOn,
@@ -55,6 +56,7 @@ from sqlspec.builder._parsing_utils import (
     _resolve_dialect,
     _rollup_expression,
     extract_expression,
+    parse_column_expression,
     to_expression,
 )
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
@@ -77,7 +79,9 @@ __all__ = ("SQLFactory", "build_copy_from_statement", "build_copy_statement", "b
 logger = get_logger("sqlspec.builder.factory")
 
 BuilderT = TypeVar("BuilderT", bound=QueryBuilder)
-ColumnLike: TypeAlias = Union[str, exp.Expr, "ExpressionWrapper", "Case", "Column"]
+ColumnLike: TypeAlias = Union[
+    str, exp.Expr, "ExpressionWrapper", "Case", "Column", "FunctionColumn", "ColumnExpression"
+]
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
@@ -358,7 +362,11 @@ class SQLFactory:
         return create_join_builder("cross join", lateral=True)
 
     def select(
-        self, *columns_or_sql: Union[str, exp.Expr, Column, "SQL", "Case"], dialect: DialectType = None
+        self,
+        *columns_or_sql: Union[
+            str, exp.Expr, Column, FunctionColumn, ColumnExpression, "ExpressionWrapper", "SQL", "Case"
+        ],
+        dialect: DialectType = None,
     ) -> "Select":
         builder_dialect = _resolve_dialect(dialect, self.dialect)
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
@@ -1101,16 +1109,35 @@ class SQLFactory:
         return FunctionExpression(exp.Any(this=values))
 
     @staticmethod
-    def not_any_(values: list[Any] | exp.Expr | str) -> FunctionExpression:
-        """Create a NOT ANY expression for use with comparison operators.
+    def not_any_(column: "str | Column | exp.Expr", values: Any) -> ColumnExpression:
+        """Create a ``NOT (column = ANY(...))`` condition.
+
+        ``column <> ANY(...)`` is true whenever any element differs, so the negation
+        wraps the ``= ANY`` comparison. The result matches ``Column.not_any_`` and
+        ``NotAnyCollectionFilter`` and renders as ``column <> ALL (...)`` on optimizing
+        dialects such as PostgreSQL.
 
         Args:
-            values: Values, expression, or subquery for the NOT ANY clause.
+            column: Column name (``"status"`` or ``"t.status"``), ``Column``, or expression.
+            values: Iterable of values bound as parameters, or a subquery given as a
+                query builder, sqlglot expression, or SQL string. Parameters bound by a
+                subquery builder are merged into the outer query. Subqueries stay
+                parenthesized so the optimizer keeps ``<> ALL (subquery)`` instead of
+                rewriting it into an anti-join, which would change the result when the
+                subquery returns ``NULL``.
 
         Returns:
-            NOT ANY expression.
+            Condition usable with ``.where()``, ``.having()``, ``&``, ``|``, and ``~``.
         """
-        return FunctionExpression(exp.Not(this=SQLFactory.any(values).expression))
+        left = column.sqlglot_expression if isinstance(column, Column) else parse_column_expression(column)
+        any_expression: exp.Expr
+        if isinstance(values, (list, tuple, set, frozenset)):
+            converted = [convert_column_value(value) for value in values]
+            any_expression = exp.Any(this=exp.Paren(this=exp.Array(expressions=converted)))
+        else:
+            any_expression = SubqueryBuilder("any")(values)
+            any_expression.set("this", exp.paren(any_expression.this, copy=False))
+        return ColumnExpression(exp.Not(this=exp.EQ(this=left, expression=any_expression)))
 
     @staticmethod
     def concat(*expressions: str | exp.Expr) -> StringExpression:
@@ -1325,19 +1352,25 @@ class SQLFactory:
         Args:
             table_name: Name of the table to insert into
             column_count: Number of columns (for placeholder generation)
-            placeholder_style: Placeholder style ("?" for SQLite/PostgreSQL, "%s" for MySQL, ":1" for Oracle)
+            placeholder_style: Positional placeholder style: ``"?"`` (qmark), ``"%s"`` (format),
+                ``":1"`` (Oracle numeric), or ``"$1"`` (PostgreSQL numeric). Numeric styles
+                number the placeholders from 1.
 
         Returns:
             INSERT expression with placeholders for bulk operations
         """
+        placeholders: list[exp.Expr]
+        if placeholder_style == "?":
+            placeholders = [exp.Placeholder() for _ in range(column_count)]
+        elif placeholder_style[:1] in {":", "$"} and placeholder_style[1:].isdigit():
+            prefix = placeholder_style[0]
+            placeholders = [exp.Var(this=f"{prefix}{index}") for index in range(1, column_count + 1)]
+        else:
+            placeholders = [exp.Var(this=placeholder_style) for _ in range(column_count)]
         return FunctionExpression(
             exp.Insert(
                 this=exp.Table(this=exp.to_identifier(table_name)),
-                expression=exp.Values(
-                    expressions=[
-                        exp.Tuple(expressions=[exp.Placeholder(this=placeholder_style) for _ in range(column_count)])
-                    ]
-                ),
+                expression=exp.Values(expressions=[exp.Tuple(expressions=placeholders)]),
             )
         )
 

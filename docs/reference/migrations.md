@@ -5,6 +5,7 @@ from sqlspec.migrations import (
     AsyncMigrationCommands,
     AsyncMigrationRunner,
     AsyncMigrationTracker,
+    BaseMigrationLoader,
     MigrationSquasher,
     PythonFileLoader,
     SchemaEnsureResult,
@@ -29,6 +30,7 @@ Programmatic schema migration commands, SQL and Python migration loaders, versio
 ::: sqlspec.migrations.commands.SyncMigrationCommands
     options:
       heading_level: 3
+      separate_signature: false
       members:
         - init
         - current
@@ -49,6 +51,8 @@ Programmatic schema migration commands, SQL and Python migration loaders, versio
 ::: sqlspec.migrations.commands.create_migration_commands
     options:
       heading_level: 3
+      separate_signature: false
+      show_docstring_parameters: false
 
 ## Migration Runners & Trackers
 
@@ -71,6 +75,12 @@ Programmatic schema migration commands, SQL and Python migration loaders, versio
     options:
       heading_level: 4
       members: false
+
+::: sqlspec.migrations.runner.create_migration_runner
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
 
 ## Migration Loaders
 

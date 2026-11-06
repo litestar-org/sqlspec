@@ -10,7 +10,7 @@ from sqlspec.driver import (
 )
 ```
 
-Base asynchronous driver adapter class inherited by all asynchronous SQLSpec database adapters (`AsyncpgDriver`, `PsycopgAsyncDriver`, `PsqlpyDriver`, `AiosqliteDriver`, `AsyncmyDriver`, `AiomysqlDriver`, `OracleAsyncDriver`, `SpannerAsyncDriver`, `Db2AsyncDriver`, `CockroachAsyncpgDriver`, `CockroachPsycopgAsyncDriver`). See [Querying](../../learn/querying.md) for usage examples.
+Base asynchronous driver adapter class inherited by all asynchronous SQLSpec database adapters (`AsyncpgDriver`, `PsycopgAsyncDriver`, `PsqlpyDriver`, `CockroachAsyncpgDriver`, `CockroachPsycopgAsyncDriver`, `AiosqliteDriver`, `AsyncmyDriver`, `AiomysqlDriver`, `MysqlConnectorAsyncDriver`, `OracleAsyncDriver`, `SpannerAsyncDriver`, `Db2AsyncDriver`). See [Querying](../../learn/querying.md) for usage examples.
 
 ## Asynchronous Driver Adapter
 
@@ -30,10 +30,7 @@ Base asynchronous driver adapter class inherited by all asynchronous SQLSpec dat
         - select_with_total
         - select_stream
         - select_to_arrow
-        - select_to_storage
         - load_from_arrow
-        - load_from_storage
-        - without_indexes
         - begin
         - commit
         - rollback
@@ -51,13 +48,16 @@ See [Runtime Introspection & DDL Synthesis](../data-dictionary/runtime.md) and [
 ::: sqlspec.driver._stream.AsyncRowStream
     options:
       heading_level: 3
+      members: false
 
 ## Pool Context Managers
 
 ::: sqlspec.driver._async.AsyncPoolConnectionContext
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.driver._async.AsyncPoolSessionFactory
     options:
       heading_level: 3
+      members: false

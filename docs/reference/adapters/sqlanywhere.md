@@ -21,6 +21,7 @@ Synchronous SAP SQL Anywhere 12+ adapter built on `sqlanydb` (`dbcapi` C library
 ::: sqlspec.adapters.sqlanywhere.SqlanywhereConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.sqlanywhere.SqlanywhereConnectionParams
     options:
@@ -55,6 +56,7 @@ Synchronous SAP SQL Anywhere 12+ adapter built on `sqlanydb` (`dbcapi` C library
 ::: sqlspec.adapters.sqlanywhere.SqlanywhereConnectionPool
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.sqlanywhere.data_dictionary.SqlanywhereSyncDataDictionary
     options:
@@ -71,15 +73,19 @@ Synchronous SAP SQL Anywhere 12+ adapter built on `sqlanydb` (`dbcapi` C library
 ::: sqlspec.adapters.sqlanywhere.litestar.SqlanywhereStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sqlanywhere.adk.SqlanywhereADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sqlanywhere.adk.SqlanywhereADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.sqlanywhere.events.SqlanywhereEventQueueStore
     options:
       heading_level: 4
+      members: false

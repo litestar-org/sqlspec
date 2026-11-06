@@ -17,7 +17,7 @@ def test_lateral_join_basic() -> None:
 
     stmt = query.build()
 
-    assert "LATERAL JOIN" in stmt.sql
+    assert "JOIN LATERAL" in stmt.sql
     assert "unnest" in stmt.sql.lower()
     assert "AS arr" in stmt.sql or "arr" in stmt.sql
 
@@ -30,7 +30,7 @@ def test_lateral_join_with_parameter() -> None:
 
     stmt = query.build()
 
-    assert "LATERAL JOIN" in stmt.sql
+    assert "JOIN LATERAL" in stmt.sql
     assert "generate_series" in stmt.sql.lower()
 
 
@@ -40,7 +40,7 @@ def test_left_lateral_join() -> None:
 
     stmt = query.build()
 
-    assert "LEFT LATERAL JOIN" in stmt.sql or "LEFT LATERAL" in stmt.sql
+    assert "LEFT JOIN LATERAL" in stmt.sql
     assert "unnest" in stmt.sql.lower()
 
 
@@ -50,7 +50,7 @@ def test_cross_lateral_join() -> None:
 
     stmt = query.build()
 
-    assert "CROSS LATERAL" in stmt.sql or "LATERAL JOIN" in stmt.sql
+    assert "CROSS JOIN LATERAL" in stmt.sql
     assert "unnest" in stmt.sql.lower()
 
 
@@ -268,3 +268,24 @@ def test_lateral_join_sql_factory_properties() -> None:
     assert "LATERAL" in stmt1.sql
     assert ("LEFT" in stmt2.sql or "left" in stmt2.sql.lower()) and "LATERAL" in stmt2.sql
     assert "LATERAL" in stmt3.sql
+
+
+@pytest.mark.parametrize(
+    ("join_method", "expected_join"),
+    [
+        ("lateral_join", "JOIN LATERAL (SELECT * FROM o LIMIT 1) AS t ON TRUE"),
+        ("left_lateral_join", "LEFT JOIN LATERAL (SELECT * FROM o LIMIT 1) AS t ON TRUE"),
+        ("cross_lateral_join", "CROSS JOIN LATERAL (SELECT * FROM o LIMIT 1) AS t"),
+    ],
+    ids=["inner", "left", "cross"],
+)
+def test_lateral_join_renders_postgres_syntax_without_condition(join_method: str, expected_join: str) -> None:
+    """Lateral joins use JOIN LATERAL and default the ON clause to TRUE."""
+    lateral = Select("*").from_("o").limit(1)
+    query = Select("*", dialect="postgres").from_("users")
+    query.enable_optimization = False
+    query = getattr(query, join_method)(lateral, alias="t")
+
+    rendered = " ".join(query.build().sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+
+    assert rendered == f"SELECT * FROM users {expected_join}"

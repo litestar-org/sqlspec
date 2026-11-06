@@ -12,8 +12,8 @@ __all__ = ("main",)
 
 def main() -> list[dict[str, Any]]:
     """Execute default slots, override their SQL, and bind a required predicate."""
-    sql_file = Path(__file__).with_suffix(".sql")
     # --8<-- [start:example]
+    sql_file = Path(__file__).with_suffix(".sql")
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
     spec.load_sql_files(sql_file)

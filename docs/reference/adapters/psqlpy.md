@@ -18,6 +18,7 @@ Rust-backed asynchronous PostgreSQL adapter built on `psqlpy`. Inherited executi
 ::: sqlspec.adapters.psqlpy.PsqlpyConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.psqlpy.PsqlpyConnectionParams
     options:
@@ -65,6 +66,7 @@ Rust-backed asynchronous PostgreSQL adapter built on `psqlpy`. Inherited executi
 ::: sqlspec.adapters.psqlpy.litestar.PsqlpyStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.psqlpy.adk.PsqlpyADKConfig
     options:
@@ -75,10 +77,12 @@ Rust-backed asynchronous PostgreSQL adapter built on `psqlpy`. Inherited executi
 ::: sqlspec.adapters.psqlpy.adk.PsqlpyADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.psqlpy.adk.PsqlpyADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.psqlpy.events.PsqlpyEventsConfig
     options:
@@ -89,11 +93,14 @@ Rust-backed asynchronous PostgreSQL adapter built on `psqlpy`. Inherited executi
 ::: sqlspec.adapters.psqlpy.events.PsqlpyEventQueueStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.psqlpy.events.PsqlpyEventsBackend
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.psqlpy.events.PsqlpyHybridEventsBackend
     options:
       heading_level: 4
+      members: false

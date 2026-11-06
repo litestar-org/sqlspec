@@ -6,17 +6,18 @@ from sqlspec.extensions.litestar import (
     CommitMode,
     CorrelationMiddleware,
     LitestarConfig,
-    SQLSpecAsyncService,
     SQLSpecChannelsBackend,
     SQLSpecPlugin,
-    SQLSpecSyncService,
-    database_group,
     get_sqlspec_scope_state,
     set_sqlspec_scope_state,
 )
+from sqlspec.extensions.litestar.plugin import (
+    integrity_error_handler,
+    not_found_error_handler,
+)
 ```
 
-Litestar plugin, ASGI transaction and correlation middlewares, server-side session store base class, and Litestar Channels backend. Adapter-specific `LitestarConfig` TypedDicts and `BaseSQLSpecStore` subclasses are documented on each [Database Adapter](../adapters/index.md) page. See the [Litestar Integration Guide](../../integrations/litestar.md) for usage examples.
+Litestar plugin, ASGI transaction and correlation middlewares, automatic HTTP `404`/`409` exception handlers, server-side session store base class, and Litestar Channels backend (`SQLSpecSyncService` and `SQLSpecAsyncService` are documented in [Service Layer](../service.md)). Adapter-specific `LitestarConfig` TypedDicts and `BaseSQLSpecStore` subclasses are documented on each [Database Adapter](../adapters/index.md) page. See the [Litestar Integration Guide](../../integrations/litestar.md) for usage examples.
 
 ## Plugin & Configuration
 
@@ -29,6 +30,9 @@ Litestar plugin, ASGI transaction and correlation middlewares, server-side sessi
         - on_cli_init
         - get_config
         - get_annotations
+        - provide_request_session
+        - provide_request_session_sync
+        - provide_request_session_async
 
 ::: sqlspec.extensions.litestar.plugin.CommitMode
     options:
@@ -70,7 +74,15 @@ Litestar plugin, ASGI transaction and correlation middlewares, server-side sessi
         - unsubscribe
         - stream_events
 
-## Scope State Helpers
+## Exception Handlers & Scope State Helpers
+
+::: sqlspec.extensions.litestar.plugin.not_found_error_handler
+    options:
+      heading_level: 4
+
+::: sqlspec.extensions.litestar.plugin.integrity_error_handler
+    options:
+      heading_level: 4
 
 ::: sqlspec.extensions.litestar._utils.get_sqlspec_scope_state
     options:

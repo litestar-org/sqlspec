@@ -5,57 +5,38 @@ import tempfile
 from pathlib import Path
 from typing import NoReturn
 
+# --8<-- [start:example]
 from sqlspec import SQLFileLoader, sql
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
-__all__ = ("main", "run_async_service_example", "run_sync_service_example")
-
 
 def run_sync_service_example(db_path: Path) -> int:
     """Execute synchronous service helpers and atomic transaction blocks."""
     config = SqliteConfig(connection_config={"database": str(db_path)})
-    # --8<-- [start:example]
     service = SQLSpecSyncService(config=config, loader=SQLFileLoader())
     users = sql.select("name").from_("users")
 
-    with service.begin_transaction() as session:
-        session.execute("CREATE TABLE users (name TEXT)")
-        session.execute("INSERT INTO users VALUES (:name)", name="Ada")
-
-    user = service.get_one(users)
-    has_users = service.exists(users)
-    paged = service.paginate(users)
-    # --8<-- [end:example]
-
     try:
+        with service.begin_transaction() as session:
+            session.execute("CREATE TABLE users (name TEXT)")
+            session.execute("INSERT INTO users VALUES (:name)", name="Ada")
+
+        user = service.get_one(users)
+        has_users = service.exists(users)
+        paged = service.paginate(users)
         assert user == {"name": "Ada"}
         assert has_users
         assert paged.total == 1
-
-        with service.provide_session() as session:
-            assert service.exists(users, session=session)
-            assert service.get_one(users, session=session) == {"name": "Ada"}
-
-        with service.begin_transaction() as session:
-            session.execute("INSERT INTO users VALUES (:name)", name="Grace")
-            grace_query = sql.select("name").from_("users").where_eq("name", "Grace")
-            assert service.exists(grace_query)
-            assert service.paginate(users).total == 2
-
-        try:
-            with service.begin_transaction() as session:
-                session.execute("INSERT INTO users VALUES (:name)", name="Rolled back")
-                _abort_transaction()
-        except ValueError:
-            pass
-
-        total = service.paginate(users).total
-        assert total == 2
-        return total
+        return paged.total
     finally:
         config.close_pool()
+
+
+# --8<-- [end:example]
+
+__all__ = ("main", "run_async_service_example", "run_sync_service_example")
 
 
 async def run_async_service_example(db_path: Path) -> int:
@@ -112,7 +93,7 @@ def main() -> tuple[int, int]:
         base_dir = Path(tmp_dir)
         sync_total = run_sync_service_example(base_dir / "sync.db")
         async_total = asyncio.run(run_async_service_example(base_dir / "async.db"))
-    assert sync_total == 2
+    assert sync_total == 1
     assert async_total == 2
     return sync_total, async_total
 

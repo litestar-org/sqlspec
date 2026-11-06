@@ -578,8 +578,8 @@ def test_parameter_values_preserved_correctly() -> None:
         assert stmt.parameters[column_name] == expected_value
     none_query = sql.select("*").from_("test").where_eq("none_col", None)
     none_stmt = none_query.build()
-    assert "none_col" in none_stmt.parameters
-    assert none_stmt.parameters["none_col"] is None
+    assert none_stmt.parameters == {}
+    assert "IS NULL" in none_stmt.sql
 
 
 def test_case_expression_basic_syntax() -> None:
@@ -764,13 +764,6 @@ def test_any_subquery() -> None:
     assert isinstance(any_expr, Any)
 
 
-def test_not_any_factory_wraps_any_expression_in_not() -> None:
-    """Test SQLFactory.not_any_ returns NOT ANY instead of bare ANY."""
-    result = SQLFactory.not_any_([1, 2, 3])
-    assert isinstance(result.expression, exp.Not)
-    assert isinstance(result.expression.this, exp.Any)
-
-
 def test_any_factory_still_returns_any_expression() -> None:
     """Test SQLFactory.any remains unchanged."""
     result = SQLFactory.any([1, 2])
@@ -783,20 +776,6 @@ def test_any_factory_values_render_via_sql() -> None:
     rendered = result.expression.sql().upper()
     assert "ANY" in rendered
     assert "1" in rendered and "2" in rendered and "3" in rendered
-
-
-def test_not_any_factory_values_render_via_sql() -> None:
-    """Test SQLFactory.not_any_ list values render to SQL without raising."""
-    rendered = SQLFactory.not_any_([1, 2, 3]).expression.sql().upper()
-    assert "NOT" in rendered
-    assert "ANY" in rendered
-
-
-def test_not_any_factory_where_clause_contains_not() -> None:
-    """Test not_any_ emits NOT when composed into a WHERE clause."""
-    query = sql.select("*").from_("users").where(SQLFactory.not_any_("SELECT id FROM blocked_users").expression)
-    stmt = query.build()
-    assert "NOT" in stmt.sql.upper()
 
 
 def test_all_subquery() -> None:
@@ -2192,3 +2171,218 @@ def test_explain_oracle_and_factory_dialect_preservation() -> None:
     assert returning_stmt.statement_config.dialect == "postgres"
     trunc = sql.truncate("users", dialect="postgresql")
     assert trunc.dialect_name == "postgres"
+
+
+@pytest.mark.parametrize(
+    ("condition_factory", "expected_where"),
+    [
+        (lambda a, b: (a >= 1) & ((b == 1) | (b == 2)), "a >= :p1 AND (b = :p2 OR b = :p3)"),
+        (lambda a, b: ((b == 1) | (b == 2)) & (a >= 1), "(b = :p1 OR b = :p2) AND a >= :p3"),
+        (lambda a, b: (a >= 1) | ((b == 1) & (b == 2)), "a >= :p1 OR b = :p2 AND b = :p3"),
+        (lambda a, b: ~((a == 1) | (b == 2)), "NOT (a = :p1 OR b = :p2)"),
+        (lambda a, b: ~(a == 1), "NOT a = :p1"),
+    ],
+    ids=["and_with_or_right", "and_with_or_left", "or_with_and", "not_over_or", "not_over_comparison"],
+)
+def test_column_expression_boolean_combinators_preserve_precedence(
+    condition_factory: "Callable[[Column, Column], Any]", expected_where: str
+) -> None:
+    query = sql.select("*").from_("t").where(condition_factory(Column("a"), Column("b")))
+    query.enable_optimization = False
+    built = query.build()
+    rendered = " ".join(built.sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+    for index, name in enumerate(built.parameters, start=1):
+        rendered = rendered.replace(f":{name}", f":p{index}")
+    assert rendered.endswith(f"WHERE {expected_where}")
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected_condition"),
+    [(None, "c = ANY(ARRAY(:c_any_1, :c_any_2))"), ("postgres", "c = ANY(ARRAY[%(c_any_1)s, %(c_any_2)s])")],
+    ids=["default", "postgres"],
+)
+def test_where_any_with_values_renders_array_operand(dialect: "str | None", expected_condition: str) -> None:
+    query = sql.select("*", dialect=dialect).from_("t").where_any("c", [1, 2])
+    query.enable_optimization = False
+    rendered = " ".join(query.build().sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+    assert rendered.endswith(f"WHERE {expected_condition}")
+
+
+def test_where_not_any_negates_any_comparison() -> None:
+    query = sql.select("*").from_("t").where_not_any("c", [1, 2])
+    query.enable_optimization = False
+    rendered = " ".join(query.build().sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+    assert rendered.endswith("WHERE NOT c = ANY(ARRAY(:c_not_any_1, :c_not_any_2))")
+
+
+@pytest.mark.parametrize(
+    ("condition", "expected_having", "expected_parameters"),
+    [
+        (("COUNT(*)", ">", 5), "COUNT(*) > :count", {"count": 5}),
+        (("SUM(o.amount)", ">=", 10), "SUM(o.amount) >= :sum_o_amount", {"sum_o_amount": 10}),
+        (("total", 7), "total = :total", {"total": 7}),
+    ],
+    ids=["count_star", "qualified_sum", "column_pair"],
+)
+def test_having_tuple_condition_binds_named_parameter(
+    condition: "tuple[Any, ...]", expected_having: str, expected_parameters: "dict[str, Any]"
+) -> None:
+    query = sql.select("dept").from_("t").group_by("dept").having(condition)
+    query.enable_optimization = False
+    built = query.build()
+    rendered = " ".join(built.sql.split()).replace('"', "")
+    assert rendered.endswith(f"HAVING {expected_having}")
+    assert built.parameters == expected_parameters
+
+
+def test_exists_subquery_merges_subquery_parameters() -> None:
+    subquery = sql.select("1").from_("orders").where(("total", ">", 100))
+    query = sql.select("*").from_("users").where(("total", "=", 5)).where(sql.exists_(subquery))
+
+    built = query.build()
+
+    assert built.parameters == {"total": 5, "total_1": 100}
+    assert ":total_1" in built.sql
+    assert "EXISTS" in built.sql
+
+
+@pytest.mark.parametrize(
+    ("placeholder_style", "expected_values"),
+    [("?", "(?, ?, ?)"), ("%s", "(%s, %s, %s)"), (":1", "(:1, :2, :3)"), ("$1", "($1, $2, $3)")],
+    ids=["qmark", "format", "oracle_numeric", "postgres_numeric"],
+)
+def test_bulk_insert_renders_positional_placeholders(placeholder_style: str, expected_values: str) -> None:
+    rendered = sql.bulk_insert("events", 3, placeholder_style=placeholder_style).expression.sql()
+    assert rendered == f"INSERT INTO events VALUES {expected_values}"
+
+
+@pytest.mark.parametrize(
+    ("condition_factory", "expected_fragment"),
+    [
+        (lambda sub: sql.exists_(sub), "EXISTS"),
+        (lambda sub: exp.Not(this=sql.exists_(sub)), "NOT EXISTS"),
+        (lambda sub: Column("salary") > sql.any_(sub), "> ANY"),
+        (lambda sub: Column("salary") > sql.all_(sub), "> ALL"),
+        (lambda sub: exp.EQ(this=exp.column("dept_id"), expression=sql.any_(sub)), "= ANY"),
+    ],
+    ids=["exists", "not_exists", "column_gt_any", "column_gt_all", "raw_eq_any"],
+)
+def test_subquery_fragments_merge_subquery_parameters(
+    condition_factory: "Callable[[Select], Any]", expected_fragment: str
+) -> None:
+    subquery = sql.select("salary").from_("employees").where(("dept", "=", "eng"))
+    query = sql.select("*").from_("staff").where(("dept", "=", "ops")).where(condition_factory(subquery))
+    query.enable_optimization = False
+
+    built = query.build()
+
+    assert built.parameters == {"dept": "ops", "dept_1": "eng"}
+    assert ":dept_1" in built.sql
+    assert expected_fragment in " ".join(built.sql.split()).replace('"', "")
+
+
+def test_subquery_fragment_reuse_does_not_mutate_fragment() -> None:
+    subquery = sql.select("1").from_("orders").where(("total", ">", 100))
+    fragment = sql.exists_(subquery)
+    first = sql.select("*").from_("users").where(("total", "=", 1)).where(fragment).build()
+    second = sql.select("*").from_("users").where(fragment).build()
+
+    assert first.parameters == {"total": 1, "total_1": 100}
+    assert second.parameters == {"total": 100}
+    assert ":total" in second.sql
+
+
+def test_in_fragment_without_left_operand_raises() -> None:
+    subquery = sql.select("id").from_("vip_users")
+    with pytest.raises(SQLBuilderError, match=r"where_in"):
+        sql.select("*").from_("users").where(sql.in_(subquery))
+
+
+@pytest.mark.parametrize(
+    ("apply_condition", "expected_where"),
+    [
+        (lambda q: q.where_eq("deleted_at", None), "deleted_at IS NULL"),
+        (lambda q: q.where_neq("deleted_at", None), "NOT deleted_at IS NULL"),
+        (lambda q: q.where(("deleted_at", None)), "deleted_at IS NULL"),
+        (lambda q: q.where(("deleted_at", "=", None)), "deleted_at IS NULL"),
+        (lambda q: q.where(("deleted_at", "!=", None)), "NOT deleted_at IS NULL"),
+        (lambda q: q.where_eq("id", 1).or_where_eq("deleted_at", None), "id = :id OR deleted_at IS NULL"),
+        (lambda q: q.where_eq("id", 1).or_where_neq("deleted_at", None), "id = :id OR NOT deleted_at IS NULL"),
+    ],
+    ids=["where_eq", "where_neq", "pair", "eq_tuple", "neq_tuple", "or_where_eq", "or_where_neq"],
+)
+def test_equality_with_none_renders_null_predicate(
+    apply_condition: "Callable[[Select], Select]", expected_where: str
+) -> None:
+    query = sql.select("*").from_("users")
+    query.enable_optimization = False
+    built = apply_condition(query).build()
+    assert " ".join(built.sql.split()).replace('"', "").endswith(f"WHERE {expected_where}")
+    assert None not in built.parameters.values()
+
+
+@pytest.mark.parametrize(
+    ("column", "dialect", "expected"),
+    [
+        ("status", None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
+        ("status", "postgres", 'WHERE "t"."status" <> ALL ( ARRAY[%(where_param_1)s, %(where_param_2)s] )'),
+        ("t.status", None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
+        (Column("status"), None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
+        (exp.column("status"), None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
+    ],
+    ids=["name", "name_postgres", "qualified_name", "column_object", "sqlglot_column"],
+)
+def test_not_any_with_values_renders_negated_any_condition(column: Any, dialect: str | None, expected: str) -> None:
+    built = sql.select("*").from_("t").where(sql.not_any_(column, ["banned", "suspended"])).build(dialect=dialect)
+
+    assert " ".join(built.sql.split()).endswith(expected)
+    assert built.parameters == {"where_param_1": "banned", "where_param_2": "suspended"}
+
+
+def test_not_any_without_optimization_wraps_any_comparison_in_not() -> None:
+    condition = sql.not_any_("status", ["banned"])
+
+    assert condition.sqlglot_expression.sql() == "NOT status = ANY(ARRAY('banned'))"
+
+
+def test_not_any_matches_column_not_any() -> None:
+    from_factory = sql.select("*").from_("t").where(sql.not_any_("status", [1, 2])).build()
+    from_column = sql.select("*").from_("t").where(Column("status").not_any_([1, 2])).build()
+
+    assert from_factory.sql == from_column.sql
+    assert from_factory.parameters == from_column.parameters
+
+
+@pytest.mark.parametrize("dialect", [None, "postgres"], ids=["default", "postgres"])
+def test_not_any_with_subquery_keeps_all_comparison_and_merges_parameters(dialect: str | None) -> None:
+    banned = sql.select("user_id").from_("bans").where_gt("severity", 3)
+
+    built = (
+        sql.select("*").from_("users").where_gt("severity", 1).where(sql.not_any_("id", banned)).build(dialect=dialect)
+    )
+    rendered = " ".join(built.sql.split())
+
+    assert built.parameters == {"severity": 1, "severity_1": 3}
+    assert '"users"."id" <> ALL ( SELECT "bans"."user_id"' in rendered
+    assert "LEFT JOIN" not in rendered
+
+
+def test_not_any_subquery_fragment_is_reusable() -> None:
+    fragment = sql.not_any_("id", sql.select("user_id").from_("bans").where_gt("severity", 3))
+
+    first = sql.select("*").from_("a").where(fragment).build()
+    second = sql.select("*").from_("b").where(fragment).build()
+
+    assert first.parameters == {"severity": 3}
+    assert second.parameters == {"severity": 3}
+
+
+def test_not_any_composes_with_boolean_operators() -> None:
+    condition = sql.not_any_("status", ["banned"]) & (Column("age") >= 18)
+
+    built = sql.select("*").from_("t").where(condition).build()
+    rendered = " ".join(built.sql.split())
+
+    assert '"t"."status" <> ALL ( ARRAY(:where_param_1) )' in rendered
+    assert '"t"."age" >= :where_param_2' in rendered
+    assert built.parameters == {"where_param_1": "banned", "where_param_2": 18}

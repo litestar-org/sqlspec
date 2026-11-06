@@ -7,10 +7,13 @@ from sqlspec.adapters.oracledb import (
     OracleAsyncExceptionHandler,
     OracleConnectionParams,
     OracleDriverFeatures,
+    OracleEndpoint,
     OraclePoolParams,
+    OracleSessionContextConfig,
     OracleSyncConfig,
     OracleSyncDriver,
     OracleSyncExceptionHandler,
+    OracleTopologyConfig,
 )
 ```
 
@@ -21,10 +24,12 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 ::: sqlspec.adapters.oracledb.OracleSyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.oracledb.OracleAsyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.oracledb.OracleConnectionParams
     options:
@@ -43,6 +48,21 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
       heading_level: 3
       separate_signature: false
       show_signature_annotations: true
+
+::: sqlspec.adapters.oracledb.OracleTopologyConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleEndpoint
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleSessionContextConfig
+    options:
+      heading_level: 4
+      members: false
 
 ## Driver, Pool & Data Dictionary
 
@@ -81,65 +101,88 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 ::: sqlspec.adapters.oracledb.litestar.OracleLitestarConfig
     options:
       heading_level: 4
+      members: false
       separate_signature: false
       show_signature_annotations: true
 
 ::: sqlspec.adapters.oracledb.litestar.OracleSyncStore
     options:
       heading_level: 4
+      members: false
+      show_docstring_parameters: false
 
 ::: sqlspec.adapters.oracledb.litestar.OracleAsyncStore
     options:
       heading_level: 4
+      members: false
+      show_docstring_parameters: false
 
 ::: sqlspec.adapters.oracledb.adk.OracleADKConfig
     options:
       heading_level: 4
+      members: false
       separate_signature: false
       show_signature_annotations: true
 
 ::: sqlspec.adapters.oracledb.adk.OracleSyncADKStore
     options:
       heading_level: 4
+      members: false
+      show_docstring_parameters: false
 
 ::: sqlspec.adapters.oracledb.adk.OracleAsyncADKStore
     options:
       heading_level: 4
+      members: false
+      show_docstring_parameters: false
 
 ::: sqlspec.adapters.oracledb.adk.OracleSyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
+      show_docstring_parameters: false
 
 ::: sqlspec.adapters.oracledb.adk.OracleAsyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
+      show_docstring_parameters: false
 
 ::: sqlspec.adapters.oracledb.events.OracleEventsConfig
     options:
       heading_level: 4
+      members: false
       separate_signature: false
       show_signature_annotations: true
 
 ::: sqlspec.adapters.oracledb.events.OracleSyncEventQueueStore
     options:
       heading_level: 4
+      members: false
+      show_docstring_parameters: false
 
 ::: sqlspec.adapters.oracledb.events.OracleAsyncEventQueueStore
     options:
       heading_level: 4
+      members: false
+      show_docstring_parameters: false
 
 ::: sqlspec.adapters.oracledb.events.OracleSyncAQEventBackend
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleAsyncAQEventBackend
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleSyncTxEventQEventBackend
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleAsyncTxEventQEventBackend
     options:
       heading_level: 4
+      members: false

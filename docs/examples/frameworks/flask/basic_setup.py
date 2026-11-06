@@ -1,5 +1,6 @@
 """Configure SQLSpecPlugin with a Flask application factory."""
 
+# --8<-- [start:example]
 from typing import Any
 
 from flask import Flask
@@ -8,10 +9,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.extensions.flask import SQLSpecPlugin
 
-__all__ = ("app", "create_app", "main")
 
-
-# --8<-- [start:example]
 def create_app(plugin: SQLSpecPlugin) -> Flask:
     """Create a Flask application initialized with SQLSpecPlugin."""
     app = Flask(__name__)
@@ -30,6 +28,8 @@ spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 plugin = SQLSpecPlugin(spec)
 app = create_app(plugin)
 # --8<-- [end:example]
+
+__all__ = ("app", "create_app", "main")
 
 
 def main() -> Flask:

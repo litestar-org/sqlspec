@@ -1670,33 +1670,30 @@ class DDLStateFolder:
 
 @dataclass(slots=True)
 class SquashPlan:
-    """Represents a planned squash operation.
-
-    Attributes:
-        source_migrations: List of (version, path) tuples for migrations being squashed.
-        target_version: The version string for the squashed migration.
-        target_path: Output file path for the squashed migration.
-        description: Combined description for the squashed migration.
-        source_versions: List of version strings being replaced (for tracking table updates).
-        transactional: Optional transactional directive preserved from source SQL migrations.
-        schema: Optional schema directive preserved from source SQL migrations.
-        strategy: Squash strategy ("concat", "ddl", or "schema").
-        schema_ddl_up: Optional pre-extracted schema CREATE DDL statements.
-        schema_ddl_down: Optional pre-extracted schema DROP DDL statements.
-        missing_down_versions: Optional list of source versions that lacked a down block.
-    """
+    """Represents a planned squash operation."""
 
     source_migrations: list[tuple[str, Path]]
+    """List of (version, path) tuples for migrations being squashed."""
     target_version: str
+    """The version string for the squashed migration."""
     target_path: Path
+    """Output file path for the squashed migration."""
     description: str
+    """Combined description for the squashed migration."""
     source_versions: list[str]
+    """List of version strings being replaced (for tracking table updates)."""
     transactional: bool | None = None
+    """Optional transactional directive preserved from source SQL migrations."""
     schema: str | None = None
+    """Optional schema directive preserved from source SQL migrations."""
     strategy: str = "concat"
+    """Squash strategy ("concat", "ddl", or "schema")."""
     schema_ddl_up: list[str] | None = None
+    """Optional pre-extracted schema CREATE DDL statements."""
     schema_ddl_down: list[str] | None = None
+    """Optional pre-extracted schema DROP DDL statements."""
     missing_down_versions: list[str] | None = None
+    """Optional list of source versions that lacked a down block."""
 
 
 class MigrationSquasher:

@@ -10,38 +10,24 @@ __all__ = ("main",)
 
 def main() -> dict[str, Any]:
     """Aggregate event counts with sql.raw() and insert a row using RETURNING."""
+    # --8<-- [start:example]
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
     with spec.provide_session(config) as session:
-        session.execute(
-            """
-            CREATE TABLE events (
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
-            )
-            """
-        )
-        session.execute(
-            """
-            INSERT INTO events (name) VALUES
-                ('signup'),
-                ('login')
-            """
-        )
+        session.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, name TEXT)")
+        session.execute("INSERT INTO events (name) VALUES ('signup'), ('login'), (NULL)")
 
-        # --8<-- [start:example]
-        raw_count = sql.raw("COUNT(*) AS total")
-        query = sql.select("name", raw_count).from_("events").group_by("name")
+        label = sql.raw("COALESCE(name, :fallback) AS label", fallback="unknown")
+        query = sql.select(label, sql.count().as_("total")).from_("events").group_by("name")
         grouped = session.execute(query).all()
-        # --8<-- [end:example]
-        assert len(grouped) == 2
+        assert len(grouped) == 3
 
         insert_returning = sql.insert("events").columns("name").values("logout").returning("id", "name")
         inserted = session.execute(insert_returning).one()
         assert inserted["name"] == "logout"
-        return inserted
+    # --8<-- [end:example]
+    return inserted
 
 
 if __name__ == "__main__":

@@ -22,10 +22,12 @@ Synchronous and asynchronous IBM Db2 LUW adapters built on `ibm_db`. Inherited e
 ::: sqlspec.adapters.db2.Db2SyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.db2.Db2AsyncConfig
     options:
       heading_level: 3
+      members: false
 
 ::: sqlspec.adapters.db2.Db2ConnectionParams
     options:
@@ -65,22 +67,22 @@ Synchronous and asynchronous IBM Db2 LUW adapters built on `ibm_db`. Inherited e
 
 ::: sqlspec.adapters.db2.Db2SyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.db2.Db2AsyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.db2.data_dictionary.Db2SyncDataDictionary
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.db2.data_dictionary.Db2AsyncDataDictionary
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ## Extension Stores & Configs
@@ -88,31 +90,39 @@ Synchronous and asynchronous IBM Db2 LUW adapters built on `ibm_db`. Inherited e
 ::: sqlspec.adapters.db2.litestar.Db2SyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.db2.litestar.Db2AsyncStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.db2.adk.Db2SyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.db2.adk.Db2AsyncADKStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.db2.adk.Db2SyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.db2.adk.Db2AsyncADKMemoryStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.db2.events.Db2SyncEventQueueStore
     options:
       heading_level: 4
+      members: false
 
 ::: sqlspec.adapters.db2.events.Db2AsyncEventQueueStore
     options:
       heading_level: 4
+      members: false

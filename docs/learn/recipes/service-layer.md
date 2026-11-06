@@ -22,13 +22,13 @@ When constructed with `config=`, a service checks out a short-lived pooled sessi
 | `provide_session()` | Context manager yielding a pooled read/write driver session. |
 | `begin_transaction()` | Context manager yielding a session inside an active transaction that commits on exit and rolls back on exception. |
 
-## Production Service Architecture Patterns
+## Service Session Lifetimes
 
-In real-world architectures, services follow either a bounded-session or request-scoped lifetime pattern:
+Services use either a bounded-session or a request-scoped lifetime:
 
-### Bounded-Session Domain Services (`config=` + `provide_session()`)
+### Bounded-Session Domain Services
 
-When a service coordinates external asynchronous I/O (such as password hashing, third-party REST APIs, or LLM embeddings), do not keep a database connection checked out during the entire operation. Instead, initialize the service with `config=` and check out short-lived sessions only when executing database commands:
+When a service coordinates external asynchronous I/O (such as password hashing, third-party REST APIs, or LLM embeddings), do not keep a database connection checked out during the entire operation. Initialize the service with `config=` and `loader=`, and access named SQL via `self.loader.get_sql(...)`:
 
 === "SQL (`app/sql/customers.sql`)"
 
@@ -57,7 +57,7 @@ When a service coordinates external asynchronous I/O (such as password hashing, 
     from sqlspec.service import SQLSpecAsyncService
 
 
-    class Customer(msgspec.Struct, frozen=True, gc=False):
+    class Customer(msgspec.Struct):
         """Customer entity representation."""
 
         id: int
@@ -73,14 +73,15 @@ When a service coordinates external asynchronous I/O (such as password hashing, 
 
         async def get_by_email(self, email: str) -> Customer:
             """Fetch customer by email, checking out a short-lived connection."""
-            query = self.get_sql("get-customer-by-email").where("email = :email")
+            base_query = self.loader.get_sql("get-customer-by-email")
+            query = base_query.where("email = :email")
             return await self.get_one(query, email=email, schema_type=Customer)
 
         async def list_customers(
             self, *, limit: int = 25, offset: int = 0
         ) -> OffsetPagination[Customer]:
             """Paginate customers without holding a connection between pages."""
-            query = self.get_sql("list-customers")
+            query = self.loader.get_sql("list-customers")
             return await self.paginate_limit_offset(
                 query,
                 LimitOffsetFilter(limit=limit, offset=offset),
@@ -94,11 +95,7 @@ When a service coordinates external asynchronous I/O (such as password hashing, 
             stack = (
                 StatementStack()
                 .push_execute(
-                    """
-                    UPDATE customers
-                    SET tier = :tier
-                    WHERE id = :id
-                    """,
+                    "UPDATE customers SET tier = :tier WHERE id = :id",
                     tier=new_tier,
                     id=customer_id,
                 )
@@ -117,135 +114,84 @@ When a service coordinates external asynchronous I/O (such as password hashing, 
                 await session.execute_stack(stack)
     ```
 
-### Request-Scoped Driver Services (`session=driver`)
+### Request-Scoped Driver Services
 
-When using dependency injection frameworks like Dishka or Litestar where a driver connection is already checked out for the lifetime of an HTTP request, inject the `driver` directly into `SQLSpecAsyncService(session)`:
-
-=== "SQL (`app/sql/products.sql`)"
-
-    ```sql
-    -- name: get-product
-    SELECT id, sku, name, price_cents
-    FROM products;
-
-    -- name: list-products
-    SELECT id, sku, name, price_cents
-    FROM products
-    ORDER BY id;
-    ```
-
-=== "Python (`app/services/products.py`)"
-
-    ```python
-    """Request-scoped product service receiving an injected driver instance."""
-
-    import msgspec
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.asyncpg import AsyncpgDriver
-    from sqlspec.core import FilterTypes, OffsetPagination
-    from sqlspec.service import SQLSpecAsyncService
-
-
-    class Product(msgspec.Struct, frozen=True, gc=False):
-        """Product domain entity."""
-
-        id: int
-        sku: str
-        name: str
-        price_cents: int
-
-
-    class ProductService(SQLSpecAsyncService[AsyncpgDriver]):
-        """Request-scoped service operating on a checked-out driver session."""
-
-        def __init__(self, driver: AsyncpgDriver, spec: SQLSpec) -> None:
-            super().__init__(driver)
-            self.spec = spec
-
-        async def get_by_id(self, product_id: int) -> Product:
-            """Retrieve a product by ID or raise NotFoundError."""
-            query = self.spec.get_sql("get-product").where("id = :id")
-            return await self.get_one(query, id=product_id, schema_type=Product)
-
-        async def list_products(
-            self, *filters: FilterTypes
-        ) -> OffsetPagination[Product]:
-            """Filter and paginate products using precompiled SQL templates."""
-            query = self.spec.get_sql("list-products")
-            return await self.paginate(query, *filters, schema_type=Product)
-    ```
-
-## Sharing an Existing Session Across Multiple Services
-
-Pass `session=session` to `get_one`, `exists`, or `paginate` (or construct `SQLSpecAsyncService(session)`) when composing multiple domain services inside a single outer `begin_transaction()` block so every read and write participates in the same atomic transaction:
+When using dependency injection frameworks like Dishka or Litestar where a driver connection is already checked out for the lifetime of an HTTP request, inject `driver` directly into `SQLSpecAsyncService(driver)` (or pass `session=session` to `get_one`, `exists`, and `paginate` when sharing an outer `begin_transaction()` block across multiple services):
 
 ```python
+import msgspec
+
 from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.service import SQLSpecSyncService
+from sqlspec.adapters.asyncpg import AsyncpgDriver
+from sqlspec.core import FilterTypes, OffsetPagination
+from sqlspec.service import SQLSpecAsyncService
 
-spec = SQLSpec()
-config = spec.add_config(
-    SqliteConfig(connection_config={"database": ":memory:"})
+
+class Product(msgspec.Struct):
+    """Product domain entity."""
+
+    id: int
+    sku: str
+    name: str
+    price_cents: int
+
+
+class ProductService(SQLSpecAsyncService[AsyncpgDriver]):
+    """Request-scoped service operating on a checked-out driver session."""
+
+    def __init__(self, driver: AsyncpgDriver, spec: SQLSpec) -> None:
+        super().__init__(driver)
+        self.spec = spec
+
+    async def get_by_id(self, product_id: int) -> Product:
+        """Retrieve a product by ID or raise NotFoundError."""
+        query = self.spec.get_sql("get-product").where("id = :id")
+        return await self.get_one(query, id=product_id, schema_type=Product)
+
+    async def list_products(
+        self, *filters: FilterTypes
+    ) -> OffsetPagination[Product]:
+        """Filter and paginate products using precompiled SQL templates."""
+        query = self.spec.get_sql("list-products")
+        return await self.paginate(query, *filters, schema_type=Product)
+```
+
+## Production Composition Root
+
+In multi-pool applications (separating request-scoped web pools from background worker pools), assemble `SQLSpec`, `bind_key` configs, and `load_sql_files` in a dedicated `app/config.py` composition root and register `config = "app.config:db"` under `[tool.sqlspec]` in `pyproject.toml`:
+
+```python
+from pathlib import Path
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DSN = "postgresql://user:pass@localhost:5432/app"
+
+db_manager = SQLSpec()
+db = db_manager.add_config(
+    AsyncpgConfig(
+        bind_key="app-web",
+        connection_config={
+            "dsn": DSN,
+            "min_size": 5,
+            "max_size": 20,
+            "command_timeout": 30.0,
+        },
+        migration_config={"script_location": str(BASE_DIR / "db" / "migrations")},
+    )
 )
-orders_svc = SQLSpecSyncService(config=config)
-ledger_svc = SQLSpecSyncService(config=config)
-
-with orders_svc.begin_transaction() as session:
-    session.execute(
-        """
-        CREATE TABLE orders (id INTEGER PRIMARY KEY, total INTEGER)
-        """
+worker_db = db_manager.add_config(
+    AsyncpgConfig(
+        bind_key="app-worker",
+        connection_config={"dsn": DSN, "min_size": 2, "max_size": 10},
     )
-    session.execute(
-        """
-        CREATE TABLE ledger (
-            id INTEGER PRIMARY KEY,
-            order_id INTEGER,
-            amount INTEGER
-        )
-        """
-    )
-    session.execute(
-        """
-        INSERT INTO orders (id, total)
-        VALUES (:id, :total)
-        """,
-        id=101,
-        total=2500,
-    )
-
-    order = orders_svc.get_one(
-        """
-        SELECT id, total
-        FROM orders
-        WHERE id = :id
-        """,
-        session=session,
-        id=101,
-    )
-    session.execute(
-        """
-        INSERT INTO ledger (order_id, amount)
-        VALUES (:order_id, :amount)
-        """,
-        order_id=order["id"],
-        amount=order["total"],
-    )
-    assert ledger_svc.exists(
-        """
-        SELECT 1
-        FROM ledger
-        WHERE order_id = :id
-        """,
-        session=session,
-        id=101,
-    )
+)
+db_manager.load_sql_files(BASE_DIR / "db" / "sql")
 ```
 
 ## Recap
 
-- Construct `SQLSpecSyncService(config=...)` or `SQLSpecAsyncService(config=...)` to eliminate repetitive `with config.provide_session()` boilerplate on single-statement reads.
-- Group multi-statement domain mutations inside `service.begin_transaction()` or `session.execute_stack(...)` for atomic execution.
-- Pass `session=session` when coordinating multiple domain services within one shared transaction.
+- Construct `SQLSpecSyncService(config=..., loader=...)` or `SQLSpecAsyncService(config=..., loader=...)` and call `self.loader.get_sql(...)` for bounded-session domain services.
+- Group multi-statement mutations inside `service.begin_transaction()` or `session.execute_stack(...)`, and pass `session=session` when coordinating multiple services inside one transaction.
