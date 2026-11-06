@@ -1,5 +1,7 @@
 """Unit tests for MERGE builder functionality."""
 
+from typing import Any
+
 import pytest
 from sqlglot import exp
 
@@ -931,3 +933,69 @@ def test_merge_defaults_disable_optimization_unlike_other_builders() -> None:
     assert sql.update("t").enable_optimization is True
     assert sql.delete().enable_optimization is True
     assert Merge(enable_optimization=True).enable_optimization is True
+
+
+MERGE_PREFIXES = {
+    "tsql": "MERGE INTO [t] USING [s] AS s ON ( [t].[id] = [s].[id] ) WHEN ",
+    "oracle": "MERGE INTO t USING s s ON ( t.id = s.id ) WHEN ",
+    "postgres": 'MERGE INTO t USING "s" AS s ON ( "t"."id" = "s"."id" ) WHEN ',
+}
+
+
+def _merge_builder(dialect: str) -> Merge:
+    return sql.merge(dialect=dialect).into("t").using("s", alias="s").on("t.id = s.id")
+
+
+def _normalized_sql(statement: Any) -> str:
+    return " ".join(statement.sql.split())
+
+
+def _nullif() -> exp.Expr:
+    return exp.Nullif(this=exp.column("a"), expression=exp.Literal.number(0))
+
+
+def _left() -> exp.Expr:
+    return exp.Left(this=exp.column("a"), expression=exp.Literal.number(2))
+
+
+@pytest.mark.parametrize(
+    ("dialect", "value", "suffix"),
+    [
+        pytest.param("tsql", sql.raw("a + 1"), "[a] = [a] + 1", id="tsql-raw"),
+        pytest.param("tsql", _nullif(), "[a] = NULLIF([a], 0)", id="tsql-nullif"),
+        pytest.param("oracle", sql.raw("a + 1"), "a = a + 1", id="oracle-raw"),
+        pytest.param("oracle", _nullif(), "a = NULLIF(a, 0)", id="oracle-nullif"),
+        pytest.param("postgres", sql.raw("a + 1"), '"a" = "a" + 1', id="postgres-raw"),
+        pytest.param("postgres", _nullif(), '"a" = NULLIF("a", 0)', id="postgres-nullif"),
+    ],
+)
+def test_merge_update_renders_full_expression(dialect: str, value: Any, suffix: str) -> None:
+    """Matched updates render both operands of a fragment or SQLGlot node."""
+    statement = _merge_builder(dialect).when_matched_then_update(a=value).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES[dialect]}MATCHED THEN UPDATE SET {suffix}"
+
+
+@pytest.mark.parametrize(
+    ("dialect", "value", "suffix"),
+    [
+        pytest.param("tsql", sql.raw("a + 1"), "([a]) VALUES ([a] + 1)", id="tsql-raw"),
+        pytest.param("tsql", _left(), "([a]) VALUES (LEFT([a], 2))", id="tsql-left"),
+        pytest.param("oracle", sql.raw("a + 1"), "(a) VALUES (a + 1)", id="oracle-raw"),
+        pytest.param("oracle", _left(), "(a) VALUES (LEFT(a, 2))", id="oracle-left"),
+        pytest.param("postgres", sql.raw("a + 1"), '("a") VALUES ("a" + 1)', id="postgres-raw"),
+        pytest.param("postgres", _left(), '("a") VALUES (LEFT("a", 2))', id="postgres-left"),
+    ],
+)
+def test_merge_insert_renders_full_expression(dialect: str, value: Any, suffix: str) -> None:
+    """Not-matched inserts render both operands of a fragment or SQLGlot node."""
+    statement = _merge_builder(dialect).when_not_matched_then_insert(columns=["a"], values=[value]).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES[dialect]}NOT MATCHED THEN INSERT {suffix}"
+
+
+def test_merge_by_source_update_renders_full_expression() -> None:
+    """By-source updates render both operands of a fragment."""
+    statement = _merge_builder("tsql").when_not_matched_by_source_then_update(a=sql.raw("a + 1")).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}NOT MATCHED BY SOURCE THEN UPDATE SET [a] = [a] + 1"

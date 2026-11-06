@@ -1,5 +1,9 @@
 """Unit tests for sql.upsert() factory method."""
 
+from typing import Any
+
+import pytest
+
 from sqlspec import sql
 from sqlspec.builder import Insert, Merge
 
@@ -270,3 +274,27 @@ def test_upsert_with_quoted_table_name() -> None:
 
     built = query.build()
     assert '"Products"' in built.sql or "Products" in built.sql
+
+
+@pytest.mark.parametrize(
+    ("builder", "expected"),
+    [
+        pytest.param(
+            sql
+            .upsert("t", dialect="postgres")
+            .using("s", alias="s")
+            .on("t.id = s.id")
+            .when_matched_then_update(a=sql.raw("t.a + 1")),
+            'MERGE INTO t USING "s" AS s ON ( "t"."id" = "s"."id" ) WHEN MATCHED THEN UPDATE SET "a" = "t"."a" + 1',
+            id="merge",
+        ),
+        pytest.param(
+            sql.upsert("t", dialect="sqlite").columns("id").values(1).on_conflict("id").do_update(a=sql.raw("a + 1")),
+            'INSERT INTO "t" ( "id" ) VALUES (:id) ON CONFLICT("id") DO UPDATE SET "a" = "a" + 1',
+            id="insert",
+        ),
+    ],
+)
+def test_upsert_renders_full_expression(builder: Any, expected: str) -> None:
+    """Both upsert forms render the whole fragment."""
+    assert " ".join(builder.build().sql.split()) == expected

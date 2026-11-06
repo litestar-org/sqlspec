@@ -296,7 +296,7 @@ def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr
 
         return extract_sql_object_expression(on, builder=builder, parse_sql=parse_join_condition)
     if isinstance(on, exp.Expr):
-        return on
+        return on.copy()
     return exp.condition(str(on))
 
 

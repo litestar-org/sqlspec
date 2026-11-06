@@ -1,9 +1,10 @@
 # pyright: reportAttributeAccessIssue=false
 """Unit tests for SELECT builder methods."""
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
+from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder._base import QueryBuilder
@@ -85,7 +86,6 @@ def test_order_by_raw_trailing_asc_emits_ascending_sort() -> None:
 
 def test_order_by_raw_function_without_direction_unchanged() -> None:
     """sql.raw without trailing direction must continue to work as a sort key."""
-    from sqlglot import exp
 
     raw_expr = cast("exp.Ordered", sql.raw("COALESCE(a, b, 0)"))
     builder = sql.select("a").from_("things").order_by(raw_expr)
@@ -148,3 +148,63 @@ def test_subquery_no_roundtrip_where_in_query_builder_subquery_still_renames_col
 def test_select_statement_hint_renders_verbatim(hint: str) -> None:
     query = sql.select("*", dialect="oracle").from_("users").with_hint(hint, dialect="oracle")
     assert query.build().sql.startswith(f"SELECT /*+ {hint} */")
+
+
+def _normalized_sql(statement: Any) -> str:
+    return " ".join(statement.sql.split())
+
+
+def _union() -> exp.Expr:
+    return cast("exp.Expr", exp.maybe_parse("SELECT 1 UNION SELECT 2"))
+
+
+QUALIFIED_PREFIX = 'SELECT "t"."z" AS "z" FROM "t" AS "t" WHERE '
+
+
+@pytest.mark.parametrize(
+    ("apply", "expected"),
+    [
+        pytest.param(
+            lambda q: q.join("u", on=sql.raw("t.id = u.id")),
+            'SELECT "z" FROM "t" JOIN "u" ON "t"."id" = "u"."id"',
+            id="join-raw",
+        ),
+        pytest.param(
+            lambda q: q.join("u", on=exp.condition("t.a = u.a AND t.b = u.b")),
+            'SELECT "z" FROM "t" JOIN "u" ON "t"."a" = "u"."a" AND "t"."b" = "u"."b"',
+            id="join-node",
+        ),
+        pytest.param(
+            lambda q: q.where_in("a", sql.raw("b + 1")), QUALIFIED_PREFIX + '"t"."a" IN ("t"."b" + 1)', id="where-in"
+        ),
+        pytest.param(
+            lambda q: q.where_not_in("a", sql.raw("b + 1")),
+            QUALIFIED_PREFIX + 'NOT "t"."a" IN ("t"."b" + 1)',
+            id="where-not-in",
+        ),
+        pytest.param(
+            lambda q: q.where_exists(_union()),
+            QUALIFIED_PREFIX + 'EXISTS( SELECT 1 AS "1" UNION SELECT 2 AS "2" )',
+            id="where-exists",
+        ),
+        pytest.param(
+            lambda q: q.where_not_exists(_union()),
+            QUALIFIED_PREFIX + 'NOT EXISTS( SELECT 1 AS "1" UNION SELECT 2 AS "2" )',
+            id="where-not-exists",
+        ),
+    ],
+)
+def test_select_predicates_render_full_expression(apply: Any, expected: str) -> None:
+    """Join and subquery predicates render every operand of a fragment or SQLGlot node."""
+    assert _normalized_sql(apply(sql.select("z").from_("t")).build()) == expected
+
+
+def test_join_and_exists_leave_caller_nodes_detached() -> None:
+    """Join and EXISTS sites attach a copy of the caller's node."""
+    condition = exp.condition("t.id = u.id")
+    union = _union()
+
+    sql.select("z").from_("t").join("u", on=condition).where_exists(union).build()
+
+    assert condition.parent is None
+    assert union.parent is None

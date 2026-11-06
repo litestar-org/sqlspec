@@ -343,3 +343,9 @@ def test_cross_dialect_render_preserves_owned_and_cached_ast(static: bool) -> No
         assert "DISTINCT ON" in rendered.sql
     finally:
         cache.delete_expression(cache_key)
+
+
+def test_extract_sql_object_expression_rejects_sqlglot_node() -> None:
+    """The extractor accepts SQL carriers only, so a bare node is rejected."""
+    with pytest.raises(ValueError, match="Value does not expose an expression"):
+        parsing_utils.extract_sql_object_expression(exp.column("a"))

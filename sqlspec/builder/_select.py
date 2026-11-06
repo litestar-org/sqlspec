@@ -763,7 +763,7 @@ class WhereClauseMixin:
             return extract_sql_object_expression(subquery, builder=self, parse_sql=parse_subquery)
 
         if isinstance(subquery, exp.Expr):
-            return subquery
+            return subquery.copy()
 
         if isinstance(subquery, str):
             parsed_expression_from_str: exp.Expr | None = exp.maybe_parse(subquery, dialect=builder.dialect)
