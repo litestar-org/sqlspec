@@ -18,12 +18,11 @@ from sqlglot.errors import ParseError
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import _coerce_column, _is_simple_identifier, extract_sql_object_expression
+from sqlspec.builder._parsing_utils import _coerce_column, _is_simple_identifier, resolve_value_expression
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_expression_and_sql
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -142,12 +141,11 @@ class _MergeAssignmentMixin:
 
     def _process_assignment(self, target_column: str, value: Any) -> exp.Expr:
         column_identifier = _coerce_column(target_column)
-
-        if has_expression_and_sql(value):
-            value_expr = extract_sql_object_expression(value, builder=self)
-            return exp.EQ(this=column_identifier, expression=value_expr)
-        if isinstance(value, exp.Expr):
-            return exp.EQ(this=column_identifier, expression=value)
+        column_name = target_column if isinstance(target_column, str) else str(target_column)
+        column_leaf = column_name.split(".")[-1]
+        resolved = resolve_value_expression(value, self, column_leaf)
+        if resolved is not None:
+            return exp.EQ(this=column_identifier, expression=resolved)
         if isinstance(value, str) and self._is_column_reference(value):
             builder = cast("QueryBuilder", self)
             parsed_expression: exp.Expr | None = exp.maybe_parse(value, dialect=builder.dialect)
@@ -156,8 +154,6 @@ class _MergeAssignmentMixin:
                 raise SQLBuilderError(msg)
             return exp.EQ(this=column_identifier, expression=parsed_expression)
 
-        column_name = target_column if isinstance(target_column, str) else str(target_column)
-        column_leaf = column_name.split(".")[-1]
         placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_leaf)
         return exp.EQ(this=column_identifier, expression=placeholder)
 
@@ -646,10 +642,9 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
 
         insert_values: list[exp.Expr] = []
         for column_name, value in zip(column_names, column_values, strict=True):
-            if has_expression_and_sql(value):
-                insert_values.append(extract_sql_object_expression(value, builder=self))
-            elif isinstance(value, exp.Expr):
-                insert_values.append(value)
+            resolved = resolve_value_expression(value, self, column_name.split(".")[-1])
+            if resolved is not None:
+                insert_values.append(resolved)
             elif isinstance(value, str):
                 if self._is_column_reference(value):
                     builder = cast("QueryBuilder", self)

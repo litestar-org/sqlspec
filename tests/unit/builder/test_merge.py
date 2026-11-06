@@ -1,6 +1,6 @@
 """Unit tests for MERGE builder functionality."""
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from sqlglot import exp
@@ -999,3 +999,107 @@ def test_merge_by_source_update_renders_full_expression() -> None:
     statement = _merge_builder("tsql").when_not_matched_by_source_then_update(a=sql.raw("a + 1")).build()
 
     assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}NOT MATCHED BY SOURCE THEN UPDATE SET [a] = [a] + 1"
+
+
+MERGE_EXPRESSION_VALUES = [
+    pytest.param(sql.column("b"), "[b]", id="column"),
+    pytest.param(sql.column("b").cast("INT"), "CAST([b] AS INTEGER)", id="function-column"),
+    pytest.param(sql.column("b") > 1, "[b] > 1", id="column-expression"),
+    pytest.param(sql.case().when("x > 1", 1).else_(0).end(), "CASE WHEN [x] > 1 THEN 1 ELSE 0 END", id="case"),
+    pytest.param(sql.count("b"), "COUNT([b])", id="aggregate"),
+    pytest.param(sql.coalesce("b", "c"), "COALESCE([b], [c])", id="conversion"),
+]
+
+
+@pytest.mark.parametrize(("value", "fragment"), MERGE_EXPRESSION_VALUES)
+@pytest.mark.parametrize(
+    ("apply", "suffix"),
+    [
+        pytest.param(
+            lambda merge, value: merge.when_matched_then_update(a=value),
+            "MATCHED THEN UPDATE SET [a] = {fragment}",
+            id="matched",
+        ),
+        pytest.param(
+            lambda merge, value: merge.when_not_matched_then_insert(columns=["a"], values=[value]),
+            "NOT MATCHED THEN INSERT ([a]) VALUES ({fragment})",
+            id="not-matched",
+        ),
+        pytest.param(
+            lambda merge, value: merge.when_not_matched_by_source_then_update(a=value),
+            "NOT MATCHED BY SOURCE THEN UPDATE SET [a] = {fragment}",
+            id="by-source",
+        ),
+    ],
+)
+def test_merge_clauses_render_expression_values(apply: Any, suffix: str, value: Any, fragment: str) -> None:
+    """Every MERGE clause renders wrappers as SQL and binds nothing."""
+    statement = apply(_merge_builder("tsql"), value).build()
+
+    assert _normalized_sql(statement) == MERGE_PREFIXES["tsql"] + suffix.format(fragment=fragment)
+    assert statement.parameters == {}
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        pytest.param("oracle", "a = b, c = COUNT(e)", id="oracle"),
+        pytest.param("postgres", '"a" = "b", "c" = COUNT("e")', id="postgres"),
+    ],
+)
+def test_merge_update_renders_values_per_dialect(dialect: str, expected: str) -> None:
+    """Wrappers render with the quoting of the target dialect."""
+    statement = _merge_builder(dialect).when_matched_then_update(a=sql.column("b"), c=sql.count("e")).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES[dialect]}MATCHED THEN UPDATE SET {expected}"
+    assert statement.parameters == {}
+
+
+def test_merge_embeds_query_builder() -> None:
+    """A query builder embeds as a subquery with merged parameters."""
+    query = sql.select("x").from_("y").where_eq("z", 5)
+
+    statement = _merge_builder("tsql").when_matched_then_update(a=query).build()
+
+    assert _normalized_sql(statement) == (
+        f"{MERGE_PREFIXES['tsql']}MATCHED THEN UPDATE SET [a] = ( SELECT [x] FROM [y] WHERE [z] = :z )"
+    )
+    assert statement.parameters == {"z": 5}
+
+
+def test_merge_keeps_string_column_reference() -> None:
+    """A qualified string keeps its column-reference shorthand."""
+    statement = _merge_builder("tsql").when_matched_then_update(a="s.a").build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}MATCHED THEN UPDATE SET [a] = [s].[a]"
+    assert statement.parameters == {}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_parameters"),
+    [pytest.param("text", {"a": "text"}, id="text"), pytest.param(1, {"a": 1}, id="number")],
+)
+def test_merge_keeps_plain_values_bound(value: Any, expected_parameters: dict[str, Any]) -> None:
+    """Plain values bind under the assignment's column name."""
+    statement = _merge_builder("tsql").when_matched_then_update(a=value).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}MATCHED THEN UPDATE SET [a] = :a"
+    assert statement.parameters == expected_parameters
+
+
+def test_merge_leaves_caller_node_detached() -> None:
+    """One node assigned to two columns renders twice and stays detached."""
+    node = cast("exp.Expr", exp.maybe_parse("a + 1"))
+
+    statement = _merge_builder("tsql").when_matched_then_update(a=node, c=node).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}MATCHED THEN UPDATE SET [a] = [a] + 1, [c] = [a] + 1"
+    assert node.parent is None
+
+
+def test_merge_rejects_vector_distance_on_unsupported_dialect() -> None:
+    """A vector distance on a dialect without vector support raises instead of losing its operand."""
+    distance = sql.column("v").vector_distance([0.1, 0.2])
+
+    with pytest.raises(SQLBuilderError, match="Vector distance is not supported"):
+        _merge_builder("tsql").when_matched_then_update(a=distance).build()

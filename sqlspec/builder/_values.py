@@ -10,9 +10,8 @@ from typing import Any, Self
 from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._parsing_utils import extract_sql_object_expression
+from sqlspec.builder._parsing_utils import resolve_value_expression
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import has_expression_and_sql
 
 __all__ = ("Values",)
 
@@ -193,10 +192,9 @@ class Values(QueryBuilder):
                 else:
                     col_name = f"col_{col_idx + 1}"
 
-                if isinstance(val, exp.Expr):
-                    row_expressions.append(val)
-                elif has_expression_and_sql(val):
-                    row_expressions.append(extract_sql_object_expression(val, builder=self))
+                resolved = resolve_value_expression(val, self, col_name)
+                if resolved is not None:
+                    row_expressions.append(resolved)
                 else:
                     placeholder, _ = self.create_placeholder(val, col_name)
                     row_expressions.append(placeholder)
