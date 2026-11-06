@@ -7,11 +7,14 @@ create_migration, stamp_migration, fix_migrations).
 """
 
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+from sqlspec.exceptions import UniqueViolationError
+from sqlspec.migrations.commands import AsyncMigrationCommands
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -297,3 +300,53 @@ def down():
     finally:
         if config.connection_instance:
             await config.close_pool()
+
+
+async def test_asyncpg_failed_migration_surfaces_constraint_error(
+    tmp_path: Path, postgres_service: "PostgresService"
+) -> None:
+    """A duplicate-key migration raises its own error and leaves the next session's search_path untouched."""
+    schema = f"mig_{uuid4().hex[:8]}"
+    migration_file = tmp_path / "0001_duplicate.sql"
+    migration_file.write_text(
+        f"""-- name: migrate-0001-up
+CREATE TABLE {schema}.dup (id INTEGER PRIMARY KEY);
+INSERT INTO {schema}.dup VALUES (1);
+INSERT INTO {schema}.dup VALUES (1);
+
+-- name: migrate-0001-down
+DROP TABLE {schema}.dup;
+"""
+    )
+    config = AsyncpgConfig(
+        connection_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "database": postgres_service.database,
+            "min_size": 1,
+            "max_size": 1,
+        },
+        migration_config={"script_location": str(tmp_path), "default_schema": schema},
+    )
+    try:
+        async with config.provide_session() as driver:
+            await driver.execute_script(f"CREATE SCHEMA {schema}")
+
+        commands = AsyncMigrationCommands(config)
+        migration = await commands.runner.load_migration(migration_file, "0001")
+        async with config.provide_session() as driver:
+            with pytest.raises(UniqueViolationError):
+                await commands.runner.execute_upgrade(driver, migration, use_transaction=True)
+
+        async with config.provide_session() as driver:
+            assert await driver.select_value("SELECT current_setting('search_path')") == '"$user", public'
+            table_count = await driver.select_value(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'dup'", schema
+            )
+            assert table_count == 0
+    finally:
+        async with config.provide_session() as driver:
+            await driver.execute_script(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        await config.close_pool()
