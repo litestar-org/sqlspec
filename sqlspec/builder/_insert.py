@@ -11,10 +11,9 @@ from sqlglot import exp
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._dml import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin, ReturningClauseMixin
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import extract_sql_object_expression
+from sqlspec.builder._parsing_utils import resolve_value_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.serializers import schema_dump, serialize_collection
-from sqlspec.utils.type_guards import has_expression_and_sql
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -268,11 +267,8 @@ class ConflictBuilder:
 def _build_conflict_set_expressions(builder: "Insert", kwargs: dict[str, Any]) -> list[exp.Expr]:
     set_expressions: list[exp.Expr] = []
     for col, val in kwargs.items():
-        if has_expression_and_sql(val):
-            value_expr = extract_sql_object_expression(val, builder=builder)
-        elif isinstance(val, exp.Expr):
-            value_expr = val
-        else:
+        value_expr = resolve_value_expression(val, builder, col)
+        if value_expr is None:
             param_name = builder.generate_unique_parameter_name(col)
             _, param_name = builder.add_parameter(val, name=param_name)
             value_expr = exp.Placeholder(this=param_name)

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 from sqlglot import exp, maybe_parse
 from sqlglot.dialects.dialect import Dialect
 
-from sqlspec.builder._column import Column
+from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.core import ParameterStyle, ParameterValidator, default_nulls, ordered
 from sqlspec.exceptions import SQLBuilderError
@@ -34,6 +34,7 @@ __all__ = (
     "parse_condition_expression",
     "parse_order_expression",
     "parse_table_expression",
+    "resolve_value_expression",
     "to_expression",
 )
 
@@ -332,6 +333,55 @@ def extract_sql_object_expression(
     if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
         expr = builder._update_placeholders(expr, param_mapping)
     return expr
+
+
+def resolve_value_expression(value: Any, builder: Any, alias_hint: str) -> exp.Expr | None:
+    """Resolve a builder value to the expression it renders as.
+
+    Args:
+        value: Value passed to a builder method.
+        builder: Query builder receiving merged parameters.
+        alias_hint: Name seed for parameters merged from a subquery builder.
+
+    Returns:
+        An expression independent of the caller's objects, or None when the value binds as a parameter.
+    """
+    if value is None or isinstance(value, (str, int, float, bytes, bytearray)):
+        return None
+    expression: exp.Expr
+    if isinstance(value, exp.Expr):
+        expression = value.copy()
+    elif isinstance(value, ExpressionWrapper):
+        expression = value.expression.copy()
+    elif isinstance(value, (Column, FunctionColumn, ColumnExpression)):
+        expression = value.sqlglot_expression.copy()
+    elif has_parameter_builder(value):
+        return _scalar_subquery(builder._embed_subquery(value, alias_hint=alias_hint))
+    elif has_expression_and_sql(value) or has_expression_and_parameters(value):
+        expression = extract_sql_object_expression(value, builder=builder)
+    else:
+        return None
+    merged: exp.Expr = builder._merge_subquery_fragments(expression)
+    if isinstance(merged, (exp.Select, exp.SetOperation)):
+        return _scalar_subquery(merged)
+    return merged
+
+
+def _scalar_subquery(query: exp.Expr) -> exp.Expr:
+    """Wrap a query as a scalar operand.
+
+    Set operations use ``exp.Subquery`` because the optimizer unwraps their parentheses.
+    Other queries use ``exp.Paren`` because the optimizer unnests ``exp.Subquery`` into joins.
+
+    Args:
+        query: Query expression to wrap.
+
+    Returns:
+        The wrapped query.
+    """
+    if isinstance(query, exp.SetOperation):
+        return exp.Subquery(this=query)
+    return exp.paren(query)
 
 
 def extract_expression(value: Any) -> exp.Expr:

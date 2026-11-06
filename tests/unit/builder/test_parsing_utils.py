@@ -6,6 +6,8 @@ was added to fix QueryBuilder parameter handling issues.
 """
 
 import contextlib
+from datetime import date
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -349,3 +351,76 @@ def test_extract_sql_object_expression_rejects_sqlglot_node() -> None:
     """The extractor accepts SQL carriers only, so a bare node is rejected."""
     with pytest.raises(ValueError, match="Value does not expose an expression"):
         parsing_utils.extract_sql_object_expression(exp.column("a"))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("x", id="str"),
+        pytest.param(1, id="int"),
+        pytest.param(True, id="bool"),
+        pytest.param(b"x", id="bytes"),
+        pytest.param(date(2026, 1, 1), id="date"),
+        pytest.param({"k": 1}, id="dict"),
+        pytest.param([1], id="list"),
+    ],
+)
+def test_resolve_value_expression_returns_none_for_bindable_values(value: Any) -> None:
+    """Values that bind as parameters resolve to no expression."""
+    assert parsing_utils.resolve_value_expression(value, sql.update("t"), "a") is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_sql", "expected_parameters"),
+    [
+        pytest.param(sql.column("b"), "b", {}, id="column"),
+        pytest.param(sql.count("b"), "COUNT(b)", {}, id="wrapper"),
+        pytest.param(sql.column("b").cast("INT"), "CAST(b AS INT)", {}, id="function-column"),
+        pytest.param(sql.column("b") > 1, "b > 1", {}, id="column-expression"),
+        pytest.param(exp.select("x"), "(SELECT x)", {}, id="select-node"),
+        pytest.param(
+            exp.maybe_parse("SELECT 1 UNION SELECT 2"), "(SELECT 1 UNION SELECT 2)", {}, id="set-operation-node"
+        ),
+        pytest.param(
+            sql.select("x").from_("y").where_eq("z", 5), "(SELECT x FROM y WHERE z = :z)", {"z": 5}, id="query-builder"
+        ),
+        pytest.param(
+            SimpleNamespace(expression=exp.condition("a = :p"), parameters={"p": 1}),
+            "a = :p",
+            {"p": 1},
+            id="parameters-carrier",
+        ),
+        pytest.param(SimpleNamespace(expression=None, sql="b + 1"), "b + 1", {}, id="text-carrier"),
+    ],
+)
+def test_resolve_value_expression(value: Any, expected_sql: str, expected_parameters: dict[str, Any]) -> None:
+    """Expression-carrying values resolve to SQL and merge their parameters into the builder."""
+    builder = sql.update("t")
+
+    resolved = parsing_utils.resolve_value_expression(value, builder, "a")
+
+    assert resolved is not None
+    assert resolved.sql() == expected_sql
+    assert builder.parameters == expected_parameters
+
+
+def test_resolve_value_expression_copies_sqlglot_node() -> None:
+    """A SQLGlot node resolves to an equal copy, leaving the caller's node untouched."""
+    node = exp.column("b")
+
+    resolved = parsing_utils.resolve_value_expression(node, sql.update("t"), "a")
+
+    assert resolved == node
+    assert resolved is not node
+
+
+def test_resolve_value_expression_parenthesizes_set_operation_as_subquery() -> None:
+    """Set operations wrap in a subquery node, and other queries in parentheses."""
+    builder = sql.update("t")
+
+    union = parsing_utils.resolve_value_expression(exp.maybe_parse("SELECT 1 UNION SELECT 2"), builder, "a")
+    select = parsing_utils.resolve_value_expression(exp.select("x"), builder, "a")
+
+    assert isinstance(union, exp.Subquery)
+    assert isinstance(select, exp.Paren)

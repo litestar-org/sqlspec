@@ -1,6 +1,6 @@
 """Unit tests for INSERT builder functionality including ON CONFLICT operations."""
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from sqlglot import exp
@@ -561,3 +561,104 @@ def test_duplicate_key_update_renders_full_expression(value: Any, expected: str)
     statement = sql.insert("t", dialect="mysql").columns("id").values(1).on_duplicate_key_update(a=value).build()
 
     assert _normalized_sql(statement) == f"INSERT INTO `t` ( `id` ) VALUES (:id) ON DUPLICATE KEY UPDATE {expected}"
+
+
+EXPRESSION_VALUES = [
+    pytest.param(sql.column("b"), '"b"', "`b`", id="column"),
+    pytest.param(sql.column("b").cast("INT"), 'CAST("b" AS INT)', "CAST(`b` AS SIGNED)", id="function_column"),
+    pytest.param(sql.column("b") > 1, '"b" > 1', "`b` > 1", id="column_expression"),
+    pytest.param(
+        sql.case().when("x > 1", 1).else_(0).end(),
+        'CASE WHEN "x" > 1 THEN 1 ELSE 0 END',
+        "CASE WHEN `x` > 1 THEN 1 ELSE 0 END",
+        id="case",
+    ),
+    pytest.param(sql.count("b"), 'COUNT("b")', "COUNT(`b`)", id="aggregate"),
+    pytest.param(sql.coalesce("b", "c"), 'COALESCE("b", "c")', "COALESCE(`b`, `c`)", id="conversion"),
+]
+
+
+def _query() -> Any:
+    return sql.select("x").from_("y").where_eq("z", 5)
+
+
+@pytest.mark.parametrize(("value", "postgres", "mysql"), EXPRESSION_VALUES)
+def test_insert_values_renders_expression_values(value: Any, postgres: str, mysql: str) -> None:
+    """Positional INSERT values render wrappers as SQL."""
+    statement = sql.insert("t", dialect="postgres").columns("a").values(value).build()
+
+    assert _normalized_sql(statement) == f'INSERT INTO "t" ( "a" ) VALUES ({postgres})'
+    assert statement.parameters == {}
+
+
+@pytest.mark.parametrize(("value", "postgres", "mysql"), EXPRESSION_VALUES)
+def test_insert_keyword_values_renders_expression_values(value: Any, postgres: str, mysql: str) -> None:
+    """Keyword INSERT values render wrappers as SQL."""
+    statement = sql.insert("t", dialect="postgres").values(a=value).build()
+
+    assert _normalized_sql(statement) == f'INSERT INTO "t" ( "a" ) VALUES ({postgres})'
+    assert statement.parameters == {}
+
+
+@pytest.mark.parametrize(("value", "postgres", "mysql"), EXPRESSION_VALUES)
+def test_conflict_update_renders_expression_values(value: Any, postgres: str, mysql: str) -> None:
+    """Conflict updates render wrappers as SQL."""
+    statement = sql.insert("t", dialect="postgres").columns("id").values(1).on_conflict("id").do_update(a=value).build()
+
+    assert _normalized_sql(statement) == f'{CONFLICT_PREFIX_POSTGRES}"a" = {postgres}'
+    assert statement.parameters == {"id": 1}
+
+
+@pytest.mark.parametrize(("value", "postgres", "mysql"), EXPRESSION_VALUES)
+def test_duplicate_key_update_renders_expression_values(value: Any, postgres: str, mysql: str) -> None:
+    """Duplicate-key updates render wrappers as SQL."""
+    statement = sql.insert("t", dialect="mysql").columns("id").values(1).on_duplicate_key_update(a=value).build()
+
+    assert _normalized_sql(statement) == f"INSERT INTO `t` ( `id` ) VALUES (:id) ON DUPLICATE KEY UPDATE `a` = {mysql}"
+    assert statement.parameters == {"id": 1}
+
+
+def test_insert_values_embeds_query_builder() -> None:
+    """A query builder in VALUES embeds as a subquery with merged parameters."""
+    statement = sql.insert("t", dialect="postgres").columns("a").values(_query()).build()
+
+    assert _normalized_sql(statement) == 'INSERT INTO "t" ( "a" ) VALUES (( SELECT "x" FROM "y" WHERE "z" = %(z)s ))'
+    assert statement.parameters == {"z": 5}
+
+
+def test_conflict_update_embeds_query_builder() -> None:
+    """A query builder in a conflict update embeds as a subquery with merged parameters."""
+    statement = (
+        sql.insert("t", dialect="postgres").columns("id").values(1).on_conflict("id").do_update(a=_query()).build()
+    )
+
+    assert _normalized_sql(statement) == f'{CONFLICT_PREFIX_POSTGRES}"a" = ( SELECT "x" FROM "y" WHERE "z" = %(z)s )'
+    assert statement.parameters == {"id": 1, "z": 5}
+
+
+def test_conflict_update_parenthesizes_select_node() -> None:
+    """A Select node renders as a parenthesized scalar subquery."""
+    statement = (
+        sql
+        .insert("t", dialect="postgres")
+        .columns("id")
+        .values(1)
+        .on_conflict("id")
+        .do_update(a=exp.select("x").from_("y"))
+        .build()
+    )
+
+    assert _normalized_sql(statement) == f'{CONFLICT_PREFIX_POSTGRES}"a" = ( SELECT "x" FROM "y" )'
+    assert statement.parameters == {"id": 1}
+
+
+def test_conflict_update_leaves_caller_node_detached() -> None:
+    """One node assigned to two columns renders twice and stays detached."""
+    node = cast("exp.Expr", exp.maybe_parse("a + 1"))
+
+    statement = (
+        sql.insert("t", dialect="postgres").columns("id").values(1).on_conflict("id").do_update(a=node, c=node).build()
+    )
+
+    assert _normalized_sql(statement) == f'{CONFLICT_PREFIX_POSTGRES}"a" = "a" + 1, "c" = "a" + 1'
+    assert node.parent is None
