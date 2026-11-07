@@ -10,8 +10,10 @@ import pytest
 
 from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.core import TABLE_EXISTS_SQL, build_set_schema_sql, split_db2_table_name
+from sqlspec.adapters.db2.data_dictionary import Db2AsyncDataDictionary, Db2SyncDataDictionary
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
 from sqlspec.exceptions import ImproperConfigurationError, PermissionDeniedError
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 from sqlspec.observability import resolve_db_system
 from tests.unit.adapters.test_db2._fakes import DriverMode, FakeDb2Connection, FakeDb2Cursor, db2_error
 
@@ -30,10 +32,25 @@ EXPECTED_TRACKING_DDL = """CREATE TABLE ddl_migrations (
 )"""
 
 
+_TRACKING_COLUMNS = (
+    "version_num",
+    "version_type",
+    "execution_sequence",
+    "description",
+    "applied_at",
+    "execution_time_ms",
+    "checksum",
+    "applied_by",
+    "replaces",
+)
+
+
 class _ProbeDriver:
     """Driver stand-in that answers the tracking-table probe from a scripted sequence or a catalog.
 
-    With a catalog, the probe finds the table when its bound ``(schema, table)`` pair is listed.
+    With a catalog, the probe finds the table when its bound ``(schema, table)`` pair is listed, and an
+    executed CREATE TABLE stores its rendered name the way Db2 does, folding unquoted parts to uppercase and
+    rejecting a name that already exists with ``SQL0601N``.
     """
 
     def __init__(self, probe_results: "list[Any]", catalog: "set[tuple[str | None, str]] | None" = None) -> None:
@@ -52,6 +69,17 @@ class _ProbeDriver:
 
     def execute(self, statement: Any) -> None:
         self.executed.append(statement)
+        if self.catalog is None:
+            return
+        rendered_sql = statement.build(dialect="db2").sql
+        if not rendered_sql.startswith("CREATE TABLE "):
+            return
+        rendered_name = rendered_sql.removeprefix("CREATE TABLE ").split(" (", 1)[0]
+        cataloged_name = split_db2_table_name(rendered_name)
+        if cataloged_name in self.catalog:
+            msg = f"SQL0601N {rendered_name} already exists"
+            raise RuntimeError(msg)
+        self.catalog.add(cataloged_name)
 
     def commit(self) -> None:
         self.commits += 1
@@ -68,6 +96,49 @@ class _AsyncProbeDriver(_ProbeDriver):
 
     async def commit(self) -> None:  # type: ignore[override]
         super().commit()
+
+
+class _CatalogDriver(_ProbeDriver):
+    """Probe driver whose real data dictionary reads a catalog keyed by exact ``(schema, table)`` names."""
+
+    def __init__(self, catalog: "set[tuple[str | None, str]]") -> None:
+        super().__init__([], catalog)
+        self.data_dictionary: Any = Db2SyncDataDictionary()
+        self.lookups: list[tuple[str | None, str | None]] = []
+
+    def select(self, _statement: Any, *, schema_name: Any, table_name: Any, schema_type: Any = None) -> "list[Any]":
+        self.lookups.append((schema_name, table_name))
+        catalog = self.catalog or set()
+        if schema_type is not None:
+            return [{"schema_name": schema, "table_name": table} for schema, table in catalog if schema == schema_name]
+        if (schema_name, table_name) not in catalog:
+            return []
+        return [{"column_name": column} for column in _TRACKING_COLUMNS]
+
+
+class _AsyncCatalogDriver(_CatalogDriver):
+    """Async form of ``_CatalogDriver`` for the async tracker and commands."""
+
+    def __init__(self, catalog: "set[tuple[str | None, str]]") -> None:
+        super().__init__(catalog)
+        self.data_dictionary = Db2AsyncDataDictionary()
+
+    async def select_value_or_none(self, statement: str, parameters: Any) -> Any:  # type: ignore[override]
+        return super().select_value_or_none(statement, parameters)
+
+    async def execute(self, statement: Any) -> None:  # type: ignore[override]
+        super().execute(statement)
+
+    async def commit(self) -> None:  # type: ignore[override]
+        super().commit()
+
+    async def select(self, _statement: Any, **kwargs: Any) -> "list[Any]":  # type: ignore[override]
+        return super().select(_statement, **kwargs)
+
+
+def _catalog_driver(db2_mode: DriverMode, catalog: "set[tuple[str | None, str]]") -> _CatalogDriver:
+    driver_class = _AsyncCatalogDriver if db2_mode.is_async else _CatalogDriver
+    return driver_class(catalog)
 
 
 def _probe_driver(
@@ -176,6 +247,96 @@ async def test_mixed_case_tracking_table_is_created_once(db2_mode: DriverMode, m
 
     assert driver.executed == []
     assert len(driver.probes) == 2
+
+
+@pytest.mark.parametrize(
+    ("table_name", "table_schema", "rendered_name", "cataloged_name"),
+    [
+        ('"App"."Tracker"', None, '"App"."Tracker"', ("App", "Tracker")),
+        ('"app"."tracker"', None, '"app"."tracker"', ("app", "tracker")),
+        ('"QuotedMigrations"', None, '"QuotedMigrations"', (None, "QuotedMigrations")),
+        ('app."QuotedMigrations"', None, 'app."QuotedMigrations"', ("APP", "QuotedMigrations")),
+        ('"App".tracker', None, '"App".tracker', ("App", "TRACKER")),
+        ("tracker", '"App"', '"App".tracker', ("App", "TRACKER")),
+    ],
+    ids=[
+        "quoted-schema-and-table",
+        "quoted-lowercase-schema-and-table",
+        "quoted-table",
+        "quoted-table-only",
+        "quoted-schema-only",
+        "quoted-schema-option",
+    ],
+)
+async def test_quoted_tracking_table_is_created_once(
+    db2_mode: DriverMode,
+    monkeypatch: pytest.MonkeyPatch,
+    table_name: str,
+    table_schema: "str | None",
+    rendered_name: str,
+    cataloged_name: "tuple[str | None, str]",
+) -> None:
+    """DDL keeps the quoting the probe binds, so the second probe finds the table the first run created."""
+    tracker = db2_mode.tracker(table_name, table_schema)
+    _stub_schema_migration(monkeypatch, tracker, db2_mode)
+    driver = _probe_driver(db2_mode, [], catalog=set())
+
+    await db2_mode.call(tracker.ensure_tracking_table, driver)
+    await db2_mode.call(tracker.ensure_tracking_table, driver)
+
+    assert len(driver.executed) == 1
+    assert driver.executed[0].build(dialect="db2").sql.startswith(f"CREATE TABLE {rendered_name} (")
+    assert driver.catalog == {cataloged_name}
+
+
+CATALOG_NAME_CASES = [
+    pytest.param('"app"."tracker"', None, ("app", "tracker"), id="quoted-lowercase-schema-and-table"),
+    pytest.param('"App"."Tracker"', None, ("App", "Tracker"), id="quoted-mixed-case"),
+    pytest.param("tracker", '"app"', ("app", "TRACKER"), id="quoted-lowercase-schema-option"),
+    pytest.param("App.Tracker", None, ("APP", "TRACKER"), id="unquoted-mixed-case"),
+    pytest.param("app.tracker", None, ("APP", "TRACKER"), id="unquoted-lowercase"),
+]
+
+
+@pytest.mark.parametrize(("table_name", "table_schema", "cataloged_name"), CATALOG_NAME_CASES)
+async def test_tracking_table_columns_are_read_by_exact_catalog_name(
+    db2_mode: DriverMode, table_name: str, table_schema: "str | None", cataloged_name: "tuple[str, str]"
+) -> None:
+    """The column check finds the table under its exact catalog name, so it adds no columns."""
+    tracker = db2_mode.tracker(table_name, table_schema)
+    driver = _catalog_driver(db2_mode, set())
+
+    await db2_mode.call(tracker.ensure_tracking_table, driver)
+
+    assert driver.catalog == {cataloged_name}
+    assert driver.lookups == [cataloged_name]
+    assert len(driver.executed) == 1
+
+
+@pytest.mark.parametrize(("table_name", "table_schema", "cataloged_name"), CATALOG_NAME_CASES)
+async def test_read_applied_migrations_finds_table_by_exact_catalog_name(
+    db2_mode: DriverMode,
+    monkeypatch: pytest.MonkeyPatch,
+    table_name: str,
+    table_schema: "str | None",
+    cataloged_name: "tuple[str, str]",
+) -> None:
+    """Applied records are read when the tracking table exists under its exact catalog schema."""
+    migration_config = {"version_table_name": table_name, "script_location": "migrations"}
+    if table_schema:
+        migration_config["version_table_schema"] = table_schema
+    config = db2_mode.config(connection_config={"database": "x"}, migration_config=migration_config)
+    commands: Any = (AsyncMigrationCommands if db2_mode.is_async else SyncMigrationCommands)(config)
+    applied = [{"version_num": "0001"}]
+
+    def read_applied(_driver: Any) -> Any:
+        return db2_mode.call(lambda: applied) if db2_mode.is_async else applied
+
+    monkeypatch.setattr(type(commands.tracker), "get_applied_migrations", lambda _self, driver: read_applied(driver))
+    driver = _catalog_driver(db2_mode, {cataloged_name})
+
+    assert await db2_mode.call(commands._read_applied_migrations, driver) == applied
+    assert driver.lookups[0][0] == cataloged_name[0]
 
 
 @pytest.mark.parametrize(

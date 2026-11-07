@@ -136,7 +136,7 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
     )
     migration_tracker_type: "ClassVar[type[SqlanywhereSyncMigrationTracker]]" = SqlanywhereSyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = False
-    supports_migration_schemas: "ClassVar[bool]" = True
+    supports_migration_schemas: "ClassVar[bool]" = False
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = True

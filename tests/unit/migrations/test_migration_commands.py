@@ -360,24 +360,50 @@ async def test_async_validate_migration_schema_raises_for_missing_schema(tmp_pat
     driver.has_schema.assert_awaited_once_with("missing_schema")
 
 
-def test_sync_validate_migration_schema_raises_when_adapter_does_not_support_it(sync_config: SqliteConfig) -> None:
+def test_sync_commands_reject_default_schema_when_adapter_lacks_support(sync_config: SqliteConfig) -> None:
     sync_config.set_migration_config({"default_schema": "any_schema"})
-    commands = SyncMigrationCommands(sync_config)
-    driver = MagicMock()
-    with pytest.raises(MigrationError, match="does not support migration default schemas"):
-        commands._validate_migration_schema(driver)
-    driver.has_schema.assert_not_called()
+    with pytest.raises(MigrationError, match="SqliteConfig does not support migration default schemas"):
+        SyncMigrationCommands(sync_config)
 
 
-async def test_async_validate_migration_schema_raises_when_adapter_does_not_support_it(
-    async_config: AiosqliteConfig,
-) -> None:
+def test_async_commands_reject_default_schema_when_adapter_lacks_support(async_config: AiosqliteConfig) -> None:
     async_config.set_migration_config({"default_schema": "any_schema"})
-    commands = AsyncMigrationCommands(async_config)
-    driver = AsyncMock()
+    with pytest.raises(MigrationError, match="AiosqliteConfig does not support migration default schemas"):
+        AsyncMigrationCommands(async_config)
+
+
+def test_sync_commands_reject_version_table_schema_when_adapter_lacks_support(sync_config: SqliteConfig) -> None:
+    sync_config.set_migration_config({"version_table_schema": "history"})
+    with pytest.raises(
+        MigrationError, match=r"does not support migration version table schemas.*version_table_schema='history'"
+    ):
+        SyncMigrationCommands(sync_config)
+
+
+def test_async_commands_reject_version_table_schema_when_adapter_lacks_support(async_config: AiosqliteConfig) -> None:
+    async_config.set_migration_config({"version_table_schema": "history"})
+    with pytest.raises(
+        MigrationError, match=r"does not support migration version table schemas.*version_table_schema='history'"
+    ):
+        AsyncMigrationCommands(async_config)
+
+
+def test_commands_reject_default_schema_first_when_both_schema_options_are_set(sync_config: SqliteConfig) -> None:
+    sync_config.set_migration_config({"default_schema": "any_schema", "version_table_schema": "history"})
     with pytest.raises(MigrationError, match="does not support migration default schemas"):
-        await commands._validate_migration_schema(driver)
-    driver.has_schema.assert_not_called()
+        SyncMigrationCommands(sync_config)
+
+
+def test_commands_accept_empty_schema_options_when_adapter_lacks_support(sync_config: SqliteConfig) -> None:
+    sync_config.set_migration_config({"default_schema": "", "version_table_schema": ""})
+    commands = SyncMigrationCommands(sync_config)
+    assert commands.tracker.version_table_schema is None
+
+
+def test_commands_accept_qualified_version_table_when_adapter_lacks_support(sync_config: SqliteConfig) -> None:
+    sync_config.set_migration_config({"version_table_name": "audit.ddl_migrations"})
+    commands = SyncMigrationCommands(sync_config)
+    assert commands.tracker.version_table_schema == "audit"
 
 
 def test_sync_migration_commands_init_creates_directory(tmp_path: Path, sync_config: SqliteConfig) -> None:

@@ -35,6 +35,10 @@ Common `MigrationConfig` keys:
 - `schema_dump_path`: Default output path written by `dump_schema()` when `output_path` is omitted (`auto_dump_schema=True` falls back to `<script_location>/schema.sql` when `schema_dump_path` is unset).
 - `auto_dump_schema`: Set to `True` (or a file path) to refresh `schema.sql` automatically after every `upgrade` that applies revisions.
 
+`default_schema`, `version_table_schema`, and `-- schema:` directives require an adapter with migration schema support: PostgreSQL drivers, CockroachDB, DuckDB, Oracle, IBM Db2, SQL Server, and PostgreSQL-backed ADBC. Other adapters raise `MigrationError`. To keep the tracking table in a specific schema on those adapters, set `version_table_name` to `"<schema>.ddl_migrations"`.
+
+SQLSpec restores the session schema after each migration, whether it succeeds or fails. A failed transactional migration rolls back first, and the original error is reported.
+
 ## Authoring SQL and Python Revisions
 
 Revisions execute in lexical prefix order (`0001_...`, `0002_...` or timestamp prefixes normalized via `sqlspec fix`). You can mix `.sql` and `.py` files in the same `migrations/` directory:

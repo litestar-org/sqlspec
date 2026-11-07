@@ -1,9 +1,14 @@
 """Integration tests for mssql-python transaction persistence."""
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 from pytest_databases.docker.mssql import MSSQLService
 
 from sqlspec.adapters.mssql_python import MssqlPythonConfig
+from sqlspec.exceptions import SQLSpecError
+from tests.integration.adapters.mssql._migration_failure import assert_failed_migration_leaves_no_partial_work
 from tests.integration.fixtures.mssql import _mssql_python_connection_config
 
 pytestmark = [pytest.mark.mssql_python, pytest.mark.xdist_group("mssql")]
@@ -59,3 +64,15 @@ def test_mssql_python_transactions_persist_and_restore_autocommit(mssql_service:
         finally:
             manual_config.close_pool()
             autocommit_config.close_pool()
+
+
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit_off", "autocommit_on"])
+def test_mssql_python_failed_migration_leaves_no_partial_work(
+    tmp_path: Path, mssql_python_migration_connection_config: dict[str, Any], autocommit: bool
+) -> None:
+    """A failed transactional migration persists no work and restores the user's default schema."""
+    connection_config = dict(mssql_python_migration_connection_config)
+    connection_config["autocommit"] = autocommit
+    assert_failed_migration_leaves_no_partial_work(
+        tmp_path, MssqlPythonConfig, connection_config, SQLSpecError, "Base table or view not found"
+    )

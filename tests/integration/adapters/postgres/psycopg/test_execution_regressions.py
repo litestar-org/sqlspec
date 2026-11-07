@@ -1,15 +1,20 @@
 """PostgreSQL execution contracts across cached and native COPY paths."""
 
 import inspect
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import pytest
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.exceptions import UniqueViolationError
+from sqlspec.migrations.commands import SyncMigrationCommands
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from pytest_databases.docker.postgres import PostgresService
 
     from sqlspec.adapters.psycopg import PsycopgAsyncDriver, PsycopgSyncDriver
     from sqlspec.core import SQLResult
@@ -101,3 +106,58 @@ async def test_psycopg_sql_connection_hook_leaves_pool_usable(
                 assert sync_driver.select_value("SELECT current_setting('TimeZone')") == "Pacific/Honolulu"
         finally:
             sync_config.close_pool()
+
+
+@pytest.mark.parametrize("use_transaction", [True, False], ids=["transactional", "non_transactional"])
+def test_psycopg_failed_migration_surfaces_constraint_error(
+    tmp_path: Path, postgres_service: "PostgresService", use_transaction: bool
+) -> None:
+    """A duplicate-key migration raises its own error and leaves the next session's search_path untouched."""
+    schema = f"mig_{uuid4().hex[:8]}"
+    migration_file = tmp_path / "0001_duplicate.sql"
+    migration_file.write_text(
+        f"""-- name: migrate-0001-up
+CREATE TABLE {schema}.dup (id INTEGER PRIMARY KEY);
+INSERT INTO {schema}.dup VALUES (1);
+INSERT INTO {schema}.dup VALUES (1);
+
+-- name: migrate-0001-down
+DROP TABLE {schema}.dup;
+"""
+    )
+    config = PsycopgSyncConfig(
+        connection_config={
+            "conninfo": (
+                f"postgresql://{postgres_service.user}:{postgres_service.password}"
+                f"@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+            ),
+            "min_size": 1,
+            "max_size": 1,
+        },
+        migration_config={"script_location": str(tmp_path), "default_schema": schema},
+    )
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script(f"CREATE SCHEMA {schema}")
+            driver.commit()
+
+        commands = SyncMigrationCommands(config)
+        migration = commands.runner.load_migration(migration_file, "0001")
+        with config.provide_session() as driver, pytest.raises(UniqueViolationError):
+            commands.runner.execute_upgrade(driver, migration, use_transaction=use_transaction)
+
+        with config.provide_session() as driver:
+            assert driver.select_value("SELECT current_setting('search_path')") == '"$user", public'
+            if use_transaction:
+                assert (
+                    driver.select_value(
+                        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = 'dup'",
+                        schema,
+                    )
+                    == 0
+                )
+    finally:
+        with config.provide_session() as driver:
+            driver.execute_script(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            driver.commit()
+        config.close_pool()
