@@ -43,6 +43,7 @@ def session(request: pytest.FixtureRequest, tmp_path: Path) -> Any:
         with config.provide_session() as driver:
             for statement in SETUP_STATEMENTS:
                 driver.execute(statement)
+            driver.commit()
             yield driver
     finally:
         config.close_pool()
@@ -101,3 +102,47 @@ def test_aliased_tables_execute(session: Any, build: Callable[[], QueryBuilder])
 def test_aliased_join_executes(session: Any) -> None:
     query = sql.select("x.pw").from_("t AS u").join("s AS x", "u.id = x.id")
     assert session.execute(query).get_data() == [{"pw": "joined"}]
+
+
+PAYLOADS = (
+    "`.json_each((SELECT json_quote(pw) FROM secrets)) --`",
+    '".json_each((SELECT json_quote(pw) FROM secrets)) --"',
+    "[.json_each((SELECT json_quote(pw) FROM secrets)) --]",
+    "`\njson_each((SELECT json_quote(pw) FROM secrets)) --`",
+    "`.json_each((SELECT json_quote(pw) FROM secrets)) /*`",
+    "`.json_each((SELECT json_quote(pw) FROM secrets)) #`",
+    '#."\nread_csv((SELECT pw FROM secrets)) --"',
+    '--."\njson_each((SELECT json_quote(pw) FROM secrets)) --"',
+    "`x\n; DROP TABLE z --`",
+    '"x\n; DROP TABLE z --"',
+    "json_each((SELECT json_quote(pw) FROM secrets))",
+    "unnest((SELECT list(pw) FROM secrets))",
+)
+
+
+def _execute_tolerating_rejection(session: Any, build: Callable[[], QueryBuilder]) -> Any:
+    try:
+        return session.execute(build()).get_data()
+    except (SQLBuilderError, SQLSpecError):
+        return []
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda text, dialect: sql.select("*", dialect=dialect).from_(text),
+        lambda text, dialect: sql.select("*", dialect=dialect).from_("t").join(text, "t.id = 1"),
+        lambda text, dialect: sql.update("t", dialect=dialect).set(pw="changed").from_(text),
+    ],
+    ids=["from", "join", "update_from"],
+)
+@pytest.mark.parametrize("use_session_dialect", [False, True], ids=["default_builder", "session_dialect"])
+@pytest.mark.parametrize("text", PAYLOADS)
+def test_payload_text_runs_nothing(
+    session: Any, build: Callable[[str, Any], QueryBuilder], use_session_dialect: bool, text: str
+) -> None:
+    dialect = session.dialect if use_session_dialect else None
+    rows = _execute_tolerating_rejection(session, lambda: build(text, dialect))
+    assert SECRET not in str(rows)
+    _assert_nothing_changed(session)
+    assert session.execute("SELECT pw FROM t").get_data() == [{"pw": "public"}]

@@ -7,7 +7,12 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._parsing_utils import _parse_table_reference, extract_expression, extract_sql_object_expression
+from sqlspec.builder._parsing_utils import (
+    _parse_table_reference,
+    extract_expression,
+    extract_sql_object_expression,
+    parse_table_expression,
+)
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import schema_dump
@@ -53,7 +58,7 @@ class DeleteFromClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", _parse_table_reference(table))
+        current_expr.set("this", _parse_table_reference(table, dialect=cast("QueryBuilder", self).dialect))
         return self
 
 
@@ -75,7 +80,7 @@ class InsertIntoClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", _parse_table_reference(table))
+        current_expr.set("this", _parse_table_reference(table, dialect=cast("QueryBuilder", self).dialect))
         return self
 
 
@@ -267,7 +272,7 @@ class UpdateTableClauseMixin:
 
         assert current_expr is not None
 
-        current_expr.set("this", _parse_table_reference(table_name, alias))
+        current_expr.set("this", _parse_table_reference(table_name, alias, cast("QueryBuilder", self).dialect))
         return self
 
 
@@ -375,7 +380,7 @@ class UpdateFromClauseMixin:
 
         table_expr: exp.Expr
         if isinstance(table, str):
-            table_expr = _parse_table_reference(table, alias)
+            table_expr = parse_table_expression(table, alias, cast("QueryBuilder", self).dialect)
         elif isinstance(table, exp.Expr):
             if isinstance(table, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=table.copy())

@@ -13,6 +13,7 @@ import sqlglot
 from sqlglot import exp, maybe_parse
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.errors import SqlglotError
+from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.builder._column import Column
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
@@ -27,6 +28,7 @@ from sqlspec.utils.type_guards import (
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
+    from sqlglot.tokenizer_core import Token
 
 __all__ = (
     "extract_expression",
@@ -45,15 +47,18 @@ _SIMPLE_IDENTIFIER_RE: Final["re.Pattern[str]"] = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$"
 )
 _QUOTED_NAME_PATTERN: Final[str] = r'"(?:[^"]|"")+"|`(?:[^`]|``)+`|\[(?:[^\]]|\]\])+\]'
-_TABLE_NAME_PART_PATTERN: Final[str] = rf"(?:{_QUOTED_NAME_PATTERN}|@?[\w$#]+(?:-[\w$#]+)*)"
+_TABLE_NAME_PART_PATTERN: Final[str] = rf"(?:{_QUOTED_NAME_PATTERN}|[\w$#]+(?:-[\w$#]+)*)"
 _ALIAS_PATTERN: Final[str] = rf"(?:{_QUOTED_NAME_PATTERN}|[\w$]+)"
+_TABLE_NAME_PART_RE: Final["re.Pattern[str]"] = re.compile(_TABLE_NAME_PART_PATTERN)
 _TABLE_REFERENCE_RE: Final["re.Pattern[str]"] = re.compile(
-    rf"(?P<table>{_TABLE_NAME_PART_PATTERN}(?:\.{{1,2}}{_TABLE_NAME_PART_PATTERN})*)"
+    rf"(?P<table>{_TABLE_NAME_PART_PATTERN}(?:\.{_TABLE_NAME_PART_PATTERN})*)"
     rf"(?:\s+(?:as\s+)?(?P<alias>{_ALIAS_PATTERN}))?",
     re.IGNORECASE,
 )
 _ALIAS_RE: Final["re.Pattern[str]"] = re.compile(_ALIAS_PATTERN)
 _ALIAS_KEYWORD: Final[str] = "as"
+_EXPLICIT_QUOTE_META_KEY: Final[str] = "sqlspec_explicit_table_quote"
+_MAX_DIRECT_TABLE_PARTS: Final[int] = 3
 _QUOTE_CLOSERS: Final[dict[str, str]] = {'"': '"', "`": "`", "[": "]"}
 _BARE_KEYWORDS: Final[frozenset[str]] = frozenset({
     "all",
@@ -166,37 +171,95 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
 def parse_table_expression(
     table_input: str, explicit_alias: "str | None" = None, dialect: "DialectType | None" = None
 ) -> exp.Expr:
-    r"""Parse a table reference string into a table expression.
+    r"""Parse table text into a table or function-call source.
 
-    The accepted forms are a dotted table name followed by an optional alias, written either
-    ``name alias`` or ``name AS alias``. Name parts and aliases are bare words or quoted
-    identifiers.
-
-    The ``dialect`` selects the identifier-quoting rules so dialect-quoted identifiers such as
-    BigQuery's ``\`project.dataset.table\``` are parsed into their qualified parts instead of a
-    single literal name.
+    The accepted forms are a dotted table name or a function call, followed by an optional alias
+    written ``name alias`` or ``name AS alias``. The text is read once with the tokenizer of
+    ``dialect``, so BigQuery's ``\`project.dataset.table\``` becomes its qualified parts. Function
+    calls follow the rules of :func:`parse_table_function`.
 
     Args:
-        table_input: The table reference text.
+        table_input: The table text.
         explicit_alias: Optional alias supplied separately from the table text.
-        dialect: Dialect used to read the table name.
+        dialect: Dialect used to read the text.
 
     Returns:
-        The parsed table expression.
+        The parsed source expression.
+
+    Raises:
+        SQLBuilderError: If the text is not a table name or function call with an optional alias.
     """
-    resolved_dialect: DialectType | None = _normalize_dialect(dialect) if isinstance(dialect, str) else dialect
-    return _parse_table_reference(table_input, explicit_alias, resolved_dialect)
+    if "(" in table_input:
+        tokens = _read_table_tokens(table_input, dialect, _table_reference_error(table_input))
+        if any(token.token_type == TokenType.L_PAREN for token in tokens):
+            return parse_table_function(table_input, explicit_alias, dialect)
+    return _parse_table_reference(table_input, explicit_alias, dialect)
+
+
+def parse_table_function(
+    function_input: str, explicit_alias: "str | None" = None, dialect: "DialectType | None" = None
+) -> exp.Expr:
+    """Parse a possibly qualified function call used as a table source.
+
+    Arguments may hold literals, placeholders, and column references. A named function still runs
+    with the arguments it is given, so function-call text must come from a trusted source.
+
+    Args:
+        function_input: A single function call with an optional alias.
+        explicit_alias: Optional alias supplied separately from the call text.
+        dialect: Dialect used to read the call.
+
+    Returns:
+        The parsed function source, aliased when an alias is present.
+
+    Raises:
+        SQLBuilderError: If the text is anything other than one function call without subqueries,
+            statements, or comments, or if the alias is not a single identifier.
+    """
+    msg = f"Invalid table function {function_input!r}: expected a single function call with an optional alias."
+    tokens = _read_table_tokens(function_input, dialect, msg)
+    if any(token.token_type in {TokenType.UNKNOWN, TokenType.SEMICOLON} for token in tokens):
+        raise SQLBuilderError(msg)
+    try:
+        statements = sqlglot.parse(f"SELECT * FROM {function_input}", dialect=_table_reader(dialect))
+    except SqlglotError as error:
+        raise SQLBuilderError(msg) from error
+
+    statement = statements[0] if len(statements) == 1 else None
+    if not isinstance(statement, exp.Select) or _set_arguments(statement) != {"expressions", "from_"}:
+        raise SQLBuilderError(msg)
+
+    source = statement.args["from_"].this
+    call = source.this if isinstance(source, exp.Table) else source
+    if (
+        not isinstance(call, exp.Func)
+        or (isinstance(source, exp.Table) and not _set_arguments(source) <= {"this", "db", "catalog", "alias"})
+        or source.find(exp.Query, exp.DDL, exp.DML, exp.Command) is not None
+        or any(node.comments for node in statement.walk())
+    ):
+        raise SQLBuilderError(msg)
+
+    if explicit_alias:
+        if source.args.get("alias"):
+            msg = f"Invalid table alias {explicit_alias!r}: table function {function_input!r} already has an alias."
+            raise SQLBuilderError(msg)
+        return exp.alias_(source, _parse_alias_identifier(explicit_alias))
+    return source  # type: ignore[no-any-return]
 
 
 def _parse_table_reference(
     table_input: str, explicit_alias: "str | None" = None, dialect: "DialectType | None" = None
 ) -> exp.Table:
-    """Parse validated table reference text into an ``exp.Table``.
+    """Parse table reference text into an ``exp.Table``.
+
+    The result is built from parsed identifiers and is never read again as SQL. Names the dialect
+    cannot parse, such as quoting styles it does not define or ``#`` inside a bare name, become
+    identifiers directly.
 
     Args:
         table_input: The table reference text.
         explicit_alias: Optional alias supplied separately from the table text.
-        dialect: Dialect used to read the table name.
+        dialect: Dialect used to read the text.
 
     Returns:
         The table expression carrying its alias as a single identifier.
@@ -205,69 +268,151 @@ def _parse_table_reference(
         SQLBuilderError: If the text is anything other than a table name and optional alias, or
             if an alias appears both in the text and as ``explicit_alias``.
     """
-    match = _TABLE_REFERENCE_RE.fullmatch(table_input.strip())
-    inline_alias: str | None = match.group("alias") if match is not None else None
-    if match is None or _ALIAS_KEYWORD in {match.group("table").lower(), (inline_alias or "").lower()}:
-        msg = f"Invalid table reference {table_input!r}: expected a table name with an optional alias."
-        raise SQLBuilderError(msg)
+    stripped = table_input.strip()
+    inline_alias: str | None = None
+    table: exp.Table | None
+    if _is_simple_identifier(stripped) and stripped.lower() != _ALIAS_KEYWORD:
+        table = _table_from_identifiers([exp.Identifier(this=part, quoted=False) for part in stripped.split(".")])
+    else:
+        error = _table_reference_error(table_input)
+        tokens = _read_table_tokens(stripped, dialect, error)
+        if TokenType.DOT in {tokens[0].token_type, tokens[-1].token_type}:
+            raise SQLBuilderError(error)
+        table_name, inline_alias = _split_inline_alias(stripped, tokens, error)
+        has_separator = any(token.token_type == TokenType.SEMICOLON for token in tokens)
+        table = None if has_separator else _read_table_name(table_name, dialect)
+        if table is None:
+            table, inline_alias = _table_from_text(stripped, error)
 
     if inline_alias is not None and explicit_alias:
         msg = f"Invalid table alias {explicit_alias!r}: table reference {table_input!r} already has an alias."
         raise SQLBuilderError(msg)
-
-    table_name: str = match.group("table")
-    table = _mark_explicit_table_quotes(exp.to_table(table_name, dialect=dialect), table_name)
     alias_text = inline_alias if inline_alias is not None else explicit_alias
     if alias_text:
         table.set("alias", exp.TableAlias(this=_parse_alias_identifier(alias_text)))
     return table
 
 
-def parse_table_function(
-    function_input: str, explicit_alias: "str | None" = None, dialect: "DialectType | None" = None
-) -> exp.Expr:
-    """Parse a set-returning function call used as a lateral join source.
+def _table_reference_error(table_input: str) -> str:
+    return f"Invalid table reference {table_input!r}: expected a table name with an optional alias."
+
+
+def _table_reader(dialect: "DialectType | None") -> Dialect:
+    """Resolve the dialect that reads table text, using the base dialect for unknown names."""
+    resolved: DialectType | None = _normalize_dialect(dialect) if isinstance(dialect, str) else dialect
+    try:
+        return Dialect.get_or_raise(resolved)
+    except ValueError:
+        return Dialect.get_or_raise(None)
+
+
+def _read_table_tokens(text: str, dialect: "DialectType | None", error: str) -> "list[Token]":
+    """Tokenize table text, rejecting text that holds comments.
 
     Args:
-        function_input: A single function call with an optional alias.
-        explicit_alias: Optional alias supplied separately from the call text.
-        dialect: Dialect used to parse the call.
+        text: The table text.
+        dialect: Dialect whose tokenizer reads the text.
+        error: Message raised for rejected text.
 
     Returns:
-        The parsed function source, aliased when an alias is present.
+        The tokens of the text.
 
     Raises:
-        SQLBuilderError: If the text is anything other than one function call without subqueries
-            or comments, or if ``explicit_alias`` is not a single identifier.
+        SQLBuilderError: If the text cannot be tokenized, is empty, or holds a comment.
     """
-    msg = f"Invalid table function {function_input!r}: expected a single function call with an optional alias."
-    resolved_dialect: DialectType | None = _normalize_dialect(dialect) if isinstance(dialect, str) else dialect
     try:
-        statements = sqlglot.parse(f"SELECT * FROM {function_input}", dialect=resolved_dialect)
-    except SqlglotError as error:
-        raise SQLBuilderError(msg) from error
+        tokens = list(_table_reader(dialect).tokenize(text))
+    except SqlglotError as exc:
+        raise SQLBuilderError(error) from exc
+    if not tokens or any(token.comments for token in tokens):
+        raise SQLBuilderError(error)
+    return tokens
 
-    statement = statements[0] if len(statements) == 1 else None
-    if not isinstance(statement, exp.Select) or {key for key, value in statement.args.items() if value} != {
-        "expressions",
-        "from_",
-    }:
-        raise SQLBuilderError(msg)
 
-    source = statement.args["from_"].this
-    call = source.this if isinstance(source, exp.Table) else source
-    extra_args = {key for key, value in source.args.items() if value} - {"this", "alias"}
+def _split_inline_alias(text: str, tokens: "list[Token]", error: str) -> "tuple[str, str | None]":
+    """Split a trailing alias token from table text.
+
+    Args:
+        text: The table text the tokens were read from.
+        tokens: The tokens of the text.
+        error: Message raised when the text ends in a bare ``AS``.
+
+    Returns:
+        The table name text and the alias text, if any.
+
+    Raises:
+        SQLBuilderError: If ``AS`` has no table name or no alias beside it.
+    """
+    last = tokens[-1]
+    if last.token_type == TokenType.ALIAS:
+        raise SQLBuilderError(error)
+    if len(tokens) == 1:
+        return text, None
+
+    previous = tokens[-2]
+    alias_text = text[last.start : last.end + 1]
+    if _ALIAS_RE.fullmatch(alias_text) is None:
+        return text, None
+    if previous.token_type == TokenType.ALIAS:
+        if len(tokens) == ALIAS_PARTS_EXPECTED_COUNT:
+            raise SQLBuilderError(error)
+        return text[: tokens[-3].end + 1], alias_text
+    if previous.token_type != TokenType.DOT and last.start > previous.end + 1:
+        return text[: previous.end + 1], alias_text
+    return text, None
+
+
+def _read_table_name(name: str, dialect: "DialectType | None") -> "exp.Table | None":
+    """Parse a table name, returning ``None`` unless the result is only identifiers."""
+    try:
+        table = sqlglot.parse_one(name, into=exp.Table, dialect=_table_reader(dialect))
+    except SqlglotError:
+        return None
     if (
-        not isinstance(call, exp.Func)
-        or (isinstance(source, exp.Table) and extra_args)
-        or call.find(exp.Query) is not None
-        or any(node.comments for node in statement.walk())
+        not isinstance(table, exp.Table)
+        or not _set_arguments(table) <= {"this", "db", "catalog"}
+        or not all(isinstance(part, exp.Identifier) for part in table.parts)
+        or any(node.comments for node in table.walk())
     ):
-        raise SQLBuilderError(msg)
+        return None
+    for part in table.parts:
+        if part.args.get("quoted"):
+            part.meta[_EXPLICIT_QUOTE_META_KEY] = True
+    return table
 
-    if explicit_alias:
-        return exp.alias_(source, _parse_alias_identifier(explicit_alias))
-    return source  # type: ignore[no-any-return]
+
+def _table_from_text(text: str, error: str) -> "tuple[exp.Table, str | None]":
+    """Build a table directly from text matching the table name grammar.
+
+    Args:
+        text: The table text.
+        error: Message raised when the text does not match.
+
+    Returns:
+        The table expression and the alias text, if any.
+
+    Raises:
+        SQLBuilderError: If the text does not match or has too many name parts.
+    """
+    match = _TABLE_REFERENCE_RE.fullmatch(text)
+    if match is None:
+        raise SQLBuilderError(error)
+    parts = _TABLE_NAME_PART_RE.findall(match.group("table"))
+    if len(parts) > _MAX_DIRECT_TABLE_PARTS:
+        raise SQLBuilderError(error)
+    return _table_from_identifiers([_identifier_from_text(part) for part in parts]), match.group("alias")
+
+
+def _table_from_identifiers(identifiers: "list[exp.Identifier]") -> exp.Table:
+    ordered_parts = identifiers[::-1]
+    table = exp.Table(this=ordered_parts[0])
+    for key, part in zip(("db", "catalog"), ordered_parts[1:], strict=False):
+        table.set(key, part)
+    return table
+
+
+def _set_arguments(expression: exp.Expr) -> "set[str]":
+    return {key for key, value in expression.args.items() if value}
 
 
 def _parse_alias_identifier(alias: str) -> exp.Identifier:
@@ -286,11 +431,16 @@ def _parse_alias_identifier(alias: str) -> exp.Identifier:
     if _ALIAS_RE.fullmatch(stripped) is None or stripped.lower() == _ALIAS_KEYWORD:
         msg = f"Invalid alias {alias!r}: expected a single identifier."
         raise SQLBuilderError(msg)
-    closing = _QUOTE_CLOSERS.get(stripped[0])
+    return _identifier_from_text(stripped)
+
+
+def _identifier_from_text(text: str) -> exp.Identifier:
+    """Build an identifier from a bare word or a quoted span."""
+    closing = _QUOTE_CLOSERS.get(text[0])
     if closing is None:
-        return exp.to_identifier(stripped)
-    identifier = exp.to_identifier(stripped[1:-1].replace(closing * 2, closing), quoted=True)
-    identifier.meta["sqlspec_explicit_table_quote"] = True
+        return exp.to_identifier(text)
+    identifier = exp.to_identifier(text[1:-1].replace(closing * 2, closing), quoted=True)
+    identifier.meta[_EXPLICIT_QUOTE_META_KEY] = True
     return identifier
 
 

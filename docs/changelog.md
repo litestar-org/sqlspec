@@ -11,7 +11,8 @@ important operational fixes.
 
 **Changed:**
 
-* Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass subqueries as builders or expressions; pass join conditions through `on`. DDL table names accept a name only. Lateral joins additionally accept one function call without subqueries.
+* Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names read the text with the builder's dialect and accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass subqueries as builders or expressions; pass join conditions through `on`. DDL and statement target names accept a name only.
+* `from_`, `join`, `Update.from_`, and `Merge.using` also accept a possibly qualified function call. Its arguments may hold literals, placeholders, and column references, but not subqueries, statements, or comments. A named function runs with the arguments it is given, and some engines provide functions that read files or run SQL text, so pass only trusted table text.
 
 **Fixed:**
 
