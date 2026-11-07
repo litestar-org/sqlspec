@@ -11,7 +11,7 @@ from sqlglot import exp
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression, parse_table_expression
-from sqlspec.builder._temporal import register_version_generators
+from sqlspec.builder._temporal import create_temporal_version, register_version_generators
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_and_sql, has_parameter_builder
 
@@ -417,6 +417,6 @@ def _attach_as_of_version(
             target_alias = table_alias
             inner_table.set("alias", None)
 
-    version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
+    version = create_temporal_version(this=as_of_type, expression=exp.convert(as_of))
     inner_table.set("version", version)
     return exp.alias_(inner_table, target_alias) if target_alias else inner_table
