@@ -14,6 +14,7 @@ important operational fixes.
 * Query builder methods keep the whole expression when given `sql.raw()` or a SQLGlot node. `do_update()`, `on_duplicate_key_update()`, `Merge` `WHEN` clauses, `join(on=...)`, `where_in()`, `where_not_in()`, `where_exists()`, and `where_not_exists()` now render values such as `a + 1`, `NULLIF(a, 0)`, `a > 1 AND b < 2`, and `UNION` queries in full, where they rendered only the right operand.
 * `Column`, `Case`, aggregates such as `sql.count()`, other expression wrappers, and subquery builders render as SQL in `Update.set()`, `Insert.values()`, `sql.values()`, conflict updates, `Merge` clauses, `where_eq()` and the other comparison helpers, `where_in()`, and `where_between()`, where they bound as parameter objects that drivers could not accept. Comparison helpers also render SQLGlot nodes, so `where_eq("a", exp.column("b"))` compares two columns.
 * `select()` and `select_only()` render subquery builders and SQLGlot query nodes as parenthesized scalar subqueries and merge their parameters, where they rendered `SELECT SELECT ...` and dropped the parameters.
+* Objects that only expose attributes named `expression`, `sql`, or `parameters`, such as a decoded request model with those fields, now bind as parameters at every builder value site. Only SQLGlot nodes, SQLSpec expression wrappers, `SQL` objects, and query builders render as SQL, so application data cannot become SQL through its field names.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 

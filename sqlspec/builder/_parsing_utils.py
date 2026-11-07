@@ -15,7 +15,7 @@ from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
-from sqlspec.core import ParameterStyle, ParameterValidator, default_nulls, ordered
+from sqlspec.core import SQL, ParameterStyle, ParameterValidator, default_nulls, ordered
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
@@ -344,6 +344,10 @@ def extract_sql_object_expression(
 def resolve_value_expression(value: Any, builder: Any, alias_hint: str) -> exp.Expr | None:
     """Resolve a builder value to the expression it renders as.
 
+    Only SQLGlot nodes, SQLSpec expression wrappers, ``SQL`` objects, and query builders render as SQL.
+    Every other value binds as a parameter, whatever attributes it exposes, so application data cannot
+    become SQL by having fields named like a SQL carrier's.
+
     Args:
         value: Value passed to a builder method.
         builder: Query builder receiving merged parameters.
@@ -354,6 +358,8 @@ def resolve_value_expression(value: Any, builder: Any, alias_hint: str) -> exp.E
     """
     if value is None or isinstance(value, (str, int, float, bytes, bytearray)):
         return None
+    from sqlspec.builder._base import QueryBuilder
+
     expression: exp.Expr
     if isinstance(value, exp.Expr):
         expression = value.copy()
@@ -361,9 +367,9 @@ def resolve_value_expression(value: Any, builder: Any, alias_hint: str) -> exp.E
         expression = value.expression.copy()
     elif isinstance(value, (Column, FunctionColumn, ColumnExpression)):
         expression = value.sqlglot_expression.copy()
-    elif has_parameter_builder(value):
+    elif isinstance(value, QueryBuilder):
         return _scalar_subquery(builder._embed_subquery(value, alias_hint=alias_hint))
-    elif has_expression_and_sql(value) or has_expression_and_parameters(value):
+    elif isinstance(value, SQL):
         expression = extract_sql_object_expression(value, builder=builder)
     else:
         return None
