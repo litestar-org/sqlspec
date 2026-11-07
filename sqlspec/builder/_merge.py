@@ -16,7 +16,12 @@ from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import _coerce_column, _parse_table_reference, resolve_value_expression
+from sqlspec.builder._parsing_utils import (
+    _coerce_column,
+    _parse_table_reference,
+    parse_table_expression,
+    resolve_value_expression,
+)
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers import to_json
@@ -103,7 +108,7 @@ class MergeIntoClauseMixin:
 
         table_expr: exp.Expr
         if isinstance(table, str):
-            table_expr = _parse_table_reference(table, alias)
+            table_expr = _parse_table_reference(table, alias, cast("QueryBuilder", self).dialect)
             cast("QueryBuilder", self)._merge_target_quoted = any(  # pyright: ignore[reportPrivateUsage]
                 part.meta.get("sqlspec_explicit_table_quote") for part in table_expr.parts
             )
@@ -126,7 +131,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         source_expr: exp.Expr
         if isinstance(source, str):
-            source_expr = _parse_table_reference(source, alias)
+            source_expr = parse_table_expression(source, alias, cast("QueryBuilder", self).dialect)
         elif isinstance(source, (dict, list)):
             paren_expr = self._create_dict_source_expression(source, alias)
             if alias and isinstance(paren_expr, exp.Paren):

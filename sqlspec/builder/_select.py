@@ -276,6 +276,9 @@ class SelectClauseMixin:
         """Set the FROM clause and optionally attach temporal versioning.
 
         ``as_of`` copies the resolved table expression, normalizes aliases, and adds an ``exp.Version`` so sqlglot's generator emits dialect-specific time-travel SQL.
+
+        A string ``table`` is a table name or a function call, each with an optional alias. Function calls
+        run as named, so pass only trusted text; arguments cannot hold subqueries, statements, or comments.
         """
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="FROM clause only valid for SELECT.")

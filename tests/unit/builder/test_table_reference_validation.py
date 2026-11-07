@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+import sqlglot
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder, Values, sql
@@ -384,7 +385,7 @@ def test_lateral_join_accepts_one_function_call(text: str, alias: "str | None", 
     ],
 )
 def test_lateral_join_rejects_anything_but_one_function_call(text: str) -> None:
-    with pytest.raises(SQLBuilderError, match="table function"):
+    with pytest.raises(SQLBuilderError, match=r"table (function|reference)"):
         sql.select("*").from_("t").cross_lateral_join(text)
 
 
@@ -437,3 +438,159 @@ def test_quoted_cte_alias_never_reaches_placeholder_names() -> None:
     built = sql.select("a").from_("c").with_cte('"c; x"', source).build(dialect="sqlite")
     assert '"c; x"' in built.sql
     assert ":c_x_a" in built.sql
+
+
+QUOTE_STYLES = ('"{}"', "`{}`", "[{}]")
+QUOTED_BODIES = (
+    ".json_each((SELECT json_quote(pw) FROM secrets)) --",
+    ".json_each((SELECT json_quote(pw) FROM secrets)) /*",
+    ".json_each((SELECT json_quote(pw) FROM secrets)) #",
+    "\njson_each((SELECT json_quote(pw) FROM secrets)) --",
+    "\nEXTERNAL_QUERY('c', (SELECT 1)) --",
+    "x\n; DROP TABLE z --",
+    "x; DROP TABLE z /*",
+    "# \nf((SELECT 1))",
+    "-- \nf((SELECT 1))",
+    "/* */ f((SELECT 1))",
+    "f((SELECT 1))",
+)
+PREFIXES = ("", "#.", "--.", "/*.", "a.", "a ")
+QUOTE_PAYLOADS = tuple(
+    prefix + style.format(body) for prefix in PREFIXES for style in QUOTE_STYLES for body in QUOTED_BODIES
+)
+BARE_PAYLOADS = (
+    "#\nf((SELECT 1))",
+    "--\nf((SELECT 1))",
+    "/* */ f((SELECT 1))",
+    "a.f((SELECT 1))",
+    "a /*\n*/ b",
+    "a #\n, secrets",
+    "a --\n, secrets",
+)
+PAYLOAD_DIALECTS = (None, *DIALECTS, "bigquery", "snowflake", "spark", "clickhouse")
+
+
+def _update_from_literal(table: str, alias: "str | None" = None) -> QueryBuilder:
+    return sql.update("base").set(a=exp.Literal.number(1)).from_(table, alias=alias)
+
+
+PAYLOAD_PATHS = (_select_from, _select_join, _update_from_literal, _merge_using)
+
+
+@pytest.mark.parametrize("dialect", PAYLOAD_DIALECTS)
+@pytest.mark.parametrize("builder_has_dialect", [True, False], ids=["builder_dialect", "default_builder"])
+@pytest.mark.parametrize("path", PAYLOAD_PATHS, ids=lambda path: path.__name__)
+def test_payloads_never_render_a_call_or_a_second_statement(
+    dialect: "str | None", builder_has_dialect: bool, path: Callable[..., QueryBuilder]
+) -> None:
+    for payload in (*QUOTE_PAYLOADS, *BARE_PAYLOADS):
+        try:
+            builder = _rebuild_with_dialect(path, payload, dialect) if builder_has_dialect else path(payload)
+            rendered = builder.build(dialect=dialect).sql
+        except SQLBuilderError:
+            continue
+        statements = sqlglot.parse(rendered, dialect=dialect)
+        assert len(statements) == 1, (payload, rendered)
+        statement = statements[0]
+        assert statement is not None
+        assert statement.find(exp.Func) is None, (payload, rendered)
+        assert len(list(statement.find_all(exp.Query))) <= 1, (payload, rendered)
+        assert not any(node.comments for node in statement.walk()), (payload, rendered)
+
+
+def _rebuild_with_dialect(path: Callable[..., QueryBuilder], payload: str, dialect: "str | None") -> QueryBuilder:
+    if path is _select_from:
+        return sql.select("*", dialect=dialect).from_(payload)
+    if path is _select_join:
+        return sql.select("*", dialect=dialect).from_("base").join(payload, "base.a = base.b")
+    if path is _update_from_literal:
+        return sql.update("base", dialect=dialect).set(a=exp.Literal.number(1)).from_(payload)
+    return sql.merge("base", dialect=dialect).using(payload).on("1 = 1").when_matched_then_delete()
+
+
+@pytest.mark.parametrize(
+    ("dialect", "text"),
+    [
+        (None, "`.json_each((SELECT json_quote(pw) FROM secrets)) --`"),
+        ("bigquery", "#.\"\nEXTERNAL_QUERY('c', (SELECT 1)) --\""),
+        ("mysql", '#."\nf((SELECT 1)) --"'),
+    ],
+)
+def test_text_read_as_comment_or_call_by_its_dialect_raises(dialect: "str | None", text: str) -> None:
+    with pytest.raises(SQLBuilderError, match="table reference"):
+        sql.select("*", dialect=dialect).from_(text)
+
+
+@pytest.mark.parametrize(
+    ("dialect", "text", "expected"),
+    [
+        (None, "json_each(?)", 'SELECT * FROM JSON_EACH(?) AS "_0"'),
+        (None, "generate_series(1,3) g", 'SELECT * FROM GENERATE_SERIES(1, 3) AS "g"'),
+        ("duckdb", "read_csv('a.csv')", "SELECT * FROM READ_CSV('a.csv') AS \"_0\""),
+        ("duckdb", "range(3) r", 'SELECT * FROM RANGE(0, 3) AS "r"'),
+        ("duckdb", "'a.parquet'", 'SELECT * FROM "a.parquet" AS "a.parquet"'),
+        ("duckdb", "'a.parquet' p", 'SELECT * FROM "a.parquet" AS "p"'),
+        ("bigquery", "p.d.t_*", "SELECT * FROM `p`.`d`.`t_*` AS `t_*`"),
+        ("bigquery", "`p.d.t` x", "SELECT * FROM `p.d.t` AS `x`"),
+        (None, "[dbo].[t] x", 'SELECT * FROM "dbo"."t" AS "x"'),
+        (None, "`my t` x", 'SELECT * FROM "my t" AS "x"'),
+        (None, "a-b.c", 'SELECT * FROM "a-b"."c" AS "c"'),
+        (None, "a.b.c.d", 'SELECT * FROM "a"."b"."c"."d" AS "d"'),
+        (None, "db..t", 'SELECT * FROM "db".."t" AS "t"'),
+    ],
+)
+def test_select_from_keeps_supported_table_text(dialect: "str | None", text: str, expected: str) -> None:
+    built = sql.select("*", dialect=dialect).from_(text).build()
+    assert " ".join(built.sql.split()) == expected
+
+
+def test_text_quoted_natively_by_its_dialect_stays_one_identifier() -> None:
+    text = "`.json_each((SELECT json_quote(pw) FROM secrets)) --`"
+    built = sql.select("*", dialect="sqlite").from_(text).build()
+    name = '".json_each((select json_quote(pw) from secrets)) --"'
+    assert " ".join(built.sql.split()) == f"SELECT * FROM {name} AS {name}"
+
+
+def test_join_accepts_function_call_text() -> None:
+    query = sql.select("*").from_("t").join("generate_series(1,3) g", "t.a = g.b")
+    assert " ".join(query.build().sql.split()) == (
+        'SELECT * FROM "t" AS "t" JOIN GENERATE_SERIES(1, 3) AS "g" ON "g"."b" = "t"."a"'
+    )
+
+
+def test_lateral_join_keeps_function_schema() -> None:
+    query = sql.select("*").from_("t").lateral_join("myschema.f(t.id) x")
+    assert " ".join(query.build().sql.split()) == (
+        'SELECT * FROM "t" AS "t" CROSS JOIN LATERAL "myschema".F("t"."id") AS "x"'
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "f((SELECT pw FROM secrets))",
+        "a.f(1, (SELECT pw FROM secrets)) x",
+        "f(1 IN (SELECT pw FROM secrets))",
+        "f(EXISTS(SELECT 1))",
+        "f(1); DROP TABLE z",
+        "f(1) -- trailing",
+        "f(/* inner */ 1)",
+        "f(1) x, secrets",
+        "f(1) UNION SELECT pw FROM secrets",
+    ],
+)
+@pytest.mark.parametrize("path", [_select_from, _select_join, _update_from, _merge_using], ids=lambda p: p.__name__)
+def test_function_text_rejects_subqueries_statements_and_comments(path: Callable[..., QueryBuilder], text: str) -> None:
+    with pytest.raises(SQLBuilderError, match=r"table (function|reference)"):
+        path(text)
+
+
+def test_function_text_rejects_second_alias() -> None:
+    with pytest.raises(SQLBuilderError, match="alias"):
+        sql.select("*").from_("f(1) x", alias="y")
+
+
+@pytest.mark.parametrize("path", [_delete_from, _insert_into, _update_table, _merge_into], ids=lambda p: p.__name__)
+def test_statement_targets_reject_function_text(path: Callable[..., QueryBuilder]) -> None:
+    with pytest.raises(SQLBuilderError, match="table reference"):
+        path("f(1)")
