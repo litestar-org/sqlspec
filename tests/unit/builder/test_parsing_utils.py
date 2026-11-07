@@ -422,8 +422,10 @@ def test_resolve_value_expression_parenthesizes_set_operation_as_subquery() -> N
     union = parsing_utils.resolve_value_expression(exp.maybe_parse("SELECT 1 UNION SELECT 2"), builder, "a")
     select = parsing_utils.resolve_value_expression(exp.select("x"), builder, "a")
 
-    assert isinstance(union, exp.Subquery)
-    assert isinstance(select, exp.Paren)
+    assert union is not None
+    assert select is not None
+    assert union.sql() == "(SELECT 1 UNION SELECT 2)"
+    assert select.sql() == "(SELECT x)"
 
 
 def test_parse_column_expression_without_builder_returns_same_node() -> None:

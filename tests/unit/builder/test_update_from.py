@@ -184,8 +184,12 @@ def test_update_set_renders_expression_values(value: Any, postgres: str, mysql: 
     """Wrappers render as SQL in SET and bind nothing."""
     statement = sql.update("t", dialect="postgres").set(a=value).build()
 
+    mysql_statement = sql.update("t", dialect="mysql").set(a=value).build()
+
     assert " ".join(statement.sql.split()) == f'UPDATE "t" SET "a" = {postgres}'
+    assert " ".join(mysql_statement.sql.split()) == f"UPDATE `t` SET `a` = {mysql}"
     assert statement.parameters == {}
+    assert mysql_statement.parameters == {}
 
 
 def test_update_set_renders_set_operation_node() -> None:

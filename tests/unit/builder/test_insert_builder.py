@@ -586,8 +586,10 @@ def _query() -> Any:
 def test_insert_values_renders_expression_values(value: Any, postgres: str, mysql: str) -> None:
     """Positional INSERT values render wrappers as SQL."""
     statement = sql.insert("t", dialect="postgres").columns("a").values(value).build()
+    mysql_statement = sql.insert("t", dialect="mysql").columns("a").values(value).build()
 
     assert _normalized_sql(statement) == f'INSERT INTO "t" ( "a" ) VALUES ({postgres})'
+    assert _normalized_sql(mysql_statement) == f"INSERT INTO `t` ( `a` ) VALUES ({mysql})"
     assert statement.parameters == {}
 
 
@@ -595,8 +597,10 @@ def test_insert_values_renders_expression_values(value: Any, postgres: str, mysq
 def test_insert_keyword_values_renders_expression_values(value: Any, postgres: str, mysql: str) -> None:
     """Keyword INSERT values render wrappers as SQL."""
     statement = sql.insert("t", dialect="postgres").values(a=value).build()
+    mysql_statement = sql.insert("t", dialect="mysql").values(a=value).build()
 
     assert _normalized_sql(statement) == f'INSERT INTO "t" ( "a" ) VALUES ({postgres})'
+    assert _normalized_sql(mysql_statement) == f"INSERT INTO `t` ( `a` ) VALUES ({mysql})"
     assert statement.parameters == {}
 
 
@@ -604,8 +608,15 @@ def test_insert_keyword_values_renders_expression_values(value: Any, postgres: s
 def test_conflict_update_renders_expression_values(value: Any, postgres: str, mysql: str) -> None:
     """Conflict updates render wrappers as SQL."""
     statement = sql.insert("t", dialect="postgres").columns("id").values(1).on_conflict("id").do_update(a=value).build()
+    mysql_statement = (
+        sql.insert("t", dialect="mysql").columns("id").values(1).on_conflict("id").do_update(a=value).build()
+    )
 
     assert _normalized_sql(statement) == f'{CONFLICT_PREFIX_POSTGRES}"a" = {postgres}'
+    assert (
+        _normalized_sql(mysql_statement)
+        == f"INSERT INTO `t` ( `id` ) VALUES (:id) ON DUPLICATE KEY UPDATE `a` = {mysql}"
+    )
     assert statement.parameters == {"id": 1}
 
 
