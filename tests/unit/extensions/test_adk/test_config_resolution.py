@@ -1,15 +1,18 @@
 """Tests for ADK flat-config resolution."""
 
+from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
 
+from sqlspec.adapters.oracledb import OracleSyncConfig
+from sqlspec.adapters.oracledb.adk.store import OracleSyncADKMemoryStore, OracleSyncADKStore
 from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.spanner.adk.store import SpannerSyncADKMemoryStore, SpannerSyncADKStore
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.config import ADKConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.extensions.adk import _config_utils
 from sqlspec.extensions.adk._config_utils import (
     _adk_artifact_store_config,
@@ -28,6 +31,83 @@ class _Config:
 
     def __init__(self, adk_config: dict[str, Any]) -> None:
         self.extension_config = {"adk": adk_config}
+
+
+class _DeclaringADKStore(SqliteADKStore):
+    extension_config_options = frozenset({"session_opt"})
+
+
+class _DeclaringADKMemoryStore(SqliteADKMemoryStore):
+    extension_config_options = frozenset({"memory_opt"})
+
+
+class _ExplicitBuiltinConfig(SqliteConfig):
+    adk_store_class = SqliteADKStore
+    adk_memory_store_class = SqliteADKMemoryStore
+
+
+class _DeclaringBuiltinConfig(SqliteConfig):
+    adk_store_class = _DeclaringADKStore
+    adk_memory_store_class = _DeclaringADKMemoryStore
+
+
+class _ExternalConfig(SqliteConfig):
+    adapter_name = "third_party"
+    adk_store_class = _DeclaringADKStore
+    adk_memory_store_class = _DeclaringADKMemoryStore
+
+
+class _ExternalNoStoreConfig(SqliteConfig):
+    adapter_name = "third_party"
+
+
+class _PlainSubclassConfig(SqliteConfig):
+    pass
+
+
+class _ExplicitOracleConfig(OracleSyncConfig):
+    adk_store_class = OracleSyncADKStore
+    adk_memory_store_class = OracleSyncADKMemoryStore
+
+
+class _BareExternalConfig(_Config):
+    adapter_name = "third_party"
+
+
+class _BareExternalSessionStoreConfig(_Config):
+    adapter_name = "third_party"
+    adk_store_class = _DeclaringADKStore
+
+
+class _BareSqliteStoreConfig(_Config):
+    adk_store_class = SqliteADKStore
+
+
+class Duck:
+    pass
+
+
+Duck.__module__ = "myapp"
+
+
+class _BareDuckStoreConfig(_Config):
+    adk_store_class = Duck
+
+
+class _InstanceStoreConfig(_Config):
+    adk_store_class: "type[Any] | None" = None
+
+    def __init__(self, adk_config: dict[str, Any], store_class: "type[Any]") -> None:
+        super().__init__(adk_config)
+        self.adk_store_class = store_class
+
+
+def _sqlite_config(config_class: type[SqliteConfig], adk_settings: dict[str, Any]) -> SqliteConfig:
+    return config_class(connection_config={"database": ":memory:"}, extension_config={"adk": adk_settings})
+
+
+def _oracle_config(adk_settings: dict[str, Any]) -> OracleSyncConfig:
+    return _ExplicitOracleConfig(connection_config={"dsn": "x"}, extension_config={"adk": adk_settings})
 
 
 def test_apply_owner_id_adds_only_configured_values() -> None:
@@ -223,3 +303,114 @@ def test_adk_store_resolution_supports_external_subclass_and_explicit_classvars(
     third_party_config = CustomThirdPartyConfig()
     assert _config_utils._adk_adapter_store_class(third_party_config, "ADKStore") is SqliteADKStore
     assert _config_utils._adk_memory_migration_store_class(third_party_config) is SqliteADKMemoryStore
+
+
+@pytest.mark.parametrize("config_class", [_DeclaringBuiltinConfig, _ExternalConfig])
+def test_adk_declared_store_options_union_across_config_paths(config_class: type[SqliteConfig]) -> None:
+    """Options from both explicit stores are accepted by session, memory, and artifact config paths."""
+    config = _sqlite_config(
+        config_class, {"session_opt": 1, "memory_opt": 2, "session_table": "s_t", "memory_table": "m_t"}
+    )
+    artifact_config = _sqlite_config(config_class, {"session_opt": 1, "memory_opt": 2, "artifact_table": "a_t"})
+
+    assert _DeclaringADKStore(config).session_table == "s_t"
+    assert _DeclaringADKMemoryStore(config).memory_table == "m_t"
+    assert _adk_artifact_store_config(artifact_config) == {"artifact_table": "a_t"}
+
+
+@pytest.mark.parametrize(
+    ("build", "match"),
+    [
+        (lambda: _sqlite_config(_ExternalConfig, {"unknown_option": 1}), "for third_party: 'unknown_option'"),
+        (lambda: _sqlite_config(_ExternalConfig, {"include_memory_migration": False}), "include_memory_migration"),
+        (lambda: _sqlite_config(_ExternalConfig, {"fts_detail": "full"}), "fts_detail"),
+        (lambda: _sqlite_config(_ExternalConfig, {"vector_dimensions": 512}), "vector_dimensions"),
+        (lambda: _adk_session_store_config(_BareExternalSessionStoreConfig({"memory_opt": 1})), "memory_opt"),
+    ],
+    ids=["typo", "retired-key", "builtin-adapter-key", "base-memory-key", "session-store-only"],
+)
+def test_adk_external_adapter_explicit_stores_reject_undeclared_keys(build: Callable[[], object], match: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match=match):
+        build()
+
+
+def test_adk_external_adapter_explicit_stores_accept_shared_keys() -> None:
+    config = _sqlite_config(
+        _ExternalConfig, {"session_table": "s_t", "events_table": "e_t", "memory_table": "m_t", "enable_memory": False}
+    )
+
+    session_settings = _adk_session_store_config(config)
+    memory_settings = _adk_memory_store_config(config)
+
+    assert session_settings["session_table"] == "s_t"
+    assert session_settings["events_table"] == "e_t"
+    assert memory_settings["memory_table"] == "m_t"
+    assert memory_settings["enable_memory"] is False
+
+
+@pytest.mark.parametrize(
+    ("build", "expected"),
+    [
+        (lambda: _sqlite_config(_ExplicitBuiltinConfig, {"fts_detail": "full"}), {"fts_detail": "full"}),
+        (lambda: _oracle_config({"in_memory": True}), {"in_memory": True}),
+        (
+            lambda: _sqlite_config(_DeclaringBuiltinConfig, {"session_opt": 1, "fts_detail": "full"}),
+            {"session_opt": 1, "fts_detail": "full"},
+        ),
+    ],
+    ids=["sqlite-adapter-key", "oracle-adapter-key", "declared-and-adapter-key"],
+)
+def test_adk_builtin_explicit_stores_accept_adapter_and_declared_keys(
+    build: Callable[[], Any], expected: dict[str, Any]
+) -> None:
+    assert build().extension_config["adk"] == expected
+
+
+@pytest.mark.parametrize(
+    ("build", "match"),
+    [
+        (lambda: _sqlite_config(_ExplicitBuiltinConfig, {"custom_opt": 1}), "for sqlite: 'custom_opt'"),
+        (lambda: _oracle_config({"custom_opt": 1}), "custom_opt"),
+        (lambda: _sqlite_config(_PlainSubclassConfig, {"custom_opt": 1}), "custom_opt"),
+        (lambda: _sqlite_config(_PlainSubclassConfig, {"include_memory_migration": False}), "include_memory_migration"),
+        (lambda: _sqlite_config(_PlainSubclassConfig, {"in_memory": True}), "in_memory"),
+    ],
+    ids=["explicit-builtin", "explicit-oracle", "plain-subclass", "plain-retired-key", "oracle-key-on-sqlite"],
+)
+def test_adk_strict_configs_reject_undeclared_keys(build: Callable[[], object], match: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match=match):
+        build()
+
+
+def test_adk_external_adapter_without_explicit_store_keeps_skip() -> None:
+    """Store resolution, not option validation, fails for an enabled feature with no store."""
+    with pytest.raises(SQLSpecError, match="Failed to import ADK store class") as excinfo:
+        _sqlite_config(_ExternalNoStoreConfig, {"unknown_option": 1})
+    assert not isinstance(excinfo.value, ImproperConfigurationError)
+
+    disabled = _sqlite_config(
+        _ExternalNoStoreConfig, {"unknown_option": 1, "enable_sessions": False, "enable_memory": False}
+    )
+    assert cast("dict[str, Any]", disabled.extension_config["adk"])["unknown_option"] == 1
+
+    assert _adk_session_store_config(_BareExternalConfig({"unknown_option": 1}))["session_table"] == "adk_session"
+
+
+@pytest.mark.parametrize(
+    ("config_class", "match"),
+    [(_BareSqliteStoreConfig, "for sqlite: 'unknown_option'"), (_BareDuckStoreConfig, "for Duck: 'unknown_option'")],
+    ids=["builtin-store", "duck-store"],
+)
+def test_adk_explicit_store_without_adapter_name_labels_error(config_class: type[_Config], match: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match=match):
+        _adk_session_store_config(config_class({"unknown_option": 1}))
+
+
+def test_adk_instance_store_attribute_supplies_declared_options() -> None:
+    """A store class set on the instance contributes options like a class attribute."""
+    accepted = _InstanceStoreConfig({"session_opt": 1}, _DeclaringADKStore)
+    rejected = _InstanceStoreConfig({"unknown_option": 1}, _DeclaringADKStore)
+
+    assert _adk_session_store_config(accepted)["session_table"] == "adk_session"
+    with pytest.raises(ImproperConfigurationError, match="unknown_option"):
+        _adk_session_store_config(rejected)

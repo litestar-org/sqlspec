@@ -34,7 +34,11 @@ ADK_RESET_TABLE_PROFILES: Final = (
 
 
 class _ADKStoreCommon(Generic[ConfigT]):
-    """Shared non-async ADK store state and helpers."""
+    """Shared non-async ADK store state and helpers.
+
+    ``extension_config_options`` names extra ``extension_config["adk"]`` keys that a store accepts when set as
+    ``adk_store_class`` or ``adk_memory_store_class``.
+    """
 
     __slots__ = (
         "_app_state_table",
@@ -49,6 +53,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
 
     _max_table_name_parts: ClassVar[int] = 1
     adapter_name: ClassVar[str | None] = None
+    extension_config_options: ClassVar[frozenset[str]] = frozenset()
 
     def __init__(self, config: ConfigT) -> None:
         """Initialize the ADK store.
