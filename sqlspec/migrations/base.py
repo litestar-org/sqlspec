@@ -563,22 +563,38 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         """Return whether the bound config opts into schema-aware migrations."""
         return bool(getattr(self.config, "supports_migration_schemas", False))
 
-    def _require_schema_support(self, default_schema: str) -> None:
-        """Raise when ``default_schema`` is configured for an unsupported adapter."""
-        if self._config_supports_schemas():
-            return
-        adapter = type(self.config).__name__
-        msg = (
-            f"{adapter} does not support migration default schemas; "
-            f"remove default_schema={default_schema!r} from migration_config."
-        )
-        raise MigrationError(msg)
-
     def _resolve_tracker_schema(self) -> str | None:
-        """Return tracker schema only for adapters that support schema-qualified migration tables."""
-        if not self._config_supports_schemas():
-            return None
-        return resolve_tracker_schema(self._get_migration_config())
+        """Return the tracker schema, rejecting schema options the adapter cannot honor.
+
+        Returns:
+            The tracker schema, or None when no schema applies.
+
+        Raises:
+            MigrationError: The adapter lacks schema support and a schema option is configured.
+        """
+        migration_config = self._get_migration_config()
+        if self._config_supports_schemas():
+            return resolve_tracker_schema(migration_config)
+        self._reject_schema_options(migration_config)
+        return None
+
+    def _reject_schema_options(self, migration_config: "dict[str, Any]") -> None:
+        adapter = type(self.config).__name__
+        default_schema = resolve_default_schema(migration_config)
+        if default_schema is not None:
+            msg = (
+                f"{adapter} does not support migration default schemas; "
+                f"remove default_schema={default_schema!r} from migration_config."
+            )
+            raise MigrationError(msg)
+        version_table_schema = migration_config.get("version_table_schema")
+        if isinstance(version_table_schema, str) and version_table_schema:
+            msg = (
+                f"{adapter} does not support migration version table schemas; "
+                f"remove version_table_schema={version_table_schema!r} from migration_config "
+                "or qualify version_table_name with the schema."
+            )
+            raise MigrationError(msg)
 
     def _create_tracker(self) -> Any:
         """Create the configured migration tracker without breaking legacy constructors."""

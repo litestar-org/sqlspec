@@ -484,17 +484,35 @@ class BaseMigrationRunner:
         return context_to_use
 
     def _resolve_migration_schema(self, migration: "LoadedMigrationMetadata") -> str | None:
-        """Return the migration's schema directive when present, otherwise the configured default."""
+        """Return the migration's schema directive when present, otherwise the configured default.
+
+        Args:
+            migration: Migration metadata.
+
+        Returns:
+            The schema to apply, or None when no schema applies.
+
+        Raises:
+            MigrationError: The adapter lacks schema support and a directive or default schema is set.
+        """
         config = self.context.config if self.context else None
+        supports_schemas = bool(getattr(config, "supports_migration_schemas", False))
+        adapter = type(config).__name__ if config else "Adapter"
         directive_schema = migration.get("schema")
-        if directive_schema is None:
-            migration_config = cast("dict[str, Any] | None", getattr(config, "migration_config", None))
-            return _resolve_default_schema(migration_config)
-        if not getattr(config, "supports_migration_schemas", False):
-            adapter = type(config).__name__ if config else "Adapter"
-            msg = f"{adapter} does not support migration schema directives; schema={directive_schema!r}"
+        if directive_schema is not None:
+            if not supports_schemas:
+                msg = f"{adapter} does not support migration schema directives; schema={directive_schema!r}"
+                raise MigrationError(msg)
+            return directive_schema
+        migration_config = cast("dict[str, Any] | None", getattr(config, "migration_config", None))
+        default_schema = _resolve_default_schema(migration_config)
+        if default_schema is not None and not supports_schemas:
+            msg = (
+                f"{adapter} does not support migration default schemas; "
+                f"remove default_schema={default_schema!r} from migration_config."
+            )
             raise MigrationError(msg)
-        return directive_schema
+        return default_schema
 
     def _resolve_use_transaction(self, migration: "LoadedMigrationMetadata", use_transaction: "bool | None") -> bool:
         """Resolve the effective transaction flag for a migration."""

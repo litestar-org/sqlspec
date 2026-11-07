@@ -1875,7 +1875,6 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         default_schema = self._resolve_default_schema()
         if default_schema is None:
             return
-        self._require_schema_support(default_schema)
         if not driver.has_schema(default_schema):
             msg = f"Configured schema '{default_schema}' does not exist"
             raise MigrationError(msg)
@@ -2905,7 +2904,6 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         default_schema = self._resolve_default_schema()
         if default_schema is None:
             return
-        self._require_schema_support(default_schema)
         if not await driver.has_schema(default_schema):
             msg = f"Configured schema '{default_schema}' does not exist"
             raise MigrationError(msg)

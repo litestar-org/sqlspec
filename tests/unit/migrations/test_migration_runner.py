@@ -1960,6 +1960,37 @@ def test_failed_recovery_step_logs_warning(tmp_path: Path, caplog: pytest.LogCap
     assert [record.getMessage() for record in caplog.records] == ["migration.recovery.failed"]
 
 
+def _unsupported_schema_context() -> MigrationContext:
+    config = _RunnerConfig({"default_schema": "app_schema"})
+    config.supports_migration_schemas = False
+    return MigrationContext(config=config)
+
+
+def test_sync_execute_upgrade_rejects_default_schema_when_adapter_lacks_support(tmp_path: Path) -> None:
+    """A configured default schema raises before any driver call on an unsupported adapter."""
+    runner = SyncMigrationRunner(tmp_path, {}, _unsupported_schema_context(), {})
+    driver = Mock()
+
+    with pytest.raises(MigrationError, match="does not support migration default schemas"):
+        runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=True)
+
+    driver.begin.assert_not_called()
+    driver.set_migration_session_schema.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_async_execute_upgrade_rejects_default_schema_when_adapter_lacks_support(tmp_path: Path) -> None:
+    """A configured default schema raises before any async driver call on an unsupported adapter."""
+    runner = AsyncMigrationRunner(tmp_path, {}, _unsupported_schema_context(), {})
+    driver = AsyncMock()
+
+    with pytest.raises(MigrationError, match="does not support migration default schemas"):
+        await runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=True)
+
+    driver.begin.assert_not_called()
+    driver.set_migration_session_schema.assert_not_called()
+
+
 @pytest.mark.anyio
 async def test_async_execute_downgrade_prefers_migration_schema_directive(tmp_path: Path) -> None:
     """Async downgrade prioritizes migration schema directive over default schema."""
