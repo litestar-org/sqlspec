@@ -1,7 +1,8 @@
 """Reusable mixins for INSERT/UPDATE/DELETE builders."""
 
+import re
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Final, Self, cast
 
 import sqlglot
 from mypy_extensions import trait
@@ -41,6 +42,8 @@ __all__ = (
 
 ARG_PAIR_COUNT = 2
 SINGLE_VALUE_COUNT = 1
+_RETURNING_WORD_PART = r"[A-Za-z0-9_$]*[A-Za-z_$][A-Za-z0-9_$]*"
+_RETURNING_WORD_RE: Final["re.Pattern[str]"] = re.compile(rf"{_RETURNING_WORD_PART}(?:\.{_RETURNING_WORD_PART}){{0,2}}")
 
 
 @trait
@@ -508,7 +511,8 @@ class ReturningClauseMixin:
 def _parse_returning_column(column: str, dialect: "DialectType | None") -> exp.Expr:
     """Parse one ``.returning()`` string into a single projection.
 
-    Bare and dotted identifiers stay columns, including keyword spellings such as ``user``.
+    Bare and dotted words stay columns, including keyword spellings such as ``user`` and words
+    starting with a digit such as ``2fa``. A word of only digits is a number.
 
     Args:
         column: Projection text.
@@ -523,6 +527,8 @@ def _parse_returning_column(column: str, dialect: "DialectType | None") -> exp.E
     stripped = column.strip()
     if _SIMPLE_IDENTIFIER_RE.fullmatch(stripped):
         return _simple_column_expression(stripped)
+    if _RETURNING_WORD_RE.fullmatch(stripped):
+        return exp.column(*reversed(stripped.split(".")))
     msg = f"Invalid RETURNING expression {column!r}: pass one column or expression per argument."
     try:
         statements = sqlglot.parse(f"SELECT {stripped}", dialect=_normalize_dialect(dialect))

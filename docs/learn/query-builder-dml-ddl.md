@@ -59,7 +59,7 @@ copy_stmt = sql.copy(
 # SQL: COPY events FROM '/tmp/events.csv' WITH (FORMAT 'csv', HEADER TRUE)
 ```
 
-Each `.returning()` string is one SQL projection, such as `"id"`, `"*"`, `"t.id"`, or `"total + 1 AS next_total"`, parsed with the builder's dialect. Treat these strings as trusted SQL text, as with `.select()`. Spaces and hyphens follow SQL rules, so `"first name"` is `first AS name` and `"first-name"` is `first - name`. Pass `exp.column("first-name")` to name a column with those characters. A string holding several projections or statements raises `SQLBuilderError`, so pass one projection per argument.
+Each `.returning()` string is one SQL projection, such as `"id"`, `"*"`, `"t.id"`, or `"total + 1 AS next_total"`, parsed with the builder's dialect. Treat these strings as trusted SQL text, as with `.select()`. Spaces and hyphens follow SQL rules, so `"first name"` is `first AS name` and `"first-name"` is `first - name`. A single word stays one column, including one starting with a digit such as `"2fa"`, and digits alone such as `"1"` are a number. Pass `exp.column("first-name")` to name a column with those characters. A string holding several projections or statements raises `SQLBuilderError`, so pass one projection per argument.
 
 ## Schema Model Binding
 

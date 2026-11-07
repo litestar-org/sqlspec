@@ -74,6 +74,12 @@ def test_update_with_cte_renders_alias_before_query() -> None:
         pytest.param((exp.column("first-name"),), '"first-name"', id="explicit-hyphen-column"),
         pytest.param((exp.column("a b"),), '"a b"', id="explicit-space-column"),
         pytest.param(("user", "default", "order"), '"user", "default", "order"', id="keywords"),
+        pytest.param(("2fa",), '"2fa"', id="word-starting-with-digit"),
+        pytest.param(("t.2fa",), '"t"."2fa"', id="qualified-word-starting-with-digit"),
+        pytest.param(("1e5",), '"1e5"', id="exponent-spelling-is-a-word"),
+        pytest.param(("0x1F",), '"0x1F"', id="hex-spelling-is-a-word"),
+        pytest.param(("1",), "1", id="integer-literal"),
+        pytest.param(("1.5",), "1.5", id="decimal-literal"),
         pytest.param((" a ",), '"a"', id="whitespace"),
         pytest.param(("(SELECT 1) AS m",), '(\n  SELECT\n    1 AS "1"\n) AS "m"', id="subquery"),
         pytest.param((Column("a"),), '"a"', id="column-object"),
@@ -99,6 +105,17 @@ def test_returning_string_projections(columns: "tuple[Any, ...]", expected: str)
 )
 def test_returning_strings_render_per_dialect(dialect: str, expected: str) -> None:
     assert sql.update("t").set(a=1).returning("a + 1 AS x", "t.a").build(dialect=dialect).sql == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        pytest.param("oracle", 'UPDATE t SET a = :a\nRETURNING "2fa"', id="oracle"),
+        pytest.param("tsql", "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[2fa]", id="tsql"),
+    ],
+)
+def test_returning_word_starting_with_digit_stays_quoted_column(dialect: str, expected: str) -> None:
+    assert sql.update("t").set(a=1).returning("2fa").build(dialect=dialect).sql == expected
 
 
 def test_returning_parses_with_builder_dialect() -> None:
