@@ -488,6 +488,10 @@ def _parse_aliased_table(table: str, dialect: "DialectType | None") -> exp.Table
         return None
     if any(value for key, value in parsed.args.items() if key not in {"this", "db", "catalog", "alias"}):
         return None
+    if not all(
+        isinstance(part, exp.Identifier) for part in (parsed.args.get("db"), parsed.args.get("catalog")) if part
+    ):
+        return None
     alias_node = parsed.args.get("alias")
     if not isinstance(alias_node, exp.TableAlias) or alias_node.args.get("columns"):
         return None

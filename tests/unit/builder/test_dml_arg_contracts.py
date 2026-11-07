@@ -312,6 +312,22 @@ def test_dml_table_string_without_a_plain_alias_stays_one_identifier(target: str
     assert sql.update(target).set(a=1).build(dialect="postgres").sql == expected
 
 
+@pytest.mark.parametrize(
+    ("target", "quoted"),
+    [
+        pytest.param("f(1).t x", '"f(1)"."t x"', id="function"),
+        pytest.param("f((SELECT 1)).t x", '"f((SELECT 1))"."t x"', id="function-with-subquery"),
+        pytest.param("f(1).s.t x", '"f(1)"."s"."t x"', id="function-as-catalog"),
+    ],
+)
+def test_dml_table_string_with_a_computed_name_part_renders_only_identifiers(target: str, quoted: str) -> None:
+    assert sql.update(target).set(a=1).build(dialect="postgres").sql == f'UPDATE {quoted} SET "a" = %(a)s'
+    assert sql.delete(target).build(dialect="postgres").sql == f"DELETE FROM {quoted}"
+    from_sql = sql.update("z").set(a=1).from_(target).build(dialect="postgres").sql
+    assert "F(" not in from_sql
+    assert quoted in from_sql
+
+
 def test_dml_table_string_alias_parses_with_builder_dialect() -> None:
     built = sql.update("[my t] AS u", dialect="tsql").set(a=1).build(dialect="postgres")
     assert built.sql == 'UPDATE "my t" AS "u" SET "a" = %(a)s'
