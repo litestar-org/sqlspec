@@ -229,7 +229,9 @@ from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore, SqliteADKSto
 
 
 class WarehouseADKStore(SqliteADKStore):
-    extension_config_options: ClassVar[frozenset[str]] = frozenset({"warehouse_partition"})
+    extension_config_options: ClassVar[frozenset[str]] = frozenset(
+        {"warehouse_partition"}
+    )
 
 
 class WarehouseConfig(SqliteConfig):
@@ -240,7 +242,9 @@ class WarehouseConfig(SqliteConfig):
 
 config = WarehouseConfig(
     connection_config={"database": ":memory:"},
-    extension_config={"adk": {"session_table": "agent_session", "warehouse_partition": "daily"}},
+    extension_config={
+        "adk": {"session_table": "agent_session", "warehouse_partition": "daily"}
+    },
 )
 ```
 

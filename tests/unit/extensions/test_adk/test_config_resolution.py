@@ -321,7 +321,7 @@ def test_adk_declared_store_options_union_across_config_paths(config_class: type
 @pytest.mark.parametrize(
     ("build", "match"),
     [
-        (lambda: _sqlite_config(_ExternalConfig, {"tpyo": 1}), "for third_party: 'tpyo'"),
+        (lambda: _sqlite_config(_ExternalConfig, {"unknown_option": 1}), "for third_party: 'unknown_option'"),
         (lambda: _sqlite_config(_ExternalConfig, {"include_memory_migration": False}), "include_memory_migration"),
         (lambda: _sqlite_config(_ExternalConfig, {"fts_detail": "full"}), "fts_detail"),
         (lambda: _sqlite_config(_ExternalConfig, {"vector_dimensions": 512}), "vector_dimensions"),
@@ -385,30 +385,32 @@ def test_adk_strict_configs_reject_undeclared_keys(build: Callable[[], object], 
 def test_adk_external_adapter_without_explicit_store_keeps_skip() -> None:
     """Store resolution, not option validation, fails for an enabled feature with no store."""
     with pytest.raises(SQLSpecError, match="Failed to import ADK store class") as excinfo:
-        _sqlite_config(_ExternalNoStoreConfig, {"tpyo": 1})
+        _sqlite_config(_ExternalNoStoreConfig, {"unknown_option": 1})
     assert not isinstance(excinfo.value, ImproperConfigurationError)
 
-    disabled = _sqlite_config(_ExternalNoStoreConfig, {"tpyo": 1, "enable_sessions": False, "enable_memory": False})
-    assert cast("dict[str, Any]", disabled.extension_config["adk"])["tpyo"] == 1
+    disabled = _sqlite_config(
+        _ExternalNoStoreConfig, {"unknown_option": 1, "enable_sessions": False, "enable_memory": False}
+    )
+    assert cast("dict[str, Any]", disabled.extension_config["adk"])["unknown_option"] == 1
 
-    assert _adk_session_store_config(_BareExternalConfig({"tpyo": 1}))["session_table"] == "adk_session"
+    assert _adk_session_store_config(_BareExternalConfig({"unknown_option": 1}))["session_table"] == "adk_session"
 
 
 @pytest.mark.parametrize(
     ("config_class", "match"),
-    [(_BareSqliteStoreConfig, "for sqlite: 'tpyo'"), (_BareDuckStoreConfig, "for Duck: 'tpyo'")],
+    [(_BareSqliteStoreConfig, "for sqlite: 'unknown_option'"), (_BareDuckStoreConfig, "for Duck: 'unknown_option'")],
     ids=["builtin-store", "duck-store"],
 )
 def test_adk_explicit_store_without_adapter_name_labels_error(config_class: type[_Config], match: str) -> None:
     with pytest.raises(ImproperConfigurationError, match=match):
-        _adk_session_store_config(config_class({"tpyo": 1}))
+        _adk_session_store_config(config_class({"unknown_option": 1}))
 
 
 def test_adk_instance_store_attribute_supplies_declared_options() -> None:
     """A store class set on the instance contributes options like a class attribute."""
     accepted = _InstanceStoreConfig({"session_opt": 1}, _DeclaringADKStore)
-    rejected = _InstanceStoreConfig({"tpyo": 1}, _DeclaringADKStore)
+    rejected = _InstanceStoreConfig({"unknown_option": 1}, _DeclaringADKStore)
 
     assert _adk_session_store_config(accepted)["session_table"] == "adk_session"
-    with pytest.raises(ImproperConfigurationError, match="tpyo"):
+    with pytest.raises(ImproperConfigurationError, match="unknown_option"):
         _adk_session_store_config(rejected)
