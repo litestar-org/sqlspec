@@ -7,15 +7,11 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._parsing_utils import (
-    _mark_explicit_table_quotes,
-    extract_expression,
-    extract_sql_object_expression,
-)
+from sqlspec.builder._parsing_utils import _mark_explicit_table_quotes, extract_expression, resolve_value_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import schema_dump
-from sqlspec.utils.type_guards import has_expression_and_sql, has_parameter_builder, is_dict
+from sqlspec.utils.type_guards import is_dict
 
 if TYPE_CHECKING:
     from sqlspec.builder._column import Column
@@ -160,13 +156,11 @@ class InsertValuesMixin:
                 self.columns(*kwargs.keys())
                 column_defs = list(self._columns or [])
             for col, val in kwargs.items():
-                if isinstance(val, exp.Expr):
-                    row_expressions.append(val)
-                    continue
-                if has_expression_and_sql(val):
-                    row_expressions.append(extract_sql_object_expression(val, builder=self))
-                    continue
                 column_name = str(col).split(".")[-1]
+                resolved = resolve_value_expression(val, self, column_name)
+                if resolved is not None:
+                    row_expressions.append(resolved)
+                    continue
                 placeholder, _ = builder.create_placeholder(val, column_name)
                 row_expressions.append(placeholder)
         else:
@@ -178,18 +172,17 @@ class InsertValuesMixin:
                 raise SQLBuilderError(msg)
 
             for index, raw_value in enumerate(positional_values):
-                if isinstance(raw_value, exp.Expr):
-                    row_expressions.append(raw_value)
-                elif has_expression_and_sql(raw_value):
-                    row_expressions.append(extract_sql_object_expression(raw_value, builder=self))
+                if column_defs and index < len(column_defs):
+                    column_token = column_defs[index]
+                    column_name = column_token.rsplit(".", maxsplit=1)[-1]
                 else:
-                    if column_defs and index < len(column_defs):
-                        column_token = column_defs[index]
-                        column_name = column_token.rsplit(".", maxsplit=1)[-1]
-                    else:
-                        column_name = f"value_{index + 1}"
-                    placeholder, _ = builder.create_placeholder(raw_value, column_name)
-                    row_expressions.append(placeholder)
+                    column_name = f"value_{index + 1}"
+                resolved = resolve_value_expression(raw_value, self, column_name)
+                if resolved is not None:
+                    row_expressions.append(resolved)
+                    continue
+                placeholder, _ = builder.create_placeholder(raw_value, column_name)
+                row_expressions.append(placeholder)
 
         values_node = current_expr.args.get("expression")
         tuple_expression = exp.Tuple(expressions=row_expressions)
@@ -334,21 +327,13 @@ class UpdateSetClauseMixin:
         return self.set(**payload)
 
     def _process_update_value(self, val: Any, col: Any) -> exp.Expr:
-        if isinstance(val, exp.Expr):
-            return val
-        if has_parameter_builder(val):
-            query_builder = cast("QueryBuilder", self)
-            column_name = col if isinstance(col, str) else str(col)
-            if "." in column_name:
-                column_name = column_name.split(".")[-1]
-            subquery_expr = query_builder._embed_subquery(val, alias_hint=column_name or "set_src")
-            return exp.paren(subquery_expr)
-        if has_expression_and_sql(val):
-            return extract_sql_object_expression(val, builder=self)
-        sql_builder = cast("SQLBuilderProtocol", self)
         column_name = col if isinstance(col, str) else str(col)
         if "." in column_name:
             column_name = column_name.split(".")[-1]
+        resolved = resolve_value_expression(val, self, column_name or "set_src")
+        if resolved is not None:
+            return resolved
+        sql_builder = cast("SQLBuilderProtocol", self)
         placeholder, _ = sql_builder.create_placeholder(val, column_name)
         return placeholder
 

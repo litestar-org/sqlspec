@@ -30,6 +30,7 @@ from sqlspec.core.parameters import (
     unescape_qmark_operator,
 )
 from sqlspec.core.query_modifiers import (
+    ConditionFactory,
     apply_column_pruning,
     apply_limit,
     apply_offset,
@@ -1675,12 +1676,7 @@ class SQL:
         new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
         return self._copy_with_expression(new_expr)
 
-    def _where_comparison(
-        self,
-        column: "str | exp.Column",
-        value: Any,
-        condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]",
-    ) -> "SQL":
+    def _where_comparison(self, column: "str | exp.Column", value: Any, condition_factory: "ConditionFactory") -> "SQL":
         col_name = extract_column_name(column)
         param_name = self._next_parameter_name(col_name)
         condition = create_condition(column, param_name, condition_factory)

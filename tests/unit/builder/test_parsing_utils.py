@@ -6,6 +6,8 @@ was added to fix QueryBuilder parameter handling issues.
 """
 
 import contextlib
+from datetime import date
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -16,12 +18,14 @@ import sqlspec.builder._parsing_utils as parsing_utils
 from sqlspec import sql
 from sqlspec.builder import (
     Select,
+    Values,
     parse_column_expression,
     parse_condition_expression,
     parse_order_expression,
     parse_table_expression,
 )
-from sqlspec.core import get_cache
+from sqlspec.core import SQL, get_cache
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_parse_condition_expression_with_dollar_parameters() -> None:
@@ -343,3 +347,254 @@ def test_cross_dialect_render_preserves_owned_and_cached_ast(static: bool) -> No
         assert "DISTINCT ON" in rendered.sql
     finally:
         cache.delete_expression(cache_key)
+
+
+def test_extract_sql_object_expression_rejects_sqlglot_node() -> None:
+    """The extractor accepts SQL carriers only, so a bare node is rejected."""
+    with pytest.raises(TypeError, match="Value is not a SQL object"):
+        parsing_utils.extract_sql_object_expression(exp.column("a"))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("x", id="str"),
+        pytest.param(1, id="int"),
+        pytest.param(True, id="bool"),
+        pytest.param(b"x", id="bytes"),
+        pytest.param(date(2026, 1, 1), id="date"),
+        pytest.param({"k": 1}, id="dict"),
+        pytest.param([1], id="list"),
+        pytest.param(
+            SimpleNamespace(expression=exp.condition("a = :p"), parameters={"p": 1}), id="parameters-lookalike"
+        ),
+        pytest.param(SimpleNamespace(expression=None, sql="b + 1"), id="text-lookalike"),
+    ],
+)
+def test_resolve_value_expression_returns_none_for_bindable_values(value: Any) -> None:
+    """Values that bind as parameters resolve to no expression."""
+    assert parsing_utils.resolve_value_expression(value, sql.update("t"), "a") is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_sql", "expected_parameters"),
+    [
+        pytest.param(sql.column("b"), "b", {}, id="column"),
+        pytest.param(sql.count("b"), "COUNT(b)", {}, id="wrapper"),
+        pytest.param(sql.column("b").cast("INT"), "CAST(b AS INT)", {}, id="function-column"),
+        pytest.param(sql.column("b") > 1, "b > 1", {}, id="column-expression"),
+        pytest.param(exp.select("x"), "(SELECT x)", {}, id="select-node"),
+        pytest.param(
+            exp.maybe_parse("SELECT 1 UNION SELECT 2"), "(SELECT 1 UNION SELECT 2)", {}, id="set-operation-node"
+        ),
+        pytest.param(
+            sql.select("x").from_("y").where_eq("z", 5), "(SELECT x FROM y WHERE z = :z)", {"z": 5}, id="query-builder"
+        ),
+        pytest.param(sql.raw("b + :p", p=1), "b + :p", {"p": 1}, id="sql-object"),
+    ],
+)
+def test_resolve_value_expression(value: Any, expected_sql: str, expected_parameters: dict[str, Any]) -> None:
+    """Expression-carrying values resolve to SQL and merge their parameters into the builder."""
+    builder = sql.update("t")
+
+    resolved = parsing_utils.resolve_value_expression(value, builder, "a")
+
+    assert resolved is not None
+    assert resolved.sql() == expected_sql
+    assert builder.parameters == expected_parameters
+
+
+def test_resolve_value_expression_copies_sqlglot_node() -> None:
+    """A SQLGlot node resolves to an equal copy, leaving the caller's node untouched."""
+    node = exp.column("b")
+
+    resolved = parsing_utils.resolve_value_expression(node, sql.update("t"), "a")
+
+    assert resolved == node
+    assert resolved is not node
+
+
+def test_resolve_value_expression_parenthesizes_set_operation_as_subquery() -> None:
+    """Set operations wrap in a subquery node, and other queries in parentheses."""
+    builder = sql.update("t")
+
+    union = parsing_utils.resolve_value_expression(exp.maybe_parse("SELECT 1 UNION SELECT 2"), builder, "a")
+    select = parsing_utils.resolve_value_expression(exp.select("x"), builder, "a")
+
+    assert union is not None
+    assert select is not None
+    assert union.sql() == "(SELECT 1 UNION SELECT 2)"
+    assert select.sql() == "(SELECT x)"
+
+
+def test_parse_column_expression_without_builder_returns_same_node() -> None:
+    """Without a builder, a query node is returned as given."""
+    node = exp.select("x")
+
+    assert parse_column_expression(node) is node
+
+
+class _ExpressionLookalike:
+    """Plain object shaped like a SQL carrier, as a decoded request model could be."""
+
+    def __init__(self, expression: Any) -> None:
+        self.expression = expression
+        self.sql = "injected_sql OR 1 = 1"
+        self.parameters = {"injected_parameter": 1}
+        self.sqlglot_expression = expression
+
+    def __str__(self) -> str:
+        return "injected_str = 1"
+
+
+def _merge() -> Any:
+    return sql.merge(dialect="postgres").into("t").using("s", alias="s").on("t.id = s.id")
+
+
+def _conflict_insert() -> Any:
+    return sql.insert("t", dialect="postgres").columns("id").values(1)
+
+
+VALUE_SITES = [
+    pytest.param(lambda v: sql.select("z").from_("t").where_eq("a", v), id="where-eq"),
+    pytest.param(lambda v: sql.select("z").from_("t").where_gt("a", v), id="where-gt"),
+    pytest.param(lambda v: sql.select("z").from_("t").where(("a", ">=", v)), id="where-tuple"),
+    pytest.param(lambda v: sql.select("z").from_("t").where_in("a", v), id="where-in"),
+    pytest.param(lambda v: sql.select("z").from_("t").where_in("a", [v, 7]), id="where-in-list"),
+    pytest.param(lambda v: sql.select("z").from_("t").where_between("a", v, 9), id="where-between"),
+    pytest.param(lambda v: sql.select("z").from_("t").where(("a", "NOT BETWEEN", (v, 9))), id="not-between"),
+    pytest.param(lambda v: sql.update("t", dialect="postgres").set(a=v), id="update-set"),
+    pytest.param(lambda v: sql.insert("t", dialect="postgres").columns("a").values(v), id="insert-positional"),
+    pytest.param(lambda v: sql.insert("t", dialect="postgres").values(a=v), id="insert-keyword"),
+    pytest.param(lambda v: _conflict_insert().on_conflict("id").do_update(a=v), id="conflict-update"),
+    pytest.param(
+        lambda v: sql.insert("t", dialect="mysql").columns("id").values(1).on_duplicate_key_update(a=v),
+        id="duplicate-key-update",
+    ),
+    pytest.param(lambda v: _merge().when_matched_then_update(a=v), id="merge-matched"),
+    pytest.param(lambda v: _merge().when_not_matched_by_source_then_update(a=v), id="merge-by-source"),
+    pytest.param(lambda v: _merge().when_not_matched_then_insert(columns=["a"], values=[v]), id="merge-insert"),
+    pytest.param(lambda v: Values().add_rows([[v]]), id="values"),
+]
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        pytest.param("injected_expression", id="text-attribute"),
+        pytest.param(exp.column("injected_expression"), id="node-attribute"),
+        pytest.param(None, id="empty-attribute"),
+    ],
+)
+@pytest.mark.parametrize("site", VALUE_SITES)
+def test_value_sites_bind_sql_carrier_lookalikes(site: Any, expression: Any) -> None:
+    """An object that only looks like a SQL carrier binds as a parameter and renders none of its attributes."""
+    lookalike = _ExpressionLookalike(expression)
+
+    statement = site(lookalike).build()
+
+    assert "injected" not in statement.sql
+    assert any(value is lookalike for value in statement.parameters.values())
+    assert "injected_parameter" not in statement.parameters
+
+
+@pytest.mark.parametrize("site", VALUE_SITES)
+def test_value_sites_render_sql_objects(site: Any) -> None:
+    """A real SQL object renders as SQL and merges its parameters."""
+    fragment = sql.raw("rendered_col + :p", p=3)
+    assert isinstance(fragment, SQL)
+
+    statement = site(fragment).build()
+
+    assert "rendered_col" in statement.sql
+    assert statement.parameters["p"] == 3
+    assert all(isinstance(value, int) for value in statement.parameters.values())
+
+
+LOOKALIKE_EXPRESSIONS = [
+    pytest.param("injected_expression", id="text-attribute"),
+    pytest.param(exp.column("injected_expression"), id="node-attribute"),
+    pytest.param(None, id="empty-attribute"),
+]
+
+
+@pytest.mark.parametrize("expression", LOOKALIKE_EXPRESSIONS)
+@pytest.mark.parametrize(
+    ("site", "message"),
+    [
+        pytest.param(lambda q, v: q.where_exists(v), "Unsupported subquery type", id="where-exists"),
+        pytest.param(lambda q, v: q.where_not_exists(v), "Unsupported subquery type", id="where-not-exists"),
+        pytest.param(lambda q, v: q.where_any("a", v), "Unsupported type for 'values'", id="where-any"),
+        pytest.param(lambda q, v: q.where_not_any("a", v), "Unsupported type for 'values'", id="where-not-any"),
+        pytest.param(lambda q, v: q.where(v), "Unsupported condition type", id="where"),
+        pytest.param(lambda q, v: q.join("u", on=v), "Unsupported join condition type", id="join"),
+    ],
+)
+def test_query_only_sites_reject_sql_carrier_lookalikes(site: Any, message: str, expression: Any) -> None:
+    """Positions where a parameter cannot stand in raise for an object that only looks like a SQL carrier."""
+    with pytest.raises(SQLBuilderError, match=message):
+        site(sql.select("z").from_("t"), _ExpressionLookalike(expression))
+
+
+@pytest.mark.parametrize(
+    ("site", "expected"),
+    [
+        pytest.param(lambda q, v: q.where_exists(v), 'EXISTS( SELECT "y"."x" AS "x" FROM "y"', id="where-exists"),
+        pytest.param(lambda q, v: q.where_not_exists(v), 'NOT EXISTS( SELECT "y"."x" AS "x" FROM "y"', id="not-exists"),
+        pytest.param(lambda q, v: q.where_any("a", v), '"y"."x" AS "x"', id="where-any"),
+        pytest.param(lambda q, v: q.where_not_any("a", v), '"y"."x" AS "x"', id="where-not-any"),
+    ],
+)
+def test_query_only_sites_render_sql_objects(site: Any, expected: str) -> None:
+    """A real SQL object still renders at query-only positions and merges its parameters."""
+    fragment = sql.raw("SELECT x FROM y WHERE k = :p", p=3)
+
+    statement = site(sql.select("z").from_("t"), fragment).build()
+
+    normalized = " ".join(statement.sql.split())
+    assert expected in normalized
+    assert '"y"."k" = :p' in normalized
+    assert statement.parameters == {"p": 3}
+
+
+def test_where_and_join_render_sql_objects() -> None:
+    """A real SQL object still renders as a WHERE or JOIN condition."""
+    statement = (
+        sql
+        .select("z")
+        .from_("t")
+        .join("u", on=sql.raw("t.id = u.id AND u.k = :p", p=3))
+        .where(sql.raw("b = :q", q=4))
+        .build()
+    )
+
+    normalized = " ".join(statement.sql.split())
+    assert "t.id = u.id" in normalized.replace('"', "")
+    assert statement.parameters == {"p": 3, "q": 4}
+
+
+def test_extract_sql_object_expression_rejects_sql_carrier_lookalike() -> None:
+    """Extraction accepts SQL objects only."""
+    with pytest.raises(TypeError, match="Value is not a SQL object"):
+        parsing_utils.extract_sql_object_expression(_ExpressionLookalike(exp.column("injected_expression")))
+
+
+@pytest.mark.parametrize("site", VALUE_SITES)
+def test_value_sites_render_sql_objects_without_parameters(site: Any) -> None:
+    """A SQL object with no parameters renders, because its empty parameter list merges as nothing."""
+    statement = site(SQL("rendered_col + 1")).build()
+
+    assert "rendered_col" in statement.sql
+    assert "rendered_col" not in " ".join(str(value) for value in statement.parameters.values())
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [pytest.param(SQL("b = ?", 1), id="positional"), pytest.param(SQL("b = :x AND c = ?", 5, x=1), id="mixed")],
+)
+@pytest.mark.parametrize("site", VALUE_SITES)
+def test_value_sites_reject_positional_sql_objects(site: Any, fragment: SQL) -> None:
+    """Positional parameters cannot merge into a builder's named parameters, so they raise instead of misbinding."""
+    with pytest.raises(SQLBuilderError, match="Positional parameters"):
+        site(fragment)

@@ -1,5 +1,9 @@
 """Unit tests for sql.upsert() factory method."""
 
+from typing import Any, cast
+
+import pytest
+
 from sqlspec import sql
 from sqlspec.builder import Insert, Merge
 
@@ -63,8 +67,8 @@ def test_upsert_postgres_builder_chain() -> None:
         builder
         .using([{"id": 1, "name": "Product 1"}], alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     built = query.build()
@@ -138,8 +142,8 @@ def test_upsert_preserves_table_name() -> None:
         builder
         .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     built = query.build()
@@ -165,8 +169,8 @@ def test_upsert_merge_supports_all_when_clauses() -> None:
         builder
         .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
         .when_not_matched_by_source_then_delete()
     )
 
@@ -222,8 +226,8 @@ def test_upsert_with_complex_table_name() -> None:
         builder
         .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     built = query.build()
@@ -264,9 +268,36 @@ def test_upsert_with_quoted_table_name() -> None:
         builder
         .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     built = query.build()
     assert '"Products"' in built.sql or "Products" in built.sql
+
+
+@pytest.mark.parametrize(
+    ("builder", "expected"),
+    [
+        pytest.param(
+            cast("Merge", sql.upsert("t", dialect="postgres"))
+            .using("s", alias="s")
+            .on("t.id = s.id")
+            .when_matched_then_update(a=sql.raw("t.a + 1")),
+            'MERGE INTO t USING "s" AS s ON ( "t"."id" = "s"."id" ) WHEN MATCHED THEN UPDATE SET "a" = "t"."a" + 1',
+            id="merge",
+        ),
+        pytest.param(
+            cast("Insert", sql.upsert("t", dialect="sqlite"))
+            .columns("id")
+            .values(1)
+            .on_conflict("id")
+            .do_update(a=sql.raw("a + 1")),
+            'INSERT INTO "t" ( "id" ) VALUES (:id) ON CONFLICT("id") DO UPDATE SET "a" = "a" + 1',
+            id="insert",
+        ),
+    ],
+)
+def test_upsert_renders_full_expression(builder: Any, expected: str) -> None:
+    """Both upsert forms render the whole fragment."""
+    assert " ".join(builder.build().sql.split()) == expected

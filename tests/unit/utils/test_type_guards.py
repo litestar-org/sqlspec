@@ -9,6 +9,7 @@ import typing
 from collections import UserDict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
 
@@ -17,6 +18,7 @@ import pytest
 from sqlglot import exp
 from typing_extensions import TypedDict
 
+from sqlspec.core import SQL
 from sqlspec.typing import PYARROW_INSTALLED, SupportedSchemaModel
 from sqlspec.utils.config_tools import parse_mysql_dsn
 from sqlspec.utils.correlation import CorrelationContext, get_correlation_adapter
@@ -42,6 +44,8 @@ from sqlspec.utils.type_guards import (
     get_node_this,
     get_param_style_and_name,
     get_value_attribute,
+    has_expression_and_parameters,
+    has_expression_and_sql,
     has_expressions_attribute,
     has_parent_attribute,
     has_this_attribute,
@@ -1110,3 +1114,26 @@ def test_deprecated_supports_property_and_classmethod() -> None:
         assert svc.old_prop == "prop-val"
     with pytest.deprecated_call(match="old_cls_method"):
         assert LegacyService.old_cls_method() == "cls-val"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(exp.column("a"), False, id="column"),
+        pytest.param(exp.condition("a = 1"), False, id="condition"),
+        pytest.param(exp.select("x"), False, id="select"),
+        pytest.param(exp.Literal.number(1), False, id="literal"),
+        pytest.param(SQL("SELECT 1"), True, id="sql-object"),
+        pytest.param(SimpleNamespace(expression=exp.select("x"), sql="SELECT x"), True, id="sql-carrier"),
+        pytest.param(SimpleNamespace(expression=None), False, id="expression-only"),
+        pytest.param(object(), False, id="plain-object"),
+    ],
+)
+def test_has_expression_and_sql_rejects_sqlglot_nodes(value: Any, expected: bool) -> None:
+    """SQLGlot nodes are not SQL carriers, because their expression attribute is the right operand."""
+    assert has_expression_and_sql(value) is expected
+
+
+def test_has_expression_and_parameters_rejects_sqlglot_nodes() -> None:
+    """SQLGlot nodes carry no parameter mapping."""
+    assert has_expression_and_parameters(exp.column("a")) is False

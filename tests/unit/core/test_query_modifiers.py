@@ -5,6 +5,8 @@ expression factories, condition builders, and expression modifiers for
 both the SQL class and builder classes.
 """
 
+from typing import Any
+
 import pytest
 import sqlglot
 from sqlglot import exp
@@ -679,3 +681,19 @@ def test_column_pruning_cache_isolates_returned_expression(dialect: str) -> None
         assert source.sql() == original
     finally:
         cache.delete_optimized(cache_key, dialect)
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected"),
+    [
+        pytest.param(expr_eq, "a = b", id="eq"),
+        pytest.param(expr_neq, "a <> b", id="neq"),
+        pytest.param(expr_lt, "a < b", id="lt"),
+        pytest.param(expr_lte, "a <= b", id="lte"),
+        pytest.param(expr_gt, "a > b", id="gt"),
+        pytest.param(expr_gte, "a >= b", id="gte"),
+    ],
+)
+def test_condition_factories_accept_expression_operand(factory: Any, expected: str) -> None:
+    """Comparison factories accept any expression as the right operand."""
+    assert factory(exp.column("a"), exp.column("b")).sql() == expected

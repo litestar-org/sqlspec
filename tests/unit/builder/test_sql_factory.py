@@ -3,7 +3,7 @@
 
 import math
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from sqlglot import exp, parse_one
@@ -38,19 +38,6 @@ from sqlspec.builder._parsing_utils import extract_sql_object_expression
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
 from tests.conftest import requires_patchable_internals
-
-
-class _SQLExpressionObject:
-    def __init__(self, sql_text: str, expression: exp.Expr, parameters: dict[str, object]) -> None:
-        self.expression = expression
-        self.parameters = parameters
-        self.sql = sql_text
-
-
-class _ParametersExpressionObject:
-    def __init__(self, _sql_text: str, expression: exp.Expr, parameters: dict[str, object]) -> None:
-        self.expression = expression
-        self.parameters = parameters
 
 
 def test_sql_factory_instance() -> None:
@@ -971,41 +958,6 @@ def test_select_conditions_use_shared_expression_extraction(monkeypatch: pytest.
     assert calls == 2
 
 
-@pytest.mark.parametrize("object_type", [_SQLExpressionObject, _ParametersExpressionObject])
-def test_sql_object_protocol_shapes_merge_where_parameters(
-    object_type: type[_SQLExpressionObject] | type[_ParametersExpressionObject],
-) -> None:
-    condition = object_type("users.id = :user_id", exp.condition("users.id = :user_id"), {"user_id": 41})
-    statement = sql.select("*").from_("users").where(cast("Any", condition)).build()
-    assert ":user_id" in statement.sql
-    assert statement.parameters["user_id"] == 41
-
-
-@pytest.mark.parametrize("object_type", [_SQLExpressionObject, _ParametersExpressionObject])
-def test_sql_object_protocol_shapes_merge_subquery_parameters(
-    object_type: type[_SQLExpressionObject] | type[_ParametersExpressionObject],
-) -> None:
-    sql_text = "SELECT 1 FROM posts WHERE posts.user_id = :user_id"
-    subquery = object_type(sql_text, parse_one(sql_text), {"user_id": 42})
-    statement = sql.select("*").from_("users").where_exists(subquery).build()
-    assert ":user_id" in statement.sql
-    assert statement.parameters["user_id"] == 42
-
-
-@pytest.mark.parametrize("object_type", [_SQLExpressionObject, _ParametersExpressionObject])
-def test_sql_object_protocol_shapes_merge_join_parameters(
-    object_type: type[_SQLExpressionObject] | type[_ParametersExpressionObject],
-) -> None:
-    condition = object_type(
-        "users.id = posts.user_id AND posts.status = :status",
-        exp.condition("users.id = posts.user_id AND posts.status = :status"),
-        {"status": "published"},
-    )
-    statement = sql.select("*").from_("users").join("posts", cast("Any", condition)).build()
-    assert ":status" in statement.sql
-    assert statement.parameters["status"] == "published"
-
-
 def test_sql_raw_without_parameters_still_works() -> None:
     """Test that SQL objects without parameters still work correctly."""
     raw_expr = sql.raw("NOW()")
@@ -1491,10 +1443,12 @@ def test_merge_complete_example() -> None:
         .merge("users")
         .using("new_users")
         .on("users.id = new_users.id")
-        .when_matched_then_update(name="new_users.name", email="new_users.email", updated_at=sql.raw("NOW()"))
+        .when_matched_then_update(
+            name=sql.raw("new_users.name"), email=sql.raw("new_users.email"), updated_at=sql.raw("NOW()")
+        )
         .when_not_matched_then_insert(
             ["id", "name", "email", "created_at"],
-            ["new_users.id", "new_users.name", "new_users.email", sql.raw("NOW()")],
+            [sql.raw("new_users.id"), sql.raw("new_users.name"), sql.raw("new_users.email"), sql.raw("NOW()")],
         )
         .when_not_matched_by_source_then_update(status="archived", archived_at=sql.raw("NOW()"))
     )
@@ -2081,19 +2035,22 @@ def test_build_and_to_statement_parity() -> None:
         sql.merge("users", dialect="mysql").using("src", alias="s").on("users.id = s.id").to_statement()
 
 
-def test_merge_literal_vs_qualified_column_reference() -> None:
+def test_merge_binds_strings_and_renders_explicit_columns() -> None:
     merge_stmt = (
         sql
         .merge("users", dialect="postgres")
         .using("staging", alias="src")
         .on("users.id = src.id")
-        .when_matched_then_update(status="active.pending", name="src.name")
-        .when_not_matched_then_insert(columns=["id", "status"], values=["src.id", "new.user"])
+        .when_matched_then_update(status="src.status", name=sql.raw("src.name"))
+        .when_not_matched_then_insert(columns=["id", "status"], values=[sql.raw("src.id"), "src.status"])
         .build()
     )
-    assert "active.pending" in merge_stmt.parameters.values()
-    assert "new.user" in merge_stmt.parameters.values()
-    assert '"src"."name"' in merge_stmt.sql or "src.name" in merge_stmt.sql
+    assert " ".join(merge_stmt.sql.split()) == (
+        'MERGE INTO users USING "staging" AS src ON ( "users"."id" = "src"."id" ) '
+        'WHEN MATCHED THEN UPDATE SET "status" = %(status)s, "name" = "src"."name" '
+        'WHEN NOT MATCHED THEN INSERT ("id", "status") VALUES ("src"."id", %(status_1)s)'
+    )
+    assert merge_stmt.parameters == {"status": "src.status", "status_1": "src.status"}
 
 
 def test_column_expression_boolean_combinators_do_not_mutate_operands() -> None:

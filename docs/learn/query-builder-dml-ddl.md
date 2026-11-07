@@ -116,8 +116,8 @@ merge_q = (
     .merge("products", dialect="postgres")
     .using([{"id": 1, "name": "Ada"}], alias="src")
     .on("products.id = src.id")
-    .when_matched_then_update(name="src.name")
-    .when_not_matched_then_insert(id="src.id", name="src.name")
+    .when_matched_then_update(name=sql.raw("src.name"))
+    .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     .when_not_matched_by_source_then_delete()
 )
 # SQL: MERGE INTO products USING (SELECT id, name FROM
@@ -126,6 +126,8 @@ merge_q = (
 # SQL: ON (products.id = src.id) WHEN MATCHED THEN UPDATE ...
 # Parameters: {'json_data': [{'id': 1, 'name': 'Ada'}]}
 ```
+
+`Merge` clauses bind every string as a parameter, so `name="src.name"` stores the text `src.name`. Reference a column or SQL keyword with an explicit expression, such as `sql.raw("src.name")`, `sql.column("name", table="src")`, or `sql.raw("CURRENT_TIMESTAMP")`.
 
 ## DDL Builders and Schema Inference
 

@@ -4,7 +4,6 @@ Provides a fluent interface for building SQL MERGE queries with
 parameter binding and validation.
 """
 
-import contextlib
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -14,16 +13,14 @@ from uuid import UUID
 
 from mypy_extensions import trait
 from sqlglot import exp
-from sqlglot.errors import ParseError
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import _coerce_column, _is_simple_identifier, extract_sql_object_expression
+from sqlspec.builder._parsing_utils import _coerce_column, resolve_value_expression
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import has_expression_and_sql
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -34,8 +31,6 @@ __all__ = ("Merge",)
 
 
 MERGE_UNSUPPORTED_DIALECTS = frozenset({"mysql", "sqlite", "duckdb", "sybase"})
-_MERGE_SQL_KEYWORD_LITERALS = frozenset({"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"})
-_MERGE_ARITHMETIC_NODES = (exp.Add, exp.Sub, exp.Mul, exp.Div, exp.Mod, exp.Paren)
 _POSTGRES_TYPE_DISPATCHER = TypeDispatcher[str]()
 _ORACLE_TYPE_DISPATCHER = TypeDispatcher[str]()
 
@@ -77,87 +72,13 @@ class _MergeAssignmentMixin:
 
     __slots__ = ()
 
-    def _known_merge_qualifiers(self) -> set[str]:
-        qualifiers: set[str] = set()
-        builder = cast("SQLBuilderProtocol", self)
-        expr = builder.get_expression()
-        if not isinstance(expr, exp.Merge):
-            return qualifiers
-        for node in (expr.this, expr.args.get("using")):
-            if node is None:
-                continue
-            alias = node.alias
-            if alias:
-                qualifiers.add(alias.lower())
-            if isinstance(node, exp.Table) and node.name:
-                qualifiers.add(node.name.lower())
-            elif isinstance(node, exp.Alias) and isinstance(node.this, exp.Table) and node.this.name:
-                qualifiers.add(node.this.name.lower())
-        return qualifiers
-
-    def _is_column_reference(self, value: str) -> bool:
-        """Check if value is a qualified MERGE column reference or CURRENT_* keyword.
-
-        Returns True only for CURRENT_TIMESTAMP/CURRENT_DATE/CURRENT_TIME keywords,
-        qualified column references matching the MERGE target/source tables or aliases,
-        or arithmetic expressions composed exclusively of such qualified columns.
-        Returns False for plain literal strings that should be parameterized.
-        """
-        if not isinstance(value, str):
-            return False
-
-        stripped = value.strip()
-        if not stripped:
-            return False
-
-        if stripped.upper() in _MERGE_SQL_KEYWORD_LITERALS:
-            return True
-
-        known_qualifiers = self._known_merge_qualifiers()
-        if not known_qualifiers:
-            return False
-
-        if _is_simple_identifier(stripped) and "." in stripped:
-            prefix = stripped.split(".", 1)[0].strip('"`[]').lower()
-            return prefix in known_qualifiers
-
-        builder = cast("QueryBuilder", self)
-        with contextlib.suppress(ParseError):
-            parsed: exp.Expr | None = exp.maybe_parse(stripped, dialect=builder.dialect)
-            if parsed is None:
-                return False
-
-            if isinstance(parsed, exp.Column):
-                return bool(parsed.table) and parsed.table.lower() in known_qualifiers
-
-            if isinstance(parsed, _MERGE_ARITHMETIC_NODES):
-                columns = list(parsed.find_all(exp.Column))
-                if not columns:
-                    return False
-                for node in parsed.walk():
-                    if not isinstance(node, (*_MERGE_ARITHMETIC_NODES, exp.Column, exp.Identifier)):
-                        return False
-                return all(bool(col.table) and col.table.lower() in known_qualifiers for col in columns)
-        return False
-
     def _process_assignment(self, target_column: str, value: Any) -> exp.Expr:
         column_identifier = _coerce_column(target_column)
-
-        if has_expression_and_sql(value):
-            value_expr = extract_sql_object_expression(value, builder=self)
-            return exp.EQ(this=column_identifier, expression=value_expr)
-        if isinstance(value, exp.Expr):
-            return exp.EQ(this=column_identifier, expression=value)
-        if isinstance(value, str) and self._is_column_reference(value):
-            builder = cast("QueryBuilder", self)
-            parsed_expression: exp.Expr | None = exp.maybe_parse(value, dialect=builder.dialect)
-            if parsed_expression is None:
-                msg = f"Could not parse assignment expression: {value}"
-                raise SQLBuilderError(msg)
-            return exp.EQ(this=column_identifier, expression=parsed_expression)
-
         column_name = target_column if isinstance(target_column, str) else str(target_column)
         column_leaf = column_name.split(".")[-1]
+        resolved = resolve_value_expression(value, self, column_leaf)
+        if resolved is not None:
+            return exp.EQ(this=column_identifier, expression=resolved)
         placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_leaf)
         return exp.EQ(this=column_identifier, expression=placeholder)
 
@@ -278,6 +199,15 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         builder = cast("QueryBuilder", self)
         dialect = builder.dialect_name
 
+        if dialect in {"postgres", "oracle"}:
+            for record in data:
+                for column, value in record.items():
+                    if resolve_value_expression(value, self, str(column)) is not None:
+                        msg = (
+                            f"MERGE USING on {dialect} passes source rows as JSON, so column '{column}' "
+                            "must hold a plain value. Use a SELECT source for expressions."
+                        )
+                        raise SQLBuilderError(msg)
         if dialect == "postgres":
             return self._create_postgres_json_source(data, columns, is_list, alias)
         if dialect == "oracle":
@@ -461,6 +391,10 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 if isinstance(value, (dict, list)):
                     value = to_json(value)
                 column_name = str(column).split(".")[-1]
+                resolved = resolve_value_expression(value, self, column_name)
+                if resolved is not None:
+                    select_items.append(exp.alias_(resolved, column))
+                    continue
                 placeholder, _ = builder.create_placeholder(value, column_name)
                 cast_expr = exp.Cast(this=placeholder, to=column_types[column].copy())
                 select_items.append(exp.alias_(cast_expr, column))
@@ -493,6 +427,10 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 column_name = column if isinstance(column, str) else str(column)
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
+                resolved = resolve_value_expression(value, self, column_name)
+                if resolved is not None:
+                    row_params.append(resolved)
+                    continue
                 placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_name)
                 row_params.append(placeholder)
             parameterized_values.append(row_params)
@@ -646,21 +584,9 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
 
         insert_values: list[exp.Expr] = []
         for column_name, value in zip(column_names, column_values, strict=True):
-            if has_expression_and_sql(value):
-                insert_values.append(extract_sql_object_expression(value, builder=self))
-            elif isinstance(value, exp.Expr):
-                insert_values.append(value)
-            elif isinstance(value, str):
-                if self._is_column_reference(value):
-                    builder = cast("QueryBuilder", self)
-                    parsed_value: exp.Expr | None = exp.maybe_parse(value, dialect=builder.dialect)
-                    if parsed_value is None:
-                        msg = f"Could not parse column reference: {value}"
-                        raise SQLBuilderError(msg)
-                    insert_values.append(parsed_value)
-                else:
-                    placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_name.split(".")[-1])
-                    insert_values.append(placeholder)
+            resolved = resolve_value_expression(value, self, column_name.split(".")[-1])
+            if resolved is not None:
+                insert_values.append(resolved)
             else:
                 placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_name.split(".")[-1])
                 insert_values.append(placeholder)

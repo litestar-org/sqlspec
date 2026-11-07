@@ -233,3 +233,11 @@ def test_select_from_values_replaces_alias_and_preserves_columns(source_alias: s
     assert [column.name for column in from_source.args["alias"].columns] == ["id", "name"]
     assert source.alias_name == source_alias
     assert query.build(dialect="postgres").parameters == {"renamed_id": 1, "renamed_name": "alice"}
+
+
+def test_values_render_expression_values() -> None:
+    """VALUES rows render wrappers and fragments as SQL and bind plain values."""
+    statement = Values().add_rows([[sql.column("b"), sql.count("c"), 1, sql.raw("d + 1")]]).build()
+
+    assert " ".join(statement.sql.split()) == 'VALUES ("b", COUNT("c"), :col_3, "d" + 1)'
+    assert statement.parameters == {"col_3": 1}
