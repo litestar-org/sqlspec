@@ -16,12 +16,7 @@ from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import (
-    _coerce_column,
-    _is_simple_identifier,
-    _parse_aliased_table,
-    resolve_value_expression,
-)
+from sqlspec.builder._parsing_utils import _coerce_column, _parse_aliased_table, resolve_value_expression
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
