@@ -662,3 +662,12 @@ def test_conflict_update_leaves_caller_node_detached() -> None:
 
     assert _normalized_sql(statement) == f'{CONFLICT_PREFIX_POSTGRES}"a" = "a" + 1, "c" = "a" + 1'
     assert node.parent is None
+
+
+@pytest.mark.parametrize("value", ["o'brien", "x; DROP TABLE t", "b + 1", "1 OR 1=1", "s.a"])
+def test_conflict_update_binds_plain_string_values(value: str) -> None:
+    """Conflict updates bind every plain string."""
+    statement = sql.insert("t", dialect="postgres").columns("id").values(1).on_conflict("id").do_update(a=value).build()
+
+    assert _normalized_sql(statement) == f'{CONFLICT_PREFIX_POSTGRES}"a" = %(a)s'
+    assert statement.parameters == {"id": 1, "a": value}

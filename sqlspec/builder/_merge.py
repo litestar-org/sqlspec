@@ -14,7 +14,7 @@ from uuid import UUID
 
 from mypy_extensions import trait
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
@@ -100,7 +100,8 @@ class _MergeAssignmentMixin:
         Returns True only for CURRENT_TIMESTAMP/CURRENT_DATE/CURRENT_TIME keywords,
         qualified column references matching the MERGE target/source tables or aliases,
         or arithmetic expressions composed exclusively of such qualified columns.
-        Returns False for plain literal strings that should be parameterized.
+        Returns False for plain literal strings that should be parameterized, including
+        strings that do not tokenize and strings carrying SQL comments.
         """
         if not isinstance(value, str):
             return False
@@ -121,9 +122,9 @@ class _MergeAssignmentMixin:
             return prefix in known_qualifiers
 
         builder = cast("QueryBuilder", self)
-        with contextlib.suppress(ParseError):
+        with contextlib.suppress(ParseError, TokenError):
             parsed: exp.Expr | None = exp.maybe_parse(stripped, dialect=builder.dialect)
-            if parsed is None:
+            if parsed is None or any(node.comments for node in parsed.walk()):
                 return False
 
             if isinstance(parsed, exp.Column):

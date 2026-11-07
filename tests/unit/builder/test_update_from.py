@@ -221,3 +221,12 @@ def test_update_set_merges_fragment_parameters() -> None:
     statement = sql.update("t", dialect="postgres").set(a=sql.exists_(query)).build()
 
     assert statement.parameters == {"z": 5}
+
+
+@pytest.mark.parametrize("value", ["o'brien", "x; DROP TABLE t", "b + 1", "1 OR 1=1", "s.a"])
+def test_update_set_binds_plain_string_values(value: str) -> None:
+    """UPDATE SET binds every plain string."""
+    statement = sql.update("t", dialect="postgres").set(a=value).build()
+
+    assert " ".join(statement.sql.split()) == 'UPDATE "t" SET "a" = %(a)s'
+    assert statement.parameters == {"a": value}

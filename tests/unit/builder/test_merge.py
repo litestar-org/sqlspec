@@ -1171,3 +1171,42 @@ def test_merge_using_dict_rejects_expression_values_in_json_sources(dialect: str
     """JSON row sources carry data only, so an expression value raises instead of serializing."""
     with pytest.raises(SQLBuilderError, match="rows as JSON"):
         sql.merge(dialect=dialect).into("t").using(source, alias="s")
+
+
+PLAIN_STRING_VALUES = [
+    pytest.param("o'brien", id="quote"),
+    pytest.param("x; DROP TABLE t", id="statement"),
+    pytest.param("b + 1", id="arithmetic"),
+    pytest.param("1 OR 1=1", id="tautology"),
+    pytest.param("s.a; DROP TABLE t", id="qualified-statement"),
+    pytest.param("s.a OR 1=1", id="qualified-tautology"),
+    pytest.param("s.a -- trailing", id="line-comment"),
+    pytest.param("s.a /* note */", id="block-comment"),
+    pytest.param("s.a + /* note */ s.b", id="arithmetic-comment"),
+    pytest.param("s.a'", id="unterminated-quote"),
+]
+
+
+@pytest.mark.parametrize("value", PLAIN_STRING_VALUES)
+@pytest.mark.parametrize(
+    ("apply", "suffix"),
+    [
+        pytest.param(lambda m, v: m.when_matched_then_update(a=v), "MATCHED THEN UPDATE SET [a] = :a", id="matched"),
+        pytest.param(
+            lambda m, v: m.when_not_matched_by_source_then_update(a=v),
+            "NOT MATCHED BY SOURCE THEN UPDATE SET [a] = :a",
+            id="by-source",
+        ),
+        pytest.param(
+            lambda m, v: m.when_not_matched_then_insert(columns=["a"], values=[v]),
+            "NOT MATCHED THEN INSERT ([a]) VALUES (:a)",
+            id="insert",
+        ),
+    ],
+)
+def test_merge_binds_plain_string_values(apply: Any, suffix: str, value: str) -> None:
+    """Strings that are not column references bind, including ones the tokenizer rejects."""
+    statement = apply(_merge_builder("tsql"), value).build()
+
+    assert _normalized_sql(statement) == MERGE_PREFIXES["tsql"] + suffix
+    assert statement.parameters == {"a": value}
