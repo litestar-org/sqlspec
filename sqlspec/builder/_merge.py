@@ -274,6 +274,15 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         builder = cast("QueryBuilder", self)
         dialect = builder.dialect_name
 
+        if dialect in {"postgres", "oracle"}:
+            for record in data:
+                for column, value in record.items():
+                    if resolve_value_expression(value, self, str(column)) is not None:
+                        msg = (
+                            f"MERGE USING on {dialect} passes source rows as JSON, so column '{column}' "
+                            "must hold a plain value. Use a SELECT source for expressions."
+                        )
+                        raise SQLBuilderError(msg)
         if dialect == "postgres":
             return self._create_postgres_json_source(data, columns, is_list, alias)
         if dialect == "oracle":
@@ -457,6 +466,10 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 if isinstance(value, (dict, list)):
                     value = to_json(value)
                 column_name = str(column).split(".")[-1]
+                resolved = resolve_value_expression(value, self, column_name)
+                if resolved is not None:
+                    select_items.append(exp.alias_(resolved, column))
+                    continue
                 placeholder, _ = builder.create_placeholder(value, column_name)
                 cast_expr = exp.Cast(this=placeholder, to=column_types[column].copy())
                 select_items.append(exp.alias_(cast_expr, column))
@@ -489,6 +502,10 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 column_name = column if isinstance(column, str) else str(column)
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
+                resolved = resolve_value_expression(value, self, column_name)
+                if resolved is not None:
+                    row_params.append(resolved)
+                    continue
                 placeholder, _ = cast("QueryBuilder", self).create_placeholder(value, column_name)
                 row_params.append(placeholder)
             parameterized_values.append(row_params)

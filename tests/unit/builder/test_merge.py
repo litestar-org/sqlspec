@@ -1103,3 +1103,71 @@ def test_merge_rejects_vector_distance_on_unsupported_dialect() -> None:
 
     with pytest.raises(SQLBuilderError, match="Vector distance is not supported"):
         _merge_builder("tsql").when_matched_then_update(a=distance).build()
+
+
+@pytest.mark.parametrize(
+    ("dialect", "source", "expected"),
+    [
+        pytest.param(
+            "tsql",
+            {"id": sql.column("c"), "n": 1},
+            "MERGE INTO [t] USING ( SELECT [c] AS [id], :n AS [n] ) AS [s] ON ( [t].[id] = [s].[id] ) "
+            "WHEN MATCHED THEN UPDATE SET [a] = :a",
+            id="tsql-row",
+        ),
+        pytest.param(
+            "tsql",
+            [{"id": sql.count("c"), "n": 1}],
+            "MERGE INTO [t] USING ( SELECT COUNT([c]) AS [id], :n AS [n] ) AS [s] ON ( [t].[id] = [s].[id] ) "
+            "WHEN MATCHED THEN UPDATE SET [a] = :a",
+            id="tsql-list",
+        ),
+    ],
+)
+def test_merge_using_dict_renders_expression_values(dialect: str, source: Any, expected: str) -> None:
+    """Expression values in a dict source render as SQL, and plain values bind."""
+    statement = (
+        sql
+        .merge(dialect=dialect)
+        .into("t")
+        .using(source, alias="s")
+        .on("t.id = s.id")
+        .when_matched_then_update(a=1)
+        .build()
+    )
+
+    assert _normalized_sql(statement) == expected
+    assert statement.parameters == {"n": 1, "a": 1}
+
+
+def test_merge_using_dict_renders_expression_values_on_db2() -> None:
+    """Db2 row sources render expression values without a parameter CAST."""
+    statement = (
+        sql
+        .merge(dialect="db2")
+        .into("t")
+        .using({"id": sql.column("c"), "n": 1}, alias="s")
+        .on("t.id = s.id")
+        .when_matched_then_update(a=2)
+        .build()
+    )
+
+    assert _normalized_sql(statement) == (
+        "MERGE INTO t USING ( SELECT c AS id, CAST(:n AS BIGINT) AS n FROM SYSIBM.SYSDUMMY1 ) AS s(id, n) "
+        "ON ( t.id = s.id ) WHEN MATCHED THEN UPDATE SET a = :a"
+    )
+    assert statement.parameters == {"n": 1, "a": 2}
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "oracle"])
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param({"id": sql.column("c")}, id="row"),
+        pytest.param([{"id": 1}, {"id": sql.count("c")}], id="later-row"),
+    ],
+)
+def test_merge_using_dict_rejects_expression_values_in_json_sources(dialect: str, source: Any) -> None:
+    """JSON row sources carry data only, so an expression value raises instead of serializing."""
+    with pytest.raises(SQLBuilderError, match="rows as JSON"):
+        sql.merge(dialect=dialect).into("t").using(source, alias="s")

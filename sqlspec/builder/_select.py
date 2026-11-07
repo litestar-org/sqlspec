@@ -720,6 +720,10 @@ class WhereClauseMixin:
         placeholders: list[exp.Expr] = []
         values_list = list(values)
         for index, element in enumerate(values_list):
+            resolved_element = resolve_value_expression(element, self, column_name)
+            if resolved_element is not None:
+                placeholders.append(resolved_element)
+                continue
             if len(values_list) == 1:
                 param_name = builder._next_parameter_name(column_name)
             else:

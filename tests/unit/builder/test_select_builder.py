@@ -436,3 +436,32 @@ def test_select_renders_sql_object_query_projection(projection: Any) -> None:
         'SELECT ( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."z" = :z ) AS "_col_0" FROM "t" AS "t"'
     )
     assert statement.parameters == {"z": 5}
+
+
+@pytest.mark.parametrize(
+    ("value", "array", "parameters"),
+    [
+        pytest.param(sql.column("b"), 'ARRAY("t"."b", :a_any_2)', {"a_any_2": 7}, id="column"),
+        pytest.param(sql.raw("b + :p", p=3), 'ARRAY("t"."b" + :p, :a_any_2)', {"p": 3, "a_any_2": 7}, id="sql-object"),
+        pytest.param(
+            sql.select("x").from_("y").where_eq("k", 5),
+            'ARRAY( ( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."k" = :k ), :a_any_2 )',
+            {"k": 5, "a_any_2": 7},
+            id="query-builder",
+        ),
+    ],
+)
+def test_where_any_renders_expression_elements(value: Any, array: str, parameters: dict[str, Any]) -> None:
+    """Expression elements of a where_any list render as SQL beside bound plain values."""
+    statement = sql.select("z").from_("t").where_any("a", [value, 7]).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + f'"t"."a" = ANY( {array} )'
+    assert statement.parameters == parameters
+
+
+def test_where_not_any_renders_expression_elements() -> None:
+    """Expression elements of a where_not_any list render as SQL."""
+    statement = sql.select("z").from_("t").where_not_any("a", [sql.column("b")]).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" <> ALL ( ARRAY("t"."b") )'
+    assert statement.parameters == {}
