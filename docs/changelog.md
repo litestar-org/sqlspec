@@ -7,6 +7,17 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.71.2
+
+**Changed:**
+
+* ADK stores can declare extra `extension_config["adk"]` keys through an `extension_config_options` `ClassVar`, matching the `events` extension. Validation accepts `ADKConfig` keys, the built-in adapter's `*ADKConfig` keys, and the options declared by both `adk_store_class` and `adk_memory_store_class`.
+* **Behavior change for third-party adapters:** external ADK stores must now declare extra options through `extension_config_options`. Configurations with explicit ADK stores and an `adapter_name` outside `sqlspec.adapters`, supported since v0.70.1 ([#877](https://github.com/litestar-org/sqlspec/pull/877)), skipped option validation and accepted any key. Undeclared keys and typos now raise `ImproperConfigurationError`, including memory settings outside `ADKConfig` such as `vector_dimensions`.
+
+**Fixed:**
+
+* Built-in configuration subclasses with explicit ADK stores accept the options those stores declare instead of raising `ImproperConfigurationError`.
+
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
 **Added:**
