@@ -7,6 +7,17 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.71.2 - Table and alias string validation
+
+**Changed:**
+
+* Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass subqueries as builders or expressions; pass join conditions through `on`. DDL table names accept a name only. Lateral joins additionally accept one function call without subqueries.
+
+**Fixed:**
+
+* Fixed `t AS u` rendering `AS AS u`, and rendered table aliases as quoted identifiers on every dialect.
+* Fixed the `MERGE` target renderer removing quotes from names that require them, and subquery aliases leaking into bound parameter names.
+
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
 **Added:**
