@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pymssql
 import pytest
@@ -51,6 +51,7 @@ from sqlspec.exceptions import (
     DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
+    MigrationError,
     NotFoundError,
     NotNullViolationError,
     OperationalError,
@@ -61,6 +62,9 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.migrations.commands import SyncMigrationCommands
+from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.runner import SyncMigrationRunner
 
 
 class FakeSybaseError(Exception):
@@ -1029,3 +1033,36 @@ def test_sybase_migration_tracker_existing_columns_query() -> None:
 def test_sybase_error_code_mapping_count() -> None:
     """_ERROR_CODE_MAPPING contains 38 error codes."""
     assert len(_ERROR_CODE_MAPPING) == 38
+
+
+def _sybase_migration_config(tmp_path: Path, **migration_options: str) -> SybaseConfig:
+    return SybaseConfig(
+        connection_config={"user": "sa", "password": "secret", "database": "demo"},
+        migration_config={"script_location": str(tmp_path), **migration_options},
+    )
+
+
+@pytest.mark.parametrize(
+    ("option", "message"),
+    [
+        ("default_schema", "SybaseConfig does not support migration default schemas"),
+        ("version_table_schema", "SybaseConfig does not support migration version table schemas"),
+    ],
+)
+def test_sybase_rejects_migration_schema_options(tmp_path: Path, option: str, message: str) -> None:
+    """Schema options raise when commands are created, before any connection opens."""
+    config = _sybase_migration_config(tmp_path, **{option: "audit"})
+
+    with pytest.raises(MigrationError, match=message):
+        SyncMigrationCommands(config)
+
+
+def test_sybase_rejects_migration_schema_directive(tmp_path: Path) -> None:
+    """A schema directive raises before any driver call."""
+    migration_file = tmp_path / "0001_directive.sql"
+    migration_file.write_text("-- schema: audit\n-- name: migrate-0001-up\nSELECT 1;\n")
+    runner = SyncMigrationRunner(tmp_path, {}, MigrationContext(config=_sybase_migration_config(tmp_path)), {})
+    migration = runner.load_migration(migration_file, "0001")
+
+    with pytest.raises(MigrationError, match="does not support migration schema directives"):
+        runner.execute_upgrade(Mock(), migration, use_transaction=False)
