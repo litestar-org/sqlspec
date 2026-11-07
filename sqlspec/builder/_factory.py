@@ -5,8 +5,9 @@ Provides statement builders (select, insert, update, etc.) and column expression
 
 import hashlib
 import logging
+import re
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, Union, cast, final
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, Union, cast, final
 
 import sqlglot
 from sqlglot import exp
@@ -86,6 +87,7 @@ ColumnLike: TypeAlias = Union[
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
+_FIRST_WORD_RE: Final["re.Pattern[str]"] = re.compile(r"\w+")
 SQL_STARTERS = {
     "SELECT",
     "INSERT",
@@ -1547,7 +1549,8 @@ class SQLFactory:
         if expected_type:
             return candidate_upper.startswith(expected_type.upper())
 
-        if any(candidate_upper.startswith(starter) for starter in SQL_STARTERS):
+        first_word = _FIRST_WORD_RE.match(candidate_upper)
+        if first_word is not None and first_word.group() in SQL_STARTERS:
             return " " in candidate
 
         return False

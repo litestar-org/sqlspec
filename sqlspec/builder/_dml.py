@@ -11,8 +11,8 @@ from sqlglot.errors import ParseError, TokenError
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import (
     _SIMPLE_IDENTIFIER_RE,
-    _mark_explicit_table_quotes,
     _normalize_dialect,
+    _parse_dml_target,
     _simple_column_expression,
     resolve_value_expression,
 )
@@ -49,6 +49,8 @@ class DeleteFromClauseMixin:
 
     __slots__ = ()
 
+    dialect: "DialectType | None"
+
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
 
@@ -63,13 +65,15 @@ class DeleteFromClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", _mark_explicit_table_quotes(exp.to_table(table), table))
+        current_expr.set("this", _parse_dml_target(table, dialect=self.dialect))
         return self
 
 
 @trait
 class InsertIntoClauseMixin:
     __slots__ = ()
+
+    dialect: "DialectType | None"
 
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
@@ -85,7 +89,7 @@ class InsertIntoClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", _mark_explicit_table_quotes(exp.to_table(table), table))
+        current_expr.set("this", _parse_dml_target(table, dialect=self.dialect))
         return self
 
 
@@ -263,6 +267,8 @@ class InsertFromSelectMixin:
 class UpdateTableClauseMixin:
     __slots__ = ()
 
+    dialect: "DialectType | None"
+
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
 
@@ -274,8 +280,7 @@ class UpdateTableClauseMixin:
 
         assert current_expr is not None
 
-        table_expr: exp.Expr = _mark_explicit_table_quotes(exp.to_table(table_name, alias=alias), table_name)
-        current_expr.set("this", table_expr)
+        current_expr.set("this", _parse_dml_target(table_name, alias, dialect=self.dialect))
         return self
 
 

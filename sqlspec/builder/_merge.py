@@ -16,7 +16,12 @@ from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import _coerce_column, resolve_value_expression
+from sqlspec.builder._parsing_utils import (
+    _coerce_column,
+    _is_simple_identifier,
+    _parse_aliased_table,
+    resolve_value_expression,
+)
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
@@ -104,15 +109,21 @@ class MergeIntoClauseMixin:
 
         table_expr: exp.Expr
         if isinstance(table, str):
-            table_expr = exp.to_table(table)
-            if is_explicitly_quoted(table):
-                stripped = table.strip('"`')
-                table_expr.set("this", exp.to_identifier(stripped, quoted=True))
-                cast("QueryBuilder", self)._merge_target_quoted = True  # pyright: ignore[reportPrivateUsage]
+            builder = cast("QueryBuilder", self)
+            parsed = None if alias else _parse_aliased_table(table, builder.dialect)
+            if parsed is not None:
+                table_expr = parsed
+                builder._merge_target_quoted = bool(parsed.this.quoted)  # pyright: ignore[reportPrivateUsage]
             else:
-                cast("QueryBuilder", self)._merge_target_quoted = False  # pyright: ignore[reportPrivateUsage]
-            if alias:
-                table_expr = exp.alias_(table_expr, alias, table=True)
+                table_expr = exp.to_table(table)
+                if is_explicitly_quoted(table):
+                    stripped = table.strip('"`')
+                    table_expr.set("this", exp.to_identifier(stripped, quoted=True))
+                    builder._merge_target_quoted = True  # pyright: ignore[reportPrivateUsage]
+                else:
+                    builder._merge_target_quoted = False  # pyright: ignore[reportPrivateUsage]
+                if alias:
+                    table_expr = exp.alias_(table_expr, alias, table=True)
         else:
             table_expr = table
 

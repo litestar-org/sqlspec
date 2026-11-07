@@ -1018,7 +1018,7 @@ class QueryBuilder:
         if dialect is None:
             return expression
         if dialect == "tsql":
-            expression = _qualify_tsql_output(expression)
+            expression = _rewrite_tsql_aliased_target(_qualify_tsql_output(expression))
         try:
             config = get_dialect_config("spanner" if dialect == "spangres" else dialect)
         except ValueError:
@@ -1476,6 +1476,43 @@ def _unquote_identifier(node: exp.Expr) -> exp.Expr:
     return node
 
 
+def _rewrite_tsql_aliased_target(expression: exp.Expr) -> exp.Expr:
+    """Rewrite a copy of an aliased DML target into the form SQL Server accepts.
+
+    An aliased update becomes ``UPDATE u ... FROM t AS u`` and an aliased delete becomes
+    ``DELETE u FROM t AS u``.
+
+    Args:
+        expression: Statement about to render for T-SQL.
+
+    Returns:
+        The rewritten copy, or the original expression when its target has no alias.
+
+    Raises:
+        SQLBuilderError: If the statement is an INSERT with an aliased target.
+    """
+    if not isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
+        return expression
+    target_node = expression.this.this if isinstance(expression.this, exp.Schema) else expression.this
+    if not isinstance(target_node, exp.Table) or not target_node.alias:
+        return expression
+    if isinstance(expression, exp.Insert):
+        msg = "T-SQL INSERT targets do not support aliases."
+        raise SQLBuilderError(msg)
+    rewritten = expression.copy()
+    target = rewritten.this
+    if isinstance(rewritten, exp.Delete):
+        if not rewritten.args.get("tables"):
+            rewritten.set("tables", [_tsql_target_reference(target)])
+        return rewritten
+    existing_from = rewritten.args.get("from_")
+    if existing_from is not None:
+        target.append("joins", exp.Join(this=existing_from.this))
+    rewritten.set("this", _tsql_target_reference(target))
+    rewritten.set("from_", exp.From(this=target))
+    return rewritten
+
+
 def _qualify_tsql_output(expression: exp.Expr) -> exp.Expr:
     """Rewrite a copy of a DML statement so its ``OUTPUT`` clause is valid T-SQL.
 
@@ -1499,7 +1536,7 @@ def _qualify_tsql_output(expression: exp.Expr) -> exp.Expr:
         "expressions", [_qualify_output_projection(projection, source, target) for projection in returning.expressions]
     )
     if target is not None and isinstance(qualified, exp.Delete) and not qualified.args.get("tables"):
-        qualified.set("tables", [_delete_output_target(target)])
+        qualified.set("tables", [_tsql_target_reference(target)])
     return qualified
 
 
@@ -1537,8 +1574,8 @@ def _is_output_target_column(column: exp.Column, target: exp.Table | None) -> bo
     return not column.db or column.db.lower() == target.db.lower()
 
 
-def _delete_output_target(target: exp.Table) -> exp.Table:
-    """Return the table reference a T-SQL delete names before ``OUTPUT``."""
+def _tsql_target_reference(target: exp.Table) -> exp.Table:
+    """Return the reference T-SQL uses for a modified table: its alias, or the table itself."""
     if target.alias:
         return exp.Table(this=exp.to_identifier(target.alias))
     return target.copy()

@@ -162,3 +162,35 @@ def test_builder_returning_output_rejected_on_triggered_table(case: Any, request
         finally:
             driver.execute_script(_RETURNING_CLEANUP)
             driver.commit()
+
+
+@pytest.mark.xdist_group("mssql")
+@pytest.mark.parametrize("case", _RETURNING_CONFIGS)
+def test_builder_aliased_dml_target_native(case: Any, request: pytest.FixtureRequest) -> None:
+    target = f"{_RETURNING_TARGET} AS u"
+    cases = [
+        (sql.update(target, dialect="tsql").set(a=11).where_eq("u.id", 1).returning("a", "u.id"), [{"a": 11, "id": 1}]),
+        (
+            sql
+            .update(target, dialect="tsql")
+            .set(a=12)
+            .from_(_RETURNING_SOURCE, alias="s")
+            .where("u.id = s.id")
+            .returning("DELETED.a AS old", "s.b"),
+            [{"old": 11, "b": 7}],
+        ),
+        (sql.delete(target, dialect="tsql").where_eq("u.id", 2).returning("u.a"), [{"a": 20}]),
+    ]
+    config = request.getfixturevalue(case.fixture_name)
+    with config.provide_session() as driver:
+        driver.execute_script(_RETURNING_SETUP)
+        try:
+            for builder, expected in cases:
+                assert driver.execute(builder).get_data() == expected
+            assert driver.execute(sql.update(target, dialect="tsql").set(a=13).where_eq("u.id", 3)).rows_affected == 1
+            assert driver.execute(sql.delete(target, dialect="tsql").where_eq("u.id", 4)).rows_affected == 1
+            remaining = driver.execute(f"SELECT id, a FROM {_RETURNING_TARGET} ORDER BY id").get_data()
+            assert remaining == [{"id": 1, "a": 12}, {"id": 3, "a": 13}]
+        finally:
+            driver.execute_script(_RETURNING_CLEANUP)
+            driver.commit()
