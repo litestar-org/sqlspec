@@ -13,8 +13,10 @@ from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import (
     _SIMPLE_IDENTIFIER_RE,
     _normalize_dialect,
-    _parse_dml_target,
+    _parse_table_reference,
     _simple_column_expression,
+    extract_expression,
+    extract_sql_object_expression,
     resolve_value_expression,
 )
 from sqlspec.exceptions import SQLBuilderError
@@ -68,7 +70,7 @@ class DeleteFromClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", _parse_dml_target(table, dialect=self.dialect))
+        current_expr.set("this", _parse_table_reference(table))
         return self
 
 
@@ -92,7 +94,7 @@ class InsertIntoClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", _parse_dml_target(table, dialect=self.dialect))
+        current_expr.set("this", _parse_table_reference(table))
         return self
 
 
@@ -283,7 +285,7 @@ class UpdateTableClauseMixin:
 
         assert current_expr is not None
 
-        current_expr.set("this", _parse_dml_target(table_name, alias, dialect=self.dialect))
+        current_expr.set("this", _parse_table_reference(table_name, alias))
         return self
 
 
@@ -385,7 +387,7 @@ class UpdateFromClauseMixin:
 
         table_expr: exp.Expr
         if isinstance(table, str):
-            table_expr = _parse_dml_target(table, alias, dialect=self.dialect)
+            table_expr = _parse_table_reference(table, alias)
         elif isinstance(table, exp.Expr):
             if isinstance(table, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=table.copy())

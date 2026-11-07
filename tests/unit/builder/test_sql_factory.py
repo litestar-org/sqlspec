@@ -1672,12 +1672,12 @@ def test_for_update_of_with_parameters() -> None:
         sql
         .select("j.id", "u.name", dialect="postgres")
         .from_("job j")
-        .join("users u ON j.user_id = u.id")
+        .join("users u", "j.user_id = u.id")
         .where_eq("j.status", "pending")
         .for_update(of=["j"])
     )
     stmt = query.build()
-    assert "FOR UPDATE OF j" in stmt.sql
+    assert 'FOR UPDATE OF "j"' in stmt.sql
     assert "%(status)s" in stmt.sql or ":status" in stmt.sql
     assert stmt.parameters["status"] == "pending"
 

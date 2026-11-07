@@ -17,6 +17,7 @@ from sqlglot import exp
 from sqlglot.generator import Generator
 
 from sqlspec.builder._generation import invalidate_generator_dispatch
+from sqlspec.builder._parsing_utils import _parse_table_reference
 
 if TYPE_CHECKING:
     from sqlglot.generators.bigquery import BigQueryGenerator
@@ -65,11 +66,11 @@ def create_temporal_table(
     register_version_generators()
 
     if isinstance(table, str):
-        table_expr = exp.to_table(table)
+        table_expr = _parse_table_reference(table)
     elif isinstance(table, exp.Table):
         table_expr = table.copy()
     else:
-        table_expr = exp.to_table(str(table))
+        table_expr = _parse_table_reference(str(table))
 
     version = create_temporal_version(this=kind, expression=as_of)
 

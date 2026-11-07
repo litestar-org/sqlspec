@@ -27,7 +27,12 @@ from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from sqlglot.schema import MappingSchema
 
 from sqlspec.builder._locking import register_lock_generator
-from sqlspec.builder._parsing_utils import _normalize_dialect, _resolve_dialect
+from sqlspec.builder._parsing_utils import (
+    _NON_IDENTIFIER_PATTERN,
+    _normalize_dialect,
+    _parse_alias_identifier,
+    _resolve_dialect,
+)
 from sqlspec.builder._vector_distance import has_vector_distance_ancestor, register_vector_distance_generator
 from sqlspec.core import (
     SQL,
@@ -285,6 +290,7 @@ class QueryBuilder:
         if alias in self._with_ctes:
             self._raise_builder_error(f"CTE with alias '{alias}' already exists.")
 
+        alias_identifier = _parse_alias_identifier(alias)
         cte_select_expression = self._resolve_cte_query(alias, query)
         cte_columns = columns
         if cte_columns is None and isinstance(query, exp.Values):
@@ -299,12 +305,7 @@ class QueryBuilder:
             elif isinstance(query_private_cols, (list, tuple)):
                 cte_columns = [str(c) for c in query_private_cols]
 
-        if cte_columns:
-            alias_node: exp.Expr = exp.TableAlias(
-                this=exp.to_identifier(alias), columns=[exp.to_identifier(c) for c in cte_columns]
-            )
-        else:
-            alias_node = exp.to_table(alias)
+        alias_node = exp.TableAlias(this=alias_identifier, columns=[exp.to_identifier(c) for c in cte_columns or ()])
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=alias_node)
         self._with_ctes[alias].meta["recursive"] = recursive
         return self
@@ -932,8 +933,9 @@ class QueryBuilder:
             Mapping of old parameter names to new unique names
         """
         param_mapping = {}
+        prefix = _NON_IDENTIFIER_PATTERN.sub("_", cte_name).strip("_") or "subquery"
         for old_name, value in parameters.items():
-            new_name = self._next_parameter_name(f"{cte_name}_{old_name}")
+            new_name = self._next_parameter_name(f"{prefix}_{old_name}")
             param_mapping[old_name] = new_name
             self.add_parameter(value, name=new_name)
         return param_mapping
@@ -1341,7 +1343,8 @@ class QueryBuilder:
             if end_quote > 0:
                 table_name = sql_string[len('MERGE INTO "') : end_quote]
                 remainder = sql_string[end_quote + 1 :]
-                return f"MERGE INTO {table_name}{remainder}"
+                if _UNQUOTED_IDENTIFIER_PATTERN.fullmatch(table_name) and remainder[:1] not in {'"', "."}:
+                    return f"MERGE INTO {table_name}{remainder}"
         return sql_string
 
     def _should_identify(self, dialect: "DialectType | str | None") -> bool:

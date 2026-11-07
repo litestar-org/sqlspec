@@ -9,6 +9,15 @@ important operational fixes.
 
 ### v0.71.2
 
+**Changed:**
+
+* Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass subqueries as builders or expressions; pass join conditions through `on`. DDL table names accept a name only. Lateral joins additionally accept one function call without subqueries.
+
+**Fixed:**
+
+* Fixed `t AS u` rendering `AS AS u`, and rendered table aliases as quoted identifiers on every dialect.
+* Fixed the `MERGE` target renderer removing quotes from names that require them, and subquery aliases leaking into bound parameter names.
+
 **Breaking changes:**
 
 * `where_any()`, `where_not_any()`, their `or_where_*` forms, and `sql.not_any_()` no longer parse strings as subqueries, and raise `SQLBuilderError` for a string. Any other iterable, including a generator, binds its elements. Before: `.where_any("a", "SELECT x FROM y")`. After: `.where_any("a", sql.select("x").from_("y"))`.
