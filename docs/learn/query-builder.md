@@ -33,12 +33,12 @@ preview = query.to_sql(show_parameters=True)
 
 ## Projections and Column Expressions
 
-Use `sql.select(...)` to add projections, `.select_only(...)` to replace them, `.distinct()` to deduplicate rows, and `sql.column(name, table=...)` for typed column expressions:
+Use `sql.select(...)` to add projections, `.select_only(...)` to replace them, `.distinct()` to deduplicate rows, and `sql.c` (`sql.c.name`, `sql.c("name", table="u")`, `sql.c["u.name"]`), `sql.col(name, table=...)`, or `sql.column(name, table=...)` for typed column expressions. For table-valued function sources, pass `sql.func(name, *args)` with `alias=`:
 
 ```python
 from sqlspec import sql
 
-u_name = sql.column("name", table="u")
+u_name = sql.c("name", table="u")
 proj = (
     sql
     .select("u.id", "u.email")
@@ -49,6 +49,10 @@ proj = (
 )
 # SQL: SELECT DISTINCT u.id, u.name AS user_name FROM users AS u
 # SQL: ORDER BY u.name ASC NULLS LAST
+# Parameters: {}
+
+series_q = sql.select("*").from_(sql.func("generate_series", 1, 3), alias="g")
+# SQL: SELECT * FROM GENERATE_SERIES(1, 3) AS g
 # Parameters: {}
 ```
 

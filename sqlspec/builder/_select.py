@@ -35,11 +35,12 @@ from sqlspec.builder._parsing_utils import (
     resolve_value_expression,
     sql_named_parameters,
     to_expression,
+    unwrap_expression_source,
 )
 from sqlspec.core import SQL, ParameterStyle, apply_direction, ordered
 from sqlspec.core.query_modifiers import expr_eq, expr_gt, expr_gte, expr_lt, expr_lte, expr_neq, expr_not_like
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import has_parameter_builder, is_expression, is_iterable_parameters
+from sqlspec.utils.type_guards import has_parameter_builder, is_iterable_parameters
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -278,17 +279,19 @@ class SelectClauseMixin:
         ``as_of`` copies the resolved table expression, normalizes aliases, and adds an ``exp.Version`` so sqlglot's generator emits dialect-specific time-travel SQL.
 
         A string ``table`` is a table name with an optional alias. Pass function sources and subqueries as
-        expressions or builders, for example ``from_(sql.raw("fn(:n)", n=1), alias="f")``. Table text must
-        be trusted, because engines may resolve names to files or external sources.
+        expressions or builders, for example ``from_(sql.func("fn", 1), alias="f")`` or
+        ``from_(sql.raw("fn(:n)", n=1), alias="f")``. Table text must be trusted, because engines may resolve
+        names to files or external sources.
         """
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="FROM clause only valid for SELECT.")
         from_expr: exp.Expr
+        unwrapped_source = unwrap_expression_source(table)
 
         if isinstance(table, str):
             from_expr = parse_table_expression(table, alias, dialect=builder.dialect)
-        elif is_expression(table):
-            from_expr = exp.alias_(table, alias) if alias else table
+        elif unwrapped_source is not None:
+            from_expr = exp.alias_(unwrapped_source, alias) if alias else unwrapped_source
         elif has_parameter_builder(table):
             subquery_expression = (
                 cast("QueryBuilder", table)._build_final_expression(copy=True)
@@ -325,7 +328,9 @@ class SelectClauseMixin:
         builder.set_expression(select_expr.from_(from_expr, copy=False))
         return cast("Self", builder)
 
-    def group_by(self, *columns: Union[str, exp.Expr, "Column", "ExpressionWrapper"]) -> Self:
+    def group_by(
+        self, *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", "ExpressionWrapper"]
+    ) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = builder.get_expression()
         if select_expr is None or not isinstance(select_expr, exp.Select):
@@ -337,13 +342,17 @@ class SelectClauseMixin:
         builder.set_expression(select_expr)
         return cast("Self", builder)
 
-    def group_by_rollup(self, *columns: str | exp.Expr) -> Self:
+    def group_by_rollup(
+        self, *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", "ExpressionWrapper"]
+    ) -> Self:
         return self.group_by(_rollup_expression(*columns))
 
-    def group_by_cube(self, *columns: str | exp.Expr) -> Self:
+    def group_by_cube(
+        self, *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", "ExpressionWrapper"]
+    ) -> Self:
         return self.group_by(_cube_expression(*columns))
 
-    def group_by_grouping_sets(self, *column_sets: tuple[str, ...] | list[str]) -> Self:
+    def group_by_grouping_sets(self, *column_sets: tuple[Any, ...] | list[Any]) -> Self:
         return self.group_by(_grouping_sets_expression(*column_sets))
 
 
@@ -353,7 +362,11 @@ class OrderByClauseMixin:
 
     _expression: exp.Expr | None
 
-    def order_by(self, *items: Union[str, exp.Ordered, "Column"], desc: bool = False) -> Self:
+    def order_by(
+        self,
+        *items: Union[str, exp.Ordered, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", "ExpressionWrapper"],
+        desc: bool = False,
+    ) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="ORDER BY only valid for SELECT.")
 

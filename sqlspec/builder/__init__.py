@@ -11,7 +11,7 @@ from sqlspec import _COMPILED
 
 if TYPE_CHECKING:
     from sqlspec.builder._base import BuiltQuery, ExpressionBuilder, QueryBuilder
-    from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
+    from sqlspec.builder._column import Column, ColumnExpression, ColumnNamespace, FunctionColumn
     from sqlspec.builder._ddl import (
         AlterOperation,
         AlterTable,
@@ -124,6 +124,7 @@ __all__ = (
     "Column",
     "ColumnDefinition",
     "ColumnExpression",
+    "ColumnNamespace",
     "CommentOn",
     "CommonTableExpressionMixin",
     "ConflictBuilder",
@@ -220,6 +221,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "Column": ("sqlspec.builder._column", "Column"),
     "ColumnDefinition": ("sqlspec.builder._ddl", "ColumnDefinition"),
     "ColumnExpression": ("sqlspec.builder._column", "ColumnExpression"),
+    "ColumnNamespace": ("sqlspec.builder._column", "ColumnNamespace"),
     "CommentOn": ("sqlspec.builder._ddl", "CommentOn"),
     "CommonTableExpressionMixin": ("sqlspec.builder._select", "CommonTableExpressionMixin"),
     "ConflictBuilder": ("sqlspec.builder._insert", "ConflictBuilder"),

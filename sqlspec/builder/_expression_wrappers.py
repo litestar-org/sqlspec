@@ -19,16 +19,23 @@ class ExpressionWrapper:
 
     __slots__ = ("_expression",)
 
+    _expression: exp.Expr
+
     def __init__(self, expression: exp.Expr) -> None:
         self._expression = expression
-
-    def __str__(self) -> str:
-        return str(self.expression)
 
     @property
     def expression(self) -> exp.Expr:
         """Get the underlying SQLGlot expression."""
         return self._expression
+
+    @property
+    def sqlglot_expression(self) -> exp.Expr:
+        """Get the underlying SQLGlot expression."""
+        return self._expression
+
+    def __str__(self) -> str:
+        return str(self.expression)
 
     def as_(self, alias: str) -> exp.Alias:
         """Create an aliased expression."""

@@ -749,3 +749,89 @@ def test_invisible_characters_in_explicit_alias_raise(dialect: str, character: s
 def test_invisible_characters_inside_quotes_stay_one_identifier(dialect: str, expected: str) -> None:
     built = sql.select("*", dialect=dialect).from_('"x\ufeffy"').build()
     assert " ".join(built.sql.split()) == expected
+
+
+@pytest.mark.parametrize(
+    ("build_query", "expected_sql", "expected_params"),
+    [
+        pytest.param(
+            lambda: sql.select("*").from_(sql.func("generate_series", 1, 3), alias="g"),
+            'SELECT * FROM GENERATE_SERIES(1, 3) AS "g"',
+            {},
+            id="select-from-sql-func",
+        ),
+        pytest.param(
+            lambda: sql.select("*").from_("t").join(sql.func("generate_series", 1, 3), "t.a = g.a", alias="g"),
+            'SELECT * FROM "t" JOIN GENERATE_SERIES(1, 3) AS "g" ON "t"."a" = "g"."a"',
+            {},
+            id="join-sql-func",
+        ),
+        pytest.param(
+            lambda: sql.select("*").from_("t").lateral_join(sql.func("generate_series", 1, 3), alias="g"),
+            'SELECT * FROM "t" AS "t" CROSS JOIN LATERAL GENERATE_SERIES(1, 3) AS "g"',
+            {},
+            id="lateral-join-sql-func",
+        ),
+        pytest.param(
+            lambda: (
+                sql
+                .select("*")
+                .from_("t")
+                .join(sql.inner_join_(sql.func("generate_series", 1, 3), alias="g").on("t.a = g.a"))
+            ),
+            'SELECT * FROM "t" JOIN GENERATE_SERIES(1, 3) AS "g" ON "t"."a" = "g"."a"',
+            {},
+            id="join-builder-sql-func",
+        ),
+        pytest.param(
+            lambda: (
+                sql.select("*").from_("t").join(sql.inner_join_(sql.raw("my_fn(:n)", n=3), alias="g").on("t.a = g.a"))
+            ),
+            'SELECT * FROM "t" JOIN MY_FN(%(n)s) AS "g" ON "t"."a" = "g"."a"',
+            {"n": 3},
+            id="join-builder-sql-raw-params",
+        ),
+        pytest.param(
+            lambda: sql.update("t").set(a=1).from_(sql.func("generate_series", 1, 3), alias="g").where("t.id = g.id"),
+            'UPDATE "t" SET "a" = %(a)s FROM GENERATE_SERIES(1, 3) AS "g" WHERE "g"."id" = "t"."id"',
+            {"a": 1},
+            id="update-from-sql-func",
+        ),
+        pytest.param(
+            lambda: sql.update("t").set(a=1).from_(sql.raw("my_fn(:n)", n=3), alias="g").where("t.id = g.id"),
+            'UPDATE "t" SET "a" = %(a)s FROM MY_FN(%(n)s) AS "g" WHERE "g"."id" = "t"."id"',
+            {"a": 1, "n": 3},
+            id="update-from-sql-raw-params",
+        ),
+        pytest.param(
+            lambda: (
+                sql
+                .merge("t", dialect="postgres")
+                .using(sql.func("generate_series", 1, 3), alias="g")
+                .on("t.id = g.id")
+                .when_matched_then_update(a=sql.c("a", "g"))
+            ),
+            'MERGE INTO t USING GENERATE_SERIES(1, 3) AS "g" ON ( "t"."id" = "g"."id" ) WHEN MATCHED THEN UPDATE SET "a" = "g"."a"',
+            {},
+            id="merge-using-sql-func",
+        ),
+        pytest.param(
+            lambda: (
+                sql
+                .merge("t", dialect="postgres")
+                .using(sql.raw("my_fn(:n)", n=3), alias="g")
+                .on("t.id = g.id")
+                .when_matched_then_update(a=sql.c("a", "g"))
+            ),
+            'MERGE INTO t USING MY_FN(%(n)s) AS "g" ON ( "t"."id" = "g"."id" ) WHEN MATCHED THEN UPDATE SET "a" = "g"."a"',
+            {"n": 3},
+            id="merge-using-sql-raw-params",
+        ),
+    ],
+)
+def test_sql_func_and_sql_raw_sources_across_builder_clauses(
+    build_query: "Callable[[], Any]", expected_sql: str, expected_params: dict[str, Any]
+) -> None:
+    built = build_query().build(dialect="postgres")
+    assert " ".join(built.sql.split()) == expected_sql
+    assert built.parameters == expected_params

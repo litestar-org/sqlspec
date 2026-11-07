@@ -16,6 +16,7 @@ from sqlspec.builder._parsing_utils import (
     _parse_table_reference,
     _simple_column_expression,
     resolve_value_expression,
+    unwrap_expression_source,
 )
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
@@ -384,16 +385,19 @@ class UpdateFromClauseMixin:
             raise SQLBuilderError(msg)
 
         table_expr: exp.Expr
+        unwrapped_source = unwrap_expression_source(table, builder=cast("SQLBuilderProtocol", self))
         if isinstance(table, str):
             table_expr = _parse_table_reference(table, alias, cast("QueryBuilder", self).dialect)
-        elif isinstance(table, exp.Expr):
-            if isinstance(table, (exp.Select, exp.SetOperation)):
-                table_expr = exp.Subquery(this=table.copy())
+        elif unwrapped_source is not None:
+            if isinstance(unwrapped_source, (exp.Select, exp.SetOperation)):
+                table_expr = exp.Subquery(this=unwrapped_source.copy())
                 if alias:
                     table_expr = exp.alias_(table_expr, alias, table=True)
             else:
                 table_expr = (
-                    exp.alias_(table.copy(), alias, table=not isinstance(table, exp.Func)) if alias else table.copy()
+                    exp.alias_(unwrapped_source.copy(), alias, table=not isinstance(unwrapped_source, exp.Func))
+                    if alias
+                    else unwrapped_source.copy()
                 )
         elif (
             hasattr(table, "build")
@@ -401,13 +405,15 @@ class UpdateFromClauseMixin:
             or hasattr(table, "get_expression")
             or hasattr(table, "_expression")
         ):
-            raw_expression = None
-            if hasattr(table, "_build_final_expression"):
-                raw_expression = table._build_final_expression(copy=True)
-            elif hasattr(table, "get_expression"):
-                raw_expression = table.get_expression()
-            elif hasattr(table, "_expression"):
-                raw_expression = table._expression
+            raw_expression: Any = None
+            build_final = getattr(table, "_build_final_expression", None)
+            get_expr = getattr(table, "get_expression", None)
+            if callable(build_final):
+                raw_expression = build_final(copy=True)
+            elif callable(get_expr):
+                raw_expression = get_expr()
+            else:
+                raw_expression = getattr(table, "_expression", None)
 
             if raw_expression is None:
                 msg = "Subquery builder has no expression to include in FROM clause."

@@ -1,6 +1,6 @@
 # Expressions, Window Functions and Vector Search
 
-Compose typed aggregate, scalar, conditional, window, and vector search expressions using either `sql.*` factory methods or `Column` descriptors (`sql.column(...)`).
+Compose typed aggregate, scalar, conditional, window, and vector search expressions using either `sql.*` factory methods or `Column` descriptors (`sql.c.name`, `sql.c("name", table="u")`, `sql.c["first-name"]`, `sql.col(...)`, or `sql.column(...)`).
 
 ## Aggregations and GROUP BY Extensions
 
@@ -32,25 +32,28 @@ rollup_q = (
 
 | Category | SQLFactory Helpers | Column Methods |
 | --- | --- | --- |
+| Arbitrary Functions & Tokens | `sql.func(name, *args, dialect=...)`, `sql.var(name)` | None |
 | Type Conversion | `sql.cast(col, dtype)`, `sql.to_literal(val)` | `col.cast(dtype)` |
 | NULL Handling | `sql.coalesce(*exprs)`, `sql.nvl(c, v)`, `sql.nvl2(c, a, b)`, `sql.decode(c, s1, r1, ...)` | `col.coalesce(*vals)` |
 | String Functions | `sql.concat(*exprs)`, `sql.upper(c)`, `sql.lower(c)`, `sql.length(c)` | `col.lower()`, `col.upper()`, `col.length()`, `col.trim()`, `col.substring(pos, len)` |
 | Math Functions | `sql.round(c, decimals)` | `col.abs()`, `col.round(decimals)`, `col.floor()`, `col.ceil()` |
 
-Column methods return a `FunctionColumn`, which supports `.cast()`, `.as_()`, ordering, and comparison helpers but not further string or math methods, so `email.trim().lower()` is not available:
+Column methods and `sql.func(...)` return a `FunctionColumn`, which supports `.cast()`, `.as_()`, ordering, and comparison helpers. Use `sql.func(name, *args)` for any SQL or table-valued function not covered by a dedicated shortcut; Python primitives in `*args` render as SQL literals while `Column` and expression arguments render as SQL expressions:
 
 ```python
 from sqlspec import sql
 
-email = sql.column("email")
-price = sql.column("price")
+email = sql.c.email
+price = sql.c.price
 scalar_q = sql.select(
     email.lower().as_("norm_email"),
     sql.coalesce("nickname", "email").as_("display_name"),
+    sql.func("nullif", price, 0).as_("nonzero_price"),
     price.round(2).cast("NUMERIC(10, 2)").as_("rounded_price"),
 ).from_("users")
 # SQL: SELECT LOWER(email) AS norm_email,
 # SQL: COALESCE(nickname, email) AS display_name,
+# SQL: NULLIF(price, 0) AS nonzero_price,
 # SQL: CAST(ROUND(price, 2) AS DECIMAL(10, 2)) AS rounded_price FROM users
 # Parameters: {}
 ```

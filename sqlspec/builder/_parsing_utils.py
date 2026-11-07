@@ -37,6 +37,7 @@ __all__ = (
     "resolve_value_expression",
     "sql_named_parameters",
     "to_expression",
+    "unwrap_expression_source",
 )
 
 ALIAS_PARTS_EXPECTED_COUNT = 2
@@ -285,7 +286,7 @@ def _parse_table_reference(
     ):
         msg = (
             f"Invalid table reference {table_input!r}: table text cannot hold function calls or subqueries. "
-            "Pass an expression or builder instead, such as sql.raw('fn(1)') or exp.func('fn', 1), with alias=."
+            "Pass an expression or builder instead, such as sql.func('fn', 1) or sql.raw('fn(1)'), with alias=."
         )
         raise SQLBuilderError(msg)
 
@@ -691,13 +692,34 @@ def extract_expression(value: Any) -> exp.Expr:
     """
     if isinstance(value, str):
         return exp.column(value)
-    if isinstance(value, Column):
+    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
         return value.sqlglot_expression
     if isinstance(value, ExpressionWrapper):
         return value.expression
     if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
+
+
+def unwrap_expression_source(value: Any, builder: Any = None) -> exp.Expr | None:
+    """Extract a SQLGlot expression from an expression, builder wrapper, or SQL object.
+
+    Args:
+        value: Candidate expression, wrapper, or SQL object.
+        builder: Optional builder for merging SQL object parameters.
+
+    Returns:
+        Underlying ``exp.Expr``, or ``None`` when ``value`` is not an expression or wrapper.
+    """
+    if isinstance(value, exp.Expr):
+        return value
+    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
+        return value.sqlglot_expression.copy()
+    if isinstance(value, ExpressionWrapper):
+        return value.expression.copy()
+    if builder is not None and isinstance(value, SQL):
+        return extract_sql_object_expression(value, builder=builder)
+    return None
 
 
 def to_expression(value: Any) -> exp.Expr:
@@ -709,6 +731,10 @@ def to_expression(value: Any) -> exp.Expr:
     Returns:
         Raw SQLGlot expression.
     """
+    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
+        return value.sqlglot_expression
+    if isinstance(value, ExpressionWrapper):
+        return value.expression
     if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
@@ -745,39 +771,62 @@ def _mark_explicit_table_quotes(table: exp.Table, source: str) -> exp.Table:
     return table
 
 
-def _normalize_partition_by(partition_by: str | list[str] | exp.Expr | None) -> list[exp.Expr] | None:
+def _normalize_partition_by(
+    partition_by: str | list[Any] | exp.Expr | Column | FunctionColumn | ColumnExpression | ExpressionWrapper | None,
+) -> list[exp.Expr] | None:
     if isinstance(partition_by, str):
         return [exp.column(partition_by)]
     if isinstance(partition_by, list):
-        return [exp.column(column) for column in partition_by]
+        return [extract_expression(column) for column in partition_by]
+    if isinstance(partition_by, (Column, FunctionColumn, ColumnExpression, ExpressionWrapper)):
+        return [extract_expression(partition_by)]
     if isinstance(partition_by, exp.Expr):
         return [partition_by]
     return None
 
 
-def _normalize_order_by(order_by: str | list[str] | exp.Expr | None) -> exp.Order | None:
+def _normalize_order_by(
+    order_by: str | list[Any] | exp.Expr | Column | FunctionColumn | ColumnExpression | ExpressionWrapper | None,
+) -> exp.Order | None:
     if isinstance(order_by, str):
         return exp.Order(expressions=[ordered(exp.column(order_by))])
     if isinstance(order_by, list):
-        return exp.Order(expressions=[ordered(exp.column(column)) for column in order_by])
+        return exp.Order(
+            expressions=[
+                column if isinstance(column, exp.Ordered) else ordered(extract_expression(column))
+                for column in order_by
+            ]
+        )
+    if isinstance(order_by, (Column, FunctionColumn, ColumnExpression, ExpressionWrapper)):
+        return exp.Order(expressions=[ordered(extract_expression(order_by))])
     if isinstance(order_by, exp.Expr):
         return exp.Order(expressions=[order_by])
     return None
 
 
-def _coerce_column(value: str | exp.Expr) -> exp.Expr:
-    return exp.column(value) if isinstance(value, str) else value
+def _coerce_column(value: str | exp.Expr | Column | FunctionColumn | ColumnExpression | ExpressionWrapper) -> exp.Expr:
+    if isinstance(value, str):
+        return exp.column(value)
+    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
+        return value.sqlglot_expression
+    if isinstance(value, ExpressionWrapper):
+        return value.expression
+    return value
 
 
-def _rollup_expression(*columns: str | exp.Expr) -> exp.Rollup:
+def _rollup_expression(
+    *columns: str | exp.Expr | Column | FunctionColumn | ColumnExpression | ExpressionWrapper,
+) -> exp.Rollup:
     return exp.Rollup(expressions=[_coerce_column(column) for column in columns])
 
 
-def _cube_expression(*columns: str | exp.Expr) -> exp.Cube:
+def _cube_expression(
+    *columns: str | exp.Expr | Column | FunctionColumn | ColumnExpression | ExpressionWrapper,
+) -> exp.Cube:
     return exp.Cube(expressions=[_coerce_column(column) for column in columns])
 
 
-def _grouping_sets_expression(*column_sets: tuple[str, ...] | list[str]) -> exp.GroupingSets:
+def _grouping_sets_expression(*column_sets: tuple[Any, ...] | list[Any]) -> exp.GroupingSets:
     sets: list[exp.Tuple] = []
     for column_set in column_sets:
         if not isinstance(column_set, (tuple, list)):
