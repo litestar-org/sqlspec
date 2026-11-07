@@ -714,6 +714,37 @@ def to_expression(value: Any) -> exp.Expr:
     return exp.convert(value)
 
 
+def _mark_explicit_table_quotes(table: exp.Table, source: str) -> exp.Table:
+    """Distinguish supplied table quotes from quoting added by optimization."""
+    if not any(quote in source for quote in ('"', "`", "[")):
+        return table
+    remaining = source.strip()
+    for identifier in table.parts:
+        if not isinstance(identifier, exp.Identifier) or not remaining:
+            break
+        name = identifier.name
+        opening = remaining[0]
+        if opening in ('"', "`", "["):
+            closing = "]" if opening == "[" else opening
+            spelling = opening + name.replace(closing, closing * 2) + closing
+            if not remaining.startswith(spelling):
+                if not (name.startswith(opening) and name.endswith(closing) and remaining.startswith(name)):
+                    break
+                spelling = name
+                identifier.set("this", name[1:-1].replace(closing * 2, closing))
+            identifier.set("quoted", True)
+            identifier.meta["sqlspec_explicit_table_quote"] = True
+        else:
+            spelling = name
+            if not remaining.startswith(spelling):
+                break
+        remaining = remaining[len(spelling) :].lstrip()
+        if not remaining.startswith("."):
+            break
+        remaining = remaining[1:].lstrip()
+    return table
+
+
 def _normalize_partition_by(partition_by: str | list[str] | exp.Expr | None) -> list[exp.Expr] | None:
     if isinstance(partition_by, str):
         return [exp.column(partition_by)]

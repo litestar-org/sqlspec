@@ -2046,7 +2046,7 @@ def test_merge_binds_strings_and_renders_explicit_columns() -> None:
         .build()
     )
     assert " ".join(merge_stmt.sql.split()) == (
-        'MERGE INTO users USING "staging" AS src ON ( "users"."id" = "src"."id" ) '
+        'MERGE INTO users USING "staging" AS "src" ON ( "users"."id" = "src"."id" ) '
         'WHEN MATCHED THEN UPDATE SET "status" = %(status)s, "name" = "src"."name" '
         'WHEN NOT MATCHED THEN INSERT ("id", "status") VALUES ("src"."id", %(status_1)s)'
     )

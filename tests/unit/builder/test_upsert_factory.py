@@ -285,7 +285,7 @@ def test_upsert_with_quoted_table_name() -> None:
             .using("s", alias="s")
             .on("t.id = s.id")
             .when_matched_then_update(a=sql.raw("t.a + 1")),
-            'MERGE INTO t USING "s" AS s ON ( "t"."id" = "s"."id" ) WHEN MATCHED THEN UPDATE SET "a" = "t"."a" + 1',
+            'MERGE INTO t USING "s" AS "s" ON ( "t"."id" = "s"."id" ) WHEN MATCHED THEN UPDATE SET "a" = "t"."a" + 1',
             id="merge",
         ),
         pytest.param(

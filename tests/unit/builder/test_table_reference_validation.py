@@ -178,7 +178,13 @@ def test_select_join_renders_alias_as_one_identifier(dialect: str, text: str, al
 def test_update_table_renders_alias_as_one_identifier(dialect: str, text: str, alias: "str | None") -> None:
     target = _aliased(dialect, _identifier(dialect, "t"), "u")
     rendered = _render(_update_table(text, alias), dialect)
-    assert rendered == f"UPDATE {target} SET {_identifier(dialect, 'a')} = {_placeholder(dialect, 'a')}"
+    if dialect == "tsql":
+        assert (
+            rendered
+            == f"UPDATE {_identifier(dialect, 'u')} SET {_identifier(dialect, 'a')} = {_placeholder(dialect, 'a')} FROM {target}"
+        )
+    else:
+        assert rendered == f"UPDATE {target} SET {_identifier(dialect, 'a')} = {_placeholder(dialect, 'a')}"
 
 
 @pytest.mark.parametrize("dialect", ["postgres", "sqlite", "duckdb"])
@@ -195,13 +201,19 @@ def test_update_from_renders_alias_as_one_identifier(dialect: str, text: str, al
 @pytest.mark.parametrize("dialect", DIALECTS)
 @pytest.mark.parametrize("text", ["t u", "t AS u"])
 def test_delete_renders_alias_as_one_identifier(dialect: str, text: str) -> None:
-    assert _render(_delete_from(text), dialect) == f"DELETE FROM {_aliased(dialect, _identifier(dialect, 't'), 'u')}"
-    assert _render(sql.delete(text), dialect) == f"DELETE FROM {_aliased(dialect, _identifier(dialect, 't'), 'u')}"
+    target = _aliased(dialect, _identifier(dialect, "t"), "u")
+    expected = f"DELETE {_identifier(dialect, 'u')} FROM {target}" if dialect == "tsql" else f"DELETE FROM {target}"
+    assert _render(_delete_from(text), dialect) == expected
+    assert _render(sql.delete(text), dialect) == expected
 
 
 @pytest.mark.parametrize("dialect", DIALECTS)
 @pytest.mark.parametrize("text", ["t u", "t AS u"])
 def test_insert_renders_alias_as_one_identifier(dialect: str, text: str) -> None:
+    if dialect == "tsql":
+        with pytest.raises(SQLBuilderError, match="INSERT targets do not support aliases"):
+            _render(_insert_into(text), dialect)
+        return
     target = _aliased(dialect, _identifier(dialect, "t"), "u")
     assert _render(_insert_into(text), dialect) == f"INSERT INTO {target} VALUES ({_placeholder(dialect, 'value_1')})"
 

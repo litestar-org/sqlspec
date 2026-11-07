@@ -9,26 +9,25 @@ important operational fixes.
 
 ### v0.71.2
 
+**Breaking changes:**
+
+* `where_any()`, `where_not_any()`, their `or_where_*` forms, and `sql.not_any_()` no longer parse strings as subqueries, and raise `SQLBuilderError` for a string. Any other iterable, including a generator, binds its elements. Before: `.where_any("a", "SELECT x FROM y")`. After: `.where_any("a", sql.select("x").from_("y"))`.
+* `sql.exists_()`, `sql.any_()`, `sql.all_()`, `sql.in_()`, `where_exists()`, and `where_not_exists()` accept only query builders, `SQL` objects, and SQLGlot nodes, plus `BuiltQuery` for the `sql.*_()` fragments, and raise `SQLBuilderError` for strings and other objects, where they parsed the value's text as SQL. Before: `.where_exists("SELECT 1 FROM y")`. After: `.where_exists(sql.select("1").from_("y"))`.
+* `Merge` update and insert clauses always bind string values as parameters. Qualified columns, arithmetic over them, and `CURRENT_TIMESTAMP`, `CURRENT_DATE`, and `CURRENT_TIME` no longer render from strings, so existing calls keep building but store the literal text. Before: `.when_matched_then_update(name="src.name", updated_at="CURRENT_TIMESTAMP")`. After: `.when_matched_then_update(name=sql.raw("src.name"), updated_at=sql.raw("CURRENT_TIMESTAMP"))`.
+* Function calls and subqueries in table strings now raise `SQLBuilderError`; pass expression objects instead, such as `from_(sql.raw("fn(:n)", n=1), alias="f")` or `from_(exp.func("fn", 1), alias="f")`. A parenthesis inside a name quoted in the builder's dialect stays part of that name.
+* Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names read the text with the builder's dialect and accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass join conditions through `on`. DDL and statement target names accept a name only. T-SQL builders also accept a table variable such as `@tv`. Unquoted text holding whitespace other than ASCII space, tab, and line breaks, or format or control characters, raises. Table text must be trusted, because engines may resolve names to files or external sources; DuckDB users can set `enable_external_access` to `False` to block file access.
+
 **Changed:**
 
-* **Breaking:** function calls and subqueries in table strings now raise `SQLBuilderError`; pass expression objects instead, such as `from_(sql.raw("fn(:n)", n=1), alias="f")` or `from_(exp.func("fn", 1), alias="f")`. A parenthesis inside a name quoted in the builder's dialect stays part of that name.
-* Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names read the text with the builder's dialect and accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass join conditions through `on`. DDL and statement target names accept a name only. T-SQL builders also accept a table variable such as `@tv`. Unquoted text holding whitespace other than ASCII space, tab, and line breaks, or format or control characters, raises. Table text must be trusted, because engines may resolve names to files or external sources; DuckDB users can set `enable_external_access` to `False` to block file access.
 * Lateral joins still accept one possibly qualified function call as a string, without subqueries, statements, or comments. A named function runs with the arguments it is given, and some engines provide functions that read files or run SQL text, so this text must be trusted.
+* ADK stores can declare extra `extension_config["adk"]` keys through an `extension_config_options` `ClassVar`, matching the `events` extension. Validation accepts `ADKConfig` keys, the built-in adapter's `*ADKConfig` keys, and the options declared by both `adk_store_class` and `adk_memory_store_class`.
+* **Behavior change for third-party adapters:** external ADK stores must now declare extra options through `extension_config_options`. Configurations with explicit ADK stores and an `adapter_name` outside `sqlspec.adapters`, supported since v0.70.1 ([#877](https://github.com/litestar-org/sqlspec/pull/877)), skipped option validation and accepted any key. Undeclared keys and typos now raise `ImproperConfigurationError`, including memory settings outside `ADKConfig` such as `vector_dimensions`.
 
 **Fixed:**
 
 * Fixed `t AS u` rendering `AS AS u`, and rendered table aliases as quoted identifiers on every dialect.
 * Fixed the `MERGE` target renderer removing quotes from names that require them, and subquery aliases leaking into bound parameter names.
 * Fixed `join` and `Update.from_` dropping the alias on function expressions, and `from_` and `join` mishandling `sql.raw` fragments with parameters.
-
-**Breaking changes:**
-
-* `where_any()`, `where_not_any()`, their `or_where_*` forms, and `sql.not_any_()` no longer parse strings as subqueries, and raise `SQLBuilderError` for a string. Any other iterable, including a generator, binds its elements. Before: `.where_any("a", "SELECT x FROM y")`. After: `.where_any("a", sql.select("x").from_("y"))`.
-* `sql.exists_()`, `sql.any_()`, `sql.all_()`, `sql.in_()`, `where_exists()`, and `where_not_exists()` accept only query builders, `SQL` objects, and SQLGlot nodes, plus `BuiltQuery` for the `sql.*_()` fragments, and raise `SQLBuilderError` for strings and other objects, where they parsed the value's text as SQL. Before: `.where_exists("SELECT 1 FROM y")`. After: `.where_exists(sql.select("1").from_("y"))`.
-* `Merge` update and insert clauses always bind string values as parameters. Qualified columns, arithmetic over them, and `CURRENT_TIMESTAMP`, `CURRENT_DATE`, and `CURRENT_TIME` no longer render from strings, so existing calls keep building but store the literal text. Before: `.when_matched_then_update(name="src.name", updated_at="CURRENT_TIMESTAMP")`. After: `.when_matched_then_update(name=sql.raw("src.name"), updated_at=sql.raw("CURRENT_TIMESTAMP"))`.
-
-**Fixed:**
-
 * Query builder methods keep the whole expression when given `sql.raw()` or a SQLGlot node. `do_update()`, `on_duplicate_key_update()`, `Merge` `WHEN` clauses, `join(on=...)`, `where_in()`, `where_not_in()`, `where_exists()`, and `where_not_exists()` now render values such as `a + 1`, `NULLIF(a, 0)`, `a > 1 AND b < 2`, and `UNION` queries in full, where they rendered only the right operand.
 * `Column`, `Case`, aggregates such as `sql.count()`, other expression wrappers, and subquery builders render as SQL in `Update.set()`, `Insert.values()`, `sql.values()`, conflict updates, `Merge` clauses, `where_eq()` and the other comparison helpers, `where_in()`, and `where_between()`, where they bound as parameter objects that drivers could not accept. Comparison helpers also render SQLGlot nodes, so `where_eq("a", exp.column("b"))` compares two columns.
 * `select()` and `select_only()` render subquery builders and SQLGlot query nodes as parenthesized scalar subqueries and merge their parameters, where they rendered `SELECT SELECT ...` and dropped the parameters.
@@ -44,11 +43,6 @@ important operational fixes.
 * A failed migration now rolls back before the session schema is reset, on every adapter. The original error reaches the caller instead of an aborted-transaction error from the reset, and SQL Server no longer commits partial work from a failed transactional migration.
 * A quoted Db2 `version_table_name` such as `"App"."Tracker"` now creates the tracking table with that exact name, so later runs find it instead of repeating `CREATE TABLE`.
 * Built-in configuration subclasses with explicit ADK stores accept the options those stores declare instead of raising `ImproperConfigurationError`.
-
-**Changed:**
-
-* ADK stores can declare extra `extension_config["adk"]` keys through an `extension_config_options` `ClassVar`, matching the `events` extension. Validation accepts `ADKConfig` keys, the built-in adapter's `*ADKConfig` keys, and the options declared by both `adk_store_class` and `adk_memory_store_class`.
-* **Behavior change for third-party adapters:** external ADK stores must now declare extra options through `extension_config_options`. Configurations with explicit ADK stores and an `adapter_name` outside `sqlspec.adapters`, supported since v0.70.1 ([#877](https://github.com/litestar-org/sqlspec/pull/877)), skipped option validation and accepted any key. Undeclared keys and typos now raise `ImproperConfigurationError`, including memory settings outside `ADKConfig` such as `vector_dimensions`.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 

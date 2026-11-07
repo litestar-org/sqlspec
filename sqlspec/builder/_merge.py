@@ -16,11 +16,7 @@ from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import (
-    _coerce_column,
-    _parse_table_reference,
-    resolve_value_expression,
-)
+from sqlspec.builder._parsing_utils import _coerce_column, _parse_table_reference, resolve_value_expression
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers import to_json
