@@ -751,9 +751,8 @@ class StatementSplitter:
                     if len(block_stack) > max_nesting_depth:
                         msg = f"Maximum nesting depth ({max_nesting_depth}) exceeded"
                         raise ValueError(msg)
-                elif token_upper in block_enders:
-                    if block_stack and is_real_block_ender(all_tokens, token_idx):
-                        block_stack.pop()
+                elif token_upper in block_enders and block_stack and is_real_block_ender(all_tokens, token_idx):
+                    block_stack.pop()
 
             is_terminator = False
             if not block_stack:

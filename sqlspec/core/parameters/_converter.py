@@ -615,9 +615,12 @@ class ParameterConverter:
                 return parameters[f"param_{unique_ordinal}"]
             if str(unique_ordinal + 1) in parameters:
                 return parameters[str(unique_ordinal + 1)]
-        elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            if unique_ordinal < len(parameters):
-                return parameters[unique_ordinal]
+        elif (
+            isinstance(parameters, Sequence)
+            and not isinstance(parameters, (str, bytes))
+            and unique_ordinal < len(parameters)
+        ):
+            return parameters[unique_ordinal]
 
         msg = f"Missing value for placeholder '{param.placeholder_text}' in statically compiled SQL"
         raise SQLSpecError(msg)

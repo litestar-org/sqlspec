@@ -7,7 +7,7 @@ important operational fixes.
 
 ## Recent Updates
 
-### v0.71.2
+### v0.72.0
 
 **Breaking changes:**
 
@@ -28,6 +28,7 @@ important operational fixes.
 * Fixed `t AS u` rendering `AS AS u`, and rendered table aliases as quoted identifiers on every dialect.
 * Fixed the `MERGE` target renderer removing quotes from names that require them, and subquery aliases leaking into bound parameter names.
 * Fixed `join` and `Update.from_` dropping the alias on function expressions, and `from_` and `join` mishandling `sql.raw` fragments with parameters.
+* Scoped temporal `exp.Version` rendering overrides to builder-constructed `as_of` / `create_temporal_table()` clauses, keeping SQLGlot's native version syntax intact for non-builder expressions and dialects. ([#896](https://github.com/litestar-org/sqlspec/pull/896))
 * Query builder methods keep the whole expression when given `sql.raw()` or a SQLGlot node. `do_update()`, `on_duplicate_key_update()`, `Merge` `WHEN` clauses, `join(on=...)`, `where_in()`, `where_not_in()`, `where_exists()`, and `where_not_exists()` now render values such as `a + 1`, `NULLIF(a, 0)`, `a > 1 AND b < 2`, and `UNION` queries in full, where they rendered only the right operand.
 * `Column`, `Case`, aggregates such as `sql.count()`, other expression wrappers, and subquery builders render as SQL in `Update.set()`, `Insert.values()`, `sql.values()`, conflict updates, `Merge` clauses, `where_eq()` and the other comparison helpers, `where_in()`, and `where_between()`, where they bound as parameter objects that drivers could not accept. Comparison helpers also render SQLGlot nodes, so `where_eq("a", exp.column("b"))` compares two columns.
 * `select()` and `select_only()` render subquery builders and SQLGlot query nodes as parenthesized scalar subqueries and merge their parameters, where they rendered `SELECT SELECT ...` and dropped the parameters.
