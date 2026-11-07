@@ -507,3 +507,75 @@ def test_async_cli_command_closes_temporary_aiosqlite_pool(tmp_path: Path) -> No
 
     assert result.exit_code == 0, result.output
     assert async_config.connection_instance is None
+
+
+def _assert_cli_error(result: Result, message: str) -> None:
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit)
+    assert message in result.output
+
+
+def _rejected_config(config_type: type, tmp_path: Path, **migration_options: str) -> object:
+    return config_type(
+        bind_key="primary",
+        connection_config={"database": str(tmp_path / "app.db")},
+        migration_config={"enabled": True, "script_location": str(tmp_path / "rejected"), **migration_options},
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [("stamp", "0001"), ("upgrade", "--no-prompt"), ("show-current-revision",), ("init", "--no-prompt")],
+    ids=["stamp", "upgrade", "current", "init"],
+)
+def test_cli_reports_rejected_schema_option(tmp_path: Path, command: tuple[str, ...]) -> None:
+    """A rejected default schema exits with its message and no traceback, and creates nothing."""
+    config = _rejected_config(SqliteConfig, tmp_path, default_schema="tenant")
+
+    result = _invoke(config, *command)
+
+    _assert_cli_error(result, "SqliteConfig does not support migration default schemas")
+    assert not (tmp_path / "rejected").exists()
+
+
+def test_cli_reports_rejected_version_table_schema(tmp_path: Path) -> None:
+    """A rejected tracker schema exits with its message and no traceback."""
+    config = _rejected_config(SqliteConfig, tmp_path, version_table_schema="audit")
+
+    result = _invoke(config, "stamp", "0001")
+
+    _assert_cli_error(result, "does not support migration version table schemas")
+
+
+@pytest.mark.parametrize("command", [("stamp", "0001"), ("init", "--no-prompt")], ids=["stamp", "init"])
+def test_cli_reports_rejected_schema_option_on_async_config(tmp_path: Path, command: tuple[str, ...]) -> None:
+    """An async config reports the same rejection without a traceback."""
+    config = _rejected_config(AiosqliteConfig, tmp_path, default_schema="tenant")
+
+    result = _invoke(config, *command)
+
+    _assert_cli_error(result, "AiosqliteConfig does not support migration default schemas")
+
+
+def test_cli_multi_config_continues_past_rejected_config(tmp_path: Path) -> None:
+    """A rejected config is recorded while the others finish, and the command still exits non-zero."""
+    good_dir = tmp_path / "good"
+    good_db = tmp_path / "good.db"
+    _write_migrations(good_dir)
+    good = SqliteConfig(
+        bind_key="good",
+        connection_config={"database": str(good_db)},
+        migration_config={"enabled": True, "script_location": str(good_dir)},
+    )
+    bad = SqliteConfig(
+        bind_key="bad",
+        connection_config={"database": str(tmp_path / "bad.db")},
+        migration_config={"enabled": True, "script_location": str(tmp_path / "bad"), "default_schema": "tenant"},
+    )
+
+    result = _invoke([good, bad], "upgrade", "--no-prompt")
+
+    _assert_cli_error(result, "Operation failed for config(s): bad")
+    with sqlite3.connect(good_db) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "users" in tables

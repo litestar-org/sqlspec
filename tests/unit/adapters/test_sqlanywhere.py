@@ -3,8 +3,9 @@
 import threading
 from contextlib import nullcontext
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -39,6 +40,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    MigrationError,
     NotFoundError,
     NotNullViolationError,
     OperationalError,
@@ -48,6 +50,9 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.migrations.commands import SyncMigrationCommands
+from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.runner import SyncMigrationRunner
 
 
 class FakeSqlanydbError(Exception):
@@ -709,3 +714,49 @@ def test_sqlanywhere_connection_pool_bounds_max_size(monkeypatch: pytest.MonkeyP
         t.join(timeout=3.0)
 
     assert any(isinstance(err, OperationalError) and "pool exhausted" in str(err) for err in errors)
+
+
+def _sqlanywhere_migration_config(tmp_path: Path, **migration_options: str) -> SqlanywhereConfig:
+    return SqlanywhereConfig(
+        connection_config={"user": "dba", "password": "sql", "database": "demo"},
+        migration_config={"script_location": str(tmp_path), **migration_options},
+    )
+
+
+def test_sqlanywhere_rejects_migration_schema_directive(tmp_path: Path) -> None:
+    """A schema directive raises before any driver call because the driver cannot switch schemas."""
+    migration_file = tmp_path / "0001_directive.sql"
+    migration_file.write_text("-- schema: audit\n-- name: migrate-0001-up\nSELECT 1;\n")
+    config = _sqlanywhere_migration_config(tmp_path)
+    runner = SyncMigrationRunner(tmp_path, {}, MigrationContext(config=config), {})
+    migration = runner.load_migration(migration_file, "0001")
+    driver = Mock()
+
+    with pytest.raises(
+        MigrationError, match="SqlanywhereConfig does not support migration schema directives; schema='audit'"
+    ):
+        runner.execute_upgrade(driver, migration, use_transaction=False)
+
+    driver.set_migration_non_transactional_schema.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("option", "message"),
+    [
+        ("default_schema", "does not support migration default schemas"),
+        ("version_table_schema", "does not support migration version table schemas"),
+    ],
+)
+def test_sqlanywhere_rejects_migration_schema_options(tmp_path: Path, option: str, message: str) -> None:
+    """Schema options raise when commands are created, before any connection opens."""
+    config = _sqlanywhere_migration_config(tmp_path, **{option: "audit"})
+
+    with pytest.raises(MigrationError, match=message):
+        SyncMigrationCommands(config)
+
+
+def test_sqlanywhere_accepts_qualified_version_table(tmp_path: Path) -> None:
+    """A schema-qualified tracker name keeps the tracking table in that schema."""
+    config = _sqlanywhere_migration_config(tmp_path, version_table_name="DBA.ddl_migrations")
+
+    assert SyncMigrationCommands(config).tracker.version_table_schema == "DBA"

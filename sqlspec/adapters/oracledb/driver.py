@@ -378,6 +378,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     __slots__ = (
         "_data_dictionary",
         "_fetch_kwargs",
+        "_migration_schema_restore",
         "_oracle_version_cache",
         "_row_metadata_cache",
         "_session_tracing_enabled",
@@ -404,6 +405,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: OracledbSyncDataDictionary | None = None
+        self._migration_schema_restore: str | None = None
         self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
@@ -665,11 +667,28 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         validate_savepoint_name(name)
 
     def set_migration_session_schema(self, schema: str) -> None:
-        """Set Oracle CURRENT_SCHEMA for migration SQL."""
+        """Set Oracle CURRENT_SCHEMA for migration SQL, remembering the schema in effect on the first switch.
+
+        Args:
+            schema: Schema to make current. Unquoted lowercase names fold to uppercase.
+        """
         normalized_schema = normalize_identifier(schema, "oracle")
         quoted_schema = quote_identifier(normalized_schema)
         with self.with_cursor(self.connection) as cursor:
+            if self._migration_schema_restore is None:
+                cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")
+                row = cursor.fetchone()
+                self._migration_schema_restore = str(row[0])
             cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}")
+
+    def reset_migration_session_schema(self) -> None:
+        """Restore the schema captured by ``set_migration_session_schema`` with its exact catalog case."""
+        previous_schema = self._migration_schema_restore
+        if previous_schema is None:
+            return
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quote_identifier(previous_schema)}")
+        self._migration_schema_restore = None
 
     def has_schema(self, schema: str) -> bool:
         """Return whether an Oracle schema/user exists."""
@@ -1308,6 +1327,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     __slots__ = (
         "_data_dictionary",
         "_fetch_kwargs",
+        "_migration_schema_restore",
         "_oracle_version_cache",
         "_pipeline_support",
         "_pipeline_support_reason",
@@ -1330,6 +1350,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: OracledbAsyncDataDictionary | None = None
+        self._migration_schema_restore: str | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
         self._oracle_version_cache: OracleVersionCache | None = None
@@ -1595,11 +1616,28 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         validate_savepoint_name(name)
 
     async def set_migration_session_schema(self, schema: str) -> None:
-        """Set Oracle CURRENT_SCHEMA for migration SQL."""
+        """Set Oracle CURRENT_SCHEMA for migration SQL, remembering the schema in effect on the first switch.
+
+        Args:
+            schema: Schema to make current. Unquoted lowercase names fold to uppercase.
+        """
         normalized_schema = normalize_identifier(schema, "oracle")
         quoted_schema = quote_identifier(normalized_schema)
         async with self.with_cursor(self.connection) as cursor:
+            if self._migration_schema_restore is None:
+                await cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")
+                row = await cursor.fetchone()
+                self._migration_schema_restore = str(row[0])
             await cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}")
+
+    async def reset_migration_session_schema(self) -> None:
+        """Restore the schema captured by ``set_migration_session_schema`` with its exact catalog case."""
+        previous_schema = self._migration_schema_restore
+        if previous_schema is None:
+            return
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {quote_identifier(previous_schema)}")
+        self._migration_schema_restore = None
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether an Oracle schema/user exists."""
