@@ -465,3 +465,45 @@ def test_where_not_any_renders_expression_elements() -> None:
 
     assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" <> ALL ( ARRAY("t"."b") )'
     assert statement.parameters == {}
+
+
+@pytest.mark.parametrize("value", ["SELECT secret FROM users", "(SELECT 1)", "SELECT 1 UNION SELECT 2", "plain"])
+@pytest.mark.parametrize(
+    "apply",
+    [
+        pytest.param(lambda q, v: q.where_any("a", v), id="where-any"),
+        pytest.param(lambda q, v: q.where_not_any("a", v), id="where-not-any"),
+        pytest.param(lambda q, v: q.where_eq("q", 1).or_where_any("a", v), id="or-where-any"),
+        pytest.param(lambda q, v: q.where_eq("q", 1).or_where_not_any("a", v), id="or-where-not-any"),
+        pytest.param(lambda q, v: q.where(sql.not_any_("a", v)), id="factory-not-any"),
+    ],
+)
+def test_any_predicates_reject_strings(apply: Any, value: str) -> None:
+    """A string is never parsed as a subquery, and a single value is not a collection to compare against."""
+    with pytest.raises(SQLBuilderError, match="does not accept a string"):
+        apply(sql.select("z").from_("t"), value)
+
+
+@pytest.mark.parametrize(
+    ("build", "predicate"),
+    [
+        pytest.param(
+            lambda q: q.where_any("a", sql.select("x").from_("y")),
+            '"t"."a" = ANY( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
+            id="where-any",
+        ),
+        pytest.param(
+            lambda q: q.where_not_any("a", sql.select("x").from_("y")),
+            '"t"."a" <> ALL ( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
+            id="where-not-any",
+        ),
+        pytest.param(
+            lambda q: q.where(sql.not_any_("a", sql.select("x").from_("y"))),
+            '"t"."a" <> ALL ( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
+            id="factory-not-any",
+        ),
+    ],
+)
+def test_any_predicates_accept_query_builders(build: Any, predicate: str) -> None:
+    """Subqueries for ANY are given as query builders."""
+    assert _normalized_sql(build(sql.select("z").from_("t")).build()) == QUALIFIED_PREFIX + predicate

@@ -709,10 +709,7 @@ class WhereClauseMixin:
         if resolved is not None:
             return exp.Any(this=resolved)
         if isinstance(values, str):
-            parsed_expr: exp.Expr | None = exp.maybe_parse(values, dialect=builder.dialect)
-            if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
-                return exp.Any(this=exp.paren(parsed_expr))
-            msg = f"Unsupported type for 'values' in {error_context}"
+            msg = f"{error_context} does not accept a string; pass a list of values, or a query builder for a subquery"
             raise SQLBuilderError(msg)
         if not is_iterable_parameters(values) or isinstance(values, (bytes, bytearray)):
             msg = f"Unsupported type for 'values' in {error_context}"

@@ -9,6 +9,10 @@ important operational fixes.
 
 ### v0.71.2
 
+**Breaking changes:**
+
+* `where_any()`, `where_not_any()`, their `or_where_*` forms, and `sql.not_any_()` no longer parse strings as subqueries, and raise `SQLBuilderError` for a string. Before: `.where_any("a", "SELECT x FROM y")`. After: `.where_any("a", sql.select("x").from_("y"))`.
+
 **Fixed:**
 
 * Query builder methods keep the whole expression when given `sql.raw()` or a SQLGlot node. `do_update()`, `on_duplicate_key_update()`, `Merge` `WHEN` clauses, `join(on=...)`, `where_in()`, `where_not_in()`, `where_exists()`, and `where_not_exists()` now render values such as `a + 1`, `NULLIF(a, 0)`, `a > 1 AND b < 2`, and `UNION` queries in full, where they rendered only the right operand.

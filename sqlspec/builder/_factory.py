@@ -1120,7 +1120,7 @@ class SQLFactory:
         Args:
             column: Column name (``"status"`` or ``"t.status"``), ``Column``, or expression.
             values: Iterable of values bound as parameters, or a subquery given as a
-                query builder, sqlglot expression, or SQL string. Parameters bound by a
+                query builder or sqlglot expression. Parameters bound by a
                 subquery builder are merged into the outer query. Subqueries stay
                 parenthesized so the optimizer keeps ``<> ALL (subquery)`` instead of
                 rewriting it into an anti-join, which would change the result when the
@@ -1128,7 +1128,13 @@ class SQLFactory:
 
         Returns:
             Condition usable with ``.where()``, ``.having()``, ``&``, ``|``, and ``~``.
+
+        Raises:
+            SQLBuilderError: If ``values`` is a string.
         """
+        if isinstance(values, str):
+            msg = "sql.not_any_() does not accept a string; pass a list of values, or a query builder for a subquery"
+            raise SQLBuilderError(msg)
         left = column.sqlglot_expression if isinstance(column, Column) else parse_column_expression(column)
         any_expression: exp.Expr
         if isinstance(values, (list, tuple, set, frozenset)):
