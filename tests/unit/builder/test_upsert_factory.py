@@ -1,6 +1,6 @@
 """Unit tests for sql.upsert() factory method."""
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -280,8 +280,7 @@ def test_upsert_with_quoted_table_name() -> None:
     ("builder", "expected"),
     [
         pytest.param(
-            sql
-            .upsert("t", dialect="postgres")
+            cast("Merge", sql.upsert("t", dialect="postgres"))
             .using("s", alias="s")
             .on("t.id = s.id")
             .when_matched_then_update(a=sql.raw("t.a + 1")),
@@ -289,7 +288,11 @@ def test_upsert_with_quoted_table_name() -> None:
             id="merge",
         ),
         pytest.param(
-            sql.upsert("t", dialect="sqlite").columns("id").values(1).on_conflict("id").do_update(a=sql.raw("a + 1")),
+            cast("Insert", sql.upsert("t", dialect="sqlite"))
+            .columns("id")
+            .values(1)
+            .on_conflict("id")
+            .do_update(a=sql.raw("a + 1")),
             'INSERT INTO "t" ( "id" ) VALUES (:id) ON CONFLICT("id") DO UPDATE SET "a" = "a" + 1',
             id="insert",
         ),
