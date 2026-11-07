@@ -10,6 +10,7 @@ from sqlspec.exceptions import (
     DeadlockError,
     DialectNotSupportedError,
     EventChannelError,
+    FileExistsInStorageError,
     FileNotFoundInStorageError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
@@ -243,6 +244,11 @@ Normalized exception hierarchy raised across database drivers, query builders, S
       members: false
 
 ::: sqlspec.exceptions.FileNotFoundInStorageError
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.exceptions.FileExistsInStorageError
     options:
       heading_level: 4
       members: false

@@ -6,11 +6,11 @@ import builtins
 import contextlib
 from abc import abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Literal, Self, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Self, cast, overload
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.utils.sync_tools import get_default_async_executor
+from sqlspec.utils.sync_tools import async_, get_default_async_executor
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = ("AsyncArrowBatchIterator", "AsyncObStoreStreamIterator", "AsyncThreadedBytesIterator", "ObjectStoreBase")
 
 
+_INLINE_BYTES_COPY_LIMIT: Final[int] = 65_536
 _StopAsyncBase = getattr(builtins, "Stop" + "Async" + "Iteration")
 _StopAsync = type("_StopAsync", (_StopAsyncBase,), {})
 
@@ -104,7 +105,11 @@ class AsyncObStoreStreamIterator:
         if self._stream is None:
             raise StopAsyncIteration
         chunk = await self._stream.__anext__()
-        return chunk if type(chunk) is bytes else bytes(chunk)
+        if type(chunk) is bytes:
+            return chunk
+        if hasattr(chunk, "__len__") and len(chunk) <= _INLINE_BYTES_COPY_LIMIT:
+            return bytes(chunk)
+        return await async_(_buffer_to_bytes)(chunk)
 
     async def aclose(self) -> None:
         """Close the underlying stream if it exposes a close hook."""
@@ -193,7 +198,7 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
+    def write_bytes_sync(self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any) -> None:
         """Write bytes to storage synchronously."""
         raise NotImplementedError
 
@@ -208,7 +213,9 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    def write_text_sync(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text_sync(
+        self, path: "str | Path", data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write text to storage synchronously."""
         raise NotImplementedError
 
@@ -291,7 +298,9 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
+    async def write_bytes_async(
+        self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write bytes to storage asynchronously."""
         raise NotImplementedError
 
@@ -301,7 +310,9 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    async def write_text_async(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    async def write_text_async(
+        self, path: "str | Path", data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write text to storage asynchronously."""
         raise NotImplementedError
 
@@ -372,6 +383,11 @@ class ObjectStoreBase:
     ) -> "str | list[str]":
         """Generate signed URL(s) asynchronously."""
         raise NotImplementedError
+
+
+def _buffer_to_bytes(chunk: Any) -> bytes:
+    """Copy a buffer-like stream chunk into an owned bytes object."""
+    return bytes(chunk)
 
 
 def _next_or_sentinel(iterator: "Iterator[Any]") -> "Any":

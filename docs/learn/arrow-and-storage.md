@@ -121,7 +121,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     )
 ```
 
-You can also write an `ArrowResult` directly to any storage destination via `arrow_result.write_to_storage_sync("alias://exports/metrics.parquet")` (or `await arrow_result.write_to_storage_async(...)`). On Windows environments where `obstore` is installed alongside local filesystem paths, pass `backend="local"` when registering local directory aliases so Windows drive prefixes resolve cleanly.
+You can also write an `ArrowResult` directly to any storage destination via `arrow_result.write_to_storage_sync("alias://exports/metrics.parquet")` (or `await arrow_result.write_to_storage_async(...)`). `file://` URIs and bare local paths resolve to `LocalStore` (`backend="local"`) by default unless `backend="obstore"` or `backend="fsspec"` is explicitly requested. Across all storage backends (`LocalStore`, `ObStoreBackend`, and `FSSpecBackend`), `write_bytes_sync`, `write_text_sync`, `write_bytes_async`, and `write_text_async` accept `overwrite=False` for atomic create-only writes, raising `FileExistsInStorageError` if the target object already exists.
 
 ### Streaming RecordBatch Coercion and Schema Validation
 

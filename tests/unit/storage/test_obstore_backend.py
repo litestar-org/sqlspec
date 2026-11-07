@@ -1,20 +1,24 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for ObStoreBackend."""
 
+import asyncio
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
-from sqlspec.exceptions import MissingDependencyError
-from sqlspec.storage.backends.obstore import _SIGNABLE_PROTOCOLS, ObStoreBackend
+from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError
+from sqlspec.storage.backends.obstore import _INLINE_BYTES_COPY_LIMIT, _SIGNABLE_PROTOCOLS, ObStoreBackend
 from sqlspec.typing import OBSTORE_INSTALLED, PYARROW_INSTALLED
 
 
-class _FakeBytes:
+class _FakeBytes(bytes):
+    def __new__(cls) -> Self:
+        return super().__new__(cls, b"parquet")
+
     def to_bytes(self) -> bytes:
-        return b"parquet"
+        return bytes(self)
 
 
 class _FakeGetResult:
@@ -1049,3 +1053,103 @@ def test_write_arrow_sync_failure_publishes_nothing() -> None:
         store.write_arrow_sync("partial", unwritable)
 
     assert store.list_objects_sync() == []
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+@pytest.mark.parametrize("use_file_uri", [False, True])
+def test_write_sync_overwrite_false_creates_and_rejects_existing(tmp_path: Path, use_file_uri: bool) -> None:
+    """Verify write_bytes_sync and write_text_sync honor overwrite=False on memory and file stores."""
+    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
+    store = ObStoreBackend(uri)
+
+    store.write_bytes_sync("exclusive.bin", b"first", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        store.write_bytes_sync("exclusive.bin", b"second", overwrite=False)
+    assert store.read_bytes_sync("exclusive.bin") == b"first"
+
+    store.write_text_sync("exclusive.txt", "first", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        store.write_text_sync("exclusive.txt", "second", overwrite=False)
+    assert store.read_text_sync("exclusive.txt") == "first"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+@pytest.mark.parametrize("use_file_uri", [False, True])
+async def test_write_async_overwrite_false_creates_and_rejects_existing(tmp_path: Path, use_file_uri: bool) -> None:
+    """Verify write_bytes_async and write_text_async honor overwrite=False on memory and file stores."""
+    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
+    store = ObStoreBackend(uri)
+
+    await store.write_bytes_async("exclusive.bin", b"first", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_bytes_async("exclusive.bin", b"second", overwrite=False)
+    assert await store.read_bytes_async("exclusive.bin") == b"first"
+
+    await store.write_text_async("exclusive.txt", "first", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_text_async("exclusive.txt", "second", overwrite=False)
+    assert await store.read_text_async("exclusive.txt") == "first"
+
+
+class _FakePutStore:
+    def __init__(self) -> None:
+        self.sync_calls: list[tuple[str, bytes, dict[str, Any]]] = []
+        self.async_calls: list[tuple[str, bytes, dict[str, Any]]] = []
+
+    def put(self, path: str, data: bytes, **kwargs: Any) -> None:
+        self.sync_calls.append((path, data, kwargs))
+
+    async def put_async(self, path: str, data: bytes, **kwargs: Any) -> None:
+        self.async_calls.append((path, data, kwargs))
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_write_bytes_forwards_valid_options_and_validates_kwargs() -> None:
+    """Verify supported obstore put options are forwarded and invalid/conflicting kwargs fail."""
+    store = ObStoreBackend("memory://")
+    fake_store = _FakePutStore()
+    store.store = fake_store
+
+    store.write_bytes_sync("obj1.bin", b"a", overwrite=False, attributes={"Cache-Control": "no-cache"})
+    await store.write_bytes_async("obj2.bin", b"b", tags={"env": "test"}, use_multipart=False)
+
+    assert fake_store.sync_calls == [
+        ("obj1.bin", b"a", {"attributes": {"Cache-Control": "no-cache"}, "mode": "create"})
+    ]
+    assert fake_store.async_calls == [("obj2.bin", b"b", {"tags": {"env": "test"}, "use_multipart": False})]
+
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        store.write_bytes_sync("obj.bin", b"a", invalid_kwarg=True)
+
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        await store.write_bytes_async("obj.bin", b"a", invalid_kwarg=True)
+
+    with pytest.raises(ValueError, match="Conflicting write options"):
+        store.write_bytes_sync("obj.bin", b"a", overwrite=False, mode="overwrite")
+
+    with pytest.raises(ValueError, match="Conflicting write options"):
+        await store.write_bytes_async("obj.bin", b"a", overwrite=False, mode="overwrite")
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+@pytest.mark.parametrize("use_file_uri", [False, True])
+async def test_read_bytes_async_large_payload_does_not_block_event_loop(tmp_path: Path, use_file_uri: bool) -> None:
+    """Verify read_bytes_async offloads large payload reads without starving concurrent tasks."""
+    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
+    store = ObStoreBackend(uri)
+    payload = b"z" * (_INLINE_BYTES_COPY_LIMIT * 4)
+    await store.write_bytes_async("large.bin", payload)
+
+    concurrent_ran = False
+
+    async def marker() -> None:
+        nonlocal concurrent_ran
+        await asyncio.sleep(0)
+        concurrent_ran = True
+
+    task = asyncio.create_task(marker())
+    data = await store.read_bytes_async("large.bin")
+    await task
+
+    assert data == payload
+    assert concurrent_ran is True

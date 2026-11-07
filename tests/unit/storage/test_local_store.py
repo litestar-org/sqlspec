@@ -8,7 +8,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError
 from sqlspec.storage.backends.local import LocalStore
 from sqlspec.typing import PYARROW_INSTALLED
 
@@ -563,3 +563,71 @@ async def test_stream_read_async_with_base_path(tmp_path: Path) -> None:
     chunks = [chunk async for chunk in await store.stream_read_async("stream_test.bin")]
 
     assert b"".join(chunks) == test_data
+
+
+def test_write_bytes_sync_overwrite_false_creates_and_rejects_existing(tmp_path: Path) -> None:
+    """Verify write_bytes_sync(overwrite=False) creates new files and raises on existing files."""
+    store = LocalStore(str(tmp_path))
+    store.write_bytes_sync("exclusive.bin", b"first", overwrite=False)
+
+    with pytest.raises(FileExistsInStorageError):
+        store.write_bytes_sync("exclusive.bin", b"second", overwrite=False)
+
+    assert store.read_bytes_sync("exclusive.bin") == b"first"
+    store.write_bytes_sync("exclusive.bin", b"replaced", overwrite=True)
+    assert store.read_bytes_sync("exclusive.bin") == b"replaced"
+
+
+def test_write_text_sync_overwrite_false_creates_and_rejects_existing(tmp_path: Path) -> None:
+    """Verify write_text_sync(overwrite=False) creates new files and raises on existing files."""
+    store = LocalStore(str(tmp_path))
+    store.write_text_sync("exclusive.txt", "first", overwrite=False)
+
+    with pytest.raises(FileExistsInStorageError):
+        store.write_text_sync("exclusive.txt", "second", overwrite=False)
+
+    assert store.read_text_sync("exclusive.txt") == "first"
+
+
+async def test_write_bytes_async_overwrite_false_creates_and_rejects_existing(tmp_path: Path) -> None:
+    """Verify write_bytes_async(overwrite=False) creates new files and raises on existing files."""
+    store = LocalStore(str(tmp_path))
+    await store.write_bytes_async("exclusive_async.bin", b"first", overwrite=False)
+
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_bytes_async("exclusive_async.bin", b"second", overwrite=False)
+
+    assert await store.read_bytes_async("exclusive_async.bin") == b"first"
+
+
+async def test_write_text_async_overwrite_false_creates_and_rejects_existing(tmp_path: Path) -> None:
+    """Verify write_text_async(overwrite=False) creates new files and raises on existing files."""
+    store = LocalStore(str(tmp_path))
+    await store.write_text_async("exclusive_async.txt", "first", overwrite=False)
+
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_text_async("exclusive_async.txt", "second", overwrite=False)
+
+    assert await store.read_text_async("exclusive_async.txt") == "first"
+
+
+def test_write_sync_rejects_unknown_kwargs(tmp_path: Path) -> None:
+    """Verify write_bytes_sync and write_text_sync reject unsupported keyword arguments."""
+    store = LocalStore(str(tmp_path))
+
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        store.write_bytes_sync("item.bin", b"data", unknown_option=True)
+
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        store.write_text_sync("item.txt", "data", unknown_option=True)
+
+
+async def test_write_async_rejects_unknown_kwargs(tmp_path: Path) -> None:
+    """Verify write_bytes_async and write_text_async reject unsupported keyword arguments."""
+    store = LocalStore(str(tmp_path))
+
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        await store.write_bytes_async("item.bin", b"data", unknown_option=True)
+
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        await store.write_text_async("item.txt", "data", unknown_option=True)

@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, overload
 from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
@@ -21,6 +21,12 @@ if TYPE_CHECKING:
 __all__ = ("FSSpecBackend",)
 
 _OBJECT_STORE_PROTOCOLS = {"s3", "gs", "az", "gcs"}
+_FSSPEC_BASIC_OPEN_OPTIONS: Final[frozenset[str]] = frozenset({
+    "autocommit",
+    "block_size",
+    "cache_options",
+    "compression",
+})
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -155,8 +161,9 @@ class FSSpecBackend:
         )
         return result
 
-    def write_bytes_sync(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
+    def write_bytes_sync(self, path: str | Path, data: bytes, *, overwrite: bool = True, **kwargs: Any) -> None:
         """Write bytes to an object synchronously."""
+        open_mode, options = _resolve_fsspec_write_options(self.protocol, overwrite, kwargs)
         resolved_path = self._resolve_path(path)
 
         if self.protocol == "file":
@@ -165,7 +172,7 @@ class FSSpecBackend:
                 self.fs.makedirs(parent_dir, exist_ok=True)
 
         execute_sync_storage_operation(
-            partial(_write_fsspec_bytes, self.fs, resolved_path, data, kwargs),
+            partial(_write_fsspec_bytes, self.fs, resolved_path, data, open_mode, options),
             backend=self.backend_type,
             operation="write_bytes",
             path=resolved_path,
@@ -183,9 +190,11 @@ class FSSpecBackend:
         data = self.read_bytes_sync(path, **kwargs)
         return data.decode(encoding)
 
-    def write_text_sync(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text_sync(
+        self, path: str | Path, data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write text to an object synchronously."""
-        self.write_bytes_sync(path, data.encode(encoding), **kwargs)
+        self.write_bytes_sync(path, data.encode(encoding), overwrite=overwrite, **kwargs)
 
     def exists_sync(self, path: str | Path, **kwargs: Any) -> bool:
         """Check if an object exists synchronously."""
@@ -463,9 +472,12 @@ class FSSpecBackend:
         """Read bytes from storage asynchronously."""
         return await async_(self.read_bytes_sync)(path, **kwargs)
 
-    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
+    async def write_bytes_async(
+        self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write bytes to storage asynchronously."""
-        return await async_(self.write_bytes_sync)(path, data, **kwargs)
+        _resolve_fsspec_write_options(self.protocol, overwrite, kwargs)
+        await async_(self.write_bytes_sync)(path, data, overwrite=overwrite, **kwargs)
 
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
@@ -518,9 +530,12 @@ class FSSpecBackend:
         """Read text from storage asynchronously."""
         return await async_(self.read_text_sync)(path, encoding, **kwargs)
 
-    async def write_text_async(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    async def write_text_async(
+        self, path: str | Path, data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write text to storage asynchronously."""
-        await async_(self.write_text_sync)(path, data, encoding, **kwargs)
+        _resolve_fsspec_write_options(self.protocol, overwrite, kwargs)
+        await async_(self.write_text_sync)(path, data, encoding, overwrite=overwrite, **kwargs)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects in storage asynchronously."""
@@ -578,9 +593,26 @@ class FSSpecBackend:
             return pq.read_table(file_obj)
 
 
-def _write_fsspec_bytes(fs: Any, resolved_path: str, data: bytes, options: "dict[str, Any]") -> None:
+def _resolve_fsspec_write_options(
+    protocol: str, overwrite: bool, kwargs: "dict[str, Any]"
+) -> "tuple[str, dict[str, Any]]":
+    """Validate and resolve fsspec open mode and options for byte writes."""
+    if "mode" in kwargs:
+        msg = "Unsupported keyword argument 'mode' for write_bytes; use 'overwrite' instead."
+        raise TypeError(msg)
+    if protocol in {"file", "memory"}:
+        unsupported = set(kwargs) - _FSSPEC_BASIC_OPEN_OPTIONS
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            msg = f"Unsupported write keyword argument(s) for FSSpecBackend ({protocol}): {names}"
+            raise TypeError(msg)
+    open_mode = "wb" if overwrite else "xb"
+    return open_mode, dict(kwargs)
+
+
+def _write_fsspec_bytes(fs: Any, resolved_path: str, data: bytes, open_mode: str, options: "dict[str, Any]") -> None:
     """Write raw bytes via an fsspec filesystem handle."""
-    with fs.open(resolved_path, mode="wb", **options) as file_obj:
+    with fs.open(resolved_path, mode=open_mode, **options) as file_obj:
         file_obj.write(data)  # pyright: ignore
 
 

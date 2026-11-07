@@ -9,8 +9,10 @@ from pathlib import Path, PureWindowsPath
 from typing import cast
 
 from sqlspec import SQLSpec
+from sqlspec.storage.backends.local import LocalStore
 from sqlspec.storage.backends.obstore import ObStoreBackend
 from sqlspec.storage.registry import _local_backend_uri
+from sqlspec.typing import OBSTORE_INSTALLED
 
 
 def test_storage_registry_file_path_resolution_load_single_file_by_str_path() -> None:
@@ -77,9 +79,15 @@ def test_storage_registry_file_path_resolution_file_and_directory_share_same_bac
         loader = s._ensure_loader()
         backend_from_file = loader.storage_registry.get(str(sql_file))
         backend_from_dir = loader.storage_registry.get(tmpdir)
-        assert isinstance(backend_from_file, ObStoreBackend)
-        assert isinstance(backend_from_dir, ObStoreBackend)
-        assert backend_from_file._local_store_root == backend_from_dir._local_store_root
+        assert isinstance(backend_from_file, LocalStore)
+        assert isinstance(backend_from_dir, LocalStore)
+        assert backend_from_file.base_path == backend_from_dir.base_path
+        if OBSTORE_INSTALLED:
+            ob_from_file = loader.storage_registry.get(str(sql_file), backend="obstore")
+            ob_from_dir = loader.storage_registry.get(tmpdir, backend="obstore")
+            assert isinstance(ob_from_file, ObStoreBackend)
+            assert isinstance(ob_from_dir, ObStoreBackend)
+            assert ob_from_file._local_store_root == ob_from_dir._local_store_root
 
 
 def test_storage_registry_file_path_resolution_roots_nonexistent_file_at_parent() -> None:
@@ -89,5 +97,9 @@ def test_storage_registry_file_path_resolution_roots_nonexistent_file_at_parent(
         s = SQLSpec()
         loader = s._ensure_loader()
         backend = loader.storage_registry.get(str(destination))
-        assert isinstance(backend, ObStoreBackend)
-        assert backend._local_store_root == str(destination.parent.resolve())
+        assert isinstance(backend, LocalStore)
+        assert backend.base_path == destination.parent.resolve()
+        if OBSTORE_INSTALLED:
+            ob_backend = loader.storage_registry.get(str(destination), backend="obstore")
+            assert isinstance(ob_backend, ObStoreBackend)
+            assert ob_backend._local_store_root == str(destination.parent.resolve())

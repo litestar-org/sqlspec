@@ -53,28 +53,13 @@ def test_get_local_backend(tmp_path: Path) -> None:
     assert backend.backend_type == "local"
 
 
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
-def test_get_local_backend_prefers_obstore(tmp_path: Path) -> None:
-    """Test that local paths prefer obstore when available."""
+def test_get_local_backend_prefers_local(tmp_path: Path) -> None:
+    """Test that local paths prefer LocalStore by default even when obstore or fsspec is installed."""
     registry = StorageRegistry()
     backend = registry.get(f"file://{tmp_path}")
-    assert backend.backend_type == "obstore"
-    backend = registry.get(str(tmp_path))
-    assert backend.backend_type == "obstore"
-    backend = registry.get(f"file://{tmp_path}", backend="local")
     assert backend.backend_type == "local"
-
-
-def test_get_local_backend_fallback_priority(tmp_path: Path) -> None:
-    """Test backend fallback priority for local paths."""
-    registry = StorageRegistry()
-    backend = registry.get(f"file://{tmp_path}")
-    if OBSTORE_INSTALLED:
-        assert backend.backend_type == "obstore"
-    elif FSSPEC_INSTALLED:
-        assert backend.backend_type == "fsspec"
-    else:
-        assert backend.backend_type == "local"
+    backend = registry.get(str(tmp_path))
+    assert backend.backend_type == "local"
 
 
 def test_get_alias(tmp_path: Path) -> None:
@@ -82,7 +67,7 @@ def test_get_alias(tmp_path: Path) -> None:
     registry = StorageRegistry()
     registry.register_alias("my_store", f"file://{tmp_path}")
     backend = registry.get("my_store")
-    assert backend.backend_type in ("obstore", "fsspec", "local")
+    assert backend.backend_type == "local"
 
 
 def test_get_with_backend_override(tmp_path: Path) -> None:
@@ -226,7 +211,7 @@ def test_path_object_conversion(tmp_path: Path) -> None:
     registry = StorageRegistry()
     path_obj = tmp_path
     backend = registry.get(path_obj)
-    assert backend.backend_type in ("obstore", "fsspec", "local")
+    assert backend.backend_type == "local"
 
 
 def test_cloud_storage_without_backends() -> None:
@@ -284,6 +269,8 @@ def test_alias_does_not_match_partial_path_segment(tmp_path: Path, monkeypatch: 
     via_alias = registry.get("db/queries.sql")
     not_alias = registry.get("db_backup/queries.sql")
 
-    assert via_alias.store_uri == f"file://{alias_target}"
-    assert not_alias.store_uri.endswith("/db_backup")
-    assert str(alias_target) not in not_alias.store_uri
+    assert isinstance(via_alias, LocalStore)
+    assert isinstance(not_alias, LocalStore)
+    assert via_alias.base_path == alias_target.resolve()
+    assert not_alias.base_path.name == "db_backup"
+    assert alias_target.resolve() != not_alias.base_path
