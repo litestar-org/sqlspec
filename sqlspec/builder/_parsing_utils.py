@@ -6,6 +6,7 @@ passed as strings to builder methods.
 
 import importlib
 import re
+import unicodedata
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
@@ -60,6 +61,9 @@ _TSQL_VARIABLE_RE: Final["re.Pattern[str]"] = re.compile(
     rf"@(?P<name>[A-Za-z_][\w$#@]*)(?:\s+(?:as\s+)?(?P<alias>{_ALIAS_PATTERN}))?", re.IGNORECASE
 )
 _ALIAS_KEYWORD: Final[str] = "as"
+_TABLE_TEXT_SEPARATOR_CHARACTERS: Final[str] = " \t\r\n"
+_INVISIBLE_CATEGORIES: Final[frozenset[str]] = frozenset({"Cc", "Cf", "Zl", "Zp", "Zs"})
+_QUOTED_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset({TokenType.IDENTIFIER, TokenType.STRING})
 _EXPLICIT_QUOTE_META_KEY: Final[str] = "sqlspec_explicit_table_quote"
 _MAX_DIRECT_TABLE_PARTS: Final[int] = 3
 _QUOTE_CLOSERS: Final[dict[str, str]] = {'"': '"', "`": "`", "[": "]"}
@@ -267,18 +271,22 @@ def _parse_table_reference(
         SQLBuilderError: If the text is anything other than a table name and optional alias, or
             if an alias appears both in the text and as ``explicit_alias``.
     """
-    if "(" in table_input:
+    if "(" in table_input and any(
+        token.token_type == TokenType.L_PAREN
+        for token in _read_table_tokens(table_input, dialect, _table_reference_error(table_input))
+    ):
         msg = (
             f"Invalid table reference {table_input!r}: table text cannot hold function calls or subqueries. "
             "Pass an expression or builder instead, such as sql.raw('fn(1)') or exp.func('fn', 1), with alias=."
         )
         raise SQLBuilderError(msg)
 
-    stripped = table_input.strip()
+    stripped = table_input.strip(_TABLE_TEXT_SEPARATOR_CHARACTERS)
     inline_alias: str | None = None
     table: exp.Table | None
     variable = _TSQL_VARIABLE_RE.fullmatch(stripped) if _reads_as_tsql(dialect) else None
-    if _is_simple_identifier(stripped) and stripped.lower() != _ALIAS_KEYWORD:
+    is_simple = _SIMPLE_IDENTIFIER_RE.fullmatch(stripped) is not None and _is_simple_identifier(stripped)
+    if is_simple and stripped.lower() != _ALIAS_KEYWORD:
         table = _table_from_identifiers([exp.Identifier(this=part, quoted=False) for part in stripped.split(".")])
     elif variable is not None:
         table = exp.Table(this=exp.Parameter(this=exp.Var(this=variable.group("name"))))
@@ -321,7 +329,7 @@ def _table_reader(dialect: "DialectType | None") -> Dialect:
 
 
 def _read_table_tokens(text: str, dialect: "DialectType | None", error: str) -> "list[Token]":
-    """Tokenize table text, rejecting text that holds comments.
+    """Tokenize table text, rejecting comments and invisible characters outside quotes.
 
     Args:
         text: The table text.
@@ -332,15 +340,35 @@ def _read_table_tokens(text: str, dialect: "DialectType | None", error: str) -> 
         The tokens of the text.
 
     Raises:
-        SQLBuilderError: If the text cannot be tokenized, is empty, or holds a comment.
+        SQLBuilderError: If the text cannot be tokenized, is empty, holds a comment, or holds
+            whitespace, format, control, or separator characters outside quotes other than
+            the ASCII space, tab, and line breaks.
     """
     try:
         tokens = list(_table_reader(dialect).tokenize(text))
     except SqlglotError as exc:
         raise SQLBuilderError(error) from exc
-    if not tokens or any(token.comments for token in tokens):
+    if not tokens or any(token.comments for token in tokens) or _has_invisible_unquoted_text(text, tokens):
         raise SQLBuilderError(error)
     return tokens
+
+
+def _has_invisible_unquoted_text(text: str, tokens: "list[Token]") -> bool:
+    """Report whether text outside quoted tokens holds characters an engine may read as separators."""
+    position = 0
+    for token in tokens:
+        if token.token_type in _QUOTED_TOKEN_TYPES:
+            if _holds_invisible_character(text[position : token.start]):
+                return True
+            position = token.end + 1
+    return _holds_invisible_character(text[position:])
+
+
+def _holds_invisible_character(text: str) -> bool:
+    return any(
+        character not in _TABLE_TEXT_SEPARATOR_CHARACTERS and unicodedata.category(character) in _INVISIBLE_CATEGORIES
+        for character in text
+    )
 
 
 def _split_inline_alias(text: str, tokens: "list[Token]", error: str) -> "tuple[str, str | None]":
@@ -441,7 +469,7 @@ def _parse_alias_identifier(alias: str) -> exp.Identifier:
     Raises:
         SQLBuilderError: If the text is not a single identifier.
     """
-    stripped = alias.strip()
+    stripped = alias.strip(_TABLE_TEXT_SEPARATOR_CHARACTERS)
     if _ALIAS_RE.fullmatch(stripped) is None or stripped.lower() == _ALIAS_KEYWORD:
         msg = f"Invalid alias {alias!r}: expected a single identifier."
         raise SQLBuilderError(msg)

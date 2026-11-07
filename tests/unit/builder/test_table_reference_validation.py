@@ -565,7 +565,8 @@ def test_lateral_join_keeps_function_schema() -> None:
         "read_text('/etc/hostname')",
         "f((SELECT pw FROM secrets))",
         "(SELECT pw FROM secrets) s",
-        '"quoted(name"',
+        '"a"(1)',
+        '"a(b)".f(1)',
     ],
 )
 @pytest.mark.parametrize("path", ALL_PATHS, ids=lambda path: path.__name__)
@@ -673,3 +674,66 @@ def test_tsql_table_variable_rejects_anything_else(text: str) -> None:
 def test_table_variable_raises_outside_tsql(dialect: "str | None") -> None:
     with pytest.raises(SQLBuilderError, match="table reference"):
         sql.select("*", dialect=dialect).from_("@tv")
+
+
+@pytest.mark.parametrize(
+    ("dialect", "text", "expected"),
+    [
+        ("postgres", '"a(b)"', '"a(b)"'),
+        ("sqlite", '"a(b)"', '"a(b)"'),
+        ("duckdb", '"a(b)"', '"a(b)"'),
+        ("oracle", '"a(b)"', '"a(b)"'),
+        ("mysql", "`a(b)`", "`a(b)`"),
+        ("tsql", "[a(b)]", "[a(b)]"),
+        ("bigquery", "`a(b)`", "`a(b)`"),
+    ],
+)
+def test_parenthesis_inside_quoted_name_renders_one_identifier(dialect: str, text: str, expected: str) -> None:
+    keyword = "" if dialect == "oracle" else "AS "
+    built = sql.select("*", dialect=dialect).from_(text).build()
+    assert " ".join(built.sql.split()) == f"SELECT * FROM {expected} {keyword}{expected}"
+
+
+def test_parenthesis_inside_quoted_name_with_alias_and_schema() -> None:
+    assert _render(sql.select("*").from_('s."a(b)" AS u'), "postgres") == 'SELECT * FROM "s"."a(b)" AS "u"'
+
+
+def test_ddl_keeps_parenthesis_inside_quoted_name() -> None:
+    assert sql.drop_table('"a(b"').build().sql == 'DROP TABLE "a(b"'
+
+
+@pytest.mark.parametrize("text", ["`a(b)`", "[a(b)]"])
+def test_parenthesis_inside_quotes_the_dialect_does_not_define_raises(text: str) -> None:
+    with pytest.raises(SQLBuilderError, match="table reference"):
+        sql.select("*", dialect="postgres").from_(text)
+
+
+INVISIBLE_CHARACTERS = ("\ufeff", "\u200b", "\u00ad", "\u00a0", "\u3000", "\u2028", "\u2029", "\x00", "\x0b", "\x85")
+
+
+@pytest.mark.parametrize("dialect", ["oracle", "db2", None])
+@pytest.mark.parametrize("character", INVISIBLE_CHARACTERS)
+@pytest.mark.parametrize(
+    "template", ["x{0}UNION{0}SELECT{0}1", "t{0}u", "t {0}u", "t AS u{0}", "{0}t", "a{0}.b", 'a."b"{0}', 't "u"{0}']
+)
+def test_invisible_characters_in_unquoted_text_raise(dialect: "str | None", character: str, template: str) -> None:
+    text = template.format(character)
+    for build in (lambda: sql.select("*", dialect=dialect).from_(text), lambda: sql.delete(text, dialect=dialect)):
+        with pytest.raises(SQLBuilderError, match="table reference"):
+            build()
+
+
+@pytest.mark.parametrize("dialect", ["oracle", "db2"])
+@pytest.mark.parametrize("character", INVISIBLE_CHARACTERS)
+def test_invisible_characters_in_explicit_alias_raise(dialect: str, character: str) -> None:
+    with pytest.raises(SQLBuilderError, match="alias"):
+        sql.select("*", dialect=dialect).from_("t", alias=f"u{character}v")
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [("oracle", 'SELECT * FROM "x\ufeffy" "x\ufeffy"'), ("db2", 'SELECT * FROM "x\ufeffy" AS "x\ufeffy"')],
+)
+def test_invisible_characters_inside_quotes_stay_one_identifier(dialect: str, expected: str) -> None:
+    built = sql.select("*", dialect=dialect).from_('"x\ufeffy"').build()
+    assert " ".join(built.sql.split()) == expected

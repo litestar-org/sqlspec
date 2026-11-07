@@ -65,8 +65,9 @@ class JoinClauseMixin:
         ``as_of`` attaches a temporal version clause by copying the inner table, honoring existing aliases, and updating the JOIN target without mutating shared expressions.
 
         A string ``table`` is a table name with an optional alias. Pass function sources and subqueries as
-        expressions or builders. With ``lateral=True`` a string may also be one function call, which runs as
-        named, so that text must be trusted; its arguments cannot hold subqueries, statements, or comments.
+        expressions or builders. Table text must be trusted, because engines may resolve names to files or
+        external sources. With ``lateral=True`` a string may also be one function call, which runs as named;
+        its arguments cannot hold subqueries, statements, or comments.
         """
         builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
@@ -152,7 +153,8 @@ class JoinClauseMixin:
 
         Args:
             table: Table, subquery, or table function to join. String text may be one function call,
-                which runs as named, so that text must be trusted.
+                which runs as named and can read files or run SQL text on some engines, so that text
+                must be trusted.
             on: Optional join condition (for LATERAL JOINs with ON clause)
             alias: Optional alias for the joined table/subquery
 
@@ -168,7 +170,8 @@ class JoinClauseMixin:
 
         Args:
             table: Table, subquery, or table function to join. String text may be one function call,
-                which runs as named, so that text must be trusted.
+                which runs as named and can read files or run SQL text on some engines, so that text
+                must be trusted.
             on: Optional join condition
             alias: Optional alias for the joined table/subquery
 
@@ -182,7 +185,8 @@ class JoinClauseMixin:
 
         Args:
             table: Table, subquery, or table function to join. String text may be one function call,
-                which runs as named, so that text must be trusted.
+                which runs as named and can read files or run SQL text on some engines, so that text
+                must be trusted.
             alias: Optional alias for the joined table/subquery
 
         Returns:

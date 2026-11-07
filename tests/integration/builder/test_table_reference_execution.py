@@ -10,7 +10,7 @@ from sqlglot import exp
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.builder import QueryBuilder, sql
-from sqlspec.exceptions import SQLBuilderError, SQLSpecError
+from sqlspec.exceptions import PermissionDeniedError, SQLBuilderError, SQLSpecError
 
 pytestmark = pytest.mark.xdist_group("builder_table_reference")
 
@@ -151,3 +151,22 @@ def test_payload_text_runs_nothing(
 def test_parameterized_function_expression_binds_and_executes(session: Any) -> None:
     source = sql.raw("json_each(:doc)", doc="[1]") if session.dialect == "sqlite" else sql.raw("range(:n)", n=1)
     assert len(session.execute(sql.select("*").from_(source, alias="f")).get_data()) == 1
+
+
+def test_duckdb_external_access_setting_blocks_quoted_file_names(tmp_path: Path) -> None:
+    data_file = tmp_path / "report.csv"
+    data_file.write_text("pw\nvalue\n")
+    query = sql.select("*", dialect="duckdb").from_(f'"{data_file}"')
+
+    allowed = DuckDBConfig(connection_config={"database": str(tmp_path / "allowed.duckdb")})
+    blocked = DuckDBConfig(
+        connection_config={"database": str(tmp_path / "blocked.duckdb"), "enable_external_access": False}
+    )
+    try:
+        with allowed.provide_session() as driver:
+            assert driver.execute(query).get_data() == [{"pw": "value"}]
+        with blocked.provide_session() as driver, pytest.raises(PermissionDeniedError):
+            driver.execute(query)
+    finally:
+        allowed.close_pool()
+        blocked.close_pool()

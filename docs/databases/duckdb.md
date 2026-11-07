@@ -151,6 +151,22 @@ Pass `DuckDBDriverFeatures` keys inside `driver_features={...}` on `DuckDBConfig
 - **Zero-Copy Arrow Reads and Writes**: Call `session.select_to_arrow(...)` (`return_format="table"`, `"batches"`, or `"reader"`) and `session.load_from_arrow(...)` to exchange columnar tables with Polars, Pandas, or PyArrow without dictionary allocations.
 - **ADK Full-Text and Cosine Vector Search**: `DuckDBADKMemoryStore` supports DuckDB's `fts` extension alongside `ARRAY` cosine similarity for local RAG and agent memory persistence.
 
+## Trusted Table Text
+
+Builder table text must come from a trusted source. DuckDB resolves table names through replacement scans, so a
+quoted name such as `from_('"data/report.csv"')` reads that file. Function text passed to `lateral_join` runs as
+named, and DuckDB functions such as `read_text()` and `query()` read files or run SQL text.
+
+To stop SQL from reaching local files, HTTP URLs, and object stores, disable external access when you configure the
+connection:
+
+```python
+config = DuckDBConfig(connection_config={"database": "app.duckdb", "enable_external_access": False})
+```
+
+File reads then raise `PermissionDeniedError`. This setting does not limit `query()`, which can still run SQL against
+data inside the database, so lateral function text must stay trusted either way.
+
 ## See Also
 
 - [DuckDB API Reference](/reference/adapters/duckdb/)
