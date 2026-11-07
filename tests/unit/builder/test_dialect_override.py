@@ -1,8 +1,16 @@
 """Unit tests for build() and to_sql() dialect override parameter."""
 
+from collections.abc import Callable
+from typing import Any, cast
+
+import pytest
+import sqlglot
+from sqlglot import exp
+
 from sqlspec import sql
 from sqlspec.builder import Column
-from sqlspec.core import StatementConfig
+from sqlspec.core import SQL, StatementConfig
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_build_with_default_dialect() -> None:
@@ -212,3 +220,226 @@ def test_dialect_class_override_and_alias_metadata() -> None:
     assert query.build(dialect=MySQL).sql == query.build(dialect="mysql").sql
     assert query.build(dialect=MySQL()).sql == query.build(dialect="mysql").sql
     assert query.build(dialect="mssql").dialect == "tsql"
+
+
+_TSQL_OUTPUT_BUILDERS: "dict[str, tuple[Callable[[], Any], str, str]]" = {
+    "insert": (
+        lambda: sql.insert("t").columns("a").values(1),
+        "INSERT INTO [t] (\n  [a]\n)\nOUTPUT %s\nVALUES\n  (:a)",
+        "INSERTED",
+    ),
+    "update": (
+        lambda: sql.update("t").set(a=1).where_eq("id", 2),
+        "UPDATE [t] SET [a] = :a\nOUTPUT %s\nWHERE\n  [id] = :id",
+        "INSERTED",
+    ),
+    "delete": (
+        lambda: sql.delete("t").where_eq("id", 2),
+        "DELETE   [t]\nOUTPUT %s FROM [t]\nWHERE\n  [id] = :id",
+        "DELETED",
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", list(_TSQL_OUTPUT_BUILDERS))
+@pytest.mark.parametrize(
+    ("projection", "expected"),
+    [
+        pytest.param("a", "[{source}].[a]", id="column"),
+        pytest.param("*", "[{source}].*", id="star"),
+        pytest.param("t.a", "[{source}].[a]", id="target-column"),
+        pytest.param("t.*", "[{source}].*", id="target-star"),
+        pytest.param("a AS x", "[{source}].[a] AS [x]", id="alias"),
+        pytest.param("a + 1 AS x", "[{source}].[a] + 1 AS [x]", id="arithmetic"),
+        pytest.param("UPPER(a)", "UPPER([{source}].[a])", id="function"),
+        pytest.param(
+            "CASE WHEN a > 1 THEN b END AS c", "CASE WHEN [{source}].[a] > 1 THEN [{source}].[b] END AS [c]", id="case"
+        ),
+        pytest.param("inserted.a", "[inserted].[a]", id="inserted-qualifier"),
+        pytest.param("DELETED.a", "[deleted].[a]", id="deleted-qualifier"),
+        pytest.param("COUNT(*)", "COUNT_BIG(*)", id="aggregate"),
+        pytest.param("other.a", "[other].[a]", id="unknown-qualifier"),
+    ],
+)
+def test_tsql_returning_qualifies_projection(kind: str, projection: str, expected: str) -> None:
+    factory, template, source = _TSQL_OUTPUT_BUILDERS[kind]
+    built = factory().returning(projection).build(dialect="tsql")
+    assert built.sql == template % expected.format(source=source)
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected"),
+    [
+        pytest.param(
+            lambda: sql.update("t").set(a=1).where_eq("id", 2).returning("DELETED.b AS old", "INSERTED.a AS new"),
+            "UPDATE [t] SET [a] = :a\nOUTPUT [deleted].[b] AS [old], [inserted].[a] AS [new]\nWHERE\n  [id] = :id",
+            id="old-and-new",
+        ),
+        pytest.param(
+            lambda: sql.update("t").set(a=1).where_eq("id", 2).returning(Column("a"), exp.Star()),
+            "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[a], [INSERTED].*\nWHERE\n  [id] = :id",
+            id="nodes",
+        ),
+        pytest.param(
+            lambda: sql.update("t").set(a=1).where_eq("id", 2).returning(cast("Any", sql.raw("a + 1"))),
+            "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[a] + 1\nWHERE\n  [id] = :id",
+            id="raw-wrapper",
+        ),
+        pytest.param(
+            lambda: sql.update("dbo.t").set(a=1).returning("dbo.t.a", "t.b"),
+            "UPDATE [dbo].[t] SET [a] = :a\nOUTPUT [INSERTED].[a], [INSERTED].[b]",
+            id="schema-update",
+        ),
+        pytest.param(
+            lambda: sql.update("t").set(a=1).returning("dbo.t.a"),
+            "UPDATE [t] SET [a] = :a\nOUTPUT [dbo].[t].[a]",
+            id="schema-mismatch-unqualified-target",
+        ),
+        pytest.param(
+            lambda: sql.update("dbo.t").set(a=1).returning("other.t.a"),
+            "UPDATE [dbo].[t] SET [a] = :a\nOUTPUT [other].[t].[a]",
+            id="schema-mismatch-qualified-target",
+        ),
+        pytest.param(
+            lambda: sql.delete("dbo.t").returning("a"),
+            "DELETE   [dbo].[t]\nOUTPUT [DELETED].[a] FROM [dbo].[t]",
+            id="schema-delete",
+        ),
+        pytest.param(
+            lambda: sql.insert("dbo.t").columns("a").values(1).returning("dbo.t.a"),
+            "INSERT INTO [dbo].[t] (\n  [a]\n)\nOUTPUT [INSERTED].[a]\nVALUES\n  (:a)",
+            id="schema-insert",
+        ),
+        pytest.param(
+            lambda: (
+                sql.update("t").set(a=1).from_("src", alias="s").where("t.id = s.id").returning("a", "t.b", "s.c AS sc")
+            ),
+            "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[a], [INSERTED].[b], [s].[c] AS [sc]\nFROM [src] AS s\n"
+            "WHERE\n  [t].[id] = [s].[id]",
+            id="from-alias",
+        ),
+        pytest.param(
+            lambda: sql.update("t").with_cte("c", sql.select("id").from_("x")).set(a=1).returning("id"),
+            "WITH [c] AS (\n  SELECT\n    [x].[id] AS [id]\n  FROM [x] AS [x]\n)\nUPDATE [t] SET [a] = :a\n"
+            "OUTPUT [INSERTED].[id]",
+            id="cte",
+        ),
+        pytest.param(
+            lambda: sql.insert("t").columns("a").from_select(sql.select("a").from_("s")).returning("a"),
+            "INSERT INTO [t] (\n  [a]\n)\nOUTPUT [INSERTED].[a]\nSELECT\n  [s].[a] AS [a]\nFROM [s] AS [s]",
+            id="insert-select",
+        ),
+        pytest.param(
+            lambda: sql.delete("t").where_eq("id", 2), "DELETE FROM [t]\nWHERE\n  [id] = :id", id="no-returning"
+        ),
+    ],
+)
+def test_tsql_returning_target_and_source_forms(factory: "Callable[[], Any]", expected: str) -> None:
+    assert factory().build(dialect="tsql").sql == expected
+
+
+def test_tsql_returning_mssql_alias_and_bracket_string() -> None:
+    built = sql.update("t", dialect="mssql").set(a=1).returning("[a b]").build()
+    assert built.sql == "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[a b]"
+
+
+@pytest.mark.parametrize("kind", list(_TSQL_OUTPUT_BUILDERS))
+def test_tsql_returning_rejects_subquery(kind: str) -> None:
+    factory, _, _ = _TSQL_OUTPUT_BUILDERS[kind]
+    with pytest.raises(SQLBuilderError, match="do not allow subqueries"):
+        factory().returning("(SELECT 1) AS m").build(dialect="tsql")
+
+
+@pytest.mark.parametrize(
+    ("dialect", "factory", "expected"),
+    [
+        pytest.param(
+            "sqlanywhere",
+            lambda: sql.update("t").set(a=1).returning("a + 1 AS x", "t.a"),
+            "UPDATE [t] SET [a] = :a\nOUTPUT [a] + 1 AS [x], [t].[a]",
+            id="sqlanywhere",
+        ),
+        pytest.param(
+            "fabric",
+            lambda: sql.delete("t").where_eq("id", 2).returning("*"),
+            "DELETE\nOUTPUT * FROM [t]\nWHERE\n  [id] = :id",
+            id="fabric",
+        ),
+        pytest.param(
+            "postgres",
+            lambda: sql.delete("t").where_eq("id", 2).returning("a"),
+            'DELETE FROM "t"\nWHERE\n  "id" = %(id)s\nRETURNING "a"',
+            id="postgres",
+        ),
+    ],
+)
+def test_tsql_output_rewrite_stays_on_tsql(dialect: str, factory: "Callable[[], Any]", expected: str) -> None:
+    assert factory().build(dialect=dialect).sql == expected
+
+
+def test_tsql_returning_statement_cache_isolated() -> None:
+    builder = sql.update("t", dialect="tsql").set(a=1).returning("a")
+
+    first = builder.to_statement().compile()
+    assert first == ("UPDATE [t] SET [a] = ? OUTPUT INSERTED.[a]", (1,))
+    assert builder.to_statement().compile() == first
+    assert builder.to_statement(StatementConfig(dialect="postgres")).sql == 'UPDATE "t" SET "a" = %(a)s RETURNING "a"'
+    assert builder.to_statement().sql == "UPDATE [t] SET [a] = :a OUTPUT INSERTED.[a]"
+    assert builder.build(dialect="postgres").sql == 'UPDATE "t" SET "a" = %(a)s\nRETURNING "a"'
+    assert builder.to_sql(show_parameters=True) == "UPDATE [t] SET [a] = 1\nOUTPUT [INSERTED].[a]"
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected"),
+    [
+        pytest.param(
+            lambda: sql.insert("t", dialect="tsql").columns("a").values(1).returning("*"),
+            ("INSERT INTO [t] ([a]) OUTPUT INSERTED.* VALUES (?)", (1,)),
+            id="insert-star",
+        ),
+        pytest.param(
+            lambda: sql.delete("t", dialect="tsql").where_eq("id", 2).returning("a", "t.b"),
+            ("DELETE [t] OUTPUT DELETED.[a], DELETED.[b] FROM [t] WHERE [id] = ?", (2,)),
+            id="delete-columns",
+        ),
+    ],
+)
+def test_tsql_returning_statement_forms(factory: "Callable[[], Any]", expected: "tuple[str, tuple[int, ...]]") -> None:
+    assert factory().to_statement().compile() == expected
+
+
+def test_tsql_returning_static_build_keeps_caller_expression() -> None:
+    source = sqlglot.parse_one("UPDATE t SET a = 1 RETURNING a")
+    built = sql.update("t").build_static_expression(source, copy=False, dialect="tsql")
+    assert built.sql == "UPDATE [t] SET [a] = 1\nOUTPUT [INSERTED].[a]"
+    assert source.sql() == "UPDATE t SET a = 1 RETURNING a"
+
+
+def test_raw_sql_compile_keeps_tsql_output_as_written() -> None:
+    statement = SQL("UPDATE t SET a=1 OUTPUT a", statement_config=StatementConfig(dialect="tsql"))
+    assert statement.compile() == ("UPDATE t SET a=1 OUTPUT a", [])
+
+
+@pytest.mark.parametrize(
+    ("raw", "source_dialect", "expected"),
+    [
+        pytest.param(
+            "UPDATE t SET a=1 RETURNING a", "postgres", "UPDATE [t] SET [a] = 1\nOUTPUT [INSERTED].[a]", id="update"
+        ),
+        pytest.param(
+            "DELETE FROM t AS u WHERE u.id = 1 RETURNING u.a",
+            "postgres",
+            "DELETE   [u]\nOUTPUT [DELETED].[a] FROM [t] AS [u]\nWHERE\n  [u].[id] = 1",
+            id="delete-alias",
+        ),
+        pytest.param(
+            "DELETE t OUTPUT deleted.a WHERE id=1",
+            "tsql",
+            "DELETE   [t]\nOUTPUT [deleted].[a]\nWHERE\n  [id] = 1",
+            id="delete-existing-tables",
+        ),
+    ],
+)
+def test_raw_sql_builder_renders_tsql_output(raw: str, source_dialect: str, expected: str) -> None:
+    builder = SQL(raw, statement_config=StatementConfig(dialect=source_dialect)).builder()
+    assert builder.build(dialect="tsql").sql == expected

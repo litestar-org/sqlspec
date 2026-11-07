@@ -219,7 +219,8 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
 | `VARBINARY(MAX)` | `bytes` / `bytearray` | Binary payload storage. |
 | `BIT` | `bool` / `int` | T-SQL boolean flag (`0` / `1`). |
 
-- **OUTPUT INSERTED Returning Semantics**: SQLGlot's `tsql` dialect compiles `.returning(...)` clauses on `INSERT`, `UPDATE`, and `DELETE` builders into T-SQL `OUTPUT INSERTED.*` / `OUTPUT DELETED.*` projections automatically.
+- **`.returning()` Renders `OUTPUT`**: Builders qualify unqualified columns, columns named with the target table, and `*`. Insert and update read from `INSERTED`, so an update returns post-update values. Delete reads from `DELETED`. Write `DELETED.col` on an update to return the previous value, and use a `FROM` alias such as `s.col` to return a source column. Subqueries raise `SQLBuilderError`. Raw `SQL` statements run as written, so include the `INSERTED` or `DELETED` prefix yourself.
+- **`OUTPUT` and Triggers**: SQL Server rejects `OUTPUT` without `INTO` when the target table has an enabled trigger (Msg 334), and builders do not render `INTO`. For those tables, run raw `SQL` with `OUTPUT ... INTO @table_variable` followed by a `SELECT`.
 - **MERGE Upserts**: Build atomic SQL Server upserts with `sql.merge(dialect="tsql").into(...)` (`WHEN MATCHED THEN UPDATE ... WHEN NOT MATCHED THEN INSERT ...`).
 - **Streaming Arrow BulkCopy on mssql-python**: `session.load_from_arrow(table, source)` streams `pyarrow.Table`, `RecordBatch`, or `RecordBatchReader` batches directly through `mssql_python`'s native TDS `bulkcopy` engine without materializing intermediate Python dicts.
 - **T-SQL Pagination Requires ORDER BY**: SQL Server's `OFFSET ... ROWS FETCH NEXT ... ROWS ONLY` syntax requires an explicit `ORDER BY` clause. Always attach `.order_by(...)` or `OrderByFilter` when using `LimitOffsetFilter` on `tsql`.

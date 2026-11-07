@@ -33,8 +33,10 @@ def test_update_from_select_builder_matrix() -> None:
     assert stmt_duckdb.parameters["a"] == 1
 
     stmt_tsql = query.build(dialect="tsql")
-    assert "FROM (" in stmt_tsql.sql and "TOP 1" in stmt_tsql.sql
-    assert "OUTPUT" in stmt_tsql.sql
+    assert stmt_tsql.sql == (
+        "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[id]\nFROM (\n  SELECT\n  TOP 1\n"
+        "    [t].[id] AS [id]\n  FROM [t] AS [t]\n) AS [s]\nWHERE\n  [s].[id] = [t].[id]"
+    )
     assert stmt_tsql.parameters["a"] == 1
 
 

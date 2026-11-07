@@ -10,8 +10,10 @@ import re
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+import sqlglot
 from sqlglot import exp, maybe_parse
 from sqlglot.dialects.dialect import Dialect
+from sqlglot.errors import ParseError, TokenError
 
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
@@ -444,6 +446,56 @@ def _mark_explicit_table_quotes(table: exp.Table, source: str) -> exp.Table:
             break
         remaining = remaining[1:].lstrip()
     return table
+
+
+def _parse_dml_target(table: str, alias: str | None = None, dialect: "DialectType | None" = None) -> exp.Table:
+    """Parse the table string naming an INSERT, UPDATE, DELETE, or MERGE target.
+
+    ``t AS u`` and ``t u`` keep their alias. Any other string stays one table reference, so its
+    text can only ever render as identifiers.
+
+    Args:
+        table: Target table text.
+        alias: Explicit alias, which takes the place of alias parsing.
+        dialect: Dialect whose tokenizer reads an aliased string.
+
+    Returns:
+        The target table expression.
+    """
+    aliased = None if alias is not None else _parse_aliased_table(table, dialect)
+    if aliased is not None:
+        return aliased
+    return _mark_explicit_table_quotes(exp.to_table(table, alias=alias), table)
+
+
+def _parse_aliased_table(table: str, dialect: "DialectType | None") -> exp.Table | None:
+    """Parse ``<table> [AS] <alias>``, returning None for every other shape."""
+    stripped = table.strip()
+    if not any(character.isspace() for character in stripped):
+        return None
+    try:
+        statements = sqlglot.parse(f"SELECT * FROM {stripped}", dialect=_normalize_dialect(dialect))
+    except (ParseError, TokenError):
+        return None
+    select = statements[0] if len(statements) == 1 else None
+    if not isinstance(select, exp.Select):
+        return None
+    if any(value for key, value in select.args.items() if key not in {"expressions", "from_"}):
+        return None
+    from_clause = select.args.get("from_")
+    parsed = from_clause.this if from_clause is not None else None
+    if not isinstance(parsed, exp.Table) or not isinstance(parsed.this, exp.Identifier):
+        return None
+    if any(value for key, value in parsed.args.items() if key not in {"this", "db", "catalog", "alias"}):
+        return None
+    if not all(
+        isinstance(part, exp.Identifier) for part in (parsed.args.get("db"), parsed.args.get("catalog")) if part
+    ):
+        return None
+    alias_node = parsed.args.get("alias")
+    if not isinstance(alias_node, exp.TableAlias) or alias_node.args.get("columns"):
+        return None
+    return _mark_explicit_table_quotes(parsed, stripped)
 
 
 def _normalize_partition_by(partition_by: str | list[str] | exp.Expr | None) -> list[exp.Expr] | None:
