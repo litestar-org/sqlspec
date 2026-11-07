@@ -360,6 +360,8 @@ class UpdateSetClauseMixin:
 class UpdateFromClauseMixin:
     __slots__ = ()
 
+    dialect: "DialectType | None"
+
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
 
@@ -383,7 +385,7 @@ class UpdateFromClauseMixin:
 
         table_expr: exp.Expr
         if isinstance(table, str):
-            table_expr = exp.to_table(table, alias=alias)
+            table_expr = _parse_dml_target(table, alias, dialect=self.dialect)
         elif isinstance(table, exp.Expr):
             if isinstance(table, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=table.copy())

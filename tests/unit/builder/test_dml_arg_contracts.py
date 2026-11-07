@@ -267,6 +267,26 @@ def test_dml_table_string_keeps_alias(target: str, dialect: str, update: str, de
             id="alias-references",
         ),
         pytest.param(
+            lambda: sql.update("t").set(a=1).from_("s AS x").where("t.id = x.id"),
+            'UPDATE "t" SET "a" = %(a)s\nFROM "s" AS "x"\nWHERE\n  "t"."id" = "x"."id"',
+            id="update-from-as",
+        ),
+        pytest.param(
+            lambda: sql.update("t").set(a=1).from_("s x").where("t.id = x.id"),
+            'UPDATE "t" SET "a" = %(a)s\nFROM "s" AS "x"\nWHERE\n  "t"."id" = "x"."id"',
+            id="update-from-implicit",
+        ),
+        pytest.param(
+            lambda: sql.update("t").set(a=1).from_("dbo.s AS x").where("t.id = x.id"),
+            'UPDATE "t" SET "a" = %(a)s\nFROM "dbo"."s" AS "x"\nWHERE\n  "t"."id" = "x"."id"',
+            id="update-from-schema",
+        ),
+        pytest.param(
+            lambda: sql.update("t").set(a=1).from_("x").from_("y AS z"),
+            'UPDATE "t" SET "a" = %(a)s\nFROM "x", "y" AS "z"',
+            id="update-from-second-source",
+        ),
+        pytest.param(
             lambda: sql.merge("t AS u").using("s", alias="s").on("u.id = s.id").when_matched_then_delete(),
             'MERGE INTO t AS "u"\nUSING "s" AS s\nON (\n  "u"."id" = "s"."id"\n)\nWHEN MATCHED THEN DELETE',
             id="merge-target",
@@ -325,6 +345,11 @@ def test_dml_table_string_alias_parses_with_builder_dialect() -> None:
             lambda: sql.update("t AS u").set(a=1).from_("s", alias="s").where("u.id = s.id"),
             "UPDATE [u] SET [a] = :a\nFROM [t] AS [u], [s] AS s\nWHERE\n  [u].[id] = [s].[id]",
             id="update-existing-from",
+        ),
+        pytest.param(
+            lambda: sql.update("t AS u").set(a=1).from_("s AS x").where("u.id = x.id"),
+            "UPDATE [u] SET [a] = :a\nFROM [t] AS [u], [s] AS [x]\nWHERE\n  [u].[id] = [x].[id]",
+            id="update-from-string-alias",
         ),
         pytest.param(
             lambda: sql.update("t AS u").set(a=1).join("s", on="u.id = s.id"),
