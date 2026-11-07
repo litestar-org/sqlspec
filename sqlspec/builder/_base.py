@@ -1017,6 +1017,8 @@ class QueryBuilder:
         """Validate and translate a copy so builds never mutate the builder AST."""
         if dialect is None:
             return expression
+        if dialect == "tsql":
+            expression = _qualify_tsql_output(expression)
         try:
             config = get_dialect_config("spanner" if dialect == "spangres" else dialect)
         except ValueError:
@@ -1472,6 +1474,74 @@ def _unquote_identifier(node: exp.Expr) -> exp.Expr:
     ):
         node.set("quoted", False)
     return node
+
+
+def _qualify_tsql_output(expression: exp.Expr) -> exp.Expr:
+    """Rewrite a copy of a DML statement so its ``OUTPUT`` clause is valid T-SQL.
+
+    Projections read from ``INSERTED`` on insert and update and from ``DELETED`` on delete. A delete
+    without explicit tables names its target before ``OUTPUT``, the only position SQL Server accepts.
+
+    Args:
+        expression: Statement about to render for T-SQL.
+
+    Returns:
+        The rewritten copy, or the original expression when it has no ``RETURNING`` clause.
+    """
+    if not isinstance(expression, (exp.Insert, exp.Update, exp.Delete)) or not expression.args.get("returning"):
+        return expression
+    qualified = expression.copy()
+    source = "DELETED" if isinstance(qualified, exp.Delete) else "INSERTED"
+    target_node = qualified.this.this if isinstance(qualified.this, exp.Schema) else qualified.this
+    target = target_node if isinstance(target_node, exp.Table) else None
+    returning = qualified.args["returning"]
+    returning.set(
+        "expressions", [_qualify_output_projection(projection, source, target) for projection in returning.expressions]
+    )
+    if target is not None and isinstance(qualified, exp.Delete) and not qualified.args.get("tables"):
+        qualified.set("tables", [_delete_output_target(target)])
+    return qualified
+
+
+def _qualify_output_projection(projection: exp.Expr, source: str, target: exp.Table | None) -> exp.Expr:
+    """Point a projection's unqualified and target-qualified columns at a pseudo-table.
+
+    Args:
+        projection: ``RETURNING`` projection.
+        source: ``INSERTED`` or ``DELETED``.
+        target: Table the statement modifies, when known.
+
+    Returns:
+        The projection reading from ``source``.
+
+    Raises:
+        SQLBuilderError: If the projection contains a subquery.
+    """
+    if projection.find(exp.Query):
+        msg = "T-SQL OUTPUT clauses do not allow subqueries."
+        raise SQLBuilderError(msg)
+    if isinstance(projection, exp.Star):
+        return exp.Column(this=projection, table=exp.to_identifier(source))
+    for column in list(projection.find_all(exp.Column)):
+        if not column.table or _is_output_target_column(column, target):
+            column.set("table", exp.to_identifier(source))
+            column.set("db", None)
+            column.set("catalog", None)
+    return projection
+
+
+def _is_output_target_column(column: exp.Column, target: exp.Table | None) -> bool:
+    """Check whether a column names the modified table, comparing any written schema."""
+    if target is None or column.table.lower() != (target.alias or target.name).lower():
+        return False
+    return not column.db or column.db.lower() == target.db.lower()
+
+
+def _delete_output_target(target: exp.Table) -> exp.Table:
+    """Return the table reference a T-SQL delete names before ``OUTPUT``."""
+    if target.alias:
+        return exp.Table(this=exp.to_identifier(target.alias))
+    return target.copy()
 
 
 def register_subquery_fragment(expression: exp.Expr, parameters: "Mapping[str, Any]") -> exp.Expr:
