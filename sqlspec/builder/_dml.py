@@ -15,9 +15,6 @@ from sqlspec.builder._parsing_utils import (
     _normalize_dialect,
     _parse_table_reference,
     _simple_column_expression,
-    extract_expression,
-    extract_sql_object_expression,
-    parse_table_expression,
     resolve_value_expression,
 )
 from sqlspec.exceptions import SQLBuilderError
@@ -388,14 +385,16 @@ class UpdateFromClauseMixin:
 
         table_expr: exp.Expr
         if isinstance(table, str):
-            table_expr = parse_table_expression(table, alias, cast("QueryBuilder", self).dialect)
+            table_expr = _parse_table_reference(table, alias, cast("QueryBuilder", self).dialect)
         elif isinstance(table, exp.Expr):
             if isinstance(table, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=table.copy())
                 if alias:
                     table_expr = exp.alias_(table_expr, alias, table=True)
             else:
-                table_expr = exp.alias_(table.copy(), alias, table=True) if alias else table.copy()
+                table_expr = (
+                    exp.alias_(table.copy(), alias, table=not isinstance(table, exp.Func)) if alias else table.copy()
+                )
         elif (
             hasattr(table, "build")
             or hasattr(table, "to_statement")
