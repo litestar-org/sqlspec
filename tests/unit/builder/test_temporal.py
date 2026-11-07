@@ -150,3 +150,30 @@ def test_as_of_with_string_alias() -> None:
     query = sql.select("*").from_("users", alias="u", as_of="2024-01-01")
     built = normalize_sql(query.build(dialect="oracle").sql)
     assert built == "SELECT * FROM users AS OF TIMESTAMP '2024-01-01' u"
+
+
+def test_temporal_registration_does_not_mutate_non_builder_version_rendering() -> None:
+    """Non-builder exp.Version expressions should retain default sqlglot rendering before and after temporal joins."""
+    code = (
+        "from sqlglot import exp; "
+        "from sqlspec import sql; "
+        "table = exp.Table(this=exp.to_identifier('t'), version=exp.Version(this='SCN', kind='AS OF', expression=exp.Literal.number(42))); "
+        "query = exp.select('*').from_(table); "
+        "dialects = (None, 'duckdb', 'bigquery', 'oracle', 'snowflake', 'postgres'); "
+        "before = {d: query.sql(d) for d in dialects}; "
+        "sql.select('*').from_('a').join('b', on='a.id = b.id', as_of='2024-01-01'); "
+        "after = {d: query.sql(d) for d in dialects}; "
+        "assert before == after, f'{before} != {after}'"
+    )
+    result = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_non_builder_version_rendering_unaffected() -> None:
+    table = exp.Table(
+        this=exp.to_identifier("t"), version=exp.Version(this="SCN", kind="AS OF", expression=exp.Literal.number(42))
+    )
+    query = exp.select("*").from_(table)
+    assert query.sql(dialect="duckdb") == "SELECT * FROM t FOR SCN AS OF 42"
+    assert query.sql(dialect="bigquery") == "SELECT * FROM t FOR SCN AS OF 42"
+    assert query.sql() == "SELECT * FROM t FOR SCN AS OF 42"
