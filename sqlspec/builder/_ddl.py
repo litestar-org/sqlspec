@@ -24,6 +24,7 @@ from sqlspec.builder._parsing_utils import (
     _is_simple_identifier,
     _mark_explicit_table_quotes,
     _normalize_dialect,
+    _parse_table_reference,
     _truthy_metadata_flag,
     parse_order_expression,
 )
@@ -3980,7 +3981,10 @@ def _parse_ddl_identifier(name: str, dialect: "DialectType | None" = None) -> ex
 
 def _parse_ddl_table(table_name: str, schema: "str | None" = None, dialect: "DialectType | None" = None) -> exp.Table:
     """Parse a DDL table reference, preserving quoted table and schema identifiers."""
-    table = _mark_explicit_table_quotes(exp.to_table(table_name, dialect=dialect), table_name)
+    table = _parse_table_reference(table_name, dialect=dialect)
+    if table.args.get("alias"):
+        msg = f"Invalid table reference {table_name!r}: DDL table names cannot have an alias."
+        raise SQLBuilderError(msg)
     if schema:
         table.set("db", _parse_ddl_identifier(schema, dialect=dialect))
     return table

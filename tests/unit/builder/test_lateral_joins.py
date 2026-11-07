@@ -58,13 +58,16 @@ def test_lateral_join_with_on_condition() -> None:
     """Test LATERAL JOIN with explicit ON condition."""
     # Use a simpler table function for this test
     query = (
-        sql.select("u.name", "s.value").from_("users u").lateral_join("generate_series(1, 10)", on="true", alias="s")
+        sql
+        .select("u.name", "s.value")
+        .from_("users u")
+        .lateral_join("generate_series(1, 10)", on="s.value > 0", alias="s")
     )
 
     stmt = query.build()
 
     assert "LATERAL" in stmt.sql
-    assert "true" in stmt.sql.lower()
+    assert '"s"."value" > 0' in stmt.sql
 
 
 def test_lateral_join_subquery() -> None:

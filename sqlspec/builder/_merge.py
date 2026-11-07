@@ -16,8 +16,12 @@ from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import _coerce_column, _parse_aliased_table, resolve_value_expression
-from sqlspec.builder._select import is_explicitly_quoted
+from sqlspec.builder._parsing_utils import (
+    _coerce_column,
+    _parse_table_reference,
+    resolve_value_expression,
+    unwrap_expression_source,
+)
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers import to_json
@@ -104,21 +108,10 @@ class MergeIntoClauseMixin:
 
         table_expr: exp.Expr
         if isinstance(table, str):
-            builder = cast("QueryBuilder", self)
-            parsed = None if alias else _parse_aliased_table(table, builder.dialect)
-            if parsed is not None:
-                table_expr = parsed
-                builder._merge_target_quoted = bool(parsed.this.quoted)  # pyright: ignore[reportPrivateUsage]
-            else:
-                table_expr = exp.to_table(table)
-                if is_explicitly_quoted(table):
-                    stripped = table.strip('"`')
-                    table_expr.set("this", exp.to_identifier(stripped, quoted=True))
-                    builder._merge_target_quoted = True  # pyright: ignore[reportPrivateUsage]
-                else:
-                    builder._merge_target_quoted = False  # pyright: ignore[reportPrivateUsage]
-                if alias:
-                    table_expr = exp.alias_(table_expr, alias, table=True)
+            table_expr = _parse_table_reference(table, alias, cast("QueryBuilder", self).dialect)
+            cast("QueryBuilder", self)._merge_target_quoted = any(  # pyright: ignore[reportPrivateUsage]
+                part.meta.get("sqlspec_explicit_table_quote") for part in table_expr.parts
+            )
         else:
             table_expr = table
 
@@ -137,8 +130,9 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
     def using(self, source: str | exp.Expr | Any, alias: str | None = None) -> Self:
         current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         source_expr: exp.Expr
+        unwrapped_source = unwrap_expression_source(source, builder=cast("SQLBuilderProtocol", self))
         if isinstance(source, str):
-            source_expr = exp.to_table(source, alias=alias)
+            source_expr = _parse_table_reference(source, alias, cast("QueryBuilder", self).dialect)
         elif isinstance(source, (dict, list)):
             paren_expr = self._create_dict_source_expression(source, alias)
             if alias and isinstance(paren_expr, exp.Paren):
@@ -152,17 +146,21 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(alias))
             else:
                 source_expr = exp.paren(subquery_expression_source)
-        elif isinstance(source, exp.Expr):
-            if isinstance(source, exp.Select):
-                source_expr = exp.Subquery(this=source, alias=exp.to_identifier(alias)) if alias else exp.paren(source)
-            elif isinstance(source, exp.Paren) and alias:
-                inner = source.this
+        elif unwrapped_source is not None:
+            if isinstance(unwrapped_source, exp.Select):
+                source_expr = (
+                    exp.Subquery(this=unwrapped_source, alias=exp.to_identifier(alias))
+                    if alias
+                    else exp.paren(unwrapped_source)
+                )
+            elif isinstance(unwrapped_source, exp.Paren) and alias:
+                inner = unwrapped_source.this
                 source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(alias))
-            elif isinstance(source, exp.Subquery) and alias:
-                source.set("alias", exp.to_identifier(alias))
-                source_expr = source
+            elif isinstance(unwrapped_source, exp.Subquery) and alias:
+                unwrapped_source.set("alias", exp.to_identifier(alias))
+                source_expr = unwrapped_source
             else:
-                source_expr = exp.alias_(source, alias) if alias else source
+                source_expr = exp.alias_(unwrapped_source, alias) if alias else unwrapped_source
         else:
             msg = f"Unsupported source type for USING clause: {type(source)}"
             raise SQLBuilderError(msg)

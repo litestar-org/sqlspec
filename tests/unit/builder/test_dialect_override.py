@@ -314,8 +314,8 @@ def test_tsql_returning_qualifies_projection(kind: str, projection: str, expecte
             lambda: (
                 sql.update("t").set(a=1).from_("src", alias="s").where("t.id = s.id").returning("a", "t.b", "s.c AS sc")
             ),
-            "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[a], [INSERTED].[b], [s].[c] AS [sc]\nFROM [src] AS s\n"
-            "WHERE\n  [t].[id] = [s].[id]",
+            "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[a], [INSERTED].[b], [s].[c] AS [sc]\nFROM [src] AS [s]\n"
+            "WHERE\n  [s].[id] = [t].[id]",
             id="from-alias",
         ),
         pytest.param(

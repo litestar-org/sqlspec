@@ -37,11 +37,11 @@ def test_for_update_of_single_table() -> None:
         sql
         .select("j.id", "u.name", dialect="postgres")
         .from_("job j")
-        .join("users u ON j.user_id = u.id")
+        .join("users u", "j.user_id = u.id")
         .for_update(of="j")
     )
     stmt = query.build()
-    assert "FOR UPDATE OF j" in stmt.sql
+    assert 'FOR UPDATE OF "j"' in stmt.sql
 
 
 def test_for_update_of_multiple_tables() -> None:
@@ -50,8 +50,8 @@ def test_for_update_of_multiple_tables() -> None:
         sql
         .select("j.id", "u.name", "c.title", dialect="postgres")
         .from_("job j")
-        .join("users u ON j.user_id = u.id")
-        .join("companies c ON u.company_id = c.id")
+        .join("users u", "j.user_id = u.id")
+        .join("companies c", "u.company_id = c.id")
         .for_update(of=["j", "u"])
     )
     stmt = query.build()
@@ -103,11 +103,11 @@ def test_for_share_of_table() -> None:
         sql
         .select("j.id", "u.name", dialect="postgres")
         .from_("job j")
-        .join("users u ON j.user_id = u.id")
+        .join("users u", "j.user_id = u.id")
         .for_share(of="j")
     )
     stmt = query.build()
-    assert "FOR SHARE OF j" in stmt.sql
+    assert 'FOR SHARE OF "j"' in stmt.sql
 
 
 def test_for_share_error_skip_locked_and_nowait() -> None:
@@ -224,8 +224,8 @@ def test_complex_join_with_for_update_of() -> None:
         sql
         .select("j.id", "j.status", "u.name", "c.title", dialect="postgres")
         .from_("job j")
-        .join("users u ON j.user_id = u.id")
-        .join("companies c ON u.company_id = c.id")
+        .join("users u", "j.user_id = u.id")
+        .join("companies c", "u.company_id = c.id")
         .where("j.status = 'pending'")
         .for_update(of=["j", "u"])
     )  # Lock only job and users tables, not companies

@@ -6,14 +6,16 @@ SQL conditions with parameter binding.
 
 from collections.abc import Iterable
 from datetime import date, datetime
-from typing import Any, cast
+from typing import Any, cast, final
 
 from sqlglot import exp
 
 from sqlspec.builder._vector_distance import VectorDistance
 from sqlspec.core import NullsPlacement, ordered
 
-__all__ = ("Column", "ColumnExpression", "FunctionColumn")
+__all__ = ("Column", "ColumnExpression", "ColumnNamespace", "FunctionColumn")
+
+_QUALIFIED_COLUMN_PARTS = 2
 
 
 class ColumnExpression:
@@ -23,6 +25,16 @@ class ColumnExpression:
 
     def __init__(self, expression: exp.Expr) -> None:
         self._expression = expression
+
+    @property
+    def expression(self) -> exp.Expr:
+        """Get the underlying SQLGlot expression."""
+        return self._expression
+
+    @property
+    def sqlglot_expression(self) -> exp.Expr:
+        """Get the underlying SQLGlot expression."""
+        return self._expression
 
     def __and__(self, other: "ColumnExpression") -> "ColumnExpression":
         """Combine with AND operator (&).
@@ -62,11 +74,6 @@ class ColumnExpression:
         )
         raise TypeError(msg)
 
-    @property
-    def sqlglot_expression(self) -> exp.Expr:
-        """Get the underlying SQLGlot expression."""
-        return self._expression
-
 
 class _ScalarExpressionMixin:
     """Shared operator and helper methods for scalar column-like expressions.
@@ -79,7 +86,17 @@ class _ScalarExpressionMixin:
 
     __slots__ = ("_expression",)
 
-    _expression: "exp.Expr"
+    _expression: exp.Expr
+
+    @property
+    def expression(self) -> exp.Expr:
+        """Get the underlying SQLGlot expression."""
+        return self._expression
+
+    @property
+    def sqlglot_expression(self) -> exp.Expr:
+        """Get the underlying SQLGlot expression."""
+        return self._expression
 
     def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         """Equal to (==)."""
@@ -116,11 +133,6 @@ class _ScalarExpressionMixin:
     def __invert__(self) -> ColumnExpression:
         """Apply NOT operator (~)."""
         return ColumnExpression(exp.Not(this=self._expression))
-
-    @property
-    def sqlglot_expression(self) -> "exp.Expr":
-        """Get the underlying SQLGlot expression."""
-        return self._expression
 
     def like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
         """SQL LIKE pattern matching."""
@@ -379,7 +391,7 @@ class Column(_ScalarExpressionMixin):
         """Convert a vector input into a SQLGlot expression."""
         if isinstance(value, list):
             return exp.Array(expressions=[exp.Literal.number(v) for v in value])
-        if isinstance(value, Column):
+        if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
             return value._expression
         if isinstance(value, exp.Expr):
             return value
@@ -400,6 +412,63 @@ class FunctionColumn(_ScalarExpressionMixin):
         return hash(id(self._expression))
 
 
+@final
+class ColumnNamespace:
+    """Namespace for constructing Column references via call, attribute, or item access.
+
+    Supports ``sql.c("name", table="u")``, ``sql.c.name``, ``sql.c["first-name"]``,
+    ``sql.c["u.name"]``, and ``sql.c["u", "first.name"]``.
+    """
+
+    __slots__ = ()
+
+    def __call__(self, name: str, table: str | None = None) -> Column:
+        """Create a Column reference with an optional table qualifier.
+
+        Args:
+            name: Column name.
+            table: Optional table name.
+
+        Returns:
+            Column expression for the given identifier.
+        """
+        return Column(name, table)
+
+    def __getattr__(self, name: str) -> Column:
+        """Create an unqualified Column reference from attribute access.
+
+        Args:
+            name: Column attribute name.
+
+        Returns:
+            Column expression for the given attribute name.
+
+        Raises:
+            AttributeError: If a dunder attribute is accessed.
+        """
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return Column(name)
+
+    def __getitem__(self, name: str | tuple[str, str]) -> Column:
+        """Create a Column reference from subscript access.
+
+        Args:
+            name: Column name, ``"table.column"`` string, or ``(table, column)`` tuple.
+
+        Returns:
+            Column expression for the requested identifier.
+        """
+        if isinstance(name, tuple):
+            table_name, col_name = name
+            return Column(col_name, table_name)
+        if "." in name:
+            parts = name.split(".")
+            if len(parts) == _QUALIFIED_COLUMN_PARTS and parts[0] and parts[1]:
+                return Column(parts[1], parts[0])
+        return Column(name)
+
+
 def _wrap_operand(expression: exp.Expr, lower_precedence: type[exp.Expr]) -> exp.Expr:
     """Parenthesize an operand whose operator binds looser than its new parent.
 
@@ -416,18 +485,26 @@ def _wrap_operand(expression: exp.Expr, lower_precedence: type[exp.Expr]) -> exp
 
 
 def _convert_value(value: Any) -> exp.Expr:
-    """Convert a Python value to a SQLGlot expression.
+    """Convert a Python value or builder expression to a SQLGlot expression.
 
-    Special handling for datetime objects to prevent SQLGlot from
-    converting them to TIME_STR_TO_TIME function calls. Datetime
-    objects should be passed as parameters, not converted to SQL functions.
+    Special handling for datetime objects prevents SQLGlot from converting them
+    to TIME_STR_TO_TIME function calls. Builder column and expression wrappers
+    unwrap to copies of their underlying SQLGlot expressions.
 
     Args:
-        value: The value to convert
+        value: The value or expression to convert.
 
     Returns:
-        A SQLGlot expression representing the value
+        A SQLGlot expression representing the value.
     """
     if isinstance(value, (datetime, date)):
         return exp.Literal(this=value, is_string=False)
+    if isinstance(value, (ColumnExpression, _ScalarExpressionMixin)):
+        return value.sqlglot_expression.copy()
+    if isinstance(value, exp.Expr):
+        return value.copy()
+    if hasattr(value, "expression"):
+        expr = value.expression
+        if isinstance(expr, exp.Expr):
+            return expr.copy()
     return exp.convert(value)

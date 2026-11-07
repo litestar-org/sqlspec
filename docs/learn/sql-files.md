@@ -125,7 +125,7 @@ Reuse static SQL blocks across queries with `-- fragment: <name>` and `/* includ
 | Value Type | Example | Splicing Semantics | Parameter Binding |
 | --- | --- | --- | --- |
 | `str` | `ordering="t.name DESC"` | Spliced verbatim as trusted SQL text (use allowlists for identifiers and directions). | None (bind user data separately). |
-| `sqlglot.exp.Expr` | `ordering=exp.column("name", table="t").desc()` | Rendered to SQL in the query's `-- dialect:`. | None. |
+| `sqlglot.exp.Expr` | `ordering=sql.col("name", table="t").desc()` | Rendered to SQL in the query's `-- dialect:`. | None. |
 | `SQL` | `predicates=SQL("t.name = :team_name", team_name="SQLSpec")` | Splices `SQL.sql` into the marker and merges `SQL.named_parameters` onto the returned statement. | Carries named parameters (`:team_name`) safely into execution. |
 
 !!! warning "Slot Validation and SQLSlotError Rules"

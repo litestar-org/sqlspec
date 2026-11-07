@@ -288,7 +288,7 @@ def test_dml_table_string_keeps_alias(target: str, dialect: str, update: str, de
         ),
         pytest.param(
             lambda: sql.merge("t AS u").using("s", alias="s").on("u.id = s.id").when_matched_then_delete(),
-            'MERGE INTO t AS "u"\nUSING "s" AS s\nON (\n  "u"."id" = "s"."id"\n)\nWHEN MATCHED THEN DELETE',
+            'MERGE INTO t AS "u"\nUSING "s" AS "s"\nON (\n  "u"."id" = "s"."id"\n)\nWHEN MATCHED THEN DELETE',
             id="merge-target",
         ),
     ],
@@ -302,10 +302,6 @@ def test_dml_table_string_alias_entry_points(factory: Any, expected: str) -> Non
     [
         pytest.param("my-table", 'UPDATE "my-table" SET "a" = %(a)s', id="hyphenated-name"),
         pytest.param('"a b"', 'UPDATE "a b" SET "a" = %(a)s', id="quoted-name-with-space"),
-        pytest.param("t, s", 'UPDATE "t, s" SET "a" = %(a)s', id="not-one-table"),
-        pytest.param("t; DROP TABLE x", 'UPDATE "t; DROP TABLE x" SET "a" = %(a)s', id="trailing-statement"),
-        pytest.param("t AS u(a, b)", 'UPDATE "t AS u(a, b)" SET "a" = %(a)s', id="alias-columns"),
-        pytest.param("t JOIN s ON 1 = 1", 'UPDATE "t JOIN s ON 1 = 1" SET "a" = %(a)s', id="join"),
     ],
 )
 def test_dml_table_string_without_a_plain_alias_stays_one_identifier(target: str, expected: str) -> None:
@@ -313,19 +309,24 @@ def test_dml_table_string_without_a_plain_alias_stays_one_identifier(target: str
 
 
 @pytest.mark.parametrize(
-    ("target", "quoted"),
+    "target",
     [
-        pytest.param("f(1).t x", '"f(1)"."t x"', id="function"),
-        pytest.param("f((SELECT 1)).t x", '"f((SELECT 1))"."t x"', id="function-with-subquery"),
-        pytest.param("f(1).s.t x", '"f(1)"."s"."t x"', id="function-as-catalog"),
+        pytest.param("t, s", id="not-one-table"),
+        pytest.param("t; DROP TABLE x", id="trailing-statement"),
+        pytest.param("t AS u(a, b)", id="alias-columns"),
+        pytest.param("t JOIN s ON 1 = 1", id="join"),
+        pytest.param("f(1).t x", id="function"),
+        pytest.param("f((SELECT 1)).t x", id="function-with-subquery"),
+        pytest.param("f(1).s.t x", id="function-as-catalog"),
     ],
 )
-def test_dml_table_string_with_a_computed_name_part_renders_only_identifiers(target: str, quoted: str) -> None:
-    assert sql.update(target).set(a=1).build(dialect="postgres").sql == f'UPDATE {quoted} SET "a" = %(a)s'
-    assert sql.delete(target).build(dialect="postgres").sql == f"DELETE FROM {quoted}"
-    from_sql = sql.update("z").set(a=1).from_(target).build(dialect="postgres").sql
-    assert "F(" not in from_sql
-    assert quoted in from_sql
+def test_dml_table_string_rejects_non_table_references(target: str) -> None:
+    with pytest.raises(SQLBuilderError, match="Invalid table reference"):
+        sql.update(target).set(a=1)
+    with pytest.raises(SQLBuilderError, match="Invalid table reference"):
+        sql.delete(target)
+    with pytest.raises(SQLBuilderError, match="Invalid table reference"):
+        sql.update("z").set(a=1).from_(target)
 
 
 def test_dml_table_string_alias_parses_with_builder_dialect() -> None:
@@ -343,7 +344,7 @@ def test_dml_table_string_alias_parses_with_builder_dialect() -> None:
         ),
         pytest.param(
             lambda: sql.update().table("t", alias="u").set(a=1),
-            "UPDATE [u] SET [a] = :a\nFROM [t] AS u",
+            "UPDATE [u] SET [a] = :a\nFROM [t] AS [u]",
             id="update-explicit-alias",
         ),
         pytest.param(
@@ -359,7 +360,7 @@ def test_dml_table_string_alias_parses_with_builder_dialect() -> None:
         ),
         pytest.param(
             lambda: sql.update("t AS u").set(a=1).from_("s", alias="s").where("u.id = s.id"),
-            "UPDATE [u] SET [a] = :a\nFROM [t] AS [u], [s] AS s\nWHERE\n  [u].[id] = [s].[id]",
+            "UPDATE [u] SET [a] = :a\nFROM [t] AS [u], [s] AS [s]\nWHERE\n  [s].[id] = [u].[id]",
             id="update-existing-from",
         ),
         pytest.param(
@@ -384,7 +385,7 @@ def test_dml_table_string_alias_parses_with_builder_dialect() -> None:
         ),
         pytest.param(
             lambda: sql.merge("t AS u").using("s", alias="s").on("u.id = s.id").when_matched_then_delete(),
-            "MERGE INTO [t] AS [u]\nUSING [s] AS s\nON (\n  [u].[id] = [s].[id]\n)\nWHEN MATCHED THEN DELETE",
+            "MERGE INTO [t] AS [u]\nUSING [s] AS [s]\nON (\n  [u].[id] = [s].[id]\n)\nWHEN MATCHED THEN DELETE",
             id="merge",
         ),
     ],

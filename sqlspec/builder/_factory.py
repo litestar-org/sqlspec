@@ -15,7 +15,7 @@ from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
+from sqlspec.builder._column import Column, ColumnExpression, ColumnNamespace, FunctionColumn
 from sqlspec.builder._column import _convert_value as convert_column_value
 from sqlspec.builder._ddl import (
     AlterTable,
@@ -58,6 +58,7 @@ from sqlspec.builder._parsing_utils import (
     _resolve_dialect,
     _rollup_expression,
     extract_expression,
+    extract_sql_object_expression,
     parse_column_expression,
     to_expression,
 )
@@ -87,6 +88,7 @@ ColumnLike: TypeAlias = Union[
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
+_COLUMN_NAMESPACE: Final[ColumnNamespace] = ColumnNamespace()
 _FIRST_WORD_RE: Final["re.Pattern[str]"] = re.compile(r"\w+")
 SQL_STARTERS = {
     "SELECT",
@@ -213,6 +215,15 @@ class SQLFactory:
             f"Use sql.{actual_type_str.lower()}() instead."
         )
         raise SQLBuilderError(msg)
+
+    @property
+    def c(self) -> ColumnNamespace:
+        """Return the column namespace supporting call, attribute, and subscript access.
+
+        Returns:
+            ColumnNamespace instance for constructing Column references.
+        """
+        return _COLUMN_NAMESPACE
 
     @property
     def merge_(self) -> "Merge":
@@ -831,6 +842,69 @@ class SQLFactory:
             Column object that supports method chaining and operator overloading.
         """
         return Column(name, table)
+
+    def col(self, name: str, table: str | None = None) -> Column:
+        """Create a column reference (alias for :meth:`column`).
+
+        Args:
+            name: Column name.
+            table: Optional table name.
+
+        Returns:
+            Column object that supports method chaining and operator overloading.
+        """
+        return Column(name, table)
+
+    def func(self, name: str, *args: Any, dialect: DialectType | None = None) -> FunctionColumn:
+        """Create a SQL function expression for scalar or table-valued function calls.
+
+        Python primitives in ``args`` are converted to SQL literals, while builder
+        column/expression objects and SQLGlot nodes are unwrapped as SQL expressions.
+
+        Args:
+            name: SQL function name.
+            *args: Function arguments (Python literals, Column, FunctionColumn, ExpressionWrapper, or SQLGlot nodes).
+            dialect: Optional SQL dialect for function resolution.
+
+        Returns:
+            FunctionColumn wrapping the SQLGlot function expression.
+
+        Raises:
+            SQLBuilderError: If ``name`` is not a non-empty string or an argument cannot be converted.
+        """
+        if not isinstance(name, str) or not name.strip():
+            msg = "Function name must be a non-empty string."
+            raise SQLBuilderError(msg)
+
+        converted_args: list[exp.Expr] = []
+        for arg in args:
+            if isinstance(arg, SQL):
+                converted_args.append(extract_sql_object_expression(arg))
+            elif isinstance(arg, Case):
+                converted_args.append(convert_column_value(arg.expression))
+            else:
+                converted_args.append(convert_column_value(arg))
+
+        resolved_dialect = _normalize_dialect(_resolve_dialect(dialect, self.dialect))
+        return FunctionColumn(exp.func(name.strip(), *converted_args, dialect=resolved_dialect))
+
+    @staticmethod
+    def var(name: str) -> FunctionColumn:
+        """Create an unquoted SQL variable or keyword expression (such as DEFAULT or CURRENT_TIMESTAMP).
+
+        Args:
+            name: SQL keyword or variable token.
+
+        Returns:
+            FunctionColumn wrapping ``exp.var(name)``.
+
+        Raises:
+            SQLBuilderError: If ``name`` is not a non-empty string.
+        """
+        if not isinstance(name, str) or not name.strip():
+            msg = "Variable name must be a non-empty string."
+            raise SQLBuilderError(msg)
+        return FunctionColumn(exp.var(name.strip()))
 
     @staticmethod
     def raw(sql_fragment: str, **parameters: Any) -> "exp.Expr | SQL":

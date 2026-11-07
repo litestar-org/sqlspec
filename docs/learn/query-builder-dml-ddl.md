@@ -59,7 +59,7 @@ copy_stmt = sql.copy(
 # SQL: COPY events FROM '/tmp/events.csv' WITH (FORMAT 'csv', HEADER TRUE)
 ```
 
-Each `.returning()` string is one SQL projection, such as `"id"`, `"*"`, `"t.id"`, or `"total + 1 AS next_total"`, parsed with the builder's dialect. Treat these strings as trusted SQL text, as with `.select()`. Spaces and hyphens follow SQL rules, so `"first name"` is `first AS name` and `"first-name"` is `first - name`. A single word stays one column, including one starting with a digit such as `"2fa"`, and digits alone such as `"1"` are a number. Pass `exp.column("first-name")` to name a column with those characters. A string holding several projections or statements raises `SQLBuilderError`, so pass one projection per argument.
+Each `.returning()` string is one SQL projection, such as `"id"`, `"*"`, `"t.id"`, or `"total + 1 AS next_total"`, parsed with the builder's dialect. Treat these strings as trusted SQL text, as with `.select()`. Spaces and hyphens follow SQL rules, so `"first name"` is `first AS name` and `"first-name"` is `first - name`. A single word stays one column, including one starting with a digit such as `"2fa"`, and digits alone such as `"1"` are a number. Pass `sql.c["first-name"]` or `sql.col("first-name")` to name a column with those characters. A string holding several projections or statements raises `SQLBuilderError`, so pass one projection per argument.
 
 ## Schema Model Binding
 
@@ -129,7 +129,7 @@ merge_q = (
 # Parameters: {'json_data': [{'id': 1, 'name': 'Ada'}]}
 ```
 
-`Merge` clauses bind every string as a parameter, so `name="src.name"` stores the text `src.name`. Reference a column or SQL keyword with an explicit expression, such as `sql.raw("src.name")`, `sql.column("name", table="src")`, or `sql.raw("CURRENT_TIMESTAMP")`.
+`Merge` clauses bind every string as a parameter, so `name="src.name"` stores the text `src.name`. Reference a column or SQL keyword with an explicit expression, such as `sql.col("name", table="src")`, `sql.c["src.name"]`, `sql.var("CURRENT_TIMESTAMP")`, or `sql.raw("src.name")`.
 
 ## DDL Builders and Schema Inference
 

@@ -1672,12 +1672,12 @@ def test_for_update_of_with_parameters() -> None:
         sql
         .select("j.id", "u.name", dialect="postgres")
         .from_("job j")
-        .join("users u ON j.user_id = u.id")
+        .join("users u", "j.user_id = u.id")
         .where_eq("j.status", "pending")
         .for_update(of=["j"])
     )
     stmt = query.build()
-    assert "FOR UPDATE OF j" in stmt.sql
+    assert 'FOR UPDATE OF "j"' in stmt.sql
     assert "%(status)s" in stmt.sql or ":status" in stmt.sql
     assert stmt.parameters["status"] == "pending"
 
@@ -2046,7 +2046,7 @@ def test_merge_binds_strings_and_renders_explicit_columns() -> None:
         .build()
     )
     assert " ".join(merge_stmt.sql.split()) == (
-        'MERGE INTO users USING "staging" AS src ON ( "users"."id" = "src"."id" ) '
+        'MERGE INTO users USING "staging" AS "src" ON ( "users"."id" = "src"."id" ) '
         'WHEN MATCHED THEN UPDATE SET "status" = %(status)s, "name" = "src"."name" '
         'WHEN NOT MATCHED THEN INSERT ("id", "status") VALUES ("src"."id", %(status_1)s)'
     )

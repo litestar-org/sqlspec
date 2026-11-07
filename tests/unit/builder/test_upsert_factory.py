@@ -6,6 +6,7 @@ import pytest
 
 from sqlspec import sql
 from sqlspec.builder import Insert, Merge
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_upsert_returns_merge_for_postgres() -> None:
@@ -97,10 +98,10 @@ def test_upsert_with_empty_table_name_passes() -> None:
     assert isinstance(builder, Merge)
 
 
-def test_upsert_with_whitespace_only_table_name_passes() -> None:
-    """Test sql.upsert() with whitespace-only table name passes (validated later)."""
-    builder = sql.upsert("   ", dialect="postgres")
-    assert isinstance(builder, Merge)
+def test_upsert_with_whitespace_only_table_name_raises() -> None:
+    """Test sql.upsert() rejects a whitespace-only table name."""
+    with pytest.raises(SQLBuilderError, match="table reference"):
+        sql.upsert("   ", dialect="postgres")
 
 
 def test_upsert_with_invalid_dialect_returns_insert() -> None:
@@ -284,7 +285,7 @@ def test_upsert_with_quoted_table_name() -> None:
             .using("s", alias="s")
             .on("t.id = s.id")
             .when_matched_then_update(a=sql.raw("t.a + 1")),
-            'MERGE INTO t USING "s" AS s ON ( "t"."id" = "s"."id" ) WHEN MATCHED THEN UPDATE SET "a" = "t"."a" + 1',
+            'MERGE INTO t USING "s" AS "s" ON ( "t"."id" = "s"."id" ) WHEN MATCHED THEN UPDATE SET "a" = "t"."a" + 1',
             id="merge",
         ),
         pytest.param(

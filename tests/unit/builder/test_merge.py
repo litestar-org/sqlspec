@@ -943,9 +943,9 @@ def test_merge_defaults_disable_optimization_unlike_other_builders() -> None:
 
 
 MERGE_PREFIXES = {
-    "tsql": "MERGE INTO [t] USING [s] AS s ON ( [t].[id] = [s].[id] ) WHEN ",
+    "tsql": "MERGE INTO [t] USING [s] AS [s] ON ( [t].[id] = [s].[id] ) WHEN ",
     "oracle": "MERGE INTO t USING s s ON ( t.id = s.id ) WHEN ",
-    "postgres": 'MERGE INTO t USING "s" AS s ON ( "t"."id" = "s"."id" ) WHEN ',
+    "postgres": 'MERGE INTO t USING "s" AS "s" ON ( "t"."id" = "s"."id" ) WHEN ',
 }
 
 
