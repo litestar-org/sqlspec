@@ -224,7 +224,9 @@ class SelectClauseMixin:
 
     def select(
         self,
-        *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case],
+        *columns: Union[
+            str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case, "QueryBuilder"
+        ],
     ) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="Cannot add columns to non-SELECT expression.")
@@ -236,7 +238,9 @@ class SelectClauseMixin:
 
     def select_only(
         self,
-        *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case],
+        *columns: Union[
+            str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case, "QueryBuilder"
+        ],
     ) -> Self:
         """Replace currently selected columns with new ones."""
         builder = cast("SQLBuilderProtocol", self)

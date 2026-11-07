@@ -424,3 +424,10 @@ def test_resolve_value_expression_parenthesizes_set_operation_as_subquery() -> N
 
     assert isinstance(union, exp.Subquery)
     assert isinstance(select, exp.Paren)
+
+
+def test_parse_column_expression_without_builder_returns_same_node() -> None:
+    """Without a builder, a query node is returned as given."""
+    node = exp.select("x")
+
+    assert parse_column_expression(node) is node

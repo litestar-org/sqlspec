@@ -324,3 +324,86 @@ def test_between_rejects_non_pair(operator: str, message: str) -> None:
     """Between predicates reject a value that is not a pair."""
     with pytest.raises(SQLBuilderError, match=message):
         sql.select("z").from_("t").where(("a", operator, 5))
+
+
+def _projection_query() -> Any:
+    return sql.select("x").from_("y").where_eq("z", 5)
+
+
+def _projection_base() -> Any:
+    return sql.select("z").from_("t")
+
+
+SUBQUERY_PROJECTION = '( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."z" = :z )'
+
+
+@pytest.mark.parametrize(
+    ("builder", "expected", "parameters"),
+    [
+        pytest.param(
+            lambda: sql.select(_projection_query()).from_("t"),
+            f'SELECT {SUBQUERY_PROJECTION} AS "_col_0" FROM "t" AS "t"',
+            {"z": 5},
+            id="factory",
+        ),
+        pytest.param(
+            lambda: _projection_base().select(_projection_query()),
+            f'SELECT "t"."z" AS "z", {SUBQUERY_PROJECTION} AS "_col_1" FROM "t" AS "t"',
+            {"z": 5},
+            id="select",
+        ),
+        pytest.param(
+            lambda: _projection_base().select_only(_projection_query()),
+            f'SELECT {SUBQUERY_PROJECTION} AS "_col_0" FROM "t" AS "t"',
+            {"z": 5},
+            id="select-only",
+        ),
+        pytest.param(
+            lambda: sql.select("a", dialect="postgres").from_("t").select(_projection_query()),
+            'SELECT "t"."a" AS "a", ( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."z" = %(z)s ) AS "_col_1" '
+            'FROM "t" AS "t"',
+            {"z": 5},
+            id="postgres",
+        ),
+        pytest.param(
+            lambda: _projection_base().where_eq("z", 1).select(_projection_query()),
+            'SELECT "t"."z" AS "z", ( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."z" = :z_1 ) AS "_col_1" '
+            'FROM "t" AS "t" WHERE "t"."z" = :z',
+            {"z": 1, "z_1": 5},
+            id="name-collision",
+        ),
+        pytest.param(
+            lambda: sql.select(exp.select("x").from_("y")).from_("t"),
+            'SELECT ( SELECT "y"."x" AS "x" FROM "y" AS "y" ) AS "_col_0" FROM "t" AS "t"',
+            {},
+            id="select-node",
+        ),
+        pytest.param(
+            lambda: sql.select(_union()).from_("t"),
+            'SELECT ( SELECT 1 AS "1" UNION SELECT 2 AS "2" ) AS "_col_0" FROM "t" AS "t"',
+            {},
+            id="union-node",
+        ),
+        pytest.param(
+            lambda: _projection_base().select(exp.select("x").from_("y").subquery("q")),
+            'SELECT "t"."z" AS "z", ( SELECT "y"."x" AS "x" FROM "y" AS "y" ) AS "q" FROM "t" AS "t"',
+            {},
+            id="aliased-subquery",
+        ),
+    ],
+)
+def test_select_renders_query_projection(builder: Any, expected: str, parameters: dict[str, Any]) -> None:
+    """Query builders and query nodes project as parenthesized scalar subqueries."""
+    statement = builder().build()
+
+    assert _normalized_sql(statement) == expected
+    assert statement.parameters == parameters
+
+
+def test_select_projection_leaves_caller_node_detached() -> None:
+    """A projected query node is copied, leaving the caller's node detached."""
+    node = exp.select("x").from_("y")
+
+    sql.select(node).from_("t").build()
+
+    assert node.parent is None

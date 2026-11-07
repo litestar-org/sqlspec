@@ -364,7 +364,7 @@ class SQLFactory:
     def select(
         self,
         *columns_or_sql: Union[
-            str, exp.Expr, Column, FunctionColumn, ColumnExpression, "ExpressionWrapper", "SQL", "Case"
+            str, exp.Expr, Column, FunctionColumn, ColumnExpression, "ExpressionWrapper", "SQL", "Case", "QueryBuilder"
         ],
         dialect: DialectType = None,
     ) -> "Select":

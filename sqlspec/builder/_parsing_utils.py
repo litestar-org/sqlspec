@@ -126,21 +126,27 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
         - Complex expressions: "CASE WHEN ... END" -> Case(...)
         - Custom Column objects from our builder
         - SQL objects with raw SQL expressions
+        - Query builders and query nodes, as scalar subqueries when a builder is given
 
     Args:
-        column_input: String, SQLGlot expression, SQL object, or Column object
+        column_input: String, SQLGlot expression, SQL object, Column object, or query builder
         builder: Optional builder instance for parameter merging
 
     Returns:
         exp.Expr: Parsed SQLGlot expression
     """
     if isinstance(column_input, exp.Expr):
+        if builder is not None and isinstance(column_input, (exp.Select, exp.SetOperation)):
+            return _scalar_subquery(column_input.copy())
         return column_input
 
     if isinstance(column_input, str):
         if _is_simple_identifier(column_input):
             return _simple_column_expression(column_input)
         return exp.maybe_parse(column_input) or exp.column(column_input)
+
+    if builder is not None and has_parameter_builder(column_input):
+        return _scalar_subquery(builder._embed_subquery(column_input, alias_hint="subquery"))
 
     if has_expression_and_sql(column_input):
         return extract_sql_object_expression(column_input, builder)
