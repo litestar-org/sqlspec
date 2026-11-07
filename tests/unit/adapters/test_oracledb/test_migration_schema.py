@@ -138,81 +138,66 @@ async def test_oracle_async_has_schema_returns_false_for_missing_user() -> None:
     assert await driver.has_schema("missing") is False
 
 
-@pytest.mark.parametrize(("current_schema", "quoted_schema"), RESET_CASES)
-def test_oracle_sync_reset_restores_captured_schema(current_schema: str, quoted_schema: str) -> None:
-    cursor = FakeSyncCursor(current_schema=current_schema)
-    driver = OracleSyncDriver(FakeSyncConnection(cursor))  # type: ignore[arg-type]
+class _OracleMode:
+    """Build the sync or async driver and fake cursor a shared test body exercises."""
 
-    driver.set_migration_session_schema("TENANT")
-    driver.reset_migration_session_schema()
+    def __init__(self, is_async: bool) -> None:
+        self.is_async = is_async
+
+    def session(self, current_schema: str = "APP_USER") -> "tuple[Any, Any]":
+        if self.is_async:
+            async_cursor = FakeAsyncCursor(current_schema=current_schema)
+            return OracleAsyncDriver(FakeAsyncConnection(async_cursor)), async_cursor  # type: ignore[arg-type]
+        sync_cursor = FakeSyncCursor(current_schema=current_schema)
+        return OracleSyncDriver(FakeSyncConnection(sync_cursor)), sync_cursor  # type: ignore[arg-type]
+
+    async def call(self, function: Any, *args: Any) -> None:
+        result = function(*args)
+        if self.is_async:
+            await result
+
+
+@pytest.fixture(params=[False, True], ids=["sync", "async"])
+def oracle_mode(request: pytest.FixtureRequest) -> _OracleMode:
+    return _OracleMode(bool(request.param))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("current_schema", "quoted_schema"), RESET_CASES)
+async def test_oracle_reset_restores_captured_schema(
+    oracle_mode: _OracleMode, current_schema: str, quoted_schema: str
+) -> None:
+    driver, cursor = oracle_mode.session(current_schema)
+
+    await oracle_mode.call(driver.set_migration_session_schema, "TENANT")
+    await oracle_mode.call(driver.reset_migration_session_schema)
 
     assert cursor.executed[-1] == (f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}", None)
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(("current_schema", "quoted_schema"), RESET_CASES)
-async def test_oracle_async_reset_restores_captured_schema(current_schema: str, quoted_schema: str) -> None:
-    cursor = FakeAsyncCursor(current_schema=current_schema)
-    driver = OracleAsyncDriver(FakeAsyncConnection(cursor))  # type: ignore[arg-type]
+async def test_oracle_second_switch_keeps_first_capture(oracle_mode: _OracleMode) -> None:
+    driver, cursor = oracle_mode.session()
 
-    await driver.set_migration_session_schema("TENANT")
-    await driver.reset_migration_session_schema()
-
-    assert cursor.executed[-1] == (f"ALTER SESSION SET CURRENT_SCHEMA = {quoted_schema}", None)
-
-
-def test_oracle_sync_second_switch_keeps_first_capture() -> None:
-    cursor = FakeSyncCursor()
-    driver = OracleSyncDriver(FakeSyncConnection(cursor))  # type: ignore[arg-type]
-
-    driver.set_migration_session_schema("ONE")
-    driver.set_migration_session_schema("TWO")
-    driver.reset_migration_session_schema()
+    await oracle_mode.call(driver.set_migration_session_schema, "ONE")
+    await oracle_mode.call(driver.set_migration_session_schema, "TWO")
+    await oracle_mode.call(driver.reset_migration_session_schema)
 
     assert cursor.executed.count(CAPTURE) == 1
     assert cursor.executed[-1] == ('ALTER SESSION SET CURRENT_SCHEMA = "APP_USER"', None)
 
 
 @pytest.mark.anyio
-async def test_oracle_async_second_switch_keeps_first_capture() -> None:
-    cursor = FakeAsyncCursor()
-    driver = OracleAsyncDriver(FakeAsyncConnection(cursor))  # type: ignore[arg-type]
+async def test_oracle_reset_without_switch_is_noop(oracle_mode: _OracleMode) -> None:
+    driver, cursor = oracle_mode.session()
 
-    await driver.set_migration_session_schema("ONE")
-    await driver.set_migration_session_schema("TWO")
-    await driver.reset_migration_session_schema()
-
-    assert cursor.executed.count(CAPTURE) == 1
-    assert cursor.executed[-1] == ('ALTER SESSION SET CURRENT_SCHEMA = "APP_USER"', None)
-
-
-def test_oracle_sync_reset_without_switch_is_noop() -> None:
-    cursor = FakeSyncCursor()
-    driver = OracleSyncDriver(FakeSyncConnection(cursor))  # type: ignore[arg-type]
-
-    driver.reset_migration_session_schema()
+    await oracle_mode.call(driver.reset_migration_session_schema)
     assert cursor.executed == []
 
-    driver.set_migration_session_schema("TENANT")
-    driver.reset_migration_session_schema()
+    await oracle_mode.call(driver.set_migration_session_schema, "TENANT")
+    await oracle_mode.call(driver.reset_migration_session_schema)
     statements_after_first_reset = list(cursor.executed)
-    driver.reset_migration_session_schema()
-
-    assert cursor.executed == statements_after_first_reset
-
-
-@pytest.mark.anyio
-async def test_oracle_async_reset_without_switch_is_noop() -> None:
-    cursor = FakeAsyncCursor()
-    driver = OracleAsyncDriver(FakeAsyncConnection(cursor))  # type: ignore[arg-type]
-
-    await driver.reset_migration_session_schema()
-    assert cursor.executed == []
-
-    await driver.set_migration_session_schema("TENANT")
-    await driver.reset_migration_session_schema()
-    statements_after_first_reset = list(cursor.executed)
-    await driver.reset_migration_session_schema()
+    await oracle_mode.call(driver.reset_migration_session_schema)
 
     assert cursor.executed == statements_after_first_reset
 

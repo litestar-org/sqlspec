@@ -1736,93 +1736,95 @@ def _failing_migration(tmp_path: Path) -> LoadedMigrationMetadata:
     return _migration(migration_file, _AsyncMigrationLoader())
 
 
+class _RunnerMode:
+    """Build the sync or async runner, driver, and callback a shared test body exercises."""
+
+    def __init__(self, is_async: bool) -> None:
+        self.is_async = is_async
+
+    def runner(self, tmp_path: Path, context_or_config: "MigrationContext | dict[str, Any]") -> Any:
+        context = (
+            context_or_config
+            if isinstance(context_or_config, MigrationContext)
+            else MigrationContext(config=_RunnerConfig(context_or_config))
+        )
+        runner_class = AsyncMigrationRunner if self.is_async else SyncMigrationRunner
+        return runner_class(tmp_path, {}, context, {})
+
+    def driver(self) -> Mock:
+        return AsyncMock() if self.is_async else Mock()
+
+    def callback(self, **kwargs: Any) -> Mock:
+        return AsyncMock(**kwargs) if self.is_async else Mock(**kwargs)
+
+    async def call(self, function: "Callable[..., Any]", *args: Any, **kwargs: Any) -> Any:
+        result = function(*args, **kwargs)
+        return await result if self.is_async else result
+
+
+@pytest.fixture(params=[False, True], ids=["sync", "async"])
+def runner_mode(request: pytest.FixtureRequest) -> _RunnerMode:
+    return _RunnerMode(bool(request.param))
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("case", _FAILURE_CASES.values(), ids=_FAILURE_CASES.keys())
-def test_sync_failure_recovery_order_keeps_original_error(tmp_path: Path, case: _FailureCase) -> None:
-    """A failed sync migration rolls back, resets, and raises the migration's own error."""
-    runner = _sync_runner(tmp_path, case.migration_config)
-    driver = Mock()
+async def test_failure_recovery_order_keeps_original_error(
+    tmp_path: Path, runner_mode: _RunnerMode, case: _FailureCase
+) -> None:
+    """A failed migration rolls back, resets, and raises the migration's own error."""
+    runner = runner_mode.runner(tmp_path, case.migration_config)
+    driver = runner_mode.driver()
     _apply_side_effects(driver, case.side_effects)
 
     with pytest.raises(ValueError, match="boom"):
-        runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=case.use_transaction)
+        await runner_mode.call(
+            runner.execute_upgrade, driver, _failing_migration(tmp_path), use_transaction=case.use_transaction
+        )
 
     assert driver.mock_calls == case.expected_calls
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("case", _FAILURE_CASES.values(), ids=_FAILURE_CASES.keys())
-async def test_async_failure_recovery_order_keeps_original_error(tmp_path: Path, case: _FailureCase) -> None:
-    """A failed async migration rolls back, resets, and raises the migration's own error."""
-    runner = _async_runner(tmp_path, case.migration_config)
-    driver = AsyncMock()
-    _apply_side_effects(driver, case.side_effects)
-
-    with pytest.raises(ValueError, match="boom"):
-        await runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=case.use_transaction)
-
-    assert driver.mock_calls == case.expected_calls
-
-
-def test_sync_missing_directive_schema_skips_begin_and_rollback(tmp_path: Path) -> None:
+async def test_missing_directive_schema_skips_begin_and_rollback(tmp_path: Path, runner_mode: _RunnerMode) -> None:
     """A missing directive schema raises before a transaction exists, so nothing is rolled back."""
-    runner = _sync_runner(tmp_path, {})
-    driver = Mock()
+    runner = runner_mode.runner(tmp_path, {})
+    driver = runner_mode.driver()
     driver.has_schema.return_value = False
     migration = _migration(tmp_path / "0001_missing.sql", _AsyncMigrationLoader(), schema="missing_schema")
 
     with pytest.raises(MigrationError, match="Migration schema 'missing_schema' does not exist"):
-        runner.execute_upgrade(driver, migration, use_transaction=True)
+        await runner_mode.call(runner.execute_upgrade, driver, migration, use_transaction=True)
 
     assert driver.mock_calls == [call.has_schema("missing_schema")]
 
 
 @pytest.mark.anyio
-async def test_async_missing_directive_schema_skips_begin_and_rollback(tmp_path: Path) -> None:
-    """A missing directive schema raises before an async transaction exists, so nothing is rolled back."""
-    runner = _async_runner(tmp_path, {})
-    driver = AsyncMock()
-    driver.has_schema.return_value = False
-    migration = _migration(tmp_path / "0001_missing.sql", _AsyncMigrationLoader(), schema="missing_schema")
-
-    with pytest.raises(MigrationError, match="Migration schema 'missing_schema' does not exist"):
-        await runner.execute_upgrade(driver, migration, use_transaction=True)
-
-    assert driver.mock_calls == [call.has_schema("missing_schema")]
-
-
-def test_sync_begin_failure_runs_no_recovery(tmp_path: Path) -> None:
+async def test_begin_failure_runs_no_recovery(tmp_path: Path, runner_mode: _RunnerMode) -> None:
     """A failed begin raises unchanged because the runner owns no transaction yet."""
-    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
-    driver = Mock()
+    runner = runner_mode.runner(tmp_path, {"default_schema": "app_schema"})
+    driver = runner_mode.driver()
     driver.begin.side_effect = ValueError("boom")
 
     with pytest.raises(ValueError, match="boom"):
-        runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=True)
+        await runner_mode.call(runner.execute_upgrade, driver, _failing_migration(tmp_path), use_transaction=True)
 
     assert driver.mock_calls == [call.begin()]
 
 
 @pytest.mark.anyio
-async def test_async_begin_failure_runs_no_recovery(tmp_path: Path) -> None:
-    """A failed async begin raises unchanged because the runner owns no transaction yet."""
-    runner = _async_runner(tmp_path, {"default_schema": "app_schema"})
-    driver = AsyncMock()
-    driver.begin.side_effect = ValueError("boom")
-
-    with pytest.raises(ValueError, match="boom"):
-        await runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=True)
-
-    assert driver.mock_calls == [call.begin()]
-
-
-def test_on_success_failure_rolls_back_without_second_reset(tmp_path: Path) -> None:
+async def test_on_success_failure_rolls_back_without_second_reset(tmp_path: Path, runner_mode: _RunnerMode) -> None:
     """A failed ledger callback rolls back, and the schema it already reset is not reset again."""
-    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
-    driver = Mock()
+    runner = runner_mode.runner(tmp_path, {"default_schema": "app_schema"})
+    driver = runner_mode.driver()
 
     with pytest.raises(ValueError, match="boom"):
-        runner.execute_upgrade(
-            driver, _failing_migration(tmp_path), use_transaction=True, on_success=Mock(side_effect=ValueError("boom"))
+        await runner_mode.call(
+            runner.execute_upgrade,
+            driver,
+            _failing_migration(tmp_path),
+            use_transaction=True,
+            on_success=runner_mode.callback(side_effect=ValueError("boom")),
         )
 
     assert driver.reset_migration_session_schema.call_count == 1
@@ -1830,32 +1832,17 @@ def test_on_success_failure_rolls_back_without_second_reset(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
-async def test_async_on_success_failure_rolls_back_without_second_reset(tmp_path: Path) -> None:
-    """A failed async ledger callback rolls back, and the schema it already reset is not reset again."""
-    runner = _async_runner(tmp_path, {"default_schema": "app_schema"})
-    driver = AsyncMock()
-
-    with pytest.raises(ValueError, match="boom"):
-        await runner.execute_upgrade(
-            driver,
-            _failing_migration(tmp_path),
-            use_transaction=True,
-            on_success=AsyncMock(side_effect=ValueError("boom")),
-        )
-
-    assert driver.reset_migration_session_schema.await_count == 1
-    assert driver.mock_calls[-2:] == [call.reset_migration_session_schema(), call.rollback()]
-
-
-def test_reset_failure_before_on_success_retries_after_rollback(tmp_path: Path) -> None:
+async def test_reset_failure_before_on_success_retries_after_rollback(tmp_path: Path, runner_mode: _RunnerMode) -> None:
     """A reset that fails before the ledger callback is retried after rollback, and its error surfaces."""
-    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
-    driver = Mock()
+    runner = runner_mode.runner(tmp_path, {"default_schema": "app_schema"})
+    driver = runner_mode.driver()
     driver.reset_migration_session_schema.side_effect = [RuntimeError("reset failed"), None]
-    on_success = Mock()
+    on_success = runner_mode.callback()
 
     with pytest.raises(RuntimeError, match="reset failed"):
-        runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=True, on_success=on_success)
+        await runner_mode.call(
+            runner.execute_upgrade, driver, _failing_migration(tmp_path), use_transaction=True, on_success=on_success
+        )
 
     on_success.assert_not_called()
     assert driver.mock_calls[-3:] == [
@@ -1866,33 +1853,19 @@ def test_reset_failure_before_on_success_retries_after_rollback(tmp_path: Path) 
 
 
 @pytest.mark.anyio
-async def test_async_reset_failure_before_on_success_retries_after_rollback(tmp_path: Path) -> None:
-    """An async reset that fails before the ledger callback is retried after rollback, and its error surfaces."""
-    runner = _async_runner(tmp_path, {"default_schema": "app_schema"})
-    driver = AsyncMock()
-    driver.reset_migration_session_schema.side_effect = [RuntimeError("reset failed"), None]
-    on_success = AsyncMock()
-
-    with pytest.raises(RuntimeError, match="reset failed"):
-        await runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=True, on_success=on_success)
-
-    on_success.assert_not_awaited()
-    assert driver.mock_calls[-3:] == [
-        call.reset_migration_session_schema(),
-        call.rollback(),
-        call.reset_migration_session_schema(),
-    ]
-
-
 @pytest.mark.parametrize("use_transaction", [True, False], ids=["transactional", "non_transactional"])
-def test_post_success_reset_failure_is_raised(tmp_path: Path, use_transaction: bool) -> None:
+async def test_post_success_reset_failure_is_raised(
+    tmp_path: Path, runner_mode: _RunnerMode, use_transaction: bool
+) -> None:
     """A reset failing after the migration finished stays visible to the caller."""
-    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
-    driver = Mock()
+    runner = runner_mode.runner(tmp_path, {"default_schema": "app_schema"})
+    driver = runner_mode.driver()
     driver.reset_migration_session_schema.side_effect = RuntimeError("reset failed")
 
     with pytest.raises(RuntimeError, match="reset failed"):
-        runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=use_transaction)
+        await runner_mode.call(
+            runner.execute_upgrade, driver, _failing_migration(tmp_path), use_transaction=use_transaction
+        )
 
     driver.rollback.assert_not_called()
 
@@ -1910,33 +1883,15 @@ async def test_async_cancellation_runs_recovery(tmp_path: Path) -> None:
     assert driver.mock_calls[-2:] == [call.rollback(), call.reset_migration_session_schema()]
 
 
-def test_downgrade_failure_rolls_back_before_reset(tmp_path: Path) -> None:
-    """A failed sync downgrade follows the same recovery order as an upgrade."""
-    runner = _sync_runner(tmp_path, {"default_schema": "app_schema"})
-    driver = Mock()
-    driver.execute_script.side_effect = ValueError("boom")
-
-    with pytest.raises(ValueError, match="boom"):
-        runner.execute_downgrade(driver, _failing_migration(tmp_path), use_transaction=True)
-
-    assert driver.mock_calls == [
-        call.begin(),
-        call.set_migration_session_schema("app_schema"),
-        call.execute_script("DROP TABLE example"),
-        call.rollback(),
-        call.reset_migration_session_schema(),
-    ]
-
-
 @pytest.mark.anyio
-async def test_async_downgrade_failure_rolls_back_before_reset(tmp_path: Path) -> None:
-    """A failed async downgrade follows the same recovery order as an upgrade."""
-    runner = _async_runner(tmp_path, {"default_schema": "app_schema"})
-    driver = AsyncMock()
+async def test_downgrade_failure_rolls_back_before_reset(tmp_path: Path, runner_mode: _RunnerMode) -> None:
+    """A failed downgrade follows the same recovery order as an upgrade."""
+    runner = runner_mode.runner(tmp_path, {"default_schema": "app_schema"})
+    driver = runner_mode.driver()
     driver.execute_script.side_effect = ValueError("boom")
 
     with pytest.raises(ValueError, match="boom"):
-        await runner.execute_downgrade(driver, _failing_migration(tmp_path), use_transaction=True)
+        await runner_mode.call(runner.execute_downgrade, driver, _failing_migration(tmp_path), use_transaction=True)
 
     assert driver.mock_calls == [
         call.begin(),
@@ -1960,32 +1915,18 @@ def test_failed_recovery_step_logs_warning(tmp_path: Path, caplog: pytest.LogCap
     assert [record.getMessage() for record in caplog.records] == ["migration.recovery.failed"]
 
 
-def _unsupported_schema_context() -> MigrationContext:
+@pytest.mark.anyio
+async def test_execute_upgrade_rejects_default_schema_when_adapter_lacks_support(
+    tmp_path: Path, runner_mode: _RunnerMode
+) -> None:
+    """A configured default schema raises before any driver call on an unsupported adapter."""
     config = _RunnerConfig({"default_schema": "app_schema"})
     config.supports_migration_schemas = False
-    return MigrationContext(config=config)
-
-
-def test_sync_execute_upgrade_rejects_default_schema_when_adapter_lacks_support(tmp_path: Path) -> None:
-    """A configured default schema raises before any driver call on an unsupported adapter."""
-    runner = SyncMigrationRunner(tmp_path, {}, _unsupported_schema_context(), {})
-    driver = Mock()
+    runner = runner_mode.runner(tmp_path, MigrationContext(config=config))
+    driver = runner_mode.driver()
 
     with pytest.raises(MigrationError, match="does not support migration default schemas"):
-        runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=True)
-
-    driver.begin.assert_not_called()
-    driver.set_migration_session_schema.assert_not_called()
-
-
-@pytest.mark.anyio
-async def test_async_execute_upgrade_rejects_default_schema_when_adapter_lacks_support(tmp_path: Path) -> None:
-    """A configured default schema raises before any async driver call on an unsupported adapter."""
-    runner = AsyncMigrationRunner(tmp_path, {}, _unsupported_schema_context(), {})
-    driver = AsyncMock()
-
-    with pytest.raises(MigrationError, match="does not support migration default schemas"):
-        await runner.execute_upgrade(driver, _failing_migration(tmp_path), use_transaction=True)
+        await runner_mode.call(runner.execute_upgrade, driver, _failing_migration(tmp_path), use_transaction=True)
 
     driver.begin.assert_not_called()
     driver.set_migration_session_schema.assert_not_called()
