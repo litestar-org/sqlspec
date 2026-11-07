@@ -2,7 +2,7 @@
 
 Compiled sqlglot parsers cannot be subclassed safely from sqlspec when sqlglot[c]
 is installed. Instead, we reuse the compiled Postgres parser and register extra
-FACTOR entries that construct built-in compiled ``exp.Operator`` nodes.
+JSON_OPERATORS entries that construct built-in compiled ``exp.Operator`` nodes.
 """
 
 from collections.abc import Callable
