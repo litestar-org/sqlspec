@@ -6,13 +6,14 @@ passed as strings to builder methods.
 
 import importlib
 import re
+import unicodedata
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import sqlglot
 from sqlglot import exp, maybe_parse
 from sqlglot.dialects.dialect import Dialect
-from sqlglot.errors import ParseError, SqlglotError, TokenError
+from sqlglot.errors import SqlglotError
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
@@ -57,6 +58,9 @@ _TSQL_VARIABLE_RE: Final["re.Pattern[str]"] = re.compile(
     rf"@(?P<name>[A-Za-z_][\w$#@]*)(?:\s+(?:as\s+)?(?P<alias>{_ALIAS_PATTERN}))?", re.IGNORECASE
 )
 _ALIAS_KEYWORD: Final[str] = "as"
+_TABLE_TEXT_SEPARATOR_CHARACTERS: Final[str] = " \t\r\n"
+_INVISIBLE_CATEGORIES: Final[frozenset[str]] = frozenset({"Cc", "Cf", "Zl", "Zp", "Zs"})
+_QUOTED_TOKEN_TYPES: Final[frozenset[TokenType]] = frozenset({TokenType.IDENTIFIER, TokenType.STRING})
 _EXPLICIT_QUOTE_META_KEY: Final[str] = "sqlspec_explicit_table_quote"
 _MAX_DIRECT_TABLE_PARTS: Final[int] = 3
 _QUOTE_CLOSERS: Final[dict[str, str]] = {'"': '"', "`": "`", "[": "]"}
@@ -275,18 +279,22 @@ def _parse_table_reference(
         SQLBuilderError: If the text is anything other than a table name and optional alias, or
             if an alias appears both in the text and as ``explicit_alias``.
     """
-    if "(" in table_input:
+    if "(" in table_input and any(
+        token.token_type == TokenType.L_PAREN
+        for token in _read_table_tokens(table_input, dialect, _table_reference_error(table_input))
+    ):
         msg = (
             f"Invalid table reference {table_input!r}: table text cannot hold function calls or subqueries. "
             "Pass an expression or builder instead, such as sql.raw('fn(1)') or exp.func('fn', 1), with alias=."
         )
         raise SQLBuilderError(msg)
 
-    stripped = table_input.strip()
+    stripped = table_input.strip(_TABLE_TEXT_SEPARATOR_CHARACTERS)
     inline_alias: str | None = None
     table: exp.Table | None
     variable = _TSQL_VARIABLE_RE.fullmatch(stripped) if _reads_as_tsql(dialect) else None
-    if _is_simple_identifier(stripped) and stripped.lower() != _ALIAS_KEYWORD:
+    is_simple = _SIMPLE_IDENTIFIER_RE.fullmatch(stripped) is not None and _is_simple_identifier(stripped)
+    if is_simple and stripped.lower() != _ALIAS_KEYWORD:
         table = _table_from_identifiers([exp.Identifier(this=part, quoted=False) for part in stripped.split(".")])
     elif variable is not None:
         table = exp.Table(this=exp.Parameter(this=exp.Var(this=variable.group("name"))))
@@ -329,7 +337,7 @@ def _table_reader(dialect: "DialectType | None") -> Dialect:
 
 
 def _read_table_tokens(text: str, dialect: "DialectType | None", error: str) -> "list[Token]":
-    """Tokenize table text, rejecting text that holds comments.
+    """Tokenize table text, rejecting comments and invisible characters outside quotes.
 
     Args:
         text: The table text.
@@ -340,15 +348,35 @@ def _read_table_tokens(text: str, dialect: "DialectType | None", error: str) -> 
         The tokens of the text.
 
     Raises:
-        SQLBuilderError: If the text cannot be tokenized, is empty, or holds a comment.
+        SQLBuilderError: If the text cannot be tokenized, is empty, holds a comment, or holds
+            whitespace, format, control, or separator characters outside quotes other than
+            the ASCII space, tab, and line breaks.
     """
     try:
         tokens = list(_table_reader(dialect).tokenize(text))
     except SqlglotError as exc:
         raise SQLBuilderError(error) from exc
-    if not tokens or any(token.comments for token in tokens):
+    if not tokens or any(token.comments for token in tokens) or _has_invisible_unquoted_text(text, tokens):
         raise SQLBuilderError(error)
     return tokens
+
+
+def _has_invisible_unquoted_text(text: str, tokens: "list[Token]") -> bool:
+    """Report whether text outside quoted tokens holds characters an engine may read as separators."""
+    position = 0
+    for token in tokens:
+        if token.token_type in _QUOTED_TOKEN_TYPES:
+            if _holds_invisible_character(text[position : token.start]):
+                return True
+            position = token.end + 1
+    return _holds_invisible_character(text[position:])
+
+
+def _holds_invisible_character(text: str) -> bool:
+    return any(
+        character not in _TABLE_TEXT_SEPARATOR_CHARACTERS and unicodedata.category(character) in _INVISIBLE_CATEGORIES
+        for character in text
+    )
 
 
 def _split_inline_alias(text: str, tokens: "list[Token]", error: str) -> "tuple[str, str | None]":
@@ -449,7 +477,7 @@ def _parse_alias_identifier(alias: str) -> exp.Identifier:
     Raises:
         SQLBuilderError: If the text is not a single identifier.
     """
-    stripped = alias.strip()
+    stripped = alias.strip(_TABLE_TEXT_SEPARATOR_CHARACTERS)
     if _ALIAS_RE.fullmatch(stripped) is None or stripped.lower() == _ALIAS_KEYWORD:
         msg = f"Invalid alias {alias!r}: expected a single identifier."
         raise SQLBuilderError(msg)
@@ -684,87 +712,6 @@ def to_expression(value: Any) -> exp.Expr:
     if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
-
-
-def _mark_explicit_table_quotes(table: exp.Table, source: str) -> exp.Table:
-    """Distinguish supplied table quotes from quoting added by optimization."""
-    if not any(quote in source for quote in ('"', "`", "[")):
-        return table
-    remaining = source.strip()
-    for identifier in table.parts:
-        if not isinstance(identifier, exp.Identifier) or not remaining:
-            break
-        name = identifier.name
-        opening = remaining[0]
-        if opening in ('"', "`", "["):
-            closing = "]" if opening == "[" else opening
-            spelling = opening + name.replace(closing, closing * 2) + closing
-            if not remaining.startswith(spelling):
-                if not (name.startswith(opening) and name.endswith(closing) and remaining.startswith(name)):
-                    break
-                spelling = name
-                identifier.set("this", name[1:-1].replace(closing * 2, closing))
-            identifier.set("quoted", True)
-            identifier.meta["sqlspec_explicit_table_quote"] = True
-        else:
-            spelling = name
-            if not remaining.startswith(spelling):
-                break
-        remaining = remaining[len(spelling) :].lstrip()
-        if not remaining.startswith("."):
-            break
-        remaining = remaining[1:].lstrip()
-    return table
-
-
-def _parse_dml_target(table: str, alias: str | None = None, dialect: "DialectType | None" = None) -> exp.Table:
-    """Parse the table string naming an INSERT, UPDATE, DELETE, or MERGE target.
-
-    ``t AS u`` and ``t u`` keep their alias. Any other string stays one table reference, so its
-    text can only ever render as identifiers.
-
-    Args:
-        table: Target table text.
-        alias: Explicit alias, which takes the place of alias parsing.
-        dialect: Dialect whose tokenizer reads an aliased string.
-
-    Returns:
-        The target table expression.
-    """
-    aliased = None if alias is not None else _parse_aliased_table(table, dialect)
-    if aliased is not None:
-        return aliased
-    return _mark_explicit_table_quotes(exp.to_table(table, alias=alias), table)
-
-
-def _parse_aliased_table(table: str, dialect: "DialectType | None") -> exp.Table | None:
-    """Parse ``<table> [AS] <alias>``, returning None for every other shape."""
-    stripped = table.strip()
-    if not any(character.isspace() for character in stripped):
-        return None
-    try:
-        statements = sqlglot.parse(f"SELECT * FROM {stripped}", dialect=_normalize_dialect(dialect))
-    except (ParseError, TokenError):
-        return None
-    select = statements[0] if len(statements) == 1 else None
-    if not isinstance(select, exp.Select):
-        return None
-    if any(value for key, value in select.args.items() if key not in {"expressions", "from_"}):
-        return None
-    from_clause = select.args.get("from_")
-    parsed = from_clause.this if from_clause is not None else None
-    if not isinstance(parsed, exp.Table) or not isinstance(parsed.this, exp.Identifier):
-        return None
-    if any(value for key, value in parsed.args.items() if key not in {"this", "db", "catalog", "alias"}):
-        return None
-    if not all(
-        isinstance(part, exp.Identifier) for part in (parsed.args.get("db"), parsed.args.get("catalog")) if part
-    ):
-        return None
-    alias_node = parsed.args.get("alias")
-    if not isinstance(alias_node, exp.TableAlias) or alias_node.args.get("columns"):
-        return None
-    return _mark_explicit_table_quotes(parsed, stripped)
 
 
 def _normalize_partition_by(partition_by: str | list[str] | exp.Expr | None) -> list[exp.Expr] | None:
