@@ -10,7 +10,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._parsing_utils import extract_sql_object_expression, parse_table_expression
+from sqlspec.builder._parsing_utils import extract_sql_object_expression, parse_table_expression, parse_table_function
 from sqlspec.builder._temporal import register_version_generators
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_and_sql, has_parameter_builder
@@ -31,7 +31,7 @@ def build_join_clause(
     *,
     lateral: bool = False,
 ) -> exp.Join:
-    table_expr = _parse_join_table(builder, table, alias)
+    table_expr = _parse_join_table(builder, table, alias, lateral)
     on_expr = _parse_join_condition(builder, on)
     join_expr = _join_for_type(table_expr, on_expr, join_type)
     if lateral:
@@ -63,6 +63,11 @@ class JoinClauseMixin:
         """Add a JOIN clause to the SELECT expression.
 
         ``as_of`` attaches a temporal version clause by copying the inner table, honoring existing aliases, and updating the JOIN target without mutating shared expressions.
+
+        A string ``table`` is a table name with an optional alias. Pass function sources and subqueries as
+        expressions or builders. Table text must be trusted, because engines may resolve names to files or
+        external sources. With ``lateral=True`` a string may also be one function call, which runs as named;
+        its arguments cannot hold subqueries, statements, or comments.
         """
         builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
@@ -147,7 +152,9 @@ class JoinClauseMixin:
         """Create a LATERAL JOIN.
 
         Args:
-            table: Table, subquery, or table function to join
+            table: Table, subquery, or table function to join. String text may be one function call,
+                which runs as named and can read files or run SQL text on some engines, so that text
+                must be trusted.
             on: Optional join condition (for LATERAL JOINs with ON clause)
             alias: Optional alias for the joined table/subquery
 
@@ -162,7 +169,9 @@ class JoinClauseMixin:
         """Create a LEFT LATERAL JOIN.
 
         Args:
-            table: Table, subquery, or table function to join
+            table: Table, subquery, or table function to join. String text may be one function call,
+                which runs as named and can read files or run SQL text on some engines, so that text
+                must be trusted.
             on: Optional join condition
             alias: Optional alias for the joined table/subquery
 
@@ -175,7 +184,9 @@ class JoinClauseMixin:
         """Create a CROSS LATERAL JOIN (no ON condition).
 
         Args:
-            table: Table, subquery, or table function to join
+            table: Table, subquery, or table function to join. String text may be one function call,
+                which runs as named and can read files or run SQL text on some engines, so that text
+                must be trusted.
             alias: Optional alias for the joined table/subquery
 
         Returns:
@@ -254,9 +265,9 @@ class JoinBuilder:
 
         table_expr: exp.Expr
         if isinstance(self._table, str):
-            table_expr = exp.to_table(self._table)
-            if self._alias:
-                table_expr = exp.alias_(table_expr, self._alias)
+            table_expr = _parse_join_text(
+                self._table, self._alias, None, self._lateral or self._join_type == "LATERAL JOIN"
+            )
         else:
             table_expr = self._table
             if self._alias:
@@ -323,13 +334,24 @@ def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProto
     return exp.alias_(subquery_exp, alias) if alias else subquery_exp
 
 
-def _parse_join_table(builder: "SQLBuilderProtocol", table: str | exp.Expr | Any, alias: str | None) -> exp.Expr:
+def _parse_join_text(table: str, alias: str | None, dialect: Any, lateral: bool) -> exp.Expr:
+    if lateral and "(" in table:
+        return parse_table_function(table, alias, dialect=dialect)
+    return parse_table_expression(table, alias, dialect=dialect)
+
+
+def _parse_join_table(
+    builder: "SQLBuilderProtocol", table: str | exp.Expr | Any, alias: str | None, lateral: bool = False
+) -> exp.Expr:
     if isinstance(table, str):
-        return parse_table_expression(table, alias, dialect=builder.dialect)
+        return _parse_join_text(table, alias, builder.dialect, lateral)
     if has_parameter_builder(table):
         return _table_from_builder(table, alias, builder)
     if isinstance(table, exp.Expr):
-        return table
+        return exp.alias_(table, alias) if alias else table
+    if has_expression_and_sql(table):
+        expression = extract_sql_object_expression(table, builder=builder)
+        return exp.alias_(expression, alias) if alias else expression
     return cast("exp.Expr", table)
 
 
@@ -394,7 +416,7 @@ def _lateral_source(table_expr: exp.Expr) -> exp.Expr:
 
     if isinstance(source, exp.Paren) and isinstance(source.this, exp.Query):
         source = exp.Subquery(this=source.this)
-    elif isinstance(source, exp.Table) and isinstance(source.this, exp.Func):
+    elif isinstance(source, exp.Table) and isinstance(source.this, exp.Func) and not source.args.get("db"):
         source = source.this
 
     return exp.Lateral(this=source, alias=alias_node)

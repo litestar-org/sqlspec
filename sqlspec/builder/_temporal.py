@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from sqlglot import exp
 
 from sqlspec.builder._generation import invalidate_generator_dispatch
+from sqlspec.builder._parsing_utils import _parse_table_reference
 
 if TYPE_CHECKING:
     from sqlglot.generator import Generator
@@ -45,11 +46,11 @@ def create_temporal_table(
     register_version_generators()
 
     if isinstance(table, str):
-        table_expr = exp.to_table(table)
+        table_expr = _parse_table_reference(table)
     elif isinstance(table, exp.Table):
         table_expr = table.copy()
     else:
-        table_expr = exp.to_table(str(table))
+        table_expr = _parse_table_reference(str(table))
 
     as_of_expr = exp.Literal.string(as_of) if isinstance(as_of, str) else as_of
 

@@ -7,6 +7,20 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.71.2 - Table and alias string validation
+
+**Changed:**
+
+* **Breaking:** function calls and subqueries in table strings now raise `SQLBuilderError`; pass expression objects instead, such as `from_(sql.raw("fn(:n)", n=1), alias="f")` or `from_(exp.func("fn", 1), alias="f")`. A parenthesis inside a name quoted in the builder's dialect stays part of that name.
+* Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names read the text with the builder's dialect and accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass join conditions through `on`. DDL and statement target names accept a name only. T-SQL builders also accept a table variable such as `@tv`. Unquoted text holding whitespace other than ASCII space, tab, and line breaks, or format or control characters, raises. Table text must be trusted, because engines may resolve names to files or external sources; DuckDB users can set `enable_external_access` to `False` to block file access.
+* Lateral joins still accept one possibly qualified function call as a string, without subqueries, statements, or comments. A named function runs with the arguments it is given, and some engines provide functions that read files or run SQL text, so this text must be trusted.
+
+**Fixed:**
+
+* Fixed `t AS u` rendering `AS AS u`, and rendered table aliases as quoted identifiers on every dialect.
+* Fixed the `MERGE` target renderer removing quotes from names that require them, and subquery aliases leaking into bound parameter names.
+* Fixed `join` and `Update.from_` dropping the alias on function expressions, and `from_` and `join` mishandling `sql.raw` fragments with parameters.
+
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
 **Added:**
