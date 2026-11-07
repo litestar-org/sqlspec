@@ -25,6 +25,7 @@ from sqlspec.builder import (
     parse_table_expression,
 )
 from sqlspec.core import SQL, get_cache
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_parse_condition_expression_with_dollar_parameters() -> None:
@@ -350,7 +351,7 @@ def test_cross_dialect_render_preserves_owned_and_cached_ast(static: bool) -> No
 
 def test_extract_sql_object_expression_rejects_sqlglot_node() -> None:
     """The extractor accepts SQL carriers only, so a bare node is rejected."""
-    with pytest.raises(ValueError, match="Value does not expose an expression"):
+    with pytest.raises(TypeError, match="Value is not a SQL object"):
         parsing_utils.extract_sql_object_expression(exp.column("a"))
 
 
@@ -439,6 +440,10 @@ class _ExpressionLookalike:
         self.expression = expression
         self.sql = "injected_sql OR 1 = 1"
         self.parameters = {"injected_parameter": 1}
+        self.sqlglot_expression = expression
+
+    def __str__(self) -> str:
+        return "injected_str = 1"
 
 
 def _merge() -> Any:
@@ -503,3 +508,71 @@ def test_value_sites_render_sql_objects(site: Any) -> None:
     assert "rendered_col" in statement.sql
     assert statement.parameters["p"] == 3
     assert all(isinstance(value, int) for value in statement.parameters.values())
+
+
+LOOKALIKE_EXPRESSIONS = [
+    pytest.param("injected_expression", id="text-attribute"),
+    pytest.param(exp.column("injected_expression"), id="node-attribute"),
+    pytest.param(None, id="empty-attribute"),
+]
+
+
+@pytest.mark.parametrize("expression", LOOKALIKE_EXPRESSIONS)
+@pytest.mark.parametrize(
+    ("site", "message"),
+    [
+        pytest.param(lambda q, v: q.where_exists(v), "Unsupported subquery type", id="where-exists"),
+        pytest.param(lambda q, v: q.where_not_exists(v), "Unsupported subquery type", id="where-not-exists"),
+        pytest.param(lambda q, v: q.where_any("a", v), "Unsupported type for 'values'", id="where-any"),
+        pytest.param(lambda q, v: q.where_not_any("a", v), "Unsupported type for 'values'", id="where-not-any"),
+        pytest.param(lambda q, v: q.where(v), "Unsupported condition type", id="where"),
+        pytest.param(lambda q, v: q.join("u", on=v), "Unsupported join condition type", id="join"),
+    ],
+)
+def test_query_only_sites_reject_sql_carrier_lookalikes(site: Any, message: str, expression: Any) -> None:
+    """Positions where a parameter cannot stand in raise for an object that only looks like a SQL carrier."""
+    with pytest.raises(SQLBuilderError, match=message):
+        site(sql.select("z").from_("t"), _ExpressionLookalike(expression))
+
+
+@pytest.mark.parametrize(
+    ("site", "expected"),
+    [
+        pytest.param(lambda q, v: q.where_exists(v), 'EXISTS( SELECT "y"."x" AS "x" FROM "y"', id="where-exists"),
+        pytest.param(lambda q, v: q.where_not_exists(v), 'NOT EXISTS( SELECT "y"."x" AS "x" FROM "y"', id="not-exists"),
+        pytest.param(lambda q, v: q.where_any("a", v), '"y"."x" AS "x"', id="where-any"),
+        pytest.param(lambda q, v: q.where_not_any("a", v), '"y"."x" AS "x"', id="where-not-any"),
+    ],
+)
+def test_query_only_sites_render_sql_objects(site: Any, expected: str) -> None:
+    """A real SQL object still renders at query-only positions and merges its parameters."""
+    fragment = sql.raw("SELECT x FROM y WHERE k = :p", p=3)
+
+    statement = site(sql.select("z").from_("t"), fragment).build()
+
+    normalized = " ".join(statement.sql.split())
+    assert expected in normalized
+    assert '"y"."k" = :p' in normalized
+    assert statement.parameters == {"p": 3}
+
+
+def test_where_and_join_render_sql_objects() -> None:
+    """A real SQL object still renders as a WHERE or JOIN condition."""
+    statement = (
+        sql
+        .select("z")
+        .from_("t")
+        .join("u", on=sql.raw("t.id = u.id AND u.k = :p", p=3))
+        .where(sql.raw("b = :q", q=4))
+        .build()
+    )
+
+    normalized = " ".join(statement.sql.split())
+    assert "t.id = u.id" in normalized.replace('"', "")
+    assert statement.parameters == {"p": 3, "q": 4}
+
+
+def test_extract_sql_object_expression_rejects_sql_carrier_lookalike() -> None:
+    """Extraction accepts SQL objects only."""
+    with pytest.raises(TypeError, match="Value is not a SQL object"):
+        parsing_utils.extract_sql_object_expression(_ExpressionLookalike(exp.column("injected_expression")))

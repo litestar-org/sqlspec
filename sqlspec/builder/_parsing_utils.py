@@ -17,12 +17,7 @@ from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.core import SQL, ParameterStyle, ParameterValidator, default_nulls, ordered
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import (
-    has_expression_and_parameters,
-    has_expression_and_sql,
-    has_expression_attr,
-    has_parameter_builder,
-)
+from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_attr, has_parameter_builder
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -145,10 +140,12 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
             return _simple_column_expression(column_input)
         return exp.maybe_parse(column_input) or exp.column(column_input)
 
-    if builder is not None and has_parameter_builder(column_input):
+    from sqlspec.builder._base import QueryBuilder
+
+    if builder is not None and isinstance(column_input, QueryBuilder):
         return _scalar_subquery(builder._embed_subquery(column_input, alias_hint="subquery"))
 
-    if has_expression_and_sql(column_input):
+    if isinstance(column_input, SQL):
         return extract_sql_object_expression(column_input, builder)
 
     if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expr):  # pyright: ignore[reportPrivateUsage]
@@ -290,20 +287,13 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
 def extract_sql_object_expression(
     value: Any, builder: Any | None = None, parse_sql: Callable[[str], exp.Expr] | None = None
 ) -> exp.Expr:
-    """Extract SQLGlot expression from SQL object value with parameter merging.
+    """Extract the SQLGlot expression from a SQL object and merge its parameters.
 
-    Handles the common pattern of:
-        1. Check if value has expression and SQL attributes
-        2. Try to get expression first, merge parameters if available
-        3. Fall back to parsing raw SQL text if expression is None
-        4. Merge parameters in both cases
-        5. Handle callable SQL text
-
-    This consolidates duplicated logic across builder files that process
-    SQL objects (like those from sql.raw() calls).
+    Only ``SQL`` instances are accepted, so an object that merely exposes the same attributes
+    never renders as SQL.
 
     Args:
-        value: The SQL object value to process
+        value: The SQL object to process
         builder: Optional builder instance for parameter merging (must have add_parameter method)
         parse_sql: Optional parser for raw SQL fallback text.
 
@@ -311,13 +301,11 @@ def extract_sql_object_expression(
         SQLGlot Expression extracted from the SQL object
 
     Raises:
-        ValueError: If the value doesn't appear to be a SQL object
+        TypeError: If the value is not a SQL object
     """
-    has_sql = has_expression_and_sql(value)
-    has_parameters = has_expression_and_parameters(value)
-    if not has_sql and not has_parameters:
-        msg = f"Value does not expose an expression with SQL or parameters: {type(value)}"
-        raise ValueError(msg)
+    if not isinstance(value, SQL):
+        msg = f"Value is not a SQL object: {type(value)}"
+        raise TypeError(msg)
 
     if value.expression is not None and isinstance(value.expression, exp.Expr):
         expr = value.expression.copy()
@@ -326,15 +314,8 @@ def extract_sql_object_expression(
             expr = builder._update_placeholders(expr, param_mapping)
         return expr
 
-    if not has_sql:
-        msg = f"Value has no SQL text fallback: {type(value)}"
-        raise ValueError(msg)
-
     param_mapping = _merge_sql_parameters(value, builder)
-    sql_text = getattr(value, "raw_sql", None)
-    if sql_text is None:
-        sql_text = value.sql if not callable(value.sql) else str(value)
-
+    sql_text = value.raw_sql
     expr = parse_sql(sql_text) if parse_sql is not None else (exp.maybe_parse(sql_text) or exp.convert(str(sql_text)))
     if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
         expr = builder._update_placeholders(expr, param_mapping)
