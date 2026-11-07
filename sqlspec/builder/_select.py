@@ -30,6 +30,7 @@ from sqlspec.builder._parsing_utils import (
     parse_condition_expression,
     parse_order_expression,
     parse_table_expression,
+    resolve_value_expression,
     to_expression,
 )
 from sqlspec.core import SQL, ParameterStyle, apply_direction, ordered
@@ -572,15 +573,17 @@ class WhereClauseMixin:
         return self._create_parameterized_condition(column, value, expr_neq if negate else expr_eq)
 
     def _create_parameterized_condition(
-        self, column: str | exp.Column, value: Any, condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]"
+        self, column: str | exp.Column, value: Any, condition_factory: "Callable[[exp.Expr, exp.Expr], exp.Expr]"
     ) -> exp.Expr:
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
+        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        resolved = resolve_value_expression(value, self, column_name)
+        if resolved is not None:
+            return condition_factory(col_expr, resolved)
         param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        placeholder = exp.Placeholder(this=param_name)
-        return condition_factory(col_expr, placeholder)
+        return condition_factory(col_expr, exp.Placeholder(this=param_name))
 
     def _current_where_clause(self) -> exp.Where | None:
         builder = cast("SQLBuilderProtocol", self)
@@ -613,14 +616,21 @@ class WhereClauseMixin:
         if has_parameter_builder(value) or isinstance(value, exp.Expr):
             subquery_expr = self._normalize_subquery_expression(value, builder)
             return exp.In(this=column_exp, expressions=[subquery_expr])
+        resolved = resolve_value_expression(value, self, column_name)
+        if resolved is not None:
+            return exp.In(this=column_exp, expressions=[resolved])
         if is_iterable_parameters(value):
-            placeholders = []
+            elements: list[exp.Expr] = []
             for index, element in enumerate(value):
                 name_seed = column_name if len(value) == 1 else f"{column_name}_{index + 1}"
+                resolved_element = resolve_value_expression(element, self, name_seed)
+                if resolved_element is not None:
+                    elements.append(resolved_element)
+                    continue
                 param_name = builder._next_parameter_name(name_seed)
                 _, param_name = builder.add_parameter(element, name=param_name)
-                placeholders.append(exp.Placeholder(this=param_name))
-            return exp.In(this=column_exp, expressions=placeholders)
+                elements.append(exp.Placeholder(this=param_name))
+            return exp.In(this=column_exp, expressions=elements)
 
         param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
@@ -639,33 +649,36 @@ class WhereClauseMixin:
 
     def _handle_between_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
         if is_iterable_parameters(value) and len(value) == BETWEEN_BOUND_COUNT:
-            builder = cast("SQLBuilderProtocol", self)
             low, high = value
-            low_param = builder._next_parameter_name(f"{column_name}_low")
-            high_param = builder._next_parameter_name(f"{column_name}_high")
-            _, low_param = builder.add_parameter(low, name=low_param)
-            _, high_param = builder.add_parameter(high, name=high_param)
             return exp.Between(
-                this=column_exp, low=exp.Placeholder(this=low_param), high=exp.Placeholder(this=high_param)
+                this=column_exp,
+                low=self._between_bound(low, f"{column_name}_low"),
+                high=self._between_bound(high, f"{column_name}_high"),
             )
         msg = f"BETWEEN operator requires a tuple of two values, got {type(value).__name__}"
         raise SQLBuilderError(msg)
 
     def _handle_not_between_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
         if is_iterable_parameters(value) and len(value) == BETWEEN_BOUND_COUNT:
-            builder = cast("SQLBuilderProtocol", self)
             low, high = value
-            low_param = builder._next_parameter_name(f"{column_name}_low")
-            high_param = builder._next_parameter_name(f"{column_name}_high")
-            _, low_param = builder.add_parameter(low, name=low_param)
-            _, high_param = builder.add_parameter(high, name=high_param)
             return exp.Not(
                 this=exp.Between(
-                    this=column_exp, low=exp.Placeholder(this=low_param), high=exp.Placeholder(this=high_param)
+                    this=column_exp,
+                    low=self._between_bound(low, f"{column_name}_low"),
+                    high=self._between_bound(high, f"{column_name}_high"),
                 )
             )
         msg = f"NOT BETWEEN operator requires a tuple of two values, got {type(value).__name__}"
         raise SQLBuilderError(msg)
+
+    def _between_bound(self, value: Any, name_seed: str) -> exp.Expr:
+        resolved = resolve_value_expression(value, self, name_seed)
+        if resolved is not None:
+            return resolved
+        builder = cast("SQLBuilderProtocol", self)
+        param_name = builder._next_parameter_name(name_seed)
+        _, param_name = builder.add_parameter(value, name=param_name)
+        return exp.Placeholder(this=param_name)
 
     def _any_comparison(self, column_expr: exp.Expr, values: Any, column_name: str, *, negate: bool) -> exp.Expr:
         """Build ``column = ANY(...)``, or ``NOT (column = ANY(...))`` when negated.
@@ -1392,8 +1405,8 @@ class _TableHintReplacer:
         return f"/*+ {self._hint} */ {self._table}{alias_part}"
 
 
-def _expr_like_exp(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return exp.Like(this=col, expression=placeholder)
+def _expr_like_exp(col: "exp.Expr", operand: "exp.Expr") -> "exp.Expr":
+    return exp.Like(this=col, expression=operand)
 
 
 _EQUALITY_OPERATORS: Final[frozenset[str]] = frozenset({"=", "==", "!=", "<>"})
@@ -1411,8 +1424,8 @@ _SIMPLE_OPERATOR_MAP: dict[str, Any] = {
 }
 
 
-def _expr_ilike(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return cast("exp.Expr", col.ilike(placeholder))
+def _expr_ilike(col: "exp.Expr", operand: "exp.Expr") -> "exp.Expr":
+    return cast("exp.Expr", col.ilike(operand))
 
 
 def _ensure_select_expression(

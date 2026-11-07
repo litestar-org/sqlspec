@@ -8,6 +8,7 @@ from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder._base import QueryBuilder
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_select_only_replaces_columns() -> None:
@@ -208,3 +209,118 @@ def test_join_and_exists_leave_caller_nodes_detached() -> None:
 
     assert condition.parent is None
     assert union.parent is None
+
+
+PREDICATE_VALUES = [
+    pytest.param(sql.column("b"), '"t"."b"', id="column"),
+    pytest.param(sql.column("b").cast("INT"), 'CAST("t"."b" AS INT)', id="function-column"),
+    pytest.param(sql.column("b") > 1, '"t"."b" > 1', id="column-expression"),
+    pytest.param(sql.case().when("x > 1", 1).else_(0).end(), 'CASE WHEN "t"."x" > 1 THEN 1 ELSE 0 END', id="case"),
+    pytest.param(sql.count("b"), 'COUNT("t"."b")', id="aggregate"),
+    pytest.param(sql.coalesce("b", "c"), 'COALESCE("t"."b", "t"."c")', id="conversion"),
+]
+
+
+@pytest.mark.parametrize(("value", "fragment"), PREDICATE_VALUES)
+@pytest.mark.parametrize(
+    ("apply", "predicate", "parameters"),
+    [
+        pytest.param(lambda q, v: q.where_eq("a", v), '"t"."a" = {fragment}', {}, id="where-eq"),
+        pytest.param(lambda q, v: q.where_gt("a", v), '"t"."a" > {fragment}', {}, id="where-gt"),
+        pytest.param(lambda q, v: q.where(("a", ">=", v)), '"t"."a" >= {fragment}', {}, id="tuple"),
+        pytest.param(lambda q, v: q.where_in("a", v), '"t"."a" IN ({fragment})', {}, id="where-in"),
+        pytest.param(
+            lambda q, v: q.where_in("a", [v, 7]), '"t"."a" IN ({fragment}, :a_2)', {"a_2": 7}, id="where-in-list"
+        ),
+        pytest.param(
+            lambda q, v: q.where_between("a", v, 9),
+            '"t"."a" <= :a_high AND "t"."a" >= {fragment}',
+            {"a_high": 9},
+            id="where-between",
+        ),
+    ],
+)
+def test_comparison_predicates_render_expression_values(
+    apply: Any, predicate: str, parameters: dict[str, Any], value: Any, fragment: str
+) -> None:
+    """Comparison, IN, and BETWEEN predicates render wrappers as SQL."""
+    statement = apply(sql.select("z").from_("t"), value).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + predicate.format(fragment=fragment)
+    assert statement.parameters == parameters
+
+
+def test_where_eq_renders_sqlglot_node() -> None:
+    """A SQLGlot node compares as SQL instead of binding."""
+    statement = sql.select("z").from_("t").where_eq("a", exp.column("b")).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" = "t"."b"'
+    assert statement.parameters == {}
+
+
+def test_where_eq_keeps_set_operation_parentheses() -> None:
+    """A set operation stays parenthesized as a scalar operand."""
+    statement = sql.select("z").from_("t").where_eq("a", _union()).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" = ( SELECT 1 AS "1" UNION SELECT 2 AS "2" )'
+
+
+def test_where_eq_embeds_query_builder() -> None:
+    """A query builder embeds as a scalar subquery with merged parameters."""
+    statement = sql.select("z").from_("t").where_eq("a", sql.select("x").from_("y").where_eq("z", 5)).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + (
+        '"t"."a" = ( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."z" = :z )'
+    )
+    assert statement.parameters == {"z": 5}
+
+
+def test_where_in_renders_parameterized_fragment() -> None:
+    """A parameterized fragment in IN renders as SQL and merges its parameters."""
+    statement = sql.select("z").from_("t").where_in("a", sql.raw("b + :p", p=3)).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" IN ("t"."b" + :p)'
+    assert statement.parameters == {"p": 3}
+
+
+def test_not_between_renders_expression_bound() -> None:
+    """A NOT BETWEEN bound renders as SQL beside a bound parameter."""
+    statement = sql.select("z").from_("t").where(("a", "NOT BETWEEN", (sql.column("b"), 9))).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" < "t"."b" OR "t"."a" > :a_high'
+    assert statement.parameters == {"a_high": 9}
+
+
+@pytest.mark.parametrize(
+    ("apply", "predicate", "parameters"),
+    [
+        pytest.param(lambda q: q.where_eq("a", "b"), '"t"."a" = :a', {"a": "b"}, id="where-eq"),
+        pytest.param(lambda q: q.where_in("a", [1, 2]), '"t"."a" IN (:a_1, :a_2)', {"a_1": 1, "a_2": 2}, id="where-in"),
+        pytest.param(
+            lambda q: q.where_between("a", 1, 9),
+            '"t"."a" <= :a_high AND "t"."a" >= :a_low',
+            {"a_low": 1, "a_high": 9},
+            id="where-between",
+        ),
+        pytest.param(lambda q: q.where_eq("a", None), '"t"."a" IS NULL', {}, id="where-eq-none"),
+    ],
+)
+def test_between_keeps_plain_values_bound(apply: Any, predicate: str, parameters: dict[str, Any]) -> None:
+    """Plain values keep their existing parameter names."""
+    statement = apply(sql.select("z").from_("t")).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + predicate
+    assert statement.parameters == parameters
+
+
+@pytest.mark.parametrize(
+    ("operator", "message"),
+    [
+        pytest.param("BETWEEN", "^BETWEEN operator requires a tuple of two values, got int$", id="between"),
+        pytest.param("NOT BETWEEN", "^NOT BETWEEN operator requires a tuple of two values, got int$", id="not-between"),
+    ],
+)
+def test_between_rejects_non_pair(operator: str, message: str) -> None:
+    """Between predicates reject a value that is not a pair."""
+    with pytest.raises(SQLBuilderError, match=message):
+        sql.select("z").from_("t").where(("a", operator, 5))
