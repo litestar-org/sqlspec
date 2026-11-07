@@ -12,7 +12,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.base import BaseMigrationTracker
-from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
+from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -231,7 +231,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver: The database driver to use.
         """
         try:
-            target = SchemaTarget(self.version_table, self._tracking_table_ddl())
+            target = self._tracking_schema_target()
             result = ensure_schema_sync(driver, [target], manage_schema=True, create_schema=False, assume_existing=True)
             added_columns = result.added_columns.get(target.identity, [])
             if not added_columns:
@@ -493,7 +493,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             driver: The database driver to use.
         """
         try:
-            target = SchemaTarget(self.version_table, self._tracking_table_ddl())
+            target = self._tracking_schema_target()
             result = await ensure_schema_async(
                 driver, [target], manage_schema=True, create_schema=False, assume_existing=True
             )

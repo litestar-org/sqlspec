@@ -352,6 +352,23 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             return run_(_run_with_cleanup)()
         return sync_fn()
 
+    def _create_cli_migration_commands(config: Any) -> "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]":
+        """Create migration commands, reporting a rejected configuration as a CLI error.
+
+        Args:
+            config: The database configuration.
+
+        Returns:
+            Migration commands for the configuration.
+
+        Raises:
+            click.ClickException: When the configuration is rejected.
+        """
+        try:
+            return migration_commands_module.create_migration_commands(config=config)
+        except SQLSpecError as exc:
+            raise click.ClickException(str(exc)) from exc
+
     def _dispatch_migration_call(config: Any, method_name: str, **kwargs: Any) -> Any:
         """Run a migration command method with sync/async dispatch for one config.
 
@@ -369,9 +386,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         Raises:
             click.ClickException: When the command raises a SQLSpec error.
         """
-        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
-            migration_commands_module.create_migration_commands(config=config)
-        )
+        migration_commands = _create_cli_migration_commands(config)
         method = getattr(migration_commands, method_name)
 
         def _sync_call() -> Any:
@@ -399,9 +414,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         Raises:
             click.ClickException: When the command raises a SQLSpec error.
         """
-        migration_commands: SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] = (
-            migration_commands_module.create_migration_commands(config=config)
-        )
+        migration_commands = _create_cli_migration_commands(config)
         try:
             return await getattr(migration_commands, method_name)(**kwargs)
         except SQLSpecError as exc:
@@ -843,7 +856,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             target_directory = (
                 str(migration_config_dict.get("script_location", "migrations")) if directory is None else directory
             )
-            migration_commands = migration_commands_module.create_migration_commands(config=cast("Any", config))
+            migration_commands = _create_cli_migration_commands(config)
             migration_commands.init(directory=target_directory, package=package)
 
         if async_configs:
@@ -857,8 +870,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         else directory
                     )
                     migration_commands: AsyncMigrationCommands[Any] = cast(
-                        "AsyncMigrationCommands[Any]",
-                        migration_commands_module.create_migration_commands(config=cast("Any", config)),
+                        "AsyncMigrationCommands[Any]", _create_cli_migration_commands(config)
                     )
                     await migration_commands.init(directory=target_directory, package=package)
 

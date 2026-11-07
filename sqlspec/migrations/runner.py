@@ -484,17 +484,35 @@ class BaseMigrationRunner:
         return context_to_use
 
     def _resolve_migration_schema(self, migration: "LoadedMigrationMetadata") -> str | None:
-        """Return the migration's schema directive when present, otherwise the configured default."""
+        """Return the migration's schema directive when present, otherwise the configured default.
+
+        Args:
+            migration: Migration metadata.
+
+        Returns:
+            The schema to apply, or None when no schema applies.
+
+        Raises:
+            MigrationError: The adapter lacks schema support and a directive or default schema is set.
+        """
         config = self.context.config if self.context else None
+        supports_schemas = bool(getattr(config, "supports_migration_schemas", False))
+        adapter = type(config).__name__ if config else "Adapter"
         directive_schema = migration.get("schema")
-        if directive_schema is None:
-            migration_config = cast("dict[str, Any] | None", getattr(config, "migration_config", None))
-            return _resolve_default_schema(migration_config)
-        if not getattr(config, "supports_migration_schemas", False):
-            adapter = type(config).__name__ if config else "Adapter"
-            msg = f"{adapter} does not support migration schema directives; schema={directive_schema!r}"
+        if directive_schema is not None:
+            if not supports_schemas:
+                msg = f"{adapter} does not support migration schema directives; schema={directive_schema!r}"
+                raise MigrationError(msg)
+            return directive_schema
+        migration_config = cast("dict[str, Any] | None", getattr(config, "migration_config", None))
+        default_schema = _resolve_default_schema(migration_config)
+        if default_schema is not None and not supports_schemas:
+            msg = (
+                f"{adapter} does not support migration default schemas; "
+                f"remove default_schema={default_schema!r} from migration_config."
+            )
             raise MigrationError(msg)
-        return directive_schema
+        return default_schema
 
     def _resolve_use_transaction(self, migration: "LoadedMigrationMetadata", use_transaction: "bool | None") -> bool:
         """Resolve the effective transaction flag for a migration."""
@@ -733,8 +751,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 start_time=start_time,
             )
         except Exception as exc:
-            if use_transaction:
-                driver.rollback()
             self._finish_migration_span_error(span, driver, migration, "upgrade", "migration.apply", start_time, exc)
             raise
 
@@ -782,8 +798,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 start_time=start_time,
             )
         except Exception as exc:
-            if use_transaction:
-                driver.rollback()
             self._finish_migration_span_error(
                 span, driver, migration, "downgrade", "migration.rollback", start_time, exc
             )
@@ -873,10 +887,14 @@ class SyncMigrationRunner(BaseMigrationRunner):
                         schema_reset = True
                     on_success(execution_time)
                 driver.commit()
-                return execution_time
-            finally:
-                if default_schema and not schema_reset:
-                    driver.reset_migration_session_schema()
+            except BaseException:
+                self._recover_failed_migration(
+                    driver, in_transaction=True, schema_active=bool(default_schema) and not schema_reset
+                )
+                raise
+            if default_schema and not schema_reset:
+                driver.reset_migration_session_schema()
+            return execution_time
 
         schema_reset = False
         try:
@@ -891,10 +909,50 @@ class SyncMigrationRunner(BaseMigrationRunner):
                     driver.reset_migration_session_schema()
                     schema_reset = True
                 on_success(execution_time)
-            return execution_time
-        finally:
-            if default_schema and not schema_reset:
-                driver.reset_migration_session_schema()
+        except BaseException:
+            self._recover_failed_migration(
+                driver, in_transaction=False, schema_active=bool(default_schema) and not schema_reset
+            )
+            raise
+        if default_schema and not schema_reset:
+            driver.reset_migration_session_schema()
+        return execution_time
+
+    def _recover_failed_migration(
+        self, driver: "SyncDriverAdapterBase", *, in_transaction: bool, schema_active: bool
+    ) -> None:
+        """Roll back a failed migration and restore the session schema without raising.
+
+        Args:
+            driver: Driver that ran the migration.
+            in_transaction: Whether the runner began a transaction for this migration.
+            schema_active: Whether a session schema reset is still outstanding.
+        """
+        if in_transaction:
+            self._attempt_recovery(driver.rollback, "rollback")
+        if not schema_active:
+            return
+        if self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema") or in_transaction:
+            return
+        self._attempt_recovery(driver.rollback, "rollback")
+        self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
+
+    def _attempt_recovery(self, step: "Callable[[], None]", step_name: str) -> bool:
+        """Run one recovery step, logging a failure instead of raising.
+
+        Args:
+            step: Driver operation to run.
+            step_name: Name recorded in the warning.
+
+        Returns:
+            True when the step succeeded.
+        """
+        try:
+            step()
+        except Exception as exc:
+            log_with_context(logger, logging.WARNING, "migration.recovery.failed", step=step_name, error=str(exc))
+            return False
+        return True
 
     def _migration_sql(self, migration: "LoadedMigrationMetadata", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (sync version).
@@ -1007,8 +1065,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 start_time=start_time,
             )
         except Exception as exc:
-            if use_transaction:
-                await driver.rollback()
             self._finish_migration_span_error(span, driver, migration, "upgrade", "migration.apply", start_time, exc)
             raise
 
@@ -1056,8 +1112,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 start_time=start_time,
             )
         except Exception as exc:
-            if use_transaction:
-                await driver.rollback()
             self._finish_migration_span_error(
                 span, driver, migration, "downgrade", "migration.rollback", start_time, exc
             )
@@ -1147,10 +1201,14 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                         schema_reset = True
                     await on_success(execution_time)
                 await driver.commit()
-                return execution_time
-            finally:
-                if default_schema and not schema_reset:
-                    await driver.reset_migration_session_schema()
+            except BaseException:
+                await self._recover_failed_migration(
+                    driver, in_transaction=True, schema_active=bool(default_schema) and not schema_reset
+                )
+                raise
+            if default_schema and not schema_reset:
+                await driver.reset_migration_session_schema()
+            return execution_time
 
         schema_reset = False
         try:
@@ -1165,10 +1223,50 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                     await driver.reset_migration_session_schema()
                     schema_reset = True
                 await on_success(execution_time)
-            return execution_time
-        finally:
-            if default_schema and not schema_reset:
-                await driver.reset_migration_session_schema()
+        except BaseException:
+            await self._recover_failed_migration(
+                driver, in_transaction=False, schema_active=bool(default_schema) and not schema_reset
+            )
+            raise
+        if default_schema and not schema_reset:
+            await driver.reset_migration_session_schema()
+        return execution_time
+
+    async def _recover_failed_migration(
+        self, driver: "AsyncDriverAdapterBase", *, in_transaction: bool, schema_active: bool
+    ) -> None:
+        """Roll back a failed migration and restore the session schema without raising.
+
+        Args:
+            driver: Driver that ran the migration.
+            in_transaction: Whether the runner began a transaction for this migration.
+            schema_active: Whether a session schema reset is still outstanding.
+        """
+        if in_transaction:
+            await self._attempt_recovery(driver.rollback, "rollback")
+        if not schema_active:
+            return
+        if await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema") or in_transaction:
+            return
+        await self._attempt_recovery(driver.rollback, "rollback")
+        await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
+
+    async def _attempt_recovery(self, step: "Callable[[], Awaitable[None]]", step_name: str) -> bool:
+        """Run one recovery step, logging a failure instead of raising.
+
+        Args:
+            step: Driver operation to run.
+            step_name: Name recorded in the warning.
+
+        Returns:
+            True when the step succeeded.
+        """
+        try:
+            await step()
+        except Exception as exc:
+            log_with_context(logger, logging.WARNING, "migration.recovery.failed", step=step_name, error=str(exc))
+            return False
+        return True
 
     async def _migration_sql(self, migration: "LoadedMigrationMetadata", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (async version).

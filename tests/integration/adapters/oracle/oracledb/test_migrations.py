@@ -40,6 +40,21 @@ def down():
     (migration_dir / "0001_create_unqualified_table.py").write_text(migration_content)
 
 
+def _write_failing_migration(migration_dir: Path, table_name: str) -> None:
+    (migration_dir / "0001_fails.py").write_text(f'''"""Fail after creating a table."""
+
+
+def up():
+    """Create a table, then reference a missing one."""
+    return ["CREATE TABLE {table_name} (id NUMBER)", "SELECT * FROM {table_name}_missing"]
+
+
+def down():
+    """Drop the table."""
+    return ["DROP TABLE {table_name}"]
+''')
+
+
 def _oracle_admin_sync_config(oracle_service: OracleService) -> OracleSyncConfig:
     return OracleSyncConfig(
         connection_config={
@@ -481,3 +496,152 @@ def test_oracledb_sync_schema_migration_from_old_format(tmp_path: Path, oracle_2
     finally:
         if config.connection_instance:
             config.close_pool()
+
+
+_CURRENT_SCHEMA_SQL = "SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL"
+
+
+def _single_session_connection_config(oracle_service: OracleService) -> dict[str, Any]:
+    return {
+        "host": oracle_service.host,
+        "port": oracle_service.port,
+        "service_name": oracle_service.service_name,
+        "user": oracle_service.user,
+        "password": oracle_service.password,
+        "min": 1,
+        "max": 1,
+    }
+
+
+def test_oracledb_sync_migration_restores_current_schema(tmp_path: Path, oracle_23ai_service: OracleService) -> None:
+    """After a sync migration, the next session on a one-connection pool reports the login schema."""
+    schema = _oracle_identifier("OSR")
+    table_name = _oracle_identifier("TBL")
+    migration_dir = tmp_path / "migrations"
+    config = OracleSyncConfig(
+        connection_config=_single_session_connection_config(oracle_23ai_service),
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": _oracle_identifier("OV"),
+            "default_schema": schema,
+        },
+    )
+    commands = SyncMigrationCommands(config)
+
+    try:
+        _create_oracle_schema(oracle_23ai_service, schema)
+
+        commands.init(str(migration_dir), package=True)
+        _write_unqualified_table_migration(migration_dir, table_name)
+        commands.upgrade()
+
+        with config.provide_session() as driver:
+            assert _sync_oracle_table_exists(driver, schema, table_name)
+            assert driver.select_value(_CURRENT_SCHEMA_SQL) == oracle_23ai_service.user.upper()
+    finally:
+        _drop_oracle_schema(oracle_23ai_service, schema)
+        if config.connection_instance:
+            config.close_pool()
+
+
+async def test_oracledb_async_migration_restores_current_schema(
+    tmp_path: Path, oracle_23ai_service: OracleService
+) -> None:
+    """After an async migration, the next session on a one-connection pool reports the login schema."""
+    schema = _oracle_identifier("OAR")
+    table_name = _oracle_identifier("TBL")
+    migration_dir = tmp_path / "migrations"
+    config = OracleAsyncConfig(
+        connection_config=_single_session_connection_config(oracle_23ai_service),
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": _oracle_identifier("OV"),
+            "default_schema": schema,
+        },
+    )
+    commands = AsyncMigrationCommands(config)
+
+    try:
+        await _async_create_oracle_schema(oracle_23ai_service, schema)
+
+        await commands.init(str(migration_dir), package=True)
+        _write_unqualified_table_migration(migration_dir, table_name)
+        await commands.upgrade()
+
+        async with config.provide_session() as driver:
+            assert await _async_oracle_table_exists(driver, schema, table_name)
+            assert await driver.select_value(_CURRENT_SCHEMA_SQL) == oracle_23ai_service.user.upper()
+    finally:
+        await _async_drop_oracle_schema(oracle_23ai_service, schema)
+        if config.connection_instance:
+            await config.close_pool()
+
+
+def test_oracledb_sync_failed_migration_restores_current_schema(
+    tmp_path: Path, oracle_23ai_service: OracleService, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """After a failed sync migration, the next session on a one-connection pool reports the login schema."""
+    schema = _oracle_identifier("OSF")
+    table_name = _oracle_identifier("TBL")
+    migration_dir = tmp_path / "migrations"
+    config = OracleSyncConfig(
+        connection_config=_single_session_connection_config(oracle_23ai_service),
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": _oracle_identifier("OV"),
+            "default_schema": schema,
+        },
+    )
+    commands = SyncMigrationCommands(config)
+
+    try:
+        _create_oracle_schema(oracle_23ai_service, schema)
+
+        commands.init(str(migration_dir), package=True)
+        _write_failing_migration(migration_dir, table_name)
+        capsys.readouterr()
+        commands.upgrade()
+
+        assert "ORA-00942" in capsys.readouterr().out
+        with config.provide_session() as driver:
+            assert _sync_oracle_table_exists(driver, schema, table_name)
+            assert driver.select_value(_CURRENT_SCHEMA_SQL) == oracle_23ai_service.user.upper()
+    finally:
+        _drop_oracle_schema(oracle_23ai_service, schema)
+        if config.connection_instance:
+            config.close_pool()
+
+
+async def test_oracledb_async_failed_migration_restores_current_schema(
+    tmp_path: Path, oracle_23ai_service: OracleService, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """After a failed async migration, the next session on a one-connection pool reports the login schema."""
+    schema = _oracle_identifier("OAF")
+    table_name = _oracle_identifier("TBL")
+    migration_dir = tmp_path / "migrations"
+    config = OracleAsyncConfig(
+        connection_config=_single_session_connection_config(oracle_23ai_service),
+        migration_config={
+            "script_location": str(migration_dir),
+            "version_table_name": _oracle_identifier("OV"),
+            "default_schema": schema,
+        },
+    )
+    commands = AsyncMigrationCommands(config)
+
+    try:
+        await _async_create_oracle_schema(oracle_23ai_service, schema)
+
+        await commands.init(str(migration_dir), package=True)
+        _write_failing_migration(migration_dir, table_name)
+        capsys.readouterr()
+        await commands.upgrade()
+
+        assert "ORA-00942" in capsys.readouterr().out
+        async with config.provide_session() as driver:
+            assert await _async_oracle_table_exists(driver, schema, table_name)
+            assert await driver.select_value(_CURRENT_SCHEMA_SQL) == oracle_23ai_service.user.upper()
+    finally:
+        await _async_drop_oracle_schema(oracle_23ai_service, schema)
+        if config.connection_instance:
+            await config.close_pool()

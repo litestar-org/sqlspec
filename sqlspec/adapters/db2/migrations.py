@@ -4,7 +4,9 @@ from typing import TYPE_CHECKING
 
 from sqlspec.adapters.db2.core import TABLE_EXISTS_SQL, split_db2_table_name, utc_now
 from sqlspec.builder import sql
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -15,14 +17,24 @@ if TYPE_CHECKING:
 __all__ = ("Db2AsyncMigrationTracker", "Db2MigrationTrackerMixin", "Db2SyncMigrationTracker")
 
 
+def _dictionary_identifier(catalog_name: str) -> str:
+    """Return a catalog name in the form the Db2 data dictionary resolves back to that exact name.
+
+    Args:
+        catalog_name: Exact name stored in the Db2 catalog.
+
+    Returns:
+        The name, quoted when the dictionary's normalization would otherwise change it.
+    """
+    return catalog_name if normalize_identifier(catalog_name, "db2") == catalog_name else quote_identifier(catalog_name)
+
+
 class Db2MigrationTrackerMixin:
     """Db2 tracking-table DDL, catalog existence probe, and UTC audit timestamps."""
 
     __slots__ = ()
 
     version_table: str
-    version_table_name: str
-    version_table_schema: "str | None"
 
     def _tracking_table_ddl(self) -> "CreateTable":
         """Return Db2 DDL for the migration tracking table.
@@ -30,11 +42,9 @@ class Db2MigrationTrackerMixin:
         Returns:
             CREATE TABLE builder without an existence clause.
         """
-        builder = sql.create_table(self.version_table_name)
-        if self.version_table_schema:
-            builder.in_schema(self.version_table_schema)
         return (
-            builder
+            sql
+            .create_table(self.version_table)
             .column("version_num", "VARCHAR(32)", primary_key=True, not_null=True)
             .column("version_type", "VARCHAR(16)")
             .column("execution_sequence", "INTEGER")
@@ -46,10 +56,32 @@ class Db2MigrationTrackerMixin:
             .column("replaces", "CLOB")
         )
 
+    def catalog_schema_name(self) -> "str | None":
+        """Return the tracking table's catalog schema in the form the Db2 data dictionary accepts.
+
+        Returns:
+            Schema name for metadata lookups, or None when the table is unqualified.
+        """
+        schema, _ = split_db2_table_name(self.version_table)
+        return None if schema is None else _dictionary_identifier(schema)
+
+    def _tracking_schema_target(self) -> SchemaTarget:
+        """Return the schema target that reads the tracking table's columns by its catalog names.
+
+        Returns:
+            Target whose introspection names resolve to the table the DDL created.
+        """
+        target = SchemaTarget(self.version_table, self._tracking_table_ddl())
+        schema, table = split_db2_table_name(self.version_table)
+        target.table_name = _dictionary_identifier(table)
+        target.schema = None if schema is None else _dictionary_identifier(schema)
+        return target
+
     def _tracking_table_exists_sql(self) -> "tuple[str, tuple[str | None, str]]":
         """Return the catalog probe for the tracking table and its bound names.
 
-        Unquoted identifiers are upper-folded while quoted identifiers keep their case.
+        Unquoted identifiers are upper-folded while quoted identifiers keep their case, matching how
+        Db2 catalogs the tracking table DDL.
 
         Returns:
             The probe SQL and its ``(schema, table)`` parameters; the schema is ``None`` for an
