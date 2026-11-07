@@ -1,4 +1,4 @@
-"""Unit tests for PostgreSQL extension operator tokens and FACTOR registration."""
+"""Unit tests for PostgreSQL extension operator tokens and JSON_OPERATORS registration."""
 
 from sqlglot import exp
 from sqlglot.parsers.postgres import PostgresParser

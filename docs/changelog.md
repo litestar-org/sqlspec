@@ -19,6 +19,12 @@ important operational fixes.
 * DuckDB and Oracle restore the session schema after a migration, so the schema no longer carries into the next session on a pooled connection or into later migrations. `current()` no longer creates an empty tracking table in the previous migration's schema on DuckDB.
 * A failed migration now rolls back before the session schema is reset, on every adapter. The original error reaches the caller instead of an aborted-transaction error from the reset, and SQL Server no longer commits partial work from a failed transactional migration.
 * A quoted Db2 `version_table_name` such as `"App"."Tracker"` now creates the tracking table with that exact name, so later runs find it instead of repeating `CREATE TABLE`.
+* Built-in configuration subclasses with explicit ADK stores accept the options those stores declare instead of raising `ImproperConfigurationError`.
+
+**Changed:**
+
+* ADK stores can declare extra `extension_config["adk"]` keys through an `extension_config_options` `ClassVar`, matching the `events` extension. Validation accepts `ADKConfig` keys, the built-in adapter's `*ADKConfig` keys, and the options declared by both `adk_store_class` and `adk_memory_store_class`.
+* **Behavior change for third-party adapters:** external ADK stores must now declare extra options through `extension_config_options`. Configurations with explicit ADK stores and an `adapter_name` outside `sqlspec.adapters`, supported since v0.70.1 ([#877](https://github.com/litestar-org/sqlspec/pull/877)), skipped option validation and accepted any key. Undeclared keys and typos now raise `ImproperConfigurationError`, including memory settings outside `ADKConfig` such as `vector_dimensions`.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
@@ -26,7 +32,7 @@ important operational fixes.
 
 * Added `tools.docs.generate_config_tables` (`render_typeddict_table`, `render_filter_catalog_table`, `sync_markdown_markers`, and `check_adapter_reference_parity`) to synchronize deterministic `TypedDict` configuration tables, `StatementFilter` catalog tables, and adapter reference symbol parity across `docs/`.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
-* Added `supports_vectors` capability metadata across the PostgreSQL, CockroachDB, DuckDB, Oracle, BigQuery, and Spanner data dictionary dialect configurations.
+* Added `supports_vectors` capability metadata across the CockroachDB, DuckDB, MariaDB, Oracle, SQL Server, BigQuery, and Spanner data dictionary dialect configurations.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
 * Overhauled the documentation suite (`docs/learn/`, `docs/databases/`, `docs/integrations/`, `docs/reference/`, `docs/contributing/`, and `docs/examples/`) with runnable `pymdownx.snippets`, generated configuration tables across all 22 adapters and framework extensions, and expanded Query Builder, SQL File Loader, and CLI reference guides.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))

@@ -144,10 +144,8 @@ def _adk_adapter_store_class(config: Any, store_suffix: str) -> Any:
     """Import an adapter-specific ADK store class for a config."""
 
     store_attr = "adk_memory_store_class" if store_suffix == "ADKMemoryStore" else "adk_store_class"
-    explicit_store = getattr(config, store_attr, None)
-    if not isinstance(explicit_store, type):
-        explicit_store = getattr(type(config), store_attr, None)
-    if isinstance(explicit_store, type):
+    explicit_store = _adk_explicit_store_class(config, store_attr)
+    if explicit_store is not None:
         return explicit_store
 
     store_path = _adk_store_path(config, store_suffix)
@@ -163,10 +161,8 @@ def _adk_adapter_store_class(config: Any, store_suffix: str) -> Any:
 def _adk_memory_migration_store_class(config: Any) -> Any | None:
     """Import the ADK memory store class when the adapter provides one."""
 
-    explicit_store = getattr(config, "adk_memory_store_class", None)
-    if not isinstance(explicit_store, type):
-        explicit_store = getattr(type(config), "adk_memory_store_class", None)
-    if isinstance(explicit_store, type):
+    explicit_store = _adk_explicit_store_class(config, "adk_memory_store_class")
+    if explicit_store is not None:
         return explicit_store
 
     store_path = _adk_store_path(config, "ADKMemoryStore")
@@ -244,31 +240,58 @@ def _ensure_adk_store_registration(config: Any) -> None:
 
 
 def _validate_adk_extension_config(config: _ADKConfigSource, settings: dict[str, Any]) -> None:
-    """Reject ADK options that the selected adapter cannot honor."""
+    """Reject ADK options that the adapter and explicit stores do not accept."""
     from sqlspec.config import ADKConfig
 
     adapter_name = resolve_adapter_name(config)
-    if adapter_name is None:
+    adapter_keys = _adk_adapter_config_keys(adapter_name)
+    explicit_stores = tuple(
+        store
+        for store in (
+            _adk_explicit_store_class(config, "adk_store_class"),
+            _adk_explicit_store_class(config, "adk_memory_store_class"),
+        )
+        if store is not None
+    )
+    if adapter_keys is None and not explicit_stores:
         return
+    accepted = set(ADKConfig.__required_keys__) | set(ADKConfig.__optional_keys__) | (adapter_keys or set())
+    for store in explicit_stores:
+        accepted.update(cast("frozenset[str]", getattr(store, "extension_config_options", frozenset())))
+    unsupported = sorted(set(settings).difference(accepted))
+    if unsupported:
+        label = adapter_name or resolve_adapter_name(explicit_stores[0]) or explicit_stores[0].__name__
+        keys = ", ".join(repr(key) for key in unsupported)
+        msg = f"Unsupported ADK configuration key(s) for {label}: {keys}"
+        raise ImproperConfigurationError(msg)
+
+
+def _adk_adapter_config_keys(adapter_name: "str | None") -> "set[str] | None":
+    """Return keys from a built-in adapter's ADK TypedDicts, or None when it has no ADK store module."""
+    if adapter_name is None:
+        return None
     module_name = f"sqlspec.adapters.{adapter_name}.adk.store"
     try:
         store_module = importlib.import_module(module_name)
     except ModuleNotFoundError as error:
         if error.name not in {module_name, module_name.rsplit(".", 1)[0], f"sqlspec.adapters.{adapter_name}"}:
             raise
-        return
-    accepted = set(ADKConfig.__required_keys__) | set(ADKConfig.__optional_keys__)
+        return None
+    keys: set[str] = set()
     for exported_name in getattr(store_module, "__all__", ()):
-        if not exported_name.endswith("ADKConfig"):
-            continue
-        config_type = getattr(store_module, exported_name)
-        accepted.update(getattr(config_type, "__required_keys__", ()))
-        accepted.update(getattr(config_type, "__optional_keys__", ()))
-    unsupported = sorted(set(settings).difference(accepted))
-    if unsupported:
-        keys = ", ".join(repr(key) for key in unsupported)
-        msg = f"Unsupported ADK configuration key(s) for {adapter_name}: {keys}"
-        raise ImproperConfigurationError(msg)
+        if exported_name.endswith("ADKConfig"):
+            config_type = getattr(store_module, exported_name)
+            keys.update(getattr(config_type, "__required_keys__", ()))
+            keys.update(getattr(config_type, "__optional_keys__", ()))
+    return keys
+
+
+def _adk_explicit_store_class(config: Any, store_attr: str) -> "type[Any] | None":
+    """Return the store class set on a config instance or its class."""
+    explicit_store = getattr(config, store_attr, None)
+    if not isinstance(explicit_store, type):
+        explicit_store = getattr(type(config), store_attr, None)
+    return explicit_store if isinstance(explicit_store, type) else None
 
 
 def _raise_unsupported_config(config_type: str) -> NoReturn:

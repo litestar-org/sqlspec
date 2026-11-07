@@ -67,6 +67,8 @@ Session, event, long-term memory, and artifact metadata services and base stores
 
 ## Base ADK Stores
 
+Store subclasses can declare extra `extension_config["adk"]` keys through the `extension_config_options` `ClassVar`. Options from `adk_store_class` and `adk_memory_store_class` are combined and accepted alongside `ADKConfig` keys and the built-in adapter's `*ADKConfig` keys. See [Declaring ADK Store Options](../../contributing/creating-adapters.md#declaring-adk-store-options).
+
 ::: sqlspec.extensions.adk.store.BaseAsyncADKStore
     options:
       heading_level: 4
