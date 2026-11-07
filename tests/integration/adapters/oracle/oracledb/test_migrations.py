@@ -578,10 +578,11 @@ async def test_oracledb_async_migration_restores_current_schema(
 
 
 def test_oracledb_sync_failed_migration_restores_current_schema(
-    tmp_path: Path, oracle_23ai_service: OracleService
+    tmp_path: Path, oracle_23ai_service: OracleService, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """After a failed sync migration, the next session on a one-connection pool reports the login schema."""
     schema = _oracle_identifier("OSF")
+    table_name = _oracle_identifier("TBL")
     migration_dir = tmp_path / "migrations"
     config = OracleSyncConfig(
         connection_config=_single_session_connection_config(oracle_23ai_service),
@@ -597,10 +598,13 @@ def test_oracledb_sync_failed_migration_restores_current_schema(
         _create_oracle_schema(oracle_23ai_service, schema)
 
         commands.init(str(migration_dir), package=True)
-        _write_failing_migration(migration_dir, _oracle_identifier("TBL"))
+        _write_failing_migration(migration_dir, table_name)
+        capsys.readouterr()
         commands.upgrade()
 
+        assert "ORA-00942" in capsys.readouterr().out
         with config.provide_session() as driver:
+            assert _sync_oracle_table_exists(driver, schema, table_name)
             assert driver.select_value(_CURRENT_SCHEMA_SQL) == oracle_23ai_service.user.upper()
     finally:
         _drop_oracle_schema(oracle_23ai_service, schema)
@@ -609,10 +613,11 @@ def test_oracledb_sync_failed_migration_restores_current_schema(
 
 
 async def test_oracledb_async_failed_migration_restores_current_schema(
-    tmp_path: Path, oracle_23ai_service: OracleService
+    tmp_path: Path, oracle_23ai_service: OracleService, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """After a failed async migration, the next session on a one-connection pool reports the login schema."""
     schema = _oracle_identifier("OAF")
+    table_name = _oracle_identifier("TBL")
     migration_dir = tmp_path / "migrations"
     config = OracleAsyncConfig(
         connection_config=_single_session_connection_config(oracle_23ai_service),
@@ -628,10 +633,13 @@ async def test_oracledb_async_failed_migration_restores_current_schema(
         await _async_create_oracle_schema(oracle_23ai_service, schema)
 
         await commands.init(str(migration_dir), package=True)
-        _write_failing_migration(migration_dir, _oracle_identifier("TBL"))
+        _write_failing_migration(migration_dir, table_name)
+        capsys.readouterr()
         await commands.upgrade()
 
+        assert "ORA-00942" in capsys.readouterr().out
         async with config.provide_session() as driver:
+            assert await _async_oracle_table_exists(driver, schema, table_name)
             assert await driver.select_value(_CURRENT_SCHEMA_SQL) == oracle_23ai_service.user.upper()
     finally:
         await _async_drop_oracle_schema(oracle_23ai_service, schema)
