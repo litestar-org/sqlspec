@@ -30,6 +30,7 @@ __all__ = (
     "parse_order_expression",
     "parse_table_expression",
     "resolve_value_expression",
+    "sql_named_parameters",
     "to_expression",
 )
 
@@ -525,6 +526,25 @@ def _truthy_metadata_flag(value: Any) -> bool:
     return bool(value)
 
 
+def sql_named_parameters(sql_obj: Any) -> "Mapping[str, Any]":
+    """Return a SQL object's named parameters.
+
+    Args:
+        sql_obj: SQL object with parameters attribute
+
+    Returns:
+        The named parameters, empty when the object has none.
+
+    Raises:
+        SQLBuilderError: If the SQL object carries positional parameters.
+    """
+    parameters = sql_obj.parameters
+    if sql_obj.positional_parameters or (parameters and not isinstance(parameters, Mapping)):
+        msg = "Positional parameters on a SQL object cannot merge into a builder; use named parameters."
+        raise SQLBuilderError(msg)
+    return parameters or {}
+
+
 def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
     """Merge parameters from SQL object into builder and return renamed placeholder mapping.
 
@@ -542,10 +562,7 @@ def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
     if not (builder and has_parameter_builder(builder)):
         return param_mapping
 
-    parameters = sql_obj.parameters
-    if sql_obj.positional_parameters or (parameters and not isinstance(parameters, Mapping)):
-        msg = "Positional parameters on a SQL object cannot merge into a builder; use named parameters."
-        raise SQLBuilderError(msg)
+    parameters = sql_named_parameters(sql_obj)
     if not parameters:
         return param_mapping
 

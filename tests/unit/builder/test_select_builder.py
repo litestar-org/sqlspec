@@ -480,7 +480,7 @@ def test_where_not_any_renders_expression_elements() -> None:
 )
 def test_any_predicates_reject_strings(apply: Any, value: str) -> None:
     """A string is never parsed as a subquery, and a single value is not a collection to compare against."""
-    with pytest.raises(SQLBuilderError, match="does not accept a string"):
+    with pytest.raises(SQLBuilderError):
         apply(sql.select("z").from_("t"), value)
 
 
@@ -507,3 +507,103 @@ def test_any_predicates_reject_strings(apply: Any, value: str) -> None:
 def test_any_predicates_accept_query_builders(build: Any, predicate: str) -> None:
     """Subqueries for ANY are given as query builders."""
     assert _normalized_sql(build(sql.select("z").from_("t")).build()) == QUALIFIED_PREFIX + predicate
+
+
+class _StrRendersSql:
+    """Object whose string form is SQL text, as application data could be."""
+
+    def __str__(self) -> str:
+        return "SELECT secret FROM users"
+
+
+UNTRUSTED_SUBQUERY_VALUES = [
+    pytest.param(_StrRendersSql(), id="str-method"),
+    pytest.param("SELECT secret FROM users", id="string"),
+    pytest.param(5, id="number"),
+    pytest.param({"k": 1}, id="mapping"),
+    pytest.param(b"SELECT 1", id="bytes"),
+    pytest.param(None, id="none"),
+]
+
+
+@pytest.mark.parametrize("value", UNTRUSTED_SUBQUERY_VALUES)
+@pytest.mark.parametrize(
+    "apply",
+    [
+        pytest.param(lambda v: sql.exists_(v), id="exists-fragment"),
+        pytest.param(lambda v: sql.any_(v), id="any-fragment"),
+        pytest.param(lambda v: sql.all_(v), id="all-fragment"),
+        pytest.param(lambda v: sql.in_(v), id="in-fragment"),
+        pytest.param(lambda v: sql.not_any_("a", v), id="not-any-factory"),
+        pytest.param(lambda v: sql.select("z").from_("t").where_any("a", v), id="where-any"),
+        pytest.param(lambda v: sql.select("z").from_("t").where_not_any("a", v), id="where-not-any"),
+        pytest.param(lambda v: sql.select("z").from_("t").where_exists(v), id="where-exists"),
+        pytest.param(lambda v: sql.select("z").from_("t").where_not_exists(v), id="where-not-exists"),
+    ],
+)
+def test_subquery_positions_reject_untrusted_values(apply: Any, value: Any) -> None:
+    """Only query objects become subqueries, so no value reaches SQL through its text."""
+    with pytest.raises(SQLBuilderError):
+        apply(value)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param(lambda: (1, 2), id="tuple"),
+        pytest.param(lambda: [1, 2], id="list"),
+        pytest.param(lambda: (value for value in (1, 2)), id="generator"),
+    ],
+)
+def test_any_predicates_bind_iterables(values: Any) -> None:
+    """Every kind of iterable binds its elements inside an array."""
+    statement = sql.select("z").from_("t").where_any("a", values()).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" = ANY( ARRAY(:a_any_1, :a_any_2) )'
+    assert statement.parameters == {"a_any_1": 1, "a_any_2": 2}
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param(lambda: (1, 2), id="tuple"),
+        pytest.param(lambda: {1}, id="set"),
+        pytest.param(lambda: (value for value in (1,)), id="generator"),
+    ],
+)
+def test_not_any_factory_binds_iterables(values: Any) -> None:
+    """The factory binds every kind of iterable as array elements."""
+    statement = sql.select("z").from_("t").where(sql.not_any_("a", values())).build()
+
+    assert "ARRAY(" in statement.sql
+    assert "SELECT secret" not in statement.sql
+    assert statement.parameters
+    assert all(isinstance(value, int) for value in statement.parameters.values())
+
+
+@pytest.mark.parametrize(
+    ("fragment", "expected"),
+    [
+        pytest.param(
+            lambda: sql.exists_(sql.raw("SELECT x FROM y WHERE k = :p", p=3)),
+            'EXISTS( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."k" = :p )',
+            id="sql-object",
+        ),
+        pytest.param(
+            lambda: sql.exists_(sql.select("x").from_("y").where_eq("p", 3).build()),
+            'EXISTS( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."p" = :p )',
+            id="built-query",
+        ),
+        pytest.param(
+            lambda: sql.exists_(sql.select("x").from_("y").where_eq("p", 3)),
+            'EXISTS( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."p" = :p )',
+            id="query-builder",
+        ),
+    ],
+)
+def test_subquery_fragments_accept_query_objects(fragment: Any, expected: str) -> None:
+    """Fragments accept query objects and carry their named parameters."""
+    statement = sql.select("z").from_("t").where(fragment()).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + expected
+    assert statement.parameters == ({"p": 3})

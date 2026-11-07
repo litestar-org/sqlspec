@@ -11,7 +11,8 @@ important operational fixes.
 
 **Breaking changes:**
 
-* `where_any()`, `where_not_any()`, their `or_where_*` forms, and `sql.not_any_()` no longer parse strings as subqueries, and raise `SQLBuilderError` for a string. Before: `.where_any("a", "SELECT x FROM y")`. After: `.where_any("a", sql.select("x").from_("y"))`.
+* `where_any()`, `where_not_any()`, their `or_where_*` forms, and `sql.not_any_()` no longer parse strings as subqueries, and raise `SQLBuilderError` for a string. Any other iterable, including a generator, binds its elements. Before: `.where_any("a", "SELECT x FROM y")`. After: `.where_any("a", sql.select("x").from_("y"))`.
+* `sql.exists_()`, `sql.any_()`, `sql.all_()`, `sql.in_()`, `where_exists()`, and `where_not_exists()` accept only query builders, `SQL` objects, and SQLGlot nodes, plus `BuiltQuery` for the `sql.*_()` fragments, and raise `SQLBuilderError` for strings and other objects, where they parsed the value's text as SQL. Before: `.where_exists("SELECT 1 FROM y")`. After: `.where_exists(sql.select("1").from_("y"))`.
 * `Merge` update and insert clauses always bind string values as parameters. Qualified columns, arithmetic over them, and `CURRENT_TIMESTAMP`, `CURRENT_DATE`, and `CURRENT_TIME` no longer render from strings, so existing calls keep building but store the literal text. Before: `.when_matched_then_update(name="src.name", updated_at="CURRENT_TIMESTAMP")`. After: `.when_matched_then_update(name=sql.raw("src.name"), updated_at=sql.raw("CURRENT_TIMESTAMP"))`.
 
 **Fixed:**

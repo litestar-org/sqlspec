@@ -7,6 +7,7 @@ parameter binding and validation.
 # pyright: reportPrivateUsage=false, reportPrivateImportUsage=false
 
 import re
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Self, Union, cast
 
 from mypy_extensions import trait
@@ -32,6 +33,7 @@ from sqlspec.builder._parsing_utils import (
     parse_order_expression,
     parse_table_expression,
     resolve_value_expression,
+    sql_named_parameters,
     to_expression,
 )
 from sqlspec.core import SQL, ParameterStyle, apply_direction, ordered
@@ -132,19 +134,25 @@ class SubqueryBuilder:
 
     def __call__(self, subquery: Any) -> exp.Expr:
         parameters: dict[str, Any] = {}
+        subquery_expr: exp.Expr
         if isinstance(subquery, exp.Expr):
             subquery_expr = subquery
-        elif has_parameter_builder(subquery):
-            subquery_builder = cast("QueryBuilder", subquery)
-            subquery_expr = subquery_builder._build_final_expression(copy=True)
-            parameters = subquery_builder.parameters
-        else:
-            dialect = subquery.dialect if isinstance(subquery, (QueryBuilder, BuiltQuery)) else None
-            parsed_expr: exp.Expression | None = exp.maybe_parse(str(subquery), dialect=dialect)
+        elif isinstance(subquery, QueryBuilder):
+            subquery_expr = subquery._build_final_expression(copy=True)
+            parameters = subquery.parameters
+        elif isinstance(subquery, SQL):
+            parameters = dict(sql_named_parameters(subquery))
+            subquery_expr = extract_sql_object_expression(subquery)
+        elif isinstance(subquery, BuiltQuery):
+            parsed_expr: exp.Expr | None = exp.maybe_parse(subquery.sql, dialect=subquery.dialect)
             if parsed_expr is None:
                 msg = f"Could not convert subquery to expression: {subquery}"
                 raise SQLBuilderError(msg)
             subquery_expr = parsed_expr
+            parameters = dict(subquery.parameters)
+        else:
+            msg = f"Unsupported subquery type: {type(subquery).__name__}"
+            raise SQLBuilderError(msg)
 
         fragment: exp.Expr
         if self._operation == "exists":
@@ -711,7 +719,7 @@ class WhereClauseMixin:
         if isinstance(values, str):
             msg = f"{error_context} does not accept a string; pass a list of values, or a query builder for a subquery"
             raise SQLBuilderError(msg)
-        if not is_iterable_parameters(values) or isinstance(values, (bytes, bytearray)):
+        if not isinstance(values, Iterable) or isinstance(values, (bytes, bytearray, Mapping)):
             msg = f"Unsupported type for 'values' in {error_context}"
             raise SQLBuilderError(msg)
         placeholders: list[exp.Expr] = []
@@ -771,13 +779,6 @@ class WhereClauseMixin:
 
         if isinstance(subquery, exp.Expr):
             return subquery.copy()
-
-        if isinstance(subquery, str):
-            parsed_expression_from_str: exp.Expr | None = exp.maybe_parse(subquery, dialect=builder.dialect)
-            if parsed_expression_from_str is None:
-                msg = f"Could not parse subquery SQL: {subquery}"
-                raise SQLBuilderError(msg)
-            return parsed_expression_from_str
 
         msg = f"Unsupported subquery type: {type(subquery).__name__}"
         raise SQLBuilderError(msg)
