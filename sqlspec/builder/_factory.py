@@ -5,14 +5,16 @@ Provides statement builders (select, insert, update, etc.) and column expression
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, Union, cast, final
+import re
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, Union, cast, final
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
-from sqlspec.builder._base import QueryBuilder
+from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._column import _convert_value as convert_column_value
 from sqlspec.builder._ddl import (
@@ -68,7 +70,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
     from sqlspec.builder._expression_wrappers import ExpressionWrapper
     from sqlspec.protocols import SQLBuilderProtocol
@@ -85,6 +87,7 @@ ColumnLike: TypeAlias = Union[
 
 MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
+_FIRST_WORD_RE: Final["re.Pattern[str]"] = re.compile(r"\w+")
 SQL_STARTERS = {
     "SELECT",
     "INSERT",
@@ -364,7 +367,7 @@ class SQLFactory:
     def select(
         self,
         *columns_or_sql: Union[
-            str, exp.Expr, Column, FunctionColumn, ColumnExpression, "ExpressionWrapper", "SQL", "Case"
+            str, exp.Expr, Column, FunctionColumn, ColumnExpression, "ExpressionWrapper", "SQL", "Case", "QueryBuilder"
         ],
         dialect: DialectType = None,
     ) -> "Select":
@@ -1120,7 +1123,7 @@ class SQLFactory:
         Args:
             column: Column name (``"status"`` or ``"t.status"``), ``Column``, or expression.
             values: Iterable of values bound as parameters, or a subquery given as a
-                query builder, sqlglot expression, or SQL string. Parameters bound by a
+                query builder or sqlglot expression. Parameters bound by a
                 subquery builder are merged into the outer query. Subqueries stay
                 parenthesized so the optimizer keeps ``<> ALL (subquery)`` instead of
                 rewriting it into an anti-join, which would change the result when the
@@ -1128,15 +1131,21 @@ class SQLFactory:
 
         Returns:
             Condition usable with ``.where()``, ``.having()``, ``&``, ``|``, and ``~``.
+
+        Raises:
+            SQLBuilderError: If ``values`` is neither an iterable of values nor a query object.
         """
         left = column.sqlglot_expression if isinstance(column, Column) else parse_column_expression(column)
         any_expression: exp.Expr
-        if isinstance(values, (list, tuple, set, frozenset)):
+        if isinstance(values, (exp.Expr, QueryBuilder, SQL, BuiltQuery)):
+            any_expression = SubqueryBuilder("any")(values)
+            any_expression.set("this", exp.paren(any_expression.this, copy=False))
+        elif isinstance(values, Iterable) and not isinstance(values, (str, bytes, bytearray, Mapping)):
             converted = [convert_column_value(value) for value in values]
             any_expression = exp.Any(this=exp.Paren(this=exp.Array(expressions=converted)))
         else:
-            any_expression = SubqueryBuilder("any")(values)
-            any_expression.set("this", exp.paren(any_expression.this, copy=False))
+            msg = "sql.not_any_() takes an iterable of values, or a query builder for a subquery"
+            raise SQLBuilderError(msg)
         return ColumnExpression(exp.Not(this=exp.EQ(this=left, expression=any_expression)))
 
     @staticmethod
@@ -1540,7 +1549,8 @@ class SQLFactory:
         if expected_type:
             return candidate_upper.startswith(expected_type.upper())
 
-        if any(candidate_upper.startswith(starter) for starter in SQL_STARTERS):
+        first_word = _FIRST_WORD_RE.match(candidate_upper)
+        if first_word is not None and first_word.group() in SQL_STARTERS:
             return " " in candidate
 
         return False

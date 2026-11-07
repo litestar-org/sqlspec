@@ -10,13 +10,17 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._parsing_utils import extract_sql_object_expression, parse_table_expression
+from sqlspec.builder._parsing_utils import (
+    extract_sql_object_expression,
+    parse_table_expression,
+    resolve_value_expression,
+)
 from sqlspec.builder._temporal import register_version_generators
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_and_sql, has_parameter_builder
+from sqlspec.utils.type_guards import has_parameter_builder
 
 if TYPE_CHECKING:
-    from sqlspec.core import SQL
     from sqlspec.protocols import HasParameterBuilderProtocol, SQLBuilderProtocol
 
 __all__ = ("JoinBuilder", "JoinClauseMixin", "create_join_builder")
@@ -289,15 +293,19 @@ def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr
         return None
     if isinstance(on, str):
         return exp.condition(on)
-    if has_expression_and_sql(on) or has_expression_and_parameters(on):
+    if isinstance(on, SQL):
 
         def parse_join_condition(sql_text: str) -> exp.Expr:
             return exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.condition(sql_text)
 
         return extract_sql_object_expression(on, builder=builder, parse_sql=parse_join_condition)
     if isinstance(on, exp.Expr):
-        return on
-    return exp.condition(str(on))
+        return on.copy()
+    resolved = resolve_value_expression(on, builder, "join_on")
+    if resolved is None:
+        msg = f"Unsupported join condition type: {type(on).__name__}"
+        raise SQLBuilderError(msg)
+    return resolved
 
 
 def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProtocol") -> exp.Expr:

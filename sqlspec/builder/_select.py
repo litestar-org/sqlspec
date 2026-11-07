@@ -7,12 +7,14 @@ parameter binding and validation.
 # pyright: reportPrivateUsage=false, reportPrivateImportUsage=false
 
 import re
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Self, Union, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder, register_subquery_fragment
+from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.builder._join import JoinClauseMixin, _attach_as_of_version
@@ -30,26 +32,20 @@ from sqlspec.builder._parsing_utils import (
     parse_condition_expression,
     parse_order_expression,
     parse_table_expression,
+    resolve_value_expression,
+    sql_named_parameters,
     to_expression,
 )
 from sqlspec.core import SQL, ParameterStyle, apply_direction, ordered
 from sqlspec.core.query_modifiers import expr_eq, expr_gt, expr_gte, expr_lt, expr_lte, expr_neq, expr_not_like
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import (
-    has_expression_and_parameters,
-    has_expression_and_sql,
-    has_parameter_builder,
-    has_sqlglot_expression,
-    is_expression,
-    is_iterable_parameters,
-)
+from sqlspec.utils.type_guards import has_parameter_builder, is_expression, is_iterable_parameters
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
     from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = (
@@ -138,19 +134,25 @@ class SubqueryBuilder:
 
     def __call__(self, subquery: Any) -> exp.Expr:
         parameters: dict[str, Any] = {}
+        subquery_expr: exp.Expr
         if isinstance(subquery, exp.Expr):
             subquery_expr = subquery
-        elif has_parameter_builder(subquery):
-            subquery_builder = cast("QueryBuilder", subquery)
-            subquery_expr = subquery_builder._build_final_expression(copy=True)
-            parameters = subquery_builder.parameters
-        else:
-            dialect = subquery.dialect if isinstance(subquery, (QueryBuilder, BuiltQuery)) else None
-            parsed_expr: exp.Expression | None = exp.maybe_parse(str(subquery), dialect=dialect)
+        elif isinstance(subquery, QueryBuilder):
+            subquery_expr = subquery._build_final_expression(copy=True)
+            parameters = subquery.parameters
+        elif isinstance(subquery, SQL):
+            parameters = dict(sql_named_parameters(subquery))
+            subquery_expr = extract_sql_object_expression(subquery)
+        elif isinstance(subquery, BuiltQuery):
+            parsed_expr: exp.Expr | None = exp.maybe_parse(subquery.sql, dialect=subquery.dialect)
             if parsed_expr is None:
                 msg = f"Could not convert subquery to expression: {subquery}"
                 raise SQLBuilderError(msg)
             subquery_expr = parsed_expr
+            parameters = dict(subquery.parameters)
+        else:
+            msg = f"Unsupported subquery type: {type(subquery).__name__}"
+            raise SQLBuilderError(msg)
 
         fragment: exp.Expr
         if self._operation == "exists":
@@ -223,7 +225,9 @@ class SelectClauseMixin:
 
     def select(
         self,
-        *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case],
+        *columns: Union[
+            str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case, "QueryBuilder"
+        ],
     ) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="Cannot add columns to non-SELECT expression.")
@@ -235,7 +239,9 @@ class SelectClauseMixin:
 
     def select_only(
         self,
-        *columns: Union[str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case],
+        *columns: Union[
+            str, exp.Expr, "Column", "FunctionColumn", "ColumnExpression", ExpressionWrapper, SQL, Case, "QueryBuilder"
+        ],
     ) -> Self:
         """Replace currently selected columns with new ones."""
         builder = cast("SQLBuilderProtocol", self)
@@ -572,15 +578,17 @@ class WhereClauseMixin:
         return self._create_parameterized_condition(column, value, expr_neq if negate else expr_eq)
 
     def _create_parameterized_condition(
-        self, column: str | exp.Column, value: Any, condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]"
+        self, column: str | exp.Column, value: Any, condition_factory: "Callable[[exp.Expr, exp.Expr], exp.Expr]"
     ) -> exp.Expr:
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
+        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        resolved = resolve_value_expression(value, self, column_name)
+        if resolved is not None:
+            return condition_factory(col_expr, resolved)
         param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        placeholder = exp.Placeholder(this=param_name)
-        return condition_factory(col_expr, placeholder)
+        return condition_factory(col_expr, exp.Placeholder(this=param_name))
 
     def _current_where_clause(self) -> exp.Where | None:
         builder = cast("SQLBuilderProtocol", self)
@@ -610,17 +618,24 @@ class WhereClauseMixin:
 
     def _handle_in_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
         builder = cast("SQLBuilderProtocol", self)
-        if has_parameter_builder(value) or isinstance(value, exp.Expr):
+        if isinstance(value, (QueryBuilder, exp.Expr)):
             subquery_expr = self._normalize_subquery_expression(value, builder)
             return exp.In(this=column_exp, expressions=[subquery_expr])
+        resolved = resolve_value_expression(value, self, column_name)
+        if resolved is not None:
+            return exp.In(this=column_exp, expressions=[resolved])
         if is_iterable_parameters(value):
-            placeholders = []
+            elements: list[exp.Expr] = []
             for index, element in enumerate(value):
                 name_seed = column_name if len(value) == 1 else f"{column_name}_{index + 1}"
+                resolved_element = resolve_value_expression(element, self, name_seed)
+                if resolved_element is not None:
+                    elements.append(resolved_element)
+                    continue
                 param_name = builder._next_parameter_name(name_seed)
                 _, param_name = builder.add_parameter(element, name=param_name)
-                placeholders.append(exp.Placeholder(this=param_name))
-            return exp.In(this=column_exp, expressions=placeholders)
+                elements.append(exp.Placeholder(this=param_name))
+            return exp.In(this=column_exp, expressions=elements)
 
         param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
@@ -639,33 +654,36 @@ class WhereClauseMixin:
 
     def _handle_between_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
         if is_iterable_parameters(value) and len(value) == BETWEEN_BOUND_COUNT:
-            builder = cast("SQLBuilderProtocol", self)
             low, high = value
-            low_param = builder._next_parameter_name(f"{column_name}_low")
-            high_param = builder._next_parameter_name(f"{column_name}_high")
-            _, low_param = builder.add_parameter(low, name=low_param)
-            _, high_param = builder.add_parameter(high, name=high_param)
             return exp.Between(
-                this=column_exp, low=exp.Placeholder(this=low_param), high=exp.Placeholder(this=high_param)
+                this=column_exp,
+                low=self._between_bound(low, f"{column_name}_low"),
+                high=self._between_bound(high, f"{column_name}_high"),
             )
         msg = f"BETWEEN operator requires a tuple of two values, got {type(value).__name__}"
         raise SQLBuilderError(msg)
 
     def _handle_not_between_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
         if is_iterable_parameters(value) and len(value) == BETWEEN_BOUND_COUNT:
-            builder = cast("SQLBuilderProtocol", self)
             low, high = value
-            low_param = builder._next_parameter_name(f"{column_name}_low")
-            high_param = builder._next_parameter_name(f"{column_name}_high")
-            _, low_param = builder.add_parameter(low, name=low_param)
-            _, high_param = builder.add_parameter(high, name=high_param)
             return exp.Not(
                 this=exp.Between(
-                    this=column_exp, low=exp.Placeholder(this=low_param), high=exp.Placeholder(this=high_param)
+                    this=column_exp,
+                    low=self._between_bound(low, f"{column_name}_low"),
+                    high=self._between_bound(high, f"{column_name}_high"),
                 )
             )
         msg = f"NOT BETWEEN operator requires a tuple of two values, got {type(value).__name__}"
         raise SQLBuilderError(msg)
+
+    def _between_bound(self, value: Any, name_seed: str) -> exp.Expr:
+        resolved = resolve_value_expression(value, self, name_seed)
+        if resolved is not None:
+            return resolved
+        builder = cast("SQLBuilderProtocol", self)
+        param_name = builder._next_parameter_name(name_seed)
+        _, param_name = builder.add_parameter(value, name=param_name)
+        return exp.Placeholder(this=param_name)
 
     def _any_comparison(self, column_expr: exp.Expr, values: Any, column_name: str, *, negate: bool) -> exp.Expr:
         """Build ``column = ANY(...)``, or ``NOT (column = ANY(...))`` when negated.
@@ -681,18 +699,11 @@ class WhereClauseMixin:
         builder = cast("SQLBuilderProtocol", self)
         error_context = "WHERE NOT ANY" if negate else "WHERE ANY"
         parameter_suffix = "not_any" if negate else "any"
-        if has_parameter_builder(values):
+        if isinstance(values, QueryBuilder):
             return exp.Any(this=self._normalize_subquery_expression(values, builder))
         if isinstance(values, exp.Expr):
             return exp.Any(this=values)
-        if has_sqlglot_expression(values):
-            raw_expr = values.sqlglot_expression
-            if isinstance(raw_expr, exp.Expr):
-                return exp.Any(this=raw_expr)
-            parsed_expr: exp.Expr | None = exp.maybe_parse(str(values), dialect=builder.dialect)
-            if parsed_expr is not None:
-                return exp.Any(this=parsed_expr)
-        if has_expression_and_sql(values):
+        if isinstance(values, SQL):
 
             def parse_any_sql(sql_text: str) -> exp.Expr:
                 parsed: exp.Expr | None = exp.maybe_parse(sql_text, dialect=builder.dialect)
@@ -702,18 +713,22 @@ class WhereClauseMixin:
                 return parsed
 
             return exp.Any(this=extract_sql_object_expression(values, builder=self, parse_sql=parse_any_sql))
+        resolved = resolve_value_expression(values, self, column_name)
+        if resolved is not None:
+            return exp.Any(this=resolved)
         if isinstance(values, str):
-            parsed_expr = exp.maybe_parse(values, dialect=builder.dialect)
-            if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
-                return exp.Any(this=exp.paren(parsed_expr))
-            msg = f"Unsupported type for 'values' in {error_context}"
+            msg = f"{error_context} does not accept a string; pass a list of values, or a query builder for a subquery"
             raise SQLBuilderError(msg)
-        if not is_iterable_parameters(values) or isinstance(values, (bytes, bytearray)):
+        if not isinstance(values, Iterable) or isinstance(values, (bytes, bytearray, Mapping)):
             msg = f"Unsupported type for 'values' in {error_context}"
             raise SQLBuilderError(msg)
         placeholders: list[exp.Expr] = []
         values_list = list(values)
         for index, element in enumerate(values_list):
+            resolved_element = resolve_value_expression(element, self, column_name)
+            if resolved_element is not None:
+                placeholders.append(resolved_element)
+                continue
             if len(values_list) == 1:
                 param_name = builder._next_parameter_name(column_name)
             else:
@@ -729,8 +744,8 @@ class WhereClauseMixin:
         return self._any_comparison(column_expr, values, column_name, negate=True)
 
     def _normalize_subquery_expression(self, subquery: Any, builder: "SQLBuilderProtocol") -> exp.Expr:
-        if has_parameter_builder(subquery):
-            subquery_builder = cast("QueryBuilder", subquery)
+        if isinstance(subquery, QueryBuilder):
+            subquery_builder = subquery
             parsed_subquery = subquery_builder._build_final_expression(copy=True)
             subquery_expr = exp.paren(parsed_subquery)
             parameters: Any = subquery_builder.parameters
@@ -751,7 +766,7 @@ class WhereClauseMixin:
                 builder.add_parameter(parameters)
             return subquery_expr
 
-        if has_expression_and_sql(subquery) or has_expression_and_parameters(subquery):
+        if isinstance(subquery, SQL):
 
             def parse_subquery(sql_text: str) -> exp.Expr:
                 parsed_from_sql: exp.Expr | None = exp.maybe_parse(sql_text, dialect=builder.dialect)
@@ -763,17 +778,10 @@ class WhereClauseMixin:
             return extract_sql_object_expression(subquery, builder=self, parse_sql=parse_subquery)
 
         if isinstance(subquery, exp.Expr):
-            return subquery
+            return subquery.copy()
 
-        if isinstance(subquery, str):
-            parsed_expression_from_str: exp.Expr | None = exp.maybe_parse(subquery, dialect=builder.dialect)
-            if parsed_expression_from_str is None:
-                msg = f"Could not parse subquery SQL: {subquery}"
-                raise SQLBuilderError(msg)
-            return parsed_expression_from_str
-
-        converted_expr: exp.Expr = exp.convert(subquery)
-        return converted_expr
+        msg = f"Unsupported subquery type: {type(subquery).__name__}"
+        raise SQLBuilderError(msg)
 
     def _create_or_expression(self, conditions: "list[exp.Expr]") -> exp.Expr:
         if not conditions:
@@ -873,20 +881,18 @@ class WhereClauseMixin:
             return query_builder._merge_subquery_fragments(_normalize_condition_expression(condition))
         if isinstance(condition, tuple):
             return self._process_tuple_condition(condition)
-        if has_parameter_builder(condition):
-            column_expr_obj = cast("ColumnExpression", condition)
-            expression_attr = cast("exp.Expr | None", column_expr_obj._expression)
+        if isinstance(condition, QueryBuilder):
+            expression_attr = condition._expression
             if expression_attr is None:
                 msg = "Column expression is missing underlying sqlglot expression."
                 raise SQLBuilderError(msg)
             return _normalize_condition_expression(expression_attr)
-        if has_sqlglot_expression(condition):
-            raw_expr = condition.sqlglot_expression
-            if isinstance(raw_expr, exp.Expr):
-                merged_expr = query_builder._merge_subquery_fragments(_normalize_condition_expression(raw_expr))
-                return builder._parameterize_expression(merged_expr)
-            return parse_condition_expression(str(condition))
-        if has_expression_and_sql(condition) or has_expression_and_parameters(condition):
+        if isinstance(condition, (Column, FunctionColumn, ColumnExpression)):
+            merged_expr = query_builder._merge_subquery_fragments(
+                _normalize_condition_expression(condition.sqlglot_expression)
+            )
+            return builder._parameterize_expression(merged_expr)
+        if isinstance(condition, SQL):
             return _normalize_condition_expression(
                 extract_sql_object_expression(condition, builder=self, parse_sql=parse_condition_expression)
             )
@@ -1392,8 +1398,8 @@ class _TableHintReplacer:
         return f"/*+ {self._hint} */ {self._table}{alias_part}"
 
 
-def _expr_like_exp(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return exp.Like(this=col, expression=placeholder)
+def _expr_like_exp(col: "exp.Expr", operand: "exp.Expr") -> "exp.Expr":
+    return exp.Like(this=col, expression=operand)
 
 
 _EQUALITY_OPERATORS: Final[frozenset[str]] = frozenset({"=", "==", "!=", "<>"})
@@ -1411,8 +1417,8 @@ _SIMPLE_OPERATOR_MAP: dict[str, Any] = {
 }
 
 
-def _expr_ilike(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return cast("exp.Expr", col.ilike(placeholder))
+def _expr_ilike(col: "exp.Expr", operand: "exp.Expr") -> "exp.Expr":
+    return cast("exp.Expr", col.ilike(operand))
 
 
 def _ensure_select_expression(

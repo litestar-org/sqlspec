@@ -7,22 +7,19 @@ passed as strings to builder methods.
 import contextlib
 import importlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+import sqlglot
 from sqlglot import exp, maybe_parse
 from sqlglot.dialects.dialect import Dialect
+from sqlglot.errors import ParseError, TokenError
 
-from sqlspec.builder._column import Column
+from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
-from sqlspec.core import ParameterStyle, ParameterValidator, default_nulls, ordered
+from sqlspec.core import SQL, ParameterStyle, ParameterValidator, default_nulls, ordered
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import (
-    has_expression_and_parameters,
-    has_expression_and_sql,
-    has_expression_attr,
-    has_parameter_builder,
-)
+from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -34,6 +31,8 @@ __all__ = (
     "parse_condition_expression",
     "parse_order_expression",
     "parse_table_expression",
+    "resolve_value_expression",
+    "sql_named_parameters",
     "to_expression",
 )
 
@@ -125,15 +124,18 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
         - Complex expressions: "CASE WHEN ... END" -> Case(...)
         - Custom Column objects from our builder
         - SQL objects with raw SQL expressions
+        - Query builders and query nodes, as scalar subqueries when a builder is given
 
     Args:
-        column_input: String, SQLGlot expression, SQL object, or Column object
+        column_input: String, SQLGlot expression, SQL object, Column object, or query builder
         builder: Optional builder instance for parameter merging
 
     Returns:
         exp.Expr: Parsed SQLGlot expression
     """
     if isinstance(column_input, exp.Expr):
+        if builder is not None and isinstance(column_input, (exp.Select, exp.SetOperation)):
+            return _scalar_subquery(column_input.copy())
         return column_input
 
     if isinstance(column_input, str):
@@ -141,8 +143,16 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
             return _simple_column_expression(column_input)
         return exp.maybe_parse(column_input) or exp.column(column_input)
 
-    if has_expression_and_sql(column_input):
-        return extract_sql_object_expression(column_input, builder)
+    from sqlspec.builder._base import QueryBuilder
+
+    if builder is not None and isinstance(column_input, QueryBuilder):
+        return _scalar_subquery(builder._embed_subquery(column_input, alias_hint="subquery"))
+
+    if isinstance(column_input, SQL):
+        extracted = extract_sql_object_expression(column_input, builder)
+        if builder is not None and isinstance(extracted, (exp.Select, exp.SetOperation)):
+            return _scalar_subquery(extracted)
+        return extracted
 
     if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expr):  # pyright: ignore[reportPrivateUsage]
         return column_input._expression  # pyright: ignore[reportPrivateUsage]
@@ -283,20 +293,13 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
 def extract_sql_object_expression(
     value: Any, builder: Any | None = None, parse_sql: Callable[[str], exp.Expr] | None = None
 ) -> exp.Expr:
-    """Extract SQLGlot expression from SQL object value with parameter merging.
+    """Extract the SQLGlot expression from a SQL object and merge its parameters.
 
-    Handles the common pattern of:
-        1. Check if value has expression and SQL attributes
-        2. Try to get expression first, merge parameters if available
-        3. Fall back to parsing raw SQL text if expression is None
-        4. Merge parameters in both cases
-        5. Handle callable SQL text
-
-    This consolidates duplicated logic across builder files that process
-    SQL objects (like those from sql.raw() calls).
+    Only ``SQL`` instances are accepted, so an object that merely exposes the same attributes
+    never renders as SQL.
 
     Args:
-        value: The SQL object value to process
+        value: The SQL object to process
         builder: Optional builder instance for parameter merging (must have add_parameter method)
         parse_sql: Optional parser for raw SQL fallback text.
 
@@ -304,13 +307,11 @@ def extract_sql_object_expression(
         SQLGlot Expression extracted from the SQL object
 
     Raises:
-        ValueError: If the value doesn't appear to be a SQL object
+        TypeError: If the value is not a SQL object
     """
-    has_sql = has_expression_and_sql(value)
-    has_parameters = has_expression_and_parameters(value)
-    if not has_sql and not has_parameters:
-        msg = f"Value does not expose an expression with SQL or parameters: {type(value)}"
-        raise ValueError(msg)
+    if not isinstance(value, SQL):
+        msg = f"Value is not a SQL object: {type(value)}"
+        raise TypeError(msg)
 
     if value.expression is not None and isinstance(value.expression, exp.Expr):
         expr = value.expression.copy()
@@ -319,19 +320,67 @@ def extract_sql_object_expression(
             expr = builder._update_placeholders(expr, param_mapping)
         return expr
 
-    if not has_sql:
-        msg = f"Value has no SQL text fallback: {type(value)}"
-        raise ValueError(msg)
-
     param_mapping = _merge_sql_parameters(value, builder)
-    sql_text = getattr(value, "raw_sql", None)
-    if sql_text is None:
-        sql_text = value.sql if not callable(value.sql) else str(value)
-
+    sql_text = value.raw_sql
     expr = parse_sql(sql_text) if parse_sql is not None else (exp.maybe_parse(sql_text) or exp.convert(str(sql_text)))
     if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
         expr = builder._update_placeholders(expr, param_mapping)
     return expr
+
+
+def resolve_value_expression(value: Any, builder: Any, alias_hint: str) -> exp.Expr | None:
+    """Resolve a builder value to the expression it renders as.
+
+    Only SQLGlot nodes, SQLSpec expression wrappers, ``SQL`` objects, and query builders render as SQL.
+    Every other value binds as a parameter, whatever attributes it exposes, so application data cannot
+    become SQL by having fields named like a SQL carrier's.
+
+    Args:
+        value: Value passed to a builder method.
+        builder: Query builder receiving merged parameters.
+        alias_hint: Name seed for parameters merged from a subquery builder.
+
+    Returns:
+        An expression independent of the caller's objects, or None when the value binds as a parameter.
+    """
+    if value is None or isinstance(value, (str, int, float, bytes, bytearray)):
+        return None
+    from sqlspec.builder._base import QueryBuilder
+
+    expression: exp.Expr
+    if isinstance(value, exp.Expr):
+        expression = value.copy()
+    elif isinstance(value, ExpressionWrapper):
+        expression = value.expression.copy()
+    elif isinstance(value, (Column, FunctionColumn, ColumnExpression)):
+        expression = value.sqlglot_expression.copy()
+    elif isinstance(value, QueryBuilder):
+        return _scalar_subquery(builder._embed_subquery(value, alias_hint=alias_hint))
+    elif isinstance(value, SQL):
+        expression = extract_sql_object_expression(value, builder=builder)
+    else:
+        return None
+    merged: exp.Expr = builder._merge_subquery_fragments(expression)
+    if isinstance(merged, (exp.Select, exp.SetOperation)):
+        return _scalar_subquery(merged)
+    return merged
+
+
+def _scalar_subquery(query: exp.Expr) -> exp.Expr:
+    """Wrap a query as a scalar operand.
+
+    Set operations use ``exp.Subquery`` because the optimizer unwraps their parentheses.
+    Other queries use ``exp.Paren`` because the optimizer unnests ``exp.Subquery`` into joins.
+
+    Args:
+        query: Query expression to wrap.
+
+    Returns:
+        The wrapped query.
+    """
+    if isinstance(query, exp.SetOperation):
+        return exp.Subquery(this=query)
+    return exp.paren(query)
 
 
 def extract_expression(value: Any) -> exp.Expr:
@@ -397,6 +446,56 @@ def _mark_explicit_table_quotes(table: exp.Table, source: str) -> exp.Table:
             break
         remaining = remaining[1:].lstrip()
     return table
+
+
+def _parse_dml_target(table: str, alias: str | None = None, dialect: "DialectType | None" = None) -> exp.Table:
+    """Parse the table string naming an INSERT, UPDATE, DELETE, or MERGE target.
+
+    ``t AS u`` and ``t u`` keep their alias. Any other string stays one table reference, so its
+    text can only ever render as identifiers.
+
+    Args:
+        table: Target table text.
+        alias: Explicit alias, which takes the place of alias parsing.
+        dialect: Dialect whose tokenizer reads an aliased string.
+
+    Returns:
+        The target table expression.
+    """
+    aliased = None if alias is not None else _parse_aliased_table(table, dialect)
+    if aliased is not None:
+        return aliased
+    return _mark_explicit_table_quotes(exp.to_table(table, alias=alias), table)
+
+
+def _parse_aliased_table(table: str, dialect: "DialectType | None") -> exp.Table | None:
+    """Parse ``<table> [AS] <alias>``, returning None for every other shape."""
+    stripped = table.strip()
+    if not any(character.isspace() for character in stripped):
+        return None
+    try:
+        statements = sqlglot.parse(f"SELECT * FROM {stripped}", dialect=_normalize_dialect(dialect))
+    except (ParseError, TokenError):
+        return None
+    select = statements[0] if len(statements) == 1 else None
+    if not isinstance(select, exp.Select):
+        return None
+    if any(value for key, value in select.args.items() if key not in {"expressions", "from_"}):
+        return None
+    from_clause = select.args.get("from_")
+    parsed = from_clause.this if from_clause is not None else None
+    if not isinstance(parsed, exp.Table) or not isinstance(parsed.this, exp.Identifier):
+        return None
+    if any(value for key, value in parsed.args.items() if key not in {"this", "db", "catalog", "alias"}):
+        return None
+    if not all(
+        isinstance(part, exp.Identifier) for part in (parsed.args.get("db"), parsed.args.get("catalog")) if part
+    ):
+        return None
+    alias_node = parsed.args.get("alias")
+    if not isinstance(alias_node, exp.TableAlias) or alias_node.args.get("columns"):
+        return None
+    return _mark_explicit_table_quotes(parsed, stripped)
 
 
 def _normalize_partition_by(partition_by: str | list[str] | exp.Expr | None) -> list[exp.Expr] | None:
@@ -479,6 +578,25 @@ def _truthy_metadata_flag(value: Any) -> bool:
     return bool(value)
 
 
+def sql_named_parameters(sql_obj: Any) -> "Mapping[str, Any]":
+    """Return a SQL object's named parameters.
+
+    Args:
+        sql_obj: SQL object with parameters attribute
+
+    Returns:
+        The named parameters, empty when the object has none.
+
+    Raises:
+        SQLBuilderError: If the SQL object carries positional parameters.
+    """
+    parameters = sql_obj.parameters
+    if sql_obj.positional_parameters or (parameters and not isinstance(parameters, Mapping)):
+        msg = "Positional parameters on a SQL object cannot merge into a builder; use named parameters."
+        raise SQLBuilderError(msg)
+    return parameters or {}
+
+
 def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
     """Merge parameters from SQL object into builder and return renamed placeholder mapping.
 
@@ -488,15 +606,22 @@ def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
 
     Returns:
         Mapping of original parameter names to renamed parameter names.
+
+    Raises:
+        SQLBuilderError: If the SQL object carries positional parameters.
     """
     param_mapping: dict[str, str] = {}
-    if not (builder and has_expression_and_parameters(sql_obj) and has_parameter_builder(builder)):
+    if not (builder and has_parameter_builder(builder)):
+        return param_mapping
+
+    parameters = sql_named_parameters(sql_obj)
+    if not parameters:
         return param_mapping
 
     existing_params = getattr(builder, "parameters", None)
     if existing_params is None:
         existing_params = getattr(builder, "_parameters", {})
-    for param_name, param_value in sql_obj.parameters.items():
+    for param_name, param_value in parameters.items():
         target_name = param_name
         if param_name in existing_params:
             if hasattr(builder, "generate_unique_parameter_name"):

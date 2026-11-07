@@ -59,6 +59,8 @@ copy_stmt = sql.copy(
 # SQL: COPY events FROM '/tmp/events.csv' WITH (FORMAT 'csv', HEADER TRUE)
 ```
 
+Each `.returning()` string is one SQL projection, such as `"id"`, `"*"`, `"t.id"`, or `"total + 1 AS next_total"`, parsed with the builder's dialect. Treat these strings as trusted SQL text, as with `.select()`. Spaces and hyphens follow SQL rules, so `"first name"` is `first AS name` and `"first-name"` is `first - name`. A single word stays one column, including one starting with a digit such as `"2fa"`, and digits alone such as `"1"` are a number. Pass `exp.column("first-name")` to name a column with those characters. A string holding several projections or statements raises `SQLBuilderError`, so pass one projection per argument.
+
 ## Schema Model Binding
 
 Bind `msgspec.Struct`, `pydantic.BaseModel`, `dataclass`, `attrs`, or `dict` payloads directly via `Insert.values_from(data)`, `Insert.values_from_many(items)`, and `Update.set_from(data)`. Model binding uses `schema_dump(..., wire_format=False)` so SQL columns always match Python attribute names. `exclude_unset=True` (the default) drops only fields the model reports as unset, such as msgspec `UNSET` values or fields missing from Pydantic's `model_fields_set`; msgspec defaults are still written:
@@ -116,8 +118,8 @@ merge_q = (
     .merge("products", dialect="postgres")
     .using([{"id": 1, "name": "Ada"}], alias="src")
     .on("products.id = src.id")
-    .when_matched_then_update(name="src.name")
-    .when_not_matched_then_insert(id="src.id", name="src.name")
+    .when_matched_then_update(name=sql.raw("src.name"))
+    .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     .when_not_matched_by_source_then_delete()
 )
 # SQL: MERGE INTO products USING (SELECT id, name FROM
@@ -126,6 +128,8 @@ merge_q = (
 # SQL: ON (products.id = src.id) WHEN MATCHED THEN UPDATE ...
 # Parameters: {'json_data': [{'id': 1, 'name': 'Ada'}]}
 ```
+
+`Merge` clauses bind every string as a parameter, so `name="src.name"` stores the text `src.name`. Reference a column or SQL keyword with an explicit expression, such as `sql.raw("src.name")`, `sql.column("name", table="src")`, or `sql.raw("CURRENT_TIMESTAMP")`.
 
 ## DDL Builders and Schema Inference
 

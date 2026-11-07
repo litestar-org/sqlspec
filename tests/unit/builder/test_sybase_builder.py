@@ -76,7 +76,7 @@ def test_sybase_merge_raises_dialect_not_supported() -> None:
             .into("users", alias="t")
             .using("staging_users", alias="s")
             .on("t.id = s.id")
-            .when_matched_then_update(name="s.name")
+            .when_matched_then_update(name=sql.raw("s.name"))
             .build()
         )
 
@@ -86,8 +86,8 @@ def test_sybase_merge_raises_dialect_not_supported() -> None:
         .into("users", alias="t")
         .using("staging_users", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update(name="s.name")
-        .when_not_matched_then_insert(id="s.id", name="s.name")
+        .when_matched_then_update(name=sql.raw("s.name"))
+        .when_not_matched_then_insert(id=sql.raw("s.id"), name=sql.raw("s.name"))
     )
     compiled = merge_builder.build()
     assert "MERGE INTO" in compiled.sql

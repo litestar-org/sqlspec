@@ -590,3 +590,14 @@ def test_where_between_and_or_where_between_use_identical_parameter_names() -> N
     between_fragment = normalized_where.split("WHERE ", 1)[1]
 
     assert between_fragment in normalized_or
+
+
+def test_or_where_eq_renders_expression_value() -> None:
+    """OR helpers render wrappers as SQL and keep plain values bound."""
+    statement = sql.select("z").from_("t").where_eq("q", 1).or_where_eq("a", sql.column("b")).build()
+
+    assert (
+        " ".join(statement.sql.split())
+        == 'SELECT "t"."z" AS "z" FROM "t" AS "t" WHERE "t"."a" = "t"."b" OR "t"."q" = :q'
+    )
+    assert statement.parameters == {"q": 1}

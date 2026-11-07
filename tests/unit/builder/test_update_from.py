@@ -1,6 +1,7 @@
 """Unit tests for UPDATE ... FROM clause support and dialect validation."""
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from sqlglot import exp
@@ -32,8 +33,10 @@ def test_update_from_select_builder_matrix() -> None:
     assert stmt_duckdb.parameters["a"] == 1
 
     stmt_tsql = query.build(dialect="tsql")
-    assert "FROM (" in stmt_tsql.sql and "TOP 1" in stmt_tsql.sql
-    assert "OUTPUT" in stmt_tsql.sql
+    assert stmt_tsql.sql == (
+        "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[id]\nFROM (\n  SELECT\n  TOP 1\n"
+        "    [t].[id] AS [id]\n  FROM [t] AS [t]\n) AS [s]\nWHERE\n  [s].[id] = [t].[id]"
+    )
     assert stmt_tsql.parameters["a"] == 1
 
 
@@ -161,3 +164,75 @@ def test_update_from_subquery_provider_replaces_alias() -> None:
 
     assert 'AS "candidate"' in query.build(dialect="postgres").sql
     assert expression.alias == "original"
+
+
+EXPRESSION_VALUES = [
+    pytest.param(sql.column("b"), '"b"', "`b`", id="column"),
+    pytest.param(sql.column("b").cast("INT"), 'CAST("b" AS INT)', "CAST(`b` AS SIGNED)", id="function_column"),
+    pytest.param(sql.column("b") > 1, '"b" > 1', "`b` > 1", id="column_expression"),
+    pytest.param(
+        sql.case().when("x > 1", 1).else_(0).end(),
+        'CASE WHEN "x" > 1 THEN 1 ELSE 0 END',
+        "CASE WHEN `x` > 1 THEN 1 ELSE 0 END",
+        id="case",
+    ),
+    pytest.param(sql.count("b"), 'COUNT("b")', "COUNT(`b`)", id="aggregate"),
+    pytest.param(sql.coalesce("b", "c"), 'COALESCE("b", "c")', "COALESCE(`b`, `c`)", id="conversion"),
+]
+
+
+@pytest.mark.parametrize(("value", "postgres", "mysql"), EXPRESSION_VALUES)
+def test_update_set_renders_expression_values(value: Any, postgres: str, mysql: str) -> None:
+    """Wrappers render as SQL in SET and bind nothing."""
+    statement = sql.update("t", dialect="postgres").set(a=value).build()
+
+    mysql_statement = sql.update("t", dialect="mysql").set(a=value).build()
+
+    assert " ".join(statement.sql.split()) == f'UPDATE "t" SET "a" = {postgres}'
+    assert " ".join(mysql_statement.sql.split()) == f"UPDATE `t` SET `a` = {mysql}"
+    assert statement.parameters == {}
+    assert mysql_statement.parameters == {}
+
+
+def test_update_set_renders_set_operation_node() -> None:
+    """A set operation keeps its parentheses as a scalar operand."""
+    statement = sql.update("t", dialect="postgres").set(a=exp.maybe_parse("SELECT 1 UNION SELECT 2")).build()
+
+    assert " ".join(statement.sql.split()) == 'UPDATE "t" SET "a" = ( SELECT 1 AS "1" UNION SELECT 2 AS "2" )'
+
+
+def test_update_set_keeps_plain_values_bound() -> None:
+    """Plain values keep binding beside rendered fragments."""
+    statement = sql.update("t", dialect="postgres").set(a=sql.raw("a + 1"), b=2).build()
+
+    assert " ".join(statement.sql.split()) == 'UPDATE "t" SET "a" = "a" + 1, "b" = %(b)s'
+    assert statement.parameters == {"b": 2}
+
+
+def test_update_set_reuses_case() -> None:
+    """One Case renders in both assignments."""
+    case = sql.case().when("x > 1", 1).else_(0).end()
+
+    statement = sql.update("t", dialect="postgres").set(a=case, d=case).build()
+
+    expected_case = 'CASE WHEN "x" > 1 THEN 1 ELSE 0 END'
+    assert " ".join(statement.sql.split()) == f'UPDATE "t" SET "a" = {expected_case}, "d" = {expected_case}'
+    assert statement.parameters == {}
+
+
+def test_update_set_merges_fragment_parameters() -> None:
+    """A fragment carrying subquery parameters merges them into the builder."""
+    query = sql.select("x").from_("y").where_eq("z", 5)
+
+    statement = sql.update("t", dialect="postgres").set(a=sql.exists_(query)).build()
+
+    assert statement.parameters == {"z": 5}
+
+
+@pytest.mark.parametrize("value", ["o'brien", "x; DROP TABLE t", "b + 1", "1 OR 1=1", "s.a"])
+def test_update_set_binds_plain_string_values(value: str) -> None:
+    """UPDATE SET binds every plain string."""
+    statement = sql.update("t", dialect="postgres").set(a=value).build()
+
+    assert " ".join(statement.sql.split()) == 'UPDATE "t" SET "a" = %(a)s'
+    assert statement.parameters == {"a": value}

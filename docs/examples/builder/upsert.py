@@ -37,8 +37,8 @@ def main() -> dict[str, Any]:
             .merge("settings", dialect="postgres")
             .using([{"key": "theme", "value": "dark"}], alias="src")
             .on("settings.key = src.key")
-            .when_matched_then_update(value="src.value")
-            .when_not_matched_then_insert(key="src.key", value="src.value")
+            .when_matched_then_update(value=sql.raw("src.value"))
+            .when_not_matched_then_insert(key=sql.raw("src.key"), value=sql.raw("src.value"))
             .build()
         )
         assert "MERGE INTO" in merge_built.sql

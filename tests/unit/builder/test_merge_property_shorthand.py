@@ -48,8 +48,8 @@ def test_merge_property_supports_full_chain() -> None:
         .into("products", alias="t")
         .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     assert isinstance(query, Merge)
@@ -68,16 +68,16 @@ def test_merge_property_multiple_accesses_independent() -> None:
         builder1
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"))
     )
 
     query2 = (
         builder2
         .using({"id": 2}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(price="src.price")
-        .when_not_matched_then_insert(id="src.id")
+        .when_matched_then_update(price=sql.raw("src.price"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"))
     )
 
     sql1 = query1.build().sql
@@ -97,8 +97,8 @@ def test_merge_property_backward_compatible() -> None:
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"))
     )
 
     built = query.build()
@@ -115,8 +115,8 @@ def test_merge_property_with_bulk_data() -> None:
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     built = query.build()
@@ -131,8 +131,8 @@ def test_merge_property_with_all_when_clauses() -> None:
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
         .when_not_matched_by_source_then_delete()
     )
 
@@ -172,8 +172,8 @@ def test_merge_property_to_sql_works() -> None:
         .into("products", alias="t")
         .using({"id": 1, "name": "Test"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     sql_str = query.to_sql()

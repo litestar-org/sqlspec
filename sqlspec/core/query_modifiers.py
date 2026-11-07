@@ -49,70 +49,70 @@ __all__ = (
     "wrap_as_subquery",
 )
 
-ConditionFactory = Callable[[exp.Expr, exp.Placeholder], exp.Expr]
+ConditionFactory = Callable[[exp.Expr, exp.Expr], exp.Expr]
 
 _TABLE_QUALIFIED_PARTS: Final[int] = 2
 _DATABASE_QUALIFIED_PARTS: Final[int] = 3
 _CATALOG_QUALIFIED_PARTS: Final[int] = 4
 
 
-def expr_eq(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
-    """Create equality expression: column = :param."""
-    return exp.EQ(this=col, expression=placeholder)
+def expr_eq(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
+    """Create equality expression: column = operand."""
+    return exp.EQ(this=col, expression=operand)
 
 
-def expr_neq(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
-    """Create not-equal expression: column != :param."""
-    return exp.NEQ(this=col, expression=placeholder)
+def expr_neq(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
+    """Create not-equal expression: column != operand."""
+    return exp.NEQ(this=col, expression=operand)
 
 
-def expr_lt(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
-    """Create less-than expression: column < :param."""
-    return exp.LT(this=col, expression=placeholder)
+def expr_lt(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
+    """Create less-than expression: column < operand."""
+    return exp.LT(this=col, expression=operand)
 
 
-def expr_lte(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
-    """Create less-than-or-equal expression: column <= :param."""
-    return exp.LTE(this=col, expression=placeholder)
+def expr_lte(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
+    """Create less-than-or-equal expression: column <= operand."""
+    return exp.LTE(this=col, expression=operand)
 
 
-def expr_gt(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
-    """Create greater-than expression: column > :param."""
-    return exp.GT(this=col, expression=placeholder)
+def expr_gt(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
+    """Create greater-than expression: column > operand."""
+    return exp.GT(this=col, expression=operand)
 
 
-def expr_gte(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
-    """Create greater-than-or-equal expression: column >= :param."""
-    return exp.GTE(this=col, expression=placeholder)
+def expr_gte(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
+    """Create greater-than-or-equal expression: column >= operand."""
+    return exp.GTE(this=col, expression=operand)
 
 
-def expr_like(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
-    """Create LIKE expression: column LIKE :param."""
-    return exp.Like(this=col, expression=placeholder)
+def expr_like(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
+    """Create LIKE expression: column LIKE operand."""
+    return exp.Like(this=col, expression=operand)
 
 
-def expr_not_like(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
-    """Create NOT LIKE expression: NOT (column LIKE :param)."""
-    return exp.Not(this=exp.Like(this=col, expression=placeholder))
+def expr_not_like(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
+    """Create NOT LIKE expression: NOT (column LIKE operand)."""
+    return exp.Not(this=exp.Like(this=col, expression=operand))
 
 
-def expr_ilike(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
-    """Create case-insensitive LIKE expression: column ILIKE :param."""
-    return exp.ILike(this=col, expression=placeholder)
+def expr_ilike(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
+    """Create case-insensitive LIKE expression: column ILIKE operand."""
+    return exp.ILike(this=col, expression=operand)
 
 
-def expr_is_null(col: exp.Expr, _placeholder: exp.Placeholder) -> exp.Expr:
+def expr_is_null(col: exp.Expr, _operand: exp.Expr) -> exp.Expr:
     """Create IS NULL expression: column IS NULL.
 
-    Note: placeholder is ignored but kept for consistent factory signature.
+    Note: operand is ignored but kept for consistent factory signature.
     """
     return exp.Is(this=col, expression=exp.null())
 
 
-def expr_is_not_null(col: exp.Expr, _placeholder: exp.Placeholder) -> exp.Expr:
+def expr_is_not_null(col: exp.Expr, _operand: exp.Expr) -> exp.Expr:
     """Create IS NOT NULL expression: column IS NOT NULL.
 
-    Note: placeholder is ignored but kept for consistent factory signature.
+    Note: operand is ignored but kept for consistent factory signature.
     """
     return exp.Not(this=exp.Is(this=col, expression=exp.null()))
 

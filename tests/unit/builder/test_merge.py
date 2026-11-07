@@ -1,5 +1,7 @@
 """Unit tests for MERGE builder functionality."""
 
+from typing import Any, cast
+
 import pytest
 from sqlglot import exp
 
@@ -18,7 +20,7 @@ def test_merge_basic_structure() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget", "price": 29.99}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name", price="src.price")
+        .when_matched_then_update(name=sql.raw("src.name"), price=sql.raw("src.price"))
         .when_not_matched_then_insert(columns=["id", "name", "price"], values=[1, "Widget", 29.99])
     )
     stmt = query.build()
@@ -118,7 +120,7 @@ def test_merge_when_matched_update_with_dict() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update({"name": "s.name", "price": "s.price"})
+        .when_matched_then_update({"name": sql.raw("s.name"), "price": sql.raw("s.price")})
     )
     stmt = query.build()
 
@@ -135,7 +137,9 @@ def test_merge_when_matched_update_with_kwargs() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update(name="s.name", price="s.price", updated_at="CURRENT_TIMESTAMP")
+        .when_matched_then_update(
+            name=sql.raw("s.name"), price=sql.raw("s.price"), updated_at=sql.raw("CURRENT_TIMESTAMP")
+        )
     )
     stmt = query.build()
 
@@ -171,7 +175,7 @@ def test_merge_when_matched_update_with_condition() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update({"price": "s.price"}, condition="s.price < t.price")
+        .when_matched_then_update({"price": sql.raw("s.price")}, condition="s.price < t.price")
     )
     stmt = query.build()
 
@@ -189,7 +193,7 @@ def test_merge_when_matched_update_with_condition_oracle() -> None:
         .into("products", alias="t")
         .using({"id": 1, "new_price": 5.00}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update({"price": "src.new_price"}, condition="src.new_price < t.price")
+        .when_matched_then_update({"price": sql.raw("src.new_price")}, condition="src.new_price < t.price")
     )
     stmt = query.build()
 
@@ -205,7 +209,7 @@ def test_merge_oracle_build_does_not_mutate_subsequent_postgres_build() -> None:
         .into("products", alias="t")
         .using("staging", alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update({"price": "src.new_price"}, condition="src.new_price < t.price")
+        .when_matched_then_update({"price": sql.raw("src.new_price")}, condition="src.new_price < t.price")
     )
 
     oracle_stmt = query.build(dialect="oracle")
@@ -271,7 +275,7 @@ def test_merge_when_matched_update_stores_condition_field() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update({"price": "s.price"}, condition="s.price < t.price")
+        .when_matched_then_update({"price": sql.raw("s.price")}, condition="s.price < t.price")
     )
 
     merge_expr = query.get_expression()
@@ -402,7 +406,7 @@ def test_merge_multiple_when_clauses() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update(price="s.price", name="s.name")
+        .when_matched_then_update(price=sql.raw("s.price"), name=sql.raw("s.name"))
         .when_not_matched_then_insert(id=1, name="New", price=10.00)
         .when_not_matched_by_source_then_update(status="inactive")
     )
@@ -419,7 +423,9 @@ def test_merge_complex_scenario() -> None:
         .into("inventory", alias="inv")
         .using({"product_id": 100, "quantity": 50, "location": "Warehouse A"}, alias="src")
         .on("inv.product_id = src.product_id AND inv.location = src.location")
-        .when_matched_then_update(quantity="inv.quantity + src.quantity", last_updated="CURRENT_TIMESTAMP")
+        .when_matched_then_update(
+            quantity=sql.raw("inv.quantity + src.quantity"), last_updated=sql.raw("CURRENT_TIMESTAMP")
+        )
         .when_not_matched_then_insert(product_id=100, quantity=50, location="Warehouse A")
     )
     stmt = query.build()
@@ -441,7 +447,7 @@ def test_merge_with_constructor_table() -> None:
         .merge("products")
         .using("staging", alias="s")
         .on("products.id = s.id")
-        .when_matched_then_update(name="s.name")
+        .when_matched_then_update(name=sql.raw("s.name"))
     )
     stmt = query.build()
 
@@ -474,7 +480,7 @@ def test_merge_null_value_handling() -> None:
         .into("users", alias="t")
         .using({"id": 1, "email": None, "status": "active"}, alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update(email="s.email")
+        .when_matched_then_update(email=sql.raw("s.email"))
     )
     stmt = query.build()
 
@@ -491,7 +497,10 @@ def test_merge_column_reference_detection() -> None:
         .using("staging", alias="s")
         .on("t.id = s.id")
         .when_matched_then_update(
-            name="s.name", price="s.price", quantity="t.quantity + s.quantity", updated_at="CURRENT_TIMESTAMP"
+            name=sql.raw("s.name"),
+            price=sql.raw("s.price"),
+            quantity=sql.raw("t.quantity + s.quantity"),
+            updated_at=sql.raw("CURRENT_TIMESTAMP"),
         )
     )
     stmt = query.build()
@@ -508,7 +517,7 @@ def test_merge_subquery_as_source() -> None:
         .into("products", alias="t")
         .using(subquery, alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update(name="s.name")
+        .when_matched_then_update(name=sql.raw("s.name"))
     )
     stmt = query.build()
 
@@ -549,7 +558,7 @@ def test_merge_using_list_of_dicts() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name", price="src.price")
+        .when_matched_then_update(name=sql.raw("src.name"), price=sql.raw("src.price"))
         .when_not_matched_then_insert(columns=["id", "name", "price"])
     )
     stmt = query.build()
@@ -570,7 +579,7 @@ def test_merge_using_list_of_dicts_postgres_dialect() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
     stmt = query.build()
 
@@ -588,7 +597,7 @@ def test_merge_using_single_dict_postgres_dialect() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
     stmt = query.build()
 
@@ -606,7 +615,7 @@ def test_merge_postgres_json_source_golden_sql_and_parameters() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name", price="src.price")
+        .when_matched_then_update(name=sql.raw("src.name"), price=sql.raw("src.price"))
         .when_not_matched_then_insert(columns=["id", "name", "price", "active", "meta", "missing"])
     )
 
@@ -659,7 +668,7 @@ def test_merge_oracle_json_source_golden_sql_and_parameters() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name", price="src.price")
+        .when_matched_then_update(name=sql.raw("src.name"), price=sql.raw("src.price"))
         .when_not_matched_then_insert(columns=["id", "name", "price", "active", "meta", "missing"])
     )
 
@@ -740,7 +749,7 @@ def test_merge_mysql_dialect_raises_error() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     with pytest.raises(DialectNotSupportedError, match="MERGE statements are not supported in MYSQL"):
@@ -756,7 +765,7 @@ def test_merge_sqlite_dialect_raises_error() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     with pytest.raises(DialectNotSupportedError, match="MERGE statements are not supported in SQLITE"):
@@ -772,7 +781,7 @@ def test_merge_duckdb_dialect_raises_error() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     with pytest.raises(DialectNotSupportedError, match="MERGE statements are not supported in DUCKDB"):
@@ -805,7 +814,7 @@ def test_merge_postgres_dialect_allowed() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     stmt = query.build()
@@ -820,7 +829,7 @@ def test_merge_oracle_dialect_allowed() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     stmt = query.build()
@@ -853,7 +862,7 @@ def test_merge_no_dialect_allowed() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     stmt = query.build()
@@ -868,8 +877,8 @@ def test_merge_property_shorthand() -> None:
         .into("products", alias="t")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     assert isinstance(query, Merge)
@@ -931,3 +940,285 @@ def test_merge_defaults_disable_optimization_unlike_other_builders() -> None:
     assert sql.update("t").enable_optimization is True
     assert sql.delete().enable_optimization is True
     assert Merge(enable_optimization=True).enable_optimization is True
+
+
+MERGE_PREFIXES = {
+    "tsql": "MERGE INTO [t] USING [s] AS s ON ( [t].[id] = [s].[id] ) WHEN ",
+    "oracle": "MERGE INTO t USING s s ON ( t.id = s.id ) WHEN ",
+    "postgres": 'MERGE INTO t USING "s" AS s ON ( "t"."id" = "s"."id" ) WHEN ',
+}
+
+
+def _merge_builder(dialect: str) -> Merge:
+    return sql.merge(dialect=dialect).into("t").using("s", alias="s").on("t.id = s.id")
+
+
+def _normalized_sql(statement: Any) -> str:
+    return " ".join(statement.sql.split())
+
+
+def _nullif() -> exp.Expr:
+    return exp.Nullif(this=exp.column("a"), expression=exp.Literal.number(0))
+
+
+def _left() -> exp.Expr:
+    return exp.Left(this=exp.column("a"), expression=exp.Literal.number(2))
+
+
+@pytest.mark.parametrize(
+    ("dialect", "value", "suffix"),
+    [
+        pytest.param("tsql", sql.raw("a + 1"), "[a] = [a] + 1", id="tsql-raw"),
+        pytest.param("tsql", _nullif(), "[a] = NULLIF([a], 0)", id="tsql-nullif"),
+        pytest.param("oracle", sql.raw("a + 1"), "a = a + 1", id="oracle-raw"),
+        pytest.param("oracle", _nullif(), "a = NULLIF(a, 0)", id="oracle-nullif"),
+        pytest.param("postgres", sql.raw("a + 1"), '"a" = "a" + 1', id="postgres-raw"),
+        pytest.param("postgres", _nullif(), '"a" = NULLIF("a", 0)', id="postgres-nullif"),
+    ],
+)
+def test_merge_update_renders_full_expression(dialect: str, value: Any, suffix: str) -> None:
+    """Matched updates render both operands of a fragment or SQLGlot node."""
+    statement = _merge_builder(dialect).when_matched_then_update(a=value).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES[dialect]}MATCHED THEN UPDATE SET {suffix}"
+
+
+@pytest.mark.parametrize(
+    ("dialect", "value", "suffix"),
+    [
+        pytest.param("tsql", sql.raw("a + 1"), "([a]) VALUES ([a] + 1)", id="tsql-raw"),
+        pytest.param("tsql", _left(), "([a]) VALUES (LEFT([a], 2))", id="tsql-left"),
+        pytest.param("oracle", sql.raw("a + 1"), "(a) VALUES (a + 1)", id="oracle-raw"),
+        pytest.param("oracle", _left(), "(a) VALUES (LEFT(a, 2))", id="oracle-left"),
+        pytest.param("postgres", sql.raw("a + 1"), '("a") VALUES ("a" + 1)', id="postgres-raw"),
+        pytest.param("postgres", _left(), '("a") VALUES (LEFT("a", 2))', id="postgres-left"),
+    ],
+)
+def test_merge_insert_renders_full_expression(dialect: str, value: Any, suffix: str) -> None:
+    """Not-matched inserts render both operands of a fragment or SQLGlot node."""
+    statement = _merge_builder(dialect).when_not_matched_then_insert(columns=["a"], values=[value]).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES[dialect]}NOT MATCHED THEN INSERT {suffix}"
+
+
+def test_merge_by_source_update_renders_full_expression() -> None:
+    """By-source updates render both operands of a fragment."""
+    statement = _merge_builder("tsql").when_not_matched_by_source_then_update(a=sql.raw("a + 1")).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}NOT MATCHED BY SOURCE THEN UPDATE SET [a] = [a] + 1"
+
+
+MERGE_EXPRESSION_VALUES = [
+    pytest.param(sql.column("b"), "[b]", id="column"),
+    pytest.param(sql.column("b").cast("INT"), "CAST([b] AS INTEGER)", id="function-column"),
+    pytest.param(sql.column("b") > 1, "[b] > 1", id="column-expression"),
+    pytest.param(sql.case().when("x > 1", 1).else_(0).end(), "CASE WHEN [x] > 1 THEN 1 ELSE 0 END", id="case"),
+    pytest.param(sql.count("b"), "COUNT([b])", id="aggregate"),
+    pytest.param(sql.coalesce("b", "c"), "COALESCE([b], [c])", id="conversion"),
+]
+
+
+@pytest.mark.parametrize(("value", "fragment"), MERGE_EXPRESSION_VALUES)
+@pytest.mark.parametrize(
+    ("apply", "suffix"),
+    [
+        pytest.param(
+            lambda merge, value: merge.when_matched_then_update(a=value),
+            "MATCHED THEN UPDATE SET [a] = {fragment}",
+            id="matched",
+        ),
+        pytest.param(
+            lambda merge, value: merge.when_not_matched_then_insert(columns=["a"], values=[value]),
+            "NOT MATCHED THEN INSERT ([a]) VALUES ({fragment})",
+            id="not-matched",
+        ),
+        pytest.param(
+            lambda merge, value: merge.when_not_matched_by_source_then_update(a=value),
+            "NOT MATCHED BY SOURCE THEN UPDATE SET [a] = {fragment}",
+            id="by-source",
+        ),
+    ],
+)
+def test_merge_clauses_render_expression_values(apply: Any, suffix: str, value: Any, fragment: str) -> None:
+    """Every MERGE clause renders wrappers as SQL and binds nothing."""
+    statement = apply(_merge_builder("tsql"), value).build()
+
+    assert _normalized_sql(statement) == MERGE_PREFIXES["tsql"] + suffix.format(fragment=fragment)
+    assert statement.parameters == {}
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        pytest.param("oracle", "a = b, c = COUNT(e)", id="oracle"),
+        pytest.param("postgres", '"a" = "b", "c" = COUNT("e")', id="postgres"),
+    ],
+)
+def test_merge_update_renders_values_per_dialect(dialect: str, expected: str) -> None:
+    """Wrappers render with the quoting of the target dialect."""
+    statement = _merge_builder(dialect).when_matched_then_update(a=sql.column("b"), c=sql.count("e")).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES[dialect]}MATCHED THEN UPDATE SET {expected}"
+    assert statement.parameters == {}
+
+
+def test_merge_embeds_query_builder() -> None:
+    """A query builder embeds as a subquery with merged parameters."""
+    query = sql.select("x").from_("y").where_eq("z", 5)
+
+    statement = _merge_builder("tsql").when_matched_then_update(a=query).build()
+
+    assert _normalized_sql(statement) == (
+        f"{MERGE_PREFIXES['tsql']}MATCHED THEN UPDATE SET [a] = ( SELECT [x] FROM [y] WHERE [z] = :z )"
+    )
+    assert statement.parameters == {"z": 5}
+
+
+def test_merge_renders_explicit_column_reference() -> None:
+    """A column reference is given as an explicit expression."""
+    statement = _merge_builder("tsql").when_matched_then_update(a=sql.raw("s.a")).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}MATCHED THEN UPDATE SET [a] = [s].[a]"
+    assert statement.parameters == {}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_parameters"),
+    [pytest.param("text", {"a": "text"}, id="text"), pytest.param(1, {"a": 1}, id="number")],
+)
+def test_merge_keeps_plain_values_bound(value: Any, expected_parameters: dict[str, Any]) -> None:
+    """Plain values bind under the assignment's column name."""
+    statement = _merge_builder("tsql").when_matched_then_update(a=value).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}MATCHED THEN UPDATE SET [a] = :a"
+    assert statement.parameters == expected_parameters
+
+
+def test_merge_leaves_caller_node_detached() -> None:
+    """One node assigned to two columns renders twice and stays detached."""
+    node = cast("exp.Expr", exp.maybe_parse("a + 1"))
+
+    statement = _merge_builder("tsql").when_matched_then_update(a=node, c=node).build()
+
+    assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}MATCHED THEN UPDATE SET [a] = [a] + 1, [c] = [a] + 1"
+    assert node.parent is None
+
+
+def test_merge_rejects_vector_distance_on_unsupported_dialect() -> None:
+    """A vector distance on a dialect without vector support raises instead of losing its operand."""
+    distance = sql.column("v").vector_distance([0.1, 0.2])
+
+    with pytest.raises(SQLBuilderError, match="Vector distance is not supported"):
+        _merge_builder("tsql").when_matched_then_update(a=distance).build()
+
+
+@pytest.mark.parametrize(
+    ("dialect", "source", "expected"),
+    [
+        pytest.param(
+            "tsql",
+            {"id": sql.column("c"), "n": 1},
+            "MERGE INTO [t] USING ( SELECT [c] AS [id], :n AS [n] ) AS [s] ON ( [t].[id] = [s].[id] ) "
+            "WHEN MATCHED THEN UPDATE SET [a] = :a",
+            id="tsql-row",
+        ),
+        pytest.param(
+            "tsql",
+            [{"id": sql.count("c"), "n": 1}],
+            "MERGE INTO [t] USING ( SELECT COUNT([c]) AS [id], :n AS [n] ) AS [s] ON ( [t].[id] = [s].[id] ) "
+            "WHEN MATCHED THEN UPDATE SET [a] = :a",
+            id="tsql-list",
+        ),
+    ],
+)
+def test_merge_using_dict_renders_expression_values(dialect: str, source: Any, expected: str) -> None:
+    """Expression values in a dict source render as SQL, and plain values bind."""
+    statement = (
+        sql
+        .merge(dialect=dialect)
+        .into("t")
+        .using(source, alias="s")
+        .on("t.id = s.id")
+        .when_matched_then_update(a=1)
+        .build()
+    )
+
+    assert _normalized_sql(statement) == expected
+    assert statement.parameters == {"n": 1, "a": 1}
+
+
+def test_merge_using_dict_renders_expression_values_on_db2() -> None:
+    """Db2 row sources render expression values without a parameter CAST."""
+    statement = (
+        sql
+        .merge(dialect="db2")
+        .into("t")
+        .using({"id": sql.column("c"), "n": 1}, alias="s")
+        .on("t.id = s.id")
+        .when_matched_then_update(a=2)
+        .build()
+    )
+
+    assert _normalized_sql(statement) == (
+        "MERGE INTO t USING ( SELECT c AS id, CAST(:n AS BIGINT) AS n FROM SYSIBM.SYSDUMMY1 ) AS s(id, n) "
+        "ON ( t.id = s.id ) WHEN MATCHED THEN UPDATE SET a = :a"
+    )
+    assert statement.parameters == {"n": 1, "a": 2}
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "oracle"])
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param({"id": sql.column("c")}, id="row"),
+        pytest.param([{"id": 1}, {"id": sql.count("c")}], id="later-row"),
+    ],
+)
+def test_merge_using_dict_rejects_expression_values_in_json_sources(dialect: str, source: Any) -> None:
+    """JSON row sources carry data only, so an expression value raises instead of serializing."""
+    with pytest.raises(SQLBuilderError, match="rows as JSON"):
+        sql.merge(dialect=dialect).into("t").using(source, alias="s")
+
+
+PLAIN_STRING_VALUES = [
+    pytest.param("o'brien", id="quote"),
+    pytest.param("x; DROP TABLE t", id="statement"),
+    pytest.param("b + 1", id="arithmetic"),
+    pytest.param("1 OR 1=1", id="tautology"),
+    pytest.param("s.a; DROP TABLE t", id="qualified-statement"),
+    pytest.param("s.a OR 1=1", id="qualified-tautology"),
+    pytest.param("s.a -- trailing", id="line-comment"),
+    pytest.param("s.a /* note */", id="block-comment"),
+    pytest.param("s.a + /* note */ s.b", id="arithmetic-comment"),
+    pytest.param("s.a'", id="unterminated-quote"),
+    pytest.param("s.a", id="source-column"),
+    pytest.param("t.a", id="target-column"),
+    pytest.param("s.a + s.b", id="column-arithmetic"),
+    pytest.param("CURRENT_TIMESTAMP", id="current-timestamp"),
+    pytest.param("current_date", id="current-date"),
+]
+
+
+@pytest.mark.parametrize("value", PLAIN_STRING_VALUES)
+@pytest.mark.parametrize(
+    ("apply", "suffix"),
+    [
+        pytest.param(lambda m, v: m.when_matched_then_update(a=v), "MATCHED THEN UPDATE SET [a] = :a", id="matched"),
+        pytest.param(
+            lambda m, v: m.when_not_matched_by_source_then_update(a=v),
+            "NOT MATCHED BY SOURCE THEN UPDATE SET [a] = :a",
+            id="by-source",
+        ),
+        pytest.param(
+            lambda m, v: m.when_not_matched_then_insert(columns=["a"], values=[v]),
+            "NOT MATCHED THEN INSERT ([a]) VALUES (:a)",
+            id="insert",
+        ),
+    ],
+)
+def test_merge_binds_plain_string_values(apply: Any, suffix: str, value: str) -> None:
+    """Every string value binds, whatever it looks like."""
+    statement = apply(_merge_builder("tsql"), value).build()
+
+    assert _normalized_sql(statement) == MERGE_PREFIXES["tsql"] + suffix
+    assert statement.parameters == {"a": value}

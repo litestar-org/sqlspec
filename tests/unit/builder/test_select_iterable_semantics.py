@@ -1,4 +1,4 @@
-"""Regression coverage for Select's Sequence-only parameter handling."""
+"""Regression coverage for how Select predicates treat non-sequence iterables."""
 
 from collections.abc import Iterator, Mapping
 from typing import Any
@@ -46,9 +46,18 @@ def test_between_operators_reject_non_sequence_iterables(method_name: str, value
         getattr(builder, method_name)(exp.column("value"), value, "value")
 
 
-@pytest.mark.parametrize("value", [{1, 2}, _generator(), _CustomMapping()])
-def test_any_operator_rejects_non_sequence_iterables(value: Any) -> None:
+def test_any_operator_rejects_mappings() -> None:
     builder = sql.select("*").from_("items")
 
     with pytest.raises(SQLBuilderError, match="Unsupported type for 'values' in WHERE ANY"):
-        builder._create_any_condition(exp.column("value"), value, "value")
+        builder._create_any_condition(exp.column("value"), _CustomMapping(), "value")
+
+
+@pytest.mark.parametrize("value", [{1, 2}, _generator()])
+def test_any_operator_binds_non_sequence_iterables(value: Any) -> None:
+    builder = sql.select("*").from_("items")
+
+    expression = builder._create_any_condition(exp.column("value"), value, "value")
+
+    assert sum(1 for _ in expression.find_all(exp.Placeholder)) == 2
+    assert sorted(builder.parameters.values()) == [1, 2]

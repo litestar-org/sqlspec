@@ -1318,17 +1318,17 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[TypedParameter]":
 
 
 def has_expression_and_sql(obj: Any) -> "TypeGuard[HasExpressionAndSQLProtocol]":
-    """Check if an object has both 'expression' and 'sql' attributes.
+    """Check if an object is a SQL carrier exposing 'expression' and 'sql' attributes.
 
-    This is commonly used to identify SQL objects in the builder system.
+    SQLGlot nodes return False: their 'expression' attribute holds the node's right operand.
 
     Args:
         obj: The object to check
 
     Returns:
-        True if the object has both attributes, False otherwise
+        True if the object carries SQL through both attributes, False otherwise
     """
-    if not hasattr(obj, "expression"):
+    if isinstance(obj, exp.Expr) or not hasattr(obj, "expression"):
         return False
     if hasattr(obj, "raw_sql"):
         return True
