@@ -7,7 +7,7 @@ passed as strings to builder methods.
 import contextlib
 import importlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp, maybe_parse
@@ -17,7 +17,7 @@ from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.core import SQL, ParameterStyle, ParameterValidator, default_nulls, ordered
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import has_expression_and_parameters, has_expression_attr, has_parameter_builder
+from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -146,7 +146,10 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
         return _scalar_subquery(builder._embed_subquery(column_input, alias_hint="subquery"))
 
     if isinstance(column_input, SQL):
-        return extract_sql_object_expression(column_input, builder)
+        extracted = extract_sql_object_expression(column_input, builder)
+        if builder is not None and isinstance(extracted, (exp.Select, exp.SetOperation)):
+            return _scalar_subquery(extracted)
+        return extracted
 
     if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expr):  # pyright: ignore[reportPrivateUsage]
         return column_input._expression  # pyright: ignore[reportPrivateUsage]
@@ -531,15 +534,25 @@ def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
 
     Returns:
         Mapping of original parameter names to renamed parameter names.
+
+    Raises:
+        SQLBuilderError: If the SQL object carries positional parameters.
     """
     param_mapping: dict[str, str] = {}
-    if not (builder and has_expression_and_parameters(sql_obj) and has_parameter_builder(builder)):
+    if not (builder and has_parameter_builder(builder)):
+        return param_mapping
+
+    parameters = sql_obj.parameters
+    if sql_obj.positional_parameters or (parameters and not isinstance(parameters, Mapping)):
+        msg = "Positional parameters on a SQL object cannot merge into a builder; use named parameters."
+        raise SQLBuilderError(msg)
+    if not parameters:
         return param_mapping
 
     existing_params = getattr(builder, "parameters", None)
     if existing_params is None:
         existing_params = getattr(builder, "_parameters", {})
-    for param_name, param_value in sql_obj.parameters.items():
+    for param_name, param_value in parameters.items():
         target_name = param_name
         if param_name in existing_params:
             if hasattr(builder, "generate_unique_parameter_name"):

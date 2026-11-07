@@ -576,3 +576,23 @@ def test_extract_sql_object_expression_rejects_sql_carrier_lookalike() -> None:
     """Extraction accepts SQL objects only."""
     with pytest.raises(TypeError, match="Value is not a SQL object"):
         parsing_utils.extract_sql_object_expression(_ExpressionLookalike(exp.column("injected_expression")))
+
+
+@pytest.mark.parametrize("site", VALUE_SITES)
+def test_value_sites_render_sql_objects_without_parameters(site: Any) -> None:
+    """A SQL object with no parameters renders, because its empty parameter list merges as nothing."""
+    statement = site(SQL("rendered_col + 1")).build()
+
+    assert "rendered_col" in statement.sql
+    assert "rendered_col" not in " ".join(str(value) for value in statement.parameters.values())
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [pytest.param(SQL("b = ?", 1), id="positional"), pytest.param(SQL("b = :x AND c = ?", 5, x=1), id="mixed")],
+)
+@pytest.mark.parametrize("site", VALUE_SITES)
+def test_value_sites_reject_positional_sql_objects(site: Any, fragment: SQL) -> None:
+    """Positional parameters cannot merge into a builder's named parameters, so they raise instead of misbinding."""
+    with pytest.raises(SQLBuilderError, match="Positional parameters"):
+        site(fragment)

@@ -407,3 +407,32 @@ def test_select_projection_leaves_caller_node_detached() -> None:
     sql.select(node).from_("t").build()
 
     assert node.parent is None
+
+
+def test_where_in_renders_built_statement() -> None:
+    """A statement from a query builder embeds with its named parameters."""
+    subquery = sql.select("x").from_("y").where_eq("k", 5).to_statement()
+
+    statement = sql.select("z").from_("t").where_in("a", subquery).build()
+
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + (
+        '"t"."a" IN (( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."k" = :k ))'
+    )
+    assert statement.parameters == {"k": 5}
+
+
+@pytest.mark.parametrize(
+    "projection",
+    [
+        pytest.param(lambda: sql.raw("SELECT x FROM y WHERE z = :z", z=5), id="raw"),
+        pytest.param(lambda: sql.select("x").from_("y").where_eq("z", 5).to_statement(), id="statement"),
+    ],
+)
+def test_select_renders_sql_object_query_projection(projection: Any) -> None:
+    """A SQL object holding a query projects as a parenthesized scalar subquery."""
+    statement = sql.select(projection()).from_("t").build()
+
+    assert _normalized_sql(statement) == (
+        'SELECT ( SELECT "y"."x" AS "x" FROM "y" AS "y" WHERE "y"."z" = :z ) AS "_col_0" FROM "t" AS "t"'
+    )
+    assert statement.parameters == {"z": 5}
