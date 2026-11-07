@@ -161,7 +161,9 @@ To stop SQL from reaching local files, HTTP URLs, and object stores, disable ext
 connection:
 
 ```python
-config = DuckDBConfig(connection_config={"database": "app.duckdb", "enable_external_access": False})
+config = DuckDBConfig(
+    connection_config={"database": "app.duckdb", "enable_external_access": False}
+)
 ```
 
 File reads then raise `PermissionDeniedError`. This setting does not limit `query()`, which can still run SQL against
