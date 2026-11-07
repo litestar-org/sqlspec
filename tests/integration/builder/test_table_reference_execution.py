@@ -146,3 +146,8 @@ def test_payload_text_runs_nothing(
     assert SECRET not in str(rows)
     _assert_nothing_changed(session)
     assert session.execute("SELECT pw FROM t").get_data() == [{"pw": "public"}]
+
+
+def test_parameterized_function_expression_binds_and_executes(session: Any) -> None:
+    source = sql.raw("json_each(:doc)", doc="[1]") if session.dialect == "sqlite" else sql.raw("range(:n)", n=1)
+    assert len(session.execute(sql.select("*").from_(source, alias="f")).get_data()) == 1

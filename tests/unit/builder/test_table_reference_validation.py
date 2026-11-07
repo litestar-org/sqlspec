@@ -524,10 +524,6 @@ def test_text_read_as_comment_or_call_by_its_dialect_raises(dialect: "str | None
 @pytest.mark.parametrize(
     ("dialect", "text", "expected"),
     [
-        (None, "json_each(?)", 'SELECT * FROM JSON_EACH(?) AS "_0"'),
-        (None, "generate_series(1,3) g", 'SELECT * FROM GENERATE_SERIES(1, 3) AS "g"'),
-        ("duckdb", "read_csv('a.csv')", "SELECT * FROM READ_CSV('a.csv') AS \"_0\""),
-        ("duckdb", "range(3) r", 'SELECT * FROM RANGE(0, 3) AS "r"'),
         ("duckdb", "'a.parquet'", 'SELECT * FROM "a.parquet" AS "a.parquet"'),
         ("duckdb", "'a.parquet' p", 'SELECT * FROM "a.parquet" AS "p"'),
         ("bigquery", "p.d.t_*", "SELECT * FROM `p`.`d`.`t_*` AS `t_*`"),
@@ -545,17 +541,9 @@ def test_select_from_keeps_supported_table_text(dialect: "str | None", text: str
 
 
 def test_text_quoted_natively_by_its_dialect_stays_one_identifier() -> None:
-    text = "`.json_each((SELECT json_quote(pw) FROM secrets)) --`"
-    built = sql.select("*", dialect="sqlite").from_(text).build()
-    name = '".json_each((select json_quote(pw) from secrets)) --"'
+    built = sql.select("*", dialect="sqlite").from_("`a; DROP TABLE z --`").build()
+    name = '"a; drop table z --"'
     assert " ".join(built.sql.split()) == f"SELECT * FROM {name} AS {name}"
-
-
-def test_join_accepts_function_call_text() -> None:
-    query = sql.select("*").from_("t").join("generate_series(1,3) g", "t.a = g.b")
-    assert " ".join(query.build().sql.split()) == (
-        'SELECT * FROM "t" AS "t" JOIN GENERATE_SERIES(1, 3) AS "g" ON "g"."b" = "t"."a"'
-    )
 
 
 def test_lateral_join_keeps_function_schema() -> None:
@@ -568,8 +556,28 @@ def test_lateral_join_keeps_function_schema() -> None:
 @pytest.mark.parametrize(
     "text",
     [
+        "json_each(?)",
+        "generate_series(1,3) g",
+        "read_csv('a.csv')",
+        "range(3) r",
+        "a.f(1) x",
+        "query('SELECT pw FROM secrets')",
+        "read_text('/etc/hostname')",
         "f((SELECT pw FROM secrets))",
-        "a.f(1, (SELECT pw FROM secrets)) x",
+        "(SELECT pw FROM secrets) s",
+        '"quoted(name"',
+    ],
+)
+@pytest.mark.parametrize("path", ALL_PATHS, ids=lambda path: path.__name__)
+def test_parenthesis_in_table_text_names_the_supported_path(path: Callable[..., QueryBuilder], text: str) -> None:
+    with pytest.raises(SQLBuilderError, match=r"Pass an expression or builder"):
+        path(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "f((SELECT pw FROM secrets))",
         "f(1 IN (SELECT pw FROM secrets))",
         "f(EXISTS(SELECT 1))",
         "f(1); DROP TABLE z",
@@ -579,18 +587,89 @@ def test_lateral_join_keeps_function_schema() -> None:
         "f(1) UNION SELECT pw FROM secrets",
     ],
 )
-@pytest.mark.parametrize("path", [_select_from, _select_join, _update_from, _merge_using], ids=lambda p: p.__name__)
-def test_function_text_rejects_subqueries_statements_and_comments(path: Callable[..., QueryBuilder], text: str) -> None:
-    with pytest.raises(SQLBuilderError, match=r"table (function|reference)"):
-        path(text)
+def test_lateral_function_text_rejects_subqueries_statements_and_comments(text: str) -> None:
+    with pytest.raises(SQLBuilderError, match="table function"):
+        sql.select("*").from_("t").lateral_join(text)
 
 
-def test_function_text_rejects_second_alias() -> None:
+def test_lateral_function_text_rejects_second_alias() -> None:
     with pytest.raises(SQLBuilderError, match="alias"):
-        sql.select("*").from_("f(1) x", alias="y")
+        sql.select("*").from_("t").lateral_join("f(1) x", alias="y")
 
 
-@pytest.mark.parametrize("path", [_delete_from, _insert_into, _update_table, _merge_into], ids=lambda p: p.__name__)
-def test_statement_targets_reject_function_text(path: Callable[..., QueryBuilder]) -> None:
+@pytest.mark.parametrize(
+    "source",
+    [lambda: exp.func("generate_series", 1, 3), lambda: sql.raw("generate_series(1, 3)")],
+    ids=["exp_func", "raw"],
+)
+def test_expression_function_sources_render_with_aliases(source: Callable[[], Any]) -> None:
+    call = "GENERATE_SERIES(1, 3)"
+    expected = {
+        "from": (sql.select("*").from_(source(), alias="g"), f'SELECT * FROM {call} AS "g"'),
+        "join": (
+            sql.select("*").from_("t").join(source(), "t.a = g.a", alias="g"),
+            f'SELECT * FROM "t" JOIN {call} AS "g" ON "t"."a" = "g"."a"',
+        ),
+        "update": (
+            sql.update("t").set(a=exp.Literal.number(1)).from_(source(), alias="g"),
+            f'UPDATE "t" SET "a" = 1 FROM {call} AS "g"',
+        ),
+        "merge": (
+            sql.merge("t").using(source(), alias="g").on("t.a = g.a").when_matched_then_delete(),
+            f'MERGE INTO t USING {call} AS "g" ON ( "t"."a" = "g"."a" ) WHEN MATCHED THEN DELETE',
+        ),
+    }
+    for builder, rendered in expected.values():
+        assert " ".join(builder.build().sql.split()) == rendered
+
+
+@pytest.mark.parametrize(
+    ("build", "expected"),
+    [
+        (lambda: sql.select("*").from_(sql.raw("my_fn(:n)", n=3), alias="g"), 'SELECT * FROM MY_FN(:n) AS "g"'),
+        (
+            lambda: sql.select("*").from_("t").join(sql.raw("my_fn(:n)", n=3), "t.a = g.a", alias="g"),
+            'SELECT * FROM "t" JOIN MY_FN(:n) AS "g" ON "t"."a" = "g"."a"',
+        ),
+    ],
+    ids=["from", "join"],
+)
+def test_parameterized_raw_function_source_binds_parameters(build: Callable[[], QueryBuilder], expected: str) -> None:
+    built = build().build()
+    assert " ".join(built.sql.split()) == expected
+    assert built.parameters == {"n": 3}
+
+
+def test_placeholder_function_source_binds_added_parameter() -> None:
+    builder = sql.select("*").from_(exp.func("my_fn", exp.Placeholder(this="n")), alias="g")
+    builder.add_parameter(3, name="n")
+    built = builder.build()
+    assert " ".join(built.sql.split()) == 'SELECT * FROM MY_FN(:n) AS "g"'
+    assert built.parameters == {"n": 3}
+
+
+@pytest.mark.parametrize(
+    ("build", "expected"),
+    [
+        (lambda: sql.select("*", dialect="tsql").from_("@tv"), "SELECT * FROM @tv AS [tv]"),
+        (lambda: sql.select("*", dialect="tsql").from_("@tv u"), "SELECT * FROM @tv AS [u]"),
+        (lambda: sql.select("*", dialect="mssql").from_("@tv AS u"), "SELECT * FROM @tv AS [u]"),
+        (lambda: sql.delete("@tv", dialect="tsql"), "DELETE FROM @tv"),
+    ],
+)
+def test_tsql_table_variable_is_accepted(build: Callable[[], QueryBuilder], expected: str) -> None:
+    assert " ".join(build().build().sql.split()) == expected
+
+
+@pytest.mark.parametrize(
+    "text", ["@tv; DROP TABLE z", "@tv -- trailing", "@tv /* c */", "@tv u v", "@tv AS", "@", "@1", "@a.b", "@`a b`"]
+)
+def test_tsql_table_variable_rejects_anything_else(text: str) -> None:
+    with pytest.raises(SQLBuilderError, match=r"table reference|alias"):
+        sql.select("*", dialect="tsql").from_(text)
+
+
+@pytest.mark.parametrize("dialect", [None, "postgres", "mysql", "sqlite", "oracle", "duckdb"])
+def test_table_variable_raises_outside_tsql(dialect: "str | None") -> None:
     with pytest.raises(SQLBuilderError, match="table reference"):
-        path("f(1)")
+        sql.select("*", dialect=dialect).from_("@tv")

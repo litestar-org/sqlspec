@@ -7,12 +7,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._parsing_utils import (
-    _parse_table_reference,
-    extract_expression,
-    extract_sql_object_expression,
-    parse_table_expression,
-)
+from sqlspec.builder._parsing_utils import _parse_table_reference, extract_expression, extract_sql_object_expression
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import schema_dump
@@ -380,14 +375,16 @@ class UpdateFromClauseMixin:
 
         table_expr: exp.Expr
         if isinstance(table, str):
-            table_expr = parse_table_expression(table, alias, cast("QueryBuilder", self).dialect)
+            table_expr = _parse_table_reference(table, alias, cast("QueryBuilder", self).dialect)
         elif isinstance(table, exp.Expr):
             if isinstance(table, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=table.copy())
                 if alias:
                     table_expr = exp.alias_(table_expr, alias, table=True)
             else:
-                table_expr = exp.alias_(table.copy(), alias, table=True) if alias else table.copy()
+                table_expr = (
+                    exp.alias_(table.copy(), alias, table=not isinstance(table, exp.Func)) if alias else table.copy()
+                )
         elif (
             hasattr(table, "build")
             or hasattr(table, "to_statement")

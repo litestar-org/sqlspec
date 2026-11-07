@@ -11,13 +11,15 @@ important operational fixes.
 
 **Changed:**
 
-* Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names read the text with the builder's dialect and accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass subqueries as builders or expressions; pass join conditions through `on`. DDL and statement target names accept a name only.
-* `from_`, `join`, `Update.from_`, and `Merge.using` also accept a possibly qualified function call. Its arguments may hold literals, placeholders, and column references, but not subqueries, statements, or comments. A named function runs with the arguments it is given, and some engines provide functions that read files or run SQL text, so pass only trusted table text.
+* **Breaking:** function calls and subqueries in table strings now raise `SQLBuilderError`; pass expression objects instead, such as `from_(sql.raw("fn(:n)", n=1), alias="f")` or `from_(exp.func("fn", 1), alias="f")`. Table text holding a parenthesis, including inside a quoted name, is rejected.
+* Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names read the text with the builder's dialect and accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass join conditions through `on`. DDL and statement target names accept a name only. T-SQL builders also accept a table variable such as `@tv`.
+* Lateral joins still accept one possibly qualified function call as a string, without subqueries, statements, or comments. A named function runs with the arguments it is given, and some engines provide functions that read files or run SQL text, so this text must be trusted.
 
 **Fixed:**
 
 * Fixed `t AS u` rendering `AS AS u`, and rendered table aliases as quoted identifiers on every dialect.
 * Fixed the `MERGE` target renderer removing quotes from names that require them, and subquery aliases leaking into bound parameter names.
+* Fixed `join` and `Update.from_` dropping the alias on function expressions, and `from_` and `join` mishandling `sql.raw` fragments with parameters.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 

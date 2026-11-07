@@ -56,6 +56,9 @@ _TABLE_REFERENCE_RE: Final["re.Pattern[str]"] = re.compile(
     re.IGNORECASE,
 )
 _ALIAS_RE: Final["re.Pattern[str]"] = re.compile(_ALIAS_PATTERN)
+_TSQL_VARIABLE_RE: Final["re.Pattern[str]"] = re.compile(
+    rf"@(?P<name>[A-Za-z_][\w$#@]*)(?:\s+(?:as\s+)?(?P<alias>{_ALIAS_PATTERN}))?", re.IGNORECASE
+)
 _ALIAS_KEYWORD: Final[str] = "as"
 _EXPLICIT_QUOTE_META_KEY: Final[str] = "sqlspec_explicit_table_quote"
 _MAX_DIRECT_TABLE_PARTS: Final[int] = 3
@@ -171,12 +174,11 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
 def parse_table_expression(
     table_input: str, explicit_alias: "str | None" = None, dialect: "DialectType | None" = None
 ) -> exp.Expr:
-    r"""Parse table text into a table or function-call source.
+    r"""Parse table text into a table expression.
 
-    The accepted forms are a dotted table name or a function call, followed by an optional alias
-    written ``name alias`` or ``name AS alias``. The text is read once with the tokenizer of
-    ``dialect``, so BigQuery's ``\`project.dataset.table\``` becomes its qualified parts. Function
-    calls follow the rules of :func:`parse_table_function`.
+    The accepted form is a dotted table name followed by an optional alias written ``name alias``
+    or ``name AS alias``. The text is read once with the tokenizer of ``dialect``, so BigQuery's
+    ``\`project.dataset.table\``` becomes its qualified parts.
 
     Args:
         table_input: The table text.
@@ -184,25 +186,22 @@ def parse_table_expression(
         dialect: Dialect used to read the text.
 
     Returns:
-        The parsed source expression.
+        The parsed table expression.
 
     Raises:
-        SQLBuilderError: If the text is not a table name or function call with an optional alias.
+        SQLBuilderError: If the text is not a table name with an optional alias.
     """
-    if "(" in table_input:
-        tokens = _read_table_tokens(table_input, dialect, _table_reference_error(table_input))
-        if any(token.token_type == TokenType.L_PAREN for token in tokens):
-            return parse_table_function(table_input, explicit_alias, dialect)
     return _parse_table_reference(table_input, explicit_alias, dialect)
 
 
 def parse_table_function(
     function_input: str, explicit_alias: "str | None" = None, dialect: "DialectType | None" = None
 ) -> exp.Expr:
-    """Parse a possibly qualified function call used as a table source.
+    """Parse a possibly qualified function call used as a lateral join source.
 
-    Arguments may hold literals, placeholders, and column references. A named function still runs
-    with the arguments it is given, so function-call text must come from a trusted source.
+    Arguments may hold literals, placeholders, and column references. A named function runs with the
+    arguments it is given, and some engines provide functions that read files or run SQL text, so the
+    text must be trusted.
 
     Args:
         function_input: A single function call with an optional alias.
@@ -268,11 +267,22 @@ def _parse_table_reference(
         SQLBuilderError: If the text is anything other than a table name and optional alias, or
             if an alias appears both in the text and as ``explicit_alias``.
     """
+    if "(" in table_input:
+        msg = (
+            f"Invalid table reference {table_input!r}: table text cannot hold function calls or subqueries. "
+            "Pass an expression or builder instead, such as sql.raw('fn(1)') or exp.func('fn', 1), with alias=."
+        )
+        raise SQLBuilderError(msg)
+
     stripped = table_input.strip()
     inline_alias: str | None = None
     table: exp.Table | None
+    variable = _TSQL_VARIABLE_RE.fullmatch(stripped) if _reads_as_tsql(dialect) else None
     if _is_simple_identifier(stripped) and stripped.lower() != _ALIAS_KEYWORD:
         table = _table_from_identifiers([exp.Identifier(this=part, quoted=False) for part in stripped.split(".")])
+    elif variable is not None:
+        table = exp.Table(this=exp.Parameter(this=exp.Var(this=variable.group("name"))))
+        inline_alias = variable.group("alias")
     else:
         error = _table_reference_error(table_input)
         tokens = _read_table_tokens(stripped, dialect, error)
@@ -291,6 +301,10 @@ def _parse_table_reference(
     if alias_text:
         table.set("alias", exp.TableAlias(this=_parse_alias_identifier(alias_text)))
     return table
+
+
+def _reads_as_tsql(dialect: "DialectType | None") -> bool:
+    return type(_table_reader(dialect)).__name__ == "TSQL"
 
 
 def _table_reference_error(table_input: str) -> str:
