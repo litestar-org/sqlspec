@@ -21,8 +21,6 @@ class Db2MigrationTrackerMixin:
     __slots__ = ()
 
     version_table: str
-    version_table_name: str
-    version_table_schema: "str | None"
 
     def _tracking_table_ddl(self) -> "CreateTable":
         """Return Db2 DDL for the migration tracking table.
@@ -30,11 +28,9 @@ class Db2MigrationTrackerMixin:
         Returns:
             CREATE TABLE builder without an existence clause.
         """
-        builder = sql.create_table(self.version_table_name)
-        if self.version_table_schema:
-            builder.in_schema(self.version_table_schema)
         return (
-            builder
+            sql
+            .create_table(self.version_table)
             .column("version_num", "VARCHAR(32)", primary_key=True, not_null=True)
             .column("version_type", "VARCHAR(16)")
             .column("execution_sequence", "INTEGER")
@@ -49,7 +45,8 @@ class Db2MigrationTrackerMixin:
     def _tracking_table_exists_sql(self) -> "tuple[str, tuple[str | None, str]]":
         """Return the catalog probe for the tracking table and its bound names.
 
-        Unquoted identifiers are upper-folded while quoted identifiers keep their case.
+        Unquoted identifiers are upper-folded while quoted identifiers keep their case, matching how
+        Db2 catalogs the tracking table DDL.
 
         Returns:
             The probe SQL and its ``(schema, table)`` parameters; the schema is ``None`` for an

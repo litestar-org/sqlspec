@@ -18,6 +18,7 @@ important operational fixes.
 
 * DuckDB and Oracle restore the session schema after a migration, so the schema no longer carries into the next session on a pooled connection or into later migrations. `current()` no longer creates an empty tracking table in the previous migration's schema on DuckDB.
 * A failed migration now rolls back before the session schema is reset, on every adapter. The original error reaches the caller instead of an aborted-transaction error from the reset, and SQL Server no longer commits partial work from a failed transactional migration.
+* A quoted Db2 `version_table_name` such as `"App"."Tracker"` now creates the tracking table with that exact name, so later runs find it instead of repeating `CREATE TABLE`.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 

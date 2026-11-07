@@ -33,7 +33,9 @@ EXPECTED_TRACKING_DDL = """CREATE TABLE ddl_migrations (
 class _ProbeDriver:
     """Driver stand-in that answers the tracking-table probe from a scripted sequence or a catalog.
 
-    With a catalog, the probe finds the table when its bound ``(schema, table)`` pair is listed.
+    With a catalog, the probe finds the table when its bound ``(schema, table)`` pair is listed, and an
+    executed CREATE TABLE stores its rendered name the way Db2 does, folding unquoted parts to uppercase and
+    rejecting a name that already exists with ``SQL0601N``.
     """
 
     def __init__(self, probe_results: "list[Any]", catalog: "set[tuple[str | None, str]] | None" = None) -> None:
@@ -52,6 +54,14 @@ class _ProbeDriver:
 
     def execute(self, statement: Any) -> None:
         self.executed.append(statement)
+        if self.catalog is None:
+            return
+        rendered_name = statement.build(dialect="db2").sql.removeprefix("CREATE TABLE ").split(" (", 1)[0]
+        cataloged_name = split_db2_table_name(rendered_name)
+        if cataloged_name in self.catalog:
+            msg = f"SQL0601N {rendered_name} already exists"
+            raise RuntimeError(msg)
+        self.catalog.add(cataloged_name)
 
     def commit(self) -> None:
         self.commits += 1
@@ -176,6 +186,38 @@ async def test_mixed_case_tracking_table_is_created_once(db2_mode: DriverMode, m
 
     assert driver.executed == []
     assert len(driver.probes) == 2
+
+
+@pytest.mark.parametrize(
+    ("table_name", "table_schema", "rendered_name", "cataloged_name"),
+    [
+        ('"App"."Tracker"', None, '"App"."Tracker"', ("App", "Tracker")),
+        ('"QuotedMigrations"', None, '"QuotedMigrations"', (None, "QuotedMigrations")),
+        ('app."QuotedMigrations"', None, 'app."QuotedMigrations"', ("APP", "QuotedMigrations")),
+        ('"App".tracker', None, '"App".tracker', ("App", "TRACKER")),
+        ("tracker", '"App"', '"App".tracker', ("App", "TRACKER")),
+    ],
+    ids=["quoted-schema-and-table", "quoted-table", "quoted-table-only", "quoted-schema-only", "quoted-schema-option"],
+)
+async def test_quoted_tracking_table_is_created_once(
+    db2_mode: DriverMode,
+    monkeypatch: pytest.MonkeyPatch,
+    table_name: str,
+    table_schema: "str | None",
+    rendered_name: str,
+    cataloged_name: "tuple[str | None, str]",
+) -> None:
+    """DDL keeps the quoting the probe binds, so the second probe finds the table the first run created."""
+    tracker = db2_mode.tracker(table_name, table_schema)
+    _stub_schema_migration(monkeypatch, tracker, db2_mode)
+    driver = _probe_driver(db2_mode, [], catalog=set())
+
+    await db2_mode.call(tracker.ensure_tracking_table, driver)
+    await db2_mode.call(tracker.ensure_tracking_table, driver)
+
+    assert len(driver.executed) == 1
+    assert driver.executed[0].build(dialect="db2").sql.startswith(f"CREATE TABLE {rendered_name} (")
+    assert driver.catalog == {cataloged_name}
 
 
 @pytest.mark.parametrize(
