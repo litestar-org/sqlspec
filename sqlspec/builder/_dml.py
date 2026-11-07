@@ -1,19 +1,30 @@
 """Reusable mixins for INSERT/UPDATE/DELETE builders."""
 
+import re
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Final, Self, cast
 
+import sqlglot
 from mypy_extensions import trait
 from sqlglot import exp
+from sqlglot.errors import ParseError, TokenError
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._parsing_utils import _mark_explicit_table_quotes, extract_expression, resolve_value_expression
+from sqlspec.builder._parsing_utils import (
+    _SIMPLE_IDENTIFIER_RE,
+    _normalize_dialect,
+    _parse_dml_target,
+    _simple_column_expression,
+    resolve_value_expression,
+)
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import schema_dump
 from sqlspec.utils.type_guards import is_dict
 
 if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.builder._column import Column
     from sqlspec.builder._expression_wrappers import ExpressionWrapper
     from sqlspec.builder._select import Case
@@ -31,6 +42,8 @@ __all__ = (
 
 ARG_PAIR_COUNT = 2
 SINGLE_VALUE_COUNT = 1
+_RETURNING_WORD_PART = r"[A-Za-z0-9_$]*[A-Za-z_$][A-Za-z0-9_$]*"
+_RETURNING_WORD_RE: Final["re.Pattern[str]"] = re.compile(rf"{_RETURNING_WORD_PART}(?:\.{_RETURNING_WORD_PART}){{0,2}}")
 
 
 @trait
@@ -38,6 +51,8 @@ class DeleteFromClauseMixin:
     """Mixin providing FROM clause support for DELETE builders."""
 
     __slots__ = ()
+
+    dialect: "DialectType | None"
 
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
@@ -53,13 +68,15 @@ class DeleteFromClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", _mark_explicit_table_quotes(exp.to_table(table), table))
+        current_expr.set("this", _parse_dml_target(table, dialect=self.dialect))
         return self
 
 
 @trait
 class InsertIntoClauseMixin:
     __slots__ = ()
+
+    dialect: "DialectType | None"
 
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
@@ -75,7 +92,7 @@ class InsertIntoClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", _mark_explicit_table_quotes(exp.to_table(table), table))
+        current_expr.set("this", _parse_dml_target(table, dialect=self.dialect))
         return self
 
 
@@ -253,6 +270,8 @@ class InsertFromSelectMixin:
 class UpdateTableClauseMixin:
     __slots__ = ()
 
+    dialect: "DialectType | None"
+
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
 
@@ -264,8 +283,7 @@ class UpdateTableClauseMixin:
 
         assert current_expr is not None
 
-        table_expr: exp.Expr = _mark_explicit_table_quotes(exp.to_table(table_name, alias=alias), table_name)
-        current_expr.set("this", table_expr)
+        current_expr.set("this", _parse_dml_target(table_name, alias, dialect=self.dialect))
         return self
 
 
@@ -342,6 +360,8 @@ class UpdateSetClauseMixin:
 class UpdateFromClauseMixin:
     __slots__ = ()
 
+    dialect: "DialectType | None"
+
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
 
@@ -365,7 +385,7 @@ class UpdateFromClauseMixin:
 
         table_expr: exp.Expr
         if isinstance(table, str):
-            table_expr = exp.to_table(table, alias=alias)
+            table_expr = _parse_dml_target(table, alias, dialect=self.dialect)
         elif isinstance(table, exp.Expr):
             if isinstance(table, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=table.copy())
@@ -454,9 +474,14 @@ class ReturningClauseMixin:
     __slots__ = ()
 
     _expression: exp.Expr | None
+    dialect: "DialectType | None"
 
     def returning(self, *columns: "str | exp.Expr | Column | ExpressionWrapper | Case") -> Self:
         """Add RETURNING clause to the DML statement.
+
+        Each string is one SQL projection parsed with the builder dialect, so it must be trusted
+        text, as with ``Select.select``. Other arguments must be SQLGlot nodes, SQLSpec expression
+        wrappers, ``SQL`` objects, or query builders.
 
         Args:
             *columns: Columns or expressions to return.
@@ -465,7 +490,8 @@ class ReturningClauseMixin:
             The builder instance for method chaining.
 
         Raises:
-            SQLBuilderError: If expression not initialized or not DML.
+            SQLBuilderError: If expression not initialized or not DML, if no column is given, if a
+                string is not exactly one projection, or if an argument cannot render as SQL.
         """
         if self._expression is None:
             msg = "Cannot add RETURNING: expression not initialized."
@@ -473,6 +499,68 @@ class ReturningClauseMixin:
         if not isinstance(self._expression, (exp.Insert, exp.Update, exp.Delete)):
             msg = "RETURNING only supported for INSERT, UPDATE, DELETE statements."
             raise SQLBuilderError(msg)
-        returning_exprs = [extract_expression(col) for col in columns]
+        if not columns:
+            msg = "RETURNING requires at least one column or expression."
+            raise SQLBuilderError(msg)
+        returning_exprs = [
+            _parse_returning_column(col, self.dialect) if isinstance(col, str) else _resolve_returning_value(col, self)
+            for col in columns
+        ]
         self._expression.set("returning", exp.Returning(expressions=returning_exprs))
         return self
+
+
+def _parse_returning_column(column: str, dialect: "DialectType | None") -> exp.Expr:
+    """Parse one ``.returning()`` string into a single projection.
+
+    Bare and dotted words stay columns, including keyword spellings such as ``user`` and words
+    starting with a digit such as ``2fa``. A word of only digits is a number.
+
+    Args:
+        column: Projection text.
+        dialect: Dialect whose tokenizer and parser read the text.
+
+    Returns:
+        The parsed projection.
+
+    Raises:
+        SQLBuilderError: If the text is not exactly one projection.
+    """
+    stripped = column.strip()
+    if _SIMPLE_IDENTIFIER_RE.fullmatch(stripped):
+        return _simple_column_expression(stripped)
+    if _RETURNING_WORD_RE.fullmatch(stripped):
+        return exp.column(*reversed(stripped.split(".")))
+    msg = f"Invalid RETURNING expression {column!r}: pass one column or expression per argument."
+    try:
+        statements = sqlglot.parse(f"SELECT {stripped}", dialect=_normalize_dialect(dialect))
+    except (ParseError, TokenError) as exc:
+        raise SQLBuilderError(msg) from exc
+    select = statements[0] if len(statements) == 1 else None
+    if not isinstance(select, exp.Select) or len(select.expressions) != 1:
+        raise SQLBuilderError(msg)
+    if any(value for key, value in select.args.items() if key != "expressions"):
+        raise SQLBuilderError(msg)
+    projection: exp.Expr = select.expressions[0]
+    return projection
+
+
+def _resolve_returning_value(value: Any, builder: Any) -> exp.Expr:
+    """Render a non-string ``.returning()`` argument, rejecting anything that is not a SQL carrier.
+
+    Args:
+        value: Argument passed to ``.returning()``.
+        builder: Query builder receiving merged parameters.
+
+    Returns:
+        The projection expression.
+
+    Raises:
+        SQLBuilderError: If the value is not a SQLGlot node, expression wrapper, ``SQL`` object,
+            or query builder.
+    """
+    resolved = resolve_value_expression(value, builder, "returning")
+    if resolved is None:
+        msg = f"Unsupported RETURNING value of type {type(value).__name__}."
+        raise SQLBuilderError(msg)
+    return resolved
