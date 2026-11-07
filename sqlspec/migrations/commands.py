@@ -1885,7 +1885,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         Returns:
             Applied records, or an empty list when the tracking table does not exist.
         """
-        tables = driver.data_dictionary.get_tables(driver, schema=self.tracker.version_table_schema)
+        tables = driver.data_dictionary.get_tables(driver, schema=self.tracker.catalog_schema_name())
         if not self._tracking_table_exists(tables):
             return []
         return cast("list[AppliedMigrationRecord]", self.tracker.get_applied_migrations(driver))
@@ -2914,7 +2914,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         Returns:
             Applied records, or an empty list when the tracking table does not exist.
         """
-        tables = await driver.data_dictionary.get_tables(driver, schema=self.tracker.version_table_schema)
+        tables = await driver.data_dictionary.get_tables(driver, schema=self.tracker.catalog_schema_name())
         if not self._tracking_table_exists(tables):
             return []
         return cast("list[AppliedMigrationRecord]", await self.tracker.get_applied_migrations(driver))

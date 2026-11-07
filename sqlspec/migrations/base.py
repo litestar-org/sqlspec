@@ -17,6 +17,7 @@ from sqlspec.builder._insert import Insert
 from sqlspec.builder._select import Select
 from sqlspec.builder._update import Update
 from sqlspec.exceptions import MigrationError
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import resolve_default_schema, resolve_extension_migrations_path, resolve_tracker_schema
 from sqlspec.migrations.version import parse_version
@@ -205,6 +206,22 @@ class BaseMigrationTracker(Generic[DriverT]):
         if version_table_schema:
             return f"{version_table_schema}.{version_table_name}"
         return version_table_name
+
+    def catalog_schema_name(self) -> "str | None":
+        """Return the tracking table's schema in the form data dictionary getters accept.
+
+        Returns:
+            Schema name for metadata lookups, or None when the table is unqualified.
+        """
+        return self.version_table_schema
+
+    def _tracking_schema_target(self) -> SchemaTarget:
+        """Return the schema target that compares the tracking table's columns with its DDL.
+
+        Returns:
+            Target naming the tracking table for introspection and additive DDL.
+        """
+        return SchemaTarget(self.version_table, self._tracking_table_ddl())
 
     def _tracking_table_builder(self) -> "CreateTable":
         """Return a CREATE TABLE builder for the tracker table."""
