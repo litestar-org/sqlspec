@@ -2186,9 +2186,18 @@ def _merge_upsert_query(table: str, rows: list[dict[str, object]], case: DriverC
         .into(table, alias="t")
         .using(_merge_source(rows, case), alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name", price="src.price", stock="src.stock", category="src.category")
+        .when_matched_then_update(
+            name=sql.raw("src.name"),
+            price=sql.raw("src.price"),
+            stock=sql.raw("src.stock"),
+            category=sql.raw("src.category"),
+        )
         .when_not_matched_then_insert(
-            id="src.id", name="src.name", price="src.price", stock="src.stock", category="src.category"
+            id=sql.raw("src.id"),
+            name=sql.raw("src.name"),
+            price=sql.raw("src.price"),
+            stock=sql.raw("src.stock"),
+            category=sql.raw("src.category"),
         )
     )
 
@@ -2250,7 +2259,7 @@ def assert_sync_merge_contract(driver: object, case: DriverCase) -> None:
             .into(target, alias="t")
             .using(_merge_source([{"id": 1, "additional": 5, "new_price": Decimal("5.00")}], case), alias="src")
             .on("t.id = src.id")
-            .when_matched_then_update({"stock": "t.stock + src.additional", "price": "src.new_price"})
+            .when_matched_then_update({"stock": sql.raw("t.stock + src.additional"), "price": sql.raw("src.new_price")})
         )
         expression = _lower_keys(sync_driver.execute(f"SELECT price, stock FROM {target} WHERE id = 1").get_data()[0])
         assert _merge_price(expression["price"]) == 5.0
@@ -2290,7 +2299,12 @@ def assert_sync_merge_contract(driver: object, case: DriverCase) -> None:
             .into(target, alias="t")
             .using(source, alias="s")
             .on("t.id = s.id")
-            .when_matched_then_update(name="s.name", price="s.price", stock="s.stock", category="s.category")
+            .when_matched_then_update(
+                name=sql.raw("s.name"),
+                price=sql.raw("s.price"),
+                stock=sql.raw("s.stock"),
+                category=sql.raw("s.category"),
+            )
             .when_not_matched_then_insert(columns=["id", "name", "price", "stock", "category"])
         )
         assert sync_driver.select_value(f"SELECT COUNT(*) AS count FROM {target}") == 3
@@ -2354,7 +2368,7 @@ async def assert_async_merge_contract(driver: object, case: DriverCase) -> None:
             .into(target, alias="t")
             .using(_merge_source([{"id": 1, "additional": 5, "new_price": Decimal("5.00")}], case), alias="src")
             .on("t.id = src.id")
-            .when_matched_then_update({"stock": "t.stock + src.additional", "price": "src.new_price"})
+            .when_matched_then_update({"stock": sql.raw("t.stock + src.additional"), "price": sql.raw("src.new_price")})
         )
         expression = _lower_keys(
             (await async_driver.execute(f"SELECT price, stock FROM {target} WHERE id = 1")).get_data()[0]
@@ -2396,7 +2410,12 @@ async def assert_async_merge_contract(driver: object, case: DriverCase) -> None:
             .into(target, alias="t")
             .using(source, alias="s")
             .on("t.id = s.id")
-            .when_matched_then_update(name="s.name", price="s.price", stock="s.stock", category="s.category")
+            .when_matched_then_update(
+                name=sql.raw("s.name"),
+                price=sql.raw("s.price"),
+                stock=sql.raw("s.stock"),
+                category=sql.raw("s.category"),
+            )
             .when_not_matched_then_insert(columns=["id", "name", "price", "stock", "category"])
         )
         assert await async_driver.select_value(f"SELECT COUNT(*) AS count FROM {target}") == 3

@@ -298,7 +298,7 @@ def test_db2_merge_extended_typed_source_roundtrip(
         .into(db2_contract_table, alias="target")
         .using([values, {**values, "record_id": 2, "payload": None}] if multiple_rows else values, alias="src")
         .on("target.record_id = src.record_id")
-        .when_not_matched_then_insert({column: f"src.{column}" for column in values})
+        .when_not_matched_then_insert({column: sql.raw(f"src.{column}") for column in values})
     )
     db2_session.execute(query)
     db2_session.commit()

@@ -89,8 +89,8 @@ def test_build_dialect_override_with_merge() -> None:
         .into("products", alias="t")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     postgres_result = query.build(dialect="postgres")

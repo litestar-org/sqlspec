@@ -54,8 +54,8 @@ def test_merge_postgres_passes_validation() -> None:
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"))
     )
 
     result = query.build()
@@ -70,8 +70,8 @@ def test_merge_oracle_passes_validation() -> None:
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"))
     )
 
     result = query.build()
@@ -86,8 +86,8 @@ def test_merge_bigquery_passes_validation() -> None:
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"))
     )
 
     result = query.build()
@@ -102,8 +102,8 @@ def test_merge_tsql_passes_validation() -> None:
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"))
     )
 
     result = query.build()
@@ -118,8 +118,8 @@ def test_merge_teradata_passes_validation() -> None:
         .into("products", alias="t")
         .using({"id": 1}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"))
     )
 
     result = query.build()
@@ -160,8 +160,8 @@ def test_merge_unsupported_dialect_with_full_query() -> None:
         .into("products", alias="t")
         .using({"id": 1, "name": "Product 1"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     with pytest.raises(DialectNotSupportedError):
@@ -186,8 +186,8 @@ def test_merge_validation_with_bulk_data() -> None:
         .into("products", alias="t")
         .using(bulk_data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     with pytest.raises(DialectNotSupportedError):
@@ -205,8 +205,8 @@ def test_merge_supported_dialects_complete_chain() -> None:
             .into("products", alias="t")
             .using({"id": 1, "name": "Test"}, alias="src")
             .on("t.id = src.id")
-            .when_matched_then_update(name="src.name")
-            .when_not_matched_then_insert(id="src.id", name="src.name")
+            .when_matched_then_update(name=sql.raw("src.name"))
+            .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
         )
 
         result = query.build()

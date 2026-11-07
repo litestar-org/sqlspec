@@ -12,6 +12,7 @@ important operational fixes.
 **Breaking changes:**
 
 * `where_any()`, `where_not_any()`, their `or_where_*` forms, and `sql.not_any_()` no longer parse strings as subqueries, and raise `SQLBuilderError` for a string. Before: `.where_any("a", "SELECT x FROM y")`. After: `.where_any("a", sql.select("x").from_("y"))`.
+* `Merge` update and insert clauses always bind string values as parameters. Qualified columns, arithmetic over them, and `CURRENT_TIMESTAMP`, `CURRENT_DATE`, and `CURRENT_TIME` no longer render from strings, so existing calls keep building but store the literal text. Before: `.when_matched_then_update(name="src.name", updated_at="CURRENT_TIMESTAMP")`. After: `.when_matched_then_update(name=sql.raw("src.name"), updated_at=sql.raw("CURRENT_TIMESTAMP"))`.
 
 **Fixed:**
 
@@ -19,7 +20,6 @@ important operational fixes.
 * `Column`, `Case`, aggregates such as `sql.count()`, other expression wrappers, and subquery builders render as SQL in `Update.set()`, `Insert.values()`, `sql.values()`, conflict updates, `Merge` clauses, `where_eq()` and the other comparison helpers, `where_in()`, and `where_between()`, where they bound as parameter objects that drivers could not accept. Comparison helpers also render SQLGlot nodes, so `where_eq("a", exp.column("b"))` compares two columns.
 * `select()` and `select_only()` render subquery builders and SQLGlot query nodes as parenthesized scalar subqueries and merge their parameters, where they rendered `SELECT SELECT ...` and dropped the parameters.
 * Objects that only expose attributes named `expression`, `sql`, or `parameters`, such as a decoded request model with those fields, now bind as parameters at every builder value site. Only SQLGlot nodes, SQLSpec expression wrappers, `SQL` objects, and query builders render as SQL, so application data cannot become SQL through its field names. `where_any()`, `where_not_any()`, `where_exists()`, `where_not_exists()`, `where()`, and `join(on=...)` raise `SQLBuilderError` for such objects.
-* `Merge` clauses bind strings that do not tokenize, such as `o'brien`, or that carry SQL comments, where they raised `TokenError` or rendered the comment. Qualified source and target column references such as `s.a` keep rendering as columns.
 * `SQL` objects without parameters render at builder value sites, where they raised `AttributeError`, and `SQL` objects with positional parameters raise `SQLBuilderError`, because they cannot merge into named builder parameters. `select()` wraps `SQL` objects holding a query as scalar subqueries.
 * `where_any()` lists and `Merge.using()` dict sources render expression values as SQL. PostgreSQL and Oracle dict sources pass rows as JSON and raise `SQLBuilderError` for them.
 

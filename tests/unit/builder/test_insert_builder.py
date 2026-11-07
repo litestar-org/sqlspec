@@ -675,7 +675,9 @@ def test_conflict_update_leaves_caller_node_detached() -> None:
     assert node.parent is None
 
 
-@pytest.mark.parametrize("value", ["o'brien", "x; DROP TABLE t", "b + 1", "1 OR 1=1", "s.a"])
+@pytest.mark.parametrize(
+    "value", ["o'brien", "x; DROP TABLE t", "b + 1", "1 OR 1=1", "s.a", "EXCLUDED.a", "CURRENT_TIMESTAMP"]
+)
 def test_conflict_update_binds_plain_string_values(value: str) -> None:
     """Conflict updates bind every plain string."""
     statement = sql.insert("t", dialect="postgres").columns("id").values(1).on_conflict("id").do_update(a=value).build()

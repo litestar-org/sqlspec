@@ -1443,10 +1443,12 @@ def test_merge_complete_example() -> None:
         .merge("users")
         .using("new_users")
         .on("users.id = new_users.id")
-        .when_matched_then_update(name="new_users.name", email="new_users.email", updated_at=sql.raw("NOW()"))
+        .when_matched_then_update(
+            name=sql.raw("new_users.name"), email=sql.raw("new_users.email"), updated_at=sql.raw("NOW()")
+        )
         .when_not_matched_then_insert(
             ["id", "name", "email", "created_at"],
-            ["new_users.id", "new_users.name", "new_users.email", sql.raw("NOW()")],
+            [sql.raw("new_users.id"), sql.raw("new_users.name"), sql.raw("new_users.email"), sql.raw("NOW()")],
         )
         .when_not_matched_by_source_then_update(status="archived", archived_at=sql.raw("NOW()"))
     )
@@ -2033,19 +2035,22 @@ def test_build_and_to_statement_parity() -> None:
         sql.merge("users", dialect="mysql").using("src", alias="s").on("users.id = s.id").to_statement()
 
 
-def test_merge_literal_vs_qualified_column_reference() -> None:
+def test_merge_binds_strings_and_renders_explicit_columns() -> None:
     merge_stmt = (
         sql
         .merge("users", dialect="postgres")
         .using("staging", alias="src")
         .on("users.id = src.id")
-        .when_matched_then_update(status="active.pending", name="src.name")
-        .when_not_matched_then_insert(columns=["id", "status"], values=["src.id", "new.user"])
+        .when_matched_then_update(status="src.status", name=sql.raw("src.name"))
+        .when_not_matched_then_insert(columns=["id", "status"], values=[sql.raw("src.id"), "src.status"])
         .build()
     )
-    assert "active.pending" in merge_stmt.parameters.values()
-    assert "new.user" in merge_stmt.parameters.values()
-    assert '"src"."name"' in merge_stmt.sql or "src.name" in merge_stmt.sql
+    assert " ".join(merge_stmt.sql.split()) == (
+        'MERGE INTO users USING "staging" AS src ON ( "users"."id" = "src"."id" ) '
+        'WHEN MATCHED THEN UPDATE SET "status" = %(status)s, "name" = "src"."name" '
+        'WHEN NOT MATCHED THEN INSERT ("id", "status") VALUES ("src"."id", %(status_1)s)'
+    )
+    assert merge_stmt.parameters == {"status": "src.status", "status_1": "src.status"}
 
 
 def test_column_expression_boolean_combinators_do_not_mutate_operands() -> None:

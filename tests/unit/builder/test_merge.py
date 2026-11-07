@@ -20,7 +20,7 @@ def test_merge_basic_structure() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget", "price": 29.99}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name", price="src.price")
+        .when_matched_then_update(name=sql.raw("src.name"), price=sql.raw("src.price"))
         .when_not_matched_then_insert(columns=["id", "name", "price"], values=[1, "Widget", 29.99])
     )
     stmt = query.build()
@@ -120,7 +120,7 @@ def test_merge_when_matched_update_with_dict() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update({"name": "s.name", "price": "s.price"})
+        .when_matched_then_update({"name": sql.raw("s.name"), "price": sql.raw("s.price")})
     )
     stmt = query.build()
 
@@ -137,7 +137,9 @@ def test_merge_when_matched_update_with_kwargs() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update(name="s.name", price="s.price", updated_at="CURRENT_TIMESTAMP")
+        .when_matched_then_update(
+            name=sql.raw("s.name"), price=sql.raw("s.price"), updated_at=sql.raw("CURRENT_TIMESTAMP")
+        )
     )
     stmt = query.build()
 
@@ -173,7 +175,7 @@ def test_merge_when_matched_update_with_condition() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update({"price": "s.price"}, condition="s.price < t.price")
+        .when_matched_then_update({"price": sql.raw("s.price")}, condition="s.price < t.price")
     )
     stmt = query.build()
 
@@ -191,7 +193,7 @@ def test_merge_when_matched_update_with_condition_oracle() -> None:
         .into("products", alias="t")
         .using({"id": 1, "new_price": 5.00}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update({"price": "src.new_price"}, condition="src.new_price < t.price")
+        .when_matched_then_update({"price": sql.raw("src.new_price")}, condition="src.new_price < t.price")
     )
     stmt = query.build()
 
@@ -207,7 +209,7 @@ def test_merge_oracle_build_does_not_mutate_subsequent_postgres_build() -> None:
         .into("products", alias="t")
         .using("staging", alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update({"price": "src.new_price"}, condition="src.new_price < t.price")
+        .when_matched_then_update({"price": sql.raw("src.new_price")}, condition="src.new_price < t.price")
     )
 
     oracle_stmt = query.build(dialect="oracle")
@@ -273,7 +275,7 @@ def test_merge_when_matched_update_stores_condition_field() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update({"price": "s.price"}, condition="s.price < t.price")
+        .when_matched_then_update({"price": sql.raw("s.price")}, condition="s.price < t.price")
     )
 
     merge_expr = query.get_expression()
@@ -404,7 +406,7 @@ def test_merge_multiple_when_clauses() -> None:
         .into("products", alias="t")
         .using("staging", alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update(price="s.price", name="s.name")
+        .when_matched_then_update(price=sql.raw("s.price"), name=sql.raw("s.name"))
         .when_not_matched_then_insert(id=1, name="New", price=10.00)
         .when_not_matched_by_source_then_update(status="inactive")
     )
@@ -421,7 +423,9 @@ def test_merge_complex_scenario() -> None:
         .into("inventory", alias="inv")
         .using({"product_id": 100, "quantity": 50, "location": "Warehouse A"}, alias="src")
         .on("inv.product_id = src.product_id AND inv.location = src.location")
-        .when_matched_then_update(quantity="inv.quantity + src.quantity", last_updated="CURRENT_TIMESTAMP")
+        .when_matched_then_update(
+            quantity=sql.raw("inv.quantity + src.quantity"), last_updated=sql.raw("CURRENT_TIMESTAMP")
+        )
         .when_not_matched_then_insert(product_id=100, quantity=50, location="Warehouse A")
     )
     stmt = query.build()
@@ -443,7 +447,7 @@ def test_merge_with_constructor_table() -> None:
         .merge("products")
         .using("staging", alias="s")
         .on("products.id = s.id")
-        .when_matched_then_update(name="s.name")
+        .when_matched_then_update(name=sql.raw("s.name"))
     )
     stmt = query.build()
 
@@ -476,7 +480,7 @@ def test_merge_null_value_handling() -> None:
         .into("users", alias="t")
         .using({"id": 1, "email": None, "status": "active"}, alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update(email="s.email")
+        .when_matched_then_update(email=sql.raw("s.email"))
     )
     stmt = query.build()
 
@@ -493,7 +497,10 @@ def test_merge_column_reference_detection() -> None:
         .using("staging", alias="s")
         .on("t.id = s.id")
         .when_matched_then_update(
-            name="s.name", price="s.price", quantity="t.quantity + s.quantity", updated_at="CURRENT_TIMESTAMP"
+            name=sql.raw("s.name"),
+            price=sql.raw("s.price"),
+            quantity=sql.raw("t.quantity + s.quantity"),
+            updated_at=sql.raw("CURRENT_TIMESTAMP"),
         )
     )
     stmt = query.build()
@@ -510,7 +517,7 @@ def test_merge_subquery_as_source() -> None:
         .into("products", alias="t")
         .using(subquery, alias="s")
         .on("t.id = s.id")
-        .when_matched_then_update(name="s.name")
+        .when_matched_then_update(name=sql.raw("s.name"))
     )
     stmt = query.build()
 
@@ -551,7 +558,7 @@ def test_merge_using_list_of_dicts() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name", price="src.price")
+        .when_matched_then_update(name=sql.raw("src.name"), price=sql.raw("src.price"))
         .when_not_matched_then_insert(columns=["id", "name", "price"])
     )
     stmt = query.build()
@@ -572,7 +579,7 @@ def test_merge_using_list_of_dicts_postgres_dialect() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
     stmt = query.build()
 
@@ -590,7 +597,7 @@ def test_merge_using_single_dict_postgres_dialect() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
     stmt = query.build()
 
@@ -608,7 +615,7 @@ def test_merge_postgres_json_source_golden_sql_and_parameters() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name", price="src.price")
+        .when_matched_then_update(name=sql.raw("src.name"), price=sql.raw("src.price"))
         .when_not_matched_then_insert(columns=["id", "name", "price", "active", "meta", "missing"])
     )
 
@@ -661,7 +668,7 @@ def test_merge_oracle_json_source_golden_sql_and_parameters() -> None:
         .into("products", alias="t")
         .using(data, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name", price="src.price")
+        .when_matched_then_update(name=sql.raw("src.name"), price=sql.raw("src.price"))
         .when_not_matched_then_insert(columns=["id", "name", "price", "active", "meta", "missing"])
     )
 
@@ -742,7 +749,7 @@ def test_merge_mysql_dialect_raises_error() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     with pytest.raises(DialectNotSupportedError, match="MERGE statements are not supported in MYSQL"):
@@ -758,7 +765,7 @@ def test_merge_sqlite_dialect_raises_error() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     with pytest.raises(DialectNotSupportedError, match="MERGE statements are not supported in SQLITE"):
@@ -774,7 +781,7 @@ def test_merge_duckdb_dialect_raises_error() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     with pytest.raises(DialectNotSupportedError, match="MERGE statements are not supported in DUCKDB"):
@@ -807,7 +814,7 @@ def test_merge_postgres_dialect_allowed() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     stmt = query.build()
@@ -822,7 +829,7 @@ def test_merge_oracle_dialect_allowed() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     stmt = query.build()
@@ -855,7 +862,7 @@ def test_merge_no_dialect_allowed() -> None:
         .into("products")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
     )
 
     stmt = query.build()
@@ -870,8 +877,8 @@ def test_merge_property_shorthand() -> None:
         .into("products", alias="t")
         .using({"id": 1, "name": "Widget"}, alias="src")
         .on("t.id = src.id")
-        .when_matched_then_update(name="src.name")
-        .when_not_matched_then_insert(id="src.id", name="src.name")
+        .when_matched_then_update(name=sql.raw("src.name"))
+        .when_not_matched_then_insert(id=sql.raw("src.id"), name=sql.raw("src.name"))
     )
 
     assert isinstance(query, Merge)
@@ -1067,9 +1074,9 @@ def test_merge_embeds_query_builder() -> None:
     assert statement.parameters == {"z": 5}
 
 
-def test_merge_keeps_string_column_reference() -> None:
-    """A qualified string keeps its column-reference shorthand."""
-    statement = _merge_builder("tsql").when_matched_then_update(a="s.a").build()
+def test_merge_renders_explicit_column_reference() -> None:
+    """A column reference is given as an explicit expression."""
+    statement = _merge_builder("tsql").when_matched_then_update(a=sql.raw("s.a")).build()
 
     assert _normalized_sql(statement) == f"{MERGE_PREFIXES['tsql']}MATCHED THEN UPDATE SET [a] = [s].[a]"
     assert statement.parameters == {}
@@ -1184,6 +1191,11 @@ PLAIN_STRING_VALUES = [
     pytest.param("s.a /* note */", id="block-comment"),
     pytest.param("s.a + /* note */ s.b", id="arithmetic-comment"),
     pytest.param("s.a'", id="unterminated-quote"),
+    pytest.param("s.a", id="source-column"),
+    pytest.param("t.a", id="target-column"),
+    pytest.param("s.a + s.b", id="column-arithmetic"),
+    pytest.param("CURRENT_TIMESTAMP", id="current-timestamp"),
+    pytest.param("current_date", id="current-date"),
 ]
 
 
@@ -1205,7 +1217,7 @@ PLAIN_STRING_VALUES = [
     ],
 )
 def test_merge_binds_plain_string_values(apply: Any, suffix: str, value: str) -> None:
-    """Strings that are not column references bind, including ones the tokenizer rejects."""
+    """Every string value binds, whatever it looks like."""
     statement = apply(_merge_builder("tsql"), value).build()
 
     assert _normalized_sql(statement) == MERGE_PREFIXES["tsql"] + suffix
