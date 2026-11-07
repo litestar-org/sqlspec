@@ -11,21 +11,41 @@ Supported syntax by dialect:
     - CockroachDB (Postgres): table AS OF SYSTEM TIME timestamp
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from sqlglot import exp
+from sqlglot.generator import Generator
 
 from sqlspec.builder._generation import invalidate_generator_dispatch
 
 if TYPE_CHECKING:
-    from sqlglot.generator import Generator
     from sqlglot.generators.bigquery import BigQueryGenerator
     from sqlglot.generators.duckdb import DuckDBGenerator
     from sqlglot.generators.oracle import OracleGenerator
     from sqlglot.generators.postgres import PostgresGenerator
     from sqlglot.generators.snowflake import SnowflakeGenerator
 
-__all__ = ("create_temporal_table", "register_version_generators")
+__all__ = (
+    "create_temporal_table",
+    "create_temporal_version",
+    "is_temporal_version_expression",
+    "register_version_generators",
+)
+
+_TEMPORAL_VERSION_KEY: Final[str] = "sqlspec_temporal_version"
+
+
+def is_temporal_version_expression(expression: object) -> bool:
+    """Return True when an exp.Version node is a SQLSpec temporal version expression."""
+    return isinstance(expression, exp.Version) and bool(expression.args.get(_TEMPORAL_VERSION_KEY))
+
+
+def create_temporal_version(this: "str | None" = None, expression: "exp.Expr | str | None" = None) -> exp.Version:
+    """Construct an exp.Version node tagged as a SQLSpec temporal version."""
+    as_of_expr = exp.Literal.string(expression) if isinstance(expression, str) else expression
+    version = exp.Version(this=this or "TIMESTAMP", kind="AS OF", expression=as_of_expr)
+    version.set(_TEMPORAL_VERSION_KEY, True)
+    return version
 
 
 def create_temporal_table(
@@ -51,9 +71,7 @@ def create_temporal_table(
     else:
         table_expr = exp.to_table(str(table))
 
-    as_of_expr = exp.Literal.string(as_of) if isinstance(as_of, str) else as_of
-
-    version = exp.Version(this=kind or "TIMESTAMP", kind="AS OF", expression=as_of_expr)
+    version = create_temporal_version(this=kind, expression=as_of)
 
     table_expr.set("version", version)
     return table_expr
@@ -66,8 +84,8 @@ def register_version_generators() -> None:
     """Register dialect-specific version_sql generators.
 
     This function is idempotent - calling it multiple times has no effect
-    after the first call. It is called automatically when the builder
-    module is imported.
+    after the first call. It is called lazily when temporal tables or joins
+    are constructed.
 
     Registers custom SQL generators for temporal (time-travel) queries:
         - Default (no dialect): AS OF SYSTEM TIME (CockroachDB style)
@@ -86,7 +104,6 @@ def register_version_generators() -> None:
     from sqlglot.dialects.oracle import Oracle
     from sqlglot.dialects.postgres import Postgres
     from sqlglot.dialects.snowflake import Snowflake
-    from sqlglot.generator import Generator
 
     Generator.TRANSFORMS[exp.Version] = _default_version_sql
 
@@ -105,15 +122,19 @@ def register_version_generators() -> None:
 
 def _oracle_version_sql(self: "OracleGenerator", expression: exp.Version) -> str:
     """Oracle: AS OF TIMESTAMP timestamp or AS OF SCN scn."""
-    expr = self.sql(expression, "expression")
-    this = expression.name or "TIMESTAMP"
-    return f"AS OF {this} {expr}"
+    if is_temporal_version_expression(expression):
+        expr = self.sql(expression, "expression")
+        this = expression.name or "TIMESTAMP"
+        return f"AS OF {this} {expr}"
+    return self.version_sql(expression)
 
 
 def _bigquery_version_sql(self: "BigQueryGenerator", expression: exp.Version) -> str:
     """BigQuery: FOR SYSTEM_TIME AS OF timestamp."""
-    expr = self.sql(expression, "expression")
-    return f"FOR SYSTEM_TIME AS OF {expr}"
+    if is_temporal_version_expression(expression):
+        expr = self.sql(expression, "expression")
+        return f"FOR SYSTEM_TIME AS OF {expr}"
+    return self.version_sql(expression)
 
 
 def _snowflake_version_sql(self: "SnowflakeGenerator", expression: exp.Version) -> str:
@@ -121,32 +142,41 @@ def _snowflake_version_sql(self: "SnowflakeGenerator", expression: exp.Version) 
 
     AS OF is mapped to AT, and BEFORE is supported for point-before queries.
     """
-    kind = expression.text("kind")
-    expr = self.sql(expression, "expression")
-    this = expression.name or "TIMESTAMP"
-    if kind and "BEFORE" in kind.upper():
-        return f"BEFORE ({this} => {expr})"
-    return f"AT ({this} => {expr})"
+    if is_temporal_version_expression(expression):
+        kind = expression.text("kind")
+        expr = self.sql(expression, "expression")
+        this = expression.name or "TIMESTAMP"
+        if kind and "BEFORE" in kind.upper():
+            return f"BEFORE ({this} => {expr})"
+        return f"AT ({this} => {expr})"
+    return self.version_sql(expression)
 
 
 def _duckdb_version_sql(self: "DuckDBGenerator", expression: exp.Version) -> str:
     """DuckDB: AT (TIMESTAMP => timestamp)."""
-    expr = self.sql(expression, "expression")
-    this = expression.name or "TIMESTAMP"
-    return f"AT ({this} => {expr})"
+    if is_temporal_version_expression(expression):
+        expr = self.sql(expression, "expression")
+        this = expression.name or "TIMESTAMP"
+        return f"AT ({this} => {expr})"
+    return self.version_sql(expression)
 
 
 def _cockroachdb_version_sql(self: "PostgresGenerator", expression: exp.Version) -> str:
     """CockroachDB (via Postgres dialect): AS OF SYSTEM TIME timestamp."""
-    expr = self.sql(expression, "expression")
-    return f"AS OF SYSTEM TIME {expr}"
+    if is_temporal_version_expression(expression):
+        expr = self.sql(expression, "expression")
+        return f"AS OF SYSTEM TIME {expr}"
+    return self.version_sql(expression)
 
 
 def _default_version_sql(self: "Generator", expression: exp.Version) -> str:
     """Default: AS OF SYSTEM TIME timestamp (CockroachDB style).
 
     When no dialect is specified, we default to CockroachDB/Postgres style
-    which is commonly expected for time-travel queries.
+    which is commonly expected for time-travel queries. Dialect subclasses
+    that inherit this transform fall back to their own ``version_sql``.
     """
-    expr = self.sql(expression, "expression")
-    return f"AS OF SYSTEM TIME {expr}"
+    if type(self) is Generator and is_temporal_version_expression(expression):
+        expr = self.sql(expression, "expression")
+        return f"AS OF SYSTEM TIME {expr}"
+    return self.version_sql(expression)
