@@ -217,6 +217,37 @@ class CustomAsyncConfig(AsyncDatabaseConfig):
     )
 ```
 
+#### Declaring ADK Store Options
+
+ADK configuration validation accepts `ADKConfig` keys, the `*ADKConfig` keys of a built-in adapter, and the `extension_config_options` of `adk_store_class` and `adk_memory_store_class`. Options from both stores are accepted on every ADK configuration path, so declare each key on either store. Any other key raises `ImproperConfigurationError`.
+
+```python
+from typing import ClassVar
+
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore, SqliteADKStore
+
+
+class WarehouseADKStore(SqliteADKStore):
+    extension_config_options: ClassVar[frozenset[str]] = frozenset({"warehouse_partition"})
+
+
+class WarehouseConfig(SqliteConfig):
+    adapter_name: ClassVar[str | None] = "warehouse"
+    adk_store_class = WarehouseADKStore
+    adk_memory_store_class = SqliteADKMemoryStore
+
+
+config = WarehouseConfig(
+    connection_config={"database": ":memory:"},
+    extension_config={"adk": {"session_table": "agent_session", "warehouse_partition": "daily"}},
+)
+```
+
+An `adapter_name` outside `sqlspec.adapters` has no `*ADKConfig` keys. Its stores declare every key outside `ADKConfig`, including base memory settings such as `vector_dimensions`. To extend a parent store's options, write `Parent.extension_config_options | frozenset({"extra"})`, because a subclass value replaces the inherited one.
+
+An `adapter_name` outside `sqlspec.adapters` with no explicit stores skips option validation because no store declares options. Enabled ADK features raise `SQLSpecError` when the store class cannot be imported.
+
 ## Driver Adapter Skeleton
 
 Below is a minimal synchronous driver skeleton demonstrating the required `SyncDriverAdapterBase` methods:
