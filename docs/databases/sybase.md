@@ -151,6 +151,7 @@ Pass `SybaseDriverFeatures` keys inside `driver_features={...}` on `SybaseConfig
 - **Pagination (`SELECT TOP n` vs `ROWS LIMIT`)**: Zero-offset bounded queries (including ADK session, event, and memory queries) emit `SELECT TOP n` without an `OFFSET` clause. Positive offsets emit `ROWS LIMIT n OFFSET m` on ASE 16.0+ modes that support it.
 - **Arrow Schema Inference and Staged Storage Loads**: `CreateTable.from_arrow_schema()` maps string primary keys to `VARCHAR(255)` and raises `SQLBuilderError` for decimal precision above `38`. During staged storage loads (`load_from_arrow` / `load_from_storage`) with `conflict_keys`, SQLSpec updates matching rows first and inserts new rows in a second statement; coordinate concurrent loads that target the same keys.
 - **System Catalog Introspection**: Schema discovery queries `dbo.sysobjects`, `dbo.syscolumns`, `dbo.sysindexes`, `dbo.sysreferences`, and `dbo.systypes`.
+- **Migration Schemas**: `-- schema:` directives, `default_schema`, and `version_table_schema` raise `MigrationError`. Qualify objects in migration SQL, and set `version_table_name` to `"<schema>.ddl_migrations"` to place the tracking table.
 
 ## See Also
 
