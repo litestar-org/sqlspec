@@ -150,3 +150,60 @@ def test_as_of_with_string_alias() -> None:
     query = sql.select("*").from_("users", alias="u", as_of="2024-01-01")
     built = normalize_sql(query.build(dialect="oracle").sql)
     assert built == "SELECT * FROM users AS OF TIMESTAMP '2024-01-01' u"
+
+
+def test_temporal_registration_does_not_mutate_non_builder_version_rendering() -> None:
+    """Non-builder exp.Version expressions should retain default sqlglot rendering before and after temporal joins."""
+    code = (
+        "from sqlglot import exp; "
+        "from sqlspec import sql; "
+        "table = exp.Table(this=exp.to_identifier('t'), version=exp.Version(this='SCN', kind='AS OF', expression=exp.Literal.number(42))); "
+        "query = exp.select('*').from_(table); "
+        "dialects = (None, 'duckdb', 'bigquery', 'oracle', 'snowflake', 'postgres'); "
+        "before = {d: query.sql(d) for d in dialects}; "
+        "sql.select('*').from_('a').join('b', on='a.id = b.id', as_of='2024-01-01'); "
+        "after = {d: query.sql(d) for d in dialects}; "
+        "assert before == after, f'{before} != {after}'"
+    )
+    result = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_non_builder_version_rendering_unaffected() -> None:
+    table = exp.Table(
+        this=exp.to_identifier("t"), version=exp.Version(this="SCN", kind="AS OF", expression=exp.Literal.number(42))
+    )
+    query = exp.select("*").from_(table)
+    assert query.sql(dialect="duckdb") == "SELECT * FROM t FOR SCN AS OF 42"
+    assert query.sql(dialect="bigquery") == "SELECT * FROM t FOR SCN AS OF 42"
+    assert query.sql() == "SELECT * FROM t FOR SCN AS OF 42"
+
+
+def test_temporal_version_cache_key_isolation() -> None:
+    """Builder-tagged and untagged exp.Version nodes must not collide in the builder/optimizer cache."""
+    raw_table = exp.Table(
+        this=exp.to_identifier("users"),
+        version=exp.Version(this="TIMESTAMP", kind="AS OF", expression=exp.Literal.string("2024-01-01")),
+    )
+    raw_built = normalize_sql(sql.select("*").from_(raw_table).build(dialect="duckdb").sql)
+    builder_built = normalize_sql(sql.select("*").from_("users", as_of="2024-01-01").build(dialect="duckdb").sql)
+    raw_built_again = normalize_sql(sql.select("*").from_(raw_table).build(dialect="duckdb").sql)
+
+    assert raw_built == "SELECT * FROM users FOR TIMESTAMP AS OF '2024-01-01' AS users"
+    assert builder_built == "SELECT * FROM users AT (TIMESTAMP => '2024-01-01') AS users"
+    assert raw_built_again == raw_built
+
+
+def test_temporal_registration_preserves_late_imported_dialect_version_sql() -> None:
+    """Dialects imported after register_version_generators() must keep their own version_sql."""
+    code = (
+        "import sys; "
+        "from sqlspec import sql; "
+        "from sqlspec.builder._temporal import register_version_generators; "
+        "assert 'sqlglot.dialects.tsql' not in sys.modules; "
+        "register_version_generators(); "
+        "built = sql.select('*').from_('t', as_of='2024-01-01').build(dialect='tsql').sql; "
+        "assert 'FOR SYSTEM_TIME AS OF' in built, built"
+    )
+    result = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
