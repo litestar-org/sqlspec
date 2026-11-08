@@ -8,9 +8,16 @@ from typing import Any, Self
 
 import pytest
 
-from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError
-from sqlspec.storage.backends.obstore import _SIGNABLE_PROTOCOLS, ObStoreBackend
+from sqlspec.exceptions import (
+    FileExistsInStorageError,
+    MissingDependencyError,
+    StorageCapabilityError,
+    StorageOperationFailedError,
+    StoragePathTraversalError,
+)
+from sqlspec.storage.backends.obstore import _SIGNABLE_PROTOCOLS, ObStoreBackend, _AsyncObstoreWriteStream
 from sqlspec.typing import OBSTORE_INSTALLED, PYARROW_INSTALLED
+from sqlspec.utils.type_guards import supports_direct_stream_write
 
 
 class _FakeBytes(bytes):
@@ -1128,3 +1135,318 @@ async def test_write_bytes_forwards_valid_options_and_validates_kwargs() -> None
 
     with pytest.raises(ValueError, match="Conflicting write options"):
         await store.write_bytes_async("obj.bin", b"a", overwrite=False, mode="overwrite")
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+def test_obstore_direct_stream_write_protocol_and_capabilities() -> None:
+    """ObStoreBackend satisfies DirectStreamWriteProtocol and reports format support."""
+    store = ObStoreBackend("memory://")
+    assert supports_direct_stream_write(store) is True
+
+    supported_formats: tuple[Any, ...] = ("parquet", "arrow-ipc", "csv")
+    for fmt in supported_formats:
+        assert store.supports_direct_arrow_write(fmt, overwrite=True) is True
+        assert store.supports_direct_arrow_write(fmt, overwrite=False) is False
+
+    unsupported_formats: tuple[Any, ...] = ("json", "jsonl", "unsupported")
+    for fmt in unsupported_formats:
+        assert store.supports_direct_arrow_write(fmt, overwrite=True) is False
+        assert store.supports_direct_arrow_write(fmt, overwrite=False) is False
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+@pytest.mark.parametrize("use_file_uri", [False, True])
+async def test_open_write_stream_sync_and_async_round_trip(tmp_path: Path, use_file_uri: bool) -> None:
+    """Sync and async write streams round trip bytes and manage closed state."""
+    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
+    store = ObStoreBackend(uri)
+    extra_kwargs = {"attributes": {"Content-Type": "application/octet-stream"}} if not use_file_uri else {}
+
+    with store.open_write_stream_sync(
+        "sync_stream.bin",
+        chunk_size=1024,
+        **extra_kwargs,
+    ) as sync_sink:
+        assert sync_sink.closed is False
+        sync_sink.write(bytearray(b"part-1"))
+        sync_sink.write(memoryview(b"-part-2"))
+
+    assert sync_sink.closed is True
+    assert store.read_bytes_sync("sync_stream.bin") == b"part-1-part-2"
+
+    async with store.open_write_stream_async(
+        "async_stream.bin",
+        chunk_size=1024,
+    ) as async_sink:
+        assert async_sink.closed is False
+        assert isinstance(async_sink.closed, bool)
+        await async_sink.write(bytearray(b"async-1"))
+        await async_sink.write(memoryview(b"-async-2"))
+
+    assert async_sink.closed is True
+    assert isinstance(async_sink.closed, bool)
+    assert await store.read_bytes_async("async_stream.bin") == b"async-1-async-2"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+@pytest.mark.parametrize("use_file_uri", [False, True])
+async def test_open_write_stream_mid_write_failure_preserves_existing_object(
+    tmp_path: Path, use_file_uri: bool
+) -> None:
+    """Failures inside stream blocks abort uploads and preserve existing objects."""
+    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
+    store = ObStoreBackend(uri)
+
+    store.write_bytes_sync("existing.parquet", b"v1-intact")
+
+    with pytest.raises(RuntimeError, match="producer boom sync"):
+        with store.open_write_stream_sync("existing.parquet") as sink:
+            sink.write(b"corrupted-partial")
+            raise RuntimeError("producer boom sync")
+
+    assert store.read_bytes_sync("existing.parquet") == b"v1-intact"
+
+    with pytest.raises(RuntimeError, match="producer boom sync fresh"):
+        with store.open_write_stream_sync("never_created_sync.parquet") as sink:
+            sink.write(b"corrupted-partial")
+            raise RuntimeError("producer boom sync fresh")
+
+    assert store.exists_sync("never_created_sync.parquet") is False
+
+    with pytest.raises(RuntimeError, match="producer boom async"):
+        async with store.open_write_stream_async("existing.parquet") as async_sink:
+            await async_sink.write(b"corrupted-partial")
+            raise RuntimeError("producer boom async")
+
+    assert await store.read_bytes_async("existing.parquet") == b"v1-intact"
+
+    with pytest.raises(RuntimeError, match="producer boom async fresh"):
+        async with store.open_write_stream_async("never_created_async.parquet") as async_sink:
+            await async_sink.write(b"corrupted-partial")
+            raise RuntimeError("producer boom async fresh")
+
+    assert await store.exists_async("never_created_async.parquet") is False
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
+@pytest.mark.parametrize("use_file_uri", [False, True])
+async def test_write_arrow_failure_preserves_existing_object(tmp_path: Path, use_file_uri: bool) -> None:
+    """Arrow write encoding failures abort without mutating or deleting existing objects."""
+    import pyarrow as pa
+
+    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
+    store = ObStoreBackend(uri)
+
+    store.write_bytes_sync("existing.parquet", b"v1-intact")
+    unwritable = pa.table({
+        "u": pa.UnionArray.from_sparse(pa.array([0, 1], pa.int8()), [pa.array([1, 2]), pa.array(["a", "b"])])
+    })
+
+    with pytest.raises(StorageOperationFailedError):
+        store.write_arrow_sync("existing.parquet", unwritable)
+    assert store.read_bytes_sync("existing.parquet") == b"v1-intact"
+
+    with pytest.raises(StorageOperationFailedError):
+        await store.write_arrow_async("existing.parquet", unwritable)
+    assert await store.read_bytes_async("existing.parquet") == b"v1-intact"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+@pytest.mark.parametrize("use_file_uri", [False, True])
+async def test_open_write_stream_async_cancelled_preserves_existing_object(tmp_path: Path, use_file_uri: bool) -> None:
+    """Task cancellation mid-stream aborts upload and preserves existing objects."""
+    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
+    store = ObStoreBackend(uri)
+
+    store.write_bytes_sync("existing.parquet", b"v1-intact")
+
+    started = asyncio.Event()
+
+    async def write_existing() -> None:
+        async with store.open_write_stream_async("existing.parquet") as sink:
+            await sink.write(b"partial-data")
+            started.set()
+            await asyncio.sleep(10)
+
+    task = asyncio.create_task(write_existing())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert await store.read_bytes_async("existing.parquet") == b"v1-intact"
+
+    fresh_started = asyncio.Event()
+
+    async def write_fresh() -> None:
+        async with store.open_write_stream_async("never_created_cancelled.parquet") as sink:
+            await sink.write(b"partial-data")
+            fresh_started.set()
+            await asyncio.sleep(10)
+
+    fresh_task = asyncio.create_task(write_fresh())
+    await fresh_started.wait()
+    fresh_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await fresh_task
+
+    assert await store.exists_async("never_created_cancelled.parquet") is False
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_async_obstore_write_stream_cancel_during_commit() -> None:
+    """Cancellation during commit completes upload before propagating CancelledError."""
+    loop = asyncio.get_running_loop()
+    commit_entered = asyncio.Event()
+    commit_gate = loop.create_future()
+    commit_finished = False
+
+    class _SpyAsyncWriter:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            nonlocal commit_finished
+            if exc_type is None:
+                commit_entered.set()
+                await commit_gate
+                commit_finished = True
+
+        def write(self, data: bytes) -> int:
+            return len(data)
+
+    stream = _AsyncObstoreWriteStream(
+        None,
+        "dummy.parquet",
+        {},
+        backend_type="obstore",
+        log_fields=None,
+    )
+    stream._entered = _SpyAsyncWriter()
+
+    async def do_exit() -> None:
+        await stream.__aexit__(None, None, None)
+
+    task = asyncio.create_task(do_exit())
+    await commit_entered.wait()
+    task.cancel()
+    await asyncio.sleep(0.01)
+    task.cancel()
+    assert commit_finished is False
+
+    commit_gate.set_result(None)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert commit_finished is True
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
+@pytest.mark.parametrize("use_file_uri", [False, True])
+async def test_write_arrow_multi_format_and_snappy_and_single_log(
+    tmp_path: Path, use_file_uri: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """write_arrow_* supports parquet/ipc/csv, defaults to snappy, logs once, and supports overwrite=False."""
+    import io
+    from decimal import Decimal
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    import sqlspec.storage.backends.obstore as obstore_module
+
+    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
+    store = ObStoreBackend(uri)
+
+    table = pa.table({
+        "id": [1, 2],
+        "amt": pa.array([Decimal("12.34"), Decimal("56.78")], type=pa.decimal64(10, 2)),
+    })
+
+    log_events: list[dict[str, Any]] = []
+
+    def fake_log_storage_event(event_name: str, **kwargs: Any) -> None:
+        if event_name == "storage.write":
+            log_events.append(dict(kwargs))
+
+    monkeypatch.setattr(obstore_module, "log_storage_event", fake_log_storage_event)
+
+    log_events.clear()
+    store.write_arrow_sync("test_snappy.parquet", table)
+    assert len(log_events) == 1
+    assert log_events[0]["operation"] == "write_arrow"
+    parquet_bytes = store.read_bytes_sync("test_snappy.parquet")
+    meta = pq.ParquetFile(io.BytesIO(parquet_bytes)).metadata
+    assert meta.row_group(0).column(0).compression == "SNAPPY"
+
+    log_events.clear()
+    await store.write_arrow_async("test_snappy_async.parquet", table)
+    assert len(log_events) == 1
+    assert log_events[0]["operation"] == "write_arrow"
+
+    store.write_arrow_sync("test.ipc", table, format_hint="arrow-ipc")
+    from sqlspec.storage._arrow_payload import decode_arrow_payload
+
+    assert decode_arrow_payload(store.read_bytes_sync("test.ipc"), "arrow-ipc").num_rows == 2
+
+    store.write_arrow_sync("test.csv", table, format_hint="csv")
+    csv_bytes = store.read_bytes_sync("test.csv")
+    assert b"12.34" in csv_bytes
+
+    store.write_arrow_sync("once_sync.parquet", table, overwrite=False, buffer_size=65536)
+    with pytest.raises(FileExistsInStorageError):
+        store.write_arrow_sync("once_sync.parquet", table, overwrite=False, buffer_size=65536)
+
+    await store.write_arrow_async("once_async.parquet", table, overwrite=False, buffer_size=65536)
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_arrow_async("once_async.parquet", table, overwrite=False, buffer_size=65536)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
+async def test_pre_execution_validation_errors(tmp_path: Path) -> None:
+    """Pre-execution validation errors propagate without StorageOperationFailedError wrapping."""
+    import pyarrow as pa
+
+    store = ObStoreBackend(f"file://{tmp_path}")
+    table = pa.table({"a": [1]})
+
+    with pytest.raises(StorageCapabilityError):
+        store.open_write_stream_sync("k", overwrite=False)
+
+    with pytest.raises(StorageCapabilityError):
+        store.open_write_stream_async("k", mode="create")
+
+    with pytest.raises(ValueError, match="Conflicting write options"):
+        store.open_write_stream_sync("k", overwrite=False, mode="overwrite")
+
+    with pytest.raises(ValueError, match="Conflicting buffer sizes"):
+        store.open_write_stream_sync("k", buffer_size=1024, chunk_size=2048)
+
+    with pytest.raises(ValueError, match="buffer_size must be positive"):
+        store.open_write_stream_sync("k", buffer_size=0)
+
+    with pytest.raises(ValueError, match="chunk_size must be positive"):
+        store.open_write_stream_sync("k", chunk_size=0)
+
+    with pytest.raises(TypeError, match="Unsupported write stream keyword argument"):
+        store.open_write_stream_sync("k", bogus=1)
+
+    with pytest.raises(StoragePathTraversalError):
+        store.open_write_stream_sync("../outside.bin")
+
+    json_format: Any = "json"
+    with pytest.raises(StorageCapabilityError):
+        store.write_arrow_sync("k", table, format_hint=json_format)
+
+    with pytest.raises(TypeError, match="Unsupported write option"):
+        await store.write_arrow_async("k", table, bogus=1)
+
+    with pytest.raises(ValueError, match="Conflicting buffer sizes"):
+        store.write_arrow_sync("k", table, overwrite=False, buffer_size=1024, chunk_size=2048)
+
+    with pytest.raises(ValueError, match="buffer_size must be positive"):
+        store.write_arrow_sync("k", table, overwrite=False, buffer_size=0)
+
+    with pytest.raises(ValueError, match="chunk_size must be positive"):
+        store.write_arrow_sync("k", table, overwrite=False, chunk_size=0)
+
