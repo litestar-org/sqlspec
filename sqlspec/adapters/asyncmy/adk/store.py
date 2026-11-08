@@ -2,10 +2,10 @@
 
 import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.asyncmy._typing import AsyncmyCursor, AsyncmyProgrammingError, AsyncmyRawCursor
-from sqlspec.adapters.asyncmy.core import resolve_many_rowcount, resolve_rowcount
+from sqlspec.adapters.asyncmy.core import format_identifier, resolve_many_rowcount, resolve_rowcount
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -22,6 +22,27 @@ if TYPE_CHECKING:
 __all__ = ("AsyncmyADKConfig", "AsyncmyADKMemoryStore", "AsyncmyADKStore")
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+
+
+def _mysql_split_table(table: str) -> tuple[str | None, str]:
+    """Split a validated 1- or 2-part MySQL table name into (database, bare_table)."""
+    if "." in table:
+        database_name, bare_table = table.split(".", 1)
+        return database_name, bare_table
+    return None, table
+
+
+def _mysql_table_ref(table: str) -> str:
+    """Render database.table via format_identifier while keeping bare names unquoted."""
+    if "." in table:
+        return format_identifier(table)
+    return table
+
+
+def _mysql_index_name(table: str, suffix: str) -> str:
+    """Derive a per-table MySQL index identifier from the bare table name."""
+    _, bare_table = _mysql_split_table(table)
+    return f"idx_{bare_table}_{suffix}"
 
 
 class AsyncmyADKConfig(ADKConfig):
@@ -57,6 +78,8 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     __slots__ = ("_json_deserializer", "_json_serializer")
 
+    _max_table_name_parts: ClassVar[int] = 2
+
     def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy ADK store."""
         super().__init__(config)
@@ -83,13 +106,13 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
+            INSERT INTO {_mysql_table_ref(self._session_table)} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
             params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            INSERT INTO {_mysql_table_ref(self._session_table)} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
             params = (session_id, app_name, user_id, state_json)
@@ -119,7 +142,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     await cursor.execute(
                         f"""
-                        UPDATE {self._session_table}
+                        UPDATE {_mysql_table_ref(self._session_table)}
                         SET update_time = UTC_TIMESTAMP(6)
                         WHERE app_name = %s AND user_id = %s AND id = %s
                         """,
@@ -130,7 +153,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(
                     f"""
                     SELECT id, app_name, user_id, state, create_time, update_time
-                    FROM {self._session_table}
+                    FROM {_mysql_table_ref(self._session_table)}
                     WHERE app_name = %s AND user_id = %s AND id = %s
                     """,
                     (app_name, user_id, session_id),
@@ -145,7 +168,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
         sql = f"""
-        UPDATE {self._session_table}
+        UPDATE {_mysql_table_ref(self._session_table)}
         SET state = %s, update_time = UTC_TIMESTAMP(6)
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
@@ -191,7 +214,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and all associated events."""
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
+        sql = f"DELETE FROM {_mysql_table_ref(self._session_table)} WHERE app_name = %s AND user_id = %s AND id = %s"
 
         async with (
             self._config.provide_connection() as conn,
@@ -203,7 +226,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     async def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
         sql = f"""
-        INSERT INTO {self._events_table} (
+        INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
@@ -228,18 +251,18 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     ) -> StoredSession:
         """Atomically append an event and update session + scoped state."""
         insert_sql = f"""
-        INSERT INTO {self._events_table} (
+        INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         update_sql = f"""
-        UPDATE {self._session_table}
+        UPDATE {_mysql_table_ref(self._session_table)}
         SET state = %s, update_time = UTC_TIMESTAMP(6)
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
         select_sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
+        FROM {_mysql_table_ref(self._session_table)}
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
@@ -305,7 +328,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         sql = f"""
         SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        FROM {self._events_table}
+        FROM {_mysql_table_ref(self._events_table)}
         WHERE {" AND ".join(where_clauses)}
         ORDER BY timestamp ASC{limit_clause}
         """
@@ -325,7 +348,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
-        sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+        sql = f"DELETE FROM {_mysql_table_ref(self._events_table)} WHERE timestamp < %s"
         params: list[Any] = [before]
         if app_name is not None:
             sql += " AND app_name = %s"
@@ -346,7 +369,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the threshold."""
-        sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+        sql = f"DELETE FROM {_mysql_table_ref(self._session_table)} WHERE update_time < %s"
         params: list[Any] = [updated_before]
         if app_name is not None:
             sql += " AND app_name = %s"
@@ -367,7 +390,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete user state rows whose update_time predates the threshold."""
-        sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s"
+        sql = f"DELETE FROM {_mysql_table_ref(self._user_state_table)} WHERE update_time < %s"
         params: list[Any] = [updated_before]
         if app_name is not None:
             sql += " AND app_name = %s"
@@ -388,7 +411,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
+        sql = f"SELECT state FROM {_mysql_table_ref(self._app_state_table)} WHERE app_name = %s"
 
         try:
             async with (
@@ -405,7 +428,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
+        sql = f"SELECT state FROM {_mysql_table_ref(self._user_state_table)} WHERE app_name = %s AND user_id = %s"
 
         try:
             async with (
@@ -444,7 +467,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
+        sql = f"SELECT value FROM {_mysql_table_ref(self._metadata_table)} WHERE `key` = %s"
 
         try:
             async with (
@@ -496,15 +519,15 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     def _drop_app_states_table_sql(self) -> str:
         """Get MySQL DROP TABLE SQL for app-scoped state."""
-        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+        return f"DROP TABLE IF EXISTS {_mysql_table_ref(self._app_state_table)}"
 
     def _drop_user_states_table_sql(self) -> str:
         """Get MySQL DROP TABLE SQL for user-scoped state."""
-        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+        return f"DROP TABLE IF EXISTS {_mysql_table_ref(self._user_state_table)}"
 
     def _drop_metadata_table_sql(self) -> str:
         """Get MySQL DROP TABLE SQL for ADK metadata."""
-        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+        return f"DROP TABLE IF EXISTS {_mysql_table_ref(self._metadata_table)}"
 
     def _drop_tables_sql(self) -> "list[str]":
         """Get MySQL DROP TABLE SQL statements."""
@@ -512,8 +535,8 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
             self._drop_app_states_table_sql(),
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
+            f"DROP TABLE IF EXISTS {_mysql_table_ref(self._events_table)}",
+            f"DROP TABLE IF EXISTS {_mysql_table_ref(self._session_table)}",
         ]
 
 
@@ -521,6 +544,8 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
     """MySQL/MariaDB ADK memory store using AsyncMy driver."""
 
     __slots__ = ("_json_deserializer", "_json_serializer")
+
+    _max_table_name_parts: ClassVar[int] = 2
 
     def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy memory store."""
@@ -551,7 +576,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
         inserted_count = 0
         if self._owner_id_column_name:
             sql = f"""
-            INSERT IGNORE INTO {self._memory_table} (
+            INSERT IGNORE INTO {_mysql_table_ref(self._memory_table)} (
                 id, session_id, app_name, user_id, scope, event_id, author,
                 {self._owner_id_column_name}, timestamp, content_json,
                 content_text, metadata_json, inserted_at
@@ -559,7 +584,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             """
         else:
             sql = f"""
-            INSERT IGNORE INTO {self._memory_table} (
+            INSERT IGNORE INTO {_mysql_table_ref(self._memory_table)} (
                 id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -635,7 +660,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
         where_scope, scope_params = _build_mysql_scope_where(app_name, user_id, scope_filter)
         if self._use_fts:
             sql = f"""
-            SELECT * FROM {self._memory_table}
+            SELECT * FROM {_mysql_table_ref(self._memory_table)}
             WHERE {where_scope}
               AND MATCH(content_text) AGAINST (%s IN NATURAL LANGUAGE MODE)
             ORDER BY timestamp DESC
@@ -645,7 +670,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
         else:
             escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             sql = f"""
-            SELECT * FROM {self._memory_table}
+            SELECT * FROM {_mysql_table_ref(self._memory_table)}
             WHERE {where_scope} AND content_text LIKE %s ESCAPE '\\\\'
             ORDER BY timestamp DESC
             LIMIT %s
@@ -684,7 +709,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
+        sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE session_id = %s"
         try:
             async with (
                 self._config.provide_connection() as conn,
@@ -716,7 +741,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             params.append(scope)
 
         where_sql = " AND ".join(clauses)
-        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
+        sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE {where_sql}"
         try:
             async with (
                 self._config.provide_connection() as conn,
@@ -743,11 +768,11 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
 
         fts_index = ""
         if self._use_fts:
-            fts_index = f",\n            FULLTEXT INDEX idx_{self._memory_table}_fts (content_text)"
+            fts_index = f",\n            FULLTEXT INDEX {_mysql_index_name(self._memory_table, 'fts')} (content_text)"
         table_options = _mysql_table_options(adk_config, "memory_table_options")
 
         return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+        CREATE TABLE IF NOT EXISTS {_mysql_table_ref(self._memory_table)} (
             id VARCHAR(128) PRIMARY KEY,
             session_id VARCHAR(128) NOT NULL,
             app_name VARCHAR(128) NOT NULL,
@@ -760,15 +785,15 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             content_text LONGTEXT NOT NULL,
             metadata_json JSON,
             inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._memory_table}_app_scope_user_time (app_name, scope, user_id, timestamp),
-            INDEX idx_{self._memory_table}_scope (app_name, scope),
-            INDEX idx_{self._memory_table}_session (session_id){fts_index}{fk_constraint}
+            INDEX {_mysql_index_name(self._memory_table, "app_scope_user_time")} (app_name, scope, user_id, timestamp),
+            INDEX {_mysql_index_name(self._memory_table, "scope")} (app_name, scope),
+            INDEX {_mysql_index_name(self._memory_table, "session")} (session_id){fts_index}{fk_constraint}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get MySQL DROP TABLE SQL statements."""
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+        return [f"DROP TABLE IF EXISTS {_mysql_table_ref(self._memory_table)}"]
 
 
 def _resolve_json_codecs(config: Any) -> "tuple[Callable[[Any], str], Callable[[Any], Any]]":
@@ -915,15 +940,15 @@ def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", t
             fk_constraint = f",\n            {fk_def}"
 
     return f"""
-        CREATE TABLE IF NOT EXISTS {session_table} (
+        CREATE TABLE IF NOT EXISTS {_mysql_table_ref(session_table)} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,{owner_id_line}
             state JSON NOT NULL,
             create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{session_table}_app_user (app_name, user_id),
-            INDEX idx_{session_table}_update_time (update_time DESC){fk_constraint}
+            INDEX {_mysql_index_name(session_table, "app_user")} (app_name, user_id),
+            INDEX {_mysql_index_name(session_table, "update_time")} (update_time DESC){fk_constraint}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
@@ -937,14 +962,14 @@ def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping
             author_gc VARCHAR(256) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.author'))) STORED,
             node_path_gc VARCHAR(512) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.node_info.path'))) STORED"""
         generated_indexes = f""",
-            INDEX idx_{events_table}_author_gc (session_id, author_gc, timestamp ASC),
-            INDEX idx_{events_table}_node_path_gc (session_id, node_path_gc, timestamp ASC)"""
+            INDEX {_mysql_index_name(events_table, "author_gc")} (session_id, author_gc, timestamp ASC),
+            INDEX {_mysql_index_name(events_table, "node_path_gc")} (session_id, node_path_gc, timestamp ASC)"""
 
     covering_column = ", invocation_id" if adk_config.get("enable_covering_indexes", False) else ""
     table_options = _mysql_table_options(adk_config, "events_table_options")
 
     return f"""
-        CREATE TABLE IF NOT EXISTS {events_table} (
+        CREATE TABLE IF NOT EXISTS {_mysql_table_ref(events_table)} (
             id VARCHAR(128) PRIMARY KEY,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
@@ -952,17 +977,17 @@ def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping
             invocation_id VARCHAR(256) NOT NULL,
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             event_data JSON NOT NULL{generated_columns},
-            FOREIGN KEY (session_id) REFERENCES {session_table}(id) ON DELETE CASCADE,
-            INDEX idx_{events_table}_scope (app_name, user_id, session_id, timestamp ASC{covering_column}),
-            INDEX idx_{events_table}_session (session_id, timestamp ASC{covering_column}),
-            INDEX idx_{events_table}_app_timestamp (app_name, timestamp ASC){generated_indexes}
+            FOREIGN KEY (session_id) REFERENCES {_mysql_table_ref(session_table)}(id) ON DELETE CASCADE,
+            INDEX {_mysql_index_name(events_table, "scope")} (app_name, user_id, session_id, timestamp ASC{covering_column}),
+            INDEX {_mysql_index_name(events_table, "session")} (session_id, timestamp ASC{covering_column}),
+            INDEX {_mysql_index_name(events_table, "app_timestamp")} (app_name, timestamp ASC){generated_indexes}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
 
 
 def _mysql_app_state_ddl(app_state_table: str, table_options: str = "") -> str:
     return f"""
-        CREATE TABLE IF NOT EXISTS {app_state_table} (
+        CREATE TABLE IF NOT EXISTS {_mysql_table_ref(app_state_table)} (
             app_name VARCHAR(128) PRIMARY KEY,
             state JSON NOT NULL,
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
@@ -972,7 +997,7 @@ def _mysql_app_state_ddl(app_state_table: str, table_options: str = "") -> str:
 
 def _mysql_user_state_ddl(user_state_table: str, table_options: str = "") -> str:
     return f"""
-        CREATE TABLE IF NOT EXISTS {user_state_table} (
+        CREATE TABLE IF NOT EXISTS {_mysql_table_ref(user_state_table)} (
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             state JSON NOT NULL,
@@ -984,7 +1009,7 @@ def _mysql_user_state_ddl(user_state_table: str, table_options: str = "") -> str
 
 def _mysql_metadata_ddl(metadata_table: str) -> str:
     return f"""
-        CREATE TABLE IF NOT EXISTS {metadata_table} (
+        CREATE TABLE IF NOT EXISTS {_mysql_table_ref(metadata_table)} (
             `key` VARCHAR(128) PRIMARY KEY,
             value VARCHAR(512) NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -993,7 +1018,7 @@ def _mysql_metadata_ddl(metadata_table: str) -> str:
 
 def _mysql_upsert_app_state_sql(app_state_table: str) -> str:
     return f"""
-        INSERT INTO {app_state_table} (app_name, state, update_time)
+        INSERT INTO {_mysql_table_ref(app_state_table)} (app_name, state, update_time)
         VALUES (%s, %s, UTC_TIMESTAMP(6))
         ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
         """
@@ -1001,7 +1026,7 @@ def _mysql_upsert_app_state_sql(app_state_table: str) -> str:
 
 def _mysql_upsert_user_state_sql(user_state_table: str) -> str:
     return f"""
-        INSERT INTO {user_state_table} (app_name, user_id, state, update_time)
+        INSERT INTO {_mysql_table_ref(user_state_table)} (app_name, user_id, state, update_time)
         VALUES (%s, %s, %s, UTC_TIMESTAMP(6))
         ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
         """
@@ -1009,7 +1034,7 @@ def _mysql_upsert_user_state_sql(user_state_table: str) -> str:
 
 def _mysql_upsert_metadata_sql(metadata_table: str) -> str:
     return f"""
-        INSERT INTO {metadata_table} (`key`, value)
+        INSERT INTO {_mysql_table_ref(metadata_table)} (`key`, value)
         VALUES (%s, %s)
         ON DUPLICATE KEY UPDATE value = VALUES(value)
         """
@@ -1053,7 +1078,7 @@ def _session_list_query(
 
     sql = f"""
     SELECT id, app_name, user_id, state, create_time, update_time
-    FROM {session_table}
+    FROM {_mysql_table_ref(session_table)}
     WHERE {where_clause}
     ORDER BY {column} {direction}, id {direction}{page_clause}
     """
