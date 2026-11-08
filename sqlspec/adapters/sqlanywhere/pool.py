@@ -83,7 +83,7 @@ class SqlanywhereConnectionPool:
         connection = self.acquire()
         try:
             yield connection
-        except Exception:
+        except BaseException:
             with contextlib.suppress(Exception):
                 self._close_thread_connection()
             raise

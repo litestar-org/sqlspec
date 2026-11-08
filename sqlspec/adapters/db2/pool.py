@@ -165,7 +165,7 @@ class Db2SyncConnectionPool:
         connection = self._get_thread_connection()
         try:
             yield connection
-        except Exception:
+        except BaseException:
             with contextlib.suppress(Exception):
                 self._close_thread_connection()
             raise

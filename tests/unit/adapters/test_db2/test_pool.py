@@ -1,5 +1,6 @@
 """Tests for IBM Db2 connection pool."""
 
+import asyncio
 import threading
 import time
 from typing import cast
@@ -176,6 +177,47 @@ def test_pool_get_connection_context_manager(fake_ibm_db: FakeModules) -> None:
 
     assert connection.closed is True
     assert pool.size() == 0
+
+
+def test_db2_pool_discards_thread_connection_on_cancelled_error(fake_ibm_db: FakeModules) -> None:
+    """A forwarded cancellation must close and discard the thread connection."""
+    _, fake_module = fake_ibm_db
+    c1 = FakeDb2Connection()
+    c2 = FakeDb2Connection()
+    fake_module.pending_connections.extend([c1, c2])
+    pool = Db2SyncConnectionPool({"database": "TESTDB"}, recycle_seconds=0, health_check_interval=0)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            with pool.get_connection() as conn:
+                assert cast(object, conn) is c1
+                raise asyncio.CancelledError()
+
+        assert c1.closed is True
+        assert pool.size() == 0
+
+        with pool.get_connection() as next_conn:
+            assert cast(object, next_conn) is c2
+            assert c2.closed is False
+    finally:
+        pool.close()
+
+
+def test_db2_pool_clean_exit_preserves_thread_connection(fake_ibm_db: FakeModules) -> None:
+    """A clean exit retains the connection for the thread."""
+    _, fake_module = fake_ibm_db
+    c1 = FakeDb2Connection()
+    fake_module.pending_connections.append(c1)
+    pool = Db2SyncConnectionPool({"database": "TESTDB"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pool.get_connection() as conn:
+            assert cast(object, conn) is c1
+        assert c1.closed is False
+        assert pool.size() == 1
+        with pool.get_connection() as next_conn:
+            assert next_conn is conn
+    finally:
+        pool.close()
 
 
 def test_pool_is_connection_alive_success() -> None:
