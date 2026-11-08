@@ -745,14 +745,19 @@ def _create_index_sql(table: str, index_name: str, columns: str) -> str:
     return f"CREATE INDEX {_quote_identifier(index_name)} ON {_table_ref(table)} ({columns})"
 
 
-def _casefold_names(rows: "list[Any]", key: str) -> "set[str]":
-    """Collapse data-dictionary rows into a case-folded, schema-stripped name set."""
-    return {_split_tsql_table(str(row.get(key, "")))[1].casefold() for row in rows}
+def _index_key(schema: str, table: str, index_name: str) -> tuple[str, str, str]:
+    """Return case-folded, bracket-stripped (schema, bare_table, bare_index) identity key."""
+    return (
+        schema.strip("[]").casefold(),
+        table.rsplit(".", 1)[-1].strip("[]").casefold(),
+        index_name.rsplit(".", 1)[-1].strip("[]").casefold(),
+    )
 
 
-def _bare_name(name: str) -> str:
-    """Return the case-folded, schema-stripped object name for membership checks."""
-    return _split_tsql_table(name)[1].casefold()
+def _row_field(row: Any, key: str) -> Any:
+    if hasattr(row, "get"):
+        return row.get(key)
+    return getattr(row, key, None)
 
 
 def _insert_event_sql(table_ref: str) -> str:
@@ -1053,16 +1058,33 @@ class _TsqlAdkSql:
             {_split_tsql_table(table)[0] for table, _ in table_ddls}
             | {_split_tsql_table(index_table)[0] for _, index_table, _ in index_specs}
         ) or {MSSQL_SCHEMA}
-        existing_tables: set[str] = set()
-        existing_indexes: set[str] = set()
+        existing_tables: set[tuple[str, str]] = set()
+        existing_indexes: set[tuple[str, str, str]] = set()
         for schema in schemas:
-            existing_tables.update(_casefold_names(dd.get_tables(driver, schema=schema), "table_name"))
-            existing_indexes.update(_casefold_names(dd.get_indexes(driver, schema=schema), "index_name"))
+            for row in dd.get_tables(driver, schema=schema):
+                row_schema = str(_row_field(row, "schema_name") or schema)
+                table_name = str(_row_field(row, "table_name") or "")
+                if not table_name:
+                    continue
+                existing_tables.add((
+                    row_schema.strip("[]").casefold(),
+                    table_name.rsplit(".", 1)[-1].strip("[]").casefold(),
+                ))
+            for row in dd.get_indexes(driver, schema=schema):
+                row_schema = str(_row_field(row, "schema_name") or schema)
+                table_name = str(_row_field(row, "table_name") or "")
+                index_name = str(_row_field(row, "index_name") or "")
+                if not table_name or not index_name:
+                    continue
+                existing_indexes.add(_index_key(row_schema, table_name, index_name))
         for table, ddl in table_ddls:
-            if _bare_name(table) not in existing_tables:
+            target_schema, target_table = _split_tsql_table(table)
+            table_key = (target_schema.strip("[]").casefold(), target_table.strip("[]").casefold())
+            if table_key not in existing_tables:
                 driver.execute(ddl)
         for index_name, index_table, columns in index_specs:
-            if _bare_name(index_name) not in existing_indexes:
+            target_schema, target_table = _split_tsql_table(index_table)
+            if _index_key(target_schema, target_table, index_name) not in existing_indexes:
                 driver.execute(_create_index_sql(index_table, index_name, columns))
 
     def session_select_sql(self, table: str) -> str:

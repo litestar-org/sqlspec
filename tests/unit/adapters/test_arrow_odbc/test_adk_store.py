@@ -32,19 +32,38 @@ def _all_tables(store: ArrowOdbcADKStore) -> "list[dict[str, Any]]":
         store._user_state_table,
         store._metadata_table,
     ]
-    return [{"table_name": name} for name in names]
+    return [{"schema_name": "dbo", "table_name": name} for name in names]
 
 
 def _all_indexes(store: ArrowOdbcADKStore) -> "list[dict[str, Any]]":
-    session_indexes = [f"idx_{store._session_table}_app_user", f"idx_{store._session_table}_update_time"]
-    event_indexes = [
-        f"idx_{store._events_table}_scope",
-        f"idx_{store._events_table}_session",
-        f"idx_{store._events_table}_invocation",
-        f"idx_{store._events_table}_timestamp",
-        f"idx_{store._events_table}_app_timestamp",
+    session_indexes = [
+        {
+            "schema_name": "dbo",
+            "table_name": store._session_table,
+            "index_name": f"idx_{store._session_table}_app_user",
+        },
+        {
+            "schema_name": "dbo",
+            "table_name": store._session_table,
+            "index_name": f"idx_{store._session_table}_update_time",
+        },
     ]
-    return [{"index_name": name} for name in (*session_indexes, *event_indexes)]
+    event_indexes = [
+        {"schema_name": "dbo", "table_name": store._events_table, "index_name": f"idx_{store._events_table}_scope"},
+        {"schema_name": "dbo", "table_name": store._events_table, "index_name": f"idx_{store._events_table}_session"},
+        {
+            "schema_name": "dbo",
+            "table_name": store._events_table,
+            "index_name": f"idx_{store._events_table}_invocation",
+        },
+        {"schema_name": "dbo", "table_name": store._events_table, "index_name": f"idx_{store._events_table}_timestamp"},
+        {
+            "schema_name": "dbo",
+            "table_name": store._events_table,
+            "index_name": f"idx_{store._events_table}_app_timestamp",
+        },
+    ]
+    return [*session_indexes, *event_indexes]
 
 
 def test_mssql_adk_table_existence_uses_data_dictionary() -> None:
@@ -193,3 +212,122 @@ def test_arrow_odbc_adk_memory_store_rejects_embedding() -> None:
 
     with pytest.raises(NotImplementedError, match="Vector embeddings are not supported"):
         mem_store.search_entries("hello", "app", "user", embedding=[0.1, 0.2])
+
+
+def test_arrow_odbc_create_tables_creates_index_owned_by_other_table() -> None:
+    """Arrow ODBC ADK creates index when identical index name exists on another table."""
+    store, driver, _ = _store_with_driver()
+    driver.data_dictionary.get_tables.return_value = _all_tables(store)
+    driver.data_dictionary.get_indexes.return_value = [
+        {"schema_name": "dbo", "table_name": "other_table", "index_name": f"idx_{store._session_table}_app_user"}
+    ]
+
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert any(f"CREATE INDEX [idx_{store._session_table}_app_user]" in stmt for stmt in executed)
+
+
+def test_arrow_odbc_create_tables_skips_index_on_exact_target() -> None:
+    """Arrow ODBC ADK skips index on exact target case-insensitively."""
+    store, driver, _ = _store_with_driver()
+    driver.data_dictionary.get_tables.return_value = _all_tables(store)
+    driver.data_dictionary.get_indexes.return_value = [
+        {
+            "schema_name": "DBO",
+            "table_name": store._session_table.upper(),
+            "index_name": f"IDX_{store._session_table.upper()}_APP_USER",
+        }
+    ]
+
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert not any(f"idx_{store._session_table}_app_user" in stmt for stmt in executed)
+    assert any(f"idx_{store._session_table}_update_time" in stmt for stmt in executed)
+
+
+def test_arrow_odbc_create_tables_uses_queried_schema_for_rows_without_schema() -> None:
+    """Arrow ODBC ADK defaults schema to queried schema for catalog rows without schema_name."""
+    store, driver, _ = _store_with_driver()
+    driver.data_dictionary.get_tables.return_value = _all_tables(store)
+    driver.data_dictionary.get_indexes.return_value = [
+        {"table_name": store._session_table, "index_name": f"idx_{store._session_table}_app_user"}
+    ]
+
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert not any(f"idx_{store._session_table}_app_user" in stmt for stmt in executed)
+
+
+def test_arrow_odbc_create_tables_keeps_configured_schemas_distinct() -> None:
+    """Arrow ODBC ADK keeps distinct schemas isolated in catalog checks."""
+    config = _mock_config({"session_table": "app.sessions", "events_table": "audit.events"})
+    store = ArrowOdbcADKStore(config)
+    driver = MagicMock()
+    config.provide_session.return_value.__enter__.return_value = driver
+    config.provide_session.return_value.__exit__.return_value = False
+    driver.data_dictionary.get_tables.return_value = [
+        {"schema_name": "app", "table_name": "sessions"},
+        {"schema_name": "audit", "table_name": "events"},
+    ]
+
+    def mock_get_indexes(_driver: Any, schema: str | None = None) -> list[dict[str, Any]]:
+        if schema == "audit":
+            return [{"schema_name": "audit", "table_name": "sessions", "index_name": "idx_sessions_app_user"}]
+        return []
+
+    driver.data_dictionary.get_indexes.side_effect = mock_get_indexes
+
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert any("CREATE INDEX [idx_sessions_app_user] ON [app].[sessions]" in stmt for stmt in executed)
+
+
+def test_arrow_odbc_bracketed_identifiers_normalize_in_helpers_and_catalog_rows() -> None:
+    """Arrow ODBC ADK normalizes bracketed identifiers from catalog rows."""
+    from sqlspec.adapters.arrow_odbc.adk.store import _split_tsql_table
+
+    assert _split_tsql_table("[app].[sessions]") == ("app", "sessions")
+
+    config = _mock_config({"session_table": "app.sessions"})
+    store = ArrowOdbcADKStore(config)
+    driver = MagicMock()
+    config.provide_session.return_value.__enter__.return_value = driver
+    config.provide_session.return_value.__exit__.return_value = False
+    driver.data_dictionary.get_tables.return_value = [
+        {"schema_name": "[app]", "table_name": "[sessions]"},
+        {"schema_name": "dbo", "table_name": "adk_events"},
+        {"schema_name": "dbo", "table_name": "adk_app_state"},
+        {"schema_name": "dbo", "table_name": "adk_user_state"},
+        {"schema_name": "dbo", "table_name": "adk_metadata"},
+    ]
+    driver.data_dictionary.get_indexes.return_value = [
+        {"schema_name": "[app]", "table_name": "[sessions]", "index_name": "[idx_sessions_app_user]"}
+    ]
+
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert not any("idx_sessions_app_user" in stmt for stmt in executed)
+
+
+def test_arrow_odbc_memory_create_tables_creates_index_owned_by_other_table() -> None:
+    """Arrow ODBC memory store creates index when identical index name exists on another table."""
+    config = _mock_config({"enable_memory": True})
+    config.statement_config.dialect = "mssql"
+    store = ArrowOdbcADKMemoryStore(config)
+    driver = MagicMock()
+    config.provide_session.return_value.__enter__.return_value = driver
+    config.provide_session.return_value.__exit__.return_value = False
+    driver.data_dictionary.get_tables.return_value = [{"schema_name": "dbo", "table_name": store._memory_table}]
+    driver.data_dictionary.get_indexes.return_value = [
+        {"schema_name": "dbo", "table_name": "other_table", "index_name": f"idx_{store._memory_table}_session"}
+    ]
+
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert any(f"CREATE INDEX [idx_{store._memory_table}_session]" in stmt for stmt in executed)
