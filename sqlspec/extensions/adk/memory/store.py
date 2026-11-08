@@ -184,6 +184,9 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
 
     __slots__ = ()
 
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+
     @abstractmethod
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.
@@ -352,6 +355,9 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
     """Base class for sync SQLSpec-backed ADK memory stores."""
 
     __slots__ = ()
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
 
     @abstractmethod
     def create_tables(self) -> None:

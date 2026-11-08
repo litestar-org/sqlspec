@@ -24,13 +24,13 @@ from sqlspec.extensions.adk._config_utils import (
     _adk_memory_migration_store_class,
     _adk_sessions_migration_enabled,
 )
+from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
-    from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
     from sqlspec.migrations.context import MigrationContext
 
 __all__ = ("down", "up")
@@ -150,10 +150,10 @@ async def _prepare_schema(
     driver = getattr(context, "driver", None)
     if driver is None:
         return
-    if isinstance(store, BaseAsyncADKStore):
+    if isinstance(store, (BaseAsyncADKStore, BaseAsyncADKMemoryStore)):
         await store.prepare_schema_async(driver)
         return
-    if isinstance(store, BaseSyncADKStore):
+    if isinstance(store, (BaseSyncADKStore, BaseSyncADKMemoryStore)):
         store.prepare_schema_sync(driver)
 
 
