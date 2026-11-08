@@ -128,6 +128,7 @@ You can also write an `ArrowResult` directly to any storage destination via `arr
 For datasets larger than available RAM, `SyncStoragePipeline` and `AsyncStoragePipeline` expose `read_arrow_batches(...)` and `write_arrow_batches(...)`, and `sqlspec.utils.arrow_helpers` provides `coerce_arrow_batches(...)`:
 
 - **Bounded-Memory Streaming**: `read_arrow_batches` yields `pyarrow.RecordBatch` chunks lazily from Parquet, Arrow IPC, or JSONL sources without materializing a full `pyarrow.Table`.
+- **Direct-to-Storage Streaming**: When writing Arrow tables or batches to capable backends implementing `DirectArrowWriteProtocol` (such as `ObStoreBackend`), `write_arrow` and `write_arrow_batches` stream directly to the target storage sink without intermediate full-file buffering in memory.
 - **Single-Pass Target Schema Coercion**: When `target_schema` (or target table `ColumnMetadata`) is supplied to `load_from_arrow` or `load_from_storage`, SQLSpec validates and coerces incoming batches (`DECIMAL`, `TIMESTAMP`, `UUID`, binary, and `FIXED_SIZE_LIST` vector columns) one `RecordBatch` at a time before streaming to the database driver.
 
 ## Schema-Aware Table Fixtures
