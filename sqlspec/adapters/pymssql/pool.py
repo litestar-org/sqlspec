@@ -99,7 +99,7 @@ class PymssqlConnectionPool:
         self._thread_local.depth = depth + 1
         try:
             yield connection
-        except Exception:
+        except BaseException:
             if getattr(self._thread_local, "depth", 1) <= 1:
                 with contextlib.suppress(Exception):
                     self._close_thread_connection()

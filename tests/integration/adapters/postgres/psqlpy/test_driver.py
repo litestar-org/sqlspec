@@ -259,3 +259,14 @@ async def test_psqlpy_cached_dml_and_errors(psqlpy_session: "PsqlpyDriver") -> N
     with pytest.raises(SQLSpecError) as error:
         await psqlpy_session.execute(query, 0)
     assert isinstance(error.value.__cause__, Error)
+
+
+async def test_psqlpy_provide_connection_body_exception_propagates_cleanly(psqlpy_config: "PsqlpyConfig") -> None:
+    """A body error inside provide_connection propagates once and leaves the pool working."""
+    with pytest.raises(ValueError, match="raised in body"):
+        async with psqlpy_config.provide_connection():
+            raise ValueError("raised in body")
+
+    async with psqlpy_config.provide_connection() as conn:
+        result = await conn.execute("SELECT 1")
+        assert len(result.result()) == 1

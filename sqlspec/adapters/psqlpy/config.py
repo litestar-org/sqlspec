@@ -189,8 +189,10 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
-            self._ctx = None
+            try:
+                await self._ctx.__aexit__(None, None, None)
+            finally:
+                self._ctx = None
 
 
 class PsqlpyConnectionContext(AsyncPoolConnectionContext):
@@ -222,9 +224,9 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._ctx:
+        if self._ctx is not None:
             try:
-                return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+                await self._ctx.__aexit__(None, None, None)
             finally:
                 self._ctx = None
         return None

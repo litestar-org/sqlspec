@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpySessionContext
-from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyDriverFeatures
+from sqlspec.adapters.psqlpy.config import (
+    PsqlpyConfig,
+    PsqlpyConnectionContext,
+    PsqlpyDriverFeatures,
+    _PsqlpySessionFactory,
+)
 from sqlspec.adapters.psqlpy.core import (
     build_connection_config,
     build_postgres_extension_probe_names,
@@ -409,3 +414,49 @@ async def test_psqlpy_sync_on_connection_create_callback() -> None:
     mock_conn.fetch = AsyncMock(return_value=None)
     await config._ensure_connection(mock_conn)  # pyright: ignore[reportPrivateUsage]
     assert hook_called is True
+
+
+class _RecordingAsyncContext:
+    def __init__(self) -> None:
+        self.recorded_exit_args: tuple[object, object, object] | None = None
+
+    async def __aenter__(self) -> object:
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object | None
+    ) -> bool | None:
+        self.recorded_exit_args = (exc_type, exc_val, exc_tb)
+        return None
+
+
+@pytest.mark.anyio
+async def test_psqlpy_connection_context_aexit_forwards_none_on_exception() -> None:
+    """Forwarded exceptions must pass (None, None, None) to the inner driver context."""
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
+    context = PsqlpyConnectionContext(config)
+    inner_ctx = _RecordingAsyncContext()
+    context._ctx = inner_ctx
+
+    exc = ValueError("forwarded failure")
+    result = await context.__aexit__(ValueError, exc, None)
+
+    assert result is None
+    assert inner_ctx.recorded_exit_args == (None, None, None)
+    assert context._ctx is None
+
+
+@pytest.mark.anyio
+async def test_psqlpy_session_factory_release_connection_forwards_none_on_exception() -> None:
+    """Factory release must pass (None, None, None) to the inner driver context."""
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
+    factory = _PsqlpySessionFactory(config)
+    inner_ctx = _RecordingAsyncContext()
+    factory._ctx = inner_ctx
+
+    conn = AsyncMock()
+    exc = ValueError("forwarded failure")
+    await factory.release_connection(conn, exc_type=ValueError, exc_val=exc, exc_tb=None)
+
+    assert inner_ctx.recorded_exit_args == (None, None, None)
+    assert factory._ctx is None
