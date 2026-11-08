@@ -6,7 +6,7 @@ and local file storage.
 
 import contextlib
 import re
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
@@ -34,7 +34,7 @@ from sqlspec.storage._utils import (
     import_pyarrow_parquet,
     log_storage_event,
 )
-from sqlspec.storage.backends.base import _INLINE_BYTES_COPY_LIMIT, AsyncArrowBatchIterator, AsyncObStoreStreamIterator
+from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -401,14 +401,16 @@ class ObStoreBackend:
 
     def read_arrow_sync(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table using obstore synchronously."""
-        pa = import_pyarrow()
         pq = import_pyarrow_parquet()
         resolved_path = self._resolve_path(path)
+        if getattr(self, "_is_local_store", False):
+            target: Callable[[], ArrowTable] = partial(
+                pq.read_table, str(Path(self._local_store_root) / resolved_path), **kwargs
+            )
+        else:
+            target = partial(_read_obstore_arrow_table, self.store, resolved_path, import_pyarrow(), pq, kwargs)
         result = execute_sync_storage_operation(
-            partial(_read_obstore_arrow_table, self.store, resolved_path, pa, pq, kwargs),
-            backend=self.backend_type,
-            operation="read_arrow",
-            path=resolved_path,
+            target, backend=self.backend_type, operation="read_arrow", path=resolved_path
         )
         log_storage_event(
             "storage.read",
@@ -719,15 +721,17 @@ class ObStoreBackend:
 
         Uses async_() with storage limiter to offload blocking PyArrow I/O to thread pool.
         """
-        pa = import_pyarrow()
         pq = import_pyarrow_parquet()
         resolved_path = self._resolve_path(path)
-        source = await execute_async_storage_operation(
-            partial(_read_obstore_arrow_source_async, self.store, resolved_path, pa),
-            backend=self.backend_type,
-            operation="read_arrow",
-            path=resolved_path,
-        )
+        if getattr(self, "_is_local_store", False):
+            source: Any = str(Path(self._local_store_root) / resolved_path)
+        else:
+            source = await execute_async_storage_operation(
+                partial(_read_obstore_arrow_source_async, self.store, resolved_path, import_pyarrow()),
+                backend=self.backend_type,
+                operation="read_arrow",
+                path=resolved_path,
+            )
 
         result = await execute_async_storage_operation(
             partial(async_(pq.read_table), source, **kwargs),
@@ -863,11 +867,10 @@ class ObStoreBackend:
         return ensure_path_within_root(path, self._local_store_root)
 
     def _read_bytes_resolved_sync(self, resolved_path: str) -> bytes:
-        target = (
-            (Path(self._local_store_root) / resolved_path).read_bytes
-            if getattr(self, "_is_local_store", False) and getattr(self, "_local_store_root", "")
-            else partial(_read_obstore_bytes, self.store, resolved_path)
-        )
+        if getattr(self, "_is_local_store", False):
+            target: Callable[[], bytes] = (Path(self._local_store_root) / resolved_path).read_bytes
+        else:
+            target = partial(_read_obstore_bytes, self.store, resolved_path)
         result = execute_sync_storage_operation(
             target, backend=self.backend_type, operation="read_bytes", path=resolved_path
         )
@@ -1020,11 +1023,10 @@ class ObStoreBackend:
         return method, expires_delta, resolved_paths, is_single
 
     async def _read_bytes_resolved_async(self, resolved_path: str) -> bytes:
-        target = (
-            async_((Path(self._local_store_root) / resolved_path).read_bytes)
-            if getattr(self, "_is_local_store", False) and getattr(self, "_local_store_root", "")
-            else partial(_read_obstore_bytes_async, self.store, resolved_path)
-        )
+        if getattr(self, "_is_local_store", False):
+            target: Callable[[], Awaitable[bytes]] = async_((Path(self._local_store_root) / resolved_path).read_bytes)
+        else:
+            target = partial(_read_obstore_bytes_async, self.store, resolved_path)
         data = await execute_async_storage_operation(
             target, backend=self.backend_type, operation="read_bytes", path=resolved_path
         )
@@ -1056,32 +1058,39 @@ class ObStoreBackend:
 
 
 def _resolve_obstore_put_options(overwrite: bool, kwargs: "dict[str, Any]") -> "dict[str, Any]":
-    """Validate and resolve obstore put options for byte writes."""
-    unsupported = set(kwargs) - _SUPPORTED_WRITE_KWARGS
-    if unsupported:
-        names = ", ".join(sorted(unsupported))
-        msg = f"Unsupported write keyword argument(s) for ObStoreBackend: {names}"
-        raise TypeError(msg)
+    """Validate and resolve obstore put options for byte writes.
 
-    options = dict(kwargs)
-    if not overwrite:
-        explicit_mode = options.get("mode")
-        if explicit_mode is not None and explicit_mode != "create":
-            msg = f"Conflicting write options: overwrite=False requires mode='create', got mode={explicit_mode!r}"
-            raise ValueError(msg)
-        options["mode"] = "create"
-    return options
+    Args:
+        overwrite: Whether an existing object may be replaced.
+        kwargs: Caller-supplied ``obstore.put`` options.
+
+    Returns:
+        The options to pass to ``put``, with ``mode="create"`` when overwriting is disabled.
+
+    Raises:
+        TypeError: If an option is not an ``obstore.put`` option.
+        ValueError: If ``overwrite=False`` is combined with a mode other than ``"create"``.
+    """
+    if kwargs:
+        unsupported = [name for name in kwargs if name not in _SUPPORTED_WRITE_KWARGS]
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            msg = f"Unsupported write keyword argument(s) for ObStoreBackend: {names}"
+            raise TypeError(msg)
+    if overwrite:
+        return kwargs
+    explicit_mode = kwargs.get("mode")
+    if explicit_mode is not None and explicit_mode != "create":
+        msg = f"Conflicting write options: overwrite=False requires mode='create', got mode={explicit_mode!r}"
+        raise ValueError(msg)
+    return {**kwargs, "mode": "create"}
 
 
 async def _read_obstore_bytes_async(store: Any, resolved_path: str) -> bytes:
-    """Read bytes via obstore asynchronously without stalling the event loop."""
+    """Read bytes via obstore asynchronously."""
     result = await store.get_async(resolved_path)
     bytes_obj = await result.bytes_async()
-    if type(bytes_obj) is bytes:
-        return bytes_obj
-    if hasattr(bytes_obj, "__len__") and len(bytes_obj) <= _INLINE_BYTES_COPY_LIMIT:
-        return cast("bytes", bytes_obj.to_bytes())
-    return cast("bytes", await async_(bytes_obj.to_bytes)())
+    return cast("bytes", bytes_obj.to_bytes())
 
 
 def _read_obstore_arrow_table(
@@ -1089,15 +1098,13 @@ def _read_obstore_arrow_table(
 ) -> "ArrowTable":
     """Read an Arrow table via obstore using a zero-copy buffer reader."""
     result = store.get(resolved_path)
-    source = pa.BufferReader(memoryview(result.bytes()))
-    return cast("ArrowTable", pq.read_table(source, **options))
+    return cast("ArrowTable", pq.read_table(pa.BufferReader(result.bytes()), **options))
 
 
 async def _read_obstore_arrow_source_async(store: Any, resolved_path: str, pa: Any) -> Any:
     """Read an obstore object into a zero-copy Arrow buffer reader asynchronously."""
     result = await store.get_async(resolved_path)
-    bytes_obj = await result.bytes_async()
-    return pa.BufferReader(memoryview(bytes_obj))
+    return pa.BufferReader(await result.bytes_async())
 
 
 def _open_obstore_reader(obs: Any, store: Any, obj_path: str, read_buffer_bytes: int | None) -> Any:

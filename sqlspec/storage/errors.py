@@ -19,7 +19,7 @@ T = TypeVar("T")
 
 
 _NOT_FOUND_NAMES = {"NotFoundError", "ObjectNotFound", "NoSuchKey", "NoSuchBucket", "NoSuchFile"}
-_ALREADY_EXISTS_NAMES = {"AlreadyExistsError", "ObjectAlreadyExists", "FileExistsError"}
+_ALREADY_EXISTS_NAMES = {"AlreadyExistsError", "ObjectAlreadyExists"}
 
 
 class StorageError:
@@ -39,7 +39,7 @@ class StorageError:
 
 
 def raise_storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> NoReturn:
-    if isinstance(error, (FileNotFoundInStorageError, FileExistsInStorageError, StorageOperationFailedError)):
+    if isinstance(error, StorageOperationFailedError):
         raise error
 
     is_missing = _is_missing_error(error)
@@ -94,7 +94,7 @@ def _is_missing_error(error: Exception) -> bool:
 
 
 def _is_exists_error(error: Exception) -> bool:
-    if isinstance(error, (FileExistsError, FileExistsInStorageError)):
+    if isinstance(error, FileExistsError):
         return True
 
     if isinstance(error, OSError) and error.errno == errno.EEXIST:

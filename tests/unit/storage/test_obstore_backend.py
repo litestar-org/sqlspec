@@ -9,7 +9,7 @@ from typing import Any, Self
 import pytest
 
 from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError
-from sqlspec.storage.backends.obstore import _INLINE_BYTES_COPY_LIMIT, _SIGNABLE_PROTOCOLS, ObStoreBackend
+from sqlspec.storage.backends.obstore import _SIGNABLE_PROTOCOLS, ObStoreBackend
 from sqlspec.typing import OBSTORE_INSTALLED, PYARROW_INSTALLED
 
 
@@ -965,7 +965,6 @@ async def test_full_workflow_with_base_path(tmp_path: Path) -> None:
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_stream_read_async_does_not_block_event_loop(tmp_path: Path) -> None:
     """Test that stream_read_async doesn't block other async tasks."""
-    import asyncio
 
     from sqlspec.storage.backends.obstore import ObStoreBackend
 
@@ -1129,27 +1128,3 @@ async def test_write_bytes_forwards_valid_options_and_validates_kwargs() -> None
 
     with pytest.raises(ValueError, match="Conflicting write options"):
         await store.write_bytes_async("obj.bin", b"a", overwrite=False, mode="overwrite")
-
-
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
-@pytest.mark.parametrize("use_file_uri", [False, True])
-async def test_read_bytes_async_large_payload_does_not_block_event_loop(tmp_path: Path, use_file_uri: bool) -> None:
-    """Verify read_bytes_async offloads large payload reads without starving concurrent tasks."""
-    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
-    store = ObStoreBackend(uri)
-    payload = b"z" * (_INLINE_BYTES_COPY_LIMIT * 4)
-    await store.write_bytes_async("large.bin", payload)
-
-    concurrent_ran = False
-
-    async def marker() -> None:
-        nonlocal concurrent_ran
-        await asyncio.sleep(0)
-        concurrent_ran = True
-
-    task = asyncio.create_task(marker())
-    data = await store.read_bytes_async("large.bin")
-    await task
-
-    assert data == payload
-    assert concurrent_ran is True

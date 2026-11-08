@@ -126,9 +126,7 @@ class LocalStore:
         self, path: "str | Path", data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
     ) -> None:
         """Write text to file synchronously."""
-        _reject_unsupported_local_write_kwargs(kwargs)
-        encoded = data.encode(encoding)
-        self.write_bytes_sync(path, encoded, overwrite=overwrite)
+        self.write_bytes_sync(path, data.encode(encoding), overwrite=overwrite, **kwargs)
 
     def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
         """Stream bytes from file synchronously.
@@ -350,8 +348,7 @@ class LocalStore:
         self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any
     ) -> None:
         """Write bytes to file asynchronously."""
-        _reject_unsupported_local_write_kwargs(kwargs)
-        await async_(self.write_bytes_sync)(path, data, overwrite=overwrite)
+        await async_(self.write_bytes_sync)(path, data, overwrite=overwrite, **kwargs)
 
     async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from file asynchronously."""
@@ -361,8 +358,7 @@ class LocalStore:
         self, path: "str | Path", data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
     ) -> None:
         """Write text to file asynchronously."""
-        _reject_unsupported_local_write_kwargs(kwargs)
-        await async_(self.write_text_sync)(path, data, encoding, overwrite=overwrite)
+        await async_(self.write_text_sync)(path, data, encoding, overwrite=overwrite, **kwargs)
 
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
@@ -494,7 +490,7 @@ def _reject_unsupported_local_write_kwargs(kwargs: "dict[str, Any]") -> None:
         raise TypeError(msg)
 
 
-def _write_local_bytes(resolved: "Path", data: bytes, overwrite: bool = True) -> None:
+def _write_local_bytes(resolved: "Path", data: bytes, overwrite: bool) -> None:
     """Write bytes to a local file, ensuring parent directories exist."""
     resolved.parent.mkdir(parents=True, exist_ok=True)
     if overwrite:

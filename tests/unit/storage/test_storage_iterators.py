@@ -69,11 +69,11 @@ async def test_async_obstore_stream_iterator_delegates_to_stream() -> None:
 
 
 @pytest.mark.anyio
-async def test_async_obstore_stream_iterator_converts_large_buffer_chunks() -> None:
-    """Verify AsyncObStoreStreamIterator converts oversized non-bytes chunks into owned bytes."""
-    large_view = memoryview(bytearray(b"x" * 131_072))
-    iterator = AsyncObStoreStreamIterator(FakeAsyncStream([large_view]))  # type: ignore[arg-type]
+async def test_async_obstore_stream_iterator_converts_buffer_chunks() -> None:
+    """Verify AsyncObStoreStreamIterator converts non-bytes buffer chunks into owned bytes."""
+    view = memoryview(bytearray(b"xyz"))
+    iterator = AsyncObStoreStreamIterator(FakeAsyncStream([view]))  # type: ignore[arg-type]
     chunk = await iterator.__anext__()
 
     assert type(chunk) is bytes
-    assert chunk == b"x" * 131_072
+    assert chunk == b"xyz"

@@ -33,7 +33,7 @@ important operational fixes.
 
 **Fixed:**
 
-* `ObStoreBackend.read_arrow_sync` and `read_arrow_async` now wrap `obstore.Bytes` in `pyarrow.BufferReader(memoryview(bytes_obj))` instead of copying into `io.BytesIO(bytes_obj.to_bytes())`, reading Parquet buffers zero-copy with the GIL released; local `ObStoreBackend` instances read bytes via `Path.read_bytes`, and remote `ObStoreBackend` / `AsyncObStoreStreamIterator` buffer copies over 64 KiB are offloaded from the event loop thread.
+* `ObStoreBackend.read_arrow_sync` and `read_arrow_async` no longer copy the object into a Python `bytes` while holding the GIL: remote objects are parsed zero-copy from the `obstore.Bytes` buffer through `pyarrow.BufferReader`, and `file://` stores read Parquet straight from disk. `file://` stores also read bytes with `Path.read_bytes`, which releases the GIL during the read.
 * Fixed `t AS u` rendering `AS AS u`, and rendered table aliases as quoted identifiers on every dialect.
 * Fixed the `MERGE` target renderer removing quotes from names that require them, and subquery aliases leaking into bound parameter names.
 * Fixed `join` and `Update.from_` dropping the alias on function expressions, and `from_` and `join` mishandling `sql.raw` fragments with parameters.

@@ -203,10 +203,8 @@ class StorageRegistry:
     def _backend_from_uri(self, uri: str, *, backend_override: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
         """Resolve backend from URI with optional backend override.
 
-        Backend selection priority for local files (file:// or bare paths):
-        1. local (always available) - zero-dependency POSIX/Windows filesystem backend
-
-        For cloud storage, prefer obstore over fsspec when available.
+        Local files (``file://`` URIs and bare paths) use ``LocalStore``. Cloud
+        storage prefers obstore over fsspec when available.
 
         Args:
             uri: Storage URI to resolve.

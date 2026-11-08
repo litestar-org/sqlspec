@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = ("FSSpecBackend",)
 
 _OBJECT_STORE_PROTOCOLS = {"s3", "gs", "az", "gcs"}
+_FSSPEC_VALIDATED_PROTOCOLS: Final[frozenset[str]] = frozenset({"file", "memory"})
 _FSSPEC_BASIC_OPEN_OPTIONS: Final[frozenset[str]] = frozenset({
     "autocommit",
     "block_size",
@@ -476,7 +477,6 @@ class FSSpecBackend:
         self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any
     ) -> None:
         """Write bytes to storage asynchronously."""
-        _resolve_fsspec_write_options(self.protocol, overwrite, kwargs)
         await async_(self.write_bytes_sync)(path, data, overwrite=overwrite, **kwargs)
 
     async def stream_read_async(
@@ -534,7 +534,6 @@ class FSSpecBackend:
         self, path: str | Path, data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
     ) -> None:
         """Write text to storage asynchronously."""
-        _resolve_fsspec_write_options(self.protocol, overwrite, kwargs)
         await async_(self.write_text_sync)(path, data, encoding, overwrite=overwrite, **kwargs)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
@@ -596,18 +595,34 @@ class FSSpecBackend:
 def _resolve_fsspec_write_options(
     protocol: str, overwrite: bool, kwargs: "dict[str, Any]"
 ) -> "tuple[str, dict[str, Any]]":
-    """Validate and resolve fsspec open mode and options for byte writes."""
-    if "mode" in kwargs:
-        msg = "Unsupported keyword argument 'mode' for write_bytes; use 'overwrite' instead."
-        raise TypeError(msg)
-    if protocol in {"file", "memory"}:
-        unsupported = set(kwargs) - _FSSPEC_BASIC_OPEN_OPTIONS
-        if unsupported:
-            names = ", ".join(sorted(unsupported))
-            msg = f"Unsupported write keyword argument(s) for FSSpecBackend ({protocol}): {names}"
+    """Validate and resolve fsspec open mode and options for byte writes.
+
+    Local and in-memory filesystems silently accept unknown ``open`` options, so
+    only the options they honor are allowed there. Remote filesystems receive
+    every option unchanged.
+
+    Args:
+        protocol: The fsspec protocol of the backend.
+        overwrite: Whether an existing object may be replaced.
+        kwargs: Caller-supplied ``fs.open`` options.
+
+    Returns:
+        The ``open`` mode (``"wb"`` or ``"xb"``) and the options to pass to ``fs.open``.
+
+    Raises:
+        TypeError: If ``mode`` or an option the local or in-memory filesystem ignores is passed.
+    """
+    if kwargs:
+        if "mode" in kwargs:
+            msg = "Unsupported keyword argument 'mode' for write_bytes; use 'overwrite' instead."
             raise TypeError(msg)
-    open_mode = "wb" if overwrite else "xb"
-    return open_mode, dict(kwargs)
+        if protocol in _FSSPEC_VALIDATED_PROTOCOLS:
+            unsupported = [name for name in kwargs if name not in _FSSPEC_BASIC_OPEN_OPTIONS]
+            if unsupported:
+                names = ", ".join(sorted(unsupported))
+                msg = f"Unsupported write keyword argument(s) for FSSpecBackend ({protocol}): {names}"
+                raise TypeError(msg)
+    return ("wb" if overwrite else "xb"), kwargs
 
 
 def _write_fsspec_bytes(fs: Any, resolved_path: str, data: bytes, open_mode: str, options: "dict[str, Any]") -> None:
