@@ -5,7 +5,6 @@ and local file storage.
 """
 
 import contextlib
-import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import timedelta
 from functools import partial
@@ -16,7 +15,7 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import StorageOperationFailedError, StoragePathTraversalError
-from sqlspec.storage._arrow_payload import resolve_parquet_use_dictionary
+from sqlspec.storage._arrow_payload import StorageFormat, write_arrow_payload
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
     ensure_path_within_root,
@@ -31,6 +30,7 @@ from sqlspec.storage._utils import (
     import_obstore,
     import_obstore_store,
     import_pyarrow,
+    import_pyarrow_csv,
     import_pyarrow_parquet,
     log_storage_event,
 )
@@ -423,6 +423,66 @@ class ObStoreBackend:
         )
         return result
 
+    def supports_arrow_direct_write(self, format_choice: str) -> bool:
+        """Check whether the backend supports direct streaming Arrow writes for format_choice.
+
+        Args:
+            format_choice: Storage format name to query.
+
+        Returns:
+            True if the format can be streamed directly to obstore's writer.
+        """
+        return format_choice in {"parquet", "arrow-ipc", "csv"}
+
+    def write_arrow_direct_sync(
+        self,
+        path: "str | Path",
+        table: "ArrowTable",
+        *,
+        format_choice: str = "parquet",
+        compression: str | None = None,
+        write_options: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> int:
+        """Write Arrow table directly to storage synchronously, streaming to the backend writer.
+
+        Args:
+            path: Destination path or URI.
+            table: PyArrow Table to write.
+            format_choice: Target storage format ("parquet", "arrow-ipc", or "csv").
+            compression: Optional compression codec.
+            write_options: Format-specific write options.
+            **kwargs: Additional backend write options.
+
+        Returns:
+            Number of bytes written.
+        """
+        import_pyarrow()
+        resolved_path = self._resolve_path(path)
+        bytes_written = execute_sync_storage_operation(
+            partial(
+                self._stream_arrow_sync,
+                resolved_path,
+                table,
+                format_choice=format_choice,
+                compression=compression,
+                write_options=write_options,
+                **kwargs,
+            ),
+            backend=self.backend_type,
+            operation="write_arrow",
+            path=resolved_path,
+        )
+        log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="write_arrow",
+            mode="sync",
+            path=resolved_path,
+        )
+        return bytes_written
+
     def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table using obstore synchronously."""
         import_pyarrow()
@@ -751,6 +811,55 @@ class ObStoreBackend:
         )
         return cast("ArrowTable", result)
 
+    async def write_arrow_direct_async(
+        self,
+        path: "str | Path",
+        table: "ArrowTable",
+        *,
+        format_choice: str = "parquet",
+        compression: str | None = None,
+        write_options: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> int:
+        """Write Arrow table directly to storage asynchronously, streaming to the backend writer.
+
+        Args:
+            path: Destination path or URI.
+            table: PyArrow Table to write.
+            format_choice: Target storage format ("parquet", "arrow-ipc", or "csv").
+            compression: Optional compression codec.
+            write_options: Format-specific write options.
+            **kwargs: Additional backend write options.
+
+        Returns:
+            Number of bytes written.
+        """
+        import_pyarrow()
+        resolved_path = self._resolve_path(path)
+        bytes_written = await execute_async_storage_operation(
+            partial(
+                async_(self._stream_arrow_sync),
+                resolved_path,
+                table,
+                format_choice=format_choice,
+                compression=compression,
+                write_options=write_options,
+                **kwargs,
+            ),
+            backend=self.backend_type,
+            operation="write_arrow",
+            path=resolved_path,
+        )
+        log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="write_arrow",
+            mode="async",
+            path=resolved_path,
+        )
+        return bytes_written
+
     async def write_arrow_async(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously.
 
@@ -939,56 +1048,53 @@ class ObStoreBackend:
             objects = [obj for obj in objects if obj.count("/") < base_depth]
         return sorted(objects)
 
-    def _stream_parquet_sync(self, resolved_path: str, table: "ArrowTable", **kwargs: Any) -> None:
-        """Serialize a table row group by row group into an obstore multipart writer.
+    def _stream_arrow_sync(
+        self,
+        resolved_path: str,
+        table: "ArrowTable",
+        *,
+        format_choice: str = "parquet",
+        compression: str | None = None,
+        write_options: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> int:
+        """Stream an Arrow table directly into an obstore multipart writer.
 
-        Peak memory is bounded by one serialized row group plus the upload
-        buffer rather than the serialized size of the whole table. The writer
-        and the sink are closed only after every row group is written; a
-        failure leaves the multipart upload unfinished, and it is discarded
-        when the writer is released, so no partial object is published.
+        Peak memory is bounded by the backend's part size and in-flight parts rather
+        than the serialized size of the whole table. The writer and sink are closed
+        only after every batch or row group is written; a failure or cancellation aborts
+        the upload before any partial object is published.
 
         Args:
             resolved_path: Store-relative destination key.
             table: Table to serialize.
-            **kwargs: Options forwarded to ``pyarrow.parquet.ParquetWriter``;
-                ``row_group_size`` is forwarded to ``write_table``.
+            format_choice: Storage format ("parquet", "arrow-ipc", or "csv").
+            compression: Optional compression codec.
+            write_options: Format-specific write options.
+            **kwargs: Additional write options forwarded to the encoder.
+
+        Returns:
+            Total bytes written to the sink.
         """
         obs = import_obstore()
+        import_pyarrow()
+        if format_choice == "parquet":
+            import_pyarrow_parquet()
+        elif format_choice == "csv":
+            import_pyarrow_csv()
 
-        pa = import_pyarrow()
-        pq = import_pyarrow_parquet()
-        schema = table.schema
-        if any(str(f.type).startswith("decimal64") for f in schema):
-            new_fields = []
-            for field in schema:
-                if str(field.type).startswith("decimal64"):
-                    match = re.match(r"decimal64\((\d+),\s*(\d+)\)", str(field.type))
-                    if match:
-                        precision, scale = int(match.group(1)), int(match.group(2))
-                        new_fields.append(pa.field(field.name, pa.decimal128(precision, scale)))
-                    else:
-                        new_fields.append(field)
-                else:
-                    new_fields.append(field)
-            table = table.cast(pa.schema(new_fields))
+        opts = dict(write_options) if write_options else {}
+        opts.update(kwargs)
 
-        row_group_size = kwargs.pop("row_group_size", None)
-        if "use_dictionary" not in kwargs:
-            kwargs["use_dictionary"] = resolve_parquet_use_dictionary(table.schema)
         sink = obs.open_writer(self.store, resolved_path)
         sink_adapter = _ObstoreSink(sink)
-        writer: Any = None
         try:
-            writer = pq.ParquetWriter(pa.PythonFile(sink_adapter, mode="w"), table.schema, **kwargs)
-            writer.write_table(table, row_group_size=row_group_size)
-            writer.close()
+            write_arrow_payload(
+                table, sink_adapter, cast("StorageFormat", format_choice), compression=compression, write_options=opts
+            )
             sink_adapter.close()
         except BaseException:
             sink_adapter.abort()
-            if writer is not None:
-                with contextlib.suppress(Exception):
-                    writer.close()
             if getattr(self, "_is_local_store", False):
                 with contextlib.suppress(Exception):
                     sink.close()
@@ -996,6 +1102,18 @@ class ObStoreBackend:
                     with contextlib.suppress(Exception):
                         (Path(self._local_store_root) / resolved_path).unlink(missing_ok=True)
             raise
+        else:
+            return sink_adapter.bytes_written
+
+    def _stream_parquet_sync(self, resolved_path: str, table: "ArrowTable", **kwargs: Any) -> None:
+        """Serialize a table row group by row group into an obstore multipart writer.
+
+        Args:
+            resolved_path: Store-relative destination key.
+            table: Table to serialize.
+            **kwargs: Options forwarded to the streaming writer.
+        """
+        self._stream_arrow_sync(resolved_path, table, format_choice="parquet", **kwargs)
 
     def _prepare_sign_request(
         self, paths: "str | list[str]", expires_in: int, for_upload: bool
@@ -1187,11 +1305,16 @@ class _ObstoreSink:
     obstore exposes ``closed`` as a method; pyarrow reads it as an attribute.
     """
 
-    __slots__ = ("_aborted", "_writer")
+    __slots__ = ("_aborted", "_bytes_written", "_writer")
 
     def __init__(self, writer: Any) -> None:
         self._writer = writer
         self._aborted = False
+        self._bytes_written = 0
+
+    @property
+    def bytes_written(self) -> int:
+        return self._bytes_written
 
     @property
     def closed(self) -> bool:
@@ -1205,13 +1328,17 @@ class _ObstoreSink:
                 abort_fn()
 
     def write(self, data: Any) -> int:
-        payload = bytes(data) if isinstance(data, (bytearray, memoryview)) else data
-        return int(self._writer.write(payload))
+        payload = (
+            data if isinstance(data, bytes) else (data.to_pybytes() if hasattr(data, "to_pybytes") else bytes(data))
+        )
+        written = int(self._writer.write(payload))
+        self._bytes_written += written
+        return written
 
     def flush(self) -> None:
-        if not self._aborted:
+        if not self._aborted and not bool(self._writer.closed()):
             self._writer.flush()
 
     def close(self) -> None:
-        if not self._aborted:
+        if not self._aborted and not bool(self._writer.closed()):
             self._writer.close()

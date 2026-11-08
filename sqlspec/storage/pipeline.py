@@ -25,7 +25,7 @@ from sqlspec.storage.errors import execute_async_storage_operation, execute_sync
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
-from sqlspec.utils.type_guards import supports_async_read_bytes, supports_async_write_bytes
+from sqlspec.utils.type_guards import supports_async_read_bytes, supports_async_write_bytes, supports_direct_arrow_write
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -356,6 +356,24 @@ class SyncStoragePipeline(_StoragePipelineBase):
         format_write_options = _csv_write_options(
             format_choice, resolved_options, self._storage_options, self._csv_write_options
         )
+        backend, path, backend_name = self._backend(destination, resolved_options)
+        if supports_direct_arrow_write(backend) and backend.supports_arrow_direct_write(format_choice):
+            start = perf_counter()
+            bytes_written = backend.write_arrow_direct_sync(
+                path, table, format_choice=format_choice, compression=compression, write_options=format_write_options
+            )
+            elapsed = perf_counter() - start
+            _METRICS.record_bytes(bytes_written)
+            telemetry: StorageTelemetry = {
+                "destination": path,
+                "bytes_processed": bytes_written,
+                "rows_processed": int(table.num_rows),
+                "duration_s": elapsed,
+                "format": format_choice,
+                "backend": backend_name,
+            }
+            return telemetry
+
         payload = _encode_arrow_payload(
             table, format_choice, compression=compression, write_options=format_write_options
         )
@@ -428,6 +446,24 @@ class SyncStoragePipeline(_StoragePipelineBase):
             file_format, resolved_options, self._storage_options, self._csv_write_options
         )
         table = batches_to_arrow_table(batches)
+        backend, path, backend_name = self._backend(destination, resolved_options)
+        if supports_direct_arrow_write(backend) and backend.supports_arrow_direct_write(file_format):
+            start = perf_counter()
+            bytes_written = backend.write_arrow_direct_sync(
+                path, table, format_choice=file_format, compression=compression, write_options=format_write_options
+            )
+            elapsed = perf_counter() - start
+            _METRICS.record_bytes(bytes_written)
+            telemetry: StorageTelemetry = {
+                "destination": path,
+                "bytes_processed": bytes_written,
+                "rows_processed": int(table.num_rows),
+                "duration_s": elapsed,
+                "format": file_format,
+                "backend": backend_name,
+            }
+            return telemetry
+
         payload = _encode_arrow_payload(table, file_format, compression=compression, write_options=format_write_options)
         return self._write_bytes(
             payload, destination, rows=int(table.num_rows), format_label=file_format, storage_options=resolved_options
@@ -506,6 +542,37 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         format_write_options = _csv_write_options(
             format_choice, resolved_options, self._storage_options, self._csv_write_options
         )
+        backend, path, backend_name = self._backend(destination, resolved_options)
+        if supports_direct_arrow_write(backend) and backend.supports_arrow_direct_write(format_choice):
+            start = perf_counter()
+            if callable(getattr(backend, "write_arrow_direct_async", None)):
+                bytes_written = await backend.write_arrow_direct_async(
+                    path,
+                    table,
+                    format_choice=format_choice,
+                    compression=compression,
+                    write_options=format_write_options,
+                )
+            else:
+                bytes_written = await async_(backend.write_arrow_direct_sync)(
+                    path,
+                    table,
+                    format_choice=format_choice,
+                    compression=compression,
+                    write_options=format_write_options,
+                )
+            elapsed = perf_counter() - start
+            _METRICS.record_bytes(bytes_written)
+            telemetry: StorageTelemetry = {
+                "destination": path,
+                "bytes_processed": bytes_written,
+                "rows_processed": int(table.num_rows),
+                "duration_s": elapsed,
+                "format": format_choice,
+                "backend": backend_name,
+            }
+            return telemetry
+
         payload = await async_(_encode_arrow_payload)(
             table, format_choice, compression=compression, write_options=format_write_options
         )
@@ -584,6 +651,29 @@ class AsyncStoragePipeline(_StoragePipelineBase):
             file_format, resolved_options, self._storage_options, self._csv_write_options
         )
         table = await async_(batches_to_arrow_table)(batches)
+        backend, path, backend_name = self._backend(destination, resolved_options)
+        if supports_direct_arrow_write(backend) and backend.supports_arrow_direct_write(file_format):
+            start = perf_counter()
+            if callable(getattr(backend, "write_arrow_direct_async", None)):
+                bytes_written = await backend.write_arrow_direct_async(
+                    path, table, format_choice=file_format, compression=compression, write_options=format_write_options
+                )
+            else:
+                bytes_written = await async_(backend.write_arrow_direct_sync)(
+                    path, table, format_choice=file_format, compression=compression, write_options=format_write_options
+                )
+            elapsed = perf_counter() - start
+            _METRICS.record_bytes(bytes_written)
+            telemetry: StorageTelemetry = {
+                "destination": path,
+                "bytes_processed": bytes_written,
+                "rows_processed": int(table.num_rows),
+                "duration_s": elapsed,
+                "format": file_format,
+                "backend": backend_name,
+            }
+            return telemetry
+
         payload = await async_(_encode_arrow_payload)(
             table, file_format, compression=compression, write_options=format_write_options
         )

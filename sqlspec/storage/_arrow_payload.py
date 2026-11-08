@@ -1,5 +1,6 @@
 """Interpreted PyArrow payload helpers for storage pipelines."""
 
+import re
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_csv, import_pyarrow_json, import_pyarrow_parquet
@@ -14,6 +15,7 @@ __all__ = (
     "decode_arrow_payload",
     "encode_arrow_payload",
     "resolve_parquet_use_dictionary",
+    "write_arrow_payload",
 )
 
 
@@ -61,6 +63,76 @@ def resolve_parquet_use_dictionary(
     return [field.name for field in schema if not _is_float_vector_field(field, pa)]
 
 
+def write_arrow_payload(
+    table: "ArrowTable",
+    sink: Any,
+    format_choice: StorageFormat,
+    *,
+    compression: str | None = None,
+    write_options: "dict[str, Any] | None" = None,
+) -> None:
+    """Write an Arrow table directly to a sink using optional PyArrow dependencies.
+
+    Args:
+        table: PyArrow Table to write.
+        sink: Target file-like object, buffer, or NativeFile.
+        format_choice: Target storage format ("parquet", "arrow-ipc", or "csv").
+        compression: Optional compression codec.
+        write_options: Format-specific write options.
+
+    Raises:
+        ValueError: If format_choice is not supported for Arrow encoding.
+    """
+    pa = import_pyarrow()
+    target_sink = sink if isinstance(sink, pa.NativeFile) else pa.PythonFile(sink, mode="w")
+
+    if format_choice == "arrow-ipc":
+        ipc_options = pa.ipc.IpcWriteOptions(compression=compression) if compression else None
+        with pa.ipc.new_file(target_sink, table.schema, options=ipc_options) as writer:
+            writer.write_table(table)
+    elif format_choice == "csv":
+        pa_csv = import_pyarrow_csv()
+        csv_opts: Any = None
+        if write_options:
+            csv_opts = pa_csv.WriteOptions(**write_options)
+        pa_csv.write_csv(table, target_sink, write_options=csv_opts)
+    elif format_choice == "parquet":
+        pq = import_pyarrow_parquet()
+        schema = table.schema
+        if any(str(f.type).startswith("decimal64") for f in schema):
+            new_fields = []
+            for field in schema:
+                if str(field.type).startswith("decimal64"):
+                    match = re.match(r"decimal64\((\d+),\s*(\d+)\)", str(field.type))
+                    if match:
+                        precision, scale = int(match.group(1)), int(match.group(2))
+                        new_fields.append(pa.field(field.name, pa.decimal128(precision, scale)))
+                    else:
+                        new_fields.append(field)
+                else:
+                    new_fields.append(field)
+            table = table.cast(pa.schema(new_fields))
+        parquet_opts = dict(write_options) if write_options else {}
+        parquet_opts["use_dictionary"] = resolve_parquet_use_dictionary(
+            table.schema, parquet_opts.get("use_dictionary")
+        )
+        row_group_size = parquet_opts.pop("row_group_size", None)
+        if row_group_size is not None:
+            writer = pq.ParquetWriter(target_sink, table.schema, compression=compression, **parquet_opts)
+            try:
+                writer.write_table(table, row_group_size=row_group_size)
+            finally:
+                writer.close()
+        else:
+            pq.write_table(table, target_sink, compression=compression, **parquet_opts)
+    else:
+        msg = f"Unsupported storage format for Arrow encoding: {format_choice}"
+        raise ValueError(msg)
+
+    if target_sink is not sink:
+        target_sink.flush()
+
+
 def encode_arrow_payload(
     table: "ArrowTable",
     format_choice: StorageFormat,
@@ -69,26 +141,9 @@ def encode_arrow_payload(
     write_options: "dict[str, Any] | None" = None,
 ) -> bytes:
     """Encode an Arrow table to bytes using optional PyArrow dependencies."""
-
     pa = import_pyarrow()
     sink = pa.BufferOutputStream()
-    if format_choice == "arrow-ipc":
-        ipc_options = pa.ipc.IpcWriteOptions(compression=compression) if compression else None
-        with pa.ipc.new_file(sink, table.schema, options=ipc_options) as writer:
-            writer.write_table(table)
-    elif format_choice == "csv":
-        pa_csv = import_pyarrow_csv()
-        csv_opts: Any = None
-        if write_options:
-            csv_opts = pa_csv.WriteOptions(**write_options)
-        pa_csv.write_csv(table, sink, write_options=csv_opts)
-    else:
-        pq = import_pyarrow_parquet()
-        parquet_opts = dict(write_options) if write_options else {}
-        parquet_opts["use_dictionary"] = resolve_parquet_use_dictionary(
-            table.schema, parquet_opts.get("use_dictionary")
-        )
-        pq.write_table(table, sink, compression=compression, **parquet_opts)
+    write_arrow_payload(table, sink, format_choice, compression=compression, write_options=write_options)
     buffer = sink.getvalue()
     result_bytes: bytes = buffer.to_pybytes()
     return result_bytes

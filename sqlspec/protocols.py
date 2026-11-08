@@ -39,6 +39,7 @@ __all__ = (
     "AsyncWriteBytesProtocol",
     "CursorMetadataProtocol",
     "DictProtocol",
+    "DirectArrowWriteProtocol",
     "HasAddListenerProtocol",
     "HasAsDictProtocol",
     "HasConfigProtocol",
@@ -348,6 +349,41 @@ class AsyncDeleteProtocol(Protocol):
     """Protocol for async delete support."""
 
     async def delete_async(self, path: "str | Path", **kwargs: Any) -> None: ...
+
+
+@runtime_checkable
+class DirectArrowWriteProtocol(Protocol):
+    """Protocol for storage backends that support direct streaming Arrow writes."""
+
+    def supports_arrow_direct_write(self, format_choice: str) -> bool:
+        """Return True if backend supports direct streaming writes for format_choice."""
+        ...
+
+    def write_arrow_direct_sync(
+        self,
+        path: "str | Path",
+        table: "ArrowTable",
+        *,
+        format_choice: str = "parquet",
+        compression: str | None = None,
+        write_options: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> int:
+        """Write Arrow table directly to storage synchronously, returning bytes written."""
+        ...
+
+    async def write_arrow_direct_async(
+        self,
+        path: "str | Path",
+        table: "ArrowTable",
+        *,
+        format_choice: str = "parquet",
+        compression: str | None = None,
+        write_options: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> int:
+        """Write Arrow table directly to storage asynchronously, returning bytes written."""
+        ...
 
 
 @runtime_checkable

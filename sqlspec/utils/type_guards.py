@@ -53,6 +53,7 @@ if TYPE_CHECKING:
         AsyncReadBytesProtocol,
         AsyncWriteBytesProtocol,
         CursorMetadataProtocol,
+        DirectArrowWriteProtocol,
         HasAddListenerProtocol,
         HasAsDictProtocol,
         HasConfigProtocol,
@@ -185,6 +186,7 @@ __all__ = (
     "supports_async_read_bytes",
     "supports_async_write_bytes",
     "supports_close",
+    "supports_direct_arrow_write",
     "supports_json_type",
     "supports_where",
 )
@@ -373,6 +375,14 @@ def supports_async_write_bytes(obj: Any) -> "TypeGuard[AsyncWriteBytesProtocol]"
     """Check if backend supports async write_bytes."""
     try:
         return callable(obj.write_bytes_async)
+    except AttributeError:
+        return False
+
+
+def supports_direct_arrow_write(obj: Any) -> "TypeGuard[DirectArrowWriteProtocol]":
+    """Check if backend supports direct Arrow streaming writes."""
+    try:
+        return callable(obj.supports_arrow_direct_write) and callable(obj.write_arrow_direct_sync)
     except AttributeError:
         return False
 
