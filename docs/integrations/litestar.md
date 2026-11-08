@@ -101,7 +101,7 @@ Configure `commit_mode` inside `extension_config["litestar"]` to control how req
 
 | Commit Mode | Commits On | Rolls Back On | Best For |
 | --- | --- | --- | --- |
-| `"manual"` (default) | Explicit `session.commit()` calls only | Unhandled exceptions or uncommitted changes at request exit | Explicit service-layer transaction boundaries |
+| `"manual"` (default) | Explicit `session.commit()` calls only | Unhandled exceptions | Explicit service-layer transaction boundaries |
 | `"autocommit"` | HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`) or unhandled exceptions | JSON REST APIs where every `2xx` handler mutates state |
 | `"autocommit_include_redirect"` | HTTP `200`–`399` responses | HTTP `>= 400` responses or unhandled exceptions | HTML / HTMX form handlers that commit and return `302` / `303` redirects |
 
@@ -110,6 +110,19 @@ Configure `commit_mode` inside `extension_config["litestar"]` to control how req
 ```
 
 Add `extra_commit_statuses` or `extra_rollback_statuses` in `LitestarConfig` when specific status codes require custom commit or rollback treatment.
+
+## Request Failure Handling
+
+When a route handler raises an unhandled exception, Litestar's exception handler runs `record_request_exception` to record the exception in ASGI scope state before sending the error response. The before-send handler forwards this exception to the connection context manager exit (`__aexit__`), ensuring uncommitted changes roll back across all supported adapters.
+
+When a route handler exits cleanly without explicitly committing open work, the outcome depends on the underlying driver and adapter:
+
+| Clean return with uncommitted work | Adapters |
+| --- | --- |
+| Commits | `psycopg`, `cockroach_psycopg`, `sqlite`, `aiosqlite`, `duckdb`, `spanner` |
+| Rolls back on release | `pymysql`, `aiomysql`, `mysqlconnector` |
+
+Starlette, FastAPI, and Flask exit clean for an exception the framework has already mapped to a response.
 
 ## Declarative Query Filter Providers
 

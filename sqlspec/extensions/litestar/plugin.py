@@ -39,6 +39,7 @@ from sqlspec.extensions.litestar.handlers import (
     lifespan_handler_maker,
     manual_handler_maker,
     pool_provider_maker,
+    record_request_exception,
     session_provider_maker,
 )
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
@@ -345,6 +346,12 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     state.pool_key: Provide(state.pool_provider),
                     state.session_key: Provide(state.session_provider),
                 })
+
+        if any(not state.disable_di for state in self._plugin_configs):
+            if app_config.after_exception is None:
+                app_config.after_exception = []
+            if record_request_exception not in app_config.after_exception:
+                app_config.after_exception.append(record_request_exception)
 
         if signature_namespace:
             app_config.signature_namespace.update(signature_namespace)

@@ -26,6 +26,39 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.anyio
 
 
+class _AsyncContextManagerFake:
+    """Fake async context manager tracking exit arguments."""
+
+    def __init__(self, connection: Any, suppress: bool = False, raise_on_exit: Exception | None = None) -> None:
+        self.connection = connection
+        self.suppress = suppress
+        self.raise_on_exit = raise_on_exit
+        self.exit_args: tuple[Any, ...] | None = None
+
+    async def __aenter__(self) -> Any:
+        return self.connection
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        self.exit_args = (exc_type, exc_val, exc_tb)
+        if self.raise_on_exit is not None:
+            raise self.raise_on_exit
+        return self.suppress
+
+
+class _SyncContextManagerFake:
+    """Fake sync context manager tracking exit arguments."""
+
+    def __init__(self, connection: Any) -> None:
+        self.connection = connection
+        self.exit_args: tuple[Any, ...] | None = None
+
+    def __enter__(self) -> Any:
+        return self.connection
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.exit_args = (exc_type, exc_val, exc_tb)
+
+
 def test_session_provider_documents_mypyc_blockers() -> None:
     """The session provider should document why handlers.py stays interpreted."""
     source = Path("sqlspec/extensions/litestar/handlers.py").read_text()
@@ -375,3 +408,298 @@ async def test_sync_lifespan_handler_creates_and_closes_pool() -> None:
         assert mock_app.state[pool_key] is not None
 
     assert pool_key not in mock_app.state
+
+
+async def test_connection_provider_handover_on_http() -> None:
+    """Connection provider hands over context manager when response has not started."""
+    connection_key = "test_connection"
+    pool_key = "test_pool"
+    mock_conn = MagicMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+
+    mock_config = MagicMock()
+    mock_config.provide_connection.return_value = cm_fake
+
+    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+
+    state = MagicMock()
+    state.get.return_value = MagicMock()
+    scope = cast("Scope", {"type": "http"})
+
+    gen = provider(state, scope)
+    conn = await gen.asend(None)
+
+    assert conn is mock_conn
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_provider_owned") is True
+    assert get_sqlspec_scope_state(scope, connection_key) is mock_conn
+
+    with pytest.raises(StopAsyncIteration):
+        await gen.asend(None)
+
+    assert cm_fake.exit_args is None
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is cm_fake
+    assert get_sqlspec_scope_state(scope, connection_key) is mock_conn
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_provider_owned") is None
+
+
+async def test_manual_handler_terminus_after_handover() -> None:
+    """Manual before-send handler completes context manager exit after handover."""
+    connection_key = "test_connection"
+    pool_key = "test_pool"
+    mock_conn = MagicMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+
+    mock_config = MagicMock()
+    mock_config.provide_connection.return_value = cm_fake
+
+    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+
+    state = MagicMock()
+    state.get.return_value = MagicMock()
+    scope = cast("Scope", {"type": "http"})
+
+    gen = provider(state, scope)
+    await gen.asend(None)
+    with pytest.raises(StopAsyncIteration):
+        await gen.asend(None)
+
+    handler = manual_handler_maker(connection_key)
+    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
+
+    await handler(message, scope)
+
+    assert cm_fake.exit_args == (None, None, None)
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is None
+    assert get_sqlspec_scope_state(scope, connection_key) is None
+
+
+async def test_connection_provider_websocket_clean_exit() -> None:
+    """Websocket connection provider exits clean immediately upon generator end."""
+    connection_key = "test_connection"
+    pool_key = "test_pool"
+    mock_conn = MagicMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+
+    mock_config = MagicMock()
+    mock_config.provide_connection.return_value = cm_fake
+
+    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+
+    state = MagicMock()
+    state.get.return_value = MagicMock()
+    scope = cast("Scope", {"type": "websocket"})
+
+    gen = provider(state, scope)
+    await gen.asend(None)
+    with pytest.raises(StopAsyncIteration):
+        await gen.asend(None)
+
+    assert cm_fake.exit_args == (None, None, None)
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is None
+    assert get_sqlspec_scope_state(scope, connection_key) is None
+
+
+async def test_connection_provider_response_already_started() -> None:
+    """Connection provider exits immediately if response has already started."""
+    from litestar.utils.scope.state import ScopeState
+
+    connection_key = "test_connection"
+    pool_key = "test_pool"
+    mock_conn = MagicMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+
+    mock_config = MagicMock()
+    mock_config.provide_connection.return_value = cm_fake
+
+    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+
+    state = MagicMock()
+    state.get.return_value = MagicMock()
+    scope = cast("Scope", {"type": "http"})
+    ScopeState.from_scope(scope).response_started = True
+
+    gen = provider(state, scope)
+    await gen.asend(None)
+    with pytest.raises(StopAsyncIteration):
+        await gen.asend(None)
+
+    assert cm_fake.exit_args == (None, None, None)
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is None
+    assert get_sqlspec_scope_state(scope, connection_key) is None
+
+
+async def test_connection_provider_body_error_forwards_exception() -> None:
+    """Exceptions thrown into connection provider are forwarded to context exit."""
+    connection_key = "test_connection"
+    pool_key = "test_pool"
+    mock_conn = MagicMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+
+    mock_config = MagicMock()
+    mock_config.provide_connection.return_value = cm_fake
+
+    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+
+    state = MagicMock()
+    state.get.return_value = MagicMock()
+    scope = cast("Scope", {"type": "http"})
+
+    gen = provider(state, scope)
+    await gen.asend(None)
+
+    err = ValueError("boom")
+    with pytest.raises(ValueError) as exc_info:
+        await gen.athrow(err)
+
+    assert exc_info.value is err
+    assert cm_fake.exit_args is not None
+    assert cm_fake.exit_args[0] is ValueError
+    assert cm_fake.exit_args[1] is err
+    assert cm_fake.exit_args[2] is not None
+    assert get_sqlspec_scope_state(scope, connection_key) is None
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_provider_owned") is None
+
+
+async def test_connection_provider_suppressing_context_propagates_exception() -> None:
+    """Connection provider propagates exceptions even if context manager attempts suppression."""
+    connection_key = "test_connection"
+    pool_key = "test_pool"
+    mock_conn = MagicMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn, suppress=True)
+
+    mock_config = MagicMock()
+    mock_config.provide_connection.return_value = cm_fake
+
+    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+
+    state = MagicMock()
+    state.get.return_value = MagicMock()
+    scope = cast("Scope", {"type": "http"})
+
+    gen = provider(state, scope)
+    await gen.asend(None)
+
+    err = ValueError("cannot suppress")
+    with pytest.raises(ValueError) as exc_info:
+        await gen.athrow(err)
+
+    assert exc_info.value is err
+    assert cm_fake.exit_args is not None
+    assert cm_fake.exit_args[1] is err
+
+
+async def test_connection_provider_sync_manager_receives_exception() -> None:
+    """Sync context manager receives thrown exception wrapped via with_ensure_async_."""
+    connection_key = "test_connection"
+    pool_key = "test_pool"
+    mock_conn = MagicMock()
+    cm_fake = _SyncContextManagerFake(mock_conn)
+
+    mock_config = MagicMock()
+    mock_config.provide_connection.return_value = cm_fake
+
+    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+
+    state = MagicMock()
+    state.get.return_value = MagicMock()
+    scope = cast("Scope", {"type": "http"})
+
+    gen = provider(state, scope)
+    await gen.asend(None)
+
+    err = ValueError("sync boom")
+    with pytest.raises(ValueError) as exc_info:
+        await gen.athrow(err)
+
+    assert exc_info.value is err
+    assert cm_fake.exit_args is not None
+    assert cm_fake.exit_args[0] is ValueError
+    assert cm_fake.exit_args[1] is err
+    assert cm_fake.exit_args[2] is not None
+
+
+async def test_connection_provider_exit_failure_propagates_after_cleanup() -> None:
+    """Context manager exit failure propagates and scope keys are cleaned up."""
+    connection_key = "test_connection"
+    pool_key = "test_pool"
+    mock_conn = MagicMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn, raise_on_exit=RuntimeError("exit crashed"))
+
+    mock_config = MagicMock()
+    mock_config.provide_connection.return_value = cm_fake
+
+    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+
+    state = MagicMock()
+    state.get.return_value = MagicMock()
+    scope = cast("Scope", {"type": "http"})
+
+    gen = provider(state, scope)
+    await gen.asend(None)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await gen.athrow(ValueError("original"))
+
+    assert "exit crashed" in str(exc_info.value)
+    assert get_sqlspec_scope_state(scope, connection_key) is None
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_provider_owned") is None
+
+
+async def test_manual_handler_forwards_on_demand_exception() -> None:
+    """Manual handler forwards recorded request exception to context exit."""
+    from sqlspec.extensions.litestar.handlers import record_request_exception
+
+    connection_key = "test_connection"
+    handler = manual_handler_maker(connection_key)
+
+    mock_conn = MagicMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+
+    scope = cast("Scope", {})
+    set_sqlspec_scope_state(scope, connection_key, mock_conn)
+    set_sqlspec_scope_state(scope, f"{connection_key}_ctx", cm_fake)
+
+    exc = RuntimeError("handler exploded")
+    await record_request_exception(exc, scope)
+
+    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 500})
+    await handler(message, scope)
+
+    assert cm_fake.exit_args is not None
+    assert cm_fake.exit_args[0] is RuntimeError
+    assert cm_fake.exit_args[1] is exc
+    assert get_sqlspec_scope_state(scope, connection_key) is None
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is None
+
+
+async def test_autocommit_handler_forwards_exception_after_rollback() -> None:
+    """Autocommit handler rolls back on 500 and forwards recorded exception to context exit."""
+    from sqlspec.extensions.litestar.handlers import record_request_exception
+
+    connection_key = "test_connection"
+    handler = autocommit_handler_maker(connection_key)
+
+    mock_conn = AsyncMock()
+    mock_conn.commit = AsyncMock()
+    mock_conn.rollback = AsyncMock()
+    mock_conn.close = AsyncMock()
+
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+
+    scope = cast("Scope", {})
+    set_sqlspec_scope_state(scope, connection_key, mock_conn)
+    set_sqlspec_scope_state(scope, f"{connection_key}_ctx", cm_fake)
+
+    exc = ValueError("bad request state")
+    await record_request_exception(exc, scope)
+
+    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 500})
+    await handler(message, scope)
+
+    mock_conn.commit.assert_not_awaited()
+    mock_conn.rollback.assert_awaited_once()
+    assert cm_fake.exit_args is not None
+    assert cm_fake.exit_args[0] is ValueError
+    assert cm_fake.exit_args[1] is exc
+    assert get_sqlspec_scope_state(scope, connection_key) is None
+    assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is None
