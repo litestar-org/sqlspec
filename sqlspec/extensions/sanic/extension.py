@@ -1,7 +1,7 @@
 """Sanic extension for SQLSpec database session and lifecycle management."""
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.base import SQLSpec
 from sqlspec.core import CorrelationExtractor
@@ -27,6 +27,7 @@ __all__ = ("SQLSpecPlugin",)
 
 logger = get_logger("sqlspec.extensions.sanic")
 
+_REQUEST_EXCEPTION_KEY: Final = "sqlspec_request_exception"
 DEFAULT_COMMIT_MODE = "manual"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
@@ -200,10 +201,18 @@ class SQLSpecPlugin:
 
         app.on_request(self._on_request)
         app.on_response(self._on_response)  # type: ignore[no-untyped-call]
-        on_exception = getattr(app, "on_exception", None)
-        if callable(on_exception):
-            on_exception(self._on_exception)
+        app.add_signal(self._on_lifecycle_exception, "http.lifecycle.exception")
         self._request_middleware_added = True
+
+    async def _on_lifecycle_exception(self, request: Any, exception: BaseException) -> None:
+        """Record an unhandled exception on request context for connection cleanup.
+
+        Args:
+            request: Sanic request instance.
+            exception: Unhandled exception raised during request lifecycle.
+        """
+        if request is not None and hasattr(request, "ctx"):
+            set_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, exception)
 
     async def _on_request(self, request: Any) -> None:
         """Acquire request-scoped connections.
@@ -219,7 +228,9 @@ class SQLSpecPlugin:
                     continue
                 await self._acquire_request_connection(request, config_state)
                 acquired_states.append(config_state)
-        except Exception:
+        except Exception as exc:
+            if request is not None and hasattr(request, "ctx"):
+                set_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, exc)
             for config_state in acquired_states[::-1]:
                 await self._release_request_connection(request, config_state)
             self._restore_observability_contexts(request, None)
@@ -239,31 +250,6 @@ class SQLSpecPlugin:
                 await self._finalize_request_connection(request, response, config_state)
         finally:
             self._restore_observability_contexts(request, response)
-
-    async def _on_exception(self, request: Any, exception: BaseException) -> None:
-        """Roll back and release request-scoped connections when an unhandled exception occurs.
-
-        Args:
-            request: Sanic request instance.
-            exception: Unhandled exception raised during request processing.
-        """
-        _ = exception
-        if request is None or not hasattr(request, "ctx"):
-            return
-        try:
-            for config_state in self._config_states[::-1]:
-                if config_state.disable_di:
-                    continue
-                connection = get_context_value(request.ctx, config_state.connection_key, None)
-                if connection is None:
-                    continue
-                try:
-                    if config_state.commit_mode != "manual":
-                        await self._rollback_target(request, connection, config_state)
-                finally:
-                    await self._release_request_connection(request, config_state)
-        finally:
-            self._restore_observability_contexts(request, None)
 
     def _needs_request_middleware(self) -> bool:
         """Return whether this plugin should register request middleware.
@@ -498,10 +484,13 @@ class SQLSpecPlugin:
             pop_context_value(request.ctx, self._connection_manager_key(config_state))
             return
 
+        exc = get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None)
+        exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
+
         if config_state.config.supports_connection_pooling:
             connection_manager = pop_context_value(request.ctx, self._connection_manager_key(config_state))
             if connection_manager is not None:
-                await connection_manager.__aexit__(None, None, None)
+                await connection_manager.__aexit__(*exit_args)
             return
 
         await ensure_async_(connection.close)()

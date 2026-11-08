@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -14,6 +15,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.extensions.sanic import SQLSpecPlugin
 from sqlspec.utils.correlation import CorrelationContext
+
+if TYPE_CHECKING:
+    from pytest_databases.docker.postgres import PostgresService
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -329,3 +333,145 @@ def test_sanic_correlation_header_round_trip() -> None:
     assert sanic_response.headers["X-Correlation-ID"] == "sanic-cid"
     assert seen_context == ["sanic-cid"]
     assert CorrelationContext.get() is None
+
+
+def test_sanic_sqlite_manual_rolls_back_on_raise() -> None:
+    """Sanic manual mode with SQLite should roll back uncommitted work when handler raises."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = SqliteConfig(
+            connection_config={"database": tmp.name},
+            extension_config={"sanic": {"commit_mode": "manual", "session_key": "db"}},
+        )
+        sqlspec.add_config(config)
+        plugin = SQLSpecPlugin(sqlspec)
+        app = _create_sanic_app("SQLSpecSanicManualSqliteRollback")
+
+        @app.post("/setup")
+        async def setup(request: Request):
+            db = plugin.get_session(request, "db")
+            db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
+            db.execute("INSERT INTO test (name) VALUES (?)", ("initial",))
+            db.commit()
+            return response.json({"created": True})
+
+        @app.post("/insert-raise")
+        async def insert_raise(request: Request):
+            db = plugin.get_session(request, "db")
+            db.execute("INSERT INTO test (name) VALUES (?)", ("failing",))
+            raise RuntimeError("handler failed")
+
+        @app.get("/data")
+        async def data(request: Request):
+            db = plugin.get_session(request, "db")
+            rows = db.execute("SELECT name FROM test ORDER BY id").all()
+            return response.json({"names": [row["name"] for row in rows]})
+
+        plugin.init_app(app)
+
+        _, res_setup = app.test_client.post("/setup")
+        assert res_setup.status == 200
+
+        _, res_raise = app.test_client.post("/insert-raise", debug=False)
+        assert res_raise.status == 500
+
+        _, res_data = app.test_client.get("/data")
+        assert res_data.status == 200
+        assert res_data.json == {"names": ["initial"]}
+
+
+def test_sanic_sqlite_manual_commits_on_clean_return() -> None:
+    """Sanic manual mode with SQLite should commit uncommitted work on clean 200 return."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = SqliteConfig(
+            connection_config={"database": tmp.name},
+            extension_config={"sanic": {"commit_mode": "manual", "session_key": "db"}},
+        )
+        sqlspec.add_config(config)
+        plugin = SQLSpecPlugin(sqlspec)
+        app = _create_sanic_app("SQLSpecSanicManualSqliteCommit")
+
+        @app.post("/setup")
+        async def setup(request: Request):
+            db = plugin.get_session(request, "db")
+            db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
+            db.commit()
+            return response.json({"created": True})
+
+        @app.post("/insert-clean")
+        async def insert_clean(request: Request):
+            db = plugin.get_session(request, "db")
+            db.execute("INSERT INTO test (name) VALUES (?)", ("clean_row",))
+            return response.json({"success": True})
+
+        @app.get("/data")
+        async def data(request: Request):
+            db = plugin.get_session(request, "db")
+            rows = db.execute("SELECT name FROM test ORDER BY id").all()
+            return response.json({"names": [row["name"] for row in rows]})
+
+        plugin.init_app(app)
+
+        _, res_setup = app.test_client.post("/setup")
+        assert res_setup.status == 200
+
+        _, res_clean = app.test_client.post("/insert-clean")
+        assert res_clean.status == 200
+
+        _, res_data = app.test_client.get("/data")
+        assert res_data.status == 200
+        assert res_data.json == {"names": ["clean_row"]}
+
+
+def test_sanic_psycopg_manual_rolls_back_on_raise(postgres_service: "PostgresService") -> None:
+    """Sanic manual mode with psycopg should roll back on exception and next request succeeds."""
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg_pool")
+    import psycopg
+
+    from sqlspec.adapters.psycopg import PsycopgAsyncConfig
+    from tests.integration.fixtures.postgres import _postgres_conninfo
+
+    conninfo = _postgres_conninfo(postgres_service)
+    with psycopg.connect(conninfo, autocommit=True) as p_conn:
+        with p_conn.cursor() as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS sanic_psycopg_test (name VARCHAR(64) NOT NULL);")
+            cur.execute("DELETE FROM sanic_psycopg_test;")
+
+    sqlspec = SQLSpec()
+    config = PsycopgAsyncConfig(
+        connection_config={"conninfo": conninfo, "min_size": 1, "max_size": 4},
+        extension_config={"sanic": {"commit_mode": "manual", "session_key": "db"}},
+    )
+    sqlspec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec)
+    app = _create_sanic_app("SQLSpecSanicPsycopgManual")
+
+    @app.post("/insert-raise")
+    async def insert_raise(request: Request):
+        db = plugin.get_session(request, "db")
+        await db.execute("INSERT INTO sanic_psycopg_test (name) VALUES (%s)", ("failing",))
+        raise RuntimeError("handler boom")
+
+    @app.post("/insert-ok")
+    async def insert_ok(request: Request):
+        db = plugin.get_session(request, "db")
+        await db.execute("INSERT INTO sanic_psycopg_test (name) VALUES (%s)", ("succeeding",))
+        await db.commit()
+        return response.json({"status": "ok"})
+
+    plugin.init_app(app)
+
+    _, res_raise = app.test_client.post("/insert-raise", debug=False)
+    assert res_raise.status == 500
+
+    _, res_ok = app.test_client.post("/insert-ok")
+    assert res_ok.status == 200
+
+    with psycopg.connect(conninfo, autocommit=True) as p_conn:
+        with p_conn.cursor() as cur:
+            cur.execute("SELECT name FROM sanic_psycopg_test ORDER BY name;")
+            rows = [row[0] for row in cur.fetchall()]
+
+    assert rows == ["succeeding"]

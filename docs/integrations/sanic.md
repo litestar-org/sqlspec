@@ -44,6 +44,19 @@ Set `commit_mode` (`"manual"`, `"autocommit"`, or `"autocommit_include_redirect"
 --8<-- "docs/examples/frameworks/sanic/commit_modes.py:example"
 ```
 
+## Request Failure Handling
+
+When a route handler raises an unhandled exception, Sanic dispatches its lifecycle exception signal, recording the exception on `request.ctx` before response middleware runs. When releasing the connection, the plugin forwards this exception to the connection context manager exit (`__aexit__`), ensuring uncommitted changes roll back across all supported adapters.
+
+When a route handler exits cleanly without explicitly committing open work, the outcome depends on the underlying driver and adapter:
+
+| Clean return with uncommitted work | Adapters |
+| --- | --- |
+| Commits | `psycopg`, `cockroach_psycopg`, `sqlite`, `aiosqlite`, `duckdb`, `spanner` |
+| Rolls back on release | `pymysql`, `aiomysql`, `mysqlconnector` |
+
+Flask exits clean for an exception it has already mapped to a response.
+
 ## Multi-Database Routing
 
 Assign distinct `bind_key`, `session_key`, `connection_key`, and `pool_key` values when connecting a Sanic service to multiple databases:
