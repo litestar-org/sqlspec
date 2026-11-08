@@ -198,6 +198,7 @@ def test_adk_store_registration_validator_resolves_duckdb_store_classes() -> Non
     [
         ("db2", "Db2Sync", "db2"),
         ("db2", "Db2Async", "db2"),
+        ("aiomysql", "Aiomysql", "mysql"),
         ("arrow_odbc", "ArrowOdbc", "tsql"),
         ("arrow_odbc", "ArrowOdbc", "db2"),
         ("cockroach_asyncpg", "CockroachAsyncpg", "postgres"),
