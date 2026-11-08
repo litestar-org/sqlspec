@@ -171,10 +171,21 @@ class AiosqlitePoolConnectionContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is None:
+        connection = self._connection
+        if connection is None:
             return False
-        await self._pool.release(self._connection)
         self._connection = None
+        raw_connection = connection.connection
+        try:
+            if exc_type is None and getattr(raw_connection, "in_transaction", False):
+                try:
+                    await end_transaction(raw_connection, commit=True)
+                except BaseException:
+                    with suppress(Exception):
+                        await end_transaction(raw_connection, commit=False)
+                    raise
+        finally:
+            await self._pool.release(connection)
         return False
 
 

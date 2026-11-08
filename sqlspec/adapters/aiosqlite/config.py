@@ -19,11 +19,7 @@ from sqlspec.adapters.aiosqlite.core import (
     render_pragmas,
 )
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
-from sqlspec.adapters.aiosqlite.pool import (
-    AiosqliteConnectionPool,
-    AiosqlitePoolConnection,
-    AiosqlitePoolConnectionContext,
-)
+from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool, AiosqlitePoolConnectionContext
 from sqlspec.adapters.aiosqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
@@ -211,25 +207,26 @@ _RUNTIME_FEATURE_KEYS = (
 
 
 class _AiosqliteSessionFactory(AsyncPoolSessionFactory):
-    __slots__ = ("_pool_conn",)
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "AiosqliteConfig") -> None:
         super().__init__(config)
-        self._pool_conn: AiosqlitePoolConnection | None = None
+        self._ctx: AiosqlitePoolConnectionContext | None = None
 
     async def acquire_connection(self) -> "AiosqliteConnection":
         pool = self._config.connection_instance
         if pool is None:
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
-        pool_conn = await pool.acquire()
-        self._pool_conn = pool_conn
-        return cast("AiosqliteConnection", pool_conn.connection)
+        self._ctx = pool.get_connection()
+        return cast("AiosqliteConnection", await self._ctx.__aenter__())
 
     async def release_connection(self, _conn: "AiosqliteConnection", **kwargs: Any) -> None:
-        if self._pool_conn is not None and self._config.connection_instance is not None:
-            await self._config.connection_instance.release(self._pool_conn)
-            self._pool_conn = None
+        context = self._ctx
+        if context is None:
+            return
+        self._ctx = None
+        await context.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
 class AiosqliteConnectionContext(AsyncPoolConnectionContext):
