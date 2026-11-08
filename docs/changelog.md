@@ -54,6 +54,9 @@ important operational fixes.
 * A failed migration now rolls back before the session schema is reset, on every adapter. The original error reaches the caller instead of an aborted-transaction error from the reset, and SQL Server no longer commits partial work from a failed transactional migration.
 * A quoted Db2 `version_table_name` such as `"App"."Tracker"` now creates the tracking table with that exact name, so later runs find it instead of repeating `CREATE TABLE`.
 * Built-in configuration subclasses with explicit ADK stores accept the options those stores declare instead of raising `ImproperConfigurationError`.
+* SQL Server (`mssql_python`, `pymssql`, and `arrow_odbc`) ADK `create_tables()` now scopes index existence checks by `(schema, table, index)` identity instead of bare index names, so required ADK indexes are no longer skipped when another table in the schema owns an index with the same name.
+* Oracle ADK initial migrations (`0001_create_adk_tables`) now invoke `prepare_schema_sync` / `prepare_schema_async` on `context.driver` across both session and memory stores, detecting the Oracle database version on the active migration driver instead of opening a second session.
+* Clarified the `v0.70.0` ADK schema note that stated existing ADK tables must be reset: fresh initialization uses the current schema, while automated upgrades for pre-`v0.70.0` ADK schemas and rows are unavailable, so inspect existing tables against the current schema before reusing them.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
