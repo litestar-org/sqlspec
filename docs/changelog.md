@@ -33,6 +33,7 @@ important operational fixes.
 
 **Fixed:**
 
+* Fixed `ObStoreBackend.stream_arrow_sync` and `stream_arrow_async` failing on every call in compiled wheels with `TypeError: bytes object expected; got obstore.Bytes`. PyArrow now reads obstore's buffers directly without a copy.
 * `ObStoreBackend.read_arrow_sync` and `read_arrow_async` no longer copy the object into a Python `bytes` while holding the GIL: remote objects are parsed zero-copy from the `obstore.Bytes` buffer through `pyarrow.BufferReader`, and `file://` stores read Parquet straight from disk. `file://` stores also read bytes with `Path.read_bytes`, which releases the GIL during the read.
 * Fixed `t AS u` rendering `AS AS u`, and rendered table aliases as quoted identifiers on every dialect.
 * Fixed the `MERGE` target renderer removing quotes from names that require them, and subquery aliases leaking into bound parameter names.

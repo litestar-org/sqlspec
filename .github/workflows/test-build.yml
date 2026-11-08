@@ -426,6 +426,7 @@ jobs:
           uv pip install --python test-mypyc --no-index --no-deps --find-links dist-mypyc/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
           uv pip install --python test-mypyc "sqlspec==${SQLSPEC_EXPECTED_VERSION}" --find-links dist-mypyc/
           uv run --no-project --python test-mypyc python -I -c "import sqlspec, os, sys; v=sqlspec.__version__; e=os.environ['SQLSPEC_EXPECTED_VERSION']; sys.exit(0 if v == e else (sys.stderr.write(f'version mismatch: got {v}, expected {e}\n') or 1))"
+          uv pip install --python test-mypyc obstore pyarrow || echo "::warning::obstore or pyarrow unavailable; the obstore smoke check will be skipped"
           uv run --no-project --python test-mypyc python -I tools/scripts/mypyc_smoke.py --require-compiled
 
   verify-packages:

@@ -37,6 +37,7 @@ from sqlspec.storage._utils import (
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 
 if TYPE_CHECKING:
+    from obstore import Bytes
     from obstore.store import ObjectStore
 
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
@@ -1150,10 +1151,18 @@ class _ObStoreFileProxy:
     def writable(self) -> bool:
         return False
 
-    def read(self, size: int = -1) -> bytes:
+    def read(self, size: int = -1) -> "Bytes":
+        """Read from the object without copying obstore's buffer.
+
+        Args:
+            size: Maximum number of bytes to read, or a negative value to read to the end.
+
+        Returns:
+            An ``obstore.Bytes`` buffer, which PyArrow reads through the buffer protocol.
+        """
         if size < 0:
-            return cast("bytes", self._reader.readall())
-        return cast("bytes", self._reader.read(size))
+            return cast("Bytes", self._reader.readall())
+        return cast("Bytes", self._reader.read(size))
 
     def readinto(self, buffer: Any) -> int:
         data = self.read(len(buffer))
