@@ -8,13 +8,13 @@ from sqlspec.storage.backends.base import AsyncObStoreStreamIterator, AsyncThrea
 
 
 class FakeAsyncStream:
-    def __init__(self, chunks: list[bytes]) -> None:
+    def __init__(self, chunks: "list[bytes | memoryview]") -> None:
         self._chunks = iter(chunks)
 
     def __aiter__(self) -> "FakeAsyncStream":
         return self
 
-    async def __anext__(self) -> bytes:
+    async def __anext__(self) -> "bytes | memoryview":
         try:
             return next(self._chunks)
         except StopIteration as exc:
@@ -72,7 +72,7 @@ async def test_async_obstore_stream_iterator_delegates_to_stream() -> None:
 async def test_async_obstore_stream_iterator_converts_buffer_chunks() -> None:
     """Verify AsyncObStoreStreamIterator converts non-bytes buffer chunks into owned bytes."""
     view = memoryview(bytearray(b"xyz"))
-    iterator = AsyncObStoreStreamIterator(FakeAsyncStream([view]))  # type: ignore[arg-type]
+    iterator = AsyncObStoreStreamIterator(FakeAsyncStream([view]))
     chunk = await iterator.__anext__()
 
     assert type(chunk) is bytes
