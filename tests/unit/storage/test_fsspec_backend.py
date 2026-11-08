@@ -1,11 +1,12 @@
 """Unit tests for FSSpecBackend."""
 
+import gzip
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
 
 if FSSPEC_INSTALLED:
@@ -600,3 +601,107 @@ async def test_stream_read_async_with_file_uri_base_path(tmp_path: Path) -> None
     chunks = [chunk async for chunk in await store.stream_read_async("stream_test.bin")]
 
     assert b"".join(chunks) == test_data
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+@pytest.mark.parametrize("protocol_kind", ["file", "memory"])
+def test_write_sync_overwrite_false_creates_and_rejects_existing(tmp_path: Path, protocol_kind: str) -> None:
+    """Verify write_bytes_sync and write_text_sync honor overwrite=False on file and memory protocols."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    base = str(tmp_path) if protocol_kind == "file" else f"/fsspec_sync_{tmp_path.name}"
+    store = FSSpecBackend(protocol_kind, base_path=base)
+
+    store.write_bytes_sync("exclusive.bin", b"first", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        store.write_bytes_sync("exclusive.bin", b"second", overwrite=False)
+    assert store.read_bytes_sync("exclusive.bin") == b"first"
+
+    store.write_text_sync("exclusive.txt", "first", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        store.write_text_sync("exclusive.txt", "second", overwrite=False)
+    assert store.read_text_sync("exclusive.txt") == "first"
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+@pytest.mark.parametrize("protocol_kind", ["file", "memory"])
+async def test_write_async_overwrite_false_creates_and_rejects_existing(tmp_path: Path, protocol_kind: str) -> None:
+    """Verify write_bytes_async and write_text_async honor overwrite=False on file and memory protocols."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    base = str(tmp_path) if protocol_kind == "file" else f"/fsspec_async_{tmp_path.name}"
+    store = FSSpecBackend(protocol_kind, base_path=base)
+
+    await store.write_bytes_async("exclusive.bin", b"first", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_bytes_async("exclusive.bin", b"second", overwrite=False)
+    assert await store.read_bytes_async("exclusive.bin") == b"first"
+
+    await store.write_text_async("exclusive.txt", "first", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_text_async("exclusive.txt", "second", overwrite=False)
+    assert await store.read_text_async("exclusive.txt") == "first"
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_write_bytes_sync_forwards_supported_open_options(tmp_path: Path) -> None:
+    """Verify supported fsspec open options such as compression are forwarded."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    store = FSSpecBackend("file", base_path=str(tmp_path))
+    store.write_bytes_sync("compressed.bin.gz", b"hello compressed", compression="gzip")
+
+    raw_bytes = (tmp_path / "compressed.bin.gz").read_bytes()
+    assert gzip.decompress(raw_bytes) == b"hello compressed"
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+@pytest.mark.parametrize("protocol_kind", ["file", "memory"])
+def test_write_rejects_mode_and_unknown_kwargs_on_local_and_memory(tmp_path: Path, protocol_kind: str) -> None:
+    """Verify mode and unknown kwargs raise TypeError on file and memory protocols."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    base = str(tmp_path) if protocol_kind == "file" else f"/fsspec_invalid_{tmp_path.name}"
+    store = FSSpecBackend(protocol_kind, base_path=base)
+
+    with pytest.raises(TypeError, match="Unsupported keyword argument 'mode'"):
+        store.write_bytes_sync("item.bin", b"data", mode="wb")
+
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        store.write_bytes_sync("item.bin", b"data", bogus_option=123)
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_write_async_rejects_invalid_kwargs_and_forwards_remote_options(tmp_path: Path) -> None:
+    """Verify async writes reject invalid kwargs and remote protocols forward custom open options."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    store = FSSpecBackend("file", base_path=str(tmp_path))
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        await store.write_bytes_async("item.bin", b"data", bogus_option=123)
+
+    captured: list[tuple[str, str, dict[str, Any]]] = []
+
+    class _FakeFile:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+        def write(self, data: bytes) -> int:
+            return len(data)
+
+    class _FakeRemoteFS:
+        def open(self, path: str, mode: str = "rb", **kwargs: Any) -> _FakeFile:
+            captured.append((path, mode, kwargs))
+            return _FakeFile()
+
+    remote_store = FSSpecBackend.__new__(FSSpecBackend)
+    remote_store.protocol = "s3"
+    remote_store.base_path = "my-bucket"
+    remote_store._fs_uri = "s3://my-bucket"
+    remote_store.fs = _FakeRemoteFS()
+
+    remote_store.write_bytes_sync("obj.bin", b"payload", overwrite=False, acl="private")
+    assert captured == [("my-bucket/obj.bin", "xb", {"acl": "private"})]

@@ -12,6 +12,7 @@ __all__ = (
     "DeadlockError",
     "DialectNotSupportedError",
     "EventChannelError",
+    "FileExistsInStorageError",
     "FileNotFoundInStorageError",
     "ForeignKeyViolationError",
     "ImproperConfigurationError",
@@ -299,6 +300,10 @@ class StorageCapabilityError(SQLSpecError):
 
 class FileNotFoundInStorageError(StorageOperationFailedError):
     """Raised when a file or object is not found in the storage backend."""
+
+
+class FileExistsInStorageError(StorageOperationFailedError):
+    """Raised when writing to an existing object with overwrite disabled."""
 
 
 class StoragePathTraversalError(StorageOperationFailedError):

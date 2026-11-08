@@ -4,7 +4,7 @@ import errno
 import logging
 from typing import TYPE_CHECKING, NoReturn, TypeVar
 
-from sqlspec.exceptions import FileNotFoundInStorageError, StorageOperationFailedError
+from sqlspec.exceptions import FileExistsInStorageError, FileNotFoundInStorageError, StorageOperationFailedError
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -19,6 +19,7 @@ T = TypeVar("T")
 
 
 _NOT_FOUND_NAMES = {"NotFoundError", "ObjectNotFound", "NoSuchKey", "NoSuchBucket", "NoSuchFile"}
+_ALREADY_EXISTS_NAMES = {"AlreadyExistsError", "ObjectAlreadyExists"}
 
 
 class StorageError:
@@ -38,10 +39,11 @@ class StorageError:
 
 
 def raise_storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> NoReturn:
-    if isinstance(error, (FileNotFoundInStorageError, StorageOperationFailedError)):
+    if isinstance(error, StorageOperationFailedError):
         raise error
 
     is_missing = _is_missing_error(error)
+    is_exists = False if is_missing else _is_exists_error(error)
     normalized = _storage_error(error, backend=backend, operation=operation, path=path)
 
     log_extra: Mapping[str, str | bool | None] = {
@@ -55,6 +57,10 @@ def raise_storage_error(error: Exception, *, backend: str, operation: str, path:
     if is_missing:
         log_with_context(logger, logging.INFO, "storage.object.missing", **log_extra)
         raise FileNotFoundInStorageError(normalized.message) from error
+
+    if is_exists:
+        log_with_context(logger, logging.INFO, "storage.object.exists", **log_extra)
+        raise FileExistsInStorageError(normalized.message) from error
 
     log_with_context(logger, logging.WARNING, "storage.operation.failed", **log_extra)
     raise StorageOperationFailedError(normalized.message) from error
@@ -85,6 +91,17 @@ def _is_missing_error(error: Exception) -> bool:
 
     name = error.__class__.__name__
     return name in _NOT_FOUND_NAMES
+
+
+def _is_exists_error(error: Exception) -> bool:
+    if isinstance(error, FileExistsError):
+        return True
+
+    if isinstance(error, OSError) and error.errno == errno.EEXIST:
+        return True
+
+    name = error.__class__.__name__
+    return name in _ALREADY_EXISTS_NAMES
 
 
 def _is_retryable(error: Exception) -> bool:

@@ -1,8 +1,9 @@
 """Storage registry for ObjectStore backends.
 
 Provides a storage registry that supports URI-first access
-pattern with automatic backend detection, ObStore preferred with FSSpec fallback,
-scheme-based routing, and named aliases for common configurations.
+pattern with automatic backend detection, LocalStore for local file paths,
+ObStore preferred with FSSpec fallback for remote storage, scheme-based routing,
+and named aliases for common configurations.
 """
 
 import logging
@@ -202,12 +203,8 @@ class StorageRegistry:
     def _backend_from_uri(self, uri: str, *, backend_override: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
         """Resolve backend from URI with optional backend override.
 
-        Backend selection priority for local files (file:// or bare paths):
-        1. obstore (if installed) - provides async I/O performance
-        2. fsspec (if installed) - async wrapper fallback
-        3. local (always available) - zero-dependency sync backend
-
-        For cloud storage, prefer obstore over fsspec when available.
+        Local files (``file://`` URIs and bare paths) use ``LocalStore``. Cloud
+        storage prefers obstore over fsspec when available.
 
         Args:
             uri: Storage URI to resolve.
@@ -226,18 +223,6 @@ class StorageRegistry:
         scheme = self._scheme(uri)
 
         if scheme in {None, "file"}:
-            if OBSTORE_INSTALLED:
-                try:
-                    return self._backend("obstore", uri, **kwargs)
-                except (ValueError, ImportError, NotImplementedError):
-                    pass
-
-            if FSSPEC_INSTALLED:
-                try:
-                    return self._backend("fsspec", uri, **kwargs)
-                except (ValueError, ImportError, NotImplementedError):
-                    pass
-
             return self._backend("local", uri, **kwargs)
 
         if scheme not in FSSPEC_ONLY_SCHEMES and OBSTORE_INSTALLED:
@@ -270,10 +255,6 @@ class StorageRegistry:
         scheme = self._scheme(uri)
 
         if scheme in {None, "file"}:
-            if OBSTORE_INSTALLED:
-                return self._backend_class("obstore")
-            if FSSPEC_INSTALLED:
-                return self._backend_class("fsspec")
             return self._backend_class("local")
 
         if scheme in FSSPEC_ONLY_SCHEMES:

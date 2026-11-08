@@ -193,7 +193,7 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
+    def write_bytes_sync(self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any) -> None:
         """Write bytes to storage synchronously."""
         raise NotImplementedError
 
@@ -208,7 +208,9 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    def write_text_sync(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text_sync(
+        self, path: "str | Path", data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write text to storage synchronously."""
         raise NotImplementedError
 
@@ -291,7 +293,9 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
+    async def write_bytes_async(
+        self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write bytes to storage asynchronously."""
         raise NotImplementedError
 
@@ -301,7 +305,9 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    async def write_text_async(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    async def write_text_async(
+        self, path: "str | Path", data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write text to storage asynchronously."""
         raise NotImplementedError
 

@@ -1,6 +1,7 @@
 """Smoke-test imports for mypyc-built wheels."""
 
 import argparse
+import asyncio
 import importlib
 import importlib.machinery
 import importlib.util
@@ -191,6 +192,66 @@ def _check_statement_cache_rebind(*, require_compiled: bool = False) -> dict[str
         assert isinstance(expression, sqlglot_exp.Expr)
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _check_obstore_arrow_reads(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Read, stream, and create-only write Parquet through ObStoreBackend with real obstore buffers."""
+    result = _new_smoke_result(
+        name="obstore_arrow_reads",
+        module="sqlspec.storage.backends.obstore",
+        attribute="ObStoreBackend",
+        compiled_required=require_compiled,
+    )
+    for dependency in ("obstore", "pyarrow"):
+        if importlib.util.find_spec(dependency) is None:
+            result["skipped"] = True
+            result["skip_reason"] = f"optional dependency missing: {dependency}"
+            return result
+    try:
+        backend_module = importlib.import_module("sqlspec.storage.backends.obstore")
+        exceptions_module = importlib.import_module("sqlspec.exceptions")
+        pa = importlib.import_module("pyarrow")
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(backend_module)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
+
+    async def read_async(backend: Any) -> "tuple[Any, list[Any], bytes]":
+        table = await backend.read_arrow_async("smoke.parquet")
+        batches = [batch async for batch in backend.stream_arrow_async("smoke.parquet")]
+        return table, batches, await backend.read_bytes_async("smoke.bin")
+
+    expected = pa.table({"id": [1, 2, 3]})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            for uri in ("memory://", Path(tmp_dir).as_uri()):
+                backend = backend_module.ObStoreBackend(uri)
+                backend.write_arrow_sync("smoke.parquet", expected)
+                backend.write_bytes_sync("smoke.bin", b"smoke", overwrite=False)
+                try:
+                    backend.write_bytes_sync("smoke.bin", b"again", overwrite=False)
+                except exceptions_module.FileExistsInStorageError:
+                    pass
+                else:
+                    raise AssertionError(f"{uri}: overwrite=False replaced an existing object")
+                assert backend.read_arrow_sync("smoke.parquet").equals(expected), f"{uri}: read_arrow_sync"
+                streamed = pa.Table.from_batches(list(backend.stream_arrow_sync("smoke.parquet")))
+                assert streamed.equals(expected), f"{uri}: stream_arrow_sync"
+                assert backend.read_bytes_sync("smoke.bin") == b"smoke", f"{uri}: read_bytes_sync"
+                table, batches, data = asyncio.run(read_async(backend))
+                assert table.equals(expected), f"{uri}: read_arrow_async"
+                assert pa.Table.from_batches(batches).equals(expected), f"{uri}: stream_arrow_async"
+                assert data == b"smoke", f"{uri}: read_bytes_async"
+    except Exception as exc:
+        underlying = exc.__cause__ or exc.__context__
+        detail = f" (from {type(underlying).__name__}: {underlying})" if underlying is not None else ""
+        result["error"] = f"{type(exc).__name__}: {exc}{detail}"
     return result
 
 
@@ -1081,6 +1142,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_adapter_config_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
+        _check_obstore_arrow_reads(require_compiled=require_compiled),
         _check_service_subclasses(require_compiled=require_compiled),
         _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
         _check_aiosqlite_exception_mapping(require_compiled=require_compiled),

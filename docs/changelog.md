@@ -13,6 +13,8 @@ important operational fixes.
 
 * Added `sql.func(name, *args, dialect=None)` to `SQLFactory` for building scalar and table-valued SQL function expressions (`from_(sql.func("generate_series", 1, 3), alias="g")`, `sql.func("nullif", sql.c.a, 0)`), converting Python primitives to SQL literals while unwrapping builder column and expression objects.
 * Added `sql.col(name, table=None)` and `sql.c` (`ColumnNamespace` supporting `sql.c("name", table="u")`, `sql.c.name`, `sql.c["first-name"]`, and `sql.c["u.name"]`) alongside `sql.column()`, plus `sql.var(name)` for unquoted SQL keyword/variable tokens such as `sql.var("DEFAULT")` and `sql.var("CURRENT_TIMESTAMP")`.
+* Added `FileExistsInStorageError(StorageOperationFailedError)` (`sqlspec.exceptions`) and normalized `FileExistsError`, `OSError(errno.EEXIST)`, `AlreadyExistsError`, and `ObjectAlreadyExists` across storage backends in `raise_storage_error`.
+* Added keyword-only `*, overwrite: bool = True, **kwargs: Any` to `write_bytes_sync`, `write_text_sync`, `write_bytes_async`, and `write_text_async` across `ObjectStoreProtocol`, `ObjectStoreBase`, `AsyncWriteBytesProtocol`, `LocalStore`, `ObStoreBackend`, and `FSSpecBackend`, mapping `overwrite=False` to atomic create-only semantics (`mode="create"` on `ObStoreBackend`, `open("xb")` on `LocalStore` and `FSSpecBackend`) and raising `FileExistsInStorageError` when the target already exists. ([#888](https://github.com/litestar-org/sqlspec/issues/888))
 
 **Breaking changes:**
 
@@ -27,9 +29,12 @@ important operational fixes.
 * Lateral joins still accept one possibly qualified function call as a string, without subqueries, statements, or comments. A named function runs with the arguments it is given, and some engines provide functions that read files or run SQL text, so this text must be trusted.
 * ADK stores can declare extra `extension_config["adk"]` keys through an `extension_config_options` `ClassVar`, matching the `events` extension. Validation accepts `ADKConfig` keys, the built-in adapter's `*ADKConfig` keys, and the options declared by both `adk_store_class` and `adk_memory_store_class`.
 * **Behavior change for third-party adapters:** external ADK stores must now declare extra options through `extension_config_options`. Configurations with explicit ADK stores and an `adapter_name` outside `sqlspec.adapters`, supported since v0.70.1 ([#877](https://github.com/litestar-org/sqlspec/pull/877)), skipped option validation and accepted any key. Undeclared keys and typos now raise `ImproperConfigurationError`, including memory settings outside `ADKConfig` such as `vector_dimensions`.
+* `StorageRegistry` resolves `file://` URIs and bare local paths to `LocalStore` (`backend="local"`) by default rather than `ObStoreBackend`, unless `backend="obstore"` or `backend="fsspec"` is explicitly requested. `LocalStore`, `ObStoreBackend`, and `FSSpecBackend` now reject unknown or conflicting `write_bytes_*` / `write_text_*` keyword arguments with `TypeError` or `ValueError` instead of silently discarding them. ([#888](https://github.com/litestar-org/sqlspec/issues/888))
 
 **Fixed:**
 
+* Fixed `ObStoreBackend.stream_arrow_sync` and `stream_arrow_async` failing on every call in compiled wheels with `TypeError: bytes object expected; got obstore.Bytes`. PyArrow now reads obstore's buffers directly without a copy.
+* `ObStoreBackend.read_arrow_sync` and `read_arrow_async` no longer copy the object into a Python `bytes` while holding the GIL: remote objects are parsed zero-copy from the `obstore.Bytes` buffer through `pyarrow.BufferReader`, and `file://` stores read Parquet straight from disk. `file://` stores also read bytes with `Path.read_bytes`, which releases the GIL during the read.
 * Fixed `t AS u` rendering `AS AS u`, and rendered table aliases as quoted identifiers on every dialect.
 * Fixed the `MERGE` target renderer removing quotes from names that require them, and subquery aliases leaking into bound parameter names.
 * Fixed `join` and `Update.from_` dropping the alias on function expressions, and `from_` and `join` mishandling `sql.raw` fragments with parameters.

@@ -105,12 +105,13 @@ class LocalStore:
         except FileNotFoundInStorageError as error:
             raise FileNotFoundError(str(resolved)) from error
 
-    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
+    def write_bytes_sync(self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any) -> None:
         """Write bytes to file synchronously."""
+        _reject_unsupported_local_write_kwargs(kwargs)
         resolved = self._resolve_path(path)
 
         execute_sync_storage_operation(
-            partial(_write_local_bytes, resolved, data),
+            partial(_write_local_bytes, resolved, data, overwrite),
             backend=self.backend_type,
             operation="write_bytes",
             path=str(resolved),
@@ -121,10 +122,11 @@ class LocalStore:
         data = self.read_bytes_sync(path, **kwargs)
         return data.decode(encoding)
 
-    def write_text_sync(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text_sync(
+        self, path: "str | Path", data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write text to file synchronously."""
-        encoded = data.encode(encoding)
-        self.write_bytes_sync(path, encoded, **kwargs)
+        self.write_bytes_sync(path, data.encode(encoding), overwrite=overwrite, **kwargs)
 
     def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
         """Stream bytes from file synchronously.
@@ -342,17 +344,21 @@ class LocalStore:
         """Read bytes from file asynchronously."""
         return await async_(self.read_bytes_sync)(path, **kwargs)
 
-    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
+    async def write_bytes_async(
+        self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write bytes to file asynchronously."""
-        await async_(self.write_bytes_sync)(path, data, **kwargs)
+        await async_(self.write_bytes_sync)(path, data, overwrite=overwrite, **kwargs)
 
     async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from file asynchronously."""
         return await async_(self.read_text_sync)(path, encoding, **kwargs)
 
-    async def write_text_async(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    async def write_text_async(
+        self, path: "str | Path", data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
         """Write text to file asynchronously."""
-        await async_(self.write_text_sync)(path, data, encoding, **kwargs)
+        await async_(self.write_text_sync)(path, data, encoding, overwrite=overwrite, **kwargs)
 
     async def stream_read_async(
         self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
@@ -476,10 +482,22 @@ class LocalStore:
         }
 
 
-def _write_local_bytes(resolved: "Path", data: bytes) -> None:
+def _reject_unsupported_local_write_kwargs(kwargs: "dict[str, Any]") -> None:
+    """Raise TypeError when unsupported keyword arguments are passed to LocalStore writes."""
+    if kwargs:
+        names = ", ".join(sorted(kwargs))
+        msg = f"Unsupported write keyword argument(s) for LocalStore: {names}"
+        raise TypeError(msg)
+
+
+def _write_local_bytes(resolved: "Path", data: bytes, overwrite: bool) -> None:
     """Write bytes to a local file, ensuring parent directories exist."""
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_bytes(data)
+    if overwrite:
+        resolved.write_bytes(data)
+        return
+    with resolved.open("xb") as file_obj:
+        file_obj.write(data)
 
 
 def _delete_local_path(resolved: "Path") -> None:

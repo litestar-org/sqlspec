@@ -300,8 +300,8 @@ def test_pipeline_direct_cloud_uri_strips_bucket_from_object_key() -> None:
             del path, kwargs
             return b'{"id": 1}\n'
 
-        def write_bytes_sync(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
-            del kwargs
+        def write_bytes_sync(self, path: str | Path, data: bytes, *, overwrite: bool = True, **kwargs: Any) -> None:
+            del overwrite, kwargs
             written.append((self.store_uri, str(path), data))
 
         def stream_read_sync(self, path: str | Path, chunk_size: int | None = None, **kwargs: Any) -> Any:
@@ -312,8 +312,10 @@ def test_pipeline_direct_cloud_uri_strips_bucket_from_object_key() -> None:
             del path, encoding, kwargs
             return ""
 
-        def write_text_sync(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-            del path, data, encoding, kwargs
+        def write_text_sync(
+            self, path: str | Path, data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+        ) -> None:
+            del path, data, encoding, overwrite, kwargs
 
         def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
             del prefix, recursive, kwargs
@@ -367,16 +369,20 @@ def test_pipeline_direct_cloud_uri_strips_bucket_from_object_key() -> None:
             del path, kwargs
             return b'{"id": 1}\n'
 
-        async def write_bytes_async(self, path: str | Path, data: bytes, **kwargs: Any) -> None:
-            del kwargs
+        async def write_bytes_async(
+            self, path: str | Path, data: bytes, *, overwrite: bool = True, **kwargs: Any
+        ) -> None:
+            del overwrite, kwargs
             written.append((self.store_uri, str(path), data))
 
         async def read_text_async(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
             del path, encoding, kwargs
             return ""
 
-        async def write_text_async(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-            del path, data, encoding, kwargs
+        async def write_text_async(
+            self, path: str | Path, data: str, encoding: str = "utf-8", *, overwrite: bool = True, **kwargs: Any
+        ) -> None:
+            del path, data, encoding, overwrite, kwargs
 
         async def stream_read_async(self, path: str | Path, chunk_size: int | None = None, **kwargs: Any) -> Any:
             del path, chunk_size, kwargs
