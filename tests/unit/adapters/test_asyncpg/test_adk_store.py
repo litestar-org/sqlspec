@@ -1,14 +1,16 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for asyncpg ADK store extension configuration."""
 
+import inspect
 from typing import Any, Self, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKConfig, AsyncpgADKMemoryStore, AsyncpgADKStore
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, MigrationError, SQLSpecError
+from sqlspec.extensions.adk.migrations.reconcile import reconcile
+from sqlspec.migrations.context import MigrationContext
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -321,3 +323,177 @@ async def test_asyncpg_adk_scann_quantizer_validation() -> None:
     store = AsyncpgADKMemoryStore(config)
     with pytest.raises(ImproperConfigurationError, match="Invalid SCaNN quantizer"):
         await store._memory_table_ddl()
+
+
+def _mock_async_driver() -> MagicMock:
+    driver = MagicMock()
+    driver.execute_script = AsyncMock()
+    driver.execute = AsyncMock()
+    driver.commit = AsyncMock()
+    driver.connection = MagicMock()
+    driver.data_dictionary = MagicMock()
+    driver.data_dictionary.get_tables = AsyncMock(return_value=[])
+    driver.data_dictionary.get_columns = AsyncMock(return_value=[])
+    return driver
+
+
+def _recorded_scripts(driver: MagicMock) -> list[str]:
+    return [_normalized(call.args[0]) for call in driver.execute_script.await_args_list]
+
+
+async def test_asyncpg_session_companions_create_guarded_indexes_only() -> None:
+    store = AsyncpgADKStore(_mock_config())
+    driver = _mock_async_driver()
+
+    await store.reconcile_companion_objects_async(driver)
+
+    statements = _recorded_scripts(driver)
+    assert statements == [
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_app_user ON adk_session(app_name, user_id);",
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_update_time ON adk_session(update_time DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_state ON adk_session USING GIN (state) WHERE state != '{}'::jsonb;",
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_session ON adk_event(session_id, timestamp ASC);",
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_app_timestamp ON adk_event(app_name, timestamp ASC);",
+    ]
+    assert all("CREATE TABLE" not in sql for sql in statements)
+    driver.commit.assert_not_called()
+
+
+async def test_asyncpg_event_companions_follow_generated_and_covering_settings() -> None:
+    store = AsyncpgADKStore(_mock_config({"enable_event_generated_columns": True, "enable_covering_indexes": True}))
+    driver = _mock_async_driver()
+
+    await store.reconcile_companion_objects_async(driver)
+
+    statements = _recorded_scripts(driver)
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_session ON adk_event(session_id, timestamp ASC) INCLUDE (invocation_id);"
+        in statements
+    )
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_author_gc ON adk_event(session_id, author_gc, timestamp ASC);"
+        in statements
+    )
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_node_path_gc ON adk_event(session_id, node_path_gc, timestamp ASC);"
+        in statements
+    )
+
+
+async def test_asyncpg_memory_companions_follow_search_settings() -> None:
+    store = AsyncpgADKMemoryStore(
+        _mock_config({"enable_bm25": True, "memory_use_fts": True, "vector_index_type": "ivfflat"})
+    )
+    driver = _mock_async_driver()
+
+    await store.reconcile_companion_objects_async(driver)
+
+    statements = _recorded_scripts(driver)
+    assert any("USING GIN (to_tsvector('english', content_text));" in sql for sql in statements)
+    assert any("USING bm25 (content_text) WITH (text_config='english');" in sql for sql in statements)
+    assert any("idx_adk_memory_ivfflat" in sql for sql in statements)
+    assert all("idx_adk_memory_hnsw" not in sql for sql in statements)
+    assert all("CREATE TABLE" not in sql for sql in statements)
+    driver.commit.assert_not_called()
+
+
+async def test_asyncpg_memory_prepare_reconcile_installs_extensions_and_prepare_schema_is_noop() -> None:
+    driver = _mock_async_driver()
+    default_store = AsyncpgADKMemoryStore(_mock_config())
+
+    await default_store.prepare_schema_async(driver)
+    driver.execute_script.assert_not_called()
+
+    await default_store.prepare_reconcile_async(driver)
+    assert _recorded_scripts(driver) == ["CREATE EXTENSION IF NOT EXISTS vector"]
+
+    driver.execute_script.reset_mock()
+    bm25_store = AsyncpgADKMemoryStore(_mock_config({"enable_bm25": True}))
+    await bm25_store.prepare_schema_async(driver)
+    driver.execute_script.assert_not_called()
+
+    await bm25_store.prepare_reconcile_async(driver)
+    assert _recorded_scripts(driver) == [
+        "CREATE EXTENSION IF NOT EXISTS vector",
+        "CREATE EXTENSION IF NOT EXISTS pg_textsearch",
+    ]
+
+
+async def test_asyncpg_memory_finalize_reconcile_refreshes_config_extension_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    register_mock = AsyncMock()
+    monkeypatch.setattr("sqlspec.adapters.asyncpg.adk.store.register_pgvector_support", register_mock)
+
+    config = AsyncpgConfig(
+        driver_features={"enable_pgvector": True, "enable_pg_textsearch": True},
+        extension_config={"adk": {"enable_bm25": True}},
+    )
+    stale_error = RuntimeError("stale")
+    config._pgvector_available = False
+    config._pg_textsearch_available = False
+    config._pg_textsearch_probe_error = stale_error
+
+    store = AsyncpgADKMemoryStore(config)
+    driver = _mock_async_driver()
+
+    await store.prepare_reconcile_async(driver)
+    assert config._pgvector_available is False
+    assert config._pg_textsearch_available is False
+    assert config._pg_textsearch_probe_error is stale_error
+    register_mock.assert_not_awaited()
+
+    await store.finalize_reconcile_async(driver)
+    assert config._pgvector_available is True
+    assert config.pg_textsearch_available is True
+    assert config._pg_textsearch_probe_error is None
+    assert config._ensure_pg_textsearch_available() is None
+    register_mock.assert_awaited_once_with(driver.connection)
+
+
+async def test_asyncpg_disabled_memory_prepares_nothing() -> None:
+    store = AsyncpgADKMemoryStore(_mock_config({"enable_memory": False}))
+    driver = _mock_async_driver()
+
+    await store.prepare_reconcile_async(driver)
+    await store.reconcile_companion_objects_async(driver)
+    await store.finalize_reconcile_async(driver)
+
+    driver.execute_script.assert_not_called()
+
+
+async def test_asyncpg_memory_prepare_reconcile_validates_settings_first() -> None:
+    store = AsyncpgADKMemoryStore(_mock_config({"vector_index_type": "scann", "scann_quantizer": "BAD"}))
+    driver = _mock_async_driver()
+
+    with pytest.raises(ImproperConfigurationError, match="BAD"):
+        await store.prepare_reconcile_async(driver)
+
+    driver.execute_script.assert_not_called()
+
+
+async def test_asyncpg_memory_prepare_reconcile_reports_missing_extension() -> None:
+    store = AsyncpgADKMemoryStore(_mock_config())
+    driver = _mock_async_driver()
+    err = SQLSpecError("not available")
+    driver.execute_script.side_effect = err
+
+    with pytest.raises(MigrationError, match="vector") as exc_info:
+        await store.prepare_reconcile_async(driver)
+
+    assert exc_info.value.__cause__ is err
+
+
+async def test_asyncpg_reconcile_prepares_before_targets_and_companions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sqlspec.adapters.asyncpg.adk.store.register_pgvector_support", AsyncMock())
+    config = AsyncpgConfig(extension_config={"adk": {"enable_sessions": False}})
+    driver = _mock_async_driver()
+
+    result = reconcile(MigrationContext(config=config, dialect="postgres", driver=driver))
+    if inspect.isawaitable(result):
+        await result
+
+    statements = _recorded_scripts(driver)
+    assert statements[0] == "CREATE EXTENSION IF NOT EXISTS vector"
+    assert statements[1].startswith("CREATE TABLE IF NOT EXISTS adk_memory")
+    assert all(sql.startswith("CREATE INDEX IF NOT EXISTS") for sql in statements[2:])
