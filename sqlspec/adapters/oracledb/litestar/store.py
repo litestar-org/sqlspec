@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
 from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, validate_oracle_identifier
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB, read_oracle_lob_async, read_oracle_lob_sync, resolve_rowcount
 from sqlspec.config import LitestarConfig
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -349,6 +350,14 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """Get Oracle CREATE TABLE SQL with optimized schema."""
         return _build_session_table_ddl(self._table_name, self._config, self._in_memory)
 
+    def _schema_target(self) -> SchemaTarget:
+        """Build the Oracle session table SchemaTarget."""
+        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect="oracle")
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the Oracle session expiry companion index definition."""
+        return [_build_session_companion_index(self._table_name)]
+
     def _drop_table_sql(self) -> "list[str]":
         """Get Oracle DROP TABLE SQL with PL/SQL error handling."""
         return _build_drop_session_table_sql(self._table_name)
@@ -468,6 +477,14 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
     def _table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema."""
         return _build_session_table_ddl(self._table_name, self._config, self._in_memory)
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the Oracle session table SchemaTarget."""
+        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect="oracle")
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the Oracle session expiry companion index definition."""
+        return [_build_session_companion_index(self._table_name)]
 
     def _drop_table_sql(self) -> "list[str]":
         """Get Oracle DROP TABLE SQL with PL/SQL error handling."""
@@ -716,6 +733,23 @@ def _build_session_table_ddl(table_name: str, config: Any, in_memory: bool) -> s
             END IF;
     END;
     """
+
+
+def _build_session_companion_index(table_name: str) -> CompanionIndex:
+    """Build CompanionIndex metadata and PL/SQL-guarded DDL for Oracle session expiry."""
+    index_name = f"idx_{table_name.replace('.', '_')}_expires_at"[:30]
+    ddl = f"""
+    BEGIN
+        EXECUTE IMMEDIATE 'CREATE INDEX {index_name}
+            ON {table_name}(expires_at)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE NOT IN (-955, -1408) THEN
+                RAISE;
+            END IF;
+    END;
+    """
+    return CompanionIndex(name=index_name, table=table_name, schema=None, ddl=ddl)
 
 
 def _build_drop_session_table_sql(table_name: str) -> "list[str]":
