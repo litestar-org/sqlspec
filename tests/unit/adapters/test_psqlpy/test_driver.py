@@ -23,18 +23,12 @@ async def test_storage_bridge_writes_client_converted_rows_without_native_export
     cursor = SimpleNamespace(
         start=AsyncMock(),
         fetchmany=AsyncMock(
-            side_effect=[
-                SimpleNamespace(result=lambda: [{"name": "Ada", "value": 1}]),
-                SimpleNamespace(result=list),
-            ]
+            side_effect=[SimpleNamespace(result=lambda: [{"name": "Ada", "value": 1}]), SimpleNamespace(result=list)]
         ),
         close=lambda: None,
     )
     transaction = SimpleNamespace(
-        begin=AsyncMock(),
-        commit=AsyncMock(),
-        rollback=AsyncMock(),
-        cursor=lambda *_args, **_kwargs: cursor,
+        begin=AsyncMock(), commit=AsyncMock(), rollback=AsyncMock(), cursor=lambda *_args, **_kwargs: cursor
     )
     connection = SimpleNamespace(transaction=lambda: transaction)
     config = PsqlpyConfig()

@@ -47,6 +47,9 @@ HOOK_ROUTED_ADAPTERS: list[tuple[str, str]] = [
     ("sqlspec.adapters.psycopg.driver", "PsycopgSyncDriver"),
     ("sqlspec.adapters.psycopg.driver", "PsycopgAsyncDriver"),
     ("sqlspec.adapters.psqlpy.driver", "PsqlpyDriver"),
+    ("sqlspec.adapters.pymssql.driver", "PymssqlDriver"),
+    ("sqlspec.adapters.sqlanywhere.driver", "SqlanywhereDriver"),
+    ("sqlspec.adapters.sybase.driver", "SybaseDriver"),
 ]
 
 
