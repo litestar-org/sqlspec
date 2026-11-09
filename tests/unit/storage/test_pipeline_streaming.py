@@ -671,3 +671,39 @@ async def test_sql_result_write_to_storage_overwrite_false() -> None:
     await result.write_to_storage_async("alias://mem/rows_async.jsonl", overwrite=False, pipeline=async_p)
     with pytest.raises(FileExistsInStorageError):
         await result2.write_to_storage_async("alias://mem/rows_async.jsonl", overwrite=False, pipeline=async_p)
+
+
+async def test_pipeline_routes_local_store_direct_stream_and_create_only(tmp_path: Path) -> None:
+    """Sync and async pipelines stream directly through LocalStore stage files and enforce overwrite=False."""
+    registry = StorageRegistry()
+    registry.register_alias("loc", f"file://{tmp_path}", backend="local")
+    sync_p = SyncStoragePipeline(registry=registry)
+    async_p = AsyncStoragePipeline(registry=registry)
+
+    schema = pa.table({"id": [1]}).schema
+    batch_1 = pa.RecordBatch.from_pydict({"id": [1, 2]}, schema=schema)
+    batch_2 = pa.RecordBatch.from_pydict({"id": [3, 4]}, schema=schema)
+
+    observed_at_batch_2: dict[str, Any] = {}
+
+    def _inspect_stage_batches() -> Iterator[pa.RecordBatch]:
+        yield batch_1
+        names = sorted(p.name for p in tmp_path.iterdir())
+        observed_at_batch_2["dest_exists"] = "staged_batches.parquet" in names
+        observed_at_batch_2["stages"] = [n for n in names if n.startswith(".sqlspec-stage-")]
+        yield batch_2
+
+    telemetry = sync_p.write_arrow_batches("alias://loc/staged_batches.parquet", _inspect_stage_batches())
+    assert telemetry["backend"] == "local"
+    assert telemetry["rows_processed"] == 4
+    assert observed_at_batch_2["dest_exists"] is False
+    assert len(observed_at_batch_2["stages"]) == 1
+
+    tbl = pa.table({"id": [10, 20]})
+    sync_p.write_arrow(tbl, "alias://loc/create_only_sync.parquet", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        sync_p.write_arrow(tbl, "alias://loc/create_only_sync.parquet", overwrite=False)
+
+    await async_p.write_arrow(tbl, "alias://loc/create_only_async.parquet", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        await async_p.write_arrow(tbl, "alias://loc/create_only_async.parquet", overwrite=False)

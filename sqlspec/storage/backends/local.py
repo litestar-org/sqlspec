@@ -18,11 +18,17 @@ from uuid import uuid4
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import FileNotFoundInStorageError, StoragePathTraversalError
-from sqlspec.storage._arrow_payload import StorageFormat, join_shielded
+from sqlspec.exceptions import FileNotFoundInStorageError, StorageCapabilityError, StoragePathTraversalError
+from sqlspec.storage._arrow_payload import (
+    StorageFormat,
+    encode_arrow_to_async_sink,
+    encode_arrow_to_sink,
+    join_shielded,
+    validate_arrow_write_options,
+)
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import ensure_path_within_root, parse_file_uri_path, reject_parent_traversal
-from sqlspec.storage._utils import import_pyarrow_parquet, log_storage_event
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, log_storage_event
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
 from sqlspec.utils.sync_tools import async_
@@ -361,15 +367,30 @@ class LocalStore:
             ),
         )
 
-    def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write Arrow table to file synchronously."""
-        pq = import_pyarrow_parquet()
+    def write_arrow_sync(
+        self, path: "str | Path", table: "ArrowTable", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
+        """Write Arrow table to file synchronously through an atomic stage file."""
+        format_hint, compression, merged_write_options = _prepare_local_arrow_write(kwargs)
         resolved = self._resolve_path(path)
 
+        def _do_write() -> None:
+            with _LocalWriteStream(
+                resolved, overwrite=overwrite, backend_type=self.backend_type, log_fields=None
+            ) as sink:
+                encode_arrow_to_sink(
+                    table, sink, format_hint=format_hint, compression=compression, write_options=merged_write_options
+                )
+
         execute_sync_storage_operation(
-            partial(_write_local_arrow, resolved, table, pq, kwargs),
-            backend=self.backend_type,
+            _do_write, backend=self.backend_type, operation="write_arrow", path=str(resolved)
+        )
+        log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
             operation="write_arrow",
+            mode="sync",
             path=str(resolved),
         )
 
@@ -490,12 +511,32 @@ class LocalStore:
         """
         return await async_(self.read_arrow_sync)(path, **kwargs)
 
-    async def write_arrow_async(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write Arrow table asynchronously.
+    async def write_arrow_async(
+        self, path: "str | Path", table: "ArrowTable", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
+        """Write Arrow table asynchronously through an atomic stage file."""
+        format_hint, compression, merged_write_options = _prepare_local_arrow_write(kwargs)
+        resolved = self._resolve_path(path)
 
-        Uses async_() to offload blocking PyArrow I/O to thread pool.
-        """
-        await async_(self.write_arrow_sync)(path, table, **kwargs)
+        async def _do_write_async() -> None:
+            async with _AsyncLocalWriteStream(
+                resolved, overwrite=overwrite, backend_type=self.backend_type, log_fields=None
+            ) as sink:
+                await encode_arrow_to_async_sink(
+                    table, sink, format_hint=format_hint, compression=compression, write_options=merged_write_options
+                )
+
+        await execute_async_storage_operation(
+            _do_write_async, backend=self.backend_type, operation="write_arrow", path=str(resolved)
+        )
+        log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="write_arrow",
+            mode="async",
+            path=str(resolved),
+        )
 
     def stream_arrow_async(
         self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
@@ -589,10 +630,35 @@ def _copy_local_path(src: "Path", dst: "Path") -> None:
         shutil.copy2(src, dst)
 
 
-def _write_local_arrow(resolved: "Path", table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
-    """Write an Arrow table to a local path."""
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, str(resolved), **options)  # pyright: ignore
+def _prepare_local_arrow_write(kwargs: "dict[str, Any]") -> "tuple[StorageFormat, str | None, dict[str, Any]]":
+    """Validate and extract format_hint, compression, and writer options for LocalStore Arrow writes."""
+    import_pyarrow()
+    format_hint: StorageFormat = kwargs.pop("format_hint", "parquet")
+    if format_hint == "parquet":
+        import_pyarrow_parquet()
+    if format_hint not in _LOCAL_ARROW_FORMATS:
+        msg = f"Arrow storage writes support only Parquet, Arrow IPC, and CSV formats, got {format_hint!r}"
+        raise StorageCapabilityError(
+            msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
+        )
+
+    write_options_arg = kwargs.pop("write_options", None)
+    merged_write_options: dict[str, Any] = dict(write_options_arg) if write_options_arg else {}
+    has_compression_in_kwargs = "compression" in kwargs
+    compression_arg = kwargs.pop("compression", None)
+    merged_write_options.update(kwargs)
+
+    if has_compression_in_kwargs:
+        compression: str | None = compression_arg
+    elif "compression" in merged_write_options:
+        compression = merged_write_options.get("compression")
+    elif format_hint == "parquet":
+        compression = "snappy"
+    else:
+        compression = None
+
+    validate_arrow_write_options(format_hint, merged_write_options)
+    return format_hint, compression, merged_write_options
 
 
 def _open_file_for_read(path: Path) -> Any:

@@ -263,11 +263,7 @@ def _generate_failing_arrow_batches(pa: Any, target_schema: Any, /) -> Iterator[
 
 
 def _generate_slow_arrow_batches(
-    pa: Any,
-    target_schema: Any,
-    started_event: asyncio.Event,
-    event_loop: asyncio.AbstractEventLoop,
-    /,
+    pa: Any, target_schema: Any, started_event: asyncio.Event, event_loop: asyncio.AbstractEventLoop, /
 ) -> Iterator[Any]:
     """Yield a batch, notify caller, pause to allow cancellation, and yield again."""
     yield pa.RecordBatch.from_pydict({"id": [20]}, schema=target_schema)
@@ -276,13 +272,7 @@ def _generate_slow_arrow_batches(
     yield pa.RecordBatch.from_pydict({"id": [21]}, schema=target_schema)
 
 
-async def _cancel_in_flight_write(
-    pipeline: Any,
-    destination: str,
-    pa: Any,
-    target_schema: Any,
-    /,
-) -> None:
+async def _cancel_in_flight_write(pipeline: Any, destination: str, pa: Any, target_schema: Any, /) -> None:
     """Launch async batch write, await start, cancel, and expect CancelledError."""
     loop = asyncio.get_running_loop()
     started = asyncio.Event()
@@ -299,7 +289,7 @@ async def _cancel_in_flight_write(
 
 
 def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[str, Any]:
-    """Stream Arrow tables and batches through compiled pipelines over ObStoreBackend."""
+    """Stream Arrow tables and batches through compiled pipelines over ObStoreBackend and LocalStore."""
     result = _new_smoke_result(
         name="pipeline_arrow_streaming",
         module="sqlspec.storage.pipeline",
@@ -314,6 +304,7 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
     try:
         pipeline_module = importlib.import_module("sqlspec.storage.pipeline")
         backend_module = importlib.import_module("sqlspec.storage.backends.obstore")
+        local_module = importlib.import_module("sqlspec.storage.backends.local")
         type_guards_module = importlib.import_module("sqlspec.utils.type_guards")
         arrow_payload_module = importlib.import_module("sqlspec.storage._arrow_payload")
         registry_module = importlib.import_module("sqlspec.storage.registry")
@@ -327,9 +318,10 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
     result["imported"] = True
     compiled_pipeline = is_compiled_module(pipeline_module)
     compiled_backend = is_compiled_module(backend_module)
+    compiled_local = is_compiled_module(local_module)
     compiled_type_guards = is_compiled_module(type_guards_module)
     arrow_payload_interpreted = not is_compiled_module(arrow_payload_module)
-    result["compiled"] = compiled_pipeline and compiled_backend and compiled_type_guards
+    result["compiled"] = compiled_pipeline and compiled_backend and compiled_local and compiled_type_guards
 
     if require_compiled:
         if not compiled_pipeline:
@@ -337,6 +329,9 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
             return result
         if not compiled_backend:
             result["error"] = "sqlspec.storage.backends.obstore was imported from source, not a compiled extension"
+            return result
+        if not compiled_local:
+            result["error"] = "sqlspec.storage.backends.local was imported from source, not a compiled extension"
             return result
         if not compiled_type_guards:
             result["error"] = "sqlspec.utils.type_guards was imported from source, not a compiled extension"
@@ -348,10 +343,19 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
     expected_rows = 3
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            for uri, prefix in [("memory://", "mem"), (Path(tmp_dir).as_uri(), "file")]:
+            obstore_dir = Path(tmp_dir) / "obstore_root"
+            obstore_dir.mkdir(parents=True, exist_ok=True)
+            local_dir = Path(tmp_dir) / "local_root"
+            local_dir.mkdir(parents=True, exist_ok=True)
+            targets = [
+                ("memory://", "mem", "obstore"),
+                (obstore_dir.as_uri(), "file", "obstore"),
+                (local_dir.as_uri(), "local", "local"),
+            ]
+            for uri, prefix, expected_backend in targets:
                 registry = registry_module.StorageRegistry()
                 alias = f"{prefix}_alias"
-                registry.register_alias(alias, uri, backend="obstore")
+                registry.register_alias(alias, uri, backend=expected_backend)
                 backend = registry.get(alias)
                 sync_p = pipeline_module.SyncStoragePipeline(registry=registry)
                 async_p = pipeline_module.AsyncStoragePipeline(registry=registry)
@@ -361,30 +365,26 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
                 for fmt in ("parquet", "arrow-ipc", "csv"):
                     dest_sync = f"alias://{alias}/sync_table_{fmt}.{fmt}"
                     t_sync = sync_p.write_arrow(sample_table, dest_sync, format_hint=fmt)
-                    assert t_sync["backend"] == "obstore", f"{uri}: {fmt} sync backend"
+                    assert t_sync["backend"] == expected_backend, f"{uri}: {fmt} sync backend"
                     assert t_sync["rows_processed"] == expected_rows, f"{uri}: {fmt} sync rows"
                     assert t_sync["bytes_processed"] > 0, f"{uri}: {fmt} sync bytes"
                     assert t_sync["format"] == fmt, f"{uri}: {fmt} sync format"
 
                     dest_sync_b = f"alias://{alias}/sync_batches_{fmt}.{fmt}"
-                    t_sync_b = sync_p.write_arrow_batches(
-                        dest_sync_b, sample_table.to_batches(), file_format=fmt
-                    )
-                    assert t_sync_b["backend"] == "obstore", f"{uri}: {fmt} sync batches backend"
+                    t_sync_b = sync_p.write_arrow_batches(dest_sync_b, sample_table.to_batches(), file_format=fmt)
+                    assert t_sync_b["backend"] == expected_backend, f"{uri}: {fmt} sync batches backend"
                     assert t_sync_b["rows_processed"] == expected_rows, f"{uri}: {fmt} sync batches rows"
 
                     dest_async = f"alias://{alias}/async_table_{fmt}.{fmt}"
                     t_async = asyncio.run(async_p.write_arrow(sample_table, dest_async, format_hint=fmt))
-                    assert t_async["backend"] == "obstore", f"{uri}: {fmt} async backend"
+                    assert t_async["backend"] == expected_backend, f"{uri}: {fmt} async backend"
                     assert t_async["rows_processed"] == expected_rows, f"{uri}: {fmt} async rows"
 
                     dest_async_b = f"alias://{alias}/async_batches_{fmt}.{fmt}"
                     t_async_b = asyncio.run(
-                        async_p.write_arrow_batches_async(
-                            dest_async_b, sample_table.to_batches(), file_format=fmt
-                        )
+                        async_p.write_arrow_batches_async(dest_async_b, sample_table.to_batches(), file_format=fmt)
                     )
-                    assert t_async_b["backend"] == "obstore", f"{uri}: {fmt} async batches backend"
+                    assert t_async_b["backend"] == expected_backend, f"{uri}: {fmt} async batches backend"
                     assert t_async_b["rows_processed"] == expected_rows, f"{uri}: {fmt} async batches rows"
 
                     raw = backend.read_bytes_sync(f"sync_table_{fmt}.{fmt}")
@@ -396,8 +396,7 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
 
                 try:
                     sync_p.write_arrow_batches(
-                        f"alias://{alias}/existing.parquet",
-                        _generate_failing_arrow_batches(pa, existing_table.schema),
+                        f"alias://{alias}/existing.parquet", _generate_failing_arrow_batches(pa, existing_table.schema)
                     )
                 except RuntimeError:
                     pass
@@ -407,12 +406,7 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
                 assert backend.read_arrow_sync("existing.parquet").equals(existing_table), f"{uri}: existing preserved"
 
                 asyncio.run(
-                    _cancel_in_flight_write(
-                        async_p,
-                        f"alias://{alias}/existing.parquet",
-                        pa,
-                        existing_table.schema,
-                    )
+                    _cancel_in_flight_write(async_p, f"alias://{alias}/existing.parquet", pa, existing_table.schema)
                 )
                 assert backend.read_arrow_sync("existing.parquet").equals(existing_table), f"{uri}: cancel preserved"
 
