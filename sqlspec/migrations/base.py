@@ -31,7 +31,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Sequence
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.observability import ObservabilityRuntime
@@ -774,6 +774,29 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
                 raise MigrationError(msg)
             reconcilers.append(ExtensionReconcilerDescriptor(ext_name, reconcile_path))
         return tuple(reconcilers)
+
+    def _retained_reconcile_versions(self, applied_migrations: "Sequence[AppliedMigrationRecord]") -> set[str]:
+        """Return applied version_num values belonging to extensions currently configured in reconcile mode.
+
+        Args:
+            applied_migrations: Applied migration records from the tracking table.
+
+        Returns:
+            Set of retained ``version_num`` strings belonging to active ``reconcile`` extensions.
+        """
+        reconcile_names = {descriptor.name for descriptor in self.extension_reconcilers}
+        if not reconcile_names:
+            return set()
+        retained: set[str] = set()
+        for record in applied_migrations:
+            version_num = record["version_num"]
+            try:
+                parsed = parse_version(version_num)
+            except ValueError:
+                continue
+            if parsed.extension in reconcile_names:
+                retained.add(version_num)
+        return retained
 
     def _discover_extension_migrations(self) -> "dict[str, Path]":
         """Discover migration paths for configured versioned extensions.

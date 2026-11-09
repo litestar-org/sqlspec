@@ -601,3 +601,603 @@ async def test_migration_commands_route_over_direct_dsn() -> None:
             assert await async_commands.current() == "0001"
             mock_direct_async_session.assert_called_once()
             mock_pooled_async_session.assert_not_called()
+
+
+def _build_sqlite_mode_config(
+    db_path: Path,
+    migrations_dir: Path,
+    *,
+    is_async: bool,
+    include_extensions: list[str] | None = None,
+    extension_config: dict[str, dict[str, object]] | None = None,
+    extra_migration_config: dict[str, object] | None = None,
+) -> SqliteConfig | AiosqliteConfig:
+    from typing import Any, cast
+
+    migration_cfg: dict[str, Any] = {"script_location": str(migrations_dir)}
+    if include_extensions is not None:
+        migration_cfg["include_extensions"] = include_extensions
+    if extra_migration_config:
+        migration_cfg.update(extra_migration_config)
+    ext_cfg = cast("Any", extension_config or {})
+    if is_async:
+        return AiosqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config=migration_cfg, extension_config=ext_cfg
+        )
+    return SqliteConfig(
+        connection_config={"database": str(db_path)}, migration_config=migration_cfg, extension_config=ext_cfg
+    )
+
+
+async def _run_upgrade(config: SqliteConfig | AiosqliteConfig, **kwargs: object) -> None:
+    from typing import Any, cast
+
+    cmds = create_migration_commands(config)
+    if isinstance(cmds, AsyncMigrationCommands):
+        await cmds.upgrade(**cast("dict[str, Any]", kwargs))
+    else:
+        cmds.upgrade(**cast("dict[str, Any]", kwargs))
+
+
+async def _run_verify(config: SqliteConfig | AiosqliteConfig, *, strict: bool = False) -> dict[str, object]:
+    from typing import cast
+
+    cmds = create_migration_commands(config)
+    if isinstance(cmds, AsyncMigrationCommands):
+        return cast("dict[str, object]", await cmds.verify(strict=strict, echo=False))
+    return cast("dict[str, object]", cmds.verify(strict=strict, echo=False))
+
+
+async def _run_stamp(config: SqliteConfig | AiosqliteConfig, revision: str) -> None:
+    cmds = create_migration_commands(config)
+    if isinstance(cmds, AsyncMigrationCommands):
+        await cmds.stamp(revision)
+    else:
+        cmds.stamp(revision)
+
+
+async def _fetch_rows(config: SqliteConfig | AiosqliteConfig, query: str) -> list[dict[str, object]]:
+    from typing import cast
+
+    if isinstance(config, AiosqliteConfig):
+        async with config.provide_session() as driver:
+            rows = await driver.select(query)
+        return cast("list[dict[str, object]]", rows)
+    with config.provide_session() as driver:
+        rows = driver.select(query)
+    return cast("list[dict[str, object]]", rows)
+
+
+async def _close_config_pool(config: SqliteConfig | AiosqliteConfig) -> None:
+    if isinstance(config, AiosqliteConfig):
+        await config.close_pool()
+    else:
+        config.close_pool()
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_retained_reconcile_ledger_survives_checksum_collision_verify_stamp_and_mode_switch(
+    tmp_path: Path, is_async: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Retained ext_<name>_* ledger rows survive auto-sync collisions, verify(strict=True), stamp, and mode toggles."""
+    db_path = tmp_path / "ledger.db"
+    core_dir = tmp_path / "migrations"
+    core_dir.mkdir()
+    ext_dir = tmp_path / "ext_demo"
+    ext_dir.mkdir()
+
+    shared_ddl = "-- name: migrate-0001-up\nCREATE TABLE demo_or_app (id INTEGER PRIMARY KEY);\n"
+    (ext_dir / "0001_init.sql").write_text(shared_ddl, encoding="utf-8")
+    (ext_dir / "reconcile.py").write_text("def reconcile(context):\n    return None\n", encoding="utf-8")
+
+    cfg_v1 = _build_sqlite_mode_config(
+        db_path,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": ext_dir, "migration_mode": "versioned"}},
+    )
+    await _run_upgrade(cfg_v1, echo=False)
+    snapshot_before = await _fetch_rows(
+        cfg_v1, "SELECT version_num, checksum, execution_sequence FROM ddl_migrations ORDER BY execution_sequence"
+    )
+    await _close_config_pool(cfg_v1)
+    assert len(snapshot_before) == 1
+    assert snapshot_before[0]["version_num"] == "ext_demo_0001"
+    retained_checksum = snapshot_before[0]["checksum"]
+
+    (ext_dir / "0001_init.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE edited_ignored (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+
+    cfg_reconcile = _build_sqlite_mode_config(
+        db_path,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": ext_dir, "migration_mode": "reconcile"}},
+    )
+    cols_before = await _fetch_rows(cfg_reconcile, "PRAGMA table_info(ddl_migrations)")
+    with caplog.at_level("WARNING", logger="sqlspec.migrations.commands"):
+        await _run_upgrade(cfg_reconcile, use_logger=True)
+        await _run_upgrade(cfg_reconcile, use_logger=True)
+    assert not any("checksum" in rec.getMessage().lower() for rec in caplog.records)
+    cols_after = await _fetch_rows(cfg_reconcile, "PRAGMA table_info(ddl_migrations)")
+    snapshot_after_switch = await _fetch_rows(
+        cfg_reconcile,
+        "SELECT version_num, checksum, execution_sequence FROM ddl_migrations ORDER BY execution_sequence",
+    )
+    assert cols_after == cols_before
+    assert snapshot_after_switch == snapshot_before
+    cmds_check = create_migration_commands(cfg_reconcile)
+    current_val = await cmds_check.current() if isinstance(cmds_check, AsyncMigrationCommands) else cmds_check.current()
+    assert current_val == "ext_demo_0001"
+
+    (core_dir / "0001_app.sql").write_text(shared_ddl, encoding="utf-8")
+    if isinstance(cfg_reconcile, AiosqliteConfig):
+        async with cfg_reconcile.provide_session() as drv:
+            await drv.execute("DROP TABLE demo_or_app")
+            await drv.commit()
+    else:
+        with cfg_reconcile.provide_session() as drv:
+            drv.execute("DROP TABLE demo_or_app")
+            drv.commit()
+
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="sqlspec.migrations.commands"):
+        await _run_upgrade(cfg_reconcile, use_logger=True)
+    assert not any("checksum" in rec.getMessage().lower() for rec in caplog.records)
+
+    rows_after_collision = await _fetch_rows(
+        cfg_reconcile, "SELECT version_num, checksum FROM ddl_migrations ORDER BY execution_sequence"
+    )
+    assert rows_after_collision == [
+        {"version_num": "ext_demo_0001", "checksum": retained_checksum},
+        {"version_num": "0001", "checksum": retained_checksum},
+    ]
+
+    report = await _run_verify(cfg_reconcile, strict=True)
+    assert report == {
+        "valid": True,
+        "orphaned_records": [],
+        "checksum_mismatches": [],
+        "pending_versions": [],
+        "partial_squash_errors": [],
+    }
+
+    if isinstance(cfg_reconcile, AiosqliteConfig):
+        async with cfg_reconcile.provide_session() as drv:
+            await AsyncMigrationCommands(cfg_reconcile).tracker.record_migration(drv, "9999", "orphan", 0, "abc")
+    else:
+        with cfg_reconcile.provide_session() as drv:
+            SyncMigrationCommands(cfg_reconcile).tracker.record_migration(drv, "9999", "orphan", 0, "abc")
+
+    with pytest.raises(MigrationError, match=r"orphaned applied records \[9999\]"):
+        await _run_verify(cfg_reconcile, strict=True)
+
+    await _run_stamp(cfg_reconcile, "base")
+    stamped_base = await _fetch_rows(cfg_reconcile, "SELECT version_num FROM ddl_migrations")
+    assert [r["version_num"] for r in stamped_base] == ["ext_demo_0001"]
+
+    await _run_stamp(cfg_reconcile, "0001")
+    stamped_rev = await _fetch_rows(cfg_reconcile, "SELECT version_num FROM ddl_migrations")
+    assert {r["version_num"] for r in stamped_rev} == {"0001", "ext_demo_0001"}
+    await _close_config_pool(cfg_reconcile)
+
+    (ext_dir / "0001_init.sql").write_text(shared_ddl, encoding="utf-8")
+    (ext_dir / "0002_extra.sql").write_text(
+        "-- name: migrate-0002-up\nCREATE TABLE demo_extra (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    cfg_back_versioned = _build_sqlite_mode_config(
+        db_path,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": ext_dir, "migration_mode": "versioned"}},
+    )
+    await _run_upgrade(cfg_back_versioned, echo=False)
+    final_versions = [
+        r["version_num"]
+        for r in await _fetch_rows(
+            cfg_back_versioned, "SELECT version_num FROM ddl_migrations ORDER BY execution_sequence"
+        )
+    ]
+    await _close_config_pool(cfg_back_versioned)
+    assert final_versions == ["ext_demo_0001", "0001", "ext_demo_0002"]
+
+
+def test_plan_version_reconciliation_excludes_retained_reconcile_rows_and_ignores_unparseable_versions(
+    tmp_path: Path,
+) -> None:
+    """_plan_version_reconciliation excludes retained reconcile rows while renaming non-reconcile orphan matches."""
+    from typing import cast
+
+    from sqlspec.migrations.base import AppliedMigrationRecord
+
+    core_dir = tmp_path / "migrations"
+    core_dir.mkdir()
+    ext_dir = tmp_path / "ext_demo"
+    ext_dir.mkdir()
+    (ext_dir / "reconcile.py").write_text("def reconcile(context):\n    return None\n", encoding="utf-8")
+
+    core_file = core_dir / "0001_app.sql"
+    core_file.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+
+    reconcile_cfg = _build_sqlite_mode_config(
+        tmp_path / "plan1.db",
+        core_dir,
+        is_async=False,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": ext_dir, "migration_mode": "reconcile"}},
+    )
+    reconcile_cmds = SyncMigrationCommands(cast("SqliteConfig", reconcile_cfg))
+    loaded = {"0001": reconcile_cmds.runner.load_migration(core_file, "0001")}
+    checksum = loaded["0001"]["checksum"]
+    applied: list[AppliedMigrationRecord] = [
+        {
+            "version_num": "ext_demo_0001",
+            "version_type": "sequential",
+            "execution_sequence": 1,
+            "description": "init",
+            "applied_at": "now",
+            "execution_time_ms": 0,
+            "checksum": checksum,
+            "applied_by": "tester",
+            "replaces": None,
+        },
+        {
+            "version_num": "custom-unparseable-tag",
+            "version_type": "sequential",
+            "execution_sequence": 2,
+            "description": "custom",
+            "applied_at": "now",
+            "execution_time_ms": 0,
+            "checksum": "other",
+            "applied_by": "tester",
+            "replaces": None,
+        },
+    ]
+
+    plan_reconcile = reconcile_cmds._plan_version_reconciliation([("0001", core_file)], applied, loaded)
+    assert plan_reconcile.renames == ()
+    assert plan_reconcile.applied_versions == ("ext_demo_0001", "custom-unparseable-tag")
+
+    plain_cfg = _build_sqlite_mode_config(tmp_path / "plan2.db", core_dir, is_async=False)
+    plain_cmds = SyncMigrationCommands(cast("SqliteConfig", plain_cfg))
+    plan_plain = plain_cmds._plan_version_reconciliation([("0001", core_file)], applied, loaded)
+    assert len(plan_plain.renames) == 1
+    assert plan_plain.renames[0].old_version == "ext_demo_0001"
+    assert plan_plain.renames[0].new_version == "0001"
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_upgrade_head_schedules_reconcilers_before_pending_and_repeats_at_head(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """upgrade('head') runs reconcilers in include_extensions order before pending migrations and repeats at head."""
+    db_path = tmp_path / "head_sched.db"
+    core_dir = tmp_path / "migrations"
+    core_dir.mkdir()
+    second_dir = tmp_path / "ext_second"
+    second_dir.mkdir()
+    first_dir = tmp_path / "ext_first"
+    first_dir.mkdir()
+    versioned_dir = tmp_path / "ext_versioned"
+    versioned_dir.mkdir()
+
+    (core_dir / "0001_app.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE app_t (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    (versioned_dir / "0001_v.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE versioned_t (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+
+    callback_template = """
+async def _run_async(driver, ext_name):
+    await driver.execute("CREATE TABLE IF NOT EXISTS reconcile_log (seq INTEGER PRIMARY KEY AUTOINCREMENT, ext TEXT, app_seen INTEGER)")
+    rows = await driver.select("SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'app_t'")
+    await driver.execute("INSERT INTO reconcile_log (ext, app_seen) VALUES (:ext, :seen)", ext=ext_name, seen=rows[0]["cnt"])
+
+def _run_sync(driver, ext_name):
+    driver.execute("CREATE TABLE IF NOT EXISTS reconcile_log (seq INTEGER PRIMARY KEY AUTOINCREMENT, ext TEXT, app_seen INTEGER)")
+    rows = driver.select("SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'app_t'")
+    driver.execute("INSERT INTO reconcile_log (ext, app_seen) VALUES (:ext, :seen)", ext=ext_name, seen=rows[0]["cnt"])
+
+def reconcile(context):
+    if context.is_async_driver:
+        return _run_async(context.driver, {ext_name!r})
+    _run_sync(context.driver, {ext_name!r})
+    return None
+"""
+    (second_dir / "reconcile.py").write_text(callback_template.format(ext_name="second"), encoding="utf-8")
+    (first_dir / "reconcile.py").write_text(callback_template.format(ext_name="first"), encoding="utf-8")
+
+    cfg = _build_sqlite_mode_config(
+        db_path,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["second", "first", "versioned_ext"],
+        extension_config={
+            "second": {"migrations_path": second_dir, "migration_mode": "reconcile"},
+            "first": {"migrations_path": first_dir, "migration_mode": "reconcile"},
+            "versioned_ext": {"migrations_path": versioned_dir, "migration_mode": "versioned"},
+        },
+    )
+
+    await _run_upgrade(cfg, echo=False)
+    await _run_upgrade(cfg, echo=False)
+
+    log_rows = await _fetch_rows(cfg, "SELECT ext, app_seen FROM reconcile_log ORDER BY seq")
+    ledger_rows = await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations ORDER BY execution_sequence")
+    await _close_config_pool(cfg)
+
+    assert log_rows == [
+        {"ext": "second", "app_seen": 0},
+        {"ext": "first", "app_seen": 0},
+        {"ext": "second", "app_seen": 1},
+        {"ext": "first", "app_seen": 1},
+    ]
+    assert [r["version_num"] for r in ledger_rows] == ["0001", "ext_versioned_ext_0001"]
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_upgrade_empty_directory_and_summary_logging_with_reconcilers(
+    tmp_path: Path, is_async: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Reconciler-only apps run on empty core directories, report Already at latest version, and log reconcilers_invoked."""
+    db_path = tmp_path / "empty_core.db"
+    core_dir = tmp_path / "empty_migs"
+    core_dir.mkdir()
+    demo_dir = tmp_path / "ext_demo"
+    demo_dir.mkdir()
+
+    (demo_dir / "reconcile.py").write_text(
+        """
+async def _async_op(driver):
+    await driver.execute("CREATE TABLE IF NOT EXISTS solo_log (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+    await driver.execute("INSERT INTO solo_log DEFAULT VALUES")
+
+def reconcile(context):
+    if context.is_async_driver:
+        return _async_op(context.driver)
+    context.driver.execute("CREATE TABLE IF NOT EXISTS solo_log (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+    context.driver.execute("INSERT INTO solo_log DEFAULT VALUES")
+    return None
+""",
+        encoding="utf-8",
+    )
+
+    cfg = _build_sqlite_mode_config(
+        db_path,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": demo_dir, "migration_mode": "reconcile"}},
+    )
+
+    with caplog.at_level("INFO", logger="sqlspec.migrations.commands"):
+        await _run_upgrade(cfg, use_logger=True, summary_only=False)
+    info_messages = [rec.getMessage() for rec in caplog.records]
+    assert any("Reconciler demo (mode=reconcile) complete in" in msg for msg in info_messages)
+    assert any("Already at latest version" in msg for msg in info_messages)
+    assert not any("No migrations found" in msg for msg in info_messages)
+    assert not any("Applied" in msg for msg in info_messages)
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="sqlspec.migrations.commands"):
+        await _run_upgrade(cfg, use_logger=True, summary_only=True)
+    summary_records = [rec for rec in caplog.records if rec.getMessage() == "migration.command.summary"]
+    assert len(summary_records) == 1
+    extra = getattr(summary_records[0], "extra_fields", {})
+    assert extra["reconcilers_invoked"] == 1
+    assert extra["applied_count"] == 0
+    assert extra["pending_count"] == 0
+
+    solo_rows = await _fetch_rows(cfg, "SELECT COUNT(*) AS cnt FROM solo_log")
+    ledger_rows = await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations")
+    await _close_config_pool(cfg)
+    assert solo_rows == [{"cnt": 2}]
+    assert ledger_rows == []
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_upgrade_reconciler_failure_stops_subsequent_work_and_strict_ordering_aborts_before_reconcilers(
+    tmp_path: Path, is_async: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Mid-batch reconciler failure stops remaining work; OutOfOrderMigrationError and dry_run skip reconcilers."""
+    from sqlspec.exceptions import OutOfOrderMigrationError
+
+    db_path = tmp_path / "fail_stop.db"
+    core_dir = tmp_path / "migs"
+    core_dir.mkdir()
+    (core_dir / "0001_app.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE app_after_fail (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+
+    first_dir = tmp_path / "ext_first"
+    first_dir.mkdir()
+    second_dir = tmp_path / "ext_second"
+    second_dir.mkdir()
+    third_dir = tmp_path / "ext_third"
+    third_dir.mkdir()
+
+    ok_tpl = """
+async def _async_op(driver, name):
+    await driver.execute("CREATE TABLE IF NOT EXISTS batch_log (name TEXT)")
+    await driver.execute("INSERT INTO batch_log VALUES (:name)", name=name)
+
+def reconcile(context):
+    if context.is_async_driver:
+        return _async_op(context.driver, {name!r})
+    context.driver.execute("CREATE TABLE IF NOT EXISTS batch_log (name TEXT)")
+    context.driver.execute("INSERT INTO batch_log VALUES (:name)", name={name!r})
+    return None
+"""
+    (first_dir / "reconcile.py").write_text(ok_tpl.format(name="first"), encoding="utf-8")
+    (second_dir / "reconcile.py").write_text(
+        'def reconcile(context):\n    raise ValueError("boom")\n', encoding="utf-8"
+    )
+    (third_dir / "reconcile.py").write_text(ok_tpl.format(name="third"), encoding="utf-8")
+
+    cfg = _build_sqlite_mode_config(
+        db_path,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["first", "second", "third"],
+        extension_config={
+            "first": {"migrations_path": first_dir, "migration_mode": "reconcile"},
+            "second": {"migrations_path": second_dir, "migration_mode": "reconcile"},
+            "third": {"migrations_path": third_dir, "migration_mode": "reconcile"},
+        },
+    )
+
+    with caplog.at_level("ERROR", logger="sqlspec.migrations.commands"), pytest.raises(MigrationError):
+        await _run_upgrade(cfg, use_logger=True, summary_only=True, echo=False)
+    fail_summaries = [rec for rec in caplog.records if rec.getMessage() == "migration.command.summary"]
+    assert len(fail_summaries) == 1
+    fail_extra = getattr(fail_summaries[0], "extra_fields", {})
+    assert fail_extra["status"] == "failed"
+    assert fail_extra["reconcilers_invoked"] == 1
+    assert fail_extra["applied_count"] == 0
+
+    batch_rows = await _fetch_rows(cfg, "SELECT name FROM batch_log")
+    tables = {r["name"] for r in await _fetch_rows(cfg, "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    ledger_rows = await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations")
+    await _close_config_pool(cfg)
+    assert batch_rows == [{"name": "first"}]
+    assert "app_after_fail" not in tables
+    assert ledger_rows == []
+
+    order_db = tmp_path / "strict_order.db"
+    order_migs = tmp_path / "order_migs"
+    order_migs.mkdir()
+    (order_migs / "0002_second.sql").write_text(
+        "-- name: migrate-0002-up\nCREATE TABLE second_t (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    cfg_init = _build_sqlite_mode_config(order_db, order_migs, is_async=is_async)
+    await _run_upgrade(cfg_init, echo=False)
+    await _close_config_pool(cfg_init)
+
+    (order_migs / "0001_late.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE late_t (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    probe_dir = tmp_path / "ext_probe"
+    probe_dir.mkdir()
+    (probe_dir / "reconcile.py").write_text(ok_tpl.format(name="ran_unexpectedly"), encoding="utf-8")
+
+    cfg_strict = _build_sqlite_mode_config(
+        order_db,
+        order_migs,
+        is_async=is_async,
+        include_extensions=["probe"],
+        extension_config={"probe": {"migrations_path": probe_dir, "migration_mode": "reconcile"}},
+        extra_migration_config={"strict_ordering": True},
+    )
+    with pytest.raises(OutOfOrderMigrationError):
+        await _run_upgrade(cfg_strict, echo=False)
+    strict_tables = {
+        r["name"] for r in await _fetch_rows(cfg_strict, "SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    await _close_config_pool(cfg_strict)
+    assert "batch_log" not in strict_tables
+
+    dry_dir = tmp_path / "ext_dry"
+    dry_dir.mkdir()
+    (dry_dir / "reconcile.py").write_text('raise RuntimeError("dry_run_imported")\n', encoding="utf-8")
+    cfg_dry = _build_sqlite_mode_config(
+        tmp_path / "dry.db",
+        core_dir,
+        is_async=is_async,
+        include_extensions=["dry"],
+        extension_config={"dry": {"migrations_path": dry_dir, "migration_mode": "reconcile"}},
+    )
+    await _run_upgrade(cfg_dry, dry_run=True, echo=False)
+    await _close_config_pool(cfg_dry)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_upgrade_reruns_converge_after_concurrent_duplicate_error_and_missing_schema_aborts_early(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """Re-running upgrade converges after a transient duplicate-object error, and missing default_schema aborts first."""
+    db_path = tmp_path / "converge.db"
+    core_dir = tmp_path / "converge_migs"
+    core_dir.mkdir()
+    ext_dir = tmp_path / "ext_converge"
+    ext_dir.mkdir()
+    flag_file = tmp_path / "fail_once.flag"
+    flag_file.write_text("1", encoding="utf-8")
+
+    (ext_dir / "reconcile.py").write_text(
+        f"""
+import sqlite3
+from pathlib import Path
+
+async def _async_op(driver):
+    await driver.execute("CREATE TABLE IF NOT EXISTS demo_t (id INTEGER PRIMARY KEY)")
+    flag = Path({str(flag_file)!r})
+    if flag.exists():
+        flag.unlink()
+        raise sqlite3.OperationalError("table demo_t already exists")
+
+def reconcile(context):
+    if context.is_async_driver:
+        return _async_op(context.driver)
+    context.driver.execute("CREATE TABLE IF NOT EXISTS demo_t (id INTEGER PRIMARY KEY)")
+    flag = Path({str(flag_file)!r})
+    if flag.exists():
+        flag.unlink()
+        raise sqlite3.OperationalError("table demo_t already exists")
+    return None
+""",
+        encoding="utf-8",
+    )
+
+    cfg = _build_sqlite_mode_config(
+        db_path,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": ext_dir, "migration_mode": "reconcile"}},
+    )
+
+    with pytest.raises(MigrationError) as first_exc:
+        await _run_upgrade(cfg, echo=False)
+    assert first_exc.value.__cause__ is not None
+
+    await _run_upgrade(cfg, echo=False)
+    tables = [
+        r["name"]
+        for r in await _fetch_rows(cfg, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'demo_t'")
+    ]
+    ledger = await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations")
+    await _close_config_pool(cfg)
+    assert tables == ["demo_t"]
+    assert ledger == []
+
+    never_dir = tmp_path / "ext_never"
+    never_dir.mkdir()
+    (never_dir / "reconcile.py").write_text('raise RuntimeError("reconciler_should_not_run")\n', encoding="utf-8")
+    schema_cls = SchemaAwareAiosqliteConfig if is_async else SchemaAwareSqliteConfig
+    schema_cfg: SqliteConfig | AiosqliteConfig = schema_cls(
+        connection_config={"database": str(tmp_path / "missing_schema.db")},
+        migration_config={
+            "script_location": str(core_dir),
+            "include_extensions": ["never"],
+            "default_schema": "missing",
+        },
+        extension_config={"never": {"migrations_path": never_dir, "migration_mode": "reconcile"}},
+    )
+    cmds = create_migration_commands(schema_cfg)
+    if isinstance(cmds, AsyncMigrationCommands):
+        mock_drv = AsyncMock()
+        mock_drv.has_schema.return_value = False
+        with patch.object(cmds.config, "provide_session") as mock_sess, pytest.raises(MigrationError, match="missing"):
+            mock_sess.return_value.__aenter__.return_value = mock_drv
+            await cmds.upgrade(echo=False)
+    else:
+        mock_drv = MagicMock()
+        mock_drv.has_schema.return_value = False
+        with patch.object(cmds.config, "provide_session") as mock_sess, pytest.raises(MigrationError, match="missing"):
+            mock_sess.return_value.__enter__.return_value = mock_drv
+            cmds.upgrade(echo=False)

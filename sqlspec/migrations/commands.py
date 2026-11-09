@@ -39,6 +39,8 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
+    from collections.abc import Set as AbstractSet
+
     from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, SyncConfigT
     from sqlspec.data_dictionary import TableMetadata
     from sqlspec.migrations.base import AppliedMigrationRecord, LoadedMigrationMetadata
@@ -553,7 +555,8 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
             MigrationError: When ``strict`` and the report is invalid, or ``fail_on_pending`` and migrations are
                 pending.
         """
-        report = self._evaluate_verification(applied_migrations, loaded_files)
+        retained_versions = self._retained_reconcile_versions(applied_migrations)
+        report = self._evaluate_verification(applied_migrations, loaded_files, retained_versions=retained_versions)
         problems: list[str] = []
         if report["checksum_mismatches"]:
             mismatched = ", ".join(item["version"] for item in report["checksum_mismatches"])
@@ -616,7 +619,10 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         Raises:
             SquashValidationError: When a squashed migration's replaced versions are only partially applied.
         """
-        applied_map: dict[str, AppliedMigrationRecord] = {m["version_num"]: m for m in applied_migrations}
+        retained_versions = self._retained_reconcile_versions(applied_migrations)
+        applied_map: dict[str, AppliedMigrationRecord] = {
+            m["version_num"]: m for m in applied_migrations if m["version_num"] not in retained_versions
+        }
         applied_versions: list[str] = [m["version_num"] for m in applied_migrations]
         files_by_version = dict(all_migrations)
         claimed_versions = set(applied_map)
@@ -889,7 +895,10 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
 
     @staticmethod
     def _evaluate_verification(
-        applied_migrations: "list[AppliedMigrationRecord]", loaded_files: "dict[str, LoadedMigrationMetadata]"
+        applied_migrations: "list[AppliedMigrationRecord]",
+        loaded_files: "dict[str, LoadedMigrationMetadata]",
+        *,
+        retained_versions: "AbstractSet[str]" = frozenset(),
     ) -> "dict[str, Any]":
         """Compare applied tracking records against loaded migration files."""
         applied_map = {m["version_num"]: m for m in applied_migrations}
@@ -926,7 +935,7 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         orphaned_records.extend(
             record["version_num"]
             for record in applied_migrations
-            if record["version_num"] not in covered_applied_versions
+            if record["version_num"] not in covered_applied_versions and record["version_num"] not in retained_versions
         )
         return {
             "valid": not (checksum_mismatches or orphaned_records or partial_squash_errors),
@@ -1217,6 +1226,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         runtime = self._runtime
         applied_count = 0
         pending_count = 0
+        reconcilers_invoked: list[str] = []
         db_system: str | None = None
         error: Exception | None = None
         ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, summary_only)
@@ -1257,20 +1267,28 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 if runtime is not None:
                     runtime.increment_metric("migrations.command.upgrade.pending", float(len(pending)))
 
-                if not pending:
-                    _report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
-                    return
+                if pending:
+                    migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+                    strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
+                    validate_migration_order(
+                        [v for v, _ in pending],
+                        applied_versions,
+                        strict_ordering,
+                        use_logger=ul,
+                        echo=echo_value,
+                        summary_only=summary_value,
+                    )
 
-                migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
-                strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
-                validate_migration_order(
-                    [v for v, _ in pending],
-                    applied_versions,
-                    strict_ordering,
-                    use_logger=ul,
-                    echo=echo_value,
-                    summary_only=summary_value,
-                )
+                if not dry_run and revision == "head" and self.extension_reconcilers:
+                    self._run_reconcilers(
+                        driver, reconcilers_invoked, use_logger=ul, echo=echo_value, summary_only=summary_value
+                    )
+
+                if not pending:
+                    _report_no_pending_migrations(
+                        ul, echo_value, summary_value, bool(all_migrations or self.extension_reconcilers)
+                    )
+                    return
 
                 output_info(
                     "Found %d pending migrations",
@@ -1325,6 +1343,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 error=effective_error,
                 allow_missing=allow_missing,
                 auto_sync=auto_sync,
+                reconcilers_invoked=len(reconcilers_invoked) if self.extension_reconcilers else None,
             )
 
         if dry_run:
@@ -1476,6 +1495,38 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
 
+    def _run_reconcilers(
+        self, driver: Any, invoked: list[str], *, use_logger: bool, echo: bool, summary_only: bool
+    ) -> None:
+        """Execute enabled extension reconcilers in configured order."""
+        for descriptor in self.extension_reconcilers:
+            try:
+                execution_time = self.runner.execute_reconciliation(driver, descriptor)
+            except Exception as exc:
+                _output_error(
+                    use_logger,
+                    echo,
+                    summary_only,
+                    "Reconciler %s (mode=%s) %s",
+                    descriptor.name,
+                    "reconcile",
+                    "failed",
+                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) failed: {exc}[/]",
+                )
+                raise
+            invoked.append(descriptor.name)
+            _output_info(
+                use_logger,
+                echo,
+                summary_only,
+                "Reconciler %s (mode=%s) %s in %dms",
+                descriptor.name,
+                "reconcile",
+                "complete",
+                execution_time,
+                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) complete in {execution_time}ms[/]",
+            )
+
     def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
 
@@ -1484,8 +1535,14 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         """
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
+            applied = self.tracker.get_applied_migrations(driver) if self.extension_reconcilers else []
+            retained = self._retained_reconcile_versions(applied)
             if revision == "base":
-                clear_sql = sql.delete().from_(self.tracker.version_table)
+                clear_sql = (
+                    sql.delete().from_(self.tracker.version_table).where_not_in("version_num", sorted(retained))
+                    if retained
+                    else sql.delete().from_(self.tracker.version_table)
+                )
                 driver.execute(clear_sql)
                 if isinstance(self.tracker, SyncMigrationTracker):
                     self.tracker._safe_commit(driver)
@@ -1516,7 +1573,11 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 return
 
             target_parsed = parse_version(target_version) if parsed_target is not None else None
-            clear_sql = sql.delete().from_(self.tracker.version_table)
+            clear_sql = (
+                sql.delete().from_(self.tracker.version_table).where_not_in("version_num", sorted(retained))
+                if retained
+                else sql.delete().from_(self.tracker.version_table)
+            )
             driver.execute(clear_sql)
             for v, path in all_migrations_list:
                 should_record = False
@@ -2236,6 +2297,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         runtime = self._runtime
         applied_count = 0
         pending_count = 0
+        reconcilers_invoked: list[str] = []
         db_system: str | None = None
         error: Exception | None = None
         ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, summary_only)
@@ -2276,20 +2338,28 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 if runtime is not None:
                     runtime.increment_metric("migrations.command.upgrade.pending", float(len(pending)))
 
-                if not pending:
-                    _report_no_pending_migrations(ul, echo_value, summary_value, bool(all_migrations))
-                    return
+                if pending:
+                    migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
+                    strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
+                    validate_migration_order(
+                        [v for v, _ in pending],
+                        applied_versions,
+                        strict_ordering,
+                        use_logger=ul,
+                        echo=echo_value,
+                        summary_only=summary_value,
+                    )
 
-                migration_config = cast("dict[str, Any]", self.config.migration_config) or {}
-                strict_ordering = migration_config.get("strict_ordering", False) and not allow_missing
-                validate_migration_order(
-                    [v for v, _ in pending],
-                    applied_versions,
-                    strict_ordering,
-                    use_logger=ul,
-                    echo=echo_value,
-                    summary_only=summary_value,
-                )
+                if not dry_run and revision == "head" and self.extension_reconcilers:
+                    await self._run_reconcilers(
+                        driver, reconcilers_invoked, use_logger=ul, echo=echo_value, summary_only=summary_value
+                    )
+
+                if not pending:
+                    _report_no_pending_migrations(
+                        ul, echo_value, summary_value, bool(all_migrations or self.extension_reconcilers)
+                    )
+                    return
 
                 output_info(
                     "Found %d pending migrations",
@@ -2346,6 +2416,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 error=effective_error,
                 allow_missing=allow_missing,
                 auto_sync=auto_sync,
+                reconcilers_invoked=len(reconcilers_invoked) if self.extension_reconcilers else None,
             )
 
         if dry_run:
@@ -2500,6 +2571,38 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
 
+    async def _run_reconcilers(
+        self, driver: Any, invoked: list[str], *, use_logger: bool, echo: bool, summary_only: bool
+    ) -> None:
+        """Execute enabled extension reconcilers in configured order."""
+        for descriptor in self.extension_reconcilers:
+            try:
+                execution_time = await self.runner.execute_reconciliation(driver, descriptor)
+            except Exception as exc:
+                _output_error(
+                    use_logger,
+                    echo,
+                    summary_only,
+                    "Reconciler %s (mode=%s) %s",
+                    descriptor.name,
+                    "reconcile",
+                    "failed",
+                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) failed: {exc}[/]",
+                )
+                raise
+            invoked.append(descriptor.name)
+            _output_info(
+                use_logger,
+                echo,
+                summary_only,
+                "Reconciler %s (mode=%s) %s in %dms",
+                descriptor.name,
+                "reconcile",
+                "complete",
+                execution_time,
+                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) complete in {execution_time}ms[/]",
+            )
+
     async def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
 
@@ -2508,9 +2611,15 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         """
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
+            applied = await self.tracker.get_applied_migrations(driver) if self.extension_reconcilers else []
+            retained = self._retained_reconcile_versions(applied)
 
             if revision == "base":
-                clear_sql = sql.delete().from_(self.tracker.version_table)
+                clear_sql = (
+                    sql.delete().from_(self.tracker.version_table).where_not_in("version_num", sorted(retained))
+                    if retained
+                    else sql.delete().from_(self.tracker.version_table)
+                )
                 await driver.execute(clear_sql)
                 if isinstance(self.tracker, AsyncMigrationTracker):
                     await self.tracker._safe_commit(driver)
@@ -2541,7 +2650,11 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 return
 
             target_parsed = parse_version(target_version) if parsed_target is not None else None
-            clear_sql = sql.delete().from_(self.tracker.version_table)
+            clear_sql = (
+                sql.delete().from_(self.tracker.version_table).where_not_in("version_num", sorted(retained))
+                if retained
+                else sql.delete().from_(self.tracker.version_table)
+            )
             await driver.execute(clear_sql)
             for v, path in all_migrations_list:
                 should_record = False
@@ -3220,6 +3333,7 @@ def _log_command_summary(
     error: Exception | None = None,
     allow_missing: bool | None = None,
     auto_sync: bool | None = None,
+    reconcilers_invoked: int | None = None,
 ) -> None:
     """Emit a single summary log entry for migration commands."""
     if not use_logger or not summary_only:
@@ -3244,6 +3358,8 @@ def _log_command_summary(
         extra_fields["allow_missing"] = allow_missing
     if auto_sync is not None:
         extra_fields["auto_sync"] = auto_sync
+    if reconcilers_invoked is not None:
+        extra_fields["reconcilers_invoked"] = reconcilers_invoked
     if error is not None:
         extra_fields["error_type"] = type(error).__name__
     log_with_context(logger, level, "migration.command.summary", **extra_fields)
