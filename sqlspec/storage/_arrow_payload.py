@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
 __all__ = (
     "StorageFormat",
-    "batches_to_arrow_table",
     "decode_arrow_payload",
     "encode_arrow_payload",
     "encode_arrow_to_async_sink",
@@ -263,23 +262,6 @@ def validate_arrow_write_options(format_hint: StorageFormat, options: "dict[str,
         names = ", ".join(unsupported)
         msg = f"Unsupported write option(s) for {format_hint}: {names}"
         raise TypeError(msg)
-
-
-def batches_to_arrow_table(batches: Any) -> "ArrowTable":
-    """Coalesce Arrow batches, tables, readers, or C stream exporters into a table."""
-    pa = import_pyarrow()
-    if isinstance(batches, pa.Table):
-        return cast("ArrowTable", batches)
-    if isinstance(batches, pa.RecordBatchReader):
-        return cast("ArrowTable", batches.read_all())
-    if isinstance(batches, pa.RecordBatch):
-        return cast("ArrowTable", pa.Table.from_batches([batches]))
-    if hasattr(batches, "__arrow_c_stream__"):
-        return cast("ArrowTable", pa.RecordBatchReader.from_stream(batches).read_all())
-    batch_list = list(batches)
-    if not batch_list:
-        return cast("ArrowTable", pa.table({}))
-    return cast("ArrowTable", pa.Table.from_batches(batch_list, schema=batch_list[0].schema))
 
 
 def resolve_parquet_use_dictionary(

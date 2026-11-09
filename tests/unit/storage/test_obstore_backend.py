@@ -4,7 +4,7 @@
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import pytest
 
@@ -1160,7 +1160,7 @@ async def test_open_write_stream_sync_and_async_round_trip(tmp_path: Path, use_f
     """Sync and async write streams round trip bytes and manage closed state."""
     uri = f"file://{tmp_path}" if use_file_uri else "memory://"
     store = ObStoreBackend(uri)
-    extra_kwargs = {"attributes": {"Content-Type": "application/octet-stream"}} if not use_file_uri else {}
+    extra_kwargs: dict[str, Any] = {"attributes": {"Content-Type": "application/octet-stream"}} if not use_file_uri else {}
 
     with store.open_write_stream_sync(
         "sync_stream.bin",
@@ -1168,8 +1168,8 @@ async def test_open_write_stream_sync_and_async_round_trip(tmp_path: Path, use_f
         **extra_kwargs,
     ) as sync_sink:
         assert sync_sink.closed is False
-        sync_sink.write(bytearray(b"part-1"))
-        sync_sink.write(memoryview(b"-part-2"))
+        sync_sink.write(cast("Any", bytearray(b"part-1")))
+        sync_sink.write(cast("Any", memoryview(b"-part-2")))
 
     assert sync_sink.closed is True
     assert store.read_bytes_sync("sync_stream.bin") == b"part-1-part-2"
@@ -1180,8 +1180,8 @@ async def test_open_write_stream_sync_and_async_round_trip(tmp_path: Path, use_f
     ) as async_sink:
         assert async_sink.closed is False
         assert isinstance(async_sink.closed, bool)
-        await async_sink.write(bytearray(b"async-1"))
-        await async_sink.write(memoryview(b"-async-2"))
+        await async_sink.write(cast("Any", bytearray(b"async-1")))
+        await async_sink.write(cast("Any", memoryview(b"-async-2")))
 
     assert async_sink.closed is True
     assert isinstance(async_sink.closed, bool)
