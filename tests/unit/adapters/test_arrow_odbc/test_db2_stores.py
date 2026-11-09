@@ -685,3 +685,38 @@ def test_arrow_odbc_db2_store_targets_session_then_chunks() -> None:
     assert indexes[0].table == "SESS"
     assert indexes[0].schema is None
     assert indexes[0].ddl == "CREATE INDEX IX_SESS_EXP ON sess(expires_at)"
+
+
+@pytest.mark.parametrize(
+    ("session_table", "expected_chunk_table", "expected_schema", "expected_table", "expected_chunk_catalog"),
+    [
+        ("sess", "sess_chunks", None, "SESS", "SESS_CHUNKS"),
+        ("custom.sess", "custom.sess_chunks", "CUSTOM", "SESS", "SESS_CHUNKS"),
+        ('"App"."MixedSess"', '"App"."MixedSess_chunks"', "App", "MixedSess", "MixedSess_chunks"),
+    ],
+)
+def test_arrow_odbc_db2_qualified_session_table_and_chunk_names(
+    session_table: str,
+    expected_chunk_table: str,
+    expected_schema: str | None,
+    expected_table: str,
+    expected_chunk_catalog: str,
+) -> None:
+    """Db2 ArrowOdbcStore accepts validated qualified names and builds safe chunk names and SchemaTargets."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": DB2_CONNECTION_STRING},
+        connection_instance=as_connection(FakeArrowOdbcConnection()),
+        extension_config={"litestar": {"session_table": session_table}},
+    )
+    store = ArrowOdbcStore(config)
+
+    assert store._chunk_table_name == expected_chunk_table
+    targets = store.get_schema_targets()
+    indexes = store.get_companion_indexes()
+    assert [(target.schema, target.table_name) for target in targets] == [
+        (expected_schema, expected_table),
+        (expected_schema, expected_chunk_catalog),
+    ]
+    assert f"CREATE TABLE {expected_chunk_table}" in store._table_ddl()
+    assert indexes[0].schema == expected_schema
+    assert indexes[0].table == expected_table

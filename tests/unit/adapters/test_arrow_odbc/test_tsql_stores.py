@@ -870,3 +870,49 @@ def test_arrow_odbc_reconcile_strict_refuses_incomplete_chunks_table() -> None:
     driver.execute_script.assert_not_called()
     driver.data_dictionary.get_indexes.assert_not_called()
     driver.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("session_table", "expected_chunk_table", "expected_schema", "expected_table"),
+    [
+        ("sess", "sess_chunks", "dbo", "sess"),
+        ("custom.sess", "custom.sess_chunks", "custom", "sess"),
+        ("[custom].[sess]", "[custom].[sess_chunks]", "custom", "sess"),
+        ('"App"."MixedSess"', '"App"."MixedSess_chunks"', "App", "MixedSess"),
+    ],
+)
+def test_arrow_odbc_tsql_qualified_session_table_and_chunk_names(
+    session_table: str, expected_chunk_table: str, expected_schema: str, expected_table: str
+) -> None:
+    """ArrowOdbcStore accepts validated 1-2 part names and renders bracket/quote-safe chunk table names."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        extension_config={"litestar": {"session_table": session_table}},
+    )
+    store = ArrowOdbcStore(config)
+
+    assert store._chunk_table_name == expected_chunk_table
+    targets = store.get_schema_targets()
+    indexes = store.get_companion_indexes()
+    assert [(target.schema, target.table_name) for target in targets] == [
+        (expected_schema, expected_table),
+        (expected_schema, f"{expected_table}_chunks"),
+    ]
+    assert f"CREATE TABLE {expected_chunk_table}" in store._table_ddl()
+    assert indexes[0].schema == expected_schema
+    assert indexes[0].table == expected_table
+    assert indexes[0].name == f"IX_{expected_table}_expires_at"
+
+
+@pytest.mark.parametrize(
+    "invalid_name",
+    ["", "   ", "a.b.c", "app..sess", ".sess", "sess.", "[unclosed", '"unclosed', "bad;name", "[bad;name]", "x" * 64],
+)
+def test_arrow_odbc_store_rejects_invalid_qualified_session_table_names(invalid_name: str) -> None:
+    """ArrowOdbcStore raises ValueError on empty, unclosed, 3-part, or unsafe session_table names."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        extension_config={"litestar": {"session_table": invalid_name}},
+    )
+    with pytest.raises(ValueError):
+        ArrowOdbcStore(config)

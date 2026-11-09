@@ -151,3 +151,109 @@ def test_arrow_odbc_db2_parameter_binding_and_arrow_null_indicators(
         diagnostic = output.replace(password, "<redacted>")
         pytest.fail(f"Native Arrow-ODBC Db2 acceptance failed (exit {result.exit_code}):\n{diagnostic}")
     assert json.loads(output) == {"dialect": "db2", "rows": 2, "transport": "arrow_odbc"}
+
+
+_QUALIFIED_LITESTAR_SCRIPT = """
+import asyncio
+import json
+import os
+from uuid import uuid4
+
+from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
+from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
+
+payload = json.loads(os.environ.pop("SQLSPEC_DB2_ODBC_CONFIG"))
+admin_config = ArrowOdbcConfig(
+    connection_config=payload,
+    driver_features={"enable_pooling": False, "query_timeout_sec": 15},
+)
+with admin_config.provide_session() as session:
+    schema_name = str(session.select_value("SELECT CURRENT SCHEMA FROM SYSIBM.SYSDUMMY1")).strip()
+    session.rollback()
+admin_config.close_pool()
+
+qualified_table = f"{schema_name}.SQLSPEC_SESS_{uuid4().hex[:8].upper()}"
+chunk_table = f"{qualified_table}_chunks"
+store_config = ArrowOdbcConfig(
+    connection_config=payload,
+    driver_features={"enable_pooling": False, "query_timeout_sec": 15},
+    extension_config={"litestar": {"session_table": qualified_table}},
+)
+store = ArrowOdbcStore(store_config)
+large_payload = b"db2-qualified-chunk-" * 300
+
+
+async def _exercise() -> int:
+    await store.create_table()
+    await store.set("qual-db2-1", large_payload, expires_in=300)
+    with store_config.provide_session() as check_session:
+        session_rows = int(check_session.select_value(f"SELECT COUNT(*) FROM {qualified_table}") or 0)
+        chunk_rows = int(check_session.select_value(f"SELECT COUNT(*) FROM {chunk_table}") or 0)
+        check_session.rollback()
+    assert session_rows == 1
+    assert chunk_rows >= 2
+    assert await store.get("qual-db2-1") == large_payload
+    await store.delete("qual-db2-1")
+    assert await store.get("qual-db2-1") is None
+    with store_config.provide_session() as check_session:
+        after_sessions = int(check_session.select_value(f"SELECT COUNT(*) FROM {qualified_table}") or 0)
+        after_chunks = int(check_session.select_value(f"SELECT COUNT(*) FROM {chunk_table}") or 0)
+        check_session.rollback()
+    assert after_sessions == 0
+    assert after_chunks == 0
+    return chunk_rows
+
+
+created = False
+try:
+    chunk_count = asyncio.run(_exercise())
+    created = True
+finally:
+    try:
+        with store_config.provide_session() as cleanup:
+            cleanup.rollback()
+            for stmt in store._drop_table_sql():
+                try:
+                    cleanup.execute(stmt)
+                    cleanup.commit()
+                except Exception:
+                    cleanup.rollback()
+    finally:
+        store_config.close_pool()
+
+assert created is True
+print(json.dumps({"qualified_table": qualified_table, "chunks": chunk_count, "round_trip": True}))
+"""
+
+
+def test_arrow_odbc_db2_qualified_litestar_session_chunked_round_trip(
+    db2_service: "Db2Service",
+    db2_connection_config: "Db2ConnectionParams",
+    db2_arrow_odbc_runtime: tuple[list[str], dict[str, str], str],
+) -> None:
+    """Qualified Db2 session_table round-trips chunked session payloads and cascades deletes."""
+    command, environment, driver = db2_arrow_odbc_runtime
+    password = str(db2_connection_config["password"])
+    parameters = {
+        "driver": driver,
+        "host": "127.0.0.1",
+        "database": db2_connection_config["database"],
+        "uid": db2_connection_config["user"],
+        "pwd": password,
+        "extra": {"Port": DB2_PORT, "Protocol": "TCPIP"},
+        "login_timeout": 15,
+        "autocommit": False,
+    }
+    result = db2_service.container.exec_run(
+        [*command, "-c", _QUALIFIED_LITESTAR_SCRIPT],
+        environment={**environment, "SQLSPEC_DB2_ODBC_CONFIG": json.dumps(parameters)},
+    )
+    output = exec_output_to_bytes(result.output).decode("utf-8", errors="replace")
+    if result.exit_code:
+        diagnostic = output.replace(password, "<redacted>")
+        pytest.fail(
+            f"Native Arrow-ODBC Db2 qualified Litestar round-trip failed (exit {result.exit_code}):\n{diagnostic}"
+        )
+    parsed = json.loads(output)
+    assert parsed["round_trip"] is True
+    assert parsed["chunks"] >= 2
