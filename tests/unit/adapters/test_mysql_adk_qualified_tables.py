@@ -17,6 +17,9 @@ from sqlspec.migrations.schema import SchemaTarget
 _ADAPTERS: list[tuple[str, str, str, bool]] = [
     ("aiomysql", "AiomysqlADKStore", "AiomysqlADKMemoryStore", True),
     ("asyncmy", "AsyncmyADKStore", "AsyncmyADKMemoryStore", True),
+    ("pymysql", "PyMysqlADKStore", "PyMysqlADKMemoryStore", False),
+    ("mysqlconnector", "MysqlConnectorSyncADKStore", "MysqlConnectorSyncADKMemoryStore", False),
+    ("mysqlconnector", "MysqlConnectorAsyncADKStore", "MysqlConnectorAsyncADKMemoryStore", True),
 ]
 
 _QUALIFIED_SESSION_SETTINGS: dict[str, str] = {
