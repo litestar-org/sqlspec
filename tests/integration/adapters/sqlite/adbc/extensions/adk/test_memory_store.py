@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
-from sqlspec.adapters.adbc.adk import AdbcADKMemoryStore
+from sqlspec.adapters.adbc.adk import AdbcADKMemoryStore, AdbcADKStore
 from sqlspec.extensions.adk import StoredMemory
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
@@ -49,6 +49,12 @@ def _build_store(tmp_path: Path, *, use_fts: bool = False) -> AdbcADKMemoryStore
 def _sqlite_object_names(config: AdbcConfig) -> set[str]:
     with config.provide_session() as driver:
         rows = driver.select("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')")
+    return {str(row["name"]) for row in rows}
+
+
+def _sqlite_index_names(config: AdbcConfig) -> set[str]:
+    with config.provide_session() as driver:
+        rows = driver.select("SELECT name FROM sqlite_master WHERE type = 'index'")
     return {str(row["name"]) for row in rows}
 
 
@@ -303,3 +309,143 @@ def test_adbc_sqlite_fts_search_missing_memory_table(tmp_path: Path) -> None:
     )
     store = AdbcADKMemoryStore(config)
     assert store.search_entries("espresso", "app", "user") == []
+
+
+def test_adbc_sqlite_companions_restore_dropped_indexes(tmp_path: Path) -> None:
+    """Companion reconciliation restores dropped memory indexes idempotently without losing rows."""
+    store = _build_store(tmp_path)
+    now = datetime.now(UTC)
+    store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
+    ])
+
+    with store.config.provide_session() as driver:
+        driver.execute("DROP INDEX idx_adk_memory_scope")
+        driver.commit()
+    assert "idx_adk_memory_scope" not in _sqlite_index_names(store.config)
+
+    with store.config.provide_session() as driver:
+        store.reconcile_companion_objects_sync(driver)
+        store.reconcile_companion_objects_sync(driver)
+        driver.commit()
+
+    assert "idx_adk_memory_scope" in _sqlite_index_names(store.config)
+    results = store.search_entries("espresso", "app", "user")
+    assert len(results) == 1
+    assert results[0]["event_id"] == "evt-1"
+
+
+def test_adbc_sqlite_session_companions_restore_dropped_index(tmp_path: Path) -> None:
+    """Session store companion reconciliation restores a dropped event index while preserving session rows."""
+    db_path = tmp_path / "test_adk_session.db"
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"})
+    store = AdbcADKStore(config)
+    store.create_tables()
+    store.create_session("sess-1", "app", "user", {"step": 1})
+
+    with config.provide_session() as driver:
+        driver.execute("DROP INDEX idx_adk_event_session")
+        driver.commit()
+    assert "idx_adk_event_session" not in _sqlite_index_names(config)
+
+    with config.provide_session() as driver:
+        store.reconcile_companion_objects_sync(driver)
+        driver.commit()
+
+    assert "idx_adk_event_session" in _sqlite_index_names(config)
+    restored = store.get_session("app", "user", "sess-1")
+    assert restored is not None
+    assert restored["state"] == {"step": 1}
+
+
+def test_adbc_sqlite_fts_companions_create_for_empty_source(tmp_path: Path) -> None:
+    """Companion reconciliation creates FTS5 objects on an empty memory table so subsequent inserts index."""
+    _build_store(tmp_path, use_fts=False)
+    db_path = tmp_path / "test_adk_memory.db"
+    fts_config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+        extension_config={"adk": {"enable_memory": True, "memory_use_fts": True}},
+    )
+    fts_store = AdbcADKMemoryStore(fts_config)
+
+    with fts_config.provide_session() as driver:
+        fts_store.reconcile_companion_objects_sync(driver)
+        driver.commit()
+
+    now = datetime.now(UTC)
+    fts_store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
+    ])
+
+    objects = _sqlite_object_names(fts_config)
+    assert {"adk_memory_fts", "adk_memory_ai", "adk_memory_ad", "adk_memory_au"}.issubset(objects)
+    assert _fts_docsize_count(fts_config) == 1
+
+
+def test_adbc_sqlite_fts_companions_rebuild_populated_source(tmp_path: Path) -> None:
+    """Companion reconciliation creates missing FTS5 objects and ordinary indexes and rebuilds existing rows."""
+    base_store = _build_store(tmp_path, use_fts=False)
+    now = datetime.now(UTC)
+    base_store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
+    ])
+    with base_store.config.provide_session() as driver:
+        driver.execute("DROP INDEX idx_adk_memory_scope")
+        driver.commit()
+
+    db_path = tmp_path / "test_adk_memory.db"
+    fts_config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+        extension_config={"adk": {"enable_memory": True, "memory_use_fts": True}},
+    )
+    fts_store = AdbcADKMemoryStore(fts_config)
+
+    with fts_config.provide_session() as driver:
+        fts_store.reconcile_companion_objects_sync(driver)
+        driver.commit()
+
+    assert "adk_memory_fts" in _sqlite_object_names(fts_config)
+    assert "idx_adk_memory_scope" in _sqlite_index_names(fts_config)
+    assert _fts_docsize_count(fts_config) == 1
+    results = fts_store.search_entries("espresso", "app", "user")
+    assert len(results) == 1
+    assert results[0]["event_id"] == "evt-1"
+
+
+def test_adbc_sqlite_fts_companions_repeat_keeps_entries(tmp_path: Path) -> None:
+    """Repeated companion reconciliation over complete FTS5 objects preserves docsize count."""
+    store = _build_store(tmp_path, use_fts=True)
+    now = datetime.now(UTC)
+    store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
+    ])
+
+    with store.config.provide_session() as driver:
+        store.reconcile_companion_objects_sync(driver)
+        store.reconcile_companion_objects_sync(driver)
+        driver.commit()
+
+    assert _fts_docsize_count(store.config) == 1
+
+
+def test_adbc_sqlite_fts_rebuild_rolls_back(tmp_path: Path) -> None:
+    """Rolling back a transaction after companion FTS5 creation and rebuild leaves adk_memory_fts absent."""
+    base_store = _build_store(tmp_path, use_fts=False)
+    now = datetime.now(UTC)
+    base_store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
+    ])
+
+    db_path = tmp_path / "test_adk_memory.db"
+    fts_config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+        extension_config={"adk": {"enable_memory": True, "memory_use_fts": True}},
+    )
+    fts_store = AdbcADKMemoryStore(fts_config)
+
+    with fts_config.provide_session() as driver:
+        driver.begin()
+        fts_store.reconcile_companion_objects_sync(driver)
+        driver.rollback()
+
+    assert "adk_memory_fts" not in _sqlite_object_names(fts_config)

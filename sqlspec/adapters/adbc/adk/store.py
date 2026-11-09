@@ -117,6 +117,19 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         super().__init__(config)
         self._dialect = self._detect_dialect()
 
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Reconcile SQLite session and event companion indexes on the migration driver.
+
+        Args:
+            driver: Synchronous migration driver executing the reconciliation phase.
+        """
+        for statement in (
+            f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC)",
+        ):
+            driver.execute(statement)
+
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
         if not self.create_schema_enabled:
@@ -1703,6 +1716,43 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     def dialect(self) -> str:
         return self._dialect
 
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Reconcile SQLite memory companion indexes and FTS5 objects on the migration driver.
+
+        Args:
+            driver: Synchronous migration driver executing the reconciliation phase.
+        """
+        if not self._enabled:
+            return
+
+        for statement in self._memory_index_statements():
+            driver.execute(statement)
+
+        if not self._use_fts:
+            return
+
+        fts_statements = self._memory_fts_statements()
+        if not fts_statements:
+            return
+
+        expected = list(fts_statements)
+        rows = driver.select(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger') AND lower(name) IN (?, ?, ?, ?)",
+            tuple(name.lower() for name in expected),
+        )
+        existing = {
+            str(row.get("name") or row.get("NAME") if isinstance(row, Mapping) else row[0]).lower() for row in rows
+        }
+        missing = [name for name in expected if name.lower() not in existing]
+        if not missing:
+            return
+
+        for name in missing:
+            driver.execute(fts_statements[name])
+
+        if driver.select(f"SELECT 1 AS present FROM {self._memory_table} LIMIT 1"):
+            driver.execute(self._memory_fts_rebuild_statement())
+
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
         if not self._enabled:
@@ -1894,6 +1944,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         """Return the SQLite FTS5 external-content rebuild statement."""
         table = self._memory_table
         return f"INSERT INTO {table}_fts({table}_fts) VALUES('rebuild')"
+
+    def _memory_index_statements(self) -> list[str]:
+        """Return SQLite ordinary CREATE INDEX statements for the memory table."""
+        return [
+            f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session ON {self._memory_table}(session_id)",
+        ]
 
     def _missing_fts_objects(self, cursor: Any) -> list[str]:
         """Return expected SQLite FTS5 object names missing from sqlite_master in creation order."""

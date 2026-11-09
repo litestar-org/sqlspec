@@ -22,8 +22,11 @@ from sqlspec.adapters.adbc.litestar.store import AdbcStore
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore
 from sqlspec.core import StatementConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, MigrationError
 from sqlspec.extensions.adk import StoredMemory
+from sqlspec.extensions.adk.migrations.reconcile import reconcile
+from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
@@ -1090,3 +1093,99 @@ def test_adbc_flightsql_search_keeps_like(monkeypatch: pytest.MonkeyPatch, caplo
     assert "MATCH" not in sql
     assert params == ("app", "user", "%espresso%", 5)
     assert any("ADBC memory store does not support FTS" in rec.message for rec in caplog.records)
+
+
+def test_adbc_reconcile_accepts_shared_object_sqlite() -> None:
+    """Shared-object SQLite driver configs pass reconcile adapter validation and companion hooks."""
+    config = AdbcConfig(
+        connection_config={"driver_name": "/opt/libadbc_driver_sqlite.so"},
+        statement_config=StatementConfig(dialect="sqlite"),
+        extension_config={"adk": {"enable_memory": False}},
+    )
+    assert validate_builtin_reconcile_adapter(config) == "adbc"
+
+    session_store = AdbcADKStore(config)
+    driver = MagicMock()
+    session_store.reconcile_companion_objects_sync(driver)
+    executed = [_normalized(str(call.args[0])) for call in driver.execute.call_args_list]
+    assert executed == [
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_app_user ON adk_session(app_name, user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_update_time ON adk_session(update_time DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_session ON adk_event(session_id, timestamp ASC)",
+    ]
+    assert driver.commit.call_count == 0
+
+    memory_store = AdbcADKMemoryStore(config)
+    memory_driver = MagicMock()
+    memory_store.reconcile_companion_objects_sync(memory_driver)
+    assert memory_driver.execute.call_count == 0
+    assert memory_driver.select.call_count == 0
+
+
+@pytest.mark.parametrize("driver_name", ["adbc_driver_flightsql", "flightsql", "grpc"])
+def test_adbc_reconcile_refuses_flightsql_before_store_hooks(driver_name: str) -> None:
+    """ADK reconcile callback rejects unclassified FlightSQL/gRPC configs before touching the driver."""
+    config = AdbcConfig(
+        connection_config={"driver_name": driver_name, "uri": "grpc://localhost:8815"},
+        extension_config={"adk": {"enable_memory": True, "migration_mode": "reconcile"}},
+    )
+    assert AdbcADKStore(config).dialect == "sqlite"
+
+    driver = MagicMock()
+    context = MigrationContext.from_config(config)
+    context.driver = driver
+    with pytest.raises(MigrationError, match='migration_mode="versioned"'):
+        reconcile(context)
+    assert driver.execute.call_count == 0
+
+
+@pytest.mark.parametrize("driver_name", ["adbc_driver_postgresql", "adbc_driver_flightsql"])
+def test_adbc_versioned_preparation_keeps_non_sqlite_dialect(driver_name: str) -> None:
+    """Versioned prepare_schema_sync remains a no-op across non-SQLite and FlightSQL ADBC drivers."""
+    config = AdbcConfig(
+        connection_config={"driver_name": driver_name}, extension_config={"adk": {"enable_memory": True}}
+    )
+    AdbcADKStore(config).prepare_schema_sync(MagicMock())
+    AdbcADKMemoryStore(config).prepare_schema_sync(MagicMock())
+
+
+def test_adbc_memory_companion_hook_skips_catalog_when_fts_disabled_and_propagates_fts5_error() -> None:
+    """Memory companion hook skips sqlite_master when FTS is off and propagates missing fts5 errors."""
+    non_fts_store = AdbcADKMemoryStore(
+        AdbcConfig(
+            connection_config={"driver_name": "sqlite", "uri": ":memory:"},
+            extension_config={"adk": {"enable_memory": True, "memory_use_fts": False}},
+        )
+    )
+    expected_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_adk_memory_app_scope_user_time ON adk_memory(app_name, scope, user_id, timestamp DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_adk_memory_scope ON adk_memory(app_name, scope)",
+        "CREATE INDEX IF NOT EXISTS idx_adk_memory_session ON adk_memory(session_id)",
+    ]
+    assert getattr(non_fts_store, "_memory_index_statements")() == expected_indexes
+
+    non_fts_driver = MagicMock()
+    non_fts_store.reconcile_companion_objects_sync(non_fts_driver)
+    assert [str(call.args[0]) for call in non_fts_driver.execute.call_args_list] == expected_indexes
+    assert non_fts_driver.select.call_count == 0
+    assert non_fts_driver.commit.call_count == 0
+
+    fts_store = AdbcADKMemoryStore(
+        AdbcConfig(
+            connection_config={"driver_name": "sqlite", "uri": ":memory:"},
+            extension_config={"adk": {"enable_memory": True, "memory_use_fts": True}},
+        )
+    )
+    fts_driver = MagicMock()
+    fts_driver.select.return_value = []
+
+    def fail_on_fts(stmt: str) -> None:
+        if "USING fts5" in stmt:
+            msg = "no such module: fts5"
+            raise RuntimeError(msg)
+
+    fts_driver.execute.side_effect = fail_on_fts
+    with pytest.raises(RuntimeError, match="no such module: fts5"):
+        fts_store.reconcile_companion_objects_sync(fts_driver)
+    assert all("CREATE TRIGGER" not in str(call.args[0]) for call in fts_driver.execute.call_args_list)
+    assert fts_driver.commit.call_count == 0
