@@ -4,9 +4,11 @@ import time
 from collections.abc import Iterator
 from threading import Thread
 from typing import Any, cast
+from unittest.mock import Mock
 
 import aiosqlite
 import pytest
+from sqlglot import parse_one
 
 import sqlspec.adapters.aiosqlite as aiosqlite_adapter
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor
@@ -17,11 +19,13 @@ from sqlspec.adapters.aiosqlite.core import (
     driver_profile,
     execute_and_resolve_rowcount,
     execute_fetchall_with_description,
+    resolve_lastrowid,
     run_on_worker_thread,
 )
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
 from sqlspec.core import ParameterStyle
+from sqlspec.core.compiler import OperationType
 from sqlspec.exceptions import SQLSpecError
 
 
@@ -484,3 +488,37 @@ async def test_aiosqlite_dispatch_execute_script_emits_events() -> None:
         assert result.successful_statements == 2
     finally:
         await conn.close()
+
+
+@pytest.mark.parametrize(
+    ("operation_type", "rowcount"),
+    [
+        ("SELECT", 1),
+        ("UPDATE", 1),
+        ("DELETE", 1),
+        ("DDL", 1),
+        ("SCRIPT", 1),
+        ("COMMAND", 1),
+        ("INSERT", 0),
+        ("INSERT", -1),
+    ],
+)
+def test_lastrowid_guard_skips_metadata(operation_type: OperationType, rowcount: int) -> None:
+    """Ensure resolve_lastrowid returns None without accessing connection or cursor attributes."""
+    connection = Mock(spec=[])
+    cursor = Mock(spec=[])
+    cache = cast("dict[tuple[str | None, str], bool]", Mock(spec=[]))
+    expression = parse_one("INSERT INTO test (value) VALUES ('x')", read="sqlite")
+
+    assert resolve_lastrowid(connection, cursor, operation_type, rowcount, expression, cache) is None
+
+
+def test_lastrowid_resolution_reaches_metadata_for_successful_insert() -> None:
+    """Ensure successful INSERT operations attempt schema and cache metadata resolution."""
+    connection = Mock(spec=[])
+    cursor = Mock(spec=[])
+    cache = cast("dict[tuple[str | None, str], bool]", Mock(spec=[]))
+    expression = parse_one("INSERT INTO test (value) VALUES ('x')", read="sqlite")
+
+    with pytest.raises(AttributeError):
+        resolve_lastrowid(connection, cursor, "INSERT", 1, expression, cache)

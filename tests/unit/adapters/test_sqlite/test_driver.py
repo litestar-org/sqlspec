@@ -1,13 +1,16 @@
 import sqlite3
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
+from sqlglot import parse_one
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, default_statement_config
+from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, default_statement_config, resolve_lastrowid
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import json_converter, register_type_handlers, unregister_type_handlers
+from sqlspec.core.compiler import OperationType
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -426,3 +429,79 @@ def test_sqlite_session_context_initializes_with_driver_class() -> None:
         driver_class=SqliteDriver,
     )
     assert ctx._driver_class is SqliteDriver
+
+
+@pytest.mark.parametrize(
+    ("operation_type", "rowcount"),
+    [
+        ("SELECT", 1),
+        ("UPDATE", 1),
+        ("DELETE", 1),
+        ("DDL", 1),
+        ("SCRIPT", 1),
+        ("COMMAND", 1),
+        ("INSERT", 0),
+        ("INSERT", -1),
+    ],
+)
+def test_lastrowid_guard_skips_metadata(operation_type: OperationType, rowcount: int) -> None:
+    """Ensure resolve_lastrowid returns None without accessing connection or cursor attributes."""
+    connection = Mock(spec=[])
+    cursor = Mock(spec=[])
+    cache = cast("dict[tuple[str | None, str], bool]", Mock(spec=[]))
+    expression = parse_one("INSERT INTO test (value) VALUES ('x')", read="sqlite")
+
+    assert resolve_lastrowid(connection, cursor, operation_type, rowcount, expression, cache) is None
+
+
+def test_lastrowid_resolution_reaches_metadata_for_successful_insert() -> None:
+    """Ensure successful INSERT operations attempt schema and cache metadata resolution."""
+    connection = Mock(spec=[])
+    cursor = Mock(spec=[])
+    cache = cast("dict[tuple[str | None, str], bool]", Mock(spec=[]))
+    expression = parse_one("INSERT INTO test (value) VALUES ('x')", read="sqlite")
+
+    with pytest.raises(AttributeError):
+        resolve_lastrowid(connection, cursor, "INSERT", 1, expression, cache)
+
+
+def test_sqlite_non_insert_operations_do_not_query_rowid_metadata() -> None:
+    """Ensure non-INSERT statements skip schema pragma queries during execution."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as session:
+        session.connection.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, value TEXT)")
+        session.connection.execute("INSERT INTO t (id, value) VALUES (1, 'a')")
+        session.connection.commit()
+
+        statements: list[str] = []
+        session.connection.set_trace_callback(statements.append)
+        try:
+            first_select = session.execute("SELECT id, value FROM t WHERE id = ?", (1,))
+            assert first_select.get_data() == [{"id": 1, "value": "a"}]
+            assert first_select.last_inserted_id is None
+
+            second_select = session.execute("SELECT id, value FROM t WHERE id = ?", (1,))
+            assert second_select.get_data() == [{"id": 1, "value": "a"}]
+            assert second_select.last_inserted_id is None
+
+            first_update = session.execute("UPDATE t SET value = ? WHERE id = ?", ("b", 1))
+            assert first_update.rows_affected == 1
+            assert first_update.last_inserted_id is None
+
+            second_update = session.execute("UPDATE t SET value = ? WHERE id = ?", ("c", 1))
+            assert second_update.rows_affected == 1
+            assert second_update.last_inserted_id is None
+
+            delete_res = session.execute("DELETE FROM t WHERE id = ?", (1,))
+            assert delete_res.rows_affected == 1
+            assert delete_res.last_inserted_id is None
+
+            assert statements
+            assert not any("PRAGMA" in sql.upper() for sql in statements)
+
+            statements.clear()
+            insert_res = session.execute("INSERT INTO t (value) VALUES (?)", ("z",))
+            assert any("PRAGMA table_list" in sql for sql in statements)
+            assert insert_res.last_inserted_id == 1
+        finally:
+            session.connection.set_trace_callback(None)
