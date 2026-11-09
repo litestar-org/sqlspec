@@ -1,5 +1,6 @@
 """Unit tests for DuckDB connection pool helpers."""
 
+import asyncio
 import logging
 import threading
 from pathlib import Path
@@ -614,3 +615,44 @@ def test_pool_thread_connection_checkout() -> None:
         {"database": ":memory:"}, secrets=[{"name": "s2", "value_provider": lambda: {}}]
     )
     assert pool_dynamic._has_dynamic_secrets is True
+
+
+def test_duckdb_cancelled_error_rolls_back_and_closes_thread_connection(tmp_path: Path) -> None:
+    """A forwarded cancellation must roll back uncommitted work and close the file connection."""
+    database = str(tmp_path / "cancel.duckdb")
+    pool = DuckDBConnectionPool(connection_config={"database": database})
+    try:
+        with pool.get_connection() as connection:
+            connection.execute("CREATE TABLE items (id INTEGER)")
+
+        with pytest.raises(asyncio.CancelledError):
+            with pool.get_connection() as connection:
+                connection.execute("BEGIN TRANSACTION")
+                connection.execute("INSERT INTO items VALUES (1)")
+                raise asyncio.CancelledError()
+
+        with pool.get_connection() as connection:
+            assert connection.execute("SELECT COUNT(*) FROM items").fetchone() == (0,)
+    finally:
+        pool.close()
+
+
+def test_duckdb_nested_cancelled_error_handled_by_outer_commit(tmp_path: Path) -> None:
+    """An inner cancellation caught by outer checkout allows outer to commit."""
+    database = str(tmp_path / "nested_cancel.duckdb")
+    pool = DuckDBConnectionPool(connection_config={"database": database})
+    try:
+        with pool.get_connection() as connection:
+            connection.execute("CREATE TABLE items (id INTEGER)")
+            connection.execute("BEGIN TRANSACTION")
+            connection.execute("INSERT INTO items VALUES (1)")
+            try:
+                with pool.get_connection():
+                    raise asyncio.CancelledError()
+            except asyncio.CancelledError:
+                pass
+
+        with pool.get_connection() as connection:
+            assert connection.execute("SELECT COUNT(*) FROM items").fetchone() == (1,)
+    finally:
+        pool.close()

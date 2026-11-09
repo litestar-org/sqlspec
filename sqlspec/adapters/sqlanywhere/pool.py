@@ -80,14 +80,18 @@ class SqlanywhereConnectionPool:
     @contextmanager
     def get_connection(self) -> "Generator[SqlanywhereConnection, None, None]":
         """Yield a thread-local SQL Anywhere connection."""
+        depth = getattr(self._thread_local, "depth", 0)
         connection = self.acquire()
+        self._thread_local.depth = depth + 1
         try:
             yield connection
-        except Exception:
-            with contextlib.suppress(Exception):
-                self._close_thread_connection()
+        except BaseException:
+            if getattr(self._thread_local, "depth", 1) <= 1:
+                with contextlib.suppress(Exception):
+                    self._close_thread_connection()
             raise
         finally:
+            self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
             self.release(connection)
 
     def close(self) -> None:

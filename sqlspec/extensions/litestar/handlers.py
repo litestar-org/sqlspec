@@ -10,11 +10,13 @@ import contextlib
 import inspect
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
-from litestar.constants import HTTP_DISCONNECT, HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
+from litestar.constants import HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
 from litestar.di import NamedDependency
+from litestar.enums import ScopeType
 from litestar.params import SkipValidation
+from litestar.utils.scope.state import ScopeState
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import (
@@ -41,10 +43,43 @@ __all__ = (
     "lifespan_handler_maker",
     "manual_handler_maker",
     "pool_provider_maker",
+    "record_request_exception",
     "session_provider_maker",
 )
 
-SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
+_REQUEST_EXCEPTION_KEY: Final = "request_exception"
+SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
+
+
+async def record_request_exception(exc: BaseException, scope: "Scope") -> None:
+    """Record an unhandled exception in the ASGI scope state for connection cleanup.
+
+    Args:
+        exc: The unhandled exception.
+        scope: The ASGI connection scope.
+    """
+    set_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY, exc)
+
+
+async def _exit_connection_context(
+    connection_cm: Any, connection: Any, scope: "Scope", exc_override: BaseException | None = None
+) -> None:
+    """Exit connection context manager forwarding recorded or override exception if any.
+
+    Args:
+        connection_cm: The context manager or None.
+        connection: The database connection instance.
+        scope: The ASGI connection scope.
+        exc_override: Optional exception overriding any scope-recorded exception.
+    """
+    exc = exc_override if exc_override is not None else get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
+    exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
+    if isinstance(connection_cm, AbstractAsyncContextManager):
+        await connection_cm.__aexit__(*exit_args)
+    elif isinstance(connection_cm, AbstractContextManager):
+        await with_ensure_async_(connection_cm).__aexit__(*exit_args)
+    else:
+        await ensure_async_(connection.close)()
 
 
 def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
@@ -71,13 +106,10 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
             if get_sqlspec_scope_state(scope, provider_owned_key):
                 return
             connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
-            if isinstance(connection_cm, AbstractAsyncContextManager):
-                await connection_cm.__aexit__(None, None, None)
-            elif isinstance(connection_cm, AbstractContextManager):
-                await with_ensure_async_(connection_cm).__aexit__(None, None, None)
-            else:
-                await ensure_async_(connection.close)()
-            delete_sqlspec_scope_state(scope, connection_scope_key)
+            try:
+                await _exit_connection_context(connection_cm, connection, scope)
+            finally:
+                delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
 
@@ -124,14 +156,26 @@ def autocommit_handler_maker(
             scope: ASGI Scope.
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
+        exc_override: BaseException | None = None
         try:
             if connection is not None and message["type"] == HTTP_RESPONSE_START:
-                if (message["status"] in commit_range or message["status"] in extra_commit_statuses) and message[
-                    "status"
-                ] not in extra_rollback_statuses:
-                    await ensure_async_(connection.commit)()
+                has_exception = get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is not None
+                if (
+                    not has_exception
+                    and (message["status"] in commit_range or message["status"] in extra_commit_statuses)
+                    and message["status"] not in extra_rollback_statuses
+                ):
+                    try:
+                        await ensure_async_(connection.commit)()
+                    except BaseException:
+                        with contextlib.suppress(Exception):
+                            await ensure_async_(connection.rollback)()
+                        raise
                 else:
                     await ensure_async_(connection.rollback)()
+        except BaseException as finalization_exc:
+            exc_override = finalization_exc
+            raise
         finally:
             if (
                 connection
@@ -139,13 +183,10 @@ def autocommit_handler_maker(
                 and not get_sqlspec_scope_state(scope, provider_owned_key)
             ):
                 connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
-                if isinstance(connection_cm, AbstractAsyncContextManager):
-                    await connection_cm.__aexit__(None, None, None)
-                elif isinstance(connection_cm, AbstractContextManager):
-                    await with_ensure_async_(connection_cm).__aexit__(None, None, None)
-                else:
-                    await ensure_async_(connection.close)()
-                delete_sqlspec_scope_state(scope, connection_scope_key)
+                try:
+                    await _exit_connection_context(connection_cm, connection, scope, exc_override=exc_override)
+                finally:
+                    delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
 
@@ -264,14 +305,22 @@ def connection_provider_maker(
             return
 
         entered_connection = await context_manager.__aenter__()
+        ctx_scope_key = f"{connection_key}_ctx"
         try:
             set_sqlspec_scope_state(scope, provider_owned_key, True)
             set_sqlspec_scope_state(scope, connection_key, entered_connection)
             yield entered_connection
-        finally:
-            await context_manager.__aexit__(None, None, None)
+        except BaseException as exc:
             delete_sqlspec_scope_state(scope, provider_owned_key)
             delete_sqlspec_scope_state(scope, connection_key)
+            await context_manager.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
+        delete_sqlspec_scope_state(scope, provider_owned_key)
+        if scope.get("type") == ScopeType.HTTP and not ScopeState.from_scope(scope).response_started:
+            set_sqlspec_scope_state(scope, ctx_scope_key, context_manager)
+            return
+        delete_sqlspec_scope_state(scope, connection_key)
+        await context_manager.__aexit__(None, None, None)
 
     return provide_connection
 

@@ -1,5 +1,6 @@
 """Unit tests for the Sybase ASE (pymssql over FreeTDS TDS 5.0) adapter."""
 
+import asyncio
 import os
 import socket
 import threading
@@ -497,6 +498,49 @@ def test_sybase_pool_recovers_acquisition_failure_and_retires_outer_failure(monk
             assert cast("object", replacement) is clean_connection
             assert clean_connection.closed is False
         assert pool.checked_out() == 0
+    finally:
+        pool.close()
+
+
+def test_sybase_pool_discards_thread_connection_on_cancelled_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A forwarded cancellation must close and discard the thread-local connection."""
+    monkeypatch.setenv("TDSVER", "5.0")
+    c1 = FakeConnection()
+    c2 = FakeConnection()
+    connections = [c1, c2]
+
+    def connect(**_kwargs: Any) -> FakeConnection:
+        return connections.pop(0)
+
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=connect))
+    pool = SybaseConnectionPool({"server": "ase.example.test"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            with pool.get_connection() as connection:
+                assert cast("object", connection) is c1
+                raise asyncio.CancelledError()
+
+        assert c1.closed is True
+
+        with pool.get_connection() as next_connection:
+            assert cast("object", next_connection) is c2
+            assert c2.closed is False
+    finally:
+        pool.close()
+
+
+def test_sybase_pool_clean_exit_preserves_thread_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A clean exit retains the connection for the thread."""
+    monkeypatch.setenv("TDSVER", "5.0")
+    connection = FakeConnection()
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_: connection))
+    pool = SybaseConnectionPool({"server": "ase.example.test"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pool.get_connection() as conn:
+            assert cast("object", conn) is connection
+        assert connection.closed is False
+        with pool.get_connection() as next_conn:
+            assert next_conn is conn
     finally:
         pool.close()
 

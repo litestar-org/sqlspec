@@ -1,5 +1,6 @@
 """pymssql pool tests."""
 
+import asyncio
 import threading
 from typing import Any, cast
 
@@ -254,5 +255,62 @@ def test_pool_recovers_after_failed_acquisition_and_retires_failed_checkout(monk
             assert pool.checked_out() == 1
 
         assert pool.checked_out() == 0
+    finally:
+        pool.close()
+
+
+def test_pymssql_pool_discards_thread_connection_on_cancelled_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A forwarded cancellation must close and discard the thread-local connection."""
+    import sqlspec.adapters.pymssql.pool as pool_module
+    from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+
+    c1 = FakeConnection()
+    c2 = FakeConnection()
+    connections = [c1, c2]
+
+    class MultiConnectModule(FakePymssqlModule):
+        def connect(self, **kwargs: Any) -> FakeConnection:
+            self.connect_calls.append(kwargs)
+            return connections.pop(0)
+
+    monkeypatch.setattr(pool_module, "pymssql", MultiConnectModule())
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            with pool.get_connection() as connection:
+                assert cast(object, connection) is c1
+                raise asyncio.CancelledError()
+
+        assert c1.closed is True
+
+        with pool.get_connection() as next_connection:
+            assert cast(object, next_connection) is c2
+            assert c2.closed is False
+    finally:
+        pool.close()
+
+
+def test_pymssql_pool_nested_cancelled_error_preserves_thread_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An inner cancellation caught by the outer checkout preserves the connection until outer exit."""
+    import sqlspec.adapters.pymssql.pool as pool_module
+    from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+
+    connection = FakeConnection()
+    monkeypatch.setattr(pool_module, "pymssql", FakePymssqlModule(connection))
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0)
+
+    try:
+        with pool.get_connection() as outer_conn:
+            assert cast(object, outer_conn) is connection
+            try:
+                with pool.get_connection() as inner_conn:
+                    assert cast(object, inner_conn) is connection
+                    raise asyncio.CancelledError()
+            except asyncio.CancelledError:
+                pass
+            assert connection.closed is False
+
+        assert connection.closed is False
     finally:
         pool.close()

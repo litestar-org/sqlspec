@@ -156,7 +156,10 @@ async def end_transaction(
     """
     if supports_autocommit is None:
         supports_autocommit = SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT
-    raw_conn = getattr(connection, "_conn", None)
+    try:
+        raw_conn = getattr(connection, "_conn", None)
+    except (ValueError, sqlite3.ProgrammingError):
+        return
     if isinstance(raw_conn, sqlite3.Connection) and callable(getattr(connection, "_execute", None)):
         conn_dict = getattr(connection, "__dict__", None)
         has_method_override = isinstance(conn_dict, dict) and (
@@ -169,12 +172,17 @@ async def end_transaction(
             return
         autocommit, in_transaction = await run_on_worker_thread(connection, _read_transaction_state_on_worker, raw_conn)
     else:
-        autocommit = getattr(raw_conn, "autocommit", False) is True or getattr(connection, "autocommit", False) is True
-        in_transaction = (
-            bool(getattr(raw_conn, "in_transaction", False))
-            if raw_conn is not None
-            else bool(getattr(connection, "in_transaction", False))
-        )
+        try:
+            autocommit = (
+                getattr(raw_conn, "autocommit", False) is True or getattr(connection, "autocommit", False) is True
+            )
+            in_transaction = (
+                bool(getattr(raw_conn, "in_transaction", False))
+                if raw_conn is not None
+                else bool(getattr(connection, "in_transaction", False))
+            )
+        except (ValueError, sqlite3.ProgrammingError):
+            return
     if supports_autocommit and autocommit:
         if in_transaction:
             await connection.execute("COMMIT" if commit else "ROLLBACK")
@@ -659,7 +667,11 @@ default_statement_config = build_statement_config()
 
 def _end_transaction_on_worker(raw_conn: Any, *, commit: bool, supports_autocommit: bool) -> None:
     """End an open transaction on a sqlite3 connection on the worker thread."""
-    if not getattr(raw_conn, "in_transaction", False):
+    try:
+        in_transaction = bool(getattr(raw_conn, "in_transaction", False))
+    except (ValueError, sqlite3.ProgrammingError):
+        return
+    if not in_transaction:
         return
     if supports_autocommit and getattr(raw_conn, "autocommit", False) is True:
         cursor = raw_conn.execute("COMMIT" if commit else "ROLLBACK")
@@ -674,7 +686,10 @@ def _end_transaction_on_worker(raw_conn: Any, *, commit: bool, supports_autocomm
 
 def _read_transaction_state_on_worker(raw_conn: Any) -> "tuple[bool, bool]":
     """Read sqlite3 autocommit and in_transaction state on the worker thread."""
-    return getattr(raw_conn, "autocommit", False) is True, bool(getattr(raw_conn, "in_transaction", False))
+    try:
+        return getattr(raw_conn, "autocommit", False) is True, bool(getattr(raw_conn, "in_transaction", False))
+    except (ValueError, sqlite3.ProgrammingError):
+        return False, False
 
 
 def _execute_fetchall_with_metadata(

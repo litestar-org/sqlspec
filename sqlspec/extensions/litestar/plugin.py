@@ -1,17 +1,21 @@
 """Litestar plugin for SQLSpec database configuration, lifecycle, and dependency injection."""
 
+import asyncio
 import logging
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias, cast, overload
 
+from litestar.constants import HTTP_RESPONSE_START
 from litestar.di import Provide
+from litestar.enums import ScopeType
 from litestar.exceptions import ClientException, HTTPException, NotFoundException
 from litestar.exceptions.responses import create_exception_response
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import CLIPlugin, InitPluginProtocol, OpenAPISchemaPlugin
 from litestar.status_codes import HTTP_409_CONFLICT, HTTP_500_INTERNAL_SERVER_ERROR
+from litestar.utils.scope.state import ScopeState
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import (
@@ -34,17 +38,21 @@ from sqlspec.extensions.litestar._utils import (
 )
 from sqlspec.extensions.litestar.cli import database_group
 from sqlspec.extensions.litestar.handlers import (
+    _REQUEST_EXCEPTION_KEY,
+    _exit_connection_context,
     autocommit_handler_maker,
     connection_provider_maker,
     lifespan_handler_maker,
     manual_handler_maker,
     pool_provider_maker,
+    record_request_exception,
     session_provider_maker,
 )
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook
+from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -59,6 +67,7 @@ if TYPE_CHECKING:
         ASGIApp,
         BeforeMessageSendHookHandler,
         ExceptionHandlersMap,
+        Message,
         Middleware,
         Receive,
         Scope,
@@ -86,6 +95,7 @@ __all__ = (
     "DEFAULT_SESSION_KEY",
     "TRACE_CONTEXT_FALLBACK_HEADERS",
     "CommitMode",
+    "ConnectionCleanupMiddleware",
     "CorrelationMiddleware",
     "PluginConfigState",
     "SQLSpecPlugin",
@@ -200,6 +210,141 @@ class CorrelationMiddleware:
             with suppress(KeyError):
                 delete_sqlspec_scope_state(scope, CORRELATION_STATE_KEY)
             CorrelationContext.set(previous_correlation_id)
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectionCleanupTarget:
+    """Configuration descriptor for ASGI residual connection cleanup."""
+
+    connection_key: str
+    session_key: str
+    commit_mode: CommitMode
+    extra_commit_statuses: frozenset[int]
+    extra_rollback_statuses: frozenset[int]
+
+
+def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:
+    """Select the primary teardown exception to re-raise after completing all targets."""
+    if current is None:
+        return candidate
+    if isinstance(current, Exception) and not isinstance(candidate, Exception):
+        return candidate
+    return current
+
+
+class ConnectionCleanupMiddleware:
+    """ASGI middleware guaranteeing residual HTTP request connections are finalized and released.
+
+    Cleans up handed-over injected connections when a request aborts before
+    ``http.response.start`` as well as on-demand connections acquired after
+    ``http.response.start`` during streaming responses or ``after_response`` hooks.
+    """
+
+    __slots__ = ("_app", "_targets")
+
+    def __init__(self, app: "ASGIApp", *, targets: "tuple[_ConnectionCleanupTarget, ...]") -> None:
+        self._app = app
+        self._targets = targets
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        if scope.get("type") != ScopeType.HTTP or not self._targets:
+            await self._app(scope, receive, send)
+            return
+
+        response_started = False
+        response_status: int | None = None
+
+        async def send_wrapper(message: "Message") -> None:
+            nonlocal response_started, response_status
+            if message["type"] == HTTP_RESPONSE_START:
+                response_started = True
+                response_status = message["status"]
+            await send(message)
+
+        caught_exc: BaseException | None = None
+        try:
+            await self._app(scope, receive, send_wrapper)
+        except BaseException as exc:
+            caught_exc = exc
+            raise
+        finally:
+            started = response_started or bool(ScopeState.from_scope(scope).response_started)
+            try:
+                await self._cleanup_scope(
+                    scope, caught_exc=caught_exc, response_started=started, response_status=response_status
+                )
+            except Exception:
+                if caught_exc is None or isinstance(caught_exc, Exception):
+                    raise
+
+    async def _cleanup_scope(
+        self, scope: "Scope", *, caught_exc: BaseException | None, response_started: bool, response_status: int | None
+    ) -> None:
+        recorded_exc = get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
+        if caught_exc is not None:
+            effective_exc: BaseException | None = caught_exc
+        elif recorded_exc is not None:
+            effective_exc = recorded_exc
+        elif not response_started:
+            effective_exc = asyncio.CancelledError()
+        else:
+            effective_exc = None
+
+        primary_exc: BaseException | None = None
+        for target in self._targets:
+            try:
+                ctx_scope_key = f"{target.connection_key}_ctx"
+                provider_owned_key = f"{target.connection_key}_provider_owned"
+                session_scope_key = f"{target.session_key}_instance"
+                connection = get_sqlspec_scope_state(scope, target.connection_key)
+                connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
+
+                if connection is None and connection_cm is None:
+                    delete_sqlspec_scope_state(scope, session_scope_key)
+                    continue
+
+                if effective_exc is not None and get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is None:
+                    set_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY, effective_exc)
+
+                exc_override: BaseException | None = None
+                try:
+                    if connection is not None and target.commit_mode != "manual":
+                        if effective_exc is not None:
+                            with suppress(Exception):
+                                await ensure_async_(connection.rollback)()
+                        else:
+                            commit_range = range(
+                                200, 400 if target.commit_mode == "autocommit_include_redirect" else 300
+                            )
+                            should_commit = (
+                                response_status is not None
+                                and (response_status in commit_range or response_status in target.extra_commit_statuses)
+                                and response_status not in target.extra_rollback_statuses
+                            )
+                            if should_commit:
+                                try:
+                                    await ensure_async_(connection.commit)()
+                                except BaseException:
+                                    with suppress(Exception):
+                                        await ensure_async_(connection.rollback)()
+                                    raise
+                            else:
+                                await ensure_async_(connection.rollback)()
+                except BaseException as finalization_exc:
+                    exc_override = finalization_exc
+                    raise
+                finally:
+                    try:
+                        await _exit_connection_context(connection_cm, connection, scope, exc_override=exc_override)
+                    finally:
+                        delete_sqlspec_scope_state(scope, target.connection_key)
+                        delete_sqlspec_scope_state(scope, provider_owned_key)
+                        delete_sqlspec_scope_state(scope, session_scope_key)
+            except BaseException as exc:
+                primary_exc = _select_teardown_exception(primary_exc, exc)
+
+        if primary_exc is not None:
+            raise primary_exc
 
 
 @dataclass
@@ -346,6 +491,12 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     state.session_key: Provide(state.session_provider),
                 })
 
+        if self._plugin_configs:
+            if app_config.after_exception is None:
+                app_config.after_exception = []
+            if record_request_exception not in app_config.after_exception:
+                app_config.after_exception.append(record_request_exception)
+
         if signature_namespace:
             app_config.signature_namespace.update(signature_namespace)
 
@@ -393,6 +544,27 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 new_middlewares.append(DefineMiddleware(CorrelationMiddleware, headers=self._correlation_headers))
         if self._enable_sqlcommenter_middleware:
             new_middlewares.append(DefineMiddleware(SQLCommenterMiddleware))
+        cleanup_targets = tuple(
+            _ConnectionCleanupTarget(
+                connection_key=state.connection_key,
+                session_key=state.session_key,
+                commit_mode=state.commit_mode,
+                extra_commit_statuses=frozenset(state.extra_commit_statuses or ()),
+                extra_rollback_statuses=frozenset(state.extra_rollback_statuses or ()),
+            )
+            for state in self._plugin_configs
+        )
+        if cleanup_targets:
+            existing_cleanup = _find_cleanup_middleware(app_config.middleware)
+            if isinstance(existing_cleanup, DefineMiddleware):
+                prior_targets = tuple(existing_cleanup.kwargs.get("targets", ()))
+                seen_keys = {item.connection_key for item in prior_targets}
+                merged_targets = prior_targets + tuple(
+                    item for item in cleanup_targets if item.connection_key not in seen_keys
+                )
+                existing_cleanup.kwargs["targets"] = merged_targets
+            elif existing_cleanup is None:
+                new_middlewares.append(DefineMiddleware(ConnectionCleanupMiddleware, targets=cleanup_targets))
         if new_middlewares:
             app_config.middleware = [*new_middlewares, *(app_config.middleware or [])]
 
@@ -838,7 +1010,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         session_scope_key = f"{plugin_state.session_key}_instance"
 
         session = get_sqlspec_scope_state(scope, session_scope_key)
-        if session is not None:
+        if session is not None and getattr(session, "connection", None) is connection:
             return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
 
         session = plugin_state.config.driver_type(
@@ -1131,6 +1303,15 @@ def _find_correlation_middleware(middleware: "Iterable[Middleware] | None") -> "
     for entry in middleware or ():
         candidate = entry.middleware if isinstance(entry, DefineMiddleware) else entry
         if isinstance(candidate, type) and issubclass(candidate, CorrelationMiddleware):
+            return entry
+    return None
+
+
+def _find_cleanup_middleware(middleware: "Iterable[Middleware] | None") -> "Middleware | None":
+    """Return the first entry in the middleware stack that installs :class:`ConnectionCleanupMiddleware`."""
+    for entry in middleware or ():
+        candidate = entry.middleware if isinstance(entry, DefineMiddleware) else entry
+        if isinstance(candidate, type) and issubclass(candidate, ConnectionCleanupMiddleware):
             return entry
     return None
 

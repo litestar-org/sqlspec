@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from os import PathLike
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict
 
 from mypy_extensions import mypyc_attr
 
@@ -19,11 +19,7 @@ from sqlspec.adapters.aiosqlite.core import (
     render_pragmas,
 )
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
-from sqlspec.adapters.aiosqlite.pool import (
-    AiosqliteConnectionPool,
-    AiosqlitePoolConnection,
-    AiosqlitePoolConnectionContext,
-)
+from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool, AiosqlitePoolConnectionContext
 from sqlspec.adapters.aiosqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
@@ -211,25 +207,27 @@ _RUNTIME_FEATURE_KEYS = (
 
 
 class _AiosqliteSessionFactory(AsyncPoolSessionFactory):
-    __slots__ = ("_pool_conn",)
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "AiosqliteConfig") -> None:
         super().__init__(config)
-        self._pool_conn: AiosqlitePoolConnection | None = None
+        self._ctx: AiosqlitePoolConnectionContext | None = None
 
     async def acquire_connection(self) -> "AiosqliteConnection":
         pool = self._config.connection_instance
         if pool is None:
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
-        pool_conn = await pool.acquire()
-        self._pool_conn = pool_conn
-        return cast("AiosqliteConnection", pool_conn.connection)
+        ctx: AiosqlitePoolConnectionContext = pool.get_connection()
+        self._ctx = ctx
+        return await ctx.__aenter__()
 
     async def release_connection(self, _conn: "AiosqliteConnection", **kwargs: Any) -> None:
-        if self._pool_conn is not None and self._config.connection_instance is not None:
-            await self._config.connection_instance.release(self._pool_conn)
-            self._pool_conn = None
+        context = self._ctx
+        if context is None:
+            return
+        self._ctx = None
+        await context.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
 class AiosqliteConnectionContext(AsyncPoolConnectionContext):
@@ -246,15 +244,18 @@ class AiosqliteConnectionContext(AsyncPoolConnectionContext):
         if pool is None:
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
-        self._ctx = pool.get_connection()
-        assert self._ctx is not None
-        return cast("AiosqliteConnection", await self._ctx.__aenter__())
+        ctx: AiosqlitePoolConnectionContext = pool.get_connection()
+        self._ctx = ctx
+        return await ctx.__aenter__()
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._ctx:
-            return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)
+        if self._ctx is not None:
+            try:
+                return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)
+            finally:
+                self._ctx = None
         return None
 
 

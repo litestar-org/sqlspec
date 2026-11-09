@@ -278,7 +278,7 @@ class DuckDBConnectionPool:
         self._thread_local.depth = depth + 1
         try:
             yield connection
-        except Exception:
+        except BaseException:
             if depth == 0:
                 with suppress(Exception):
                     connection.rollback()

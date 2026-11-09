@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite import pool as pool_module
 from sqlspec.adapters.aiosqlite.pool import (
     SQLITE_BUSY_TIMEOUT,
@@ -403,7 +404,7 @@ async def test_acquire_and_release_idle_fast_path(monkeypatch: pytest.MonkeyPatc
             cursor = await conn.execute("SELECT COUNT(*) FROM items")
             row = await cursor.fetchone()
             await cursor.close()
-            assert row == (0,)
+            assert row == (1,)
     finally:
         await pool.close()
 
@@ -482,3 +483,326 @@ async def test_release_retires_connection_when_rollback_fails(monkeypatch: pytes
     assert pool._queue.qsize() == 0
     assert not pool_conn.is_healthy
     await pool.close()
+
+
+async def test_aiosqlite_connection_clean_exit_persists(tmp_path: Path) -> None:
+    """provide_connection clean exit commits an open transaction."""
+    db_path = tmp_path / "clean_exit.db"
+    config = AiosqliteConfig(connection_config={"database": str(db_path)})
+    async with config.provide_connection() as conn:
+        await conn.execute("CREATE TABLE t (x INTEGER)")
+        await conn.commit()
+
+    async with config.provide_connection() as conn:
+        await conn.execute("INSERT INTO t VALUES (1)")
+
+    with sqlite3.connect(db_path) as sync_conn:
+        row = sync_conn.execute("SELECT COUNT(*) FROM t").fetchone()
+        assert row == (1,)
+    if config.connection_instance:
+        await config.connection_instance.close()
+
+
+async def test_aiosqlite_connection_raised_error_rolls_back(tmp_path: Path) -> None:
+    """provide_connection exception exit rolls back an open transaction."""
+    db_path = tmp_path / "raised_error.db"
+    config = AiosqliteConfig(connection_config={"database": str(db_path)})
+    async with config.provide_connection() as conn:
+        await conn.execute("CREATE TABLE t (x INTEGER)")
+        await conn.commit()
+
+    with pytest.raises(ValueError, match="raised error"):
+        async with config.provide_connection() as conn:
+            await conn.execute("INSERT INTO t VALUES (1)")
+            raise ValueError("raised error")
+
+    with sqlite3.connect(db_path) as sync_conn:
+        row = sync_conn.execute("SELECT COUNT(*) FROM t").fetchone()
+        assert row == (0,)
+    if config.connection_instance:
+        await config.connection_instance.close()
+
+
+async def test_aiosqlite_connection_cancelled_rolls_back(tmp_path: Path) -> None:
+    """provide_connection cancellation rolls back an open transaction."""
+    db_path = tmp_path / "cancelled.db"
+    config = AiosqliteConfig(connection_config={"database": str(db_path)})
+    async with config.provide_connection() as conn:
+        await conn.execute("CREATE TABLE t (x INTEGER)")
+        await conn.commit()
+
+    with pytest.raises(asyncio.CancelledError):
+        async with config.provide_connection() as conn:
+            await conn.execute("INSERT INTO t VALUES (1)")
+            raise asyncio.CancelledError()
+
+    with sqlite3.connect(db_path) as sync_conn:
+        row = sync_conn.execute("SELECT COUNT(*) FROM t").fetchone()
+        assert row == (0,)
+    if config.connection_instance:
+        await config.connection_instance.close()
+
+
+async def test_aiosqlite_session_clean_exit_persists(tmp_path: Path) -> None:
+    """provide_session clean exit commits an open transaction."""
+    db_path = tmp_path / "session_clean.db"
+    config = AiosqliteConfig(connection_config={"database": str(db_path)})
+    async with config.provide_connection() as conn:
+        await conn.execute("CREATE TABLE t (x INTEGER)")
+        await conn.commit()
+
+    async with config.provide_session() as session:
+        await session.execute("INSERT INTO t VALUES (1)")
+
+    with sqlite3.connect(db_path) as sync_conn:
+        row = sync_conn.execute("SELECT COUNT(*) FROM t").fetchone()
+        assert row == (1,)
+    if config.connection_instance:
+        await config.connection_instance.close()
+
+
+async def test_aiosqlite_session_raised_error_rolls_back(tmp_path: Path) -> None:
+    """provide_session exception exit rolls back an open transaction."""
+    db_path = tmp_path / "session_err.db"
+    config = AiosqliteConfig(connection_config={"database": str(db_path)})
+    async with config.provide_connection() as conn:
+        await conn.execute("CREATE TABLE t (x INTEGER)")
+        await conn.commit()
+
+    with pytest.raises(ValueError, match="session error"):
+        async with config.provide_session() as session:
+            await session.execute("INSERT INTO t VALUES (1)")
+            raise ValueError("session error")
+
+    with sqlite3.connect(db_path) as sync_conn:
+        row = sync_conn.execute("SELECT COUNT(*) FROM t").fetchone()
+        assert row == (0,)
+    if config.connection_instance:
+        await config.connection_instance.close()
+
+
+async def test_aiosqlite_no_transaction_is_noop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A clean exit without an open transaction skips end_transaction."""
+    db_path = tmp_path / "noop.db"
+    end_tx_calls = 0
+    original_end_tx = pool_module.end_transaction
+
+    async def spy_end_tx(connection: Any, *, commit: bool, supports_autocommit: bool | None = None) -> None:
+        nonlocal end_tx_calls
+        end_tx_calls += 1
+        await original_end_tx(connection, commit=commit, supports_autocommit=supports_autocommit)
+
+    monkeypatch.setattr(pool_module, "end_transaction", spy_end_tx)
+
+    config = AiosqliteConfig(connection_config={"database": str(db_path)})
+    async with config.provide_connection() as conn:
+        cursor = await conn.execute("SELECT 1")
+        await cursor.close()
+        assert conn.in_transaction is False
+
+    assert end_tx_calls == 0
+    if config.connection_instance:
+        await config.connection_instance.close()
+
+
+async def test_aiosqlite_explicit_commit_before_exit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """An explicit commit leaves in_transaction False so exit skips end_transaction."""
+    db_path = tmp_path / "explicit_commit.db"
+    config = AiosqliteConfig(connection_config={"database": str(db_path)})
+    async with config.provide_connection() as conn:
+        await conn.execute("CREATE TABLE t (x INTEGER)")
+        await conn.commit()
+
+    end_tx_calls = 0
+    original_end_tx = pool_module.end_transaction
+
+    async def spy_end_tx(connection: Any, *, commit: bool, supports_autocommit: bool | None = None) -> None:
+        nonlocal end_tx_calls
+        end_tx_calls += 1
+        await original_end_tx(connection, commit=commit, supports_autocommit=supports_autocommit)
+
+    monkeypatch.setattr(pool_module, "end_transaction", spy_end_tx)
+
+    async with config.provide_connection() as conn:
+        await conn.execute("INSERT INTO t VALUES (1)")
+        await conn.commit()
+        assert conn.in_transaction is False
+
+    assert end_tx_calls == 0
+
+    with sqlite3.connect(db_path) as sync_conn:
+        row = sync_conn.execute("SELECT COUNT(*) FROM t").fetchone()
+        assert row == (1,)
+    if config.connection_instance:
+        await config.connection_instance.close()
+
+
+async def test_aiosqlite_explicit_rollback_before_exit(tmp_path: Path) -> None:
+    """An explicit rollback discards work and exits clean with row count 0."""
+    db_path = tmp_path / "explicit_rollback.db"
+    config = AiosqliteConfig(connection_config={"database": str(db_path)})
+    async with config.provide_connection() as conn:
+        await conn.execute("CREATE TABLE t (x INTEGER)")
+        await conn.commit()
+
+    async with config.provide_connection() as conn:
+        await conn.execute("INSERT INTO t VALUES (1)")
+        await conn.rollback()
+
+    with sqlite3.connect(db_path) as sync_conn:
+        row = sync_conn.execute("SELECT COUNT(*) FROM t").fetchone()
+        assert row == (0,)
+    if config.connection_instance:
+        await config.connection_instance.close()
+
+
+async def test_aiosqlite_reused_connection_starts_clean_after_commit(tmp_path: Path) -> None:
+    """A reused pooled connection has in_transaction False after clean commit exit."""
+    db_path = tmp_path / "reuse_commit.db"
+    pool = AiosqliteConnectionPool({"database": str(db_path)}, pool_size=1, min_size=1)
+    try:
+        async with pool.get_connection() as conn1:
+            await conn1.execute("CREATE TABLE t (x INTEGER)")
+            await conn1.commit()
+
+        async with pool.get_connection() as conn2:
+            assert conn2 is conn1
+            await conn2.execute("INSERT INTO t VALUES (1)")
+
+        async with pool.get_connection() as conn3:
+            assert conn3 is conn1
+            assert conn3.in_transaction is False
+            cursor = await conn3.execute("SELECT COUNT(*) FROM t")
+            row = await cursor.fetchone()
+            await cursor.close()
+            assert row == (1,)
+    finally:
+        await pool.close()
+
+
+async def test_aiosqlite_reused_connection_starts_clean_after_rollback(tmp_path: Path) -> None:
+    """A reused pooled connection has in_transaction False after exception rollback exit."""
+    db_path = tmp_path / "reuse_rollback.db"
+    pool = AiosqliteConnectionPool({"database": str(db_path)}, pool_size=1, min_size=1)
+    try:
+        async with pool.get_connection() as conn1:
+            await conn1.execute("CREATE TABLE t (x INTEGER)")
+            await conn1.commit()
+
+        with pytest.raises(ValueError, match="rollback forced"):
+            async with pool.get_connection() as conn2:
+                assert conn2 is conn1
+                await conn2.execute("INSERT INTO t VALUES (1)")
+                raise ValueError("rollback forced")
+
+        async with pool.get_connection() as conn3:
+            assert conn3 is conn1
+            assert conn3.in_transaction is False
+            cursor = await conn3.execute("SELECT COUNT(*) FROM t")
+            row = await cursor.fetchone()
+            await cursor.close()
+            assert row == (0,)
+    finally:
+        await pool.close()
+
+
+async def test_aiosqlite_commit_failure_rolls_back_and_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Commit failure triggers rollback under suppress and raises the commit error."""
+    db_path = tmp_path / "commit_fail.db"
+    pool = AiosqliteConnectionPool({"database": str(db_path)}, pool_size=1, min_size=1)
+    calls: list[bool] = []
+    original_end_tx = pool_module.end_transaction
+
+    async def failing_end_tx(connection: Any, *, commit: bool, supports_autocommit: bool | None = None) -> None:
+        calls.append(commit)
+        if commit:
+            raise sqlite3.OperationalError("simulated commit failure")
+        await original_end_tx(connection, commit=commit, supports_autocommit=supports_autocommit)
+
+    monkeypatch.setattr(pool_module, "end_transaction", failing_end_tx)
+
+    try:
+        async with pool.get_connection() as conn:
+            await conn.execute("CREATE TABLE t (x INTEGER)")
+            await conn.commit()
+
+        calls.clear()
+
+        with pytest.raises(sqlite3.OperationalError, match="simulated commit failure"):
+            async with pool.get_connection() as conn:
+                await conn.execute("INSERT INTO t VALUES (1)")
+
+        assert calls == [True, False]
+
+        monkeypatch.setattr(pool_module, "end_transaction", original_end_tx)
+        async with pool.get_connection() as conn:
+            cursor = await conn.execute("SELECT COUNT(*) FROM t")
+            row = await cursor.fetchone()
+            await cursor.close()
+            assert row == (0,)
+    finally:
+        await pool.close()
+
+
+async def test_aiosqlite_direct_release_still_rolls_back(tmp_path: Path) -> None:
+    """Direct acquire/release without context manager still rolls back uncommitted work."""
+    db_path = tmp_path / "direct_release.db"
+    pool = AiosqliteConnectionPool({"database": str(db_path)}, pool_size=1, min_size=1)
+    try:
+        async with pool.get_connection() as conn:
+            await conn.execute("CREATE TABLE t (x INTEGER)")
+            await conn.commit()
+
+        pool_conn = await pool.acquire()
+        await pool_conn.connection.execute("INSERT INTO t VALUES (1)")
+        await pool.release(pool_conn)
+
+        with sqlite3.connect(db_path) as sync_conn:
+            row = sync_conn.execute("SELECT COUNT(*) FROM t").fetchone()
+            assert row == (0,)
+    finally:
+        await pool.close()
+
+
+async def test_aiosqlite_connection_context_aexit_clears_inner_ctx(tmp_path: Path) -> None:
+    """AiosqliteConnectionContext.__aexit__ clears _ctx on both clean exit and inner exit failure."""
+    from sqlspec.adapters.aiosqlite.config import AiosqliteConnectionContext
+
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "ctx_clear.db")})
+    try:
+        ctx = config.provide_connection()
+        assert isinstance(ctx, AiosqliteConnectionContext)
+        async with ctx:
+            assert ctx._ctx is not None
+        assert ctx._ctx is None
+
+        failing_ctx = AiosqliteConnectionContext(config)
+        inner_mock = AsyncMock()
+        inner_mock.__aexit__.side_effect = RuntimeError("inner exit boom")
+        failing_ctx._ctx = inner_mock
+
+        with pytest.raises(RuntimeError, match="inner exit boom"):
+            await failing_ctx.__aexit__(None, None, None)
+
+        assert failing_ctx._ctx is None
+    finally:
+        await config.close_pool()
+
+
+async def test_aiosqlite_context_exit_handles_closed_connection_or_pool(tmp_path: Path) -> None:
+    """Clean context exit succeeds as a no-op if the connection or pool was closed inside the block."""
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "closed_inside.db")})
+    pool = await config.create_pool()
+    async with config.provide_connection(pool) as connection:
+        cursor = await connection.execute("SELECT 1")
+        row = await cursor.fetchone()
+        await cursor.close()
+        assert row == (1,)
+        await config.close_pool()
+
+    pool2 = await config.create_pool()
+    try:
+        async with config.provide_connection(pool2) as connection2:
+            await connection2.close()
+    finally:
+        await config.close_pool()
