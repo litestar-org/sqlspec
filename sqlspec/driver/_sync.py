@@ -6,6 +6,7 @@ and ``SyncExceptionHandler`` stores mapped exceptions on ``pending_exception``
 rather than raising inside ``__exit__`` across C-extension ABI boundaries.
 """
 
+import contextlib
 import logging
 import sys
 from abc import abstractmethod
@@ -57,7 +58,8 @@ from sqlspec.driver._stream import SyncRowStream, _LazyEagerSyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
 from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
-from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
+from sqlspec.storage.pipeline import close_sync_arrow_source
+from sqlspec.utils.arrow_helpers import arrow_batches_from_rows, convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
 from sqlspec.utils.type_guards import resolve_row_format
@@ -85,6 +87,7 @@ if TYPE_CHECKING:
 __all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase", "SyncPoolConnectionContext", "SyncPoolSessionFactory")
 
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
+_DEFAULT_EXPORT_BATCH_SIZE: Final[int] = 10_000
 logger = get_logger(_LOGGER_NAME)
 _SyncResultT = TypeVar("_SyncResultT")
 _SyncDriverT = TypeVar("_SyncDriverT", bound="SyncDriverAdapterBase")
@@ -152,6 +155,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     __slots__ = ()
 
     dialect: "DialectType | None" = None
+    native_arrow_export: ClassVar[bool] = False
+    export_integers_may_widen: ClassVar[bool] = False
 
     @property
     @abstractmethod
@@ -1959,20 +1964,76 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             StorageTelemetry with write metrics.
         """
-        runtime = self.observability
-        span = runtime.start_storage_span(
-            "write", destination=stringify_storage_target(destination), format_label=format_hint
-        )
+        result_metadata = result.metadata
+        stream_close = result_metadata.get("stream_close") if isinstance(result_metadata, dict) else None
         try:
-            telemetry = result.write_to_storage_sync(
-                destination, format_hint=format_hint, storage_options=storage_options, pipeline=pipeline
+            runtime = self.observability
+            span = runtime.start_storage_span(
+                "write", destination=stringify_storage_target(destination), format_label=format_hint
             )
-        except Exception as exc:
-            runtime.end_storage_span(span, error=exc)
-            raise
+            try:
+                telemetry = result.write_to_storage_sync(
+                    destination, format_hint=format_hint, storage_options=storage_options, pipeline=pipeline
+                )
+            except Exception as exc:
+                runtime.end_storage_span(span, error=exc)
+                raise
+        finally:
+            close_sync_arrow_source(result.data)
+            if callable(stream_close):
+                with contextlib.suppress(Exception):
+                    stream_close()
+        read_ahead_columns = result_metadata.get("read_ahead_columns") if isinstance(result_metadata, dict) else None
+        if read_ahead_columns:
+            extra = telemetry.get("extra")
+            if extra is None:
+                extra = {}
+                telemetry["extra"] = extra
+            extra["read_ahead_columns"] = read_ahead_columns
         telemetry = runtime.annotate_storage_telemetry(telemetry)
         runtime.end_storage_span(span, telemetry=telemetry)
         return telemetry
+
+    def _select_for_storage(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Return an Arrow result that streams rows to storage."""
+        if "return_format" in kwargs or kwargs.get("native_only"):
+            return self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        if self.native_arrow_export:
+            return self.select_to_arrow(
+                statement, *parameters, statement_config=statement_config, return_format="reader", **kwargs
+            )
+        fallback_kwargs = dict(kwargs)
+        raw_batch_size = kwargs.pop("batch_size", None)
+        batch_size = _DEFAULT_EXPORT_BATCH_SIZE if raw_batch_size is None else int(raw_batch_size)
+        arrow_schema = kwargs.pop("arrow_schema", None)
+        stream = self.select_stream(
+            statement, *parameters, statement_config=statement_config, chunk_size=batch_size, **kwargs
+        )
+        read_ahead: list[str] = []
+        reader = arrow_batches_from_rows(
+            stream,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+            integer_may_widen=self.export_integers_may_widen,
+            on_read_ahead=read_ahead.extend,
+        )
+        if reader is None:
+            stream.close()
+            return self.select_to_arrow(statement, *parameters, statement_config=statement_config, **fallback_kwargs)
+        metadata: dict[str, Any] = {"streamed": True, "row_stream_batches": True, "stream_close": stream.close}
+        if read_ahead:
+            metadata["read_ahead_columns"] = tuple(read_ahead)
+        prepared = self.prepare_statement(
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs={}
+        )
+        return create_arrow_result(statement=prepared, data=reader, rows_affected=0, metadata=metadata)
 
     def _read_storage_arrow(
         self,

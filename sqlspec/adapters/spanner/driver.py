@@ -518,7 +518,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Execute query and stream Arrow results to storage."""
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
@@ -1199,7 +1199,9 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Execute query and stream Arrow results to storage asynchronously."""
         self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = await self._select_for_storage(
+            statement, *parameters, statement_config=statement_config, **kwargs
+        )
         async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline

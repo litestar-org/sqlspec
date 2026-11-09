@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpySessionContext
-from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyDriverFeatures
+from sqlspec.adapters.psqlpy.config import (
+    PsqlpyConfig,
+    PsqlpyConnectionContext,
+    PsqlpyDriverFeatures,
+    _PsqlpySessionFactory,
+)
 from sqlspec.adapters.psqlpy.core import (
     build_connection_config,
     build_postgres_extension_probe_names,
@@ -409,3 +414,109 @@ async def test_psqlpy_sync_on_connection_create_callback() -> None:
     mock_conn.fetch = AsyncMock(return_value=None)
     await config._ensure_connection(mock_conn)  # pyright: ignore[reportPrivateUsage]
     assert hook_called is True
+
+
+class _RecordingAsyncContext:
+    def __init__(self) -> None:
+        self.recorded_exit_args: tuple[object, object, object] | None = None
+
+    async def __aenter__(self) -> object:
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object | None
+    ) -> bool | None:
+        self.recorded_exit_args = (exc_type, exc_val, exc_tb)
+        return None
+
+
+@pytest.mark.anyio
+async def test_psqlpy_connection_context_aexit_forwards_none_on_exception() -> None:
+    """Forwarded exceptions must pass (None, None, None) to the inner driver context."""
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
+    context = PsqlpyConnectionContext(config)
+    inner_ctx = _RecordingAsyncContext()
+    context._ctx = inner_ctx
+
+    exc = ValueError("forwarded failure")
+    result = await context.__aexit__(ValueError, exc, None)
+
+    assert result is None
+    assert inner_ctx.recorded_exit_args == (None, None, None)
+    assert context._ctx is None
+
+
+@pytest.mark.anyio
+async def test_psqlpy_session_factory_release_connection_forwards_none_on_exception() -> None:
+    """Factory release must pass (None, None, None) to the inner driver context."""
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
+    factory = _PsqlpySessionFactory(config)
+    inner_ctx = _RecordingAsyncContext()
+    factory._ctx = inner_ctx
+
+    conn = AsyncMock()
+    exc = ValueError("forwarded failure")
+    await factory.release_connection(conn, exc_type=ValueError, exc_val=exc, exc_tb=None)
+
+    conn.execute.assert_awaited_once_with("ROLLBACK")
+    assert inner_ctx.recorded_exit_args == (None, None, None)
+    assert factory._ctx is None
+
+
+@pytest.mark.anyio
+async def test_psqlpy_connection_context_aexit_executes_rollback_on_exception() -> None:
+    """PsqlpyConnectionContext.__aexit__ must execute ROLLBACK on exception and suppress rollback errors."""
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
+    context = PsqlpyConnectionContext(config)
+    inner_ctx = _RecordingAsyncContext()
+    conn = AsyncMock()
+    conn.execute.side_effect = RuntimeError("connection lost")
+    context._ctx = inner_ctx
+    context._connection = conn
+
+    exc = ValueError("raw begin aborted")
+    result = await context.__aexit__(ValueError, exc, None)
+
+    assert result is None
+    conn.execute.assert_awaited_once_with("ROLLBACK")
+    assert context._connection is None
+    assert inner_ctx.recorded_exit_args == (None, None, None)
+    assert context._ctx is None
+
+    clean_context = PsqlpyConnectionContext(config)
+    clean_inner_ctx = _RecordingAsyncContext()
+    clean_conn = AsyncMock()
+    clean_context._ctx = clean_inner_ctx
+    clean_context._connection = clean_conn
+
+    await clean_context.__aexit__(None, None, None)
+
+    clean_conn.execute.assert_not_awaited()
+    assert clean_context._connection is None
+    assert clean_inner_ctx.recorded_exit_args == (None, None, None)
+
+
+@pytest.mark.anyio
+async def test_psqlpy_session_factory_release_connection_skips_rollback_on_clean_exit() -> None:
+    """_PsqlpySessionFactory.release_connection skips ROLLBACK on clean exit and suppresses rollback errors."""
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
+    factory = _PsqlpySessionFactory(config)
+    inner_ctx = _RecordingAsyncContext()
+    factory._ctx = inner_ctx
+    conn = AsyncMock()
+
+    await factory.release_connection(conn, exc_type=None, exc_val=None, exc_tb=None)
+
+    conn.execute.assert_not_awaited()
+    assert inner_ctx.recorded_exit_args == (None, None, None)
+
+    failing_conn = AsyncMock()
+    failing_conn.execute.side_effect = RuntimeError("socket closed")
+    err_ctx = _RecordingAsyncContext()
+    factory._ctx = err_ctx
+
+    await factory.release_connection(failing_conn, exc_type=RuntimeError, exc_val=RuntimeError("boom"), exc_tb=None)
+
+    failing_conn.execute.assert_awaited_once_with("ROLLBACK")
+    assert err_ctx.recorded_exit_args == (None, None, None)
+    assert factory._ctx is None

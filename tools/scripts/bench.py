@@ -28,7 +28,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from sqlspec import ObservabilityConfig, SQLSpec
+from sqlspec import ObservabilityConfig, ParameterDeclaration, SQLFileLoader, SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.utils.schema import _convert_numpy_recursive, to_schema, transform_dict_keys
@@ -98,6 +98,7 @@ __all__ = (
     "raw_spanner_strings",
     "raw_sqlite_complex_parameters",
     "raw_sqlite_complex_query",
+    "raw_sqlite_declared_parameters",
     "raw_sqlite_dict_key_transform",
     "raw_sqlite_initialization",
     "raw_sqlite_iterative_inserts",
@@ -203,6 +204,7 @@ __all__ = (
     "sqlspec_spanner_strings",
     "sqlspec_sqlite_complex_parameters",
     "sqlspec_sqlite_complex_query",
+    "sqlspec_sqlite_declared_parameters",
     "sqlspec_sqlite_dict_key_transform",
     "sqlspec_sqlite_initialization",
     "sqlspec_sqlite_iterative_inserts",
@@ -221,6 +223,8 @@ __all__ = (
 _leaked_pools: list[str] = []
 
 ROWS_TO_INSERT = 10_000
+
+DECLARED_TABLE_ROWS = 7000
 
 POOL_SIZE = 1
 
@@ -258,6 +262,17 @@ POSTGRES_DSN_ENV = "SQLSPEC_BENCH_POSTGRES_DSN"
 
 COCKROACH_DSN_ENV = "SQLSPEC_BENCH_COCKROACH_DSN"
 
+BENCH_DRIVER_PACKAGES = (
+    "adbc-driver-manager",
+    "aiosqlite",
+    "asyncmy",
+    "asyncpg",
+    "duckdb",
+    "oracledb",
+    "psqlpy",
+    "psycopg",
+)
+
 HOT_PATH_EXTENDED_SCENARIOS = (
     ("raw", "scalar_param_select"),
     ("sqlspec", "scalar_param_select"),
@@ -282,6 +297,8 @@ SQLITE_EXTENDED_SCENARIOS = (
     ("sqlspec", "thin_path_stress"),
     ("raw", "schema_type_numpy"),
     ("sqlspec", "schema_type_numpy"),
+    ("raw", "declared_parameters"),
+    ("sqlspec", "declared_parameters"),
     *HOT_PATH_EXTENDED_SCENARIOS,
 )
 
@@ -1466,6 +1483,50 @@ def sqlalchemy_sqlite_repeated_queries() -> None:
             for i in range(ROWS_TO_INSERT):
                 result = conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"})
                 result.fetchone()
+
+
+def raw_sqlite_declared_parameters() -> None:
+    """Repeated single-row named-parameter queries using raw sqlite3."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        try:
+            _optimize_raw_sqlite(conn)
+            conn.execute(CREATE_TEST_TABLE)
+            conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(DECLARED_TABLE_ROWS)])
+            conn.commit()
+            for i in range(ROWS_TO_INSERT):
+                expected = f"value_{i % DECLARED_TABLE_ROWS}"
+                cursor = conn.execute(SELECT_BY_VALUE_SQLA, {"value": expected})
+                try:
+                    row = cursor.fetchone()
+                    assert row is not None
+                    assert row[0] == expected
+                finally:
+                    cursor.close()
+        finally:
+            conn.close()
+
+
+def sqlspec_sqlite_declared_parameters() -> None:
+    """Repeated single-row queries through a loader-declared SQL object."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(connection_config={"database": tmp.name})
+        loader = SQLFileLoader()
+        loader.add_named_sql("select_by_value", SELECT_BY_VALUE_SQLA, parameters=[ParameterDeclaration("value", "str")])
+        declared_sql = loader.get_sql("select_by_value")
+        try:
+            with spec.provide_session(config) as session:
+                session.execute(CREATE_TEST_TABLE)
+                data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(DECLARED_TABLE_ROWS)]
+                session.execute_many(INSERT_TEST_VALUE, data)
+                for i in range(ROWS_TO_INSERT):
+                    expected = f"value_{i % DECLARED_TABLE_ROWS}"
+                    row = session.fetch_one_or_none(declared_sql, value=expected)
+                    assert row is not None
+                    assert row["value"] == expected
+        finally:
+            config.close_pool()
 
 
 async def raw_aiosqlite_initialization() -> None:
@@ -3179,14 +3240,28 @@ def _driver_has_core_scenarios(driver: str) -> bool:
 
 
 def _collect_environment_metadata() -> dict[str, Any]:
-    """Collect Python, platform, and key package versions for benchmark reproducibility."""
+    """Collect Python, platform, driver, and key package versions for benchmark reproducibility."""
     packages: dict[str, str | None] = {}
     for pkg_name in ("duckdb", "sqlglot", "aiosqlite", "pyarrow", "sqlspec"):
         try:
             packages[pkg_name] = importlib.metadata.version(pkg_name)
         except importlib.metadata.PackageNotFoundError:
             packages[pkg_name] = None
-    return {"python_version": platform.python_version(), "platform": platform.platform(), "packages": packages}
+    driver_versions: dict[str, str | None] = {}
+    for pkg_name in BENCH_DRIVER_PACKAGES:
+        try:
+            driver_versions[pkg_name] = importlib.metadata.version(pkg_name)
+        except importlib.metadata.PackageNotFoundError:
+            driver_versions[pkg_name] = None
+    return {
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "packages": packages,
+        "cpu_count": os.cpu_count(),
+        "sqlglot_version": packages["sqlglot"],
+        "driver_versions": {"sqlite3": sqlite3.sqlite_version, **driver_versions},
+        "service_id": os.environ.get("SQLSPEC_BENCH_SERVICE_ID"),
+    }
 
 
 def _write_json_results(
@@ -4582,6 +4657,8 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec", "sqlite", "complex_parameters"): sqlspec_sqlite_complex_parameters,
     ("raw", "sqlite", "thin_path_stress"): raw_sqlite_thin_path_stress,
     ("sqlspec", "sqlite", "thin_path_stress"): sqlspec_sqlite_thin_path_stress,
+    ("raw", "sqlite", "declared_parameters"): raw_sqlite_declared_parameters,
+    ("sqlspec", "sqlite", "declared_parameters"): sqlspec_sqlite_declared_parameters,
     ("raw", "sqlite", "scalar_param_select"): raw_sqlite_scalar_param_select,
     ("sqlspec", "sqlite", "scalar_param_select"): sqlspec_sqlite_scalar_param_select,
     ("raw", "sqlite", "no_param_select"): raw_sqlite_no_param_select,

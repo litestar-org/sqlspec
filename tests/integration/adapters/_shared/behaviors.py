@@ -6850,6 +6850,99 @@ async def assert_async_storage_bridge_local_contract(driver: object, case: Drive
     await dispatch_async_extra_assertions(driver, case, STORAGE_BRIDGE_SCOPE)
 
 
+_SELECT_TO_STORAGE_ROWS = (
+    ContractRow("excluded", 0, "skip"),
+    ContractRow("alpha", 1, "first"),
+    ContractRow("beta", 2, None),
+    ContractRow("gamma", 3, "third"),
+    ContractRow("delta", 4, "fourth"),
+    ContractRow("epsilon", 5, "fifth"),
+)
+_SELECT_TO_STORAGE_EXPECTED = [
+    {"name": "alpha", "value": 1, "note": "first"},
+    {"name": "beta", "value": 2, "note": None},
+    {"name": "gamma", "value": 3, "note": "third"},
+    {"name": "delta", "value": 4, "note": "fourth"},
+    {"name": "epsilon", "value": 5, "note": "fifth"},
+]
+
+
+def _supports_arrow_export(driver: object, case: DriverCase) -> bool:
+    if not callable(getattr(driver, "select_to_storage", None)):
+        return False
+    if case.supports_storage_bridge:
+        return True
+    features = getattr(driver, "driver_features", None)
+    if not isinstance(features, dict):
+        return False
+    capabilities = features.get("storage_capabilities")
+    return isinstance(capabilities, dict) and bool(capabilities.get("arrow_export_enabled"))
+
+
+def _assert_decoded_select_to_storage_files(case: DriverCase, multi_path: Any, empty_path: Any) -> None:
+    import pyarrow.parquet as pq
+
+    multi_table = pq.read_table(multi_path)
+    assert multi_table.column_names == ["name", "value", "note"]
+    decoded_rows = [
+        {"name": row["name"], "value": int(row["value"]), "note": row["note"]} for row in multi_table.to_pylist()
+    ]
+    assert decoded_rows == _SELECT_TO_STORAGE_EXPECTED
+
+    empty_table = pq.read_table(empty_path)
+    assert empty_table.num_rows == 0
+    expected_empty_columns = (
+        [] if case.adapter in {"asyncpg", "cockroach_asyncpg", "psqlpy"} else ["name", "value", "note"]
+    )
+    assert empty_table.column_names == expected_empty_columns
+
+
+def assert_sync_select_to_storage_local_contract(driver: object, case: DriverCase, tmp_path: Any) -> None:
+    """Assert sync drivers stream multi-chunk and empty parameterized queries to local Parquet."""
+    if not _supports_arrow_export(driver, case):
+        pytest.skip(f"{case.adapter} has no Arrow export capability")
+    sync_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    _seed_sync(sync_driver, _SELECT_TO_STORAGE_ROWS, table, case)
+
+    multi_destination = str(tmp_path / f"{case.id}_multi.parquet")
+    multi_query = f"SELECT name, value, note FROM {table.name} WHERE name <> ? ORDER BY value"
+    multi_job = sync_driver.select_to_storage(
+        multi_query, multi_destination, ("excluded",), format_hint="parquet", batch_size=2
+    )
+    assert multi_job.telemetry["rows_processed"] == 5
+
+    empty_destination = str(tmp_path / f"{case.id}_empty.parquet")
+    empty_job = sync_driver.select_to_storage(
+        table.select_by_name_qmark_sql, empty_destination, ("missing",), format_hint="parquet", batch_size=2
+    )
+    assert empty_job.telemetry["rows_processed"] == 0
+    _assert_decoded_select_to_storage_files(case, multi_destination, empty_destination)
+
+
+async def assert_async_select_to_storage_local_contract(driver: object, case: DriverCase, tmp_path: Any) -> None:
+    """Assert async drivers stream multi-chunk and empty parameterized queries to local Parquet."""
+    if not _supports_arrow_export(driver, case):
+        pytest.skip(f"{case.adapter} has no Arrow export capability")
+    async_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await _seed_async(async_driver, _SELECT_TO_STORAGE_ROWS, table, case)
+
+    multi_destination = str(tmp_path / f"{case.id}_multi.parquet")
+    multi_query = f"SELECT name, value, note FROM {table.name} WHERE name <> ? ORDER BY value"
+    multi_job = await async_driver.select_to_storage(
+        multi_query, multi_destination, ("excluded",), format_hint="parquet", batch_size=2
+    )
+    assert multi_job.telemetry["rows_processed"] == 5
+
+    empty_destination = str(tmp_path / f"{case.id}_empty.parquet")
+    empty_job = await async_driver.select_to_storage(
+        table.select_by_name_qmark_sql, empty_destination, ("missing",), format_hint="parquet", batch_size=2
+    )
+    assert empty_job.telemetry["rows_processed"] == 0
+    _assert_decoded_select_to_storage_files(case, multi_destination, empty_destination)
+
+
 async def _mysql_decimal_storage_bridge(driver: object, case: DriverCase) -> None:
     """Fold MySQL DECIMAL fidelity for parquet load_from_storage."""
     from pathlib import Path

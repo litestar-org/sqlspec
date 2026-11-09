@@ -4,7 +4,7 @@ from collections.abc import Sized
 from contextlib import AsyncExitStack, ExitStack, suppress
 from itertools import chain
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Literal, LiteralString, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, LiteralString, cast
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
@@ -489,7 +489,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
-        return SyncRowStream(PsycopgSyncStreamSource(self, sql, prepared_parameters, chunk_size))
+        return SyncRowStream(
+            PsycopgSyncStreamSource(
+                self, sql, prepared_parameters, chunk_size, column_types_resolver=_resolve_column_types
+            )
+        )
 
     def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -528,7 +532,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Execute a query and stream Arrow results to storage (sync)."""
 
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
@@ -1069,7 +1073,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
-        return AsyncRowStream(PsycopgAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
+        return AsyncRowStream(
+            PsycopgAsyncStreamSource(
+                self, sql, prepared_parameters, chunk_size, column_types_resolver=_resolve_column_types
+            )
+        )
 
     def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -1110,7 +1118,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Execute a query and stream Arrow data to storage asynchronously."""
 
         self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = await self._select_for_storage(
+            statement, *parameters, statement_config=statement_config, **kwargs
+        )
         async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
@@ -1376,6 +1386,23 @@ def _stack_pipeline_sync_error(adapter: str, cause: "Exception") -> "StackExecut
 register_driver_profile("psycopg", driver_profile)
 
 
+_PSYCOPG_NUMERIC_OID: Final[int] = 1700
+_DECIMAL_MAX_PRECISION: Final[int] = 76
+
+
+def _numeric_token(col: Any) -> str:
+    """Resolve a psycopg numeric column descriptor to an exact or fallback decimal token."""
+    precision = getattr(col, "precision", None)
+    scale = getattr(col, "scale", None)
+    if isinstance(precision, bool) or not isinstance(precision, int):
+        return "decimal"
+    if isinstance(scale, bool) or not isinstance(scale, int):
+        return "decimal"
+    if 1 <= precision <= _DECIMAL_MAX_PRECISION and 0 <= scale <= precision:
+        return f"decimal({precision},{scale})"
+    return "decimal"
+
+
 def _resolve_column_types(description: Any) -> "dict[str, str] | None":
     """Map psycopg cursor column OIDs to neutral Arrow type tokens.
 
@@ -1387,7 +1414,10 @@ def _resolve_column_types(description: Any) -> "dict[str, str] | None":
         return None
     column_types: dict[str, str] = {}
     for col in description:
-        token = _PSYCOPG_OID_TOKENS.get(col.type_code)
-        if token is not None:
-            column_types[col.name] = token
+        if col.type_code == _PSYCOPG_NUMERIC_OID:
+            column_types[col.name] = _numeric_token(col)
+        else:
+            token = _PSYCOPG_OID_TOKENS.get(col.type_code)
+            if token is not None:
+                column_types[col.name] = token
     return column_types or None

@@ -4,9 +4,12 @@ Implements the ObjectStoreProtocol using obstore for S3, GCS, Azure,
 and local file storage.
 """
 
+import asyncio
 import contextlib
-import re
+import inspect
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
@@ -15,8 +18,15 @@ from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import StorageOperationFailedError, StoragePathTraversalError
-from sqlspec.storage._arrow_payload import resolve_parquet_use_dictionary
+from sqlspec.exceptions import StorageCapabilityError, StorageOperationFailedError, StoragePathTraversalError
+from sqlspec.storage._arrow_payload import (
+    StorageFormat,
+    encode_arrow_payload,
+    encode_arrow_to_async_sink,
+    encode_arrow_to_sink,
+    join_shielded,
+    validate_arrow_write_options,
+)
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
     ensure_path_within_root,
@@ -40,11 +50,13 @@ if TYPE_CHECKING:
     from obstore import Bytes
     from obstore.store import ObjectStore
 
+    from sqlspec.protocols import AsyncWritableBytesSink, WritableBytesSink
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
-from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
+from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
 from sqlspec.utils.module_loader import ensure_obstore
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.uuids import uuid4
 
 _MAX_SIGN_EXPIRES_SECONDS: Final[int] = 604800
 _SIGNABLE_PROTOCOLS: Final[frozenset[str]] = frozenset({"s3", "gs", "gcs", "az", "azure"})
@@ -56,6 +68,36 @@ _SUPPORTED_WRITE_KWARGS: Final[frozenset[str]] = frozenset({
     "chunk_size",
     "max_concurrency",
 })
+_DIRECT_ARROW_FORMATS: Final[frozenset[str]] = frozenset({"parquet", "arrow-ipc", "csv"})
+_SUPPORTED_WRITER_KWARGS: Final[frozenset[str]] = frozenset({
+    "attributes",
+    "tags",
+    "mode",
+    "buffer_size",
+    "chunk_size",
+    "max_concurrency",
+})
+_OBSTORE_ARROW_STORE_KWARGS: Final[frozenset[str]] = frozenset({
+    "attributes",
+    "tags",
+    "mode",
+    "use_multipart",
+    "buffer_size",
+    "chunk_size",
+    "max_concurrency",
+})
+_STAGE_PREFIX: Final[str] = ".sqlspec-stage-"
+_ATOMIC_COPY_CREATE_PROTOCOLS: Final[frozenset[str]] = frozenset({
+    "memory",
+    "file",
+    "gs",
+    "gcs",
+    "az",
+    "azure",
+    "abfs",
+    "abfss",
+})
+_S3_PROTOCOLS: Final[frozenset[str]] = frozenset({"s3", "s3a"})
 
 __all__ = ("ObStoreBackend",)
 
@@ -423,18 +465,243 @@ class ObStoreBackend:
         )
         return result
 
-    def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write Arrow table using obstore synchronously."""
+    def _supports_atomic_copy_create(self) -> bool:
+        """Return whether the underlying store supports atomic conditional copy (overwrite=False)."""
+        if self.protocol in _ATOMIC_COPY_CREATE_PROTOCOLS:
+            return True
+        if self.protocol in _S3_PROTOCOLS:
+            store_config = getattr(self.store, "config", None)
+            has_store_setting = (
+                bool(store_config.get("copy_if_not_exists")) if isinstance(store_config, dict) else False
+            )
+            return has_store_setting or bool(os.environ.get("AWS_COPY_IF_NOT_EXISTS"))
+        return False
+
+    def _can_stream_create_only(self, kwargs: "dict[str, Any]") -> bool:
+        """Return whether create-only streaming can preserve the requested options on this store."""
+        if not self._supports_atomic_copy_create():
+            return False
+        return not (
+            self.protocol in _S3_PROTOCOLS and (kwargs.get("attributes") is not None or kwargs.get("tags") is not None)
+        )
+
+    def _prepare_create_only_stream_options(self, overwrite: bool, kwargs: "dict[str, Any]") -> "dict[str, Any]":
+        """Validate create-only stream options and resolve options for the staged inner writer."""
+        if kwargs:
+            unsupported = sorted(k for k in kwargs if k not in _SUPPORTED_WRITER_KWARGS)
+            if unsupported:
+                names = ", ".join(unsupported)
+                msg = f"Unsupported write stream keyword argument(s) for ObStoreBackend: {names}"
+                raise TypeError(msg)
+        mode = kwargs.get("mode")
+        if not overwrite and mode is not None and mode != "create":
+            msg = f"Conflicting write options: overwrite=False requires mode='create', got mode={mode!r}"
+            raise ValueError(msg)
+        if not self._supports_atomic_copy_create():
+            msg = "Direct write streams do not support overwrite=False for this store"
+            raise StorageCapabilityError(msg, capability="overwrite_false_stream")
+        if self.protocol in _S3_PROTOCOLS and (kwargs.get("attributes") is not None or kwargs.get("tags") is not None):
+            msg = "Direct create-only write streams on S3 do not preserve attributes or tags"
+            raise StorageCapabilityError(msg, capability="overwrite_false_stream")
+        stage_kwargs = {k: v for k, v in kwargs.items() if k != "mode"}
+        return _resolve_obstore_writer_options(True, stage_kwargs)
+
+    def supports_direct_arrow_write(self, file_format: "StorageFormat", *, overwrite: bool = True) -> bool:
+        """Return whether ObStoreBackend can stream the given Arrow format directly.
+
+        Args:
+            file_format: Target Arrow serialization format.
+            overwrite: Whether replacing an existing destination object is permitted.
+
+        Returns:
+            True when file_format is parquet, arrow-ipc, or csv and either overwrite is True
+            or the store supports atomic conditional copy for staged create-only streams.
+        """
+        return file_format in _DIRECT_ARROW_FORMATS and (bool(overwrite) or self._supports_atomic_copy_create())
+
+    def open_write_stream_sync(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> "AbstractContextManager[WritableBytesSink]":
+        """Open a synchronous multipart byte sink that aborts on unhandled exceptions.
+
+        Args:
+            path: Destination object path relative to the store or base path.
+            overwrite: Whether an existing destination may be overwritten.
+            **kwargs: Optional writer settings (attributes, tags, buffer_size,
+                chunk_size, max_concurrency, mode).
+
+        Returns:
+            Context manager entering a writable byte sink backed by obstore.open_writer.
+
+        Raises:
+            StoragePathTraversalError: If path escapes the store root.
+            StorageCapabilityError: If overwrite=False is unsupported on the store or options.
+            TypeError: If unsupported keyword arguments are supplied.
+            ValueError: If writer options conflict or specify non-positive buffer sizes.
+        """
+        resolved_path = self._resolve_path(path)
+        log_fields = {"protocol": self.protocol, "operation": "write_stream", "mode": "sync"}
+        if not overwrite or kwargs.get("mode") == "create":
+            writer_options = self._prepare_create_only_stream_options(overwrite, kwargs)
+            stage = _obstore_stage_key(resolved_path)
+            return _ObstoreStagedCreateStream(
+                self.store, stage, resolved_path, writer_options, backend_type=self.backend_type, log_fields=log_fields
+            )
+        writer_options = _resolve_obstore_writer_options(overwrite, kwargs)
+        return _ObstoreWriteStream(
+            self.store, resolved_path, writer_options, backend_type=self.backend_type, log_fields=log_fields
+        )
+
+    def open_write_stream_async(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[AsyncWritableBytesSink]":
+        """Open an asynchronous multipart byte sink with shielded abort on error or cancellation.
+
+        Args:
+            path: Destination object path relative to the store or base path.
+            overwrite: Whether an existing destination may be overwritten.
+            **kwargs: Optional writer settings (attributes, tags, buffer_size,
+                chunk_size, max_concurrency, mode).
+
+        Returns:
+            Async context manager entering a byte sink backed by obstore.open_writer_async.
+
+        Raises:
+            StoragePathTraversalError: If path escapes the store root.
+            StorageCapabilityError: If overwrite=False is unsupported on the store or options.
+            TypeError: If unsupported keyword arguments are supplied.
+            ValueError: If writer options conflict or specify non-positive buffer sizes.
+        """
+        resolved_path = self._resolve_path(path)
+        log_fields = {"protocol": self.protocol, "operation": "write_stream", "mode": "async"}
+        if not overwrite or kwargs.get("mode") == "create":
+            writer_options = self._prepare_create_only_stream_options(overwrite, kwargs)
+            stage = _obstore_stage_key(resolved_path)
+            return _AsyncObstoreStagedCreateStream(
+                self.store, stage, resolved_path, writer_options, backend_type=self.backend_type, log_fields=log_fields
+            )
+        writer_options = _resolve_obstore_writer_options(overwrite, kwargs)
+        return _AsyncObstoreWriteStream(
+            self.store, resolved_path, writer_options, backend_type=self.backend_type, log_fields=log_fields
+        )
+
+    def write_arrow_sync(
+        self, path: "str | Path", table: "ArrowTable", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
+        """Write an Arrow table via direct streaming or atomic buffered put when overwrite is False.
+
+        Args:
+            path: Destination object path relative to the store or base path.
+            table: Arrow table to serialize and write.
+            overwrite: Whether to overwrite an existing object or enforce atomic create.
+            **kwargs: Format hint, compression, PyArrow writer options, and ObStore options.
+        """
         import_pyarrow()
-        import_pyarrow_parquet()
         resolved_path = self._resolve_path(path)
 
-        execute_sync_storage_operation(
-            partial(self._stream_parquet_sync, resolved_path, table, **kwargs),
-            backend=self.backend_type,
-            operation="write_arrow",
-            path=resolved_path,
-        )
+        format_hint: StorageFormat = kwargs.pop("format_hint", "parquet")
+        if format_hint == "parquet":
+            import_pyarrow_parquet()
+        if format_hint not in _DIRECT_ARROW_FORMATS:
+            msg = f"Arrow storage writes support only Parquet, Arrow IPC, and CSV formats, got {format_hint!r}"
+            raise StorageCapabilityError(
+                msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
+            )
+
+        write_options_arg = kwargs.pop("write_options", None)
+        merged_write_options: dict[str, Any] = dict(write_options_arg) if write_options_arg else {}
+        store_kwargs: dict[str, Any] = {}
+        has_compression_in_kwargs = "compression" in kwargs
+        compression_arg = kwargs.pop("compression", None)
+
+        for key, value in list(kwargs.items()):
+            if key in _OBSTORE_ARROW_STORE_KWARGS:
+                store_kwargs[key] = value
+            else:
+                merged_write_options[key] = value
+
+        if has_compression_in_kwargs:
+            compression = compression_arg
+        elif "compression" in merged_write_options:
+            compression = merged_write_options.get("compression")
+        elif format_hint == "parquet":
+            compression = "snappy"
+        else:
+            compression = None
+
+        validate_arrow_write_options(format_hint, merged_write_options)
+
+        is_create_only = (not overwrite) or (store_kwargs.get("mode") == "create")
+        if not is_create_only:
+            store_kwargs.pop("use_multipart", None)
+            writer_options = _resolve_obstore_writer_options(overwrite, store_kwargs)
+
+            def _do_stream_write() -> None:
+                with _ObstoreWriteStream(
+                    self.store, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
+                ) as sink:
+                    encode_arrow_to_sink(
+                        table,
+                        sink,
+                        format_hint=format_hint,
+                        compression=compression,
+                        write_options=merged_write_options,
+                    )
+
+            execute_sync_storage_operation(
+                _do_stream_write, backend=self.backend_type, operation="write_arrow", path=resolved_path
+            )
+        elif self._can_stream_create_only(store_kwargs):
+            explicit_mode = store_kwargs.get("mode")
+            if not overwrite and explicit_mode is not None and explicit_mode != "create":
+                msg = f"Conflicting write options: overwrite=False requires mode='create', got mode={explicit_mode!r}"
+                raise ValueError(msg)
+            stage_store_kwargs = {k: v for k, v in store_kwargs.items() if k not in {"mode", "use_multipart"}}
+            writer_options = _resolve_obstore_writer_options(True, stage_store_kwargs)
+            stage = _obstore_stage_key(resolved_path)
+
+            def _do_staged_stream_write() -> None:
+                with _ObstoreStagedCreateStream(
+                    self.store, stage, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
+                ) as sink:
+                    encode_arrow_to_sink(
+                        table,
+                        sink,
+                        format_hint=format_hint,
+                        compression=compression,
+                        write_options=merged_write_options,
+                    )
+
+            execute_sync_storage_operation(
+                _do_staged_stream_write, backend=self.backend_type, operation="write_arrow", path=resolved_path
+            )
+        else:
+            buffer_size = store_kwargs.pop("buffer_size", None)
+            chunk_size = store_kwargs.get("chunk_size")
+            if buffer_size is not None and chunk_size is not None and buffer_size != chunk_size:
+                msg = f"Conflicting buffer sizes: buffer_size={buffer_size} and chunk_size={chunk_size}"
+                raise ValueError(msg)
+            if buffer_size is not None and buffer_size <= 0:
+                msg = f"buffer_size must be positive, got {buffer_size}"
+                raise ValueError(msg)
+            if chunk_size is not None and chunk_size <= 0:
+                msg = f"chunk_size must be positive, got {chunk_size}"
+                raise ValueError(msg)
+            if buffer_size is not None and chunk_size is None:
+                store_kwargs["chunk_size"] = buffer_size
+
+            put_options = _resolve_obstore_put_options(overwrite, store_kwargs)
+
+            def _do_buffered_write() -> None:
+                payload = encode_arrow_payload(
+                    table, format_hint, compression=compression, write_options=merged_write_options
+                )
+                self.store.put(resolved_path, payload, **put_options)
+
+            execute_sync_storage_operation(
+                _do_buffered_write, backend=self.backend_type, operation="write_arrow", path=resolved_path
+            )
+
         log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
@@ -751,22 +1018,126 @@ class ObStoreBackend:
         )
         return cast("ArrowTable", result)
 
-    async def write_arrow_async(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write Arrow table to storage asynchronously.
+    async def write_arrow_async(
+        self, path: "str | Path", table: "ArrowTable", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
+        """Write an Arrow table asynchronously via direct streaming or atomic buffered put_async.
 
-        Uses async_() with storage limiter to offload blocking PyArrow serialization
-        to thread pool, preventing event loop blocking.
+        Args:
+            path: Destination object path relative to the store or base path.
+            table: Arrow table to serialize and write.
+            overwrite: Whether to overwrite an existing object or enforce atomic create.
+            **kwargs: Format hint, compression, PyArrow writer options, and ObStore options.
         """
         import_pyarrow()
-        import_pyarrow_parquet()
         resolved_path = self._resolve_path(path)
 
-        await execute_async_storage_operation(
-            partial(async_(self._stream_parquet_sync), resolved_path, table, **kwargs),
-            backend=self.backend_type,
-            operation="write_arrow",
-            path=resolved_path,
-        )
+        format_hint: StorageFormat = kwargs.pop("format_hint", "parquet")
+        if format_hint == "parquet":
+            import_pyarrow_parquet()
+        if format_hint not in _DIRECT_ARROW_FORMATS:
+            msg = f"Arrow storage writes support only Parquet, Arrow IPC, and CSV formats, got {format_hint!r}"
+            raise StorageCapabilityError(
+                msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
+            )
+
+        write_options_arg = kwargs.pop("write_options", None)
+        merged_write_options: dict[str, Any] = dict(write_options_arg) if write_options_arg else {}
+        store_kwargs: dict[str, Any] = {}
+        has_compression_in_kwargs = "compression" in kwargs
+        compression_arg = kwargs.pop("compression", None)
+
+        for key, value in list(kwargs.items()):
+            if key in _OBSTORE_ARROW_STORE_KWARGS:
+                store_kwargs[key] = value
+            else:
+                merged_write_options[key] = value
+
+        if has_compression_in_kwargs:
+            compression = compression_arg
+        elif "compression" in merged_write_options:
+            compression = merged_write_options.get("compression")
+        elif format_hint == "parquet":
+            compression = "snappy"
+        else:
+            compression = None
+
+        validate_arrow_write_options(format_hint, merged_write_options)
+
+        is_create_only = (not overwrite) or (store_kwargs.get("mode") == "create")
+        if not is_create_only:
+            store_kwargs.pop("use_multipart", None)
+            writer_options = _resolve_obstore_writer_options(overwrite, store_kwargs)
+
+            async def _do_stream_write_async() -> None:
+                async with _AsyncObstoreWriteStream(
+                    self.store, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
+                ) as sink:
+                    chunk_size = writer_options.get("buffer_size", 1048576)
+                    await encode_arrow_to_async_sink(
+                        table,
+                        sink,
+                        format_hint=format_hint,
+                        compression=compression,
+                        write_options=merged_write_options,
+                        chunk_size=chunk_size,
+                    )
+
+            await execute_async_storage_operation(
+                _do_stream_write_async, backend=self.backend_type, operation="write_arrow", path=resolved_path
+            )
+        elif self._can_stream_create_only(store_kwargs):
+            explicit_mode = store_kwargs.get("mode")
+            if not overwrite and explicit_mode is not None and explicit_mode != "create":
+                msg = f"Conflicting write options: overwrite=False requires mode='create', got mode={explicit_mode!r}"
+                raise ValueError(msg)
+            stage_store_kwargs = {k: v for k, v in store_kwargs.items() if k not in {"mode", "use_multipart"}}
+            writer_options = _resolve_obstore_writer_options(True, stage_store_kwargs)
+            stage = _obstore_stage_key(resolved_path)
+
+            async def _do_staged_stream_write_async() -> None:
+                async with _AsyncObstoreStagedCreateStream(
+                    self.store, stage, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
+                ) as sink:
+                    chunk_size = writer_options.get("buffer_size", 1048576)
+                    await encode_arrow_to_async_sink(
+                        table,
+                        sink,
+                        format_hint=format_hint,
+                        compression=compression,
+                        write_options=merged_write_options,
+                        chunk_size=chunk_size,
+                    )
+
+            await execute_async_storage_operation(
+                _do_staged_stream_write_async, backend=self.backend_type, operation="write_arrow", path=resolved_path
+            )
+        else:
+            buffer_size = store_kwargs.pop("buffer_size", None)
+            chunk_size = store_kwargs.get("chunk_size")
+            if buffer_size is not None and chunk_size is not None and buffer_size != chunk_size:
+                msg = f"Conflicting buffer sizes: buffer_size={buffer_size} and chunk_size={chunk_size}"
+                raise ValueError(msg)
+            if buffer_size is not None and buffer_size <= 0:
+                msg = f"buffer_size must be positive, got {buffer_size}"
+                raise ValueError(msg)
+            if chunk_size is not None and chunk_size <= 0:
+                msg = f"chunk_size must be positive, got {chunk_size}"
+                raise ValueError(msg)
+            if buffer_size is not None and chunk_size is None:
+                store_kwargs["chunk_size"] = buffer_size
+
+            put_options = _resolve_obstore_put_options(overwrite, store_kwargs)
+
+            async def _do_buffered_write_async() -> None:
+                payload = await async_(encode_arrow_payload)(
+                    table, format_hint, compression=compression, write_options=merged_write_options
+                )
+                await self.store.put_async(resolved_path, payload, **put_options)
+
+            await execute_async_storage_operation(
+                _do_buffered_write_async, backend=self.backend_type, operation="write_arrow", path=resolved_path
+            )
 
         log_storage_event(
             "storage.write",
@@ -938,64 +1309,6 @@ class ObStoreBackend:
             base_depth = resolved_prefix.rstrip("/").count("/") + (1 if resolved_prefix.strip("/") else 0)
             objects = [obj for obj in objects if obj.count("/") < base_depth]
         return sorted(objects)
-
-    def _stream_parquet_sync(self, resolved_path: str, table: "ArrowTable", **kwargs: Any) -> None:
-        """Serialize a table row group by row group into an obstore multipart writer.
-
-        Peak memory is bounded by one serialized row group plus the upload
-        buffer rather than the serialized size of the whole table. The writer
-        and the sink are closed only after every row group is written; a
-        failure leaves the multipart upload unfinished, and it is discarded
-        when the writer is released, so no partial object is published.
-
-        Args:
-            resolved_path: Store-relative destination key.
-            table: Table to serialize.
-            **kwargs: Options forwarded to ``pyarrow.parquet.ParquetWriter``;
-                ``row_group_size`` is forwarded to ``write_table``.
-        """
-        obs = import_obstore()
-
-        pa = import_pyarrow()
-        pq = import_pyarrow_parquet()
-        schema = table.schema
-        if any(str(f.type).startswith("decimal64") for f in schema):
-            new_fields = []
-            for field in schema:
-                if str(field.type).startswith("decimal64"):
-                    match = re.match(r"decimal64\((\d+),\s*(\d+)\)", str(field.type))
-                    if match:
-                        precision, scale = int(match.group(1)), int(match.group(2))
-                        new_fields.append(pa.field(field.name, pa.decimal128(precision, scale)))
-                    else:
-                        new_fields.append(field)
-                else:
-                    new_fields.append(field)
-            table = table.cast(pa.schema(new_fields))
-
-        row_group_size = kwargs.pop("row_group_size", None)
-        if "use_dictionary" not in kwargs:
-            kwargs["use_dictionary"] = resolve_parquet_use_dictionary(table.schema)
-        sink = obs.open_writer(self.store, resolved_path)
-        sink_adapter = _ObstoreSink(sink)
-        writer: Any = None
-        try:
-            writer = pq.ParquetWriter(pa.PythonFile(sink_adapter, mode="w"), table.schema, **kwargs)
-            writer.write_table(table, row_group_size=row_group_size)
-            writer.close()
-            sink_adapter.close()
-        except BaseException:
-            sink_adapter.abort()
-            if writer is not None:
-                with contextlib.suppress(Exception):
-                    writer.close()
-            if getattr(self, "_is_local_store", False):
-                with contextlib.suppress(Exception):
-                    sink.close()
-                if getattr(self, "_local_store_root", ""):
-                    with contextlib.suppress(Exception):
-                        (Path(self._local_store_root) / resolved_path).unlink(missing_ok=True)
-            raise
 
     def _prepare_sign_request(
         self, paths: "str | list[str]", expires_in: int, for_upload: bool
@@ -1181,37 +1494,401 @@ class _ObStoreFileProxy:
             self._reader.close()
 
 
-class _ObstoreSink:
-    """Adapt an obstore writer to the file-like surface ``pyarrow.PythonFile`` expects.
+def _resolve_obstore_writer_options(overwrite: bool, kwargs: "dict[str, Any]") -> "dict[str, Any]":
+    """Validate and normalize keyword arguments for obstore.open_writer and open_writer_async.
 
-    obstore exposes ``closed`` as a method; pyarrow reads it as an attribute.
+    Args:
+        overwrite: Whether overwriting existing destinations is allowed.
+        kwargs: Raw keyword arguments supplied to open_write_stream_*.
+
+    Returns:
+        Validated options dictionary suitable for open_writer and open_writer_async.
+
+    Raises:
+        TypeError: If unsupported keyword arguments are present.
+        ValueError: If mode conflicts with overwrite=False or buffer sizes conflict or are non-positive.
+        StorageCapabilityError: If overwrite is False or mode is 'create'.
     """
+    if kwargs:
+        unsupported = sorted(k for k in kwargs if k not in _SUPPORTED_WRITER_KWARGS)
+        if unsupported:
+            names = ", ".join(unsupported)
+            msg = f"Unsupported write stream keyword argument(s) for ObStoreBackend: {names}"
+            raise TypeError(msg)
 
-    __slots__ = ("_aborted", "_writer")
+    mode = kwargs.get("mode")
+    if not overwrite:
+        if mode is not None and mode != "create":
+            msg = f"Conflicting write options: overwrite=False requires mode='create', got mode={mode!r}"
+            raise ValueError(msg)
+        msg = "Direct write streams do not support overwrite=False"
+        raise StorageCapabilityError(msg, capability="overwrite_false_stream")
 
-    def __init__(self, writer: Any) -> None:
+    if mode == "create":
+        msg = "Direct write streams do not support mode='create'"
+        raise StorageCapabilityError(msg, capability="overwrite_false_stream")
+
+    buffer_size = kwargs.get("buffer_size")
+    chunk_size = kwargs.get("chunk_size")
+    if buffer_size is not None and chunk_size is not None and buffer_size != chunk_size:
+        msg = f"Conflicting buffer sizes: buffer_size={buffer_size} and chunk_size={chunk_size}"
+        raise ValueError(msg)
+    if buffer_size is not None and buffer_size <= 0:
+        msg = f"buffer_size must be positive, got {buffer_size}"
+        raise ValueError(msg)
+    if chunk_size is not None and chunk_size <= 0:
+        msg = f"chunk_size must be positive, got {chunk_size}"
+        raise ValueError(msg)
+
+    opts = dict(kwargs)
+    opts.pop("mode", None)
+    if chunk_size is not None and buffer_size is None:
+        opts["buffer_size"] = chunk_size
+    opts.pop("chunk_size", None)
+    return opts
+
+
+class _ObstoreWriteStream:
+    """Commit or abort one obstore multipart writer around a caller's write block."""
+
+    __slots__ = ("_backend_type", "_entered", "_log_fields", "_resolved_path", "_sink", "_store", "_writer_options")
+
+    def __init__(
+        self,
+        store: Any,
+        resolved_path: str,
+        writer_options: "dict[str, Any]",
+        *,
+        backend_type: str,
+        log_fields: "dict[str, Any] | None",
+    ) -> None:
+        self._store = store
+        self._resolved_path = resolved_path
+        self._writer_options = writer_options
+        self._backend_type = backend_type
+        self._log_fields = log_fields
+        self._entered: Any = None
+        self._sink: _ObstoreSink | None = None
+
+    def __enter__(self) -> "_ObstoreSink":
+        obs = import_obstore()
+        raw_writer = execute_sync_storage_operation(
+            partial(obs.open_writer, self._store, self._resolved_path, **self._writer_options),
+            backend=self._backend_type,
+            operation="open_write_stream",
+            path=self._resolved_path,
+        )
+        entered_writer = execute_sync_storage_operation(
+            raw_writer.__enter__, backend=self._backend_type, operation="open_write_stream", path=self._resolved_path
+        )
+        self._entered = entered_writer
+        sink = _ObstoreSink(entered_writer, backend=self._backend_type, path=self._resolved_path)
+        self._sink = sink
+        return sink
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        entered_writer = self._entered
+        sink = self._sink
+        if sink is not None:
+            sink._closed = True
+        if entered_writer is None:
+            return
+        if exc_type is None:
+            execute_sync_storage_operation(
+                partial(entered_writer.__exit__, None, None, None),
+                backend=self._backend_type,
+                operation="write_stream_close",
+                path=self._resolved_path,
+            )
+            if self._log_fields is not None:
+                log_storage_event(
+                    "storage.write", backend_type=self._backend_type, path=self._resolved_path, **self._log_fields
+                )
+        else:
+            with contextlib.suppress(Exception):
+                entered_writer.__exit__(exc_type, exc, traceback)
+
+
+class _AsyncObstoreWriteStream:
+    """Commit or abort one obstore async writer with shielded completion."""
+
+    __slots__ = ("_backend_type", "_entered", "_log_fields", "_resolved_path", "_sink", "_store", "_writer_options")
+
+    def __init__(
+        self,
+        store: Any,
+        resolved_path: str,
+        writer_options: "dict[str, Any]",
+        *,
+        backend_type: str,
+        log_fields: "dict[str, Any] | None",
+    ) -> None:
+        self._store = store
+        self._resolved_path = resolved_path
+        self._writer_options = writer_options
+        self._backend_type = backend_type
+        self._log_fields = log_fields
+        self._entered: Any = None
+        self._sink: _AsyncObstoreSink | None = None
+
+    async def __aenter__(self) -> "_AsyncObstoreSink":
+        obs = import_obstore()
+        raw_writer = execute_sync_storage_operation(
+            partial(obs.open_writer_async, self._store, self._resolved_path, **self._writer_options),
+            backend=self._backend_type,
+            operation="open_write_stream",
+            path=self._resolved_path,
+        )
+        entered_writer = await execute_async_storage_operation(
+            raw_writer.__aenter__, backend=self._backend_type, operation="open_write_stream", path=self._resolved_path
+        )
+        self._entered = entered_writer
+        sink = _AsyncObstoreSink(entered_writer, backend=self._backend_type, path=self._resolved_path)
+        self._sink = sink
+        return sink
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        entered_writer = self._entered
+        sink = self._sink
+        if sink is not None:
+            sink._closed = True
+        if entered_writer is None:
+            return
+        if exc_type is None:
+            exit_fut = entered_writer.__aexit__(None, None, None)
+            if inspect.isawaitable(exit_fut):
+                await execute_async_storage_operation(
+                    partial(join_shielded, asyncio.ensure_future(exit_fut)),
+                    backend=self._backend_type,
+                    operation="write_stream_close",
+                    path=self._resolved_path,
+                )
+            if self._log_fields is not None:
+                log_storage_event(
+                    "storage.write", backend_type=self._backend_type, path=self._resolved_path, **self._log_fields
+                )
+        else:
+            try:
+                exit_fut = entered_writer.__aexit__(exc_type, exc, traceback)
+                if inspect.isawaitable(exit_fut):
+                    await join_shielded(asyncio.ensure_future(exit_fut), suppress_result=True)
+            except Exception:
+                return
+
+
+def _obstore_stage_key(destination: str) -> str:
+    """Construct a hidden stage key in the destination's parent prefix."""
+    if "/" in destination:
+        parent, _ = destination.rsplit("/", 1)
+        return f"{parent}/{_STAGE_PREFIX}{uuid4().hex}" if parent else f"{_STAGE_PREFIX}{uuid4().hex}"
+    return f"{_STAGE_PREFIX}{uuid4().hex}"
+
+
+class _ObstoreStagedCreateStream:
+    """Stage a create-only obstore stream to a temporary key and publish via conditional copy."""
+
+    __slots__ = ("_backend_type", "_destination", "_inner", "_log_fields", "_stage", "_store")
+
+    def __init__(
+        self,
+        store: Any,
+        stage: str,
+        destination: str,
+        writer_options: "dict[str, Any]",
+        *,
+        backend_type: str,
+        log_fields: "dict[str, Any] | None",
+    ) -> None:
+        self._store = store
+        self._stage = stage
+        self._destination = destination
+        self._backend_type = backend_type
+        self._log_fields = log_fields
+        self._inner = _ObstoreWriteStream(store, stage, writer_options, backend_type=backend_type, log_fields=None)
+
+    def __enter__(self) -> "_ObstoreSink":
+        return self._inner.__enter__()
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if exc_type is not None:
+            self._inner.__exit__(exc_type, exc, traceback)
+            return
+        self._inner.__exit__(None, None, None)
+        obs = import_obstore()
+        try:
+            execute_sync_storage_operation(
+                partial(obs.copy, self._store, self._stage, self._destination, overwrite=False),
+                backend=self._backend_type,
+                operation="write_stream_close",
+                path=self._destination,
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                obs.delete(self._store, self._stage)
+        if self._log_fields is not None:
+            log_storage_event(
+                "storage.write", backend_type=self._backend_type, path=self._destination, **self._log_fields
+            )
+
+
+async def _delete_obstore_stage_async(store: Any, stage: str) -> None:
+    """Delete a temporary staged obstore object while suppressing cleanup errors."""
+    obs = import_obstore()
+    try:
+        del_coro = obs.delete_async(store, stage)
+        await join_shielded(asyncio.ensure_future(del_coro), suppress_result=True)
+    except Exception:
+        return
+
+
+class _AsyncObstoreStagedCreateStream:
+    """Asynchronously stage a create-only obstore stream and publish via shielded conditional copy."""
+
+    __slots__ = ("_backend_type", "_destination", "_inner", "_log_fields", "_stage", "_store")
+
+    def __init__(
+        self,
+        store: Any,
+        stage: str,
+        destination: str,
+        writer_options: "dict[str, Any]",
+        *,
+        backend_type: str,
+        log_fields: "dict[str, Any] | None",
+    ) -> None:
+        self._store = store
+        self._stage = stage
+        self._destination = destination
+        self._backend_type = backend_type
+        self._log_fields = log_fields
+        self._inner = _AsyncObstoreWriteStream(store, stage, writer_options, backend_type=backend_type, log_fields=None)
+
+    async def __aenter__(self) -> "_AsyncObstoreSink":
+        return await self._inner.__aenter__()
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if exc_type is not None:
+            await self._inner.__aexit__(exc_type, exc, traceback)
+            return
+        obs = import_obstore()
+        cancel_exc: asyncio.CancelledError | None = None
+        try:
+            await self._inner.__aexit__(None, None, None)
+        except asyncio.CancelledError as caught_cancel:
+            cancel_exc = caught_cancel
+        if cancel_exc is not None:
+            await _delete_obstore_stage_async(self._store, self._stage)
+            raise cancel_exc
+        pending_exc: BaseException | None = None
+        try:
+            copy_coro = obs.copy_async(self._store, self._stage, self._destination, overwrite=False)
+            await execute_async_storage_operation(
+                partial(join_shielded, asyncio.ensure_future(copy_coro)),
+                backend=self._backend_type,
+                operation="write_stream_close",
+                path=self._destination,
+            )
+        except BaseException as publish_exc:
+            pending_exc = publish_exc
+        await _delete_obstore_stage_async(self._store, self._stage)
+        if pending_exc is not None:
+            raise pending_exc
+        if self._log_fields is not None:
+            log_storage_event(
+                "storage.write", backend_type=self._backend_type, path=self._destination, **self._log_fields
+            )
+
+
+class _ObstoreSink:
+    """Adapt an obstore WritableFile to WritableBytesSink and pyarrow.PythonFile."""
+
+    __slots__ = ("_backend", "_closed", "_path", "_writer")
+
+    def __init__(self, writer: Any, *, backend: str = "obstore", path: str | None = None) -> None:
         self._writer = writer
-        self._aborted = False
+        self._backend = backend
+        self._path = path
+        self._closed = False
 
     @property
     def closed(self) -> bool:
-        return self._aborted or bool(self._writer.closed())
+        if self._closed:
+            return True
+        writer_closed = getattr(self._writer, "closed", None)
+        if callable(writer_closed):
+            return bool(writer_closed())
+        if writer_closed is not None:
+            return bool(writer_closed)
+        return False
 
-    def abort(self) -> None:
-        self._aborted = True
-        abort_fn = getattr(self._writer, "abort", None)
-        if callable(abort_fn):
-            with contextlib.suppress(Exception):
-                abort_fn()
-
-    def write(self, data: Any) -> int:
+    def write(self, data: Any, /) -> int:
+        if self._closed:
+            return 0
         payload = bytes(data) if isinstance(data, (bytearray, memoryview)) else data
-        return int(self._writer.write(payload))
+        if not payload:
+            return 0
+        return int(
+            execute_sync_storage_operation(
+                partial(self._writer.write, payload),
+                backend=self._backend,
+                operation="write_stream_write",
+                path=self._path,
+            )
+        )
 
     def flush(self) -> None:
-        if not self._aborted:
-            self._writer.flush()
+        if self._closed:
+            return
+        flush_fn = getattr(self._writer, "flush", None)
+        if callable(flush_fn):
+            execute_sync_storage_operation(
+                flush_fn, backend=self._backend, operation="write_stream_flush", path=self._path
+            )
 
     def close(self) -> None:
-        if not self._aborted:
-            self._writer.close()
+        self._closed = True
+
+
+class _AsyncObstoreSink:
+    """Adapt an obstore AsyncWritableFile to AsyncWritableBytesSink with storage error translation."""
+
+    __slots__ = ("_backend", "_closed", "_path", "_writer")
+
+    def __init__(self, writer: Any, *, backend: str = "obstore", path: str | None = None) -> None:
+        self._writer = writer
+        self._backend = backend
+        self._path = path
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    async def write(self, data: Any, /) -> int:
+        if self._closed:
+            return 0
+        payload = bytes(data) if isinstance(data, (bytearray, memoryview)) else data
+        if not payload:
+            return 0
+        try:
+            result = self._writer.write(payload)
+            if inspect.isawaitable(result):
+                result = await result
+            return int(result)
+        except Exception as error:
+            raise_storage_error(error, backend=self._backend, operation="write_stream_write", path=self._path)
+
+    async def flush(self) -> None:
+        if self._closed:
+            return
+        flush_fn = getattr(self._writer, "flush", None)
+        if callable(flush_fn):
+            try:
+                result = flush_fn()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as error:
+                raise_storage_error(error, backend=self._backend, operation="write_stream_flush", path=self._path)
+
+    async def close(self) -> None:
+        self._closed = True

@@ -10,6 +10,7 @@ Run with::
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -22,6 +23,9 @@ BenchmarkKey = tuple[str, str, str]
 
 HARD_METADATA_KEYS: tuple[str, ...] = ("rows", "pool_size", "mypyc_compiled")
 SOFT_METADATA_KEYS: tuple[str, ...] = ("iterations", "warmup", "environment")
+STRICT_METADATA_KEYS: tuple[str, ...] = ("iterations", "warmup")
+STRICT_ENVIRONMENT_KEYS: tuple[str, ...] = ("platform", "python_version", "cpu_count", "driver_versions", "service_id")
+GATE_IDENTITY_PARTS = 3
 
 __all__ = (
     "HARD_METADATA_KEYS",
@@ -330,8 +334,31 @@ def print_comparison_table(
 @click.option(
     "--print-run-args", is_flag=True, default=False, help="Print bench.py CLI flags matching BASELINE metadata and exit"
 )
+@click.option(
+    "--gate-identity",
+    "gate_identities",
+    multiple=True,
+    help="driver/library_key/scenario allowed to fail the run; repeatable",
+)
+@click.option(
+    "--max-gate-noise", type=float, default=None, help="Maximum noise_ratio for gated identities in either file"
+)
+@click.option(
+    "--strict-parity",
+    is_flag=True,
+    default=False,
+    help="Treat iterations, warmup and host, service and driver environment differences as hard mismatches",
+)
 def main(
-    baseline: str, current: str | None, threshold: float, mode: str, allow_metadata_mismatch: bool, print_run_args: bool
+    baseline: str,
+    current: str | None,
+    threshold: float,
+    mode: str,
+    allow_metadata_mismatch: bool,
+    print_run_args: bool,
+    gate_identities: tuple[str, ...] = (),
+    max_gate_noise: float | None = None,
+    strict_parity: bool = False,
 ) -> None:
     """Compare two benchmark result JSON files or print baseline run args.
 
@@ -340,6 +367,8 @@ def main(
 
     Both files should be produced by ``bench.py --json-output <file>``.
     """
+    gated = _validate_gate_options(gate_identities, max_gate_noise, strict_parity, allow_metadata_mismatch)
+
     baseline_data = _load_results(baseline)
     if print_run_args:
         click.echo(format_run_args(baseline_data))
@@ -349,20 +378,21 @@ def main(
         raise click.ClickException("Missing argument 'CURRENT'.")
 
     current_data = _load_results(current)
-    hard_mismatches, soft_warnings = validate_metadata_parity(baseline_data, current_data)
-
-    for warning in soft_warnings:
-        click.secho(f"Metadata warning: {warning}", fg="yellow")
-
-    if hard_mismatches:
-        for mismatch in hard_mismatches:
-            click.secho(f"Metadata mismatch: {mismatch}", fg="red")
-        if not allow_metadata_mismatch:
-            sys.exit(2)
+    _enforce_metadata_parity(
+        baseline_data, current_data, strict_parity=strict_parity, allow_metadata_mismatch=allow_metadata_mismatch
+    )
 
     print_comparison_table(baseline_data, current_data, threshold=threshold, mode=mode)
 
     baseline_lookup = _build_lookup(baseline_data)
+    current_lookup = _build_lookup(current_data)
+    if gated:
+        missing_gated = [key for key in sorted(gated) if key not in baseline_lookup or key not in current_lookup]
+        if missing_gated:
+            for key in missing_gated:
+                click.secho(f"Missing gated identity: {'/'.join(key)}", fg="red")
+            sys.exit(1)
+
     missing = _missing_required_scenarios(current_data, set(baseline_lookup))
     if missing:
         missing_text = ", ".join("/".join(key) for key in sorted(missing))
@@ -370,12 +400,188 @@ def main(
         sys.exit(1)
 
     rows = compute_comparison_rows(baseline_data, current_data, mode=mode, threshold=threshold)
-    regressions = sum(1 for row in rows if row["status_text"] == "REGRESSED")
+    regressions = _report_and_count_regressions(rows, gated, baseline_lookup, current_lookup)
+
+    noise_errors: list[str] = []
+    if max_gate_noise is not None:
+        noise_errors.extend(_gated_noise_errors(baseline_data, gated, max_gate_noise, "baseline"))
+        noise_errors.extend(_gated_noise_errors(current_data, gated, max_gate_noise, "current"))
+        for err in noise_errors:
+            click.secho(f"Gated noise error: {err}", fg="red")
 
     if regressions > 0:
         click.secho(f"\n{regressions} regression(s) detected (>{threshold}% slower).", fg="red")
+    if regressions > 0 or noise_errors:
         sys.exit(1)
     click.secho("\nNo regressions detected.", fg="green")
+
+
+def _validate_gate_options(
+    gate_identities: tuple[str, ...], max_gate_noise: float | None, strict_parity: bool, allow_metadata_mismatch: bool
+) -> set[BenchmarkKey]:
+    """Validate CLI gate options and return parsed gated benchmark identities."""
+    gated = _parse_gate_identities(gate_identities)
+    if max_gate_noise is not None:
+        if not gated:
+            msg = "--max-gate-noise requires at least one --gate-identity."
+            raise click.ClickException(msg)
+        if isinstance(max_gate_noise, bool) or not math.isfinite(max_gate_noise) or max_gate_noise < 0.0:
+            msg = f"--max-gate-noise must be a finite non-negative number, got {max_gate_noise!r}."
+            raise click.ClickException(msg)
+    if strict_parity and allow_metadata_mismatch:
+        msg = "--strict-parity cannot be combined with --allow-metadata-mismatch."
+        raise click.ClickException(msg)
+    return gated
+
+
+def _enforce_metadata_parity(
+    baseline_data: dict[str, Any], current_data: dict[str, Any], *, strict_parity: bool, allow_metadata_mismatch: bool
+) -> None:
+    """Print metadata warnings and exit 2 on unallowed hard or strict-parity mismatches."""
+    hard_mismatches, soft_warnings = validate_metadata_parity(baseline_data, current_data)
+    strict_mismatches = _strict_parity_mismatches(baseline_data, current_data) if strict_parity else []
+
+    for warning in soft_warnings:
+        click.secho(f"Metadata warning: {warning}", fg="yellow")
+
+    all_hard_mismatches = [*hard_mismatches, *strict_mismatches]
+    if all_hard_mismatches:
+        for mismatch in all_hard_mismatches:
+            click.secho(f"Metadata mismatch: {mismatch}", fg="red")
+        if strict_parity:
+            click.secho("Recapture the baseline and current run on one host and service.", fg="red")
+        if not allow_metadata_mismatch:
+            sys.exit(2)
+
+
+def _report_and_count_regressions(
+    rows: list[dict[str, Any]],
+    gated: set[BenchmarkKey],
+    baseline_lookup: dict[BenchmarkKey, dict[str, Any]],
+    current_lookup: dict[BenchmarkKey, dict[str, Any]],
+) -> int:
+    """Print gated summary and report-only regressions, returning blocking regression count."""
+    if not gated:
+        return sum(1 for row in rows if row["status_text"] == "REGRESSED")
+
+    rows_by_key = {(row["driver"], row["library_key"], row["scenario"]): row for row in rows}
+    for key in sorted(gated):
+        base_res = baseline_lookup.get(key)
+        curr_res = current_lookup.get(key)
+        comp_row = rows_by_key.get(key)
+        if base_res is not None and curr_res is not None and comp_row is not None:
+            pct_val = float(comp_row["pct_change"])
+            click.echo(
+                f"Gated {'/'.join(key)}: baseline noise {_format_noise_value(base_res.get('noise_ratio'))}, "
+                f"current noise {_format_noise_value(curr_res.get('noise_ratio'))}, delta {pct_val:+.1f}%"
+            )
+
+    regressions = 0
+    for row in rows:
+        if row["status_text"] != "REGRESSED":
+            continue
+        row_key = (row["driver"], row["library_key"], row["scenario"])
+        if row_key in gated:
+            regressions += 1
+        else:
+            pct_val = float(row["pct_change"])
+            click.secho(f"Report-only over threshold: {'/'.join(row_key)} ({pct_val:+.1f}%)", fg="yellow")
+    return regressions
+
+
+def _parse_gate_identities(values: tuple[str, ...]) -> set[BenchmarkKey]:
+    """Parse driver/library_key/scenario values, raising ClickException on a malformed value."""
+    parsed: set[BenchmarkKey] = set()
+    for raw_val in values:
+        parts = raw_val.split("/")
+        if len(parts) != GATE_IDENTITY_PARTS or any(not part or part.strip() != part for part in parts):
+            msg = f"Malformed --gate-identity {raw_val!r}; expected 'driver/library_key/scenario'."
+            raise click.ClickException(msg)
+        parsed.add((parts[0], parts[1], parts[2]))
+    return parsed
+
+
+def _gated_noise_errors(data: dict[str, Any], gated: set[BenchmarkKey], max_noise: float, label: str) -> list[str]:
+    """Return one message per gated row whose time or noise_ratio is invalid or above max_noise."""
+    lookup = _build_lookup(data)
+    errors: list[str] = []
+    for key in sorted(gated):
+        key_str = "/".join(key)
+        row = lookup.get(key)
+        if row is None:
+            errors.append(f"{label} {key_str}: missing gated row")
+            continue
+        time_val = row.get("time")
+        if (
+            isinstance(time_val, bool)
+            or not isinstance(time_val, int | float)
+            or not math.isfinite(time_val)
+            or float(time_val) <= 0.0
+        ):
+            errors.append(f"{label} {key_str}: invalid time {time_val!r}")
+        noise_val = row.get("noise_ratio")
+        if (
+            isinstance(noise_val, bool)
+            or not isinstance(noise_val, int | float)
+            or not math.isfinite(noise_val)
+            or float(noise_val) < 0.0
+        ):
+            errors.append(f"{label} {key_str}: invalid noise_ratio {noise_val!r}")
+        elif float(noise_val) > max_noise:
+            errors.append(
+                f"{label} {key_str}: noise_ratio {float(noise_val):.4f} exceeds max_gate_noise {max_noise:.4f}"
+            )
+    return errors
+
+
+def _strict_parity_mismatches(baseline: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    """Return one message per differing or absent iterations, warmup, or parity environment key."""
+    raw_base_meta = baseline.get("metadata")
+    raw_curr_meta = current.get("metadata")
+    base_meta = raw_base_meta if isinstance(raw_base_meta, dict) else {}
+    curr_meta = raw_curr_meta if isinstance(raw_curr_meta, dict) else {}
+
+    mismatches: list[str] = []
+    for key in STRICT_METADATA_KEYS:
+        if key not in base_meta or key not in curr_meta:
+            mismatches.append(
+                f"{key}: absent (baseline={'present' if key in base_meta else 'absent'}, "
+                f"current={'present' if key in curr_meta else 'absent'})"
+            )
+        elif not _values_strictly_equal(base_meta[key], curr_meta[key]):
+            mismatches.append(f"{key}: baseline={base_meta[key]!r} != current={curr_meta[key]!r}")
+
+    raw_base_env = base_meta.get("environment")
+    raw_curr_env = curr_meta.get("environment")
+    base_env = raw_base_env if isinstance(raw_base_env, dict) else {}
+    curr_env = raw_curr_env if isinstance(raw_curr_env, dict) else {}
+
+    for env_key in STRICT_ENVIRONMENT_KEYS:
+        if env_key not in base_env or env_key not in curr_env:
+            mismatches.append(
+                f"environment.{env_key}: absent (baseline={'present' if env_key in base_env else 'absent'}, "
+                f"current={'present' if env_key in curr_env else 'absent'})"
+            )
+        elif not _values_strictly_equal(base_env[env_key], curr_env[env_key]):
+            mismatches.append(f"environment.{env_key}: baseline={base_env[env_key]!r} != current={curr_env[env_key]!r}")
+
+    return mismatches
+
+
+def _values_strictly_equal(left: Any, right: Any) -> bool:
+    """Compare two metadata values while distinguishing bool from int."""
+    if isinstance(left, bool) != isinstance(right, bool):
+        return False
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(_values_strictly_equal(left[k], right[k]) for k in left)
+    return bool(left == right)
+
+
+def _format_noise_value(value: object) -> str:
+    """Format a gated row's noise_ratio for summary output."""
+    if not isinstance(value, bool) and isinstance(value, int | float) and math.isfinite(value):
+        return f"{float(value):.4f}"
+    return repr(value)
 
 
 def _load_results(path: str) -> dict[str, Any]:

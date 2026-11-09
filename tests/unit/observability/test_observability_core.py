@@ -125,6 +125,8 @@ class _FakeSpanManager:
 class _ArrowResultStub:
     def __init__(self) -> None:
         self.calls: list[tuple[Any, Any, Any, Any]] = []
+        self.data: Any = None
+        self.metadata: dict[str, Any] = {}
 
     def write_to_storage_sync(
         self, destination: Any, *, format_hint: Any = None, storage_options: Any = None, pipeline: Any = None

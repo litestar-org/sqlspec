@@ -4,24 +4,46 @@ A simple, zero-dependency implementation for local file operations.
 No external dependencies like fsspec or obstore required.
 """
 
+import asyncio
+import contextlib
+import errno
+import os
 import shutil
 from collections.abc import AsyncIterator, Iterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar, Final, Literal, cast, overload
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import FileNotFoundInStorageError, StoragePathTraversalError
+from sqlspec.exceptions import FileNotFoundInStorageError, StorageCapabilityError, StoragePathTraversalError
+from sqlspec.storage._arrow_payload import (
+    StorageFormat,
+    encode_arrow_to_async_sink,
+    encode_arrow_to_sink,
+    join_shielded,
+    validate_arrow_write_options,
+)
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import ensure_path_within_root, parse_file_uri_path, reject_parent_traversal
-from sqlspec.storage._utils import import_pyarrow_parquet
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, log_storage_event
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
-from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
+from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
+    from sqlspec.protocols import AsyncWritableBytesSink, WritableBytesSink
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
+
+_LOCAL_ARROW_FORMATS: Final[frozenset[str]] = frozenset({"parquet", "arrow-ipc", "csv"})
+_STAGE_PREFIX: Final[str] = ".sqlspec-stage-"
+_NO_HARD_LINK_ERRNOS: Final[frozenset[int]] = frozenset({
+    errno.EPERM,
+    getattr(errno, "ENOTSUP", errno.EPERM),
+    errno.ENOSYS,
+})
 
 __all__ = ("LocalStore",)
 
@@ -83,6 +105,63 @@ class LocalStore:
             Always False for local storage.
         """
         return False
+
+    def supports_direct_arrow_write(self, file_format: StorageFormat, *, overwrite: bool = True) -> bool:
+        """Return whether direct streaming Arrow writes are supported for the format and overwrite mode.
+
+        Args:
+            file_format: Target storage format.
+            overwrite: Whether existing files may be replaced.
+
+        Returns:
+            True for parquet, arrow-ipc, and csv regardless of overwrite mode.
+        """
+        _ = overwrite
+        return file_format in _LOCAL_ARROW_FORMATS
+
+    def open_write_stream_sync(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> "AbstractContextManager[WritableBytesSink]":
+        """Open a staged synchronous write stream that publishes atomically on clean exit.
+
+        Args:
+            path: Destination path relative to ``base_path``.
+            overwrite: Replace an existing destination when True, or enforce exclusive create when False.
+            **kwargs: Unsupported extra keyword arguments (rejected with ``TypeError``).
+
+        Returns:
+            Context manager yielding a writable byte sink.
+        """
+        _reject_unsupported_local_write_kwargs(kwargs)
+        destination = self._resolve_path(path)
+        return _LocalWriteStream(
+            destination,
+            overwrite=overwrite,
+            backend_type=self.backend_type,
+            log_fields={"protocol": self.protocol, "operation": "write_stream", "mode": "sync"},
+        )
+
+    def open_write_stream_async(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[AsyncWritableBytesSink]":
+        """Open a staged asynchronous write stream that publishes atomically under shielded completion.
+
+        Args:
+            path: Destination path relative to ``base_path``.
+            overwrite: Replace an existing destination when True, or enforce exclusive create when False.
+            **kwargs: Unsupported extra keyword arguments (rejected with ``TypeError``).
+
+        Returns:
+            Async context manager yielding an async writable byte sink.
+        """
+        _reject_unsupported_local_write_kwargs(kwargs)
+        destination = self._resolve_path(path)
+        return _AsyncLocalWriteStream(
+            destination,
+            overwrite=overwrite,
+            backend_type=self.backend_type,
+            log_fields={"protocol": self.protocol, "operation": "write_stream", "mode": "async"},
+        )
 
     def resolve_uri(self, path: "str | Path") -> str:
         """Resolve a backend-relative path to an absolute filesystem path.
@@ -288,15 +367,30 @@ class LocalStore:
             ),
         )
 
-    def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write Arrow table to file synchronously."""
-        pq = import_pyarrow_parquet()
+    def write_arrow_sync(
+        self, path: "str | Path", table: "ArrowTable", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
+        """Write Arrow table to file synchronously through an atomic stage file."""
+        format_hint, compression, merged_write_options = _prepare_local_arrow_write(kwargs)
         resolved = self._resolve_path(path)
 
+        def _do_write() -> None:
+            with _LocalWriteStream(
+                resolved, overwrite=overwrite, backend_type=self.backend_type, log_fields=None
+            ) as sink:
+                encode_arrow_to_sink(
+                    table, sink, format_hint=format_hint, compression=compression, write_options=merged_write_options
+                )
+
         execute_sync_storage_operation(
-            partial(_write_local_arrow, resolved, table, pq, kwargs),
-            backend=self.backend_type,
+            _do_write, backend=self.backend_type, operation="write_arrow", path=str(resolved)
+        )
+        log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
             operation="write_arrow",
+            mode="sync",
             path=str(resolved),
         )
 
@@ -417,12 +511,32 @@ class LocalStore:
         """
         return await async_(self.read_arrow_sync)(path, **kwargs)
 
-    async def write_arrow_async(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write Arrow table asynchronously.
+    async def write_arrow_async(
+        self, path: "str | Path", table: "ArrowTable", *, overwrite: bool = True, **kwargs: Any
+    ) -> None:
+        """Write Arrow table asynchronously through an atomic stage file."""
+        format_hint, compression, merged_write_options = _prepare_local_arrow_write(kwargs)
+        resolved = self._resolve_path(path)
 
-        Uses async_() to offload blocking PyArrow I/O to thread pool.
-        """
-        await async_(self.write_arrow_sync)(path, table, **kwargs)
+        async def _do_write_async() -> None:
+            async with _AsyncLocalWriteStream(
+                resolved, overwrite=overwrite, backend_type=self.backend_type, log_fields=None
+            ) as sink:
+                await encode_arrow_to_async_sink(
+                    table, sink, format_hint=format_hint, compression=compression, write_options=merged_write_options
+                )
+
+        await execute_async_storage_operation(
+            _do_write_async, backend=self.backend_type, operation="write_arrow", path=str(resolved)
+        )
+        log_storage_event(
+            "storage.write",
+            backend_type=self.backend_type,
+            protocol=self.protocol,
+            operation="write_arrow",
+            mode="async",
+            path=str(resolved),
+        )
 
     def stream_arrow_async(
         self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
@@ -516,12 +630,308 @@ def _copy_local_path(src: "Path", dst: "Path") -> None:
         shutil.copy2(src, dst)
 
 
-def _write_local_arrow(resolved: "Path", table: "ArrowTable", pq: Any, options: "dict[str, Any]") -> None:
-    """Write an Arrow table to a local path."""
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, str(resolved), **options)  # pyright: ignore
+def _prepare_local_arrow_write(kwargs: "dict[str, Any]") -> "tuple[StorageFormat, str | None, dict[str, Any]]":
+    """Validate and extract format_hint, compression, and writer options for LocalStore Arrow writes."""
+    import_pyarrow()
+    format_hint: StorageFormat = kwargs.pop("format_hint", "parquet")
+    if format_hint == "parquet":
+        import_pyarrow_parquet()
+    if format_hint not in _LOCAL_ARROW_FORMATS:
+        msg = f"Arrow storage writes support only Parquet, Arrow IPC, and CSV formats, got {format_hint!r}"
+        raise StorageCapabilityError(
+            msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
+        )
+
+    write_options_arg = kwargs.pop("write_options", None)
+    merged_write_options: dict[str, Any] = dict(write_options_arg) if write_options_arg else {}
+    has_compression_in_kwargs = "compression" in kwargs
+    compression_arg = kwargs.pop("compression", None)
+    merged_write_options.update(kwargs)
+
+    if has_compression_in_kwargs:
+        compression: str | None = compression_arg
+    elif "compression" in merged_write_options:
+        compression = merged_write_options.get("compression")
+    elif format_hint == "parquet":
+        compression = "snappy"
+    else:
+        compression = None
+
+    validate_arrow_write_options(format_hint, merged_write_options)
+    return format_hint, compression, merged_write_options
 
 
 def _open_file_for_read(path: Path) -> Any:
     """Open a file for binary reading."""
     return path.open("rb")
+
+
+def _open_local_stage(destination: "Path") -> "tuple[Path, BinaryIO]":
+    """Create the parent directory and exclusively open a hidden sibling stage file with mode 0o666."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stage = destination.with_name(f"{_STAGE_PREFIX}{uuid4().hex}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    fd = os.open(stage, flags, 0o666)
+    try:
+        return stage, os.fdopen(fd, "wb")
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        with contextlib.suppress(OSError):
+            stage.unlink(missing_ok=True)
+        raise
+
+
+def _publish_local_stage(stage: "Path", destination: "Path", *, overwrite: bool) -> None:
+    """Atomically publish a stage file, always removing the stage."""
+    try:
+        if overwrite:
+            if destination.exists():
+                shutil.copymode(destination, stage)
+            Path(stage).replace(destination)
+            return
+
+        try:
+            os.link(stage, destination)
+        except OSError as exc:
+            if exc.errno not in _NO_HARD_LINK_ERRNOS:
+                raise
+            with stage.open("rb") as src_file, destination.open("xb") as dst_file:
+                try:
+                    shutil.copyfileobj(src_file, dst_file)
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        dst_file.close()
+                    with contextlib.suppress(OSError):
+                        destination.unlink(missing_ok=True)
+                    raise
+    finally:
+        with contextlib.suppress(OSError):
+            stage.unlink(missing_ok=True)
+
+
+def _close_and_publish_local_stage(
+    stage: "Path", file_obj: "BinaryIO", destination: "Path", *, overwrite: bool
+) -> None:
+    """Close a stage file and atomically publish it to ``destination``."""
+    try:
+        file_obj.close()
+    except BaseException:
+        with contextlib.suppress(OSError):
+            stage.unlink(missing_ok=True)
+        raise
+    _publish_local_stage(stage, destination, overwrite=overwrite)
+
+
+def _abort_local_stage(stage: "Path", file_obj: "BinaryIO") -> None:
+    """Close and unlink a stage file, suppressing OS cleanup errors."""
+    with contextlib.suppress(OSError):
+        file_obj.close()
+    with contextlib.suppress(OSError):
+        stage.unlink(missing_ok=True)
+
+
+async def _abort_local_stage_async(stage: "Path", file_obj: "BinaryIO") -> None:
+    """Abort an opened local stage file under cancellation shield."""
+    try:
+        await join_shielded(asyncio.ensure_future(async_(_abort_local_stage)(stage, file_obj)), suppress_result=True)
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        return
+
+
+class _LocalFileSink:
+    """Synchronous byte sink backed by a staged local file."""
+
+    __slots__ = ("_backend", "_file", "_path", "closed")
+
+    def __init__(self, file_obj: Any, *, backend: str = "local", path: str | None = None) -> None:
+        self._file = file_obj
+        self._backend = backend
+        self._path = path
+        self.closed = False
+
+    def write(self, data: Any, /) -> int:
+        if self.closed:
+            return 0
+        if not data:
+            return 0
+        try:
+            return int(self._file.write(data))
+        except Exception as error:
+            raise_storage_error(error, backend=self._backend, operation="write_stream", path=self._path)
+
+    def flush(self) -> None:
+        if self.closed:
+            return
+        try:
+            self._file.flush()
+        except Exception as error:
+            raise_storage_error(error, backend=self._backend, operation="write_stream", path=self._path)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _AsyncLocalFileSink:
+    """Asynchronous byte sink backed by a staged local file via ``async_``."""
+
+    __slots__ = ("_backend", "_file", "_path", "closed")
+
+    def __init__(self, file_obj: Any, *, backend: str = "local", path: str | None = None) -> None:
+        self._file = file_obj
+        self._backend = backend
+        self._path = path
+        self.closed = False
+
+    async def write(self, data: Any, /) -> int:
+        if self.closed:
+            return 0
+        payload = bytes(data) if isinstance(data, (bytearray, memoryview)) else data
+        if not payload:
+            return 0
+        try:
+            return int(await async_(self._file.write)(payload))
+        except Exception as error:
+            raise_storage_error(error, backend=self._backend, operation="write_stream", path=self._path)
+
+    async def flush(self) -> None:
+        if self.closed:
+            return
+        try:
+            await async_(self._file.flush)()
+        except Exception as error:
+            raise_storage_error(error, backend=self._backend, operation="write_stream", path=self._path)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _LocalWriteStream:
+    """Synchronous staged local write stream context manager."""
+
+    __slots__ = ("_backend_type", "_destination", "_file", "_log_fields", "_overwrite", "_sink", "_stage")
+
+    def __init__(
+        self, destination: "Path", *, overwrite: bool, backend_type: str, log_fields: "dict[str, Any] | None"
+    ) -> None:
+        self._destination = destination
+        self._overwrite = overwrite
+        self._backend_type = backend_type
+        self._log_fields = log_fields
+        self._stage: Path | None = None
+        self._file: BinaryIO | None = None
+        self._sink: _LocalFileSink | None = None
+
+    def __enter__(self) -> "_LocalFileSink":
+        stage, file_obj = execute_sync_storage_operation(
+            lambda: _open_local_stage(self._destination),
+            backend=self._backend_type,
+            operation="open_write_stream",
+            path=str(self._destination),
+        )
+        self._stage = stage
+        self._file = file_obj
+        sink = _LocalFileSink(file_obj, backend=self._backend_type, path=str(self._destination))
+        self._sink = sink
+        return sink
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        _ = (exc, traceback)
+        sink = self._sink
+        if sink is not None:
+            sink.closed = True
+        stage = self._stage
+        file_obj = self._file
+        if stage is None or file_obj is None:
+            return
+        if exc_type is None:
+            execute_sync_storage_operation(
+                partial(_close_and_publish_local_stage, stage, file_obj, self._destination, overwrite=self._overwrite),
+                backend=self._backend_type,
+                operation="write_stream_close",
+                path=str(self._destination),
+            )
+            if self._log_fields is not None:
+                log_storage_event(
+                    "storage.write", backend_type=self._backend_type, path=str(self._destination), **self._log_fields
+                )
+        else:
+            _abort_local_stage(stage, file_obj)
+
+
+class _AsyncLocalWriteStream:
+    """Asynchronous staged local write stream context manager with shielded completion."""
+
+    __slots__ = ("_backend_type", "_destination", "_file", "_log_fields", "_overwrite", "_sink", "_stage")
+
+    def __init__(
+        self, destination: "Path", *, overwrite: bool, backend_type: str, log_fields: "dict[str, Any] | None"
+    ) -> None:
+        self._destination = destination
+        self._overwrite = overwrite
+        self._backend_type = backend_type
+        self._log_fields = log_fields
+        self._stage: Path | None = None
+        self._file: BinaryIO | None = None
+        self._sink: _AsyncLocalFileSink | None = None
+
+    async def __aenter__(self) -> "_AsyncLocalFileSink":
+        open_fut = asyncio.ensure_future(async_(lambda: _open_local_stage(self._destination))())
+        opened: tuple[Path, BinaryIO] | None = None
+        cancel_exc: asyncio.CancelledError | None = None
+        try:
+            opened = await execute_async_storage_operation(
+                partial(join_shielded, open_fut),
+                backend=self._backend_type,
+                operation="open_write_stream",
+                path=str(self._destination),
+            )
+        except asyncio.CancelledError as caught_cancel:
+            cancel_exc = caught_cancel
+        if cancel_exc is not None:
+            if open_fut.done() and not open_fut.cancelled() and open_fut.exception() is None:
+                opened_stage, opened_file = open_fut.result()
+                await _abort_local_stage_async(opened_stage, opened_file)
+            raise cancel_exc
+        if opened is None:
+            msg = "Unreachable"
+            raise RuntimeError(msg)
+        stage, file_obj = opened
+        self._stage = stage
+        self._file = file_obj
+        sink = _AsyncLocalFileSink(file_obj, backend=self._backend_type, path=str(self._destination))
+        self._sink = sink
+        return sink
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        _ = (exc, traceback)
+        sink = self._sink
+        if sink is not None:
+            sink.closed = True
+        stage = self._stage
+        file_obj = self._file
+        if stage is None or file_obj is None:
+            return
+        if exc_type is None:
+            publish_fut = asyncio.ensure_future(
+                async_(
+                    partial(
+                        _close_and_publish_local_stage, stage, file_obj, self._destination, overwrite=self._overwrite
+                    )
+                )()
+            )
+            await execute_async_storage_operation(
+                partial(join_shielded, publish_fut),
+                backend=self._backend_type,
+                operation="write_stream_close",
+                path=str(self._destination),
+            )
+            if self._log_fields is not None:
+                log_storage_event(
+                    "storage.write", backend_type=self._backend_type, path=str(self._destination), **self._log_fields
+                )
+        else:
+            abort_fut = asyncio.ensure_future(async_(_abort_local_stage)(stage, file_obj))
+            await join_shielded(abort_fut, suppress_result=True)

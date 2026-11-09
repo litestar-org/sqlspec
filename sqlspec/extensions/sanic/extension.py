@@ -1,7 +1,10 @@
 """Sanic extension for SQLSpec database session and lifecycle management."""
 
+import asyncio
+import contextlib
 import logging
-from typing import TYPE_CHECKING, Any
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.base import SQLSpec
 from sqlspec.core import CorrelationExtractor
@@ -27,10 +30,22 @@ __all__ = ("SQLSpecPlugin",)
 
 logger = get_logger("sqlspec.extensions.sanic")
 
+_REQUEST_EXCEPTION_KEY: Final = "sqlspec_request_exception"
+_ACTIVE_REQUEST_KEY: Final = "_sqlspec_active_request"
+_CURRENT_REQUEST: ContextVar[Any | None] = ContextVar("_sqlspec_sanic_active_request", default=None)
 DEFAULT_COMMIT_MODE = "manual"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
+
+
+def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:
+    """Select the primary teardown exception to re-raise after completing all targets."""
+    if current is None:
+        return candidate
+    if isinstance(current, Exception) and not isinstance(candidate, Exception):
+        return candidate
+    return current
 
 
 class SQLSpecPlugin:
@@ -199,11 +214,101 @@ class SQLSpecPlugin:
             return
 
         app.on_request(self._on_request)
-        app.on_response(self._on_response)  # type: ignore[no-untyped-call]
-        on_exception = getattr(app, "on_exception", None)
-        if callable(on_exception):
-            on_exception(self._on_exception)
+        cast("Any", app).on_response(self._on_response)
+        app.add_signal(self._on_lifecycle_exception, "http.lifecycle.exception")
+        app.add_signal(self._on_request_complete, "http.lifecycle.complete")
         self._request_middleware_added = True
+
+    def _bind_active_request(self, request: Any) -> None:
+        """Record active request in task and TCP connection contexts for disconnect cleanup.
+
+        Args:
+            request: Sanic request instance.
+        """
+        _CURRENT_REQUEST.set(request)
+        conn_info = getattr(request, "conn_info", None)
+        if conn_info is not None and hasattr(conn_info, "ctx"):
+            set_context_value(conn_info.ctx, _ACTIVE_REQUEST_KEY, request)
+
+    def _unbind_active_request(self, request: Any) -> None:
+        """Clear active request tracking from task and TCP connection contexts.
+
+        Args:
+            request: Sanic request instance.
+        """
+        if _CURRENT_REQUEST.get() is request:
+            _CURRENT_REQUEST.set(None)
+        conn_info = getattr(request, "conn_info", None)
+        if (
+            conn_info is not None
+            and hasattr(conn_info, "ctx")
+            and get_context_value(conn_info.ctx, _ACTIVE_REQUEST_KEY, None) is request
+        ):
+            pop_context_value(conn_info.ctx, _ACTIVE_REQUEST_KEY)
+
+    async def _on_lifecycle_exception(self, request: Any, exception: BaseException) -> None:
+        """Record an unhandled exception on request context for connection cleanup.
+
+        Args:
+            request: Sanic request instance.
+            exception: Unhandled exception raised during request lifecycle.
+        """
+        if request is not None and hasattr(request, "ctx"):
+            set_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, exception)
+
+    async def _on_request_complete(self, conn_info: Any = None, request: Any = None, **_: Any) -> None:
+        """Release any residual request connections and contexts when a request aborts or disconnects.
+
+        Args:
+            conn_info: Optional Sanic connection info passed by ``http.lifecycle.complete``.
+            request: Optional Sanic request instance.
+            **_: Additional signal context arguments.
+        """
+        target_request = request
+        if target_request is None:
+            target_request = _CURRENT_REQUEST.get()
+        if target_request is None and conn_info is not None and hasattr(conn_info, "ctx"):
+            target_request = pop_context_value(conn_info.ctx, _ACTIVE_REQUEST_KEY)
+        if target_request is None or not hasattr(target_request, "ctx"):
+            return
+
+        self._unbind_active_request(target_request)
+        has_residual = any(
+            not state.disable_di
+            and (
+                has_context_value(target_request.ctx, state.connection_key)
+                or has_context_value(target_request.ctx, self._connection_manager_key(state))
+            )
+            for state in self._config_states
+        )
+        primary_exc: BaseException | None = None
+        try:
+            if has_residual:
+                if get_context_value(target_request.ctx, _REQUEST_EXCEPTION_KEY, None) is None:
+                    set_context_value(target_request.ctx, _REQUEST_EXCEPTION_KEY, asyncio.CancelledError())
+                for config_state in self._config_states[::-1]:
+                    if config_state.disable_di:
+                        continue
+                    try:
+                        exc_override: BaseException | None = None
+                        try:
+                            connection = get_context_value(target_request.ctx, config_state.connection_key, None)
+                            if connection is not None and config_state.commit_mode != "manual":
+                                with contextlib.suppress(Exception):
+                                    await self._rollback_target(target_request, connection, config_state)
+                        except BaseException as rollback_exc:
+                            exc_override = rollback_exc
+                            raise
+                        finally:
+                            await self._release_request_connection(
+                                target_request, config_state, exc_override=exc_override
+                            )
+                    except BaseException as exc:
+                        primary_exc = _select_teardown_exception(primary_exc, exc)
+            if primary_exc is not None:
+                raise primary_exc
+        finally:
+            self._restore_observability_contexts(target_request, None)
 
     async def _on_request(self, request: Any) -> None:
         """Acquire request-scoped connections.
@@ -211,6 +316,7 @@ class SQLSpecPlugin:
         Args:
             request: Sanic request instance.
         """
+        self._bind_active_request(request)
         self._set_observability_contexts(request)
         acquired_states: list[SanicConfigState] = []
         try:
@@ -219,11 +325,24 @@ class SQLSpecPlugin:
                     continue
                 await self._acquire_request_connection(request, config_state)
                 acquired_states.append(config_state)
-        except Exception:
-            for config_state in acquired_states[::-1]:
-                await self._release_request_connection(request, config_state)
-            self._restore_observability_contexts(request, None)
-            raise
+        except BaseException as exc:
+            try:
+                if request is not None and hasattr(request, "ctx"):
+                    set_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, exc)
+                primary_exc: BaseException | None = None
+                for config_state in acquired_states[::-1]:
+                    try:
+                        await self._release_request_connection(request, config_state)
+                    except BaseException as release_exc:
+                        primary_exc = _select_teardown_exception(primary_exc, release_exc)
+                if primary_exc is not None:
+                    if not isinstance(exc, Exception) and isinstance(primary_exc, Exception):
+                        raise
+                    raise primary_exc
+                raise
+            finally:
+                self._restore_observability_contexts(request, None)
+                self._unbind_active_request(request)
 
     async def _on_response(self, request: Any, response: Any) -> None:
         """Finalize request-scoped connections.
@@ -232,38 +351,20 @@ class SQLSpecPlugin:
             request: Sanic request instance.
             response: Sanic response instance.
         """
+        primary_exc: BaseException | None = None
         try:
             for config_state in self._config_states[::-1]:
                 if config_state.disable_di:
-                    continue
-                await self._finalize_request_connection(request, response, config_state)
-        finally:
-            self._restore_observability_contexts(request, response)
-
-    async def _on_exception(self, request: Any, exception: BaseException) -> None:
-        """Roll back and release request-scoped connections when an unhandled exception occurs.
-
-        Args:
-            request: Sanic request instance.
-            exception: Unhandled exception raised during request processing.
-        """
-        _ = exception
-        if request is None or not hasattr(request, "ctx"):
-            return
-        try:
-            for config_state in self._config_states[::-1]:
-                if config_state.disable_di:
-                    continue
-                connection = get_context_value(request.ctx, config_state.connection_key, None)
-                if connection is None:
                     continue
                 try:
-                    if config_state.commit_mode != "manual":
-                        await self._rollback_target(request, connection, config_state)
-                finally:
-                    await self._release_request_connection(request, config_state)
+                    await self._finalize_request_connection(request, response, config_state)
+                except BaseException as exc:
+                    primary_exc = _select_teardown_exception(primary_exc, exc)
+            if primary_exc is not None:
+                raise primary_exc
         finally:
-            self._restore_observability_contexts(request, None)
+            self._restore_observability_contexts(request, response)
+            self._unbind_active_request(request)
 
     def _needs_request_middleware(self) -> bool:
         """Return whether this plugin should register request middleware.
@@ -458,17 +559,29 @@ class SQLSpecPlugin:
         """
         connection = get_context_value(request.ctx, config_state.connection_key, None)
         if connection is None:
+            if has_context_value(request.ctx, self._connection_manager_key(config_state)):
+                await self._release_request_connection(request, config_state)
             return
 
+        exc_override: BaseException | None = None
         try:
             if config_state.commit_mode != "manual":
+                has_exception = get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None) is not None
                 status_code = self._response_status_code(response)
-                if self._should_commit(config_state, status_code):
-                    await self._commit_target(request, connection, config_state)
+                if not has_exception and self._should_commit(config_state, status_code):
+                    try:
+                        await self._commit_target(request, connection, config_state)
+                    except BaseException:
+                        with contextlib.suppress(Exception):
+                            await self._rollback_target(request, connection, config_state)
+                        raise
                 else:
                     await self._rollback_target(request, connection, config_state)
+        except BaseException as finalization_exc:
+            exc_override = finalization_exc
+            raise
         finally:
-            await self._release_request_connection(request, config_state)
+            await self._release_request_connection(request, config_state, exc_override=exc_override)
 
     async def _commit_target(self, request: Any, connection: Any, config_state: SanicConfigState) -> None:
         """Commit transaction using active session or connection."""
@@ -484,27 +597,33 @@ class SQLSpecPlugin:
         if hasattr(target, "rollback"):
             await ensure_async_(target.rollback)()
 
-    async def _release_request_connection(self, request: Any, config_state: SanicConfigState) -> None:
+    async def _release_request_connection(
+        self, request: Any, config_state: SanicConfigState, exc_override: BaseException | None = None
+    ) -> None:
         """Release and clear one request connection.
 
         Args:
             request: Sanic request instance.
             config_state: Configuration state.
+            exc_override: Optional exception overriding any request-recorded exception.
         """
         connection = pop_context_value(request.ctx, config_state.connection_key)
         pop_context_value(request.ctx, f"{config_state.session_key}_instance")
+        connection_manager = pop_context_value(request.ctx, self._connection_manager_key(config_state))
 
-        if connection is None:
-            pop_context_value(request.ctx, self._connection_manager_key(config_state))
+        if connection is None and connection_manager is None:
             return
+
+        exc = exc_override if exc_override is not None else get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None)
+        exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
 
         if config_state.config.supports_connection_pooling:
-            connection_manager = pop_context_value(request.ctx, self._connection_manager_key(config_state))
             if connection_manager is not None:
-                await connection_manager.__aexit__(None, None, None)
+                await connection_manager.__aexit__(*exit_args)
             return
 
-        await ensure_async_(connection.close)()
+        if connection is not None:
+            await ensure_async_(connection.close)()
 
     def _should_commit(self, config_state: SanicConfigState, status_code: int) -> bool:
         """Determine whether a response status should commit.

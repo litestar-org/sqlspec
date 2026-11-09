@@ -285,9 +285,27 @@ class PsycopgSyncStreamSource:
     when one is already active, a transaction block under autocommit).
     """
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
+    __slots__ = (
+        "_chunk_size",
+        "_column_names",
+        "_column_types_resolver",
+        "_cursor",
+        "_driver",
+        "_parameters",
+        "_sql",
+        "_transaction",
+        "column_types",
+    )
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(
+        self,
+        driver: Any,
+        sql: str,
+        parameters: Any,
+        chunk_size: int,
+        *,
+        column_types_resolver: "Callable[[Any], dict[str, str] | None] | None" = None,
+    ) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
@@ -295,6 +313,8 @@ class PsycopgSyncStreamSource:
         self._cursor: Any = None
         self._transaction: Any = None
         self._column_names: list[str] | None = None
+        self._column_types_resolver = column_types_resolver
+        self.column_types: dict[str, str] | None = None
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -335,6 +355,8 @@ class PsycopgSyncStreamSource:
             cursor.itersize = self._chunk_size
             execute_with_optional_parameters(cursor, self._sql, self._parameters)
             self._cursor = cursor
+            if self._column_types_resolver is not None:
+                self.column_types = self._column_types_resolver(cursor.description)
         except BaseException as exc:
             self._transaction = None
             with contextlib.suppress(Exception):
@@ -349,9 +371,27 @@ class PsycopgAsyncStreamSource:
     when one is already active, a transaction block under autocommit).
     """
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
+    __slots__ = (
+        "_chunk_size",
+        "_column_names",
+        "_column_types_resolver",
+        "_cursor",
+        "_driver",
+        "_parameters",
+        "_sql",
+        "_transaction",
+        "column_types",
+    )
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(
+        self,
+        driver: Any,
+        sql: str,
+        parameters: Any,
+        chunk_size: int,
+        *,
+        column_types_resolver: "Callable[[Any], dict[str, str] | None] | None" = None,
+    ) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
@@ -359,6 +399,8 @@ class PsycopgAsyncStreamSource:
         self._cursor: Any = None
         self._transaction: Any = None
         self._column_names: list[str] | None = None
+        self._column_types_resolver = column_types_resolver
+        self.column_types: dict[str, str] | None = None
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -399,6 +441,8 @@ class PsycopgAsyncStreamSource:
             cursor.itersize = self._chunk_size
             await execute_with_optional_parameters_async(cursor, self._sql, self._parameters)
             self._cursor = cursor
+            if self._column_types_resolver is not None:
+                self.column_types = self._column_types_resolver(cursor.description)
         except BaseException as exc:
             self._transaction = None
             with contextlib.suppress(Exception):

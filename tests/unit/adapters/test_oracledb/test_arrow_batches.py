@@ -365,3 +365,145 @@ def test_sync_select_to_arrow_reader_yields_lazily() -> None:
     second_batch = reader.read_next_batch()
     assert second_batch.num_rows == 1
     assert yielded == [1, 2]
+
+
+def test_storage_reader_exposes_stream_close() -> None:
+    """OracleSyncDriver.select_to_arrow(return_format='reader') exposes stream_close metadata."""
+    finalized = False
+
+    def _generate_tables() -> Iterator[pa.Table]:
+        nonlocal finalized
+        try:
+            yield pa.table({"ID": [1, 2]})
+            yield pa.table({"ID": [3, 4]})
+        finally:
+            finalized = True
+
+    source_gen = _generate_tables()
+
+    class _ClosableBatchConnection:
+        def fetch_df_batches(self, **_kwargs: object) -> Iterator[pa.Table]:
+            return source_gen
+
+    driver = OracleSyncDriver(cast("OracleSyncConnection", _ClosableBatchConnection()))
+    result = driver.select_to_arrow("SELECT id FROM example", return_format="reader", batch_size=2)
+    assert finalized is False
+    assert "stream_close" in result.metadata
+    stream_close = result.metadata["stream_close"]
+    assert callable(stream_close)
+    stream_close()
+    assert finalized is True
+
+
+def test_oracle_async_driver_declares_export_integers_may_widen() -> None:
+    """OracleAsyncDriver declares integer-widening read-ahead for row-stream fallback exports."""
+    assert OracleAsyncDriver.export_integers_may_widen is True
+
+
+@pytest.mark.anyio
+async def test_async_select_for_storage_fetches_frames_lazily_and_closes_on_aclose() -> None:
+    """OracleAsyncDriver._select_for_storage yields batches lazily on demand and closes inner stream on aclose."""
+    frames_consumed = 0
+    finalized = False
+
+    class _LazyAsyncBatchConnection:
+        async def fetch_df_batches(self, **_kwargs: object) -> AsyncIterator[pa.Table]:
+            nonlocal frames_consumed, finalized
+            try:
+                frames_consumed += 1
+                yield pa.table({"ID": [1, 2], "VALUE": [10, 20]})
+                frames_consumed += 1
+                yield pa.table({"ID": [3], "VALUE": [30]})
+            finally:
+                finalized = True
+
+    driver = OracleAsyncDriver(
+        cast("OracleAsyncConnection", _LazyAsyncBatchConnection()),
+        driver_features={"enable_lowercase_column_names": True},
+    )
+    result = await driver._select_for_storage("SELECT id, value FROM example", batch_size=2)
+    assert hasattr(result.data, "__aiter__")
+    assert result.metadata["streamed"] is True
+    assert frames_consumed == 0
+
+    batches = aiter(result.data)
+    first_batch = await anext(batches)
+    assert frames_consumed == 1
+    assert first_batch.to_pydict() == {"id": [1, 2], "value": [10, 20]}
+    assert finalized is False
+
+    await batches.aclose()
+    assert finalized is True
+
+
+@pytest.mark.anyio
+async def test_async_select_for_storage_empty_frame_preserves_schema() -> None:
+    """OracleAsyncDriver._select_for_storage yields a zero-row batch preserving schema for empty frames."""
+    empty_frame = pa.Table.from_pylist([], schema=pa.schema([("A", pa.int64())]))
+
+    class _EmptyAsyncBatchConnection:
+        async def fetch_df_batches(self, **_kwargs: object) -> AsyncIterator[pa.Table]:
+            yield empty_frame
+
+    driver = OracleAsyncDriver(cast("OracleAsyncConnection", _EmptyAsyncBatchConnection()))
+    result = await driver._select_for_storage("SELECT a FROM example WHERE 1 = 0")
+    collected = [batch async for batch in result.data]
+    assert len(collected) == 1
+    assert collected[0].num_rows == 0
+    assert collected[0].schema.names == ["A"]
+
+
+@pytest.mark.anyio
+async def test_async_select_for_storage_explicit_return_format_and_no_frame_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OracleAsyncDriver._select_for_storage delegates explicit return_format and non-batch connections to super."""
+    batch_conn = _OracleAsyncBatchConnection()
+    driver = OracleAsyncDriver(cast("OracleAsyncConnection", batch_conn))
+    arrow_calls: list[dict[str, Any]] = []
+
+    async def fake_select_to_arrow(self: Any, statement: Any, /, *parameters: Any, **kwargs: Any) -> Any:
+        _ = (self, statement, parameters)
+        arrow_calls.append(dict(kwargs))
+        return pa.table({"a": [1]})
+
+    monkeypatch.setattr(OracleAsyncDriver, "select_to_arrow", fake_select_to_arrow)
+    await driver._select_for_storage("SELECT 1", return_format="table")
+    assert len(arrow_calls) == 1
+    assert arrow_calls[0]["return_format"] == "table"
+
+    super_calls: list[str] = []
+
+    async def fake_super_select(self: Any, statement: Any, /, *parameters: Any, **kwargs: Any) -> Any:
+        _ = (self, parameters, kwargs)
+        super_calls.append(str(statement))
+        return pa.table({"a": [1]})
+
+    from sqlspec.driver import AsyncDriverAdapterBase
+
+    monkeypatch.setattr(AsyncDriverAdapterBase, "_select_for_storage", fake_super_select)
+    fallback_driver = OracleAsyncDriver(cast("OracleAsyncConnection", _OracleAsyncAllConnection()))
+    await fallback_driver._select_for_storage("SELECT 1")
+    assert super_calls == ["SELECT 1"]
+
+
+@pytest.mark.anyio
+async def test_async_select_for_storage_maps_mid_stream_oracle_error() -> None:
+    """OracleAsyncDriver._select_for_storage maps mid-stream OracleError to SQLSpec exceptions."""
+    import oracledb
+
+    from sqlspec.exceptions import SQLParsingError
+
+    class _MidStreamFailingAsyncConnection:
+        async def fetch_df_batches(self, **_kwargs: object) -> AsyncIterator[pa.Table]:
+            yield pa.table({"ID": [1]})
+            raise oracledb.DatabaseError("ORA-00942: missing table")
+
+    driver = OracleAsyncDriver(cast("OracleAsyncConnection", _MidStreamFailingAsyncConnection()))
+    result = await driver._select_for_storage("SELECT id FROM example")
+    batches = aiter(result.data)
+    first = await anext(batches)
+    assert first.to_pydict() == {"ID": [1]}
+    with pytest.raises(SQLParsingError, match="ORA-00942") as exc_info:
+        await anext(batches)
+    assert isinstance(exc_info.value.__cause__, oracledb.DatabaseError)

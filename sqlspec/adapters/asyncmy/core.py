@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "AsyncmyStreamSource",
+    "_resolve_column_types",
     "apply_driver_features",
     "build_insert_statement",
     "build_load_data_statement",
@@ -160,6 +161,7 @@ class AsyncmyStreamSource:
         "_parameters",
         "_row_plan",
         "_sql",
+        "column_types",
     )
 
     def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, json_type_codes: "set[int]") -> None:
@@ -170,6 +172,7 @@ class AsyncmyStreamSource:
         self._cursor: Any = None
         self._json_type_codes = json_type_codes
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        self.column_types: dict[str, str] | None = None
         self._deserializer: Callable[[Any], Any] = cast(
             "Callable[[Any], Any]",
             getattr(driver, "_json_deserializer", None) or driver.driver_features.get("json_deserializer", from_json),
@@ -206,6 +209,7 @@ class AsyncmyStreamSource:
             self._cursor = cursor
             await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+            self.column_types = _resolve_column_types(self._cursor.description)
         except BaseException:
             await self.close(error=True)
             raise
@@ -628,5 +632,64 @@ def _create_mysql_error(
 
 
 driver_profile = build_profile()
+
+_MYSQL_NEWDECIMAL_CODE: Final[int] = 246
+_MYSQL_DECIMAL_MIN_LEN: Final[int] = 6
+_DECIMAL_MAX_PRECISION: Final[int] = 76
+
+_MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
+    0: "decimal",
+    1: "int32",
+    2: "int32",
+    3: "int64",
+    4: "float32",
+    5: "float64",
+    7: "timestamp",
+    8: "int64",
+    10: "date",
+    11: "time",
+    12: "timestamp",
+    246: "decimal",
+    252: "binary",
+    253: "string",
+    254: "string",
+}
+
+
+def _decimal_token(col: Any) -> str:
+    """Resolve a MySQL NEWDECIMAL field descriptor to an exact or fallback decimal token."""
+    if not isinstance(col, (tuple, list)) or len(col) < _MYSQL_DECIMAL_MIN_LEN:
+        return "decimal"
+    raw_length = col[4]
+    raw_scale = col[5]
+    if isinstance(raw_length, bool) or not isinstance(raw_length, int):
+        return "decimal"
+    if isinstance(raw_scale, bool) or not isinstance(raw_scale, int):
+        return "decimal"
+    precision = raw_length - (1 if raw_scale else 0)
+    if 1 <= precision <= _DECIMAL_MAX_PRECISION and 0 <= raw_scale <= precision:
+        return f"decimal({precision},{raw_scale})"
+    return "decimal"
+
+
+def _resolve_column_types(description: Any) -> "dict[str, str] | None":
+    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
+
+    Returns ``None`` when the cursor has no description or reports no
+    recognizable type codes.
+    """
+    if not description:
+        return None
+    column_types: dict[str, str] = {}
+    for col in description:
+        type_code = col[1]
+        if type_code == _MYSQL_NEWDECIMAL_CODE:
+            column_types[col[0]] = _decimal_token(col)
+        else:
+            token = _MYSQL_TYPE_CODE_TOKENS.get(type_code)
+            if token is not None:
+                column_types[col[0]] = token
+    return column_types or None
+
 
 default_statement_config = build_statement_config()

@@ -1,7 +1,9 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for storage bridge ingestion helpers."""
 
+import contextlib
 import sqlite3
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -31,11 +33,12 @@ from sqlspec.adapters.pymysql import default_statement_config as pymysql_stateme
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.adapters.sqlite import default_statement_config as sqlite_statement_config
 from sqlspec.exceptions import StoragePathTraversalError
-from sqlspec.protocols import ObjectStoreProtocol
+from sqlspec.protocols import AsyncWritableBytesSink, DirectStreamWriteProtocol, ObjectStoreProtocol, WritableBytesSink
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
 from sqlspec.storage.pipeline import AsyncStoragePipeline, StorageDestination, _encode_row_payload, _StoragePipelineBase
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
+from sqlspec.utils.type_guards import supports_direct_stream_write
 
 CAPABILITIES = {
     "arrow_export_enabled": True,
@@ -902,11 +905,11 @@ def test_write_arrow_csv_no_header() -> None:
 
 def test_csv_roundtrip_encode_decode() -> None:
     """Roundtrip: encode Arrow table to CSV bytes, decode back, compare."""
-    from sqlspec.storage.pipeline import _decode_arrow_payload, _encode_arrow_payload
+    from sqlspec.storage._arrow_payload import decode_arrow_payload, encode_arrow_payload
 
     original = pa.table({"id": [1, 2, 3], "score": [9.5, 8.0, 7.2]})
-    payload = _encode_arrow_payload(original, "csv", compression=None)
-    restored = _decode_arrow_payload(payload, "csv")
+    payload = encode_arrow_payload(original, "csv", compression=None)
+    restored = decode_arrow_payload(payload, "csv")
 
     assert restored.num_rows == original.num_rows
     assert restored.column_names == original.column_names
@@ -915,11 +918,11 @@ def test_csv_roundtrip_encode_decode() -> None:
 
 def test_read_arrow_csv() -> None:
     """Read a CSV artifact back into an Arrow table via SyncStoragePipeline.read_arrow()."""
-    from sqlspec.storage.pipeline import _encode_arrow_payload
+    from sqlspec.storage._arrow_payload import encode_arrow_payload
 
     backend = _CsvTestBackend()
     original = pa.table({"a": [1, 2], "b": ["x", "y"]})
-    csv_bytes = _encode_arrow_payload(original, "csv", compression=None)
+    csv_bytes = encode_arrow_payload(original, "csv", compression=None)
     backend.payloads["input.csv"] = csv_bytes
 
     pipeline = SyncStoragePipeline(registry=cast(Any, _CsvTestRegistry(backend)))
@@ -928,3 +931,139 @@ def test_read_arrow_csv() -> None:
     assert table.num_rows == 2
     assert table.column_names == ["a", "b"]
     assert telemetry["format"] == "csv"
+
+
+class _SyncBufSink:
+    """Synchronous memory buffer sink for direct-stream tests."""
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+
+    def write(self, data: bytes, /) -> int | None:
+        self.data.extend(data)
+        return len(data)
+
+
+class _AsyncBufSink:
+    """Asynchronous memory buffer sink for direct-stream tests."""
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+
+    async def write(self, data: bytes, /) -> int | None:
+        self.data.extend(data)
+        return len(data)
+
+
+class _OptInDirectBackend:
+    """Backend test double implementing DirectStreamWriteProtocol."""
+
+    def supports_direct_arrow_write(self, file_format: str, *, overwrite: bool = True) -> bool:
+        return file_format == "parquet" and overwrite
+
+    @contextlib.contextmanager
+    def open_write_stream_sync(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> Iterator[WritableBytesSink]:
+        yield _SyncBufSink()
+
+    @contextlib.asynccontextmanager
+    async def open_write_stream_async(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> AsyncIterator[AsyncWritableBytesSink]:
+        yield _AsyncBufSink()
+
+
+def test_supports_direct_stream_write_plain_stubs_false() -> None:
+    """Verify plain storage backend stubs return False for direct-stream capabilities."""
+    csv_backend = _CsvTestBackend()
+    counting_backend = _CountingStorageBackend()
+
+    assert supports_direct_stream_write(csv_backend) is False
+    assert isinstance(csv_backend, DirectStreamWriteProtocol) is False
+    assert supports_direct_stream_write(counting_backend) is False
+    assert isinstance(counting_backend, DirectStreamWriteProtocol) is False
+
+
+def test_supports_direct_stream_write_primitives_and_classes_false() -> None:
+    """Verify None, primitives, and uninstantiated class objects return False."""
+    assert supports_direct_stream_write(None) is False
+    assert supports_direct_stream_write("file:///tmp") is False
+    assert supports_direct_stream_write(123) is False
+    assert supports_direct_stream_write(_OptInDirectBackend) is False
+
+
+def test_supports_direct_stream_write_partial_stubs_false() -> None:
+    """Verify partially implemented or non-callable attribute objects return False."""
+    missing_async = SimpleNamespace(
+        supports_direct_arrow_write=lambda *a, **k: True, open_write_stream_sync=contextlib.nullcontext
+    )
+    non_callable_async = SimpleNamespace(
+        supports_direct_arrow_write=lambda *a, **k: True,
+        open_write_stream_sync=contextlib.nullcontext,
+        open_write_stream_async=None,
+    )
+
+    assert supports_direct_stream_write(missing_async) is False
+    assert supports_direct_stream_write(non_callable_async) is False
+
+
+async def test_supports_direct_stream_write_opt_in_instance_true() -> None:
+    """Verify conforming backend instance passes guard and yields valid sinks."""
+    backend = _OptInDirectBackend()
+
+    assert supports_direct_stream_write(backend) is True
+    assert isinstance(backend, DirectStreamWriteProtocol) is True
+    assert backend.supports_direct_arrow_write("parquet", overwrite=True) is True
+    assert backend.supports_direct_arrow_write("parquet", overwrite=False) is False
+    assert backend.supports_direct_arrow_write("csv", overwrite=True) is False
+
+    with backend.open_write_stream_sync("out.parquet") as sync_sink:
+        assert isinstance(sync_sink, WritableBytesSink) is True
+        written = sync_sink.write(b"PAR1")
+        assert written == 4
+        assert cast(_SyncBufSink, sync_sink).data == b"PAR1"
+
+    async with backend.open_write_stream_async("out.parquet") as async_sink:
+        assert isinstance(async_sink, AsyncWritableBytesSink) is True
+        written = await async_sink.write(b"PAR1")
+        assert written == 4
+        assert cast(_AsyncBufSink, async_sink).data == b"PAR1"
+
+
+def test_storage_lazy_direct_stream_exports() -> None:
+    """Verify PEP 562 lazy exports in sqlspec.storage for direct stream and sink encoder symbols."""
+    import sqlspec.storage as storage_pkg
+
+    expected_names = (
+        "AsyncWritableBytesSink",
+        "DirectStreamWriteProtocol",
+        "WritableBytesSink",
+        "encode_arrow_to_async_sink",
+        "encode_arrow_to_sink",
+        "supports_direct_stream_write",
+    )
+    module_dir = dir(storage_pkg)
+    for symbol in expected_names:
+        assert symbol in storage_pkg.__all__
+        assert symbol in module_dir
+
+    from sqlspec.protocols import AsyncWritableBytesSink as ProtoAsyncWritableBytesSink
+    from sqlspec.protocols import DirectStreamWriteProtocol as ProtoDirectStreamWriteProtocol
+    from sqlspec.protocols import WritableBytesSink as ProtoWritableBytesSink
+    from sqlspec.storage import AsyncWritableBytesSink as StorageAsyncWritableBytesSink
+    from sqlspec.storage import DirectStreamWriteProtocol as StorageDirectStreamWriteProtocol
+    from sqlspec.storage import WritableBytesSink as StorageWritableBytesSink
+    from sqlspec.storage import encode_arrow_to_async_sink as storage_encode_arrow_to_async_sink
+    from sqlspec.storage import encode_arrow_to_sink as storage_encode_arrow_to_sink
+    from sqlspec.storage import supports_direct_stream_write as storage_supports_direct_stream_write
+    from sqlspec.storage._arrow_payload import encode_arrow_to_async_sink as payload_encode_arrow_to_async_sink
+    from sqlspec.storage._arrow_payload import encode_arrow_to_sink as payload_encode_arrow_to_sink
+    from sqlspec.utils.type_guards import supports_direct_stream_write as guard_supports_direct_stream_write
+
+    assert StorageAsyncWritableBytesSink is ProtoAsyncWritableBytesSink
+    assert StorageDirectStreamWriteProtocol is ProtoDirectStreamWriteProtocol
+    assert StorageWritableBytesSink is ProtoWritableBytesSink
+    assert storage_encode_arrow_to_sink is payload_encode_arrow_to_sink
+    assert storage_encode_arrow_to_async_sink is payload_encode_arrow_to_async_sink
+    assert storage_supports_direct_stream_write is guard_supports_direct_stream_write

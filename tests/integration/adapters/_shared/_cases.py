@@ -509,6 +509,7 @@ SYNC_DRIVER_CASES = (
         marks=(MSSQL_MARK, MSSQL_XDIST_MARK),
         table=MSSQL_CONTRACT_TABLE,
         supports_savepoints=True,
+        supports_storage_bridge=True,
         supports_data_dictionary=True,
         supports_data_dictionary_core=True,
         supports_data_dictionary_constraints=True,

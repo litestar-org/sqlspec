@@ -82,7 +82,7 @@ When an application connects to multiple databases (for example, a transactional
 
 ## On-Demand Session and Connection Acquisition
 
-In custom guards, middleware, or event hooks where standard route dependency injection is not active, `SQLSpecPlugin` exposes direct scope-backed session and connection accessors that reuse or lazily acquire a connection from the pool and clean it up automatically in `before_send`:
+In custom guards, middleware, streaming iterators, or event hooks where standard route dependency injection is not active, `SQLSpecPlugin` exposes direct scope-backed session and connection accessors. Connections acquired before `http.response.start` are finalized in `before_send`, while connections acquired after `http.response.start` (such as inside `Stream` responses or `after_response` hooks) are finalized by `ConnectionCleanupMiddleware` when the ASGI request completes:
 
 - `plugin.provide_request_session(key, state, scope)` and `plugin.provide_request_connection(key, state, scope)` (when the connection already exists in ASGI scope).
 - `plugin.provide_request_session_sync(key, state, scope)` and `plugin.provide_request_connection_sync(key, state, scope)` (acquires a sync connection on demand if not yet present in `scope`).
@@ -101,15 +101,34 @@ Configure `commit_mode` inside `extension_config["litestar"]` to control how req
 
 | Commit Mode | Commits On | Rolls Back On | Best For |
 | --- | --- | --- | --- |
-| `"manual"` (default) | Explicit `session.commit()` calls only | Unhandled exceptions or uncommitted changes at request exit | Explicit service-layer transaction boundaries |
-| `"autocommit"` | HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`) or unhandled exceptions | JSON REST APIs where every `2xx` handler mutates state |
-| `"autocommit_include_redirect"` | HTTP `200`–`399` responses | HTTP `>= 400` responses or unhandled exceptions | HTML / HTMX form handlers that commit and return `302` / `303` redirects |
+| `"manual"` (default) | Explicit `session.commit()` calls only | Unhandled or mapped exceptions and request cancellations | Explicit service-layer transaction boundaries |
+| `"autocommit"` | Clean HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`), any raised exception (including mapped `2xx` responses), or cancellation | JSON REST APIs where every `2xx` handler mutates state |
+| `"autocommit_include_redirect"` | Clean HTTP `200`–`399` responses | HTTP `>= 400` responses, any raised exception (including mapped `2xx`/`3xx` responses), or cancellation | HTML / HTMX form handlers that commit and return `302` / `303` redirects |
 
 ```python
 --8<-- "docs/examples/frameworks/litestar/commit_modes.py:example"
 ```
 
 Add `extra_commit_statuses` or `extra_rollback_statuses` in `LitestarConfig` when specific status codes require custom commit or rollback treatment.
+
+## Request Failure Handling
+
+Litestar manages request connections across two distinct paths, and both forward exceptions and cancellations to the adapter's connection context exit (`__aexit__`):
+
+- **Injected dependencies (`db_session` / `db_connection`)**: The dependency generator owns the connection context while the route handler executes. If the handler raises `BaseException`, the generator exits the connection context immediately with `(exc_type, exc_val, exc_tb)` before Litestar renders an exception response. When an HTTP handler returns normally before `http.response.start`, the generator hands the open context to ASGI scope so `before_send` applies `commit_mode` against the response status and exits the context. If `asyncio.CancelledError` or an error in `after_request`, response serialization, or an exception handler aborts the request before `http.response.start`, `ConnectionCleanupMiddleware` rolls back uncommitted work and exits the context.
+- **On-demand accessors (`provide_request_session_*` / `provide_request_connection_*`)**: Connections live directly in ASGI scope. Whenever a handler or hook raises an exception, Litestar's `after_exception` hook runs `record_request_exception` to store the exception in scope before sending the error response. Both `before_send` (under `autocommit` and `manual` modes) and `ConnectionCleanupMiddleware` check this recorded exception before inspecting HTTP status codes, rolling back uncommitted writes and passing `(exc_type, exc_val, exc_tb)` to `__aexit__`.
+
+Both unhandled exceptions and exceptions mapped to HTTP responses by Litestar `exception_handlers` (such as `HTTPException`, `NotFoundError`, `IntegrityError`, or custom handlers returning `4xx` or `2xx` fallback responses) record the exception via `after_exception` and roll back uncommitted work. By contrast, Starlette, FastAPI, and Flask treat exceptions already converted into responses by inner framework exception handlers as normal responses at the middleware boundary unless status-based rollback applies.
+
+When a route handler in `"manual"` mode returns cleanly without calling `commit()` or `rollback()`, the outcome for open uncommitted work depends on the adapter:
+
+| Clean return with uncommitted work (`manual` mode) | Adapters |
+| --- | --- |
+| Commits open transaction on context exit | `sqlite`, `aiosqlite`, `duckdb`, `psycopg`, `cockroach_psycopg`, `spanner` |
+| Rolls back uncommitted transaction on pool release or close | `pymysql`, `aiomysql`, `asyncmy`, `mysqlconnector`, `oracledb`, `mssql_python`, `adbc` |
+| Autocommits single statements; rolls back open `BEGIN` blocks on pool release | `asyncpg`, `cockroach_asyncpg` |
+| Autocommits single statements by default (explicit `BEGIN` or `autocommit=False` requires explicit commit or `commit_mode`) | `psqlpy`, `db2`, `arrow_odbc`, `bigquery` |
+| Retains open transaction on thread-local connection until explicit `commit()` / `rollback()` (discards connection on exception) | `pymssql`, `sybase`, `sqlanywhere` |
 
 ## Declarative Query Filter Providers
 

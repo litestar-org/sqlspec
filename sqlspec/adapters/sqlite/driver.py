@@ -1,7 +1,7 @@
 """SQLite driver implementation."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -79,6 +79,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     __slots__ = ("_data_dictionary", "_rowid_target_cache")
     dialect: "DialectType | None" = "sqlite"
+    export_integers_may_widen: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -303,7 +304,7 @@ class SqliteDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Execute a query and write Arrow-compatible output to storage (sync)."""
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline

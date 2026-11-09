@@ -20,8 +20,17 @@ from sqlspec.exceptions import UniqueViolationError
 async def test_storage_bridge_writes_client_converted_rows_without_native_export(tmp_path: Path) -> None:
     """Client-side storage export works without claiming native Arrow export."""
     parquet = pytest.importorskip("pyarrow.parquet")
-    connection = AsyncMock()
-    connection.fetch.return_value = SimpleNamespace(result=lambda: [{"name": "Ada", "value": 1}])
+    cursor = SimpleNamespace(
+        start=AsyncMock(),
+        fetchmany=AsyncMock(
+            side_effect=[SimpleNamespace(result=lambda: [{"name": "Ada", "value": 1}]), SimpleNamespace(result=list)]
+        ),
+        close=lambda: None,
+    )
+    transaction = SimpleNamespace(
+        begin=AsyncMock(), commit=AsyncMock(), rollback=AsyncMock(), cursor=lambda *_args, **_kwargs: cursor
+    )
+    connection = SimpleNamespace(transaction=lambda: transaction)
     config = PsqlpyConfig()
     driver = PsqlpyDriver(cast("Any", connection), driver_features=config.driver_features)
     target = tmp_path / "psqlpy.parquet"

@@ -259,3 +259,62 @@ async def test_psqlpy_cached_dml_and_errors(psqlpy_session: "PsqlpyDriver") -> N
     with pytest.raises(SQLSpecError) as error:
         await psqlpy_session.execute(query, 0)
     assert isinstance(error.value.__cause__, Error)
+
+
+async def test_psqlpy_provide_connection_body_exception_propagates_cleanly(psqlpy_config: "PsqlpyConfig") -> None:
+    """A body error inside provide_connection propagates once and leaves the pool working."""
+    with pytest.raises(ValueError, match="raised in body"):
+        async with psqlpy_config.provide_connection():
+            raise ValueError("raised in body")
+
+    async with psqlpy_config.provide_connection() as conn:
+        result = await conn.execute("SELECT 1")
+        assert len(result.result()) == 1
+
+
+async def test_psqlpy_raw_begin_rolls_back_on_exception_exit(psqlpy_config: "PsqlpyConfig") -> None:
+    """Raw BEGIN + INSERT followed by exception rolls back and leaves the pooled connection clean."""
+    bounded_config = PsqlpyConfig(connection_config={**psqlpy_config.connection_config, "max_db_pool_size": 2})
+    pool = await bounded_config.create_pool()
+    try:
+        async with pool.acquire():
+            async with bounded_config.provide_connection() as setup_conn:
+                await setup_conn.execute("CREATE TABLE IF NOT EXISTS psqlpy_raw_begin_test (name TEXT NOT NULL)")
+                await setup_conn.execute("DELETE FROM psqlpy_raw_begin_test")
+
+            dirty_conn_pid: int | None = None
+            with pytest.raises(RuntimeError, match="abort raw connection begin"):
+                async with bounded_config.provide_connection() as conn:
+                    dirty_conn_pid = (await conn.execute("SELECT pg_backend_pid() AS pid")).result()[0]["pid"]
+                    await conn.execute("BEGIN")
+                    await conn.execute("INSERT INTO psqlpy_raw_begin_test (name) VALUES ('dirty_connection')")
+                    raise RuntimeError("abort raw connection begin")
+
+            async with bounded_config.provide_connection() as verify_conn:
+                verify_pid = (await verify_conn.execute("SELECT pg_backend_pid() AS pid")).result()[0]["pid"]
+                assert verify_pid == dirty_conn_pid
+                rows = (await verify_conn.execute("SELECT name FROM psqlpy_raw_begin_test")).result()
+                assert rows == []
+                tx_status = (await verify_conn.execute("SELECT txid_current_if_assigned() AS txid")).result()
+                assert tx_status[0]["txid"] is None
+
+            dirty_session_pid: int | None = None
+            with pytest.raises(RuntimeError, match="abort raw session begin"):
+                async with bounded_config.provide_session() as session:
+                    pid_res = await session.execute("SELECT pg_backend_pid() AS pid")
+                    dirty_session_pid = pid_res.get_data()[0]["pid"]
+                    await session.execute("BEGIN")
+                    await session.execute("INSERT INTO psqlpy_raw_begin_test (name) VALUES ('dirty_session')")
+                    raise RuntimeError("abort raw session begin")
+
+            async with bounded_config.provide_session() as verify_session:
+                verify_session_pid = (await verify_session.execute("SELECT pg_backend_pid() AS pid")).get_data()[0][
+                    "pid"
+                ]
+                assert verify_session_pid == dirty_session_pid
+                result = await verify_session.execute("SELECT name FROM psqlpy_raw_begin_test")
+                assert result.get_data() == []
+                tx_check = await verify_session.execute("SELECT txid_current_if_assigned() AS txid")
+                assert tx_check.get_data()[0]["txid"] is None
+    finally:
+        await bounded_config.close_pool()

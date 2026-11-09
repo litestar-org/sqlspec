@@ -45,8 +45,11 @@ from sqlspec.utils.text import normalize_identifier, quote_identifier
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.core import SQLResult
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import SQLResult, Statement, StatementFilter
     from sqlspec.driver._common import CachedQuery
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.typing import StatementParameters
 
 __all__ = (
     "Db2AsyncCursor",
@@ -303,6 +306,28 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(Db2SyncStreamSource(self, sql, prepared_parameters, chunk_size))
+
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream the Arrow result to storage."""
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
+        pipeline = self._storage_pipeline()
+        telemetry_payload = self._write_storage_result(
+            arrow_result, destination, format_hint=format_hint, pipeline=pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def create_savepoint(self, name: str) -> None:
         """Create a transaction savepoint retaining open cursors."""
@@ -647,6 +672,30 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return AsyncRowStream(Db2AsyncStreamSource(self, sql, prepared_parameters, chunk_size))
+
+    async def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream the Arrow result to storage."""
+        self._require_capability("arrow_export_enabled")
+        arrow_result = await self._select_for_storage(
+            statement, *parameters, statement_config=statement_config, **kwargs
+        )
+        async_pipeline = self._storage_pipeline()
+        telemetry_payload = await self._write_storage_result(
+            arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
 
     async def create_savepoint(self, name: str) -> None:
         """Create a transaction savepoint retaining open cursors."""

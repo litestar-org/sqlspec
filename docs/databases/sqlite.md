@@ -198,6 +198,10 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
 - **BEGIN IMMEDIATE Concurrency on Aiosqlite**: Under concurrent `asyncio` writes, starting with `DEFERRED` and upgrading to a write lock mid-transaction causes immediate `SQLITE_BUSY` errors. `AiosqliteConfig` defaults `default_transaction_mode` to `"IMMEDIATE"` so writers wait cleanly up to `busy_timeout`.
 - **Custom Functions, Collations, Aggregates, and Window Functions**: Register Python callables across every pooled connection using `custom_functions` (`SqliteFunctionConfig` / `AiosqliteFunctionConfig`), `custom_collations` (`SqliteCollationConfig` / `AiosqliteCollationConfig`), `custom_aggregates` (`SqliteAggregateConfig` / `AiosqliteAggregateConfig`), and `custom_window_functions` (`SqliteWindowFunctionConfig` / `AiosqliteWindowFunctionConfig`).
 
+## Connection Exit
+
+Context managers returned by `provide_connection`, `provide_session`, and `pool.get_connection` automatically commit open uncommitted work on a clean context exit and roll back on any exception (including cancellation), on both `SqliteConfig` and `AiosqliteConfig`. Call `rollback()` explicitly before exiting cleanly if you want to discard open modifications. Direct `pool.acquire()` and `pool.release()` calls do not commit on release; releasing an uncommitted connection directly rolls back any open work.
+
 ## See Also
 
 - [SQLite API Reference](/reference/adapters/sqlite/)

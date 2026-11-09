@@ -3,7 +3,7 @@
 """Unit tests for LocalStore backend."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -631,3 +631,337 @@ async def test_write_async_rejects_unknown_kwargs(tmp_path: Path) -> None:
 
     with pytest.raises(TypeError, match="Unsupported write keyword argument"):
         await store.write_text_async("item.txt", "data", unknown_option=True)
+
+
+def test_local_store_direct_stream_capability_matrix(tmp_path: Path) -> None:
+    """LocalStore supports direct stream writes for parquet, arrow-ipc, and csv across both overwrite values."""
+    from sqlspec.storage._arrow_payload import StorageFormat
+    from sqlspec.utils.type_guards import supports_direct_stream_write
+
+    store = LocalStore(str(tmp_path))
+    assert supports_direct_stream_write(store) is True
+
+    supported: tuple[StorageFormat, ...] = ("parquet", "arrow-ipc", "csv")
+    for fmt in supported:
+        assert store.supports_direct_arrow_write(fmt, overwrite=True) is True
+        assert store.supports_direct_arrow_write(fmt, overwrite=False) is True
+
+    assert store.supports_direct_arrow_write("json", overwrite=True) is False
+    assert store.supports_direct_arrow_write("json", overwrite=False) is False
+    assert store.supports_direct_arrow_write("jsonl", overwrite=True) is False
+
+
+def _dir_names(directory: Path) -> list[str]:
+    return sorted(p.name for p in directory.iterdir())
+
+
+def _stage_names(directory: Path) -> list[str]:
+    return [name for name in _dir_names(directory) if name.startswith(".sqlspec-stage-")]
+
+
+async def test_local_store_open_write_stream_round_trip(tmp_path: Path) -> None:
+    """Sync and async write streams stage in parent directory, publish atomically, and leave no stage file."""
+    from sqlspec.storage.backends.local import _AsyncLocalFileSink, _LocalFileSink
+
+    store = LocalStore(str(tmp_path))
+
+    with store.open_write_stream_sync("d/s.bin") as sink:
+        assert isinstance(sink, _LocalFileSink)
+        assert sink.write(b"part-1") == 6
+        assert sink.write(cast("Any", memoryview(b"-part-2"))) == 7
+        sink.flush()
+
+    assert store.read_bytes_sync("d/s.bin") == b"part-1-part-2"
+    assert _dir_names(tmp_path / "d") == ["s.bin"]
+
+    async with store.open_write_stream_async("da/sa.bin") as async_sink:
+        assert isinstance(async_sink, _AsyncLocalFileSink)
+        assert await async_sink.write(cast("Any", bytearray(b"part-1"))) == 6
+        assert await async_sink.write(b"-part-2") == 7
+        await async_sink.flush()
+
+    assert await store.read_bytes_async("da/sa.bin") == b"part-1-part-2"
+    assert _dir_names(tmp_path / "da") == ["sa.bin"]
+
+
+async def test_local_store_open_write_stream_failure_and_cancel_preserve_existing(tmp_path: Path) -> None:
+    """Mid-write errors and task cancellation unlink the stage file and leave existing destination untouched."""
+    import asyncio
+
+    store = LocalStore(str(tmp_path))
+    store.write_bytes_sync("e.bin", b"v1")
+
+    with pytest.raises(RuntimeError, match="boom"), store.open_write_stream_sync("e.bin") as sink:
+        sink.write(b"partial")
+        raise RuntimeError("boom")
+
+    assert store.read_bytes_sync("e.bin") == b"v1"
+    assert _dir_names(tmp_path) == ["e.bin"]
+
+    with pytest.raises(RuntimeError, match="boom-async"):
+        async with store.open_write_stream_async("e.bin") as async_sink:
+            await async_sink.write(b"partial-async")
+            raise RuntimeError("boom-async")
+
+    assert store.read_bytes_sync("e.bin") == b"v1"
+    assert _dir_names(tmp_path) == ["e.bin"]
+
+    started = asyncio.Event()
+    park = asyncio.Event()
+
+    async def _slow_stream() -> None:
+        async with store.open_write_stream_async("e.bin") as async_sink:
+            await async_sink.write(b"chunk")
+            started.set()
+            await park.wait()
+
+    task = asyncio.create_task(_slow_stream())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert store.read_bytes_sync("e.bin") == b"v1"
+    assert _dir_names(tmp_path) == ["e.bin"]
+
+
+async def test_local_store_sink_and_open_error_normalization_and_cancelled_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sink write/flush errors and open failures normalize to StorageOperationFailedError; cancelled __aenter__ cleans stage."""
+    import asyncio
+    import errno
+    import time
+
+    from sqlspec.exceptions import StorageOperationFailedError, StoragePathTraversalError
+    from sqlspec.storage.backends import local as local_mod
+    from sqlspec.storage.backends.local import _AsyncLocalFileSink, _LocalFileSink
+
+    class _FullDiskDouble:
+        closed = False
+
+        def write(self, _data: Any) -> int:
+            raise OSError(errno.ENOSPC, "disk full")
+
+        def flush(self) -> None:
+            raise OSError(errno.EIO, "io error")
+
+    sync_sink = _LocalFileSink(_FullDiskDouble(), backend="local", path="x")
+    with pytest.raises(StorageOperationFailedError):
+        sync_sink.write(b"abc")
+    with pytest.raises(StorageOperationFailedError):
+        sync_sink.flush()
+
+    async_sink = _AsyncLocalFileSink(_FullDiskDouble(), backend="local", path="x")
+    with pytest.raises(StorageOperationFailedError):
+        await async_sink.write(b"abc")
+    with pytest.raises(StorageOperationFailedError):
+        await async_sink.flush()
+
+    store = LocalStore(str(tmp_path))
+    store.write_bytes_sync("blocked", b"not-a-dir")
+    with pytest.raises(StorageOperationFailedError), store.open_write_stream_sync("blocked/x.bin"):
+        pass
+
+    with pytest.raises(StorageOperationFailedError):
+        async with store.open_write_stream_async("blocked/x.bin"):
+            pass
+
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        store.open_write_stream_sync("x.bin", bogus=1)
+    with pytest.raises(TypeError, match="Unsupported write keyword argument"):
+        store.open_write_stream_async("x.bin", bogus=1)
+    with pytest.raises(StoragePathTraversalError):
+        store.open_write_stream_sync("../escape.bin")
+    with pytest.raises(StoragePathTraversalError):
+        store.open_write_stream_async("../escape.bin")
+
+    orig_open_stage = local_mod._open_local_stage
+    entered_open = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _delayed_open_stage(destination: Path) -> Any:
+        result = orig_open_stage(destination)
+        loop.call_soon_threadsafe(entered_open.set)
+        time.sleep(0.05)
+        return result
+
+    monkeypatch.setattr(local_mod, "_open_local_stage", _delayed_open_stage)
+
+    async def _enter_and_write() -> None:
+        async with store.open_write_stream_async("cancel_open.bin") as s:
+            await s.write(b"never")
+
+    cancel_open_task = asyncio.create_task(_enter_and_write())
+    await entered_open.wait()
+    cancel_open_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_open_task
+
+    assert _stage_names(tmp_path) == []
+    assert not store.exists_sync("cancel_open.bin")
+
+
+async def test_local_store_create_only_no_hardlinks_and_mode_preservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Create-only streams publish atomically via os.link or O_EXCL fallback, and overwrite preserves file mode."""
+    import errno
+    import os
+    import shutil
+    import stat
+
+    from sqlspec.exceptions import StorageOperationFailedError
+
+    store = LocalStore(str(tmp_path))
+
+    with store.open_write_stream_sync("once.bin", overwrite=False) as sink:
+        sink.write(b"first")
+
+    with pytest.raises(FileExistsInStorageError), store.open_write_stream_sync("once.bin", overwrite=False) as sink:
+        sink.write(b"second")
+
+    assert store.read_bytes_sync("once.bin") == b"first"
+    assert _stage_names(tmp_path) == []
+
+    async with store.open_write_stream_async("once_async.bin", overwrite=False) as async_sink:
+        await async_sink.write(b"first-async")
+
+    with pytest.raises(FileExistsInStorageError):
+        async with store.open_write_stream_async("once_async.bin", overwrite=False) as async_sink:
+            await async_sink.write(b"second-async")
+
+    assert await store.read_bytes_async("once_async.bin") == b"first-async"
+
+    def _no_hard_link(_src: Any, _dst: Any) -> None:
+        raise OSError(errno.EPERM, "hard links disabled")
+
+    monkeypatch.setattr(os, "link", _no_hard_link)
+
+    with store.open_write_stream_sync("nolink_new.bin", overwrite=False) as sink:
+        sink.write(b"created-via-xb")
+    assert store.read_bytes_sync("nolink_new.bin") == b"created-via-xb"
+
+    with (
+        pytest.raises(FileExistsInStorageError),
+        store.open_write_stream_sync("nolink_new.bin", overwrite=False) as sink,
+    ):
+        sink.write(b"conflict")
+    assert store.read_bytes_sync("nolink_new.bin") == b"created-via-xb"
+
+    def _failing_copy(_fsrc: Any, fdst: Any, *_args: Any, **_kwargs: Any) -> None:
+        fdst.write(b"half")
+        raise OSError(errno.ENOSPC, "copy failed")
+
+    monkeypatch.setattr(shutil, "copyfileobj", _failing_copy)
+    with (
+        pytest.raises(StorageOperationFailedError),
+        store.open_write_stream_sync("nolink_fail.bin", overwrite=False) as sink,
+    ):
+        sink.write(b"full-payload")
+    assert not store.exists_sync("nolink_fail.bin")
+    assert _stage_names(tmp_path) == []
+
+    monkeypatch.undo()
+
+    def _seed_and_check_mode() -> int:
+        mode_file = tmp_path / "m.bin"
+        mode_file.write_bytes(b"initial")
+        mode_file.chmod(0o640)
+        with store.open_write_stream_sync("m.bin", overwrite=True) as sink:
+            sink.write(b"updated")
+        assert mode_file.read_bytes() == b"updated"
+        return stat.S_IMODE(mode_file.stat().st_mode)
+
+    assert _seed_and_check_mode() == 0o640
+
+
+@pytest.mark.skipif(not PYARROW_INSTALLED, reason="PyArrow not installed")
+async def test_local_store_write_arrow_formats_options_overwrite_and_failure_safety(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """LocalStore.write_arrow_* streams parquet/arrow-ipc/csv, honors options and overwrite, and preserves existing files on failure."""
+    import logging
+
+    import pyarrow.parquet as pq
+
+    from sqlspec.exceptions import StorageCapabilityError, StorageOperationFailedError
+    from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload
+
+    store = LocalStore(str(tmp_path))
+    tbl = pa.table({"id": [1, 2], "name": ["alpha", "beta"]})
+
+    formats: tuple[StorageFormat, ...] = ("parquet", "arrow-ipc", "csv")
+    for fmt in formats:
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="sqlspec.storage"):
+            store.write_arrow_sync(f"fmt_sync.{fmt}", tbl, format_hint=fmt)
+        decoded_sync = decode_arrow_payload(store.read_bytes_sync(f"fmt_sync.{fmt}"), fmt)
+        assert decoded_sync.to_pylist() == tbl.to_pylist()
+        sync_write_events = [
+            r
+            for r in caplog.records
+            if r.getMessage() == "storage.write" and getattr(r, "extra_fields", {}).get("operation") == "write_arrow"
+        ]
+        assert len(sync_write_events) == 1
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="sqlspec.storage"):
+            await store.write_arrow_async(f"fmt_async.{fmt}", tbl, format_hint=fmt)
+        decoded_async = decode_arrow_payload(await store.read_bytes_async(f"fmt_async.{fmt}"), fmt)
+        assert decoded_async.to_pylist() == tbl.to_pylist()
+        async_write_events = [
+            r
+            for r in caplog.records
+            if r.getMessage() == "storage.write" and getattr(r, "extra_fields", {}).get("operation") == "write_arrow"
+        ]
+        assert len(async_write_events) == 1
+
+        store.write_arrow_sync(f"once_sync.{fmt}", tbl, format_hint=fmt, overwrite=False)
+        with pytest.raises(FileExistsInStorageError):
+            store.write_arrow_sync(f"once_sync.{fmt}", tbl, format_hint=fmt, overwrite=False)
+
+        await store.write_arrow_async(f"once_async.{fmt}", tbl, format_hint=fmt, overwrite=False)
+        with pytest.raises(FileExistsInStorageError):
+            await store.write_arrow_async(f"once_async.{fmt}", tbl, format_hint=fmt, overwrite=False)
+
+    store.write_arrow_sync("default_comp.parquet", tbl)
+    pf_default = pq.ParquetFile(pa.BufferReader(store.read_bytes_sync("default_comp.parquet")))
+    assert pf_default.metadata.row_group(0).column(0).compression == "SNAPPY"
+
+    store.write_arrow_sync("zstd_comp.parquet", tbl, write_options={"compression": "zstd"})
+    pf_zstd = pq.ParquetFile(pa.BufferReader(store.read_bytes_sync("zstd_comp.parquet")))
+    assert pf_zstd.metadata.row_group(0).column(0).compression == "ZSTD"
+
+    six_rows = pa.table({"id": [1, 2, 3, 4, 5, 6]})
+    store.write_arrow_sync("flat_opt.parquet", six_rows, row_group_size=2)
+    pf_groups = pq.ParquetFile(pa.BufferReader(store.read_bytes_sync("flat_opt.parquet")))
+    assert pf_groups.num_row_groups == 3
+
+    with pytest.raises(TypeError):
+        store.write_arrow_sync("bad_kw.parquet", tbl, bogus=1)
+    with pytest.raises(TypeError):
+        await store.write_arrow_async("bad_kw.parquet", tbl, bogus=1)
+
+    with pytest.raises(StorageCapabilityError):
+        store.write_arrow_sync("bad_fmt.json", tbl, format_hint="json")
+    assert not store.exists_sync("bad_fmt.json")
+    with pytest.raises(StorageCapabilityError):
+        await store.write_arrow_async("bad_fmt_async.json", tbl, format_hint="json")
+    assert not store.exists_sync("bad_fmt_async.json")
+
+    store.write_arrow_sync("e.parquet", tbl)
+    seeded_bytes = store.read_bytes_sync("e.parquet")
+
+    sparse_union = pa.UnionArray.from_sparse(pa.array([0, 1], type=pa.int8()), [pa.array([1, 2]), pa.array(["x", "y"])])
+    unwritable_tbl = pa.table({"u": sparse_union})
+
+    with pytest.raises(StorageOperationFailedError):
+        store.write_arrow_sync("e.parquet", unwritable_tbl)
+    assert store.read_bytes_sync("e.parquet") == seeded_bytes
+    assert _stage_names(tmp_path) == []
+
+    with pytest.raises(StorageOperationFailedError):
+        await store.write_arrow_async("e.parquet", unwritable_tbl)
+    assert store.read_bytes_sync("e.parquet") == seeded_bytes
+    assert _stage_names(tmp_path) == []
