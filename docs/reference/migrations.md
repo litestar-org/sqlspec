@@ -1,6 +1,10 @@
 # Migrations
 
 ```python
+from sqlspec.config import (
+    ExtensionMigrationMode,
+    resolve_extension_migration_mode,
+)
 from sqlspec.migrations import (
     AsyncMigrationCommands,
     AsyncMigrationRunner,
@@ -21,9 +25,10 @@ from sqlspec.migrations import (
     ensure_schema_sync,
     fold_migration_ddl,
 )
+from sqlspec.migrations.context import MigrationContext
 ```
 
-Programmatic schema migration commands, SQL and Python migration loaders, version table trackers, declarative schema targets, and canonical DDL or concatenation squashing. See the [Migrations Guide](../learn/migrations.md) for end-to-end workflows.
+Programmatic schema migration commands, SQL and Python migration loaders, version table trackers, unversioned extension reconciler contexts, declarative schema targets, and canonical DDL or concatenation squashing. See the [Migrations Guide](../learn/migrations.md) for end-to-end workflows.
 
 ## Migration Commands
 
@@ -99,6 +104,27 @@ Programmatic schema migration commands, SQL and Python migration loaders, versio
       heading_level: 4
       members: false
 
+## Extension Reconciliation & Context
+
+Built-in reconcilers (`litestar`, `events`, and `adk`) execute `<migrations_path>/reconcile.py::reconcile(context)` across all 20 unconditional built-in adapters (`sqlite`, `aiosqlite`, `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `oracledb`, `spanner`, `bigquery`, `db2`, `sqlanywhere`, `sybase`), `arrow_odbc` on `mssql`/`tsql`/`db2`, and `adbc` on backends with a resolved dialect (ADBC over FlightSQL requires an explicit `statement_config` dialect or `gizmosql_backend`). Inside `reconcile(context)`, pass `manage_schema=True, commit=False, strict=True` to `ensure_schema_sync` or `ensure_schema_async` so the migration runner owns transaction boundaries and unsafe schema drift fails closed with `MigrationError`.
+
+::: sqlspec.config.ExtensionMigrationMode
+    options:
+      heading_level: 4
+      separate_signature: false
+
+::: sqlspec.migrations.context.MigrationContext
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.migrations.utils.resolve_extension_migration_mode
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
+      show_docstring_parameters: false
+
 ## Declarative Schema & Squashing
 
 ::: sqlspec.migrations.schema.SchemaTarget
@@ -114,10 +140,16 @@ Programmatic schema migration commands, SQL and Python migration loaders, versio
 ::: sqlspec.migrations.schema.ensure_schema_sync
     options:
       heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
+      show_docstring_parameters: false
 
 ::: sqlspec.migrations.schema.ensure_schema_async
     options:
       heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
+      show_docstring_parameters: false
 
 ::: sqlspec.migrations.squash.MigrationSquasher
     options:
@@ -132,3 +164,6 @@ Programmatic schema migration commands, SQL and Python migration loaders, versio
 ::: sqlspec.migrations.squash.fold_migration_ddl
     options:
       heading_level: 4
+      separate_signature: false
+      show_signature_annotations: true
+      show_docstring_parameters: false
