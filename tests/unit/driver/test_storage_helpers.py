@@ -27,7 +27,12 @@ from sqlspec.typing import PYARROW_INSTALLED
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 
-HOOK_ROUTED_ADAPTERS: list[tuple[str, str]] = []
+HOOK_ROUTED_ADAPTERS: list[tuple[str, str]] = [
+    ("sqlspec.adapters.adbc.driver", "AdbcDriver"),
+    ("sqlspec.adapters.arrow_odbc.driver", "ArrowOdbcDriver"),
+    ("sqlspec.adapters.spanner.driver", "SpannerSyncDriver"),
+    ("sqlspec.adapters.spanner.driver", "SpannerAsyncDriver"),
+]
 
 
 class _NoopSyncExcHandler:

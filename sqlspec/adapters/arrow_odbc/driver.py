@@ -6,7 +6,7 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from sqlglot import exp
 
@@ -143,6 +143,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         "_use_concurrent_fetch",
         "dialect",
     )
+    native_arrow_export: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -469,7 +470,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Execute a query and stream Arrow-compatible results to storage."""
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
