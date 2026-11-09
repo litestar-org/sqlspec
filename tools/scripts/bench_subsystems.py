@@ -659,8 +659,10 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     from sqlspec import SQLSpec, sql
     from sqlspec.adapters.sqlite import SqliteConfig
     from sqlspec.adapters.sqlite.driver import SqliteCursor
+    from sqlspec.core import ParameterDeclaration
     from sqlspec.core.result._base import SQLResult
     from sqlspec.core.statement import SQL
+    from sqlspec.driver._common import _check_declared_parameters
     from sqlspec.storage.pipeline import SyncStoragePipeline, _decode_arrow_payload, _encode_row_payload
     from sqlspec.storage.registry import StorageRegistry
     from sqlspec.typing import Empty
@@ -838,6 +840,37 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
             bench_fn=bench_driver_parameters,
             iterations=iterations,
             description="Format a 3-element positional parameter set",
+        )
+    )
+
+    declared_stmt = SQL(
+        "SELECT :value, :id",
+        {"value": "x", "id": 1},
+        declared_parameters=(ParameterDeclaration("value", "str"), ParameterDeclaration("id", "int")),
+    )
+    undeclared_stmt = SQL("SELECT :value, :id", {"value": "x", "id": 1})
+
+    def bench_check_declared_two() -> None:
+        _check_declared_parameters(declared_stmt)
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="_check_declared_parameters (2 declared)",
+            bench_fn=bench_check_declared_two,
+            iterations=iterations,
+            description="Validate a named statement carrying two parameter declarations",
+        )
+    )
+
+    def bench_check_declared_none() -> None:
+        _check_declared_parameters(undeclared_stmt)
+
+    benchmarks.append(
+        SubsystemBenchmark(
+            name="_check_declared_parameters (none declared)",
+            bench_fn=bench_check_declared_none,
+            iterations=iterations,
+            description="Short-circuit declared-parameter validation when no declarations exist",
         )
     )
 

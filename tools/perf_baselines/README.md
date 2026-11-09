@@ -37,6 +37,12 @@ when deliberately measuring a different pool topology.
   file fall back to absolute median comparison (`abs-fallback`). Pass
   `BENCHMARK_MODE=absolute` (or `--mode absolute`) to compare absolute median
   timings across all scenarios.
+- **SQLite overhead gate enforcement (`bench_gate.py`)**: `tools/scripts/bench_gate.py`
+  evaluates five raw-versus-SQLSpec SQLite budgets (`iterative_inserts`,
+  `repeated_queries`, `write_heavy`, `read_heavy`, and `declared_parameters`),
+  retains per-tier and aggregate noise statistics, fails any gated row whose
+  `raw` or `sqlspec` `noise_ratio` exceeds `--max-noise-ratio` when set, and
+  refuses interpreted builds before running when `--require-compiled` is passed.
 
 ## Baseline inventory
 
@@ -67,6 +73,9 @@ local and service-backed drivers:
   executing a query per session
 - `observability_select`: repeated `SELECT` queries with statement observers
   enabled via `ObservabilityConfig`
+- `declared_parameters` (SQLite-only): repeated named `SELECT`s through a
+  loader-declared `SQL` object over a fixed 7000-row unindexed table, including
+  setup and cleanup in the timing
 
 ## Service-backed environment variables
 

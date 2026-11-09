@@ -407,6 +407,25 @@ bench-gate-adapters:                                ## Compare selected adapter 
 		exit 1; \
 	fi
 
+ORACLE_JSON_GATE_ARGS = --mode ratio --threshold 5 --max-gate-noise 0.05 \
+	--gate-identity oracle/sqlspec_native_json/json_write \
+	--gate-identity oracle/sqlspec_serialized_json/json_write \
+	--gate-identity oracle/sqlspec/json_read
+
+ORACLE_JSON_BASELINE ?= tools/perf_baselines/oracle.json
+
+.PHONY: bench-repeat-oracle-json
+bench-repeat-oracle-json:                           ## Check that two same-commit Oracle captures agree on the JSON rows
+	@test -n "$(CANDIDATE)"
+	@test -n "$(VALIDATION)"
+	@uv run --no-sync python tools/scripts/bench_compare.py "$(CANDIDATE)" "$(VALIDATION)" $(ORACLE_JSON_GATE_ARGS)
+	@uv run --no-sync python tools/scripts/bench_compare.py "$(VALIDATION)" "$(CANDIDATE)" $(ORACLE_JSON_GATE_ARGS)
+
+.PHONY: bench-gate-oracle-json
+bench-gate-oracle-json:                             ## Fail when a fresh Oracle capture regresses a JSON row against the baseline
+	@test -n "$(CURRENT)"
+	@uv run --no-sync python tools/scripts/bench_compare.py "$(ORACLE_JSON_BASELINE)" "$(CURRENT)" $(ORACLE_JSON_GATE_ARGS) --strict-parity
+
 .PHONY: bench-subsystems
 bench-subsystems:                                   ## Run subsystem micro-benchmarks
 	@echo "${INFO} Running subsystem micro-benchmarks... 🔬"
