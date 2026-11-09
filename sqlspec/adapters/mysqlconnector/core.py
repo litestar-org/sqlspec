@@ -158,6 +158,7 @@ class MysqlConnectorSyncStreamSource:
         "_parameters",
         "_row_plan",
         "_sql",
+        "column_types",
     )
 
     def __init__(
@@ -178,6 +179,7 @@ class MysqlConnectorSyncStreamSource:
         self._cursor_options = dict(cursor_options or {})
         self._cursor_options["buffered"] = False
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        self.column_types: dict[str, str] | None = None
         deserializer = getattr(driver, "_json_deserializer", None)
         if deserializer is None and hasattr(driver, "driver_features") and isinstance(driver.driver_features, dict):
             deserializer = driver.driver_features.get("json_deserializer")
@@ -194,6 +196,7 @@ class MysqlConnectorSyncStreamSource:
             self._cursor = cursor
             cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+            self.column_types = _resolve_column_types(self._cursor.description)
         except BaseException:
             self.close(error=True)
             raise
@@ -236,6 +239,7 @@ class MysqlConnectorAsyncStreamSource:
         "_parameters",
         "_row_plan",
         "_sql",
+        "column_types",
     )
 
     def __init__(
@@ -256,6 +260,7 @@ class MysqlConnectorAsyncStreamSource:
         self._cursor_options = dict(cursor_options or {})
         self._cursor_options["buffered"] = False
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        self.column_types: dict[str, str] | None = None
         deserializer = getattr(driver, "_json_deserializer", None)
         if deserializer is None and hasattr(driver, "driver_features") and isinstance(driver.driver_features, dict):
             deserializer = driver.driver_features.get("json_deserializer")
@@ -296,6 +301,7 @@ class MysqlConnectorAsyncStreamSource:
             self._cursor = cursor
             await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+            self.column_types = _resolve_column_types(self._cursor.description)
         except BaseException:
             await self.close(error=True)
             raise
