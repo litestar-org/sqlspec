@@ -13,7 +13,8 @@ from sqlspec.adapters.arrow_odbc.core import (
 from sqlspec.adapters.arrow_odbc.core import atomic_store_write as _atomic_write
 from sqlspec.adapters.arrow_odbc.core import strip_bracket_quotes as _strip_tsql_quotes
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -194,6 +195,14 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         """Get the CREATE TABLE DDL for the configured dialect."""
         return self._sql.table_ddl()
 
+    def get_schema_targets(self) -> list[SchemaTarget]:
+        """Return primary session table and overflow chunk table SchemaTargets in FK order."""
+        return self._sql.schema_targets()
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the companion session expiry index definition."""
+        return self._sql.companion_indexes()
+
     def _drop_table_sql(self) -> "list[str]":
         """Get the DROP TABLE statements for the configured dialect."""
         return self._sql.drop_statements()
@@ -322,6 +331,72 @@ class _TsqlSessionSql:
         END;
         """
 
+    def _session_table_ddl(self) -> str:
+        """Get table-only SQL Server CREATE TABLE DDL for the primary session table."""
+        return f"""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.tables
+            WHERE name = N'{self._bare_table}'
+              AND schema_id = SCHEMA_ID(N'{self._schema}')
+        )
+        BEGIN
+            CREATE TABLE {self._table_name} (
+                session_id NVARCHAR(255) PRIMARY KEY,
+                data NVARCHAR(MAX) NULL,
+                expires_at DATETIME2(6) NULL,
+                created_at DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME(),
+                updated_at DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME()
+            );
+        END;
+        """
+
+    def _chunk_table_ddl(self) -> str:
+        """Get SQL Server CREATE TABLE DDL for the overflow chunks table."""
+        return f"""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.tables
+            WHERE name = N'{self._bare_chunk_table}'
+              AND schema_id = SCHEMA_ID(N'{self._schema}')
+        )
+        BEGIN
+            CREATE TABLE {self._chunk_table_name} (
+                session_id NVARCHAR(255) NOT NULL,
+                chunk_index INT NOT NULL,
+                data NVARCHAR(3500) NOT NULL,
+                CONSTRAINT PK_{self._bare_chunk_table} PRIMARY KEY (session_id, chunk_index),
+                CONSTRAINT FK_{self._bare_chunk_table}_session FOREIGN KEY (session_id)
+                    REFERENCES {self._table_name}(session_id) ON DELETE CASCADE
+            );
+        END;
+        """
+
+    def schema_targets(self) -> list[SchemaTarget]:
+        """Build ordered SchemaTargets for the primary session and chunk tables."""
+        return [
+            SchemaTarget.from_ddl(self._bare_table, self._session_table_ddl(), schema=self._schema, dialect="tsql"),
+            SchemaTarget.from_ddl(self._bare_chunk_table, self._chunk_table_ddl(), schema=self._schema, dialect="tsql"),
+        ]
+
+    def companion_indexes(self) -> list[CompanionIndex]:
+        """Build the guarded T-SQL companion expiry index definition."""
+        index_name = f"IX_{self._bare_table}_expires_at"
+        ddl = f"""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.indexes
+            WHERE name = N'{index_name}'
+              AND object_id = OBJECT_ID(N'{self._schema}.{self._bare_table}')
+        )
+        BEGIN
+            CREATE INDEX {index_name}
+                ON {self._table_name}(expires_at)
+                WHERE expires_at IS NOT NULL;
+        END;
+        """
+        return [CompanionIndex(name=index_name, table=self._bare_table, schema=self._schema, ddl=ddl)]
+
     def drop_statements(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
         chunk_target = f"{self._schema}.{self._bare_chunk_table}"
@@ -345,6 +420,24 @@ class _Db2SessionSql:
     def table_ddl(self) -> str:
         """Get the session table, expiry index and chunk table DDL as one script."""
         return f"{self._session_table_ddl()};\n{self._index_ddl()};\n{self._chunk_table_ddl()}"
+
+    def schema_targets(self) -> list[SchemaTarget]:
+        """Build ordered Db2 SchemaTargets for the primary session and chunk tables."""
+        schema_name = self._schema or None
+        return [
+            SchemaTarget.from_ddl(self._catalog_table, self._session_table_ddl(), schema=schema_name, dialect="db2"),
+            SchemaTarget.from_ddl(
+                f"{self._catalog_table}_CHUNKS", self._chunk_table_ddl(), schema=schema_name, dialect="db2"
+            ),
+        ]
+
+    def companion_indexes(self) -> list[CompanionIndex]:
+        """Build the Db2 companion expiry index definition."""
+        return [
+            CompanionIndex(
+                name=self._index_name(), table=self._catalog_table, schema=self._schema or None, ddl=self._index_ddl()
+            )
+        ]
 
     def drop_statements(self) -> "list[str]":
         """Get Db2 DROP TABLE statements."""

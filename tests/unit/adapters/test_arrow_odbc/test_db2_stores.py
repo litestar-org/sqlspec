@@ -32,6 +32,7 @@ _ONE_ROW = pa.table({"1": [1]})
 _SESSION_COLUMNS = pa.table({
     name: pa.array([], pa.string()) for name in ("SESSION_ID", "DATA", "EXPIRES_AT", "CREATED_AT", "UPDATED_AT")
 })
+_CHUNK_COLUMNS = pa.table({name: pa.array([], pa.string()) for name in ("SESSION_ID", "CHUNK_INDEX", "DATA")})
 _SERVER_CLOCK_MARKERS = ("SYSUTCDATETIME", "CURRENT TIMESTAMP", "CURRENT_TIMESTAMP")
 
 
@@ -63,7 +64,7 @@ async def test_db2_litestar_create_table_probes_then_creates() -> None:
         if "SYSCAT.TABLES" in sql and parameters == [None, "SESS"]:
             return _ONE_ROW
         if "WHERE 1=0" in sql:
-            return _SESSION_COLUMNS
+            return _CHUNK_COLUMNS if "sess_chunks" in sql.lower() else _SESSION_COLUMNS
         return None
 
     connection = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=responder)
@@ -155,7 +156,7 @@ async def test_db2_litestar_update_binds_utc_times() -> None:
 def test_db2_litestar_ddl_parses_with_db2_dialect() -> None:
     """The Db2 DDL parses with the db2 dialect and yields the session table columns."""
     store = _session_store(FakeArrowOdbcConnection())
-    ddl = store._table_ddl()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._table_ddl()
 
     statements = [statement for statement in sqlglot.parse(ddl, read="db2") if statement is not None]
     target = SchemaTarget.from_ddl("sess", ddl, dialect="db2")
@@ -169,7 +170,7 @@ def test_db2_litestar_ddl_parses_with_db2_dialect() -> None:
         "updated_at",
     ]
     assert "IF NOT EXISTS" not in ddl.upper()
-    assert store._drop_table_sql() == ["DROP TABLE sess_chunks", "DROP TABLE sess"]  # pyright: ignore[reportPrivateUsage]
+    assert store._drop_table_sql() == ["DROP TABLE sess_chunks", "DROP TABLE sess"]
 
 
 def _event_store(queue_table: str = "app_events") -> ArrowOdbcEventQueueStore:
@@ -205,7 +206,7 @@ def test_db2_event_store_create_statements() -> None:
 )
 def test_db2_event_store_index_existence_target(queue_table: str, expected: "tuple[str | None, str]") -> None:
     """The index check targets the upper-folded catalog names of the unquoted queue table."""
-    assert _event_store(queue_table)._index_existence_target() == expected  # pyright: ignore[reportPrivateUsage]
+    assert _event_store(queue_table)._index_existence_target() == expected
 
 
 _EVENT_TIME = datetime(2026, 1, 2, 3, 4, 5, 678901, tzinfo=UTC)
@@ -451,11 +452,11 @@ def test_db2_adk_ddl_parses_with_db2_dialect() -> None:
     """Every ADK session-store DDL statement parses with the db2 dialect and declares NOT NULL keys."""
     store = _adk_store(FakeArrowOdbcConnection(), owner_id_column="tenant_id INTEGER")
     ddls = [
-        store._sessions_table_ddl(),  # pyright: ignore[reportPrivateUsage]
-        store._events_table_ddl(),  # pyright: ignore[reportPrivateUsage]
-        store._app_states_table_ddl(),  # pyright: ignore[reportPrivateUsage]
-        store._user_states_table_ddl(),  # pyright: ignore[reportPrivateUsage]
-        store._metadata_table_ddl(),  # pyright: ignore[reportPrivateUsage]
+        store._sessions_table_ddl(),
+        store._events_table_ddl(),
+        store._app_states_table_ddl(),
+        store._user_states_table_ddl(),
+        store._metadata_table_ddl(),
     ]
 
     parsed = [sqlglot.parse_one(ddl, read="db2") for ddl in ddls]
@@ -472,7 +473,7 @@ def test_db2_adk_ddl_parses_with_db2_dialect() -> None:
         "update_time",
     ]
     assert all("NVARCHAR" not in ddl and "SYSUTCDATETIME" not in ddl for ddl in ddls)
-    assert store._drop_tables_sql() == [  # pyright: ignore[reportPrivateUsage]
+    assert store._drop_tables_sql() == [
         "DROP TABLE adk_internal_metadata",
         "DROP TABLE adk_user_state",
         "DROP TABLE adk_app_state",
@@ -644,7 +645,7 @@ def test_db2_adk_memory_cutoff_is_utc() -> None:
 def test_db2_adk_memory_ddl_parses_with_db2_dialect() -> None:
     """The Db2 memory table DDL parses with the db2 dialect and has no SQL Server types."""
     store = _memory_store(FakeArrowOdbcConnection(), owner_id_column="tenant_id INTEGER")
-    ddl = store._memory_table_ddl()  # pyright: ignore[reportPrivateUsage]
+    ddl = store._memory_table_ddl()
 
     target = SchemaTarget.from_ddl("adk_memory", ddl, dialect="db2")
 
@@ -665,4 +666,22 @@ def test_db2_adk_memory_ddl_parses_with_db2_dialect() -> None:
         "tenant_id",
     ]
     assert "NVARCHAR" not in ddl and "DATETIME2" not in ddl
-    assert store._drop_memory_table_sql() == ["DROP TABLE adk_memory"]  # pyright: ignore[reportPrivateUsage]
+    assert store._drop_memory_table_sql() == ["DROP TABLE adk_memory"]
+
+
+def test_arrow_odbc_db2_store_targets_session_then_chunks() -> None:
+    """Db2 ArrowOdbcStore returns session and chunk SchemaTargets in FK order and companion index."""
+    store = _session_store(FakeArrowOdbcConnection())
+
+    targets = store.get_schema_targets()
+    indexes = store.get_companion_indexes()
+
+    assert [target.table_name for target in targets] == ["SESS", "SESS_CHUNKS"]
+    assert [target.schema for target in targets] == [None, None]
+    assert targets[0].constraint_columns == frozenset({"session_id"})
+    assert targets[1].constraint_columns == frozenset({"session_id", "chunk_index"})
+    assert len(indexes) == 1
+    assert indexes[0].name == "IX_SESS_EXP"
+    assert indexes[0].table == "SESS"
+    assert indexes[0].schema is None
+    assert indexes[0].ddl == "CREATE INDEX IX_SESS_EXP ON sess(expires_at)"
