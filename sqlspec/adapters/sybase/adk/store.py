@@ -16,6 +16,7 @@ from sqlspec.adapters.sybase.core import (
 from sqlspec.exceptions import NotFoundError, SQLSpecError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -348,6 +349,45 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         """Return ``(index_name, table, columns)`` specs for session and event indexes."""
         return [*_sessions_index_specs(self._session_table), *_events_index_specs(self._events_table)]
 
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct Sybase ASE SchemaTarget definitions in FK dependency order."""
+        ddl_targets = (
+            (
+                self._session_table,
+                _sessions_create_table_sql(self._session_table, JSON_COLUMN_TYPE, self._owner_id_column_ddl),
+                self._sessions_table_ddl(),
+            ),
+            (
+                self._events_table,
+                _events_create_table_sql(self._events_table, self._session_table, JSON_COLUMN_TYPE),
+                self._events_table_ddl(),
+            ),
+            (
+                self._app_state_table,
+                _app_states_create_table_sql(self._app_state_table, JSON_COLUMN_TYPE),
+                self._app_states_table_ddl(),
+            ),
+            (
+                self._user_state_table,
+                _user_states_create_table_sql(self._user_state_table, JSON_COLUMN_TYPE),
+                self._user_states_table_ddl(),
+            ),
+            (self._metadata_table, _metadata_create_table_sql(self._metadata_table), self._metadata_table_ddl()),
+        )
+        return [
+            _build_sybase_target(table, inner_ddl, create_statement)
+            for table, inner_ddl, create_statement in ddl_targets
+        ]
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return ordered Sybase ASE ADK session-store SchemaTarget definitions."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Sybase ASE ADK session and event companion indexes without committing."""
+        _reconcile_sybase_indexes(driver, self._index_specs())
+
     def _sessions_table_ddl(self) -> str:
         """Return Sybase ASE DDL for the ADK session table."""
         return _sessions_table_ddl(self._session_table, JSON_COLUMN_TYPE, self._owner_id_column_ddl)
@@ -571,27 +611,29 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
             f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True
         )
 
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct the Sybase ASE ADK memory SchemaTarget when memory is enabled."""
+        if not self._enabled:
+            return []
+        inner_ddl = _memory_create_table_sql(self._memory_table, JSON_COLUMN_TYPE, self._owner_id_column_ddl)
+        return [_build_sybase_target(self._memory_table, inner_ddl, self._memory_table_ddl())]
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return ordered Sybase ASE ADK memory SchemaTarget definitions."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Sybase ASE ADK memory companion indexes without committing."""
+        if not self._enabled:
+            return
+        _reconcile_sybase_indexes(driver, self._memory_index_specs())
+
     def _memory_table_ddl(self) -> str:
-        owner_line = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         table_ref = _table_ref(self._memory_table)
         escaped_ref = escape_sql_literal(table_ref)
         create_sql = escape_sql_literal(
-            f"CREATE TABLE {table_ref} ("
-            "id VARCHAR(128) NOT NULL, "
-            "session_id VARCHAR(128) NOT NULL, "
-            "app_name VARCHAR(128) NOT NULL, "
-            "user_id VARCHAR(128) NOT NULL, "
-            f"scope VARCHAR(16) DEFAULT 'user' NOT NULL, "
-            "event_id VARCHAR(128) NOT NULL, "
-            "author VARCHAR(256) NULL, "
-            "timestamp BIGDATETIME NOT NULL, "
-            f"content_json {JSON_COLUMN_TYPE} NOT NULL, "
-            "content_text TEXT NOT NULL, "
-            f"metadata_json {JSON_COLUMN_TYPE} NULL, "
-            f"inserted_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL{owner_line}, "
-            f"CONSTRAINT {_constraint_ref('pk', self._memory_table, 'id')} PRIMARY KEY (id), "
-            f"CONSTRAINT {_constraint_ref('uq', self._memory_table, 'event_id')} UNIQUE (event_id)"
-            ")"
+            _memory_create_table_sql(self._memory_table, JSON_COLUMN_TYPE, self._owner_id_column_ddl)
         )
         return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
@@ -632,6 +674,34 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
             return rowcount
 
 
+def _build_sybase_target(table: str, inner_ddl: str, create_statement: str) -> SchemaTarget:
+    """Build a Sybase ASE SchemaTarget from unwrapped DDL while preserving the guarded CREATE statement."""
+    schema_name, bare_table = split_schema_and_table(table)
+    parsed = SchemaTarget.from_ddl(bare_table, inner_ddl, schema=schema_name, dialect="sybase")
+    return SchemaTarget(
+        parsed.table_name,
+        parsed.create_table,
+        schema=parsed.schema,
+        create_statement=create_statement,
+        constraint_columns=parsed.constraint_columns,
+        unsafe_add_columns=parsed.unsafe_add_columns,
+    )
+
+
+def _reconcile_sybase_indexes(driver: Any, index_specs: "list[tuple[str, str, str]]") -> None:
+    """Create missing Sybase ASE ADK companion indexes via catalog probes without committing."""
+    checked_tables: dict[tuple[str, str], list[Any]] = {}
+    for index_name, index_table, columns in index_specs:
+        schema_name, table_name = split_schema_and_table(index_table)
+        table_key = (schema_name, table_name)
+        rows = checked_tables.get(table_key)
+        if rows is None:
+            rows = list(driver.data_dictionary.get_indexes(driver, table=table_name, schema=schema_name))
+            checked_tables[table_key] = rows
+        if not metadata_has_index(rows, table_name, index_name, schema_name=schema_name):
+            driver.execute(_create_index_sql(index_table, index_name, columns))
+
+
 def _existing_index_names(driver: "SybaseDriver", index_specs: "list[tuple[str, str, str]]") -> "set[str]":
     schemas = {split_schema_and_table(index_table)[0] for _, index_table, _ in index_specs} or {SYBASE_SCHEMA}
     existing: set[str] = set()
@@ -640,11 +710,10 @@ def _existing_index_names(driver: "SybaseDriver", index_specs: "list[tuple[str, 
     return existing
 
 
-def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:
+def _sessions_create_table_sql(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:
     owner_line = f", {owner_id_column_ddl}" if owner_id_column_ddl else ""
     table_ref = _table_ref(table)
-    escaped_ref = escape_sql_literal(table_ref)
-    create_sql = escape_sql_literal(
+    return (
         f"CREATE TABLE {table_ref} ("
         "id VARCHAR(128) NOT NULL, "
         "app_name VARCHAR(128) NOT NULL, "
@@ -655,6 +724,11 @@ def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: 
         f"CONSTRAINT {_constraint_ref('pk', table, 'id')} PRIMARY KEY (id)"
         ")"
     )
+
+
+def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:
+    escaped_ref = escape_sql_literal(_table_ref(table))
+    create_sql = escape_sql_literal(_sessions_create_table_sql(table, json_column_type, owner_id_column_ddl))
     return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
 
@@ -666,11 +740,10 @@ def _sessions_index_specs(table: str) -> "list[tuple[str, str, str]]":
     ]
 
 
-def _events_table_ddl(table: str, session_table: str, json_column_type: str) -> str:
+def _events_create_table_sql(table: str, session_table: str, json_column_type: str) -> str:
     table_ref = _table_ref(table)
     session_ref = _table_ref(session_table)
-    escaped_ref = escape_sql_literal(table_ref)
-    create_sql = escape_sql_literal(
+    return (
         f"CREATE TABLE {table_ref} ("
         "id VARCHAR(128) NOT NULL, "
         "app_name VARCHAR(128) NOT NULL, "
@@ -683,6 +756,11 @@ def _events_table_ddl(table: str, session_table: str, json_column_type: str) -> 
         f"CONSTRAINT {_constraint_ref('fk', table, 'session')} FOREIGN KEY (session_id) REFERENCES {session_ref}(id)"
         ")"
     )
+
+
+def _events_table_ddl(table: str, session_table: str, json_column_type: str) -> str:
+    escaped_ref = escape_sql_literal(_table_ref(table))
+    create_sql = escape_sql_literal(_events_create_table_sql(table, session_table, json_column_type))
     return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
 
@@ -697,10 +775,9 @@ def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
     ]
 
 
-def _app_states_table_ddl(table: str, json_column_type: str) -> str:
+def _app_states_create_table_sql(table: str, json_column_type: str) -> str:
     table_ref = _table_ref(table)
-    escaped_ref = escape_sql_literal(table_ref)
-    create_sql = escape_sql_literal(
+    return (
         f"CREATE TABLE {table_ref} ("
         "app_name VARCHAR(128) NOT NULL, "
         f"state {json_column_type} NOT NULL, "
@@ -708,13 +785,17 @@ def _app_states_table_ddl(table: str, json_column_type: str) -> str:
         f"CONSTRAINT {_constraint_ref('pk', table, 'app_name')} PRIMARY KEY (app_name)"
         ")"
     )
+
+
+def _app_states_table_ddl(table: str, json_column_type: str) -> str:
+    escaped_ref = escape_sql_literal(_table_ref(table))
+    create_sql = escape_sql_literal(_app_states_create_table_sql(table, json_column_type))
     return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
 
-def _user_states_table_ddl(table: str, json_column_type: str) -> str:
+def _user_states_create_table_sql(table: str, json_column_type: str) -> str:
     table_ref = _table_ref(table)
-    escaped_ref = escape_sql_literal(table_ref)
-    create_sql = escape_sql_literal(
+    return (
         f"CREATE TABLE {table_ref} ("
         "app_name VARCHAR(128) NOT NULL, "
         "user_id VARCHAR(128) NOT NULL, "
@@ -723,20 +804,52 @@ def _user_states_table_ddl(table: str, json_column_type: str) -> str:
         f"CONSTRAINT {_constraint_ref('pk', table, 'app_user')} PRIMARY KEY (app_name, user_id)"
         ")"
     )
+
+
+def _user_states_table_ddl(table: str, json_column_type: str) -> str:
+    escaped_ref = escape_sql_literal(_table_ref(table))
+    create_sql = escape_sql_literal(_user_states_create_table_sql(table, json_column_type))
     return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
 
 
-def _metadata_table_ddl(table: str) -> str:
+def _metadata_create_table_sql(table: str) -> str:
     table_ref = _table_ref(table)
-    escaped_ref = escape_sql_literal(table_ref)
-    create_sql = escape_sql_literal(
+    return (
         f"CREATE TABLE {table_ref} ("
         "[key] VARCHAR(128) NOT NULL, "
         "value VARCHAR(512) NOT NULL, "
         f"CONSTRAINT {_constraint_ref('pk', table, 'key')} PRIMARY KEY ([key])"
         ")"
     )
+
+
+def _metadata_table_ddl(table: str) -> str:
+    escaped_ref = escape_sql_literal(_table_ref(table))
+    create_sql = escape_sql_literal(_metadata_create_table_sql(table))
     return f"IF OBJECT_ID('{escaped_ref}') IS NULL EXECUTE('{create_sql}');"
+
+
+def _memory_create_table_sql(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:
+    owner_line = f", {owner_id_column_ddl}" if owner_id_column_ddl else ""
+    table_ref = _table_ref(table)
+    return (
+        f"CREATE TABLE {table_ref} ("
+        "id VARCHAR(128) NOT NULL, "
+        "session_id VARCHAR(128) NOT NULL, "
+        "app_name VARCHAR(128) NOT NULL, "
+        "user_id VARCHAR(128) NOT NULL, "
+        "scope VARCHAR(16) DEFAULT 'user' NOT NULL, "
+        "event_id VARCHAR(128) NOT NULL, "
+        "author VARCHAR(256) NULL, "
+        "timestamp BIGDATETIME NOT NULL, "
+        f"content_json {json_column_type} NOT NULL, "
+        "content_text TEXT NOT NULL, "
+        f"metadata_json {json_column_type} NULL, "
+        f"inserted_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL{owner_line}, "
+        f"CONSTRAINT {_constraint_ref('pk', table, 'id')} PRIMARY KEY (id), "
+        f"CONSTRAINT {_constraint_ref('uq', table, 'event_id')} UNIQUE (event_id)"
+        ")"
+    )
 
 
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:

@@ -3,6 +3,7 @@
 from sqlspec.adapters.sybase.config import SybaseConfig
 from sqlspec.adapters.sybase.core import escape_sql_literal, format_identifier
 from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.migrations.schema import SchemaTarget
 
 __all__ = ("SybaseEventQueueStore",)
 
@@ -54,6 +55,18 @@ class SybaseEventQueueStore(BaseEventQueueStore[SybaseConfig]):
             f"created_at {timestamp_type} DEFAULT {ts_default} NOT NULL, "
             f"acknowledged_at {timestamp_type} NULL"
             f"){pk_inline}{table_clause}"
+        )
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the Sybase ASE queue table SchemaTarget from unwrapped DDL."""
+        parsed = SchemaTarget.from_ddl(self.table_name, self._table_ddl(), dialect="sybase")
+        return SchemaTarget(
+            parsed.table_name,
+            parsed.create_table,
+            schema=parsed.schema,
+            create_statement=self.create_statements()[0],
+            constraint_columns=parsed.constraint_columns,
+            unsafe_add_columns=parsed.unsafe_add_columns,
         )
 
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
