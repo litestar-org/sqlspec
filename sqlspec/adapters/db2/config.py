@@ -141,7 +141,7 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
     migration_tracker_type: "ClassVar[type[Db2SyncMigrationTracker]]" = Db2SyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
-    supports_native_arrow_export: "ClassVar[bool]" = False
+    supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
@@ -297,7 +297,7 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
     migration_tracker_type: "ClassVar[type[Db2AsyncMigrationTracker]]" = Db2AsyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
-    supports_native_arrow_export: "ClassVar[bool]" = False
+    supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False

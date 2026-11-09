@@ -50,6 +50,9 @@ HOOK_ROUTED_ADAPTERS: list[tuple[str, str]] = [
     ("sqlspec.adapters.pymssql.driver", "PymssqlDriver"),
     ("sqlspec.adapters.sqlanywhere.driver", "SqlanywhereDriver"),
     ("sqlspec.adapters.sybase.driver", "SybaseDriver"),
+    ("sqlspec.adapters.db2.driver", "Db2SyncDriver"),
+    ("sqlspec.adapters.db2.driver", "Db2AsyncDriver"),
+    ("sqlspec.adapters.mssql_python.driver", "MssqlPythonDriver"),
 ]
 
 
@@ -456,3 +459,13 @@ def test_sqlite_drivers_declare_export_integers_may_widen() -> None:
     assert SqliteDriver.export_integers_may_widen is True
     assert AiosqliteDriver.export_integers_may_widen is True
     assert PyMysqlDriver.export_integers_may_widen is False
+
+
+def test_db2_and_mssql_python_native_arrow_export_flags() -> None:
+    """MssqlPythonDriver uses native reader export while Db2 drivers use row streams."""
+    from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
+    from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
+
+    assert MssqlPythonDriver.native_arrow_export is True
+    assert Db2SyncDriver.native_arrow_export is False
+    assert Db2AsyncDriver.native_arrow_export is False

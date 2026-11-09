@@ -352,7 +352,7 @@ async def test_db2_config_defaults(db2_mode: DriverMode) -> None:
     assert config.supports_transactional_ddl is True
     assert config.supports_migration_schemas is True
     assert config.supports_native_row_streaming is True
-    assert config.supports_native_arrow_export is False
+    assert config.supports_native_arrow_export is True
     assert config.type_coercion_capabilities.datetime_binding == "native"
     assert config.type_coercion_capabilities.uuid_binding == "text"
 
