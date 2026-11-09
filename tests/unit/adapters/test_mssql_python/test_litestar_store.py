@@ -2,11 +2,14 @@
 
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sqlspec.adapters.mssql_python import MssqlPythonConfig
 from sqlspec.adapters.mssql_python.litestar import MssqlPythonStore
+from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
+from sqlspec.migrations.context import MigrationContext
 
 
 class FakeCursor:
@@ -227,3 +230,74 @@ async def test_mssql_python_store_set_uses_holdlock() -> None:
 
     merge_sql, _ = connection.executed[0]
     assert "MERGE INTO [dbo].[mssql_sessions] WITH (HOLDLOCK) AS target" in merge_sql
+
+
+def test_mssql_python_store_scopes_bare_table_to_dbo() -> None:
+    """Unqualified session tables scope SchemaTarget and CompanionIndex to dbo."""
+    store = MssqlPythonStore(cast("Any", FakeConfig(table_name="litestar_session")))
+
+    targets = store.get_schema_targets()
+    indexes = store.get_companion_indexes()
+
+    assert len(targets) == 1
+    assert targets[0].schema == "dbo"
+    assert targets[0].table_name == "litestar_session"
+    assert [col.name for col in targets[0].create_table.columns] == [
+        "session_id",
+        "data",
+        "expires_at",
+        "created_at",
+        "updated_at",
+    ]
+    assert targets[0].constraint_columns == frozenset({"session_id"})
+    assert len(indexes) == 1
+    assert indexes[0].name == "IX_litestar_session_expires_at"
+    assert indexes[0].table == "litestar_session"
+    assert indexes[0].schema == "dbo"
+    assert "WHERE expires_at IS NOT NULL" in indexes[0].ddl
+
+
+def test_mssql_python_store_reconciles_missing_companion_index_on_existing_table() -> None:
+    """Reconcile queries dbo metadata and restores missing filtered expiry index without committing."""
+    config = MssqlPythonConfig(
+        extension_config={"litestar": {"session_table": "litestar_session", "migration_mode": "reconcile"}}
+    )
+    existing_columns = [
+        {"column_name": "session_id", "data_type": "nvarchar", "nullable": False},
+        {"column_name": "data", "data_type": "varbinary", "nullable": False},
+        {"column_name": "expires_at", "data_type": "datetime2", "nullable": True},
+        {"column_name": "created_at", "data_type": "datetime2", "nullable": False},
+        {"column_name": "updated_at", "data_type": "datetime2", "nullable": False},
+    ]
+
+    missing_driver = MagicMock()
+    missing_driver.dialect = "tsql"
+    missing_driver.data_dictionary.get_tables.return_value = [{"table_name": "litestar_session", "schema_name": "dbo"}]
+    missing_driver.data_dictionary.get_columns.return_value = existing_columns
+    missing_driver.data_dictionary.get_indexes.return_value = []
+
+    assert litestar_reconcile(MigrationContext(config=config, driver=missing_driver)) is None
+
+    missing_driver.data_dictionary.get_tables.assert_called_once_with(missing_driver, schema="dbo")
+    missing_driver.data_dictionary.get_columns.assert_called_once_with(missing_driver, "litestar_session", schema="dbo")
+    missing_driver.data_dictionary.get_indexes.assert_called_once_with(
+        missing_driver, table="litestar_session", schema="dbo"
+    )
+    assert missing_driver.execute_script.call_count == 1
+    script_sql = str(missing_driver.execute_script.call_args.args[0])
+    assert "CREATE INDEX [IX_litestar_session_expires_at]" in script_sql
+    assert "ON [dbo].[litestar_session](expires_at)" in script_sql
+    assert "WHERE expires_at IS NOT NULL" in script_sql
+    missing_driver.commit.assert_not_called()
+
+    present_driver = MagicMock()
+    present_driver.dialect = "tsql"
+    present_driver.data_dictionary.get_tables.return_value = [{"table_name": "litestar_session", "schema_name": "dbo"}]
+    present_driver.data_dictionary.get_columns.return_value = existing_columns
+    present_driver.data_dictionary.get_indexes.return_value = [
+        {"index_name": "IX_LITESTAR_SESSION_EXPIRES_AT", "table_name": "LITESTAR_SESSION", "schema_name": "DBO"}
+    ]
+
+    assert litestar_reconcile(MigrationContext(config=config, driver=present_driver)) is None
+    present_driver.execute_script.assert_not_called()
+    present_driver.commit.assert_not_called()

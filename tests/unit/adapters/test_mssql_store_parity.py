@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Cross-driver SQL parity between the mssql-python and pymssql extension stores."""
 
 from typing import Any
@@ -267,3 +266,29 @@ def test_adk_memory_create_tables_creates_index_owned_by_other_table(
 
     executed = [str(call.args[0]) for call in driver.execute.call_args_list]
     assert any("CREATE INDEX [idx_adk_memory_session] ON [dbo].[adk_memory]" in stmt for stmt in executed)
+
+
+def test_mssql_stores_companion_index_and_schema_target_parity() -> None:
+    """Litestar SchemaTarget and CompanionIndex definitions match across pymssql and mssql-python."""
+    mssql_store = MssqlPythonStore(MssqlPythonConfig(extension_config={"litestar": {}}))
+    pymssql_store = PymssqlStore(PymssqlConfig(extension_config={"litestar": {}}))
+
+    mssql_targets = mssql_store.get_schema_targets()
+    pymssql_targets = pymssql_store.get_schema_targets()
+
+    assert len(mssql_targets) == 1
+    assert len(pymssql_targets) == 1
+    assert mssql_targets[0].table_name == pymssql_targets[0].table_name == "litestar_session"
+    assert mssql_targets[0].schema == pymssql_targets[0].schema == "dbo"
+    assert [col.name for col in mssql_targets[0].create_table.columns] == [
+        col.name for col in pymssql_targets[0].create_table.columns
+    ]
+    assert mssql_targets[0].constraint_columns == pymssql_targets[0].constraint_columns == frozenset({"session_id"})
+
+    mssql_indexes = mssql_store.get_companion_indexes()
+    pymssql_indexes = pymssql_store.get_companion_indexes()
+    assert mssql_indexes == pymssql_indexes
+    assert len(mssql_indexes) == 1
+    assert mssql_indexes[0].name == "IX_litestar_session_expires_at"
+    assert mssql_indexes[0].table == "litestar_session"
+    assert mssql_indexes[0].schema == "dbo"

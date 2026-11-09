@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.pymssql._typing import PymssqlCursor
 from sqlspec.adapters.pymssql.core import escape_sql_literal, quote_bracket_identifier, split_schema_and_table
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -57,6 +58,32 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
     async def delete_expired(self) -> int:
         """Delete all expired sessions."""
         return await async_(self._delete_expired)()
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the SQL Server session SchemaTarget scoped to dbo or explicit schema."""
+        schema_name, bare_table = split_schema_and_table(self._table_name)
+        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect="tsql")
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the filtered SQL Server session expiry index metadata and guarded DDL."""
+        schema_name, bare_table = split_schema_and_table(self._table_name)
+        table_ref = _table_ref(self._table_name)
+        raw_index_name = f"IX_{bare_table}_expires_at"
+        quoted_index_name = quote_bracket_identifier(raw_index_name)
+        ddl = f"""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.indexes
+            WHERE name = N'{escape_sql_literal(raw_index_name)}'
+              AND object_id = OBJECT_ID(N'{escape_sql_literal(table_ref)}')
+        )
+        BEGIN
+            CREATE INDEX {quoted_index_name}
+                ON {table_ref}(expires_at)
+                WHERE expires_at IS NOT NULL;
+        END;
+        """
+        return [CompanionIndex(name=raw_index_name, table=bare_table, schema=schema_name, ddl=ddl)]
 
     def _table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
