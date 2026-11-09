@@ -51,9 +51,13 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.extensions.adk.migrations.reconcile import reconcile as adk_reconcile
+from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
+from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.runner import SyncMigrationRunner
+from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
 
 
 class FakeSqlanydbError(Exception):
@@ -858,3 +862,148 @@ def test_sqlanywhere_accepts_qualified_version_table(tmp_path: Path) -> None:
     config = _sqlanywhere_migration_config(tmp_path, version_table_name="DBA.ddl_migrations")
 
     assert SyncMigrationCommands(config).tracker.version_table_schema == "DBA"
+
+
+def test_sqlanywhere_reconcile_guard_and_litestar_events_targets() -> None:
+    """Reconcile guard accepts SqlanywhereConfig and extracts Litestar and events targets and companion indexes."""
+    config = SqlanywhereConfig(
+        connection_config={"user": "dba", "password": "sql", "database": "demo"},
+        extension_config={
+            "litestar": {"session_table": "sa_sessions", "migration_mode": "reconcile"},
+            "events": {"queue_table": "sa_events", "migration_mode": "reconcile"},
+        },
+    )
+    assert validate_builtin_reconcile_adapter(config) == "sqlanywhere"
+
+    litestar_store = SqlanywhereStore(config)
+    targets = litestar_store.get_schema_targets()
+    assert [t.table_name for t in targets] == ["sa_sessions"]
+    col_names = [col.name for col in targets[0].create_table.columns]
+    assert col_names == ["session_id", "data", "expires_at", "created_at", "updated_at"]
+
+    companions = litestar_store.get_companion_indexes()
+    assert len(companions) == 1
+    assert companions[0].name == "IX_sa_sessions_expires_at"
+    assert companions[0].table == "sa_sessions"
+    assert "CREATE INDEX IF NOT EXISTS" in companions[0].ddl
+
+    events_store = SqlanywhereEventQueueStore(config)
+    event_targets = events_store.get_schema_targets()
+    assert [t.table_name for t in event_targets] == ["sa_events"]
+    companion_sql = events_store.companion_index_statement()
+    assert companion_sql is not None
+    assert "CREATE INDEX IF NOT EXISTS" in companion_sql
+
+
+def test_sqlanywhere_reconcile_adk_targets_and_companion_indexes() -> None:
+    """ADK session and memory stores return dependency-ordered targets and idempotent companion index DDL."""
+    config = SqlanywhereConfig(
+        connection_config={"user": "dba", "password": "sql", "database": "demo"},
+        extension_config={
+            "adk": {
+                "migration_mode": "reconcile",
+                "enable_memory": True,
+                "owner_id_column": "tenant_id INTEGER NULL",
+                "session_table": "adk_session",
+                "events_table": "adk_event",
+                "app_state_table": "adk_app_state",
+                "user_state_table": "adk_user_state",
+                "metadata_table": "adk_internal_metadata",
+                "memory_table": "adk_memory",
+            }
+        },
+    )
+    driver = MagicMock()
+
+    session_store = SqlanywhereADKStore(config)
+    targets = session_store.get_schema_targets_sync(driver)
+    assert [t.table_name for t in targets] == [
+        "adk_session",
+        "adk_event",
+        "adk_app_state",
+        "adk_user_state",
+        "adk_internal_metadata",
+    ]
+    assert "tenant_id" in [col.name for col in targets[0].create_table.columns]
+
+    session_store.reconcile_companion_objects_sync(driver)
+    executed_session_indexes = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert len(executed_session_indexes) == 7
+    assert all(stmt.startswith("CREATE INDEX IF NOT EXISTS") for stmt in executed_session_indexes)
+    driver.commit.assert_not_called()
+
+    driver.reset_mock()
+    memory_store = SqlanywhereADKMemoryStore(config)
+    mem_targets = memory_store.get_schema_targets_sync(driver)
+    assert [t.table_name for t in mem_targets] == ["adk_memory"]
+    memory_store.reconcile_companion_objects_sync(driver)
+    executed_mem_indexes = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert len(executed_mem_indexes) == 4
+    assert all(stmt.startswith("CREATE INDEX IF NOT EXISTS") for stmt in executed_mem_indexes)
+    driver.commit.assert_not_called()
+
+    disabled_config = SqlanywhereConfig(
+        connection_config={"user": "dba", "password": "sql", "database": "demo"},
+        extension_config={"adk": {"enable_memory": False}},
+    )
+    disabled_driver = MagicMock()
+    disabled_mem = SqlanywhereADKMemoryStore(disabled_config)
+    assert disabled_mem.get_schema_targets_sync(disabled_driver) == []
+    disabled_mem.reconcile_companion_objects_sync(disabled_driver)
+    disabled_driver.execute.assert_not_called()
+
+
+def test_sqlanywhere_reconcile_end_to_end_orchestrators() -> None:
+    """Built-in Litestar, events, and ADK reconcilers converge SQL Anywhere stores without committing."""
+    config = SqlanywhereConfig(
+        connection_config={"user": "dba", "password": "sql", "database": "demo"},
+        extension_config={
+            "litestar": {"session_table": "sa_sessions", "migration_mode": "reconcile"},
+            "events": {"queue_table": "sa_events", "migration_mode": "reconcile"},
+            "adk": {"migration_mode": "reconcile", "enable_memory": True},
+        },
+    )
+
+    class FakeReconcileDD:
+        def get_tables(self, _driver: Any, schema: str | None = None) -> list[dict[str, Any]]:
+            _ = schema
+            return []
+
+        def get_columns(self, _driver: Any, _table: str, schema: str | None = None) -> list[dict[str, Any]]:
+            _ = schema
+            return []
+
+        def get_indexes(
+            self, _driver: Any, table: str | None = None, schema: str | None = None
+        ) -> list[dict[str, Any]]:
+            _ = (table, schema)
+            return []
+
+    executed: list[str] = []
+    commits = 0
+
+    class FakeReconcileDriver:
+        dialect = "sqlanywhere"
+        data_dictionary = FakeReconcileDD()
+
+        def execute(self, sql: Any, *_args: Any, **_kwargs: Any) -> None:
+            executed.append(str(sql))
+
+        def execute_script(self, sql: Any, *_args: Any, **_kwargs: Any) -> None:
+            executed.append(str(sql))
+
+        def commit(self) -> None:
+            nonlocal commits
+            commits += 1
+
+    ctx = MigrationContext(config=config, dialect="sqlanywhere", driver=cast("Any", FakeReconcileDriver()))
+    assert litestar_reconcile(ctx) is None
+    assert events_reconcile(ctx) is None
+    assert adk_reconcile(ctx) is None
+    assert commits == 0
+    assert any('"sa_sessions"' in stmt for stmt in executed)
+    assert any("sa_events" in stmt for stmt in executed)
+    assert any('"adk_session"' in stmt for stmt in executed)
+    assert any('"adk_memory"' in stmt for stmt in executed)
+    assert any('"idx_adk_session_app_user"' in stmt for stmt in executed)
+    assert any('"idx_adk_memory_session"' in stmt for stmt in executed)

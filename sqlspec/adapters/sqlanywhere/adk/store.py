@@ -12,6 +12,7 @@ from sqlspec.adapters.sqlanywhere.core import (
 )
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -332,6 +333,27 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
         """Return ``(index_name, table, columns)`` specs for session and event indexes."""
         return [*_sessions_index_specs(self._session_table), *_events_index_specs(self._events_table)]
 
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct SQL Anywhere SchemaTarget definitions in FK dependency order."""
+        ddl_targets = (
+            (self._session_table, self._sessions_table_ddl()),
+            (self._events_table, self._events_table_ddl()),
+            (self._app_state_table, self._app_states_table_ddl()),
+            (self._user_state_table, self._user_states_table_ddl()),
+            (self._metadata_table, self._metadata_table_ddl()),
+        )
+        return [SchemaTarget.from_ddl(table, ddl, dialect="sqlanywhere") for table, ddl in ddl_targets]
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return ordered SQL Anywhere ADK session-store SchemaTarget definitions."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing SQL Anywhere ADK session and event companion indexes without committing."""
+        for index_name, index_table, columns in self._index_specs():
+            driver.execute(_create_index_sql(index_table, index_name, columns))
+
     def _sessions_table_ddl(self) -> str:
         """Return SQL Anywhere DDL for the ADK session table."""
         return _sessions_table_ddl(self._session_table, JSON_COLUMN_TYPE, self._owner_id_column_ddl)
@@ -568,6 +590,24 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
             (f"idx_{table_name}_session", self._memory_table, "session_id"),
             (f"idx_{table_name}_timestamp", self._memory_table, "timestamp DESC"),
         ]
+
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct the SQL Anywhere ADK memory-table SchemaTarget when enabled."""
+        if not self._enabled:
+            return []
+        return [SchemaTarget.from_ddl(self._memory_table, self._memory_table_ddl(), dialect="sqlanywhere")]
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return SQL Anywhere ADK memory-store SchemaTarget definitions when enabled."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing SQL Anywhere ADK memory companion indexes without committing."""
+        if not self._enabled:
+            return
+        for index_name, index_table, columns in self._memory_index_specs():
+            driver.execute(_create_index_sql(index_table, index_name, columns))
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]

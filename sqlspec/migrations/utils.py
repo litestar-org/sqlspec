@@ -57,6 +57,7 @@ UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS: frozenset[str] = frozenset({
     "oracledb",
     "spanner",
     "bigquery",
+    "sqlanywhere",
 })
 
 
