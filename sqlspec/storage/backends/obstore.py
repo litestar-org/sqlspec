@@ -15,7 +15,6 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Self, cast, overload
 from urllib.parse import urlparse
-from uuid import uuid4
 
 from mypy_extensions import mypyc_attr
 
@@ -57,6 +56,7 @@ if TYPE_CHECKING:
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
 from sqlspec.utils.module_loader import ensure_obstore
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.uuids import uuid4
 
 _MAX_SIGN_EXPIRES_SECONDS: Final[int] = 604800
 _SIGNABLE_PROTOCOLS: Final[frozenset[str]] = frozenset({"s3", "gs", "gcs", "az", "azure"})

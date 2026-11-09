@@ -76,6 +76,7 @@ _PG_DATE_EPOCH_DAYS: Final[int] = 10957
 _PG_EPOCH_OFFSET_US: Final[int] = 946_684_800_000_000
 _PG_NULL_MARKER: Final[bytes] = b"\xff\xff\xff\xff"
 _ARROW_TABLE_COERCER: "TypeDispatcher[Any] | None" = None
+_DEFERRED_CLOSE_READER_CLS: "type[Any] | None" = None
 _ARROW_SCHEMA_DECISION_CACHE_SIZE = 512
 _CONFIG_CATEGORY_DEFAULTS: "dict[str, str]" = {
     "uuid": "UUID",
@@ -499,6 +500,13 @@ def arrow_batches_from_rows(
         raise
 
     explicit = arrow_schema is not None
+    rows_closed = False
+
+    def _close_rows_once() -> None:
+        nonlocal rows_closed
+        if not rows_closed:
+            rows_closed = True
+            _close_sync_rows(rows)
 
     def _iter_batches() -> "Iterator[ArrowRecordBatch]":
         try:
@@ -510,9 +518,11 @@ def arrow_batches_from_rows(
                 later_table = _convert_later_chunk(later_chunk, schema, explicit=explicit)
                 yield from later_table.to_batches(max_chunksize=batch_size)
         finally:
-            _close_sync_rows(rows)
+            _close_rows_once()
 
-    return pa.RecordBatchReader.from_batches(schema, _iter_batches())
+    return arrow_reader_with_deferred_close(
+        pa.RecordBatchReader.from_batches(schema, _iter_batches()), _close_rows_once
+    )
 
 
 async def arrow_batches_from_async_rows(
@@ -911,11 +921,14 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
 
 
 def arrow_reader_with_deferred_close(reader: Any, close_callback: "Callable[[], None]") -> "ArrowRecordBatchReader":
-    """Wrap a RecordBatchReader so close_callback fires when it is exhausted or errors."""
+    """Wrap a RecordBatchReader so close_callback fires on close, exhaustion, or error."""
     ensure_pyarrow()
     import pyarrow as pa
 
-    return pa.RecordBatchReader.from_batches(reader.schema, _DeferredCloseBatchIterator(reader, close_callback))
+    iterator = _DeferredCloseBatchIterator(reader, close_callback)
+    base_reader = pa.RecordBatchReader.from_batches(reader.schema, iterator)
+    reader_cls = _get_deferred_close_reader_cls()
+    return cast("ArrowRecordBatchReader", reader_cls(base_reader, iterator.close))
 
 
 def arrow_reader_to_return_format(
@@ -936,17 +949,34 @@ def arrow_reader_to_return_format(
         raise TypeError(msg)
     if arrow_schema is not None:
         if not isinstance(arrow_schema, pa.Schema):
+            reader_close = getattr(reader, "close", None)
+            if callable(reader_close):
+                with contextlib.suppress(Exception):
+                    reader_close()
             msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
             raise TypeError(msg)
-        reader = reader.cast(arrow_schema)
+        try:
+            reader = reader.cast(arrow_schema)
+        except BaseException:
+            reader_close = getattr(reader, "close", None)
+            if callable(reader_close):
+                with contextlib.suppress(Exception):
+                    reader_close()
+            raise
     if return_format == "reader":
         return reader, -1
-    if return_format == "batches":
-        batches = list(reader)
-        return batches, sum(batch.num_rows for batch in batches)
-    table = reader.read_all()
-    shaped = arrow_table_to_return_format(table, return_format=return_format, batch_size=batch_size)
-    return shaped, int(table.num_rows)
+    try:
+        if return_format == "batches":
+            batches = list(reader)
+            return batches, sum(batch.num_rows for batch in batches)
+        table = reader.read_all()
+        shaped = arrow_table_to_return_format(table, return_format=return_format, batch_size=batch_size)
+        return shaped, int(table.num_rows)
+    finally:
+        reader_close = getattr(reader, "close", None)
+        if callable(reader_close):
+            with contextlib.suppress(Exception):
+                reader_close()
 
 
 def encode_arrow_batch_pg_binary(
@@ -1928,6 +1958,115 @@ class _DeferredCloseBatchIterator:
             self._closed = True
             with contextlib.suppress(Exception):
                 self._close_callback()
+
+
+def _deferred_reader_init(self: Any, reader: Any, close_fn: "Callable[[], None] | None") -> None:
+    self._reader = reader
+    self._close_fn = close_fn
+
+
+def _deferred_reader_enter(self: Any) -> Any:
+    return self
+
+
+def _deferred_reader_exit(self: Any, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    _ = (exc_type, exc_val, exc_tb)
+    self.close()
+
+
+def _deferred_reader_iter(self: Any) -> Any:
+    return self
+
+
+def _deferred_reader_next(self: Any) -> Any:
+    return self._reader.read_next_batch()
+
+
+def _deferred_reader_read_next_batch(self: Any) -> Any:
+    return self._reader.read_next_batch()
+
+
+def _deferred_reader_read_next_batch_with_custom_metadata(self: Any) -> Any:
+    return self._reader.read_next_batch_with_custom_metadata()
+
+
+def _deferred_reader_iter_batches_with_custom_metadata(self: Any) -> Any:
+    return self._reader.iter_batches_with_custom_metadata()
+
+
+def _deferred_reader_read_all(self: Any) -> Any:
+    try:
+        return self._reader.read_all()
+    finally:
+        self.close()
+
+
+def _deferred_reader_read_pandas(self: Any, **options: Any) -> Any:
+    try:
+        return self._reader.read_pandas(**options)
+    finally:
+        self.close()
+
+
+def _deferred_reader_export_to_c(self: Any, out_ptr: int) -> None:
+    self._reader._export_to_c(out_ptr)
+
+
+def _deferred_reader_arrow_c_stream(self: Any, requested_schema: Any = None) -> Any:
+    return self._reader.__arrow_c_stream__(requested_schema=requested_schema)
+
+
+def _deferred_reader_cast(self: Any, target_schema: Any) -> Any:
+    fn = self._close_fn
+    casted = self._reader.cast(target_schema)
+    self._close_fn = None
+    return type(self)(casted, fn)
+
+
+def _deferred_reader_close(self: Any) -> None:
+    reader = getattr(self, "_reader", None)
+    try:
+        reader_close = getattr(reader, "close", None)
+        if callable(reader_close):
+            with contextlib.suppress(Exception):
+                reader_close()
+    finally:
+        fn = getattr(self, "_close_fn", None)
+        if fn is not None:
+            self._close_fn = None
+            if callable(fn):
+                with contextlib.suppress(Exception):
+                    fn()
+
+
+def _get_deferred_close_reader_cls() -> "type[Any]":
+    global _DEFERRED_CLOSE_READER_CLS
+    if _DEFERRED_CLOSE_READER_CLS is None:
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        namespace: dict[str, Any] = {
+            "__module__": __name__,
+            "__slots__": ("_close_fn", "_reader"),
+            "__init__": _deferred_reader_init,
+            "__del__": _deferred_reader_close,
+            "__enter__": _deferred_reader_enter,
+            "__exit__": _deferred_reader_exit,
+            "__iter__": _deferred_reader_iter,
+            "__next__": _deferred_reader_next,
+            "schema": property(lambda self: self._reader.schema),
+            "read_next_batch": _deferred_reader_read_next_batch,
+            "read_next_batch_with_custom_metadata": _deferred_reader_read_next_batch_with_custom_metadata,
+            "iter_batches_with_custom_metadata": _deferred_reader_iter_batches_with_custom_metadata,
+            "read_all": _deferred_reader_read_all,
+            "read_pandas": _deferred_reader_read_pandas,
+            "_export_to_c": _deferred_reader_export_to_c,
+            "__arrow_c_stream__": _deferred_reader_arrow_c_stream,
+            "cast": _deferred_reader_cast,
+            "close": _deferred_reader_close,
+        }
+        _DEFERRED_CLOSE_READER_CLS = type("_DeferredCloseReader", (pa.RecordBatchReader,), namespace)
+    return _DEFERRED_CLOSE_READER_CLS
 
 
 class _AsyncBytesIterator:

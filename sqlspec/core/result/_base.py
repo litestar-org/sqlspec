@@ -9,6 +9,8 @@ Classes:
     ArrowResult: Apache Arrow format results for data interchange.
 """
 
+import asyncio
+import contextlib
 from abc import abstractmethod
 from collections.abc import Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
@@ -25,6 +27,7 @@ from sqlspec.storage import (
     StorageTelemetry,
     SyncStoragePipeline,
 )
+from sqlspec.storage.pipeline import close_async_arrow_result_resources, close_sync_arrow_source
 from sqlspec.utils.arrow_helpers import (
     arrow_reader_to_return_format,
     arrow_table_column_names,
@@ -85,9 +88,9 @@ class _ChainedCloseableIterator:
         return next(self._iterator)
 
     def close(self) -> None:
-        close_fn = getattr(self._iterator, "close", None)
-        if callable(close_fn):
-            close_fn()
+        self._exhausted_first = True
+        self._first = None
+        close_sync_arrow_source(self._iterator)
 
 
 def _resolve_arrow_result_batches_source(data: Any) -> Any:
@@ -103,13 +106,21 @@ def _resolve_arrow_result_batches_source(data: Any) -> Any:
                 source = iter_batches_fn()
     iterable_source = cast("Iterable[Any]", source)
     iterator = iter(iterable_source)
-    first = next(iterator, _PEEK_EMPTY)
+    try:
+        first = next(iterator, _PEEK_EMPTY)
+    except BaseException:
+        close_sync_arrow_source(iterator)
+        raise
     if first is _PEEK_EMPTY:
+        close_sync_arrow_source(iterator)
         return ()
     chained = _ChainedCloseableIterator(first, iterator)
     if has_arrow_table_stats(first) and not hasattr(first, "combine_chunks"):
         return chained
-    _cols, batch_iter = coerce_arrow_batches(chained)
+    try:
+        _cols, batch_iter = coerce_arrow_batches(chained)
+    finally:
+        chained.close()
     return batch_iter
 
 
@@ -1054,18 +1065,57 @@ class ArrowResult(StatementResult):
         if hasattr(self.data, "__aiter__"):
             msg = "Async Arrow batch sources require write_to_storage_async"
             raise TypeError(msg)
-        active_pipeline = pipeline or SyncStoragePipeline()
-        if has_arrow_table_stats(self.data) and hasattr(self.data, "combine_chunks"):
-            return active_pipeline.write_arrow(
-                cast("ArrowTable", self.data),
-                destination,
-                format_hint=format_hint,
-                storage_options=storage_options,
-                compression=compression,
-                write_options=write_options,
-                overwrite=overwrite,
-            )
-        if isinstance(self.data, Mapping):
+        batch_iter: Any = None
+        result_metadata = self.metadata
+        stream_close = result_metadata.get("stream_close") if isinstance(result_metadata, dict) else None
+        try:
+            active_pipeline = pipeline or SyncStoragePipeline()
+            if has_arrow_table_stats(self.data) and hasattr(self.data, "combine_chunks"):
+                return active_pipeline.write_arrow(
+                    cast("ArrowTable", self.data),
+                    destination,
+                    format_hint=format_hint,
+                    storage_options=storage_options,
+                    compression=compression,
+                    write_options=write_options,
+                    overwrite=overwrite,
+                )
+            if isinstance(self.data, Mapping):
+                table = coerce_arrow_table(self.data)
+                return active_pipeline.write_arrow(
+                    table,
+                    destination,
+                    format_hint=format_hint,
+                    storage_options=storage_options,
+                    compression=compression,
+                    write_options=write_options,
+                    overwrite=overwrite,
+                )
+            if has_arrow_table_stats(self.data) or hasattr(self.data, "__arrow_c_stream__"):
+                return active_pipeline.write_arrow_batches(
+                    destination,
+                    self.data,
+                    file_format=format_hint or "parquet",
+                    compression=compression,
+                    write_options=write_options,
+                    storage_options=storage_options,
+                    overwrite=overwrite,
+                )
+            if (
+                (isinstance(self.data, Iterable) and not isinstance(self.data, (str, bytes, bytearray)))
+                or callable(getattr(self.data, "to_batches", None))
+                or callable(getattr(self.data, "iter_batches", None))
+            ):
+                batch_iter = _resolve_arrow_result_batches_source(self.data)
+                return active_pipeline.write_arrow_batches(
+                    destination,
+                    batch_iter,
+                    file_format=format_hint or "parquet",
+                    compression=compression,
+                    write_options=write_options,
+                    storage_options=storage_options,
+                    overwrite=overwrite,
+                )
             table = coerce_arrow_table(self.data)
             return active_pipeline.write_arrow(
                 table,
@@ -1076,41 +1126,13 @@ class ArrowResult(StatementResult):
                 write_options=write_options,
                 overwrite=overwrite,
             )
-        if has_arrow_table_stats(self.data) or hasattr(self.data, "__arrow_c_stream__"):
-            return active_pipeline.write_arrow_batches(
-                destination,
-                self.data,
-                file_format=format_hint or "parquet",
-                compression=compression,
-                write_options=write_options,
-                storage_options=storage_options,
-                overwrite=overwrite,
-            )
-        if (
-            (isinstance(self.data, Iterable) and not isinstance(self.data, (str, bytes, bytearray)))
-            or callable(getattr(self.data, "to_batches", None))
-            or callable(getattr(self.data, "iter_batches", None))
-        ):
-            batch_iter = _resolve_arrow_result_batches_source(self.data)
-            return active_pipeline.write_arrow_batches(
-                destination,
-                batch_iter,
-                file_format=format_hint or "parquet",
-                compression=compression,
-                write_options=write_options,
-                storage_options=storage_options,
-                overwrite=overwrite,
-            )
-        table = coerce_arrow_table(self.data)
-        return active_pipeline.write_arrow(
-            table,
-            destination,
-            format_hint=format_hint,
-            storage_options=storage_options,
-            compression=compression,
-            write_options=write_options,
-            overwrite=overwrite,
-        )
+        finally:
+            if batch_iter is not None and batch_iter is not self.data:
+                close_sync_arrow_source(batch_iter)
+            close_sync_arrow_source(self.data)
+            if callable(stream_close):
+                with contextlib.suppress(Exception):
+                    stream_close()
 
     async def write_to_storage_async(
         self,
@@ -1126,73 +1148,101 @@ class ArrowResult(StatementResult):
         if self.data is None:
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
-        active_pipeline = pipeline or AsyncStoragePipeline()
-        if hasattr(self.data, "__aiter__"):
-            return await active_pipeline.write_arrow_batches_async(
-                destination,
+        batch_iter: Any = None
+        telemetry: StorageTelemetry | None = None
+        pending_exc: BaseException | None = None
+        result_metadata = self.metadata
+        stream_aclose = result_metadata.get("stream_aclose") if isinstance(result_metadata, dict) else None
+        stream_close = result_metadata.get("stream_close") if isinstance(result_metadata, dict) else None
+        try:
+            active_pipeline = pipeline or AsyncStoragePipeline()
+            if hasattr(self.data, "__aiter__"):
+                telemetry = await active_pipeline.write_arrow_batches_async(
+                    destination,
+                    self.data,
+                    file_format=format_hint or "parquet",
+                    compression=compression,
+                    write_options=write_options,
+                    storage_options=storage_options,
+                    overwrite=overwrite,
+                )
+            elif has_arrow_table_stats(self.data) and hasattr(self.data, "combine_chunks"):
+                telemetry = await active_pipeline.write_arrow(
+                    cast("ArrowTable", self.data),
+                    destination,
+                    format_hint=format_hint,
+                    storage_options=storage_options,
+                    compression=compression,
+                    write_options=write_options,
+                    overwrite=overwrite,
+                )
+            elif isinstance(self.data, Mapping):
+                table = coerce_arrow_table(self.data)
+                telemetry = await active_pipeline.write_arrow(
+                    table,
+                    destination,
+                    format_hint=format_hint,
+                    storage_options=storage_options,
+                    compression=compression,
+                    write_options=write_options,
+                    overwrite=overwrite,
+                )
+            elif has_arrow_table_stats(self.data) or hasattr(self.data, "__arrow_c_stream__"):
+                telemetry = await active_pipeline.write_arrow_batches_async(
+                    destination,
+                    self.data,
+                    file_format=format_hint or "parquet",
+                    compression=compression,
+                    write_options=write_options,
+                    storage_options=storage_options,
+                    overwrite=overwrite,
+                )
+            elif (
+                (isinstance(self.data, Iterable) and not isinstance(self.data, (str, bytes, bytearray)))
+                or callable(getattr(self.data, "to_batches", None))
+                or callable(getattr(self.data, "iter_batches", None))
+            ):
+                batch_iter = _resolve_arrow_result_batches_source(self.data)
+                telemetry = await active_pipeline.write_arrow_batches_async(
+                    destination,
+                    batch_iter,
+                    file_format=format_hint or "parquet",
+                    compression=compression,
+                    write_options=write_options,
+                    storage_options=storage_options,
+                    overwrite=overwrite,
+                )
+            else:
+                table = coerce_arrow_table(self.data)
+                telemetry = await active_pipeline.write_arrow(
+                    table,
+                    destination,
+                    format_hint=format_hint,
+                    storage_options=storage_options,
+                    compression=compression,
+                    write_options=write_options,
+                    overwrite=overwrite,
+                )
+        except BaseException as exc:
+            pending_exc = exc
+        cleanup_cancel: asyncio.CancelledError | None = None
+        try:
+            await close_async_arrow_result_resources(
                 self.data,
-                file_format=format_hint or "parquet",
-                compression=compression,
-                write_options=write_options,
-                storage_options=storage_options,
-                overwrite=overwrite,
+                batch_iter=batch_iter,
+                stream_aclose=stream_aclose if callable(stream_aclose) else None,
+                stream_close=stream_close if callable(stream_close) else None,
             )
-        if has_arrow_table_stats(self.data) and hasattr(self.data, "combine_chunks"):
-            return await active_pipeline.write_arrow(
-                cast("ArrowTable", self.data),
-                destination,
-                format_hint=format_hint,
-                storage_options=storage_options,
-                compression=compression,
-                write_options=write_options,
-                overwrite=overwrite,
-            )
-        if isinstance(self.data, Mapping):
-            table = coerce_arrow_table(self.data)
-            return await active_pipeline.write_arrow(
-                table,
-                destination,
-                format_hint=format_hint,
-                storage_options=storage_options,
-                compression=compression,
-                write_options=write_options,
-                overwrite=overwrite,
-            )
-        if has_arrow_table_stats(self.data) or hasattr(self.data, "__arrow_c_stream__"):
-            return await active_pipeline.write_arrow_batches_async(
-                destination,
-                self.data,
-                file_format=format_hint or "parquet",
-                compression=compression,
-                write_options=write_options,
-                storage_options=storage_options,
-                overwrite=overwrite,
-            )
-        if (
-            (isinstance(self.data, Iterable) and not isinstance(self.data, (str, bytes, bytearray)))
-            or callable(getattr(self.data, "to_batches", None))
-            or callable(getattr(self.data, "iter_batches", None))
-        ):
-            batch_iter = _resolve_arrow_result_batches_source(self.data)
-            return await active_pipeline.write_arrow_batches_async(
-                destination,
-                batch_iter,
-                file_format=format_hint or "parquet",
-                compression=compression,
-                write_options=write_options,
-                storage_options=storage_options,
-                overwrite=overwrite,
-            )
-        table = coerce_arrow_table(self.data)
-        return await active_pipeline.write_arrow(
-            table,
-            destination,
-            format_hint=format_hint,
-            storage_options=storage_options,
-            compression=compression,
-            write_options=write_options,
-            overwrite=overwrite,
-        )
+        except asyncio.CancelledError as caught_cancel:
+            cleanup_cancel = caught_cancel
+        if pending_exc is not None:
+            raise pending_exc
+        if cleanup_cancel is not None:
+            raise cleanup_cancel
+        if telemetry is None:
+            msg = "Unreachable"
+            raise RuntimeError(msg)
+        return telemetry
 
     def _as_table(self) -> "ArrowTable":
         if self.data is None:

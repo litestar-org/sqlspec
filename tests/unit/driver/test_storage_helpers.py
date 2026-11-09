@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sqlspec.core import SQL, StatementConfig, create_arrow_result
+from sqlspec.core import SQL, StatementConfig, build_arrow_result_from_reader, create_arrow_result
 from sqlspec.driver._async import AsyncDataDictionaryBase, AsyncDriverAdapterBase
 from sqlspec.driver._common import (
     AsyncExceptionHandler,
@@ -22,8 +22,10 @@ from sqlspec.driver._common import (
 from sqlspec.driver._storage_helpers import arrow_batch_to_rows, coerce_arrow_batches, ingest_telemetry_from_batches
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
-from sqlspec.storage.pipeline import StorageTelemetry, SyncStoragePipeline
+from sqlspec.exceptions import StorageCapabilityError
+from sqlspec.storage.pipeline import StorageBridgeJob, StorageTelemetry, SyncStoragePipeline
 from sqlspec.typing import PYARROW_INSTALLED
+from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 
@@ -82,11 +84,12 @@ class _RecordingSyncSource:
     def __init__(self, chunks: list[list[dict[str, Any]]], *, column_types: dict[str, str] | None = None) -> None:
         self._chunks = list(chunks)
         self.column_types = column_types
+        self.started = False
         self.closed = False
         self.close_calls = 0
 
     def start(self) -> None:
-        return None
+        self.started = True
 
     def fetch_chunk(self) -> list[dict[str, Any]]:
         if not self._chunks:
@@ -103,11 +106,12 @@ class _RecordingAsyncSource:
     def __init__(self, chunks: list[list[dict[str, Any]]], *, column_types: dict[str, str] | None = None) -> None:
         self._chunks = list(chunks)
         self.column_types = column_types
+        self.started = False
         self.closed = False
         self.close_calls = 0
 
     async def start(self) -> None:
-        return None
+        self.started = True
 
     async def fetch_chunk(self) -> list[dict[str, Any]]:
         if not self._chunks:
@@ -469,3 +473,112 @@ def test_db2_and_mssql_python_native_arrow_export_flags() -> None:
     assert MssqlPythonDriver.native_arrow_export is True
     assert Db2SyncDriver.native_arrow_export is False
     assert Db2AsyncDriver.native_arrow_export is False
+
+
+async def test_async_select_to_storage_preflight_failure_closes_opened_row_stream(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Async select_to_storage closes the opened AsyncRowStream before propagating pre-iteration StorageCapabilityError."""
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
+
+    class _ExportAsyncDouble(_AsyncDriverDouble):
+        async def select_to_storage(
+            self, statement: Any, destination: Any, /, *parameters: Any, format_hint: Any = None, **kwargs: Any
+        ) -> StorageBridgeJob:
+            result = await self._select_for_storage(statement, *parameters, **kwargs)
+            assert self.source.started is True
+            assert self.source.closed is False
+            assert result.metadata["row_stream_batches"] is True
+            assert callable(result.metadata["stream_aclose"])
+            telemetry = await self._write_storage_result(result, destination, format_hint=format_hint)
+            return self._storage_job(telemetry, None)
+
+    driver = _ExportAsyncDouble([[{"a": 1}], [{"a": 2}]], column_types={"a": "int64"})
+    with pytest.raises(StorageCapabilityError):
+        await driver.select_to_storage("SELECT a FROM t", tmp_path / "bad.json", format_hint="json", batch_size=1)
+    assert driver.source.closed is True
+    assert driver.source.close_calls == 1
+
+    config = AiosqliteConfig()
+    spec = SQLSpec()
+    spec.add_config(config)
+    captured_streams: list[AsyncRowStream[Any]] = []
+    orig_dispatch = AiosqliteDriver.dispatch_select_stream
+
+    def _capturing_dispatch(
+        self: AiosqliteDriver, statement: SQL, chunk_size: int
+    ) -> AsyncRowStream[dict[str, Any]] | None:
+        stream = orig_dispatch(self, statement, chunk_size)
+        if stream is not None:
+            captured_streams.append(stream)
+        return stream
+
+    monkeypatch.setattr(AiosqliteDriver, "dispatch_select_stream", _capturing_dispatch)
+    try:
+        async with spec.provide_session(config) as session:
+            await session.execute("CREATE TABLE export_items (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+            await session.execute_many(
+                "INSERT INTO export_items (id, label) VALUES (?, ?)", [(1, "alpha"), (2, "beta"), (3, "gamma")]
+            )
+            await session.commit()
+            with pytest.raises(StorageCapabilityError):
+                await session.select_to_storage(
+                    "SELECT label FROM export_items ORDER BY id",
+                    tmp_path / "aiosqlite_bad.json",
+                    format_hint="json",
+                    batch_size=1,
+                )
+            assert len(captured_streams) == 1
+            assert captured_streams[0]._closed is True
+            rows = await session.select("SELECT COUNT(*) AS cnt FROM export_items")
+            assert rows == [{"cnt": 3}]
+    finally:
+        await config.close_pool()
+
+
+def test_sync_native_select_to_storage_preflight_failure_closes_deferred_reader(tmp_path: Path) -> None:
+    """Sync native_arrow_export select_to_storage closes deferred-close RecordBatchReader before StorageCapabilityError."""
+    import pyarrow as pa
+
+    close_calls: list[str] = []
+
+    class _NativeReaderSyncDouble(_SyncDriverDouble):
+        native_arrow_export: ClassVar[bool] = True
+
+        def select_to_arrow(self, statement: Any, /, *parameters: Any, **kwargs: Any) -> Any:
+            self.select_to_arrow_calls.append(((statement, *parameters), dict(kwargs)))
+            schema = pa.schema([("a", pa.int64())])
+            batches = [
+                pa.RecordBatch.from_pydict({"a": [1]}, schema=schema),
+                pa.RecordBatch.from_pydict({"a": [2]}, schema=schema),
+            ]
+            reader = arrow_reader_with_deferred_close(
+                pa.RecordBatchReader.from_batches(schema, batches), lambda: close_calls.append("cursor_closed")
+            )
+            return build_arrow_result_from_reader(
+                SQL("SELECT a FROM t"), reader, return_format=kwargs.get("return_format", "table")
+            )
+
+        def select_to_storage(
+            self, statement: Any, destination: Any, /, *parameters: Any, format_hint: Any = None, **kwargs: Any
+        ) -> StorageBridgeJob:
+            result = self._select_for_storage(statement, *parameters, **kwargs)
+            assert close_calls == []
+            telemetry = self._write_storage_result(result, destination, format_hint=format_hint)
+            return self._storage_job(telemetry, None)
+
+    driver = _NativeReaderSyncDouble([[{"a": 1}]])
+    with pytest.raises(StorageCapabilityError):
+        driver.select_to_storage("SELECT a FROM t", tmp_path / "native_bad.json", format_hint="json")
+    assert close_calls == ["cursor_closed"]
+
+    row_driver = _SyncDriverDouble([[{"a": 1}], [{"a": 2}]], column_types={"a": "int64"})
+    row_result = row_driver._select_for_storage("SELECT a FROM t", batch_size=1)
+    assert row_driver.source.started is True
+    assert row_driver.source.closed is False
+    with pytest.raises(StorageCapabilityError):
+        row_driver._write_storage_result(row_result, tmp_path / "row_bad.json", format_hint="json")
+    assert row_driver.source.closed is True
+    assert row_driver.source.close_calls == 1

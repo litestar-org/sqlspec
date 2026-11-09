@@ -6,6 +6,7 @@ and ``AsyncExceptionHandler`` stores mapped exceptions on ``pending_exception``
 rather than raising inside ``__aexit__`` across C-extension ABI boundaries.
 """
 
+import asyncio
 import logging
 import sys
 from abc import abstractmethod
@@ -58,6 +59,7 @@ from sqlspec.driver._stream import AsyncRowStream, _LazyEagerAsyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
 from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+from sqlspec.storage.pipeline import close_async_arrow_result_resources
 from sqlspec.utils.arrow_helpers import arrow_batches_from_async_rows, convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
@@ -2055,17 +2057,41 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             StorageTelemetry with write metrics.
         """
         runtime = self.observability
-        span = runtime.start_storage_span(
-            "write", destination=stringify_storage_target(destination), format_label=format_hint
-        )
+        span: Any = None
+        span_started = False
+        telemetry: StorageTelemetry | None = None
+        pending_exc: BaseException | None = None
+        result_metadata = result.metadata
+        stream_aclose = result_metadata.get("stream_aclose") if isinstance(result_metadata, dict) else None
+        stream_close = result_metadata.get("stream_close") if isinstance(result_metadata, dict) else None
         try:
+            span = runtime.start_storage_span(
+                "write", destination=stringify_storage_target(destination), format_label=format_hint
+            )
+            span_started = True
             telemetry = await result.write_to_storage_async(
                 destination, format_hint=format_hint, storage_options=storage_options, pipeline=pipeline
             )
-        except Exception as exc:
-            runtime.end_storage_span(span, error=exc)
-            raise
-        result_metadata = result.metadata
+        except BaseException as exc:
+            pending_exc = exc
+        cleanup_cancel: asyncio.CancelledError | None = None
+        try:
+            await close_async_arrow_result_resources(
+                result.data,
+                stream_aclose=stream_aclose if callable(stream_aclose) else None,
+                stream_close=stream_close if callable(stream_close) else None,
+            )
+        except asyncio.CancelledError as caught_cancel:
+            cleanup_cancel = caught_cancel
+        if pending_exc is not None:
+            if span_started and isinstance(pending_exc, Exception):
+                runtime.end_storage_span(span, error=pending_exc)
+            raise pending_exc
+        if cleanup_cancel is not None:
+            raise cleanup_cancel
+        if telemetry is None:
+            msg = "Unreachable"
+            raise RuntimeError(msg)
         read_ahead_columns = result_metadata.get("read_ahead_columns") if isinstance(result_metadata, dict) else None
         if read_ahead_columns:
             extra = telemetry.get("extra")
@@ -2112,7 +2138,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             return await self.select_to_arrow(
                 statement, *parameters, statement_config=statement_config, **fallback_kwargs
             )
-        metadata: dict[str, Any] = {"streamed": True}
+        metadata: dict[str, Any] = {"streamed": True, "row_stream_batches": True, "stream_aclose": stream.aclose}
         if read_ahead:
             metadata["read_ahead_columns"] = tuple(read_ahead)
         prepared = self.prepare_statement(

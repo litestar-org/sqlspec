@@ -8,7 +8,6 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeAlias, cast, overload
 from urllib.parse import urlparse
-from uuid import uuid4
 
 from mypy_extensions import mypyc_attr
 
@@ -33,6 +32,7 @@ from sqlspec.storage.backends.local import (
 )
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.protocols import AsyncWritableBytesSink, WritableBytesSink
@@ -960,6 +960,18 @@ def _abort_fsspec_stream(strategy: "_FsspecStrategy", fs: Any, stage: "str | Non
             fs.rm(stage)
 
 
+async def _abort_fsspec_stream_async(strategy: "_FsspecStrategy", fs: Any, stage: "str | None", file_obj: Any) -> None:
+    """Abort an opened fsspec write stream under cancellation shield."""
+    try:
+        await join_shielded(
+            asyncio.ensure_future(async_(_abort_fsspec_stream)(strategy, fs, stage, file_obj)), suppress_result=True
+        )
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        return
+
+
 class _FsspecSink:
     """Write to one fsspec file, normalizing storage failures."""
 
@@ -1174,23 +1186,26 @@ class _AsyncFsspecWriteStream:
                 )
             )()
         )
+        opened: tuple[str | None, Any] | None = None
+        cancel_exc: asyncio.CancelledError | None = None
         try:
-            stage, file_obj = await execute_async_storage_operation(
+            opened = await execute_async_storage_operation(
                 partial(join_shielded, open_fut),
                 backend=self._backend_type,
                 operation="open_write_stream",
                 path=self._destination,
             )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as caught_cancel:
+            cancel_exc = caught_cancel
+        if cancel_exc is not None:
             if open_fut.done() and not open_fut.cancelled() and open_fut.exception() is None:
                 opened_stage, opened_file = open_fut.result()
-                await join_shielded(
-                    asyncio.ensure_future(
-                        async_(_abort_fsspec_stream)(self._strategy, self._fs, opened_stage, opened_file)
-                    ),
-                    suppress_result=True,
-                )
-            raise
+                await _abort_fsspec_stream_async(self._strategy, self._fs, opened_stage, opened_file)
+            raise cancel_exc
+        if opened is None:
+            msg = "Unreachable"
+            raise RuntimeError(msg)
+        stage, file_obj = opened
         self._stage = stage
         self._file = file_obj
         sink = _AsyncFsspecSink(file_obj, backend=self._backend_type, path=self._destination)

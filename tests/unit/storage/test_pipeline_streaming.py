@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for streaming storage pipeline batches, vector Parquet defaults, schema-pinned JSONL/CSV/IPC, and ObStoreSink safety."""
 
 import asyncio
@@ -16,13 +15,14 @@ import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.core.result import ArrowResult, SQLResult
-from sqlspec.exceptions import FileExistsInStorageError
+from sqlspec.exceptions import FileExistsInStorageError, StorageCapabilityError
 from sqlspec.protocols import AsyncWritableBytesSink
 from sqlspec.storage import StorageRegistry, get_storage_bridge_metrics, reset_storage_bridge_metrics
 from sqlspec.storage._arrow_payload import decode_arrow_payload, encode_arrow_payload, resolve_parquet_use_dictionary
 from sqlspec.storage.backends.local import LocalStore
 from sqlspec.storage.backends.obstore import ObStoreBackend, _ObstoreSink
 from sqlspec.storage.pipeline import AsyncStoragePipeline, SyncStoragePipeline
+from sqlspec.utils.arrow_helpers import arrow_batches_from_async_rows, arrow_reader_with_deferred_close
 
 
 def test_resolve_parquet_use_dictionary_disables_float_vector_columns() -> None:
@@ -751,3 +751,110 @@ async def test_pipeline_routes_fsspec_memory_direct_stream_and_create_only(tmp_p
         await async_p.write_arrow_batches_async(
             "alias://fsmem/exclusive_async.parquet", tbl.to_batches(), overwrite=False
         )
+
+
+async def test_write_arrow_batches_preflight_failure_closes_async_and_sync_sources(tmp_path: Path) -> None:
+    """write_arrow_batches and write_arrow_batches_async close batch sources on pre-iteration StorageCapabilityError."""
+    sync_p = SyncStoragePipeline()
+    async_p = AsyncStoragePipeline()
+    schema = pa.schema(cast("Any", [("id", pa.int64()), ("label", pa.string())]))
+    batch = pa.RecordBatch.from_pydict({"id": [1, 2], "label": ["a", "b"]}, schema=schema)
+
+    async_events: list[str] = []
+
+    class _AsyncRowCursor:
+        column_types: dict[str, str] = {"id": "int64", "label": "text"}
+
+        def __init__(self) -> None:
+            self._rows = [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]
+            self._idx = 0
+
+        def __aiter__(self) -> "_AsyncRowCursor":
+            return self
+
+        async def __anext__(self) -> dict[str, Any]:
+            if self._idx >= len(self._rows):
+                raise StopAsyncIteration
+            row = self._rows[self._idx]
+            self._idx += 1
+            return row
+
+        async def aclose(self) -> None:
+            async_events.append("cursor_aclosed")
+
+    row_cursor = _AsyncRowCursor()
+    async_batches = await arrow_batches_from_async_rows(row_cursor, batch_size=1)
+    assert async_batches is not None
+    assert async_events == []
+
+    with pytest.raises(StorageCapabilityError):
+        await async_p.write_arrow_batches_async(
+            tmp_path / "preflight_bad.json", async_batches, file_format=cast("Any", "json")
+        )
+    assert async_events == ["cursor_aclosed"]
+
+    result_events: list[str] = []
+    row_cursor_2 = _AsyncRowCursor()
+
+    async def _extra_stream_aclose() -> None:
+        result_events.append("stream_aclosed")
+
+    async_batches_2 = await arrow_batches_from_async_rows(row_cursor_2, batch_size=1)
+    async_result = ArrowResult(
+        statement=cast("Any", None),
+        data=async_batches_2,
+        metadata={"streamed": True, "row_stream_batches": True, "stream_aclose": _extra_stream_aclose},
+    )
+    with pytest.raises(StorageCapabilityError):
+        await async_result.write_to_storage_async(
+            tmp_path / "result_bad.json", format_hint=cast("Any", "json"), pipeline=async_p
+        )
+    assert async_events == ["cursor_aclosed", "cursor_aclosed"]
+    assert result_events == ["stream_aclosed"]
+
+    sync_closed: list[str] = []
+    reader_1 = arrow_reader_with_deferred_close(
+        pa.RecordBatchReader.from_batches(schema, [batch]), lambda: sync_closed.append("reader_1")
+    )
+    with pytest.raises(StorageCapabilityError):
+        sync_p.write_arrow_batches(tmp_path / "sync_bad.json", reader_1, file_format=cast("Any", "json"))
+    assert sync_closed == ["reader_1"]
+
+    reader_2 = arrow_reader_with_deferred_close(
+        pa.RecordBatchReader.from_batches(schema, [batch]), lambda: sync_closed.append("reader_2")
+    )
+    sync_result = ArrowResult(statement=cast("Any", None), data=reader_2)
+    with pytest.raises(StorageCapabilityError):
+        sync_result.write_to_storage_sync(
+            tmp_path / "sync_result_bad.json", format_hint=cast("Any", "json"), pipeline=sync_p
+        )
+    assert sync_closed == ["reader_1", "reader_2"]
+
+
+async def test_local_and_fsspec_async_write_stream_aenter_cancellation_cleans_stage(tmp_path: Path) -> None:
+    """Cancelling _AsyncLocalWriteStream.__aenter__ and _AsyncFsspecWriteStream.__aenter__ cleans stage files and raises CancelledError."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    local_dir = tmp_path / "local_cancel"
+    local_dir.mkdir()
+    local_store = LocalStore(str(local_dir))
+    local_stream = local_store.open_write_stream_async("cancelled.parquet")
+    loop = asyncio.get_running_loop()
+    local_task = asyncio.create_task(local_stream.__aenter__())
+    loop.call_soon(local_task.cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await local_task
+    assert [p.name for p in local_dir.iterdir() if p.name.startswith(".sqlspec-stage-")] == []
+    assert not (local_dir / "cancelled.parquet").exists()
+
+    pytest.importorskip("fsspec")
+    fsspec_dir = tmp_path / "fsspec_cancel"
+    fsspec_dir.mkdir()
+    fsspec_store = FSSpecBackend("file://", base_path=str(fsspec_dir))
+    fsspec_stream = fsspec_store.open_write_stream_async("cancelled_fs.parquet")
+    fsspec_task = asyncio.create_task(fsspec_stream.__aenter__())
+    loop.call_soon(fsspec_task.cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await fsspec_task
+    assert [p.name for p in fsspec_dir.iterdir() if p.name.startswith(".sqlspec-stage-")] == []
+    assert not (fsspec_dir / "cancelled_fs.parquet").exists()

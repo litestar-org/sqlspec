@@ -30,6 +30,7 @@ from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import DataError, ImproperConfigurationError, SQLSpecError
 from sqlspec.typing import ArrowException
+from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
@@ -679,8 +680,11 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         ensure_pyarrow()
         import pyarrow as pa
 
-        return pa.RecordBatchReader.from_batches(
-            renamed, (pa.RecordBatch.from_arrays(batch.columns, schema=renamed) for batch in reader)
+        return arrow_reader_with_deferred_close(
+            pa.RecordBatchReader.from_batches(
+                renamed, (pa.RecordBatch.from_arrays(batch.columns, schema=renamed) for batch in reader)
+            ),
+            reader.close,
         )
 
     @staticmethod

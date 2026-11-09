@@ -288,6 +288,115 @@ async def _cancel_in_flight_write(pipeline: Any, destination: str, pa: Any, targ
         raise AssertionError("task was not cancelled")
 
 
+async def _cancel_stream_aenter(backend: Any, path: str, /) -> None:
+    """Cancel open_write_stream_async().__aenter__() and verify CancelledError propagates."""
+    loop = asyncio.get_running_loop()
+    stream = backend.open_write_stream_async(path)
+    task = asyncio.create_task(stream.__aenter__())
+    loop.call_soon(task.cancel)
+    try:
+        sink = await task
+    except asyncio.CancelledError:
+        return
+    await stream.__aexit__(None, None, None)
+    _ = sink
+    raise AssertionError("open_write_stream_async.__aenter__ was not cancelled")
+
+
+async def _verify_preflight_async_batch_cleanup(
+    async_p: Any, destination: str, arrow_helpers_module: Any, exceptions_module: Any, /
+) -> None:
+    """Verify write_arrow_batches_async closes opened async batch iterators on pre-iteration errors."""
+    events: list[str] = []
+
+    class _SmokeAsyncRows:
+        column_types: dict[str, str] = {"id": "int64"}
+
+        def __init__(self) -> None:
+            self._items = [{"id": 1}, {"id": 2}]
+            self._idx = 0
+
+        def __aiter__(self) -> "_SmokeAsyncRows":
+            return self
+
+        async def __anext__(self) -> dict[str, int]:
+            if self._idx >= len(self._items):
+                raise StopAsyncIteration
+            item = self._items[self._idx]
+            self._idx += 1
+            return item
+
+        async def aclose(self) -> None:
+            events.append("aclosed")
+
+    batches = await arrow_helpers_module.arrow_batches_from_async_rows(_SmokeAsyncRows(), batch_size=1)
+    assert batches is not None
+    assert events == []
+    try:
+        await async_p.write_arrow_batches_async(destination, batches, file_format="json")
+    except exceptions_module.StorageCapabilityError:
+        pass
+    else:
+        raise AssertionError("write_arrow_batches_async(file_format='json') did not raise StorageCapabilityError")
+    assert events == ["aclosed"], f"expected ['aclosed'], got {events!r}"
+
+
+def _verify_pipeline_preflight_and_cancel_smoke(
+    *,
+    uri: str,
+    alias: str,
+    expected_backend: str,
+    backend: Any,
+    local_dir: Path,
+    sample_table: Any,
+    sync_p: Any,
+    async_p: Any,
+    pa: Any,
+    arrow_helpers_module: Any,
+    exceptions_module: Any,
+) -> None:
+    """Verify pre-iteration batch cleanup and staged stream __aenter__ cancellation."""
+    sync_closed: list[str] = []
+    deferred_reader = arrow_helpers_module.arrow_reader_with_deferred_close(
+        pa.RecordBatchReader.from_batches(sample_table.schema, sample_table.to_batches()),
+        lambda closed=sync_closed: closed.append("closed"),
+    )
+    try:
+        sync_p.write_arrow_batches(f"alias://{alias}/preflight_bad.json", deferred_reader, file_format="json")
+    except exceptions_module.StorageCapabilityError:
+        pass
+    else:
+        raise AssertionError(f"{uri}: sync json format did not raise StorageCapabilityError")
+    assert sync_closed == ["closed"], f"{uri}: deferred reader not closed on preflight error"
+
+    asyncio.run(
+        _verify_preflight_async_batch_cleanup(
+            async_p, f"alias://{alias}/preflight_async_bad.json", arrow_helpers_module, exceptions_module
+        )
+    )
+
+    if expected_backend == "local":
+        asyncio.run(_cancel_stream_aenter(backend, "cancelled_aenter.parquet"))
+        assert [p.name for p in local_dir.iterdir() if p.name.startswith(".sqlspec-stage-")] == []
+        assert not (local_dir / "cancelled_aenter.parquet").exists()
+
+
+def _verify_fsspec_aenter_cancel_smoke(*, tmp_dir: str, require_compiled: bool) -> str | None:
+    """Verify _AsyncFsspecWriteStream.__aenter__ cancellation when fsspec is installed."""
+    if importlib.util.find_spec("fsspec") is None:
+        return None
+    fsspec_module = importlib.import_module("sqlspec.storage.backends.fsspec")
+    if require_compiled and not is_compiled_module(fsspec_module):
+        return "sqlspec.storage.backends.fsspec was imported from source, not a compiled extension"
+    fsspec_dir = Path(tmp_dir) / "fsspec_root"
+    fsspec_dir.mkdir(parents=True, exist_ok=True)
+    fsspec_backend = fsspec_module.FSSpecBackend("file://", base_path=str(fsspec_dir))
+    asyncio.run(_cancel_stream_aenter(fsspec_backend, "cancelled_fsspec_aenter.parquet"))
+    assert [p.name for p in fsspec_dir.iterdir() if p.name.startswith(".sqlspec-stage-")] == []
+    assert not (fsspec_dir / "cancelled_fsspec_aenter.parquet").exists()
+    return None
+
+
 def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[str, Any]:
     """Stream Arrow tables and batches through compiled pipelines over ObStoreBackend and LocalStore."""
     result = _new_smoke_result(
@@ -310,6 +419,7 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
         base_module = importlib.import_module("sqlspec.base")
         sqlite_module = importlib.import_module("sqlspec.adapters.sqlite")
         arrow_payload_module = importlib.import_module("sqlspec.storage._arrow_payload")
+        arrow_helpers_module = importlib.import_module("sqlspec.utils.arrow_helpers")
         registry_module = importlib.import_module("sqlspec.storage.registry")
         exceptions_module = importlib.import_module("sqlspec.exceptions")
         pa = importlib.import_module("pyarrow")
@@ -452,6 +562,25 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
                     else:
                         raise AssertionError("memory:// staged overwrite=False batches did not raise conflict")
                     assert [k for k in backend.list_objects_sync() if ".sqlspec-stage-" in k] == []
+
+                _verify_pipeline_preflight_and_cancel_smoke(
+                    uri=uri,
+                    alias=alias,
+                    expected_backend=expected_backend,
+                    backend=backend,
+                    local_dir=local_dir,
+                    sample_table=sample_table,
+                    sync_p=sync_p,
+                    async_p=async_p,
+                    pa=pa,
+                    arrow_helpers_module=arrow_helpers_module,
+                    exceptions_module=exceptions_module,
+                )
+
+            fsspec_err = _verify_fsspec_aenter_cancel_smoke(tmp_dir=tmp_dir, require_compiled=require_compiled)
+            if fsspec_err is not None:
+                result["error"] = fsspec_err
+                return result
 
             spec = base_module.SQLSpec()
             sqlite_cfg = sqlite_module.SqliteConfig()

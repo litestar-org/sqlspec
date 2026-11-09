@@ -6891,7 +6891,9 @@ def _assert_decoded_select_to_storage_files(case: DriverCase, multi_path: Any, e
 
     empty_table = pq.read_table(empty_path)
     assert empty_table.num_rows == 0
-    expected_empty_columns = [] if case.adapter in {"asyncpg", "psqlpy"} else ["name", "value", "note"]
+    expected_empty_columns = (
+        [] if case.adapter in {"asyncpg", "cockroach_asyncpg", "psqlpy"} else ["name", "value", "note"]
+    )
     assert empty_table.column_names == expected_empty_columns
 
 

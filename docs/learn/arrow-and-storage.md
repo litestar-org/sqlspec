@@ -143,22 +143,35 @@ import pyarrow as pa
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import FileExistsInStorageError
-from sqlspec.storage import AsyncStoragePipeline, SyncStoragePipeline, storage_registry
+from sqlspec.storage import (
+    AsyncStoragePipeline,
+    SyncStoragePipeline,
+    storage_registry,
+)
 
 spec = SQLSpec()
 config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
-with tempfile.TemporaryDirectory() as tmp_dir, spec.provide_session(config) as session:
+with (
+    tempfile.TemporaryDirectory() as tmp_dir,
+    spec.provide_session(config) as session,
+):
     export_dir = Path(tmp_dir)
-    storage_registry.register_alias("stream_exports", export_dir.as_uri(), backend="local")
+    storage_registry.register_alias(
+        "stream_exports", export_dir.as_uri(), backend="local"
+    )
 
-    session.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, host TEXT, latency_ms REAL)")
+    session.execute(
+        "CREATE TABLE events (id INTEGER PRIMARY KEY, host TEXT, latency_ms REAL)"
+    )
     session.execute_many(
         "INSERT INTO events (id, host, latency_ms) VALUES (?, ?, ?)",
         [(1, "web-1", 12.4), (2, "web-2", 18.9), (3, "web-3", 9.1)],
     )
 
-    arrow_result = session.select_to_arrow("SELECT host, latency_ms FROM events ORDER BY id")
+    arrow_result = session.select_to_arrow(
+        "SELECT host, latency_ms FROM events ORDER BY id"
+    )
     arrow_result.write_to_storage_sync(
         "alias://stream_exports/from_result.parquet",
         format_hint="parquet",
@@ -168,7 +181,8 @@ with tempfile.TemporaryDirectory() as tmp_dir, spec.provide_session(config) as s
     )
 
     sync_pipeline = SyncStoragePipeline(registry=storage_registry)
-    batches = pa.table({"host": ["web-1", "web-2"], "cpu_pct": [41.5, 68.0]}).to_batches(max_chunksize=1)
+    source_table = pa.table({"host": ["web-1", "web-2"], "cpu_pct": [41.5, 68.0]})
+    batches = source_table.to_batches(max_chunksize=1)
     sync_pipeline.write_arrow_batches(
         "alias://stream_exports/batches.parquet",
         batches,
@@ -191,7 +205,8 @@ with tempfile.TemporaryDirectory() as tmp_dir, spec.provide_session(config) as s
 
     async def write_async() -> None:
         async_pipeline = AsyncStoragePipeline(registry=storage_registry)
-        async_batches = pa.table({"host": ["web-1"], "cpu_pct": [41.5]}).to_batches()
+        async_table = pa.table({"host": ["web-1"], "cpu_pct": [41.5]})
+        async_batches = async_table.to_batches()
         await async_pipeline.write_arrow_batches_async(
             "alias://stream_exports/async_batches.parquet",
             async_batches,

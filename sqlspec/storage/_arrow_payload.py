@@ -345,7 +345,7 @@ def _resolve_arrow_source(data: Any, pa: Any) -> tuple[Any, Any, Any, Any]:
         return None, data.schema, iter(data), None
     if hasattr(data, "__arrow_c_stream__"):
         reader = pa.RecordBatchReader.from_stream(data)
-        return None, reader.schema, iter(reader), None
+        return None, reader.schema, iter(reader), reader
     iterator = iter(data)
     first_batch = next(iterator, None)
     if first_batch is None:
@@ -449,69 +449,76 @@ def encode_arrow_to_sink(
     Raises:
         StorageCapabilityError: If format_hint is not a supported Arrow write format.
     """
-    if format_hint not in {"parquet", "arrow-ipc", "csv"}:
-        msg = "Arrow storage writes support only Parquet, Arrow IPC, and CSV formats"
-        raise StorageCapabilityError(
-            msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
-        )
-
-    validate_arrow_write_options(format_hint, write_options)
-
-    pa = import_pyarrow()
-    table, schema, batches_iter, iterator = _resolve_arrow_source(data, pa)
-
-    if format_hint in {"parquet", "csv"}:
-        target_schema, schema_changed = _normalize_arrow_schema(schema, pa)
-    else:
-        target_schema = schema
-        schema_changed = False
-
-    if format_hint == "csv" and len(target_schema) == 0:
-        return (0, 0)
-
-    is_native = isinstance(sink, pa.NativeFile) and not isinstance(sink, pa.PythonFile)
-    proxy: _PoisonableCountingSink | None = None
-    if is_native:
-        pa_sink = sink
-        start_offset = sink.tell()
-    else:
-        proxy = _PoisonableCountingSink(sink)
-        pa_sink = pa.PythonFile(proxy, mode="w")
-        start_offset = 0
-
-    writer: Any = None
+    iterator: Any = None
     try:
-        writer, row_group_size = _create_format_writer(
-            format_hint, pa_sink, target_schema, compression=compression, write_options=write_options
-        )
-        rows_processed = _write_table_or_batches(
-            writer,
-            table,
-            batches_iter,
-            target_schema,
-            format_hint=format_hint,
-            schema_changed=schema_changed,
-            row_group_size=row_group_size,
-        )
-        writer.close()
-        if proxy is not None:
-            proxy.flush()
-            proxy.close()
-    except BaseException:
-        if proxy is not None:
-            proxy.poison()
-        if writer is not None:
-            with contextlib.suppress(Exception):
-                writer.close()
-        raise
-    else:
-        bytes_written = (pa_sink.tell() - start_offset) if proxy is None else proxy.bytes_written
-        return (bytes_written, rows_processed)
+        if format_hint not in {"parquet", "arrow-ipc", "csv"}:
+            msg = "Arrow storage writes support only Parquet, Arrow IPC, and CSV formats"
+            raise StorageCapabilityError(
+                msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
+            )
+
+        validate_arrow_write_options(format_hint, write_options)
+
+        pa = import_pyarrow()
+        table, schema, batches_iter, iterator = _resolve_arrow_source(data, pa)
+
+        if format_hint in {"parquet", "csv"}:
+            target_schema, schema_changed = _normalize_arrow_schema(schema, pa)
+        else:
+            target_schema = schema
+            schema_changed = False
+
+        if format_hint == "csv" and len(target_schema) == 0:
+            return (0, 0)
+
+        is_native = isinstance(sink, pa.NativeFile) and not isinstance(sink, pa.PythonFile)
+        proxy: _PoisonableCountingSink | None = None
+        if is_native:
+            pa_sink = sink
+            start_offset = sink.tell()
+        else:
+            proxy = _PoisonableCountingSink(sink)
+            pa_sink = pa.PythonFile(proxy, mode="w")
+            start_offset = 0
+
+        writer: Any = None
+        try:
+            writer, row_group_size = _create_format_writer(
+                format_hint, pa_sink, target_schema, compression=compression, write_options=write_options
+            )
+            rows_processed = _write_table_or_batches(
+                writer,
+                table,
+                batches_iter,
+                target_schema,
+                format_hint=format_hint,
+                schema_changed=schema_changed,
+                row_group_size=row_group_size,
+            )
+            writer.close()
+            if proxy is not None:
+                proxy.flush()
+                proxy.close()
+        except BaseException:
+            if proxy is not None:
+                proxy.poison()
+            if writer is not None:
+                with contextlib.suppress(Exception):
+                    writer.close()
+            raise
+        else:
+            bytes_written = (pa_sink.tell() - start_offset) if proxy is None else proxy.bytes_written
+            return (bytes_written, rows_processed)
     finally:
-        source_close = getattr(iterator or data, "close", None)
-        if callable(source_close):
+        if iterator is not None and iterator is not data:
+            iter_close = getattr(iterator, "close", None)
+            if callable(iter_close):
+                with contextlib.suppress(Exception):
+                    iter_close()
+        data_close = getattr(data, "close", None)
+        if callable(data_close):
             with contextlib.suppress(Exception):
-                source_close()
+                data_close()
 
 
 async def join_shielded(future: "asyncio.Future[Any] | asyncio.Task[Any]", *, suppress_result: bool = False) -> Any:
@@ -611,42 +618,43 @@ async def encode_arrow_to_async_sink(
         StorageCapabilityError: If format_hint is not a supported Arrow write format.
         ValueError: If chunk_size is not a positive integer.
     """
-    if format_hint not in {"parquet", "arrow-ipc", "csv"}:
-        msg = "Arrow storage writes support only Parquet, Arrow IPC, and CSV formats"
-        raise StorageCapabilityError(
-            msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
-        )
-    if chunk_size <= 0:
-        msg = "chunk_size must be a positive integer"
-        raise ValueError(msg)
-
-    validate_arrow_write_options(format_hint, write_options)
-
-    loop = asyncio.get_running_loop()
-    bridge = _AsyncSinkBridge(loop, chunk_size)
-    async_iterator: Any = aiter(cast("Any", data)) if hasattr(data, "__aiter__") else None
+    async_iterator: Any = None
     active_tasks: list[asyncio.Task[Any]] = []
-    worker_source: Any = (
-        _iter_async_source(async_iterator, loop, bridge, active_tasks) if async_iterator is not None else data
-    )
-
-    def _worker() -> tuple[int, int]:
-        try:
-            result = encode_arrow_to_sink(
-                worker_source, bridge, format_hint=format_hint, compression=compression, write_options=write_options
-            )
-            bridge.finish()
-        except _BridgeAbortedError:
-            bridge.mark_aborted_done()
-            return (0, 0)
-        except BaseException:
-            bridge.fail()
-            raise
-        else:
-            return result
-
-    worker_future = loop.run_in_executor(None, _worker)
     try:
+        if format_hint not in {"parquet", "arrow-ipc", "csv"}:
+            msg = "Arrow storage writes support only Parquet, Arrow IPC, and CSV formats"
+            raise StorageCapabilityError(
+                msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
+            )
+        if chunk_size <= 0:
+            msg = "chunk_size must be a positive integer"
+            raise ValueError(msg)
+
+        validate_arrow_write_options(format_hint, write_options)
+
+        loop = asyncio.get_running_loop()
+        bridge = _AsyncSinkBridge(loop, chunk_size)
+        async_iterator = aiter(cast("Any", data)) if hasattr(data, "__aiter__") else None
+        worker_source: Any = (
+            _iter_async_source(async_iterator, loop, bridge, active_tasks) if async_iterator is not None else data
+        )
+
+        def _worker() -> tuple[int, int]:
+            try:
+                result = encode_arrow_to_sink(
+                    worker_source, bridge, format_hint=format_hint, compression=compression, write_options=write_options
+                )
+                bridge.finish()
+            except _BridgeAbortedError:
+                bridge.mark_aborted_done()
+                return (0, 0)
+            except BaseException:
+                bridge.fail()
+                raise
+            else:
+                return result
+
+        worker_future = loop.run_in_executor(None, _worker)
         try:
             while True:
                 chunk = await bridge.dequeue()
@@ -658,15 +666,19 @@ async def encode_arrow_to_async_sink(
             bridge.abort()
             await join_shielded(worker_future, suppress_result=True)
     finally:
-        if async_iterator is not None:
-            for pending_task in active_tasks:
-                if not pending_task.done():
-                    pending_task.cancel()
-                    await join_shielded(pending_task, suppress_result=True)
-            aclose = getattr(async_iterator, "aclose", None)
-            if callable(aclose):
-                with contextlib.suppress(Exception):
-                    await join_shielded(asyncio.ensure_future(cast("Any", aclose)()), suppress_result=True)
+        for pending_task in active_tasks:
+            if not pending_task.done():
+                pending_task.cancel()
+                await join_shielded(pending_task, suppress_result=True)
+        close_target = async_iterator if async_iterator is not None else data
+        aclose = getattr(close_target, "aclose", None)
+        if callable(aclose):
+            with contextlib.suppress(Exception):
+                await join_shielded(asyncio.ensure_future(cast("Any", aclose)()), suppress_result=True)
+        data_close = getattr(data, "close", None)
+        if callable(data_close):
+            with contextlib.suppress(Exception):
+                data_close()
 
 
 def encode_arrow_payload(
