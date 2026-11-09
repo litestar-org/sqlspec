@@ -15,6 +15,7 @@ important operational fixes.
 * Added `sql.col(name, table=None)` and `sql.c` (`ColumnNamespace` supporting `sql.c("name", table="u")`, `sql.c.name`, `sql.c["first-name"]`, and `sql.c["u.name"]`) alongside `sql.column()`, plus `sql.var(name)` for unquoted SQL keyword/variable tokens such as `sql.var("DEFAULT")` and `sql.var("CURRENT_TIMESTAMP")`.
 * Added `FileExistsInStorageError(StorageOperationFailedError)` (`sqlspec.exceptions`) and normalized `FileExistsError`, `OSError(errno.EEXIST)`, `AlreadyExistsError`, and `ObjectAlreadyExists` across storage backends in `raise_storage_error`.
 * Added keyword-only `*, overwrite: bool = True, **kwargs: Any` to `write_bytes_sync`, `write_text_sync`, `write_bytes_async`, and `write_text_async` across `ObjectStoreProtocol`, `ObjectStoreBase`, `AsyncWriteBytesProtocol`, `LocalStore`, `ObStoreBackend`, and `FSSpecBackend`, mapping `overwrite=False` to atomic create-only semantics (`mode="create"` on `ObStoreBackend`, `open("xb")` on `LocalStore` and `FSSpecBackend`) and raising `FileExistsInStorageError` when the target already exists. ([#888](https://github.com/litestar-org/sqlspec/issues/888))
+* MySQL and MariaDB ADK stores accept `database.table` names across `aiomysql`, `asyncmy`, `PyMySQL`, and `mysql-connector` sync and async stores when the target database already exists, deriving index names from the bare table name while preserving unquoted bare-table DDL and DML.
 
 **Breaking changes:**
 

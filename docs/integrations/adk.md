@@ -207,6 +207,8 @@ def create_adk_services(
 
 Instead of calling `ensure_tables()` at runtime in production, enable `"adk"` in `migration_config={"include_extensions": ["adk"]}` (or configure `extension_config["adk"]`, which auto-includes ADK migrations) so `sqlspec upgrade` tracks ADK schema revisions alongside your application migrations.
 
+MySQL and MariaDB stores accept `database.table` names when the database already exists; SQLSpec does not create it.
+
 Use the built-in `sqlspec adk memory` CLI commands to verify table reachability or delete memory entries older than a retention threshold:
 
 ```bash
