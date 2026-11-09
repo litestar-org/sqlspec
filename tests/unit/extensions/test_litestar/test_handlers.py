@@ -427,14 +427,14 @@ async def test_connection_provider_handover_on_http() -> None:
     scope = cast("Scope", {"type": "http"})
 
     gen = provider(state, scope)
-    conn = await gen.asend(None)
+    conn = await anext(gen)
 
     assert conn is mock_conn
     assert get_sqlspec_scope_state(scope, f"{connection_key}_provider_owned") is True
     assert get_sqlspec_scope_state(scope, connection_key) is mock_conn
 
     with pytest.raises(StopAsyncIteration):
-        await gen.asend(None)
+        await anext(gen)
 
     assert cm_fake.exit_args is None
     assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is cm_fake
@@ -459,9 +459,9 @@ async def test_manual_handler_terminus_after_handover() -> None:
     scope = cast("Scope", {"type": "http"})
 
     gen = provider(state, scope)
-    await gen.asend(None)
+    await anext(gen)
     with pytest.raises(StopAsyncIteration):
-        await gen.asend(None)
+        await anext(gen)
 
     handler = manual_handler_maker(connection_key)
     message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
@@ -490,9 +490,9 @@ async def test_connection_provider_websocket_clean_exit() -> None:
     scope = cast("Scope", {"type": "websocket"})
 
     gen = provider(state, scope)
-    await gen.asend(None)
+    await anext(gen)
     with pytest.raises(StopAsyncIteration):
-        await gen.asend(None)
+        await anext(gen)
 
     assert cm_fake.exit_args == (None, None, None)
     assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is None
@@ -519,9 +519,9 @@ async def test_connection_provider_response_already_started() -> None:
     ScopeState.from_scope(scope).response_started = True
 
     gen = provider(state, scope)
-    await gen.asend(None)
+    await anext(gen)
     with pytest.raises(StopAsyncIteration):
-        await gen.asend(None)
+        await anext(gen)
 
     assert cm_fake.exit_args == (None, None, None)
     assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is None
@@ -545,7 +545,7 @@ async def test_connection_provider_body_error_forwards_exception() -> None:
     scope = cast("Scope", {"type": "http"})
 
     gen = provider(state, scope)
-    await gen.asend(None)
+    await anext(gen)
 
     err = ValueError("boom")
     with pytest.raises(ValueError) as exc_info:
@@ -577,7 +577,7 @@ async def test_connection_provider_suppressing_context_propagates_exception() ->
     scope = cast("Scope", {"type": "http"})
 
     gen = provider(state, scope)
-    await gen.asend(None)
+    await anext(gen)
 
     err = ValueError("cannot suppress")
     with pytest.raises(ValueError) as exc_info:
@@ -605,7 +605,7 @@ async def test_connection_provider_sync_manager_receives_exception() -> None:
     scope = cast("Scope", {"type": "http"})
 
     gen = provider(state, scope)
-    await gen.asend(None)
+    await anext(gen)
 
     err = ValueError("sync boom")
     with pytest.raises(ValueError) as exc_info:
@@ -635,7 +635,7 @@ async def test_connection_provider_exit_failure_propagates_after_cleanup() -> No
     scope = cast("Scope", {"type": "http"})
 
     gen = provider(state, scope)
-    await gen.asend(None)
+    await anext(gen)
 
     with pytest.raises(RuntimeError) as exc_info:
         await gen.athrow(ValueError("original"))
