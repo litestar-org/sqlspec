@@ -177,13 +177,18 @@ class AiosqlitePoolConnectionContext:
         self._connection = None
         raw_connection = connection.connection
         try:
-            if exc_type is None and getattr(raw_connection, "in_transaction", False):
+            if exc_type is None and not connection.is_closed:
                 try:
-                    await end_transaction(raw_connection, commit=True)
-                except BaseException:
-                    with suppress(Exception):
-                        await end_transaction(raw_connection, commit=False)
-                    raise
+                    in_transaction = bool(getattr(raw_connection, "in_transaction", False))
+                except (ValueError, sqlite3.ProgrammingError):
+                    in_transaction = False
+                if in_transaction:
+                    try:
+                        await end_transaction(raw_connection, commit=True)
+                    except BaseException:
+                        with suppress(Exception):
+                            await end_transaction(raw_connection, commit=False)
+                        raise
         finally:
             await self._pool.release(connection)
         return False

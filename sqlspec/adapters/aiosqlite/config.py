@@ -218,8 +218,9 @@ class _AiosqliteSessionFactory(AsyncPoolSessionFactory):
         if pool is None:
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
-        self._ctx = pool.get_connection()
-        return cast("AiosqliteConnection", await self._ctx.__aenter__())
+        ctx: AiosqlitePoolConnectionContext = pool.get_connection()
+        self._ctx = ctx
+        return await ctx.__aenter__()
 
     async def release_connection(self, _conn: "AiosqliteConnection", **kwargs: Any) -> None:
         context = self._ctx
@@ -243,15 +244,18 @@ class AiosqliteConnectionContext(AsyncPoolConnectionContext):
         if pool is None:
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
-        self._ctx = pool.get_connection()
-        assert self._ctx is not None
-        return cast("AiosqliteConnection", await self._ctx.__aenter__())
+        ctx: AiosqlitePoolConnectionContext = pool.get_connection()
+        self._ctx = ctx
+        return await ctx.__aenter__()
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._ctx:
-            return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)
+        if self._ctx is not None:
+            try:
+                return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)
+            finally:
+                self._ctx = None
         return None
 
 

@@ -1,5 +1,6 @@
 """Psqlpy database configuration."""
 
+import contextlib
 import inspect
 import sys
 from collections.abc import Mapping
@@ -188,6 +189,9 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
         return connection
 
     async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
+        if kwargs.get("exc_type") is not None and _conn is not None:
+            with contextlib.suppress(Exception):
+                await _conn.execute("ROLLBACK")
         if self._ctx is not None:
             try:
                 await self._ctx.__aexit__(None, None, None)
@@ -219,11 +223,18 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
             await ctx.__aexit__(*sys.exc_info())
             self._ctx = None
             raise
-        return connection  # type: ignore[no-any-return]
+        typed_connection = cast("PsqlpyConnection", connection)
+        self._connection = typed_connection
+        return typed_connection
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
+        connection = self._connection
+        self._connection = None
+        if exc_type is not None and connection is not None:
+            with contextlib.suppress(Exception):
+                await connection.execute("ROLLBACK")
         if self._ctx is not None:
             try:
                 await self._ctx.__aexit__(None, None, None)

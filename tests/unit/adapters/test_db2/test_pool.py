@@ -220,6 +220,40 @@ def test_db2_pool_clean_exit_preserves_thread_connection(fake_ibm_db: FakeModule
         pool.close()
 
 
+def test_db2_pool_nested_checkout_depth_guard(fake_ibm_db: FakeModules) -> None:
+    """Nested get_connection preserves active outer connection when inner exception is caught and closes when uncaught."""
+    _, fake_module = fake_ibm_db
+    c1 = FakeDb2Connection()
+    c2 = FakeDb2Connection()
+    fake_module.pending_connections.extend([c1, c2])
+    pool = Db2SyncConnectionPool({"database": "TESTDB"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pool.get_connection() as outer_conn:
+            assert cast(object, outer_conn) is c1
+            with pytest.raises(ValueError, match="inner error"):
+                with pool.get_connection() as inner_conn:
+                    assert inner_conn is outer_conn
+                    raise ValueError("inner error")
+            assert c1.closed is False
+
+        assert c1.closed is False
+
+        with pytest.raises(RuntimeError, match="uncaught inner"):
+            with pool.get_connection() as outer_conn2:
+                assert outer_conn2 is outer_conn
+                with pool.get_connection():
+                    raise RuntimeError("uncaught inner")
+
+        assert c1.closed is True
+        assert pool.size() == 0
+
+        with pool.get_connection() as fresh_conn:
+            assert cast(object, fresh_conn) is c2
+            assert c2.closed is False
+    finally:
+        pool.close()
+
+
 def test_pool_is_connection_alive_success() -> None:
     """_is_connection_alive returns True when ping query executes cleanly."""
     pool = Db2SyncConnectionPool({"database": "TESTDB"})

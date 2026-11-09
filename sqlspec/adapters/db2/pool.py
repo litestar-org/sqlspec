@@ -162,13 +162,18 @@ class Db2SyncConnectionPool:
         Yields:
             A thread-local Db2 database connection.
         """
+        depth = getattr(self._thread_local, "depth", 0)
         connection = self._get_thread_connection()
+        self._thread_local.depth = depth + 1
         try:
             yield connection
         except BaseException:
-            with contextlib.suppress(Exception):
-                self._close_thread_connection()
+            if getattr(self._thread_local, "depth", 1) <= 1:
+                with contextlib.suppress(Exception):
+                    self._close_thread_connection()
             raise
+        finally:
+            self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
 
     def close(self) -> None:
         """Close every connection this pool opened across all threads."""

@@ -762,3 +762,47 @@ async def test_aiosqlite_direct_release_still_rolls_back(tmp_path: Path) -> None
             assert row == (0,)
     finally:
         await pool.close()
+
+
+async def test_aiosqlite_connection_context_aexit_clears_inner_ctx(tmp_path: Path) -> None:
+    """AiosqliteConnectionContext.__aexit__ clears _ctx on both clean exit and inner exit failure."""
+    from sqlspec.adapters.aiosqlite.config import AiosqliteConnectionContext
+
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "ctx_clear.db")})
+    try:
+        ctx = config.provide_connection()
+        assert isinstance(ctx, AiosqliteConnectionContext)
+        async with ctx:
+            assert ctx._ctx is not None
+        assert ctx._ctx is None
+
+        failing_ctx = AiosqliteConnectionContext(config)
+        inner_mock = AsyncMock()
+        inner_mock.__aexit__.side_effect = RuntimeError("inner exit boom")
+        failing_ctx._ctx = inner_mock
+
+        with pytest.raises(RuntimeError, match="inner exit boom"):
+            await failing_ctx.__aexit__(None, None, None)
+
+        assert failing_ctx._ctx is None
+    finally:
+        await config.close_pool()
+
+
+async def test_aiosqlite_context_exit_handles_closed_connection_or_pool(tmp_path: Path) -> None:
+    """Clean context exit succeeds as a no-op if the connection or pool was closed inside the block."""
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "closed_inside.db")})
+    pool = await config.create_pool()
+    async with config.provide_connection(pool) as connection:
+        cursor = await connection.execute("SELECT 1")
+        row = await cursor.fetchone()
+        await cursor.close()
+        assert row == (1,)
+        await config.close_pool()
+
+    pool2 = await config.create_pool()
+    try:
+        async with config.provide_connection(pool2) as connection2:
+            await connection2.close()
+    finally:
+        await config.close_pool()
