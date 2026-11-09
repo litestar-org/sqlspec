@@ -9,7 +9,6 @@ import builtins
 import inspect
 import sys
 import types
-import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
@@ -20,6 +19,7 @@ from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.version import extract_migration_version
 from sqlspec.utils.sync_tools import await_
+from sqlspec.utils.uuids import uuid4
 
 __all__ = (
     "BaseMigrationLoader",
@@ -98,7 +98,7 @@ def load_reconcile_callable(
         MigrationError: If reading, compiling, executing, or validating reconcile(context) fails.
     """
     root = project_root if project_root is not None else find_project_root(module_path.parent)
-    module_name = f"_sqlspec_reconcile_{extension_name}_{uuid.uuid4().hex}"
+    module_name = f"_sqlspec_reconcile_{extension_name}_{uuid4().hex}"
 
     try:
         source_code = module_path.read_text(encoding="utf-8")

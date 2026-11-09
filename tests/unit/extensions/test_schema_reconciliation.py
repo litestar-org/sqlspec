@@ -494,7 +494,7 @@ def test_adk_session_targets_use_supplied_scope(monkeypatch: pytest.MonkeyPatch)
             "adk_internal_metadata",
         ]
         assert qualified_targets[0].identity == "analytics.adk_session"
-        assert driver.mock_calls == []
+        assert [c.args[0] for c in driver.execute.call_args_list] == store._companion_index_statements()
     finally:
         config.close_pool()
         qualified_config.close_pool()
@@ -508,7 +508,7 @@ async def test_adk_session_targets_async_use_supplied_scope(monkeypatch: pytest.
     try:
         store = AiosqliteADKStore(config)
         monkeypatch.setattr(AiosqliteConfig, "provide_session", MagicMock(side_effect=AssertionError("second session")))
-        driver = MagicMock()
+        driver = MagicMock(execute=AsyncMock())
 
         targets = await store.get_schema_targets_async(driver)
         await store.prepare_reconcile_async(driver)
@@ -517,7 +517,7 @@ async def test_adk_session_targets_async_use_supplied_scope(monkeypatch: pytest.
 
         assert len(targets) == 5
         assert targets[0].identity == "custom_sessions"
-        assert driver.mock_calls == []
+        assert [c.args[0] for c in driver.execute.await_args_list] == store._companion_index_statements()
     finally:
         await config.close_pool()
 
@@ -574,7 +574,7 @@ async def test_adk_memory_targets_follow_enabled_flag(monkeypatch: pytest.Monkey
         async_store = AiosqliteADKMemoryStore(async_enabled_cfg)
         monkeypatch.setattr(SqliteConfig, "provide_session", MagicMock(side_effect=AssertionError("second session")))
         monkeypatch.setattr(AiosqliteConfig, "provide_session", MagicMock(side_effect=AssertionError("second session")))
-        driver = MagicMock()
+        driver = MagicMock(execute=AsyncMock())
 
         assert disabled_store.get_schema_targets_sync(driver) == []
         sqlite_targets = sqlite_enabled_store.get_schema_targets_sync(driver)
@@ -593,7 +593,7 @@ async def test_adk_memory_targets_follow_enabled_flag(monkeypatch: pytest.Monkey
         await async_store.prepare_reconcile_async(driver)
         await async_store.reconcile_companion_objects_async(driver)
         await async_store.finalize_reconcile_async(driver)
-        assert driver.mock_calls == []
+        assert [c.args[0] for c in driver.execute.await_args_list] == async_store._memory_index_statements()
     finally:
         disabled_cfg.close_pool()
         enabled_cfg.close_pool()
