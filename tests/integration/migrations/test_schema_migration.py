@@ -313,3 +313,50 @@ def test_tracker_get_applied_migrations_orders_by_execution_sequence(sqlite_sess
     assert applied[0]["version_num"] == "0001"
     assert applied[1]["version_num"] == "0003"
     assert applied[2]["version_num"] == "0002"
+
+
+def test_sqlite_litestar_reconcile_mode_end_to_end(tmp_path: object) -> None:
+    from pathlib import Path
+
+    from sqlspec.exceptions import MigrationError
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    root = Path(str(tmp_path))
+    migrations_dir = root / "migrations"
+    migrations_dir.mkdir(parents=True, exist_ok=True)
+    db_path = root / "litestar_e2e.db"
+
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)},
+        migration_config={"script_location": str(migrations_dir)},
+        extension_config={"litestar": {"session_table": "litestar_session", "migration_mode": "reconcile"}},
+    )
+    try:
+        with config.provide_session() as session:
+            session.execute_script(
+                "CREATE TABLE litestar_session (session_id TEXT PRIMARY KEY, data BLOB NOT NULL); "
+                "INSERT INTO litestar_session (session_id, data) VALUES ('keep-me', X'0102');"
+            )
+            session.commit()
+
+        commands = SyncMigrationCommands(config)
+        commands.upgrade()
+        commands.upgrade()
+
+        with config.provide_session() as session:
+            cols = {
+                str(col["column_name"]).casefold()
+                for col in session.data_dictionary.get_columns(session, "litestar_session")
+            }
+            rows = session.select("SELECT session_id, data FROM litestar_session")
+            ledger = session.select("SELECT version_num FROM ddl_migrations")
+
+        assert "expires_at" in cols
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == "keep-me"
+        assert all(not str(r["version_num"]).startswith("ext_litestar_") for r in ledger)
+
+        with pytest.raises(MigrationError):
+            commands.downgrade()
+    finally:
+        config.close_pool()

@@ -15,7 +15,7 @@ Supports:
 
 import contextlib
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.adbc.core import _DB2_INDEX_EXISTS_SQL, _DB2_TABLE_EXISTS_SQL, is_postgres_dialect
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
@@ -135,6 +135,14 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             Number of sessions deleted.
         """
         return await async_(self._delete_expired)()
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Cache dialect from the active driver without opening a nested session."""
+        if self._dialect is not None:
+            return
+        dialect_value = getattr(driver, "dialect", None)
+        raw_dialect = str(dialect_value).lower() if dialect_value else "postgres"
+        self._dialect = "mssql" if raw_dialect in {"tsql", "sqlserver"} else raw_dialect
 
     def _get_dialect(self) -> str:
         """Get the database dialect, caching it after first access.

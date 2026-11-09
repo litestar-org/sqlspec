@@ -26,6 +26,7 @@ logger = get_logger("sqlspec.extensions.litestar.store")
 
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 MAX_TABLE_NAME_LENGTH: Final = 63
+_SQLGLOT_PARSE_DIALECTS: Final[dict[str, str]] = {"mariadb": "mysql", "mssql": "tsql", "postgresql": "postgres"}
 
 
 class BaseSQLSpecStore(Store, Generic[ConfigT]):
@@ -118,6 +119,21 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
 
+    def get_schema_targets(self) -> "list[SchemaTarget]":
+        """Return ordered SchemaTarget definitions for this session store."""
+        return [self._schema_target()]
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the primary session table SchemaTarget from store DDL."""
+        statement_config = getattr(self._config, "statement_config", None)
+        raw_dialect = getattr(self, "_dialect", None) or getattr(statement_config, "dialect", None)
+        dialect = (
+            _SQLGLOT_PARSE_DIALECTS.get(raw_dialect.lower(), raw_dialect)
+            if isinstance(raw_dialect, str)
+            else raw_dialect
+        )
+        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect=dialect)
+
     async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
         """Apply additive session-table changes from the canonical store DDL.
 
@@ -127,19 +143,16 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         manage_schema, create_schema = self._schema_management_flags()
         if not manage_schema:
             return
-        statement_config = getattr(self._config, "statement_config", None)
-        dialect = getattr(statement_config, "dialect", None)
-        target = SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect=dialect)
         session_context = cast("Any", self._config).provide_session()
         if hasattr(session_context, "__aenter__"):
             async with session_context as driver:
+                await self.prepare_schema_async(driver)
+                targets = self.get_schema_targets()
                 await ensure_schema_async(
-                    driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+                    driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
                 )
             return
-        await async_(_reconcile_schema_sync)(
-            self._config, target, create_schema=create_schema, assume_existing=assume_existing
-        )
+        await async_(_reconcile_schema_sync)(self, create_schema=create_schema, assume_existing=assume_existing)
 
     def _table_name_from_config(self) -> str:
         """Extract the configured session table name."""
@@ -270,9 +283,11 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             raise ValueError(msg)
 
 
-def _reconcile_schema_sync(config: Any, target: SchemaTarget, *, create_schema: bool, assume_existing: bool) -> None:
+def _reconcile_schema_sync(store: "BaseSQLSpecStore[Any]", *, create_schema: bool, assume_existing: bool) -> None:
     """Run additive reconciliation for a synchronous Litestar store."""
-    with config.provide_session() as driver:
+    with cast("Any", store.config).provide_session() as driver:
+        store.prepare_schema_sync(driver)
+        targets = store.get_schema_targets()
         ensure_schema_sync(
-            driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+            driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
         )
