@@ -329,6 +329,11 @@ def build_column_expression(
 
     constraints: list[exp.ColumnConstraint] = []
 
+    if norm_dialect == "oracle" and col.default is not None:
+        constraints.append(
+            exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=_build_default_expression(col.default, dialect)))
+        )
+
     if col.not_null:
         constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
 
@@ -356,7 +361,7 @@ def build_column_expression(
     elif identity_constraint is not None:
         constraints.append(identity_constraint)
 
-    if col.default is not None:
+    if norm_dialect != "oracle" and col.default is not None:
         constraints.append(
             exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=_build_default_expression(col.default, dialect)))
         )

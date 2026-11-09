@@ -279,11 +279,13 @@ adk_app = f"{prefix}_ADK_A"
 adk_user = f"{prefix}_ADK_U"
 adk_meta = f"{prefix}_ADK_M"
 adk_memory = f"{prefix}_ADK_MEM"
+mig_table = f"{prefix}_MIG"
 dropped_adk_index = f"IDX_{adk_session}_UPDATE_TIME"
 
 config = ArrowOdbcConfig(
     connection_config=reconcile_payload,
     driver_features={"enable_pooling": False, "query_timeout_sec": 15},
+    migration_config={"version_table_name": mig_table.lower()},
     extension_config={
         "litestar": {"migration_mode": "reconcile", "session_table": sess_table.lower()},
         "events": {"migration_mode": "reconcile", "queue_table": events_table.lower()},
@@ -306,7 +308,7 @@ try:
         schema_name = str(driver.select_value("SELECT CURRENT SCHEMA FROM SYSIBM.SYSDUMMY1")).strip()
         existing = {row["table_name"].upper() for row in driver.data_dictionary.get_tables(driver, schema=schema_name)}
         assert set(all_tables).issubset(existing)
-        assert "DDL_MIGRATIONS" not in existing
+        assert int(driver.select_value(f"SELECT COUNT(*) FROM {mig_table}")) == 0
         driver.execute(f"DROP TABLE {chunk_table}")
         driver.execute(f"DROP INDEX {dropped_adk_index}")
 
@@ -317,13 +319,13 @@ try:
             row["table_name"].upper() for row in driver.data_dictionary.get_tables(driver, schema=schema_name)
         }
         assert chunk_table in restored_tables
-        assert "DDL_MIGRATIONS" not in restored_tables
+        assert int(driver.select_value(f"SELECT COUNT(*) FROM {mig_table}")) == 0
         indexes = driver.data_dictionary.get_indexes(driver, table=adk_session, schema=schema_name)
         assert metadata_has_index(indexes, adk_session, dropped_adk_index, schema_name=schema_name)
 finally:
     try:
         with config.provide_session() as cleanup:
-            for table in all_tables:
+            for table in (*all_tables, mig_table):
                 try:
                     cleanup.execute(f"DROP TABLE {table}")
                 except Exception:

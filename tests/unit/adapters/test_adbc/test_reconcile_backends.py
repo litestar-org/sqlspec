@@ -1,9 +1,10 @@
 """Unit tests for ADBC multi-backend extension schema reconciliation."""
 
+import contextlib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -495,3 +496,73 @@ def test_adbc_adk_local_backends_migrate_up_and_repair_dropped_indexes(backend: 
         memory_indexes = {row["index_name"] for row in driver.data_dictionary.get_indexes(driver, table="adk_memory")}
         assert "idx_adk_session_app_user" in session_indexes
         assert "idx_adk_memory_scope" in memory_indexes
+
+
+def test_adbc_litestar_store_snowflake_hex_binary_and_uppercase_rows() -> None:
+    """Snowflake ADBC session store binds TO_BINARY hex strings and reads uppercase row keys."""
+    config = AdbcConfig(connection_config={"driver_name": "adbc_driver_snowflake"})
+    store = AdbcStore(config)
+    fake_driver = MagicMock()
+    fake_driver.dialect = "snowflake"
+    fake_driver.select_one.side_effect = [{"COUNT": 0}, {"COUNT": 1}]
+    fake_driver.select_one_or_none.side_effect = [
+        {"DATA": b"hello".hex(), "EXPIRES_AT": None},
+        {"DATA": "plain-text", "EXPIRES_AT": None},
+        {"DATA": b"hello".hex(), "EXPIRES_AT": None},
+    ]
+
+    @contextlib.contextmanager
+    def _fake_session(_self: Any) -> Any:
+        yield fake_driver
+
+    with patch.object(AdbcConfig, "provide_session", _fake_session):
+        store._set("k1", b"hello")
+        store._set("k1", b"world")
+        fetched_hex = store._get("k1")
+        fetched_plain = store._get("k1")
+        ttl = store._expires_in("k1")
+
+    insert_call = fake_driver.execute.call_args_list[0]
+    update_call = fake_driver.execute.call_args_list[1]
+    assert "TO_BINARY(?, 'HEX')" in str(insert_call.args[0])
+    assert insert_call.args[2] == b"hello".hex()
+    assert "TO_BINARY(?, 'HEX')" in str(update_call.args[0])
+    assert update_call.args[1] == b"world".hex()
+    assert fetched_hex == b"hello"
+    assert fetched_plain == b"plain-text"
+    assert ttl is None
+
+
+@pytest.mark.parametrize(
+    ("stmt_dialect", "expected_dialect"),
+    [
+        ("postgres", "postgresql"),
+        ("sqlite", "sqlite"),
+        ("duckdb", "duckdb"),
+        ("bigquery", "bigquery"),
+        ("snowflake", "snowflake"),
+        ("oracle", "oracle"),
+        ("db2", "db2"),
+        ("tsql", "mssql"),
+    ],
+)
+def test_adbc_adk_store_mutated_statement_config_dialect_and_qualified_names(
+    stmt_dialect: str, expected_dialect: str
+) -> None:
+    """ADK store resolves mutated statement_config dialects and schema-qualified table targets."""
+    config = AdbcConfig(
+        connection_config={},
+        statement_config=StatementConfig(dialect=stmt_dialect),
+        extension_config={"adk": {"session_table": "adk_sessions", "events_table": "adk_events"}},
+    )
+    config.connection_config = {}
+    store = AdbcADKStore(config)
+    assert store.dialect == expected_dialect
+    targets = store.get_schema_targets_sync(None)
+    assert len(targets) == 5
+
+    unconfigured = AdbcConfig(
+        connection_config={"driver_name": "unknown_custom_driver"},
+        statement_config=StatementConfig(dialect="unknown_dialect"),
+    )
+    assert AdbcADKStore(unconfigured).dialect == "generic"

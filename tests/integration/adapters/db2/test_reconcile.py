@@ -56,15 +56,18 @@ def test_db2_sync_reconcile_converges_and_repairs_dropped_adk_index(request: pyt
     """Db2SyncConfig migrate_up() reconciles litestar, events, and adk without ledger rows and repairs dropped indexes."""
     conn_cfg = _resolve_db2_connection_config(request)
     prefix = f"db2_rec_s_{uuid4().hex[:6]}"
+    mig_table = f"{prefix}_mig"
     ext, tables, dropped_index = _extension_config(prefix)
     adk_session = ext["adk"]["session_table"]
-    config = Db2SyncConfig(connection_config=conn_cfg, extension_config=ext)
+    config = Db2SyncConfig(
+        connection_config=conn_cfg, migration_config={"version_table_name": mig_table}, extension_config=ext
+    )
     try:
         config.migrate_up()
         with config.provide_session() as driver:
             existing_tables = {row["table_name"].casefold() for row in driver.data_dictionary.get_tables(driver)}
             assert {name.casefold() for name in tables}.issubset(existing_tables)
-            assert "ddl_migrations" not in existing_tables
+            assert int(driver.select_value(f"SELECT COUNT(*) FROM {mig_table}")) == 0
             indexes = driver.data_dictionary.get_indexes(driver, table=adk_session)
             assert metadata_has_index(indexes, adk_session, dropped_index)
             driver.execute(f"DROP INDEX {dropped_index}")
@@ -77,12 +80,11 @@ def test_db2_sync_reconcile_converges_and_repairs_dropped_adk_index(request: pyt
         with config.provide_session() as driver:
             restored = driver.data_dictionary.get_indexes(driver, table=adk_session)
             assert metadata_has_index(restored, adk_session, dropped_index)
-            final_tables = {row["table_name"].casefold() for row in driver.data_dictionary.get_tables(driver)}
-            assert "ddl_migrations" not in final_tables
+            assert int(driver.select_value(f"SELECT COUNT(*) FROM {mig_table}")) == 0
     finally:
         with config.provide_session() as cleanup:
             cleanup.rollback()
-            for table in tables:
+            for table in (*tables, mig_table):
                 try:
                     cleanup.execute(f"DROP TABLE {table}")
                     cleanup.commit()
@@ -96,15 +98,18 @@ async def test_db2_async_reconcile_converges_and_repairs_dropped_adk_index(reque
     """Db2AsyncConfig migrate_up() reconciles litestar, events, and adk without ledger rows and repairs dropped indexes."""
     conn_cfg = _resolve_db2_connection_config(request)
     prefix = f"db2_rec_a_{uuid4().hex[:6]}"
+    mig_table = f"{prefix}_mig"
     ext, tables, dropped_index = _extension_config(prefix)
     adk_session = ext["adk"]["session_table"]
-    config = Db2AsyncConfig(connection_config=conn_cfg, extension_config=ext)
+    config = Db2AsyncConfig(
+        connection_config=conn_cfg, migration_config={"version_table_name": mig_table}, extension_config=ext
+    )
     try:
         await config.migrate_up()
         async with config.provide_session() as driver:
             existing_tables = {row["table_name"].casefold() for row in await driver.data_dictionary.get_tables(driver)}
             assert {name.casefold() for name in tables}.issubset(existing_tables)
-            assert "ddl_migrations" not in existing_tables
+            assert int(await driver.select_value(f"SELECT COUNT(*) FROM {mig_table}")) == 0
             indexes = await driver.data_dictionary.get_indexes(driver, table=adk_session)
             assert metadata_has_index(indexes, adk_session, dropped_index)
             await driver.execute(f"DROP INDEX {dropped_index}")
@@ -115,12 +120,11 @@ async def test_db2_async_reconcile_converges_and_repairs_dropped_adk_index(reque
         async with config.provide_session() as driver:
             restored = await driver.data_dictionary.get_indexes(driver, table=adk_session)
             assert metadata_has_index(restored, adk_session, dropped_index)
-            final_tables = {row["table_name"].casefold() for row in await driver.data_dictionary.get_tables(driver)}
-            assert "ddl_migrations" not in final_tables
+            assert int(await driver.select_value(f"SELECT COUNT(*) FROM {mig_table}")) == 0
     finally:
         async with config.provide_session() as cleanup:
             await cleanup.rollback()
-            for table in tables:
+            for table in (*tables, mig_table):
                 try:
                     await cleanup.execute(f"DROP TABLE {table}")
                     await cleanup.commit()

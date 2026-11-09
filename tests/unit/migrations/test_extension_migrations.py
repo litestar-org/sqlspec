@@ -539,3 +539,96 @@ def test_adbc_nontransactional_migrate_up_commits_reconciled_ddl(tmp_path: Path)
         tables = {str(t.get("table_name") or "").lower() for t in session.data_dictionary.get_tables(session)}
         assert "ls_persisted" in tables
     config.close_pool()
+
+
+def test_oracle_tracking_ddl_orders_default_before_not_null_and_normalizes_uppercase_rows() -> None:
+    from unittest.mock import MagicMock
+
+    from sqlspec.migrations.tracker import SyncMigrationTracker
+
+    tracker = SyncMigrationTracker(version_table_name="ddl_migrations")
+    oracle_ddl = tracker._tracking_table_ddl().build(dialect="oracle").sql
+    assert oracle_ddl.index("DEFAULT CURRENT_TIMESTAMP") < oracle_ddl.index("NOT NULL")
+
+    driver = MagicMock()
+    result = MagicMock()
+    result.data = [{"VERSION_NUM": "0001", "EXECUTION_SEQUENCE": 1}]
+    result.get_data.return_value = [{"VERSION_NUM": "0001", "EXECUTION_SEQUENCE": 1}]
+    driver.execute.return_value = result
+
+    assert tracker.get_current_version(driver) == "0001"
+    applied = tracker.get_applied_migrations(driver)
+    assert applied[0]["version_num"] == "0001"
+
+
+def test_adbc_driver_and_runner_implicit_transaction_detection() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from sqlspec.adapters.adbc.driver import AdbcDriver
+    from sqlspec.migrations.runner import BaseMigrationRunner
+
+    fake_adbc_conn = SimpleNamespace(
+        _commit_supported=True, _autocommit=False, adbc_connection=SimpleNamespace(get_option=lambda _k: "true")
+    )
+    drv = AdbcDriver(connection=MagicMock())
+    drv._transaction_active = True
+    assert drv._has_implicit_transaction() is True
+
+    drv._transaction_active = False
+    drv.driver_features = {"autocommit": True}
+    assert drv._has_implicit_transaction() is False
+
+    drv.driver_features = {}
+    drv.connection = cast("Any", SimpleNamespace(_commit_supported=False, _autocommit=False))
+    assert drv._has_implicit_transaction() is False
+
+    drv.connection = cast("Any", fake_adbc_conn)
+    assert drv._has_implicit_transaction() is False
+
+    drv.connection = cast("Any", SimpleNamespace(autocommit=False))
+    assert drv._has_implicit_transaction() is True
+
+    drv.connection = cast("Any", SimpleNamespace(autocommit=None))
+    assert drv._has_implicit_transaction() is False
+
+    async def _coro() -> bool:
+        return True
+
+    assert BaseMigrationRunner._has_active_implicit_transaction(cast("Any", SimpleNamespace())) is False
+    assert (
+        BaseMigrationRunner._has_active_implicit_transaction(
+            cast("Any", SimpleNamespace(_connection_in_transaction=lambda: True))
+        )
+        is True
+    )
+    assert (
+        BaseMigrationRunner._has_active_implicit_transaction(
+            cast(
+                "Any",
+                SimpleNamespace(
+                    _connection_in_transaction=lambda: (_ for _ in ()).throw(NotImplementedError()),
+                    _has_implicit_transaction="not-callable",
+                ),
+            )
+        )
+        is False
+    )
+    assert (
+        BaseMigrationRunner._has_active_implicit_transaction(
+            cast(
+                "Any",
+                SimpleNamespace(
+                    _connection_in_transaction=_coro,
+                    _has_implicit_transaction=lambda: (_ for _ in ()).throw(AttributeError()),
+                ),
+            )
+        )
+        is False
+    )
+    assert (
+        BaseMigrationRunner._has_active_implicit_transaction(
+            cast("Any", SimpleNamespace(_connection_in_transaction=lambda: False, _has_implicit_transaction=_coro))
+        )
+        is False
+    )

@@ -234,9 +234,11 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             query_text = self._get_query_text(dialect, "tables", "by_schema").format(schema_prefix=schema_prefix)
             return driver.select(query_text, schema_name=schema_name, schema_type=TableMetadata)
 
-        return driver.select(
-            self._get_query(dialect, "tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata
-        )
+        if dialect == "snowflake":
+            return self._snowflake_get_tables(driver, schema_name)
+
+        rows = driver.select(self._get_query(dialect, "tables", "by_schema"), schema_name=schema_name, table_name=None)
+        return cast("list[TableMetadata]", _lowercase_dict_rows(rows))
 
     def get_columns(
         self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
@@ -275,17 +277,19 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             )
             return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
 
+        if dialect == "snowflake":
+            return self._snowflake_get_columns(driver, resolved_table, schema_name)
+
         if table is None:
-            return driver.select(
-                self._get_query(dialect, "columns", "by_schema"), schema_name=schema_name, schema_type=ColumnMetadata
+            rows = driver.select(
+                self._get_query(dialect, "columns", "by_schema"), schema_name=schema_name, table_name=None
             )
+            return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows))
         table_name = self._resolve_identifier(dialect, table)
-        return driver.select(
-            self._get_query(dialect, "columns", "by_table"),
-            schema_name=schema_name,
-            table_name=table_name,
-            schema_type=ColumnMetadata,
+        rows = driver.select(
+            self._get_query(dialect, "columns", "by_table"), schema_name=schema_name, table_name=table_name
         )
+        return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows))
 
     def get_indexes(
         self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
@@ -314,17 +318,16 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
         try:
             if table is None:
-                return driver.select(
-                    self._get_query(dialect, "indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                rows = driver.select(
+                    self._get_query(dialect, "indexes", "by_schema"), schema_name=schema_name, table_name=None
                 )
+                return _normalize_sql_index_rows(rows, dialect)
 
             table_name = self._resolve_identifier(dialect, table)
-            return driver.select(
-                self._get_query(dialect, "indexes", "by_table"),
-                schema_name=schema_name,
-                table_name=table_name,
-                schema_type=IndexMetadata,
+            rows = driver.select(
+                self._get_query(dialect, "indexes", "by_table"), schema_name=schema_name, table_name=table_name
             )
+            return _normalize_sql_index_rows(rows, dialect)
         except SQLFileNotFoundError:
             return []
 
@@ -796,6 +799,99 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             if table.get("table_constraints") is None:
                 raise _NativeMetadataIncompleteError
         return _normalize_native_foreign_keys(rows, table_name_exact=table_name)
+
+    def _snowflake_get_tables(self, driver: "AdbcDriver", schema_name: "str | None") -> "list[TableMetadata]":
+        if schema_name is not None:
+            rows = driver.select(
+                "SELECT table_schema AS schema_name, table_name, table_type "
+                "FROM information_schema.tables "
+                "WHERE UPPER(table_type) IN ('BASE TABLE', 'TABLE') AND UPPER(table_schema) = UPPER(?) "
+                "ORDER BY table_schema, table_name",
+                schema_name,
+            )
+        else:
+            rows = driver.select(
+                "SELECT table_schema AS schema_name, table_name, table_type "
+                "FROM information_schema.tables "
+                "WHERE UPPER(table_type) IN ('BASE TABLE', 'TABLE') "
+                "AND UPPER(table_schema) != 'INFORMATION_SCHEMA' "
+                "ORDER BY table_schema, table_name"
+            )
+        return cast("list[TableMetadata]", _lowercase_dict_rows(rows))
+
+    def _snowflake_get_columns(
+        self, driver: "AdbcDriver", table_name: "str | None", schema_name: "str | None"
+    ) -> "list[ColumnMetadata]":
+        base_select = (
+            "SELECT table_schema AS schema_name, table_name, column_name, data_type, "
+            "ordinal_position, is_nullable, column_default "
+            "FROM information_schema.columns "
+        )
+        if table_name is not None and schema_name is not None:
+            rows = driver.select(
+                f"{base_select}WHERE UPPER(table_schema) = UPPER(?) AND UPPER(table_name) = UPPER(?) "
+                "ORDER BY ordinal_position",
+                schema_name,
+                table_name,
+            )
+        elif table_name is not None:
+            rows = driver.select(
+                f"{base_select}WHERE UPPER(table_schema) != 'INFORMATION_SCHEMA' AND UPPER(table_name) = UPPER(?) "
+                "ORDER BY table_schema, ordinal_position",
+                table_name,
+            )
+        elif schema_name is not None:
+            rows = driver.select(
+                f"{base_select}WHERE UPPER(table_schema) = UPPER(?) ORDER BY table_name, ordinal_position", schema_name
+            )
+        else:
+            rows = driver.select(
+                f"{base_select}WHERE UPPER(table_schema) != 'INFORMATION_SCHEMA' "
+                "ORDER BY table_schema, table_name, ordinal_position"
+            )
+        return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows))
+
+
+def _lowercase_dict_rows(rows: "Sequence[Any]") -> "list[dict[str, Any]]":
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        if isinstance(row, dict):
+            normalized.append({str(key).lower(): value for key, value in row.items()})
+        else:
+            normalized.append(cast("dict[str, Any]", row))
+    return normalized
+
+
+def _normalize_sql_index_rows(rows: "Sequence[Any]", dialect: str) -> "list[IndexMetadata]":
+    lowered = _lowercase_dict_rows(rows)
+    if not lowered:
+        return []
+    if dialect == "db2" or ("column_name" in lowered[0] and "columns" not in lowered[0]):
+        grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row in lowered:
+            if not isinstance(row, dict):
+                continue
+            key = (str(row.get("schema_name", "")), str(row.get("table_name", "")), str(row.get("index_name", "")))
+            entry = grouped.get(key)
+            if entry is None:
+                entry = {
+                    "schema_name": key[0],
+                    "table_name": key[1],
+                    "index_name": key[2],
+                    "columns": [],
+                    "is_unique": bool(row.get("is_unique", 0)),
+                    "is_primary": bool(row.get("is_primary", 0)),
+                }
+                grouped[key] = entry
+            col_name = row.get("column_name")
+            if col_name:
+                cast("list[str]", entry["columns"]).append(str(col_name))
+        return [cast("IndexMetadata", item) for item in grouped.values()]
+
+    for row in lowered:
+        if isinstance(row, dict) and isinstance(row.get("columns"), str):
+            row["columns"] = [col.strip() for col in row["columns"].split(",") if col.strip()]
+    return cast("list[IndexMetadata]", lowered)
 
 
 class _NativeMetadataIncompleteError(Exception):

@@ -536,8 +536,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             if result is None:
                 return None
 
-            data = result["data"]
-            expires_at = result["expires_at"]
+            data = result["data"] if "data" in result else result["DATA"]
+            expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
 
             if renew_for is not None and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
@@ -551,6 +551,11 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 driver.execute(update_sql, new_expires_at, key)
                 driver.commit()
 
+            if isinstance(data, str):
+                try:
+                    return bytes.fromhex(data)
+                except ValueError:
+                    return data.encode("utf-8")
             return bytes(data)
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
@@ -604,55 +609,59 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             ON DUPLICATE KEY UPDATE data = VALUES(data), expires_at = VALUES(expires_at)
             """
         elif dialect in {"bigquery", "snowflake", "oracle", "db2", "mssql"}:
+            bind_data: bytes | str = data.hex() if dialect == "snowflake" else data
+            insert_data_expr = f"TO_BINARY({p2}, 'HEX')" if dialect == "snowflake" else p2
+            update_data_expr = f"TO_BINARY({p1}, 'HEX')" if dialect == "snowflake" else p1
             with self._config.provide_session() as driver:
                 try:
                     check_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE session_id = {p1}"
                     result = driver.select_one(check_sql, key)
-                    exists = result and result.get("count", 0) > 0
+                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    exists = bool(raw_count and int(raw_count) > 0)
 
                     if exists:
                         if expires_at is None:
                             sql = f"""
                             UPDATE {self._table_name}
-                            SET data = {p1}, expires_at = NULL
+                            SET data = {update_data_expr}, expires_at = NULL
                             WHERE session_id = {p2}
                             """
-                            driver.execute(sql, data, key)
+                            driver.execute(sql, bind_data, key)
                         else:
                             sql = f"""
                             UPDATE {self._table_name}
-                            SET data = {p1}, expires_at = {p2}
+                            SET data = {update_data_expr}, expires_at = {p2}
                             WHERE session_id = {p3}
                             """
-                            driver.execute(sql, data, expires_at, key)
+                            driver.execute(sql, bind_data, expires_at, key)
                     elif expires_at is None:
                         sql = f"""
                         INSERT INTO {self._table_name} (session_id, data, expires_at)
-                        VALUES ({p1}, {p2}, NULL)
+                        VALUES ({p1}, {insert_data_expr}, NULL)
                         """
                         try:
-                            driver.execute(sql, key, data)
+                            driver.execute(sql, key, bind_data)
                         except IntegrityError:
                             sql = f"""
                             UPDATE {self._table_name}
-                            SET data = {p1}, expires_at = NULL
+                            SET data = {update_data_expr}, expires_at = NULL
                             WHERE session_id = {p2}
                             """
-                            driver.execute(sql, data, key)
+                            driver.execute(sql, bind_data, key)
                     else:
                         sql = f"""
                         INSERT INTO {self._table_name} (session_id, data, expires_at)
-                        VALUES ({p1}, {p2}, {p3})
+                        VALUES ({p1}, {insert_data_expr}, {p3})
                         """
                         try:
-                            driver.execute(sql, key, data, expires_at)
+                            driver.execute(sql, key, bind_data, expires_at)
                         except IntegrityError:
                             sql = f"""
                             UPDATE {self._table_name}
-                            SET data = {p1}, expires_at = {p2}
+                            SET data = {update_data_expr}, expires_at = {p2}
                             WHERE session_id = {p3}
                             """
-                            driver.execute(sql, data, expires_at, key)
+                            driver.execute(sql, bind_data, expires_at, key)
                     driver.commit()
                 except Exception:
                     with contextlib.suppress(Exception):
@@ -730,10 +739,12 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         with self._config.provide_session() as driver:
             result = driver.select_one_or_none(sql, key)
 
-            if result is None or result.get("expires_at") is None:
+            if result is None:
                 return None
 
-            expires_at = result["expires_at"]
+            expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
+            if expires_at is None:
+                return None
 
             if not isinstance(expires_at, datetime):
                 return None
@@ -763,7 +774,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             with self._config.provide_session() as driver:
                 try:
                     result = driver.select_one(count_sql)
-                    count = result.get("count", 0) if result else 0
+                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    count = int(raw_count) if raw_count else 0
 
                     if count > 0:
                         driver.execute(delete_sql)

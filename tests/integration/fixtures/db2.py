@@ -101,6 +101,9 @@ def db2_service(
             if not fallback_attempted and ("SQL1013N" in error_text or "42705" in error_text):
                 needs_4k_fallback = True
             else:
+                logs_text = service.container.logs().decode("utf-8", errors="replace")
+                if any(marker in error_text or marker in logs_text for marker in ("SQL1042C", "57019")):
+                    pytest.skip("Db2 container failed internal db2start (SQL1042C / SQLSTATE=57019) on host kernel")
                 return False
 
         if needs_4k_fallback:
