@@ -40,6 +40,7 @@ Configure the `events` extension on your database config (`EventsConfig`). When 
 | `select_for_update` | `bool` | `False` | Use SELECT FOR UPDATE locking when claiming events. Defaults to False. |
 | `skip_locked` | `bool` | `False` | Use SKIP LOCKED for non-blocking event claims. Defaults to False. |
 | `shard_count` | `int` | `1` | Number of hash shards for queue table and index prefixing (e.g. Cloud Spanner). Defaults to 1. |
+| `migration_mode` | `ExtensionMigrationMode` | `'versioned'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'versioned'`. |
 <!-- GENERATED:END config-table:sqlspec.config.EventsConfig -->
 
 ```python
@@ -107,6 +108,29 @@ asyncio.run(main())
 
 Both `AsyncEventChannel` and `SyncEventChannel` provide `publish_many(events)` where each item is a `(channel, payload, metadata)` tuple. On `poll_queue` and `notify_queue`, SQLSpec bulk-inserts all rows in a single publisher transaction; on `notify_queue`, it emits a single compact wakeup marker (`marker_id` + `batch_size`) per channel in the same transaction so consumers drain the batch immediately.
 
+### Opt-In Schema Reconciliation
+
+`migration_mode="versioned"` remains the default. Setting `migration_mode="reconcile"` converges durable event queue tables and companion claim indexes on every head `sqlspec upgrade` without recording new `ext_events_*` ledger rows while honoring `manage_schema` and `create_schema` (see [Migrations](../learn/migrations.md)):
+
+```python
+extension_config = {
+    "events": {
+        "backend": "poll_queue",
+        "migration_mode": "reconcile",
+    }
+}
+```
+
+When `backend="notify"` (transient PostgreSQL `LISTEN`/`NOTIFY`), reconciliation is a no-op because no durable queue table is used. When `backend` is `"aq"` or `"txeventq"` on Oracle 21c+ (`oracledb`), reconciliation converges the queue table and companion index and provisions and starts the native `DBMS_AQADM` queue table and queue (`aq_queue`, or one queue per channel listed in `aq_channels` when `aq_queue` contains `{channel}`). `aq_channels` only enumerates queues to provision during head upgrades and never restricts runtime `publish` or dequeue channels. Reconciliation raises `MigrationError` when a `{channel}` `aq_queue` template has no `aq_channels`, when `create_schema=False` and a target queue is missing, on Oracle `< 21c`, or when the database user lacks the `DBMS_AQADM` execute grant.
+
+| Adapter Family | Built-In Adapters | Reconcile Scope and Boundaries |
+| --- | --- | --- |
+| PostgreSQL | `asyncpg`, `psycopg`, `psqlpy` | No-op when `backend="notify"`; converges `sqlspec_event_queue`, companion polling index, and `fillfactor`/autovacuum storage options for `"poll_queue"` and `"notify_queue"`. |
+| Oracle | `oracledb` | Converges version-detected JSON/BLOB queue tables and companion indexes for `"poll_queue"`, plus native `DBMS_AQADM` JSON queue tables and started queues (`aq_queue` and `aq_channels`) for `"aq"` and `"txeventq"`. |
+| Embedded, OLTP, and Arrow ODBC | `sqlite`, `aiosqlite`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `db2`, `sqlanywhere`, `sybase`, `arrow_odbc` (`mssql`, `tsql`, `db2`) | Converges `poll_queue` tables, additive columns, and companion claim/polling indexes. |
+| Cloud Spanner and BigQuery | `spanner`, `bigquery` | Converges `poll_queue` tables (`shard_count` prefixing and TTL-compatible indexes on `spanner`; partitioned queue tables and nullable-only additive column repair on `bigquery`). |
+| Multi-backend ADBC | `adbc` | Converges `poll_queue` tables and companion indexes across all ADBC backends with a resolved dialect. ADBC over FlightSQL needs an explicit `statement_config` dialect or `gizmosql_backend`. |
+
 ## PostgreSQL ListenerHub and Pooler Routing
 
 On PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`), `notify` and `notify_queue` manage a single persistent `LISTEN` connection per backend instance via `ListenerHub`:
@@ -151,7 +175,7 @@ Several adapters export typed `EventsConfig` subclasses under `sqlspec.adapters.
 - **SQLite (`SqliteEventsConfig`, `AiosqliteEventsConfig`)**: PRAGMA profile and overrides for high-concurrency WAL queue polling.
 - **Cloud Spanner (base `EventsConfig` on `SpannerSyncConfig` / `SpannerAsyncConfig`)**: `shard_count > 1` hash-shard prefixing to prevent queue-head hotspots. The adapter also uses snapshot-read candidate polling and keeps acknowledged rows for native `ROW DELETION POLICY` TTL cleanup instead of deleting them on `ack`.
 - **BigQuery (`BigQueryEventsConfig`)**: `partitioning=True` (`DATE(available_at)` partitioning), `partition_expiration_days`, and `require_partition_filter`.
-- **Oracle (`OracleEventsConfig`)**: `backend="aq"` or `"txeventq"`, `aq_queue` (`"SQLSPEC_EVT_{channel}"` per-channel routing), `aq_visibility` (`"DEQ_ON_COMMIT"` / `"DEQ_IMMEDIATE"`), `OracleEventsPartitionConfig`, and `OracleEventsCompressionConfig`.
+- **Oracle (`OracleEventsConfig`)**: `backend="aq"` or `"txeventq"`, `aq_queue` (`"SQLSPEC_EVT_{channel}"` per-channel routing), `aq_channels` (channel list provisioned during `migration_mode="reconcile"` upgrades for `{channel}` queue templates), `aq_visibility` (`"DEQ_ON_COMMIT"` / `"DEQ_IMMEDIATE"`), `OracleEventsPartitionConfig`, and `OracleEventsCompressionConfig`.
 
 ## Recap
 
