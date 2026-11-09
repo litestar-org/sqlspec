@@ -530,7 +530,8 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
 
         self.version_table = migration_config.get("version_table_name", "ddl_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))
-        self.project_root = Path(migration_config["project_root"]) if "project_root" in migration_config else None
+        raw_project_root = migration_config.get("project_root")
+        self.project_root = Path(raw_project_root) if raw_project_root is not None else None
         self.include_extensions = migration_config.get("include_extensions", [])
         self.extension_configs = self._parse_extension_configs()
         self.extension_reconcilers = self._discover_extension_reconcilers()

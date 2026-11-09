@@ -1971,3 +1971,638 @@ def test_capability_still_decides_without_a_directive(tmp_path: Path) -> None:
 
     assert runner.should_use_transaction(migration, cast("Any", _NonTransactionalDdlConfig({}))) is False
     assert runner.should_use_transaction(migration, cast("Any", _RunnerConfig({}))) is True
+
+
+def test_sync_execute_reconciliation_passes_isolated_context(tmp_path: Path) -> None:
+    """Sync callback receives an isolated MigrationContext with deep-copied extension_config."""
+    import json
+
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    log_file = tmp_path / "context_log.json"
+    log_file.write_text("[]", encoding="utf-8")
+    reconcile_path = tmp_path / "reconcile.py"
+    reconcile_path.write_text(
+        f"""
+import json
+from pathlib import Path
+
+def reconcile(context):
+    log_path = Path({str(log_file)!r})
+    entries = json.loads(log_path.read_text(encoding="utf-8"))
+    entries.append({{
+        "has_driver": context.driver is not None,
+        "dialect": context.dialect,
+        "nested_k": context.extension_config["nested"]["k"],
+        "metadata_keys": sorted(context.metadata.keys()),
+    }})
+    log_path.write_text(json.dumps(entries), encoding="utf-8")
+    context.extension_config["nested"]["k"] = "mutated"
+    context.metadata["tmp"] = 1
+""",
+        encoding="utf-8",
+    )
+
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    ext_configs: dict[str, dict[str, Any]] = {"litestar": {"nested": {"k": "original"}}}
+    runner = SyncMigrationRunner(tmp_path, {}, MigrationContext.from_config(config), ext_configs)
+    descriptor = ExtensionReconcilerDescriptor(name="litestar", module_path=reconcile_path)
+
+    with config.provide_session() as driver:
+        elapsed_first = runner.execute_reconciliation(driver, descriptor)
+        elapsed_second = runner.execute_reconciliation(driver, descriptor)
+
+    assert isinstance(elapsed_first, int) and elapsed_first >= 0
+    assert isinstance(elapsed_second, int) and elapsed_second >= 0
+    assert ext_configs["litestar"]["nested"]["k"] == "original"
+    recorded = json.loads(log_file.read_text(encoding="utf-8"))
+    assert recorded == [
+        {"has_driver": True, "dialect": "sqlite", "nested_k": "original", "metadata_keys": []},
+        {"has_driver": True, "dialect": "sqlite", "nested_k": "original", "metadata_keys": []},
+    ]
+
+
+@pytest.mark.anyio
+async def test_async_execute_reconciliation_supports_async_and_sync_callbacks(tmp_path: Path) -> None:
+    """AsyncMigrationRunner supports both async def and plain def reconcile callbacks."""
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    async_path = tmp_path / "async_reconcile.py"
+    async_path.write_text(
+        """
+async def reconcile(context):
+    await context.driver.execute("CREATE TABLE async_cb (id INTEGER PRIMARY KEY)")
+""",
+        encoding="utf-8",
+    )
+    sync_path = tmp_path / "sync_reconcile.py"
+    sync_path.write_text(
+        """
+def reconcile(context):
+    context.metadata["ran_sync"] = True
+""",
+        encoding="utf-8",
+    )
+
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "async_cb.db")})
+    runner = AsyncMigrationRunner(tmp_path, {}, MigrationContext.from_config(config), {"adk": {}, "events": {}})
+
+    async with config.provide_session() as driver:
+        elapsed_async = await runner.execute_reconciliation(
+            driver, ExtensionReconcilerDescriptor(name="adk", module_path=async_path)
+        )
+        elapsed_sync = await runner.execute_reconciliation(
+            driver, ExtensionReconcilerDescriptor(name="events", module_path=sync_path)
+        )
+        tables = await driver.select("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'async_cb'")
+
+    await config.close_pool()
+    assert isinstance(elapsed_async, int) and elapsed_async >= 0
+    assert isinstance(elapsed_sync, int) and elapsed_sync >= 0
+    assert len(tables) == 1
+
+
+def test_sync_execute_reconciliation_rejects_async_callback_without_loop_or_warning(tmp_path: Path) -> None:
+    """SyncMigrationRunner closes unawaited coroutines and raises MigrationError without spawning a loop."""
+    import gc
+    import warnings
+
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    reconcile_path = tmp_path / "reconcile.py"
+    reconcile_path.write_text("async def reconcile(context):\n    return None\n", encoding="utf-8")
+
+    runner = _sync_runner(tmp_path, {})
+    driver = Mock()
+    descriptor = ExtensionReconcilerDescriptor(name="litestar", module_path=reconcile_path)
+
+    with (
+        warnings.catch_warnings(record=True) as caught,
+        patch.object(asyncio, "new_event_loop", side_effect=AssertionError("unexpected new_event_loop")),
+        patch.object(asyncio, "run", side_effect=AssertionError("unexpected asyncio.run")),
+    ):
+        warnings.simplefilter("always")
+        with pytest.raises(MigrationError) as exc_info:
+            runner.execute_reconciliation(driver, descriptor)
+        gc.collect()
+
+    message = str(exc_info.value)
+    assert "litestar" in message
+    assert str(reconcile_path) in message
+    runtime_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+    assert runtime_warnings == []
+
+
+@pytest.mark.anyio
+async def test_execute_reconciliation_rejects_non_none_return_without_payload_leak(tmp_path: Path) -> None:
+    """Sync and async runners reject non-None return values without interpolating secret payloads."""
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    sync_path = tmp_path / "sync_ret.py"
+    sync_path.write_text('def reconcile(context):\n    return ["CREATE TABLE t (id INT)"]\n', encoding="utf-8")
+    async_path = tmp_path / "async_ret.py"
+    async_path.write_text('async def reconcile(context):\n    return {"pw": "topsecret_value"}\n', encoding="utf-8")
+
+    sync_runner = _sync_runner(tmp_path, {})
+    with pytest.raises(MigrationError) as sync_exc:
+        sync_runner.execute_reconciliation(
+            Mock(), ExtensionReconcilerDescriptor(name="litestar", module_path=sync_path)
+        )
+    assert "litestar" in str(sync_exc.value)
+    assert str(sync_path) in str(sync_exc.value)
+    assert "list" in str(sync_exc.value)
+
+    async_runner = _async_runner(tmp_path, {})
+    with pytest.raises(MigrationError) as async_exc:
+        await async_runner.execute_reconciliation(
+            AsyncMock(), ExtensionReconcilerDescriptor(name="adk", module_path=async_path)
+        )
+    assert "adk" in str(async_exc.value)
+    assert str(async_path) in str(async_exc.value)
+    assert "dict" in str(async_exc.value)
+    assert "topsecret_value" not in str(async_exc.value)
+
+
+@pytest.mark.parametrize(
+    ("case_id", "source", "expected_cause"),
+    [
+        ("missing_file", None, OSError),
+        ("syntax_error", "def reconcile(:\n", SyntaxError),
+        ("missing_symbol", "VALUE = 1\n", None),
+        ("non_callable", 'reconcile = "not_callable"\n', None),
+    ],
+)
+def test_load_reconcile_callable_rejects_invalid_modules_and_cleans_sys_modules(
+    tmp_path: Path, case_id: str, source: str | None, expected_cause: type[BaseException] | None
+) -> None:
+    """Invalid reconcile modules raise MigrationError and leave zero temporary sys.modules entries."""
+    import sys
+
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    reconcile_path = tmp_path / f"{case_id}_reconcile.py"
+    if source is not None:
+        reconcile_path.write_text(source, encoding="utf-8")
+
+    runner = _sync_runner(tmp_path, {})
+    descriptor = ExtensionReconcilerDescriptor(name="events", module_path=reconcile_path)
+
+    with pytest.raises(MigrationError) as exc_info:
+        runner.execute_reconciliation(Mock(), descriptor)
+
+    assert "events" in str(exc_info.value)
+    assert str(reconcile_path) in str(exc_info.value)
+    if expected_cause is not None:
+        assert isinstance(exc_info.value.__cause__, expected_cause)
+    leaked = [name for name in sys.modules if name.startswith("_sqlspec_reconcile_")]
+    assert leaked == []
+
+
+def test_execute_reconciliation_reloads_fresh_source_with_preserved_mtime_and_size(tmp_path: Path) -> None:
+    """Rewriting reconcile.py with identical byte length and mtime executes the updated code."""
+    import os
+
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    out_file = tmp_path / "version.txt"
+    reconcile_path = tmp_path / "reconcile.py"
+    source_v1 = f'from pathlib import Path\ndef reconcile(context):\n    Path({str(out_file)!r}).write_text("v1")\n'
+    source_v2 = f'from pathlib import Path\ndef reconcile(context):\n    Path({str(out_file)!r}).write_text("v2")\n'
+    assert len(source_v1.encode("utf-8")) == len(source_v2.encode("utf-8"))
+
+    reconcile_path.write_text(source_v1, encoding="utf-8")
+    stat_before = reconcile_path.stat()
+
+    runner = _sync_runner(tmp_path, {})
+    descriptor = ExtensionReconcilerDescriptor(name="litestar", module_path=reconcile_path)
+    runner.execute_reconciliation(Mock(), descriptor)
+    assert out_file.read_text(encoding="utf-8") == "v1"
+
+    reconcile_path.write_text(source_v2, encoding="utf-8")
+    os.utime(reconcile_path, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns))
+
+    runner.execute_reconciliation(Mock(), descriptor)
+    assert out_file.read_text(encoding="utf-8") == "v2"
+
+
+@pytest.mark.anyio
+async def test_execute_reconciliation_resolves_project_root_and_honors_configured_root(tmp_path: Path) -> None:
+    """Reconcilers resolve project_root via marker search or migration_config and restore sys.path."""
+    import sys
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+    from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+
+    auto_root = tmp_path / "auto_project"
+    nested_dir = auto_root / "pkg" / "migrations"
+    nested_dir.mkdir(parents=True)
+    (auto_root / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
+    (auto_root / "sibling_auto_helper.py").write_text("MARKER = 'auto_ok'\n", encoding="utf-8")
+    auto_reconcile = nested_dir / "reconcile.py"
+    auto_reconcile.write_text(
+        """
+import sys
+import sibling_auto_helper
+
+def reconcile(context):
+    assert "None" not in sys.path
+    assert sibling_auto_helper.MARKER == "auto_ok"
+""",
+        encoding="utf-8",
+    )
+
+    runner = _sync_runner(tmp_path, {})
+    assert runner.project_root is None
+    runner.execute_reconciliation(Mock(), ExtensionReconcilerDescriptor(name="litestar", module_path=auto_reconcile))
+    assert str(auto_root) not in sys.path
+    assert "None" not in sys.path
+    sys.modules.pop("sibling_auto_helper", None)
+
+    configured_root = tmp_path / "configured_root"
+    configured_root.mkdir()
+    (configured_root / "configured_helper.py").write_text("MARKER = 'configured_ok'\n", encoding="utf-8")
+    separate_dir = tmp_path / "separate_reconcilers"
+    separate_dir.mkdir()
+    configured_reconcile = separate_dir / "reconcile.py"
+    configured_reconcile.write_text(
+        """
+import sys
+import configured_helper
+
+def reconcile(context):
+    assert "None" not in sys.path
+    assert configured_helper.MARKER == "configured_ok"
+""",
+        encoding="utf-8",
+    )
+
+    sync_cfg = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={"script_location": str(tmp_path / "migs"), "project_root": str(configured_root)},
+    )
+    sync_cmds = SyncMigrationCommands(sync_cfg)
+    assert sync_cmds.runner.project_root == configured_root
+    with sync_cfg.provide_session() as sync_driver:
+        sync_cmds.runner.execute_reconciliation(
+            sync_driver, ExtensionReconcilerDescriptor(name="litestar", module_path=configured_reconcile)
+        )
+    assert str(configured_root) not in sys.path
+    sys.modules.pop("configured_helper", None)
+
+    async_cfg = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={"script_location": str(tmp_path / "migs"), "project_root": str(configured_root)},
+    )
+    async_cmds = AsyncMigrationCommands(async_cfg)
+    assert async_cmds.runner.project_root == configured_root
+    async with async_cfg.provide_session() as async_driver:
+        await async_cmds.runner.execute_reconciliation(
+            async_driver, ExtensionReconcilerDescriptor(name="litestar", module_path=configured_reconcile)
+        )
+    await async_cfg.close_pool()
+    assert str(configured_root) not in sys.path
+    sys.modules.pop("configured_helper", None)
+
+
+@pytest.mark.anyio
+async def test_execute_reconciliation_exception_wrapping_passthrough_and_cancellation(tmp_path: Path) -> None:
+    """Non-MigrationError exceptions sanitize messages and chain __cause__; MigrationError and CancelledError behave per contract."""
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    secret_path = tmp_path / "secret_err.py"
+    secret_path.write_text('def reconcile(context):\n    raise ValueError("secret_dsn_password")\n', encoding="utf-8")
+
+    guard_path = tmp_path / "guard_err.py"
+    guard_path.write_text(
+        'from sqlspec.exceptions import MigrationError\ndef reconcile(context):\n    raise MigrationError("explicit guard")\n',
+        encoding="utf-8",
+    )
+
+    cancel_path = tmp_path / "cancel_err.py"
+    cancel_path.write_text(
+        "import asyncio\nasync def reconcile(context):\n    raise asyncio.CancelledError()\n", encoding="utf-8"
+    )
+
+    sync_runner = _sync_runner(tmp_path, {})
+    with pytest.raises(MigrationError) as secret_exc:
+        sync_runner.execute_reconciliation(Mock(), ExtensionReconcilerDescriptor(name="adk", module_path=secret_path))
+    assert "adk" in str(secret_exc.value)
+    assert str(secret_path) in str(secret_exc.value)
+    assert "ValueError" in str(secret_exc.value)
+    assert "secret_dsn_password" not in str(secret_exc.value)
+    assert isinstance(secret_exc.value.__cause__, ValueError)
+
+    with pytest.raises(MigrationError, match="explicit guard"):
+        sync_runner.execute_reconciliation(Mock(), ExtensionReconcilerDescriptor(name="adk", module_path=guard_path))
+
+    async_runner = _async_runner(tmp_path, {"default_schema": "app"})
+    async_driver = AsyncMock()
+    with pytest.raises(asyncio.CancelledError):
+        await async_runner.execute_reconciliation(
+            async_driver, ExtensionReconcilerDescriptor(name="adk", module_path=cancel_path)
+        )
+    assert async_driver.mock_calls == [
+        call.begin(),
+        call.set_migration_session_schema("app"),
+        call.rollback(),
+        call.reset_migration_session_schema(),
+    ]
+
+
+@pytest.mark.anyio
+async def test_execute_reconciliation_transactional_call_order_and_failure_recovery(
+    tmp_path: Path, runner_mode: _RunnerMode
+) -> None:
+    """Transactional reconcile commits before reset_schema on success and rolls back before reset_schema on failure."""
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    ok_path = tmp_path / "ok_reconcile.py"
+    ok_path.write_text('def reconcile(context):\n    context.driver.record_event("callback")\n', encoding="utf-8")
+    fail_path = tmp_path / "fail_reconcile.py"
+    fail_path.write_text(
+        'def reconcile(context):\n    context.driver.record_event("callback")\n    raise RuntimeError("boom")\n',
+        encoding="utf-8",
+    )
+
+    runner = runner_mode.runner(tmp_path, {"default_schema": "app"})
+    events_ok: list[str] = []
+    driver_ok = runner_mode.driver()
+    driver_ok.begin.side_effect = lambda: events_ok.append("begin")
+    driver_ok.set_migration_session_schema.side_effect = lambda s: events_ok.append(f"set_schema:{s}")
+    driver_ok.record_event = Mock(side_effect=events_ok.append)
+    driver_ok.commit.side_effect = lambda: events_ok.append("commit")
+    driver_ok.reset_migration_session_schema.side_effect = lambda: events_ok.append("reset_schema")
+
+    await runner_mode.call(
+        runner.execute_reconciliation, driver_ok, ExtensionReconcilerDescriptor(name="litestar", module_path=ok_path)
+    )
+    assert events_ok == ["begin", "set_schema:app", "callback", "commit", "reset_schema"]
+    driver_ok.rollback.assert_not_called()
+
+    events_fail: list[str] = []
+    driver_fail = runner_mode.driver()
+    driver_fail.begin.side_effect = lambda: events_fail.append("begin")
+    driver_fail.set_migration_session_schema.side_effect = lambda s: events_fail.append(f"set_schema:{s}")
+    driver_fail.record_event = Mock(side_effect=events_fail.append)
+    driver_fail.rollback.side_effect = lambda: events_fail.append("rollback")
+    driver_fail.reset_migration_session_schema.side_effect = lambda: events_fail.append("reset_schema")
+
+    with pytest.raises(MigrationError) as exc_info:
+        await runner_mode.call(
+            runner.execute_reconciliation,
+            driver_fail,
+            ExtensionReconcilerDescriptor(name="litestar", module_path=fail_path),
+        )
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert events_fail == ["begin", "set_schema:app", "callback", "rollback", "reset_schema"]
+    driver_fail.commit.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_execute_reconciliation_secondary_recovery_failure_preserves_primary_cause(
+    tmp_path: Path, runner_mode: _RunnerMode
+) -> None:
+    """Rollback or schema-reset errors during recovery never mask the primary callback error."""
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    fail_path = tmp_path / "primary_fail.py"
+    fail_path.write_text('def reconcile(context):\n    raise ValueError("primary_err")\n', encoding="utf-8")
+
+    runner = runner_mode.runner(tmp_path, {"default_schema": "app"})
+    driver = runner_mode.driver()
+    driver.rollback.side_effect = RuntimeError("conn lost")
+    driver.reset_migration_session_schema.side_effect = RuntimeError("conn lost")
+
+    with pytest.raises(MigrationError) as exc_info:
+        await runner_mode.call(
+            runner.execute_reconciliation, driver, ExtensionReconcilerDescriptor(name="events", module_path=fail_path)
+        )
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+@pytest.mark.anyio
+async def test_execute_reconciliation_rejects_unsupported_default_schema_before_begin(
+    tmp_path: Path, runner_mode: _RunnerMode
+) -> None:
+    """Unsupported default_schema fails before driver.begin(), schema switching, or callback loading."""
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    config = _RunnerConfig({"default_schema": "app"})
+    config.supports_migration_schemas = False
+    runner = runner_mode.runner(tmp_path, MigrationContext(config=config))
+    driver = runner_mode.driver()
+    missing_path = tmp_path / "does_not_exist.py"
+
+    with pytest.raises(MigrationError, match="does not support migration default schemas"):
+        await runner_mode.call(
+            runner.execute_reconciliation,
+            driver,
+            ExtensionReconcilerDescriptor(name="litestar", module_path=missing_path),
+        )
+    driver.begin.assert_not_called()
+    driver.set_migration_session_schema.assert_not_called()
+    driver.set_migration_non_transactional_schema.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_execute_reconciliation_nontransactional_mock_and_duckdb(
+    tmp_path: Path, runner_mode: _RunnerMode
+) -> None:
+    """Non-transactional mode skips begin/commit/rollback on stateless/DuckDB drivers while persisting DDL+DML."""
+    from sqlspec.adapters.duckdb import DuckDBConfig
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    mock_path = tmp_path / "nontx_mock.py"
+    mock_path.write_text('def reconcile(context):\n    context.driver.record_event("callback")\n', encoding="utf-8")
+
+    runner = runner_mode.runner(tmp_path, {"transactional": False, "default_schema": "app"})
+    events: list[str] = []
+    driver = runner_mode.driver()
+    driver.set_migration_non_transactional_schema.side_effect = lambda s: events.append(f"set_non_tx_schema:{s}")
+    driver.record_event = Mock(side_effect=events.append)
+    driver.reset_migration_session_schema.side_effect = lambda: events.append("reset_schema")
+
+    await runner_mode.call(
+        runner.execute_reconciliation, driver, ExtensionReconcilerDescriptor(name="litestar", module_path=mock_path)
+    )
+    assert events == ["set_non_tx_schema:app", "callback", "reset_schema"]
+    driver.begin.assert_not_called()
+    driver.commit.assert_not_called()
+    driver.rollback.assert_not_called()
+
+    if not runner_mode.is_async:
+        duck_db_file = tmp_path / "reconcile_duck.ddb"
+        duck_path = tmp_path / "duck_reconcile.py"
+        duck_path.write_text(
+            """
+def reconcile(context):
+    context.driver.execute("CREATE TABLE IF NOT EXISTS duck_items (id INTEGER, name VARCHAR)")
+    context.driver.execute("INSERT INTO duck_items VALUES (1, 'persisted')")
+""",
+            encoding="utf-8",
+        )
+        duck_cfg = DuckDBConfig(
+            connection_config={"database": str(duck_db_file)}, migration_config={"transactional": False}
+        )
+        duck_runner = SyncMigrationRunner(tmp_path, {}, MigrationContext.from_config(duck_cfg), {"events": {}})
+        with duck_cfg.provide_session() as duck_driver:
+            duck_runner.execute_reconciliation(
+                duck_driver, ExtensionReconcilerDescriptor(name="events", module_path=duck_path)
+            )
+        with duck_cfg.provide_session() as duck_driver:
+            rows = duck_driver.select("SELECT id, name FROM duck_items")
+        duck_cfg.close_pool()
+        assert rows == [{"id": 1, "name": "persisted"}]
+
+
+@pytest.mark.anyio
+async def test_execute_reconciliation_nontransactional_implicit_tx_and_psycopg_fallback(
+    tmp_path: Path, runner_mode: _RunnerMode
+) -> None:
+    """Non-transactional mode commits active implicit DBAPI transactions and falls back to rollback+reset on INERROR."""
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    ok_path = tmp_path / "implicit_ok.py"
+    ok_path.write_text('def reconcile(context):\n    context.driver.record_event("callback")\n', encoding="utf-8")
+    fail_path = tmp_path / "implicit_fail.py"
+    fail_path.write_text(
+        'def reconcile(context):\n    context.driver.record_event("callback")\n    raise RuntimeError("aborted")\n',
+        encoding="utf-8",
+    )
+
+    runner_no_schema = runner_mode.runner(tmp_path, {"transactional": False})
+    driver_implicit = runner_mode.driver()
+    driver_implicit._connection_in_transaction = lambda: True
+    driver_implicit.record_event = Mock()
+
+    await runner_mode.call(
+        runner_no_schema.execute_reconciliation,
+        driver_implicit,
+        ExtensionReconcilerDescriptor(name="adk", module_path=ok_path),
+    )
+    driver_implicit.begin.assert_not_called()
+    driver_implicit.commit.assert_called_once()
+    driver_implicit.rollback.assert_not_called()
+
+    driver_implicit_fail = runner_mode.driver()
+    driver_implicit_fail._connection_in_transaction = lambda: True
+    driver_implicit_fail.record_event = Mock()
+    with pytest.raises(MigrationError):
+        await runner_mode.call(
+            runner_no_schema.execute_reconciliation,
+            driver_implicit_fail,
+            ExtensionReconcilerDescriptor(name="adk", module_path=fail_path),
+        )
+    driver_implicit_fail.rollback.assert_called_once()
+
+    runner_with_schema = runner_mode.runner(tmp_path, {"transactional": False, "default_schema": "app"})
+    fallback_events: list[str] = []
+    driver_psycopg = runner_mode.driver()
+    driver_psycopg.set_migration_non_transactional_schema.side_effect = lambda s: fallback_events.append(
+        f"set_non_tx_schema:{s}"
+    )
+    driver_psycopg.record_event = Mock(side_effect=fallback_events.append)
+    reset_attempts = 0
+
+    def _reset_side_effect() -> None:
+        nonlocal reset_attempts
+        reset_attempts += 1
+        if reset_attempts == 1:
+            fallback_events.append("reset_schema(fail)")
+            msg = "current transaction is aborted"
+            raise RuntimeError(msg)
+        fallback_events.append("reset_schema(ok)")
+
+    driver_psycopg.reset_migration_session_schema.side_effect = _reset_side_effect
+    driver_psycopg.rollback.side_effect = lambda: fallback_events.append("rollback")
+
+    with pytest.raises(MigrationError):
+        await runner_mode.call(
+            runner_with_schema.execute_reconciliation,
+            driver_psycopg,
+            ExtensionReconcilerDescriptor(name="adk", module_path=fail_path),
+        )
+    assert fallback_events == [
+        "set_non_tx_schema:app",
+        "callback",
+        "reset_schema(fail)",
+        "rollback",
+        "reset_schema(ok)",
+    ]
+
+
+def test_execute_reconciliation_sqlite_atomic_rollback_and_zero_ledger_writes(tmp_path: Path) -> None:
+    """Failed transactional reconcile rolls back atomically on SQLite and successful runs never create ddl_migrations."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+
+    db_path = tmp_path / "atomic_sqlite.db"
+    cfg = SqliteConfig(connection_config={"database": str(db_path)})
+    with cfg.provide_session() as driver:
+        driver.execute("CREATE TABLE seed_rows (id INTEGER PRIMARY KEY, label TEXT)")
+        driver.commit()
+
+    fail_reconcile = tmp_path / "fail_sqlite.py"
+    fail_reconcile.write_text(
+        """
+def reconcile(context):
+    context.driver.execute("INSERT INTO seed_rows (id, label) VALUES (1, 'rolled_back')")
+    raise RuntimeError("boom")
+""",
+        encoding="utf-8",
+    )
+    ok_reconcile = tmp_path / "ok_sqlite.py"
+    ok_reconcile.write_text(
+        """
+def reconcile(context):
+    context.driver.execute("CREATE TABLE ext_reconciled (id INTEGER PRIMARY KEY)")
+""",
+        encoding="utf-8",
+    )
+
+    runner = SyncMigrationRunner(tmp_path, {}, MigrationContext.from_config(cfg), {"litestar": {}})
+    with cfg.provide_session() as driver, pytest.raises(MigrationError):
+        runner.execute_reconciliation(
+            driver, ExtensionReconcilerDescriptor(name="litestar", module_path=fail_reconcile)
+        )
+
+    with cfg.provide_session() as driver:
+        assert driver.select("SELECT id FROM seed_rows") == []
+        runner.execute_reconciliation(driver, ExtensionReconcilerDescriptor(name="litestar", module_path=ok_reconcile))
+
+    with cfg.provide_session() as driver:
+        tables = {row["name"] for row in driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+    cfg.close_pool()
+    assert "ext_reconciled" in tables
+    assert "ddl_migrations" not in tables
+
+
+def test_execute_reconciliation_records_observability_metrics(tmp_path: Path) -> None:
+    """ObservabilityRuntime records invocations, applied, duration_ms, and errors for reconcile operations."""
+    from sqlspec.migrations.base import ExtensionReconcilerDescriptor
+    from sqlspec.observability import ObservabilityRuntime
+
+    ok_path = tmp_path / "obs_ok.py"
+    ok_path.write_text("def reconcile(context):\n    return None\n", encoding="utf-8")
+    fail_path = tmp_path / "obs_fail.py"
+    fail_path.write_text('def reconcile(context):\n    raise RuntimeError("fail")\n', encoding="utf-8")
+
+    runtime = ObservabilityRuntime(config_name="test_cfg")
+    runner = SyncMigrationRunner(
+        tmp_path, {}, MigrationContext(config=_RunnerConfig({})), {"litestar": {}}, runtime=runtime
+    )
+
+    runner.execute_reconciliation(Mock(), ExtensionReconcilerDescriptor(name="litestar", module_path=ok_path))
+    with pytest.raises(MigrationError):
+        runner.execute_reconciliation(Mock(), ExtensionReconcilerDescriptor(name="litestar", module_path=fail_path))
+
+    snapshot = runtime.metrics_snapshot()
+    assert snapshot["test_cfg.migrations.reconcile.invocations"] == 2.0
+    assert snapshot["test_cfg.migrations.reconcile.applied"] == 1.0
+    assert snapshot["test_cfg.migrations.reconcile.errors"] == 1.0
+    assert "test_cfg.migrations.reconcile.duration_ms" in snapshot

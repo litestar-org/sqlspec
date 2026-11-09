@@ -1105,6 +1105,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             runtime=self._runtime,
             description_hints=self._template_settings.description_hints,
         )
+        self.runner.project_root = self.project_root
 
     def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
@@ -2126,6 +2127,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             runtime=self._runtime,
             description_hints=self._template_settings.description_hints,
         )
+        self.runner.project_root = self.project_root
 
     async def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
