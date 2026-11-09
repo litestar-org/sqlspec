@@ -299,51 +299,15 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
 
         if dialect == "sqlite":
-            if table is None:
-                tables = self.get_tables(driver, schema=schema_name)
-                indexes: list[IndexMetadata] = []
-                for table_info in tables:
-                    table_name = table_info.get("table_name")
-                    if not table_name:
-                        continue
-                    indexes.extend(self.get_indexes(driver, table=table_name, schema=schema_name))
-                return indexes
-
-            table_name = table
             schema_prefix = format_sqlite_schema_prefix(schema_name)
-            table_identifier = f"{schema_name}.{table_name}" if schema_name else table_name
-            index_list_sql = self._get_query_text(dialect, "indexes", "by_table").format(
-                schema_prefix=schema_prefix, table_name=_format_sqlite_identifier(table_identifier)
-            )
-            index_list_rows = driver.select(index_list_sql, table_name=table_name, schema_name=schema_name)
-            index_metadata_list: list[IndexMetadata] = []
-            for row in index_list_rows:
-                index_name = row.get("name")
-                if not index_name:
-                    continue
-                index_identifier = f"{schema_name}.{index_name}" if schema_name else index_name
-                columns_sql = self._get_query_text(dialect, "indexes", "columns_by_index").format(
-                    index_name=_format_sqlite_identifier(index_identifier)
-                )
-                columns_rows = driver.select(columns_sql, index_name=index_name, schema_name=schema_name)
-                columns: list[str] = []
-                for col in columns_rows:
-                    column_name = col.get("name")
-                    if column_name is None:
-                        continue
-                    columns.append(str(column_name))
-                index_metadata: IndexMetadata = {"index_name": index_name, "table_name": table_name, "columns": columns}
-                if schema_name is not None:
-                    index_metadata["schema_name"] = schema_name
-                unique_value = row.get("unique")
-                if unique_value is not None:
-                    index_metadata["is_unique"] = unique_value
-                index_metadata_list.append(index_metadata)
-            return index_metadata_list
+            if table is None:
+                query_text = self._get_query_text(dialect, "indexes", "by_schema").format(schema_prefix=schema_prefix)
+                rows = driver.select(query_text, schema_name=schema_name)
+                return _sqlite_index_rows_to_metadata(rows, schema_name)
 
-        if dialect == "duckdb":
-            operation = "by_schema" if table is None else "by_table"
-            return driver.select(self._get_query(dialect, "indexes", operation), schema_type=IndexMetadata)
+            query_text = self._get_query_text(dialect, "indexes", "by_table").format(schema_prefix=schema_prefix)
+            rows = driver.select(query_text, table_name=table, schema_name=schema_name)
+            return _sqlite_index_rows_to_metadata(rows, schema_name)
 
         if dialect == "snowflake":
             return []
@@ -1073,6 +1037,57 @@ def _normalize_native_statistics(
                     record["schema_name"] = str(schema_name)
                 statistics.append(record)
     return statistics
+
+
+_SQLITE_INDEX_EXPRESSION_COLUMN_ID: Final[int] = -2
+
+
+def _sqlite_index_rows_to_metadata(rows: "list[dict[str, Any]]", schema_name: "str | None") -> "list[IndexMetadata]":
+    """Group SQLite pragma_index_xinfo rows into public IndexMetadata records."""
+    if not rows:
+        return []
+    if "columns" in rows[0]:
+        return cast("list[IndexMetadata]", rows)
+
+    grouped: dict[tuple[str | None, str, str], dict[str, Any]] = {}
+    for row in rows:
+        table_name_value = row.get("table_name")
+        index_name_value = row.get("index_name")
+        if table_name_value is None or index_name_value is None:
+            continue
+        row_schema = cast("str | None", row.get("schema_name", schema_name))
+        table_name = str(table_name_value)
+        index_name = str(index_name_value)
+        key = (row_schema, table_name, index_name)
+        index_metadata = grouped.get(key)
+        if index_metadata is None:
+            index_metadata = {
+                "index_name": index_name,
+                "table_name": table_name,
+                "columns": [],
+                "is_primary": bool(row.get("is_primary")),
+            }
+            if row_schema is not None:
+                index_metadata["schema_name"] = row_schema
+            unique_value = row.get("is_unique")
+            if unique_value is not None:
+                index_metadata["is_unique"] = unique_value
+            if row.get("is_partial") is not None:
+                index_metadata["is_partial"] = row.get("is_partial")
+            if row.get("index_sql") is not None:
+                index_metadata["native_sql"] = row.get("index_sql")
+            grouped[key] = index_metadata
+
+        if row.get("is_key_column") in (0, False):
+            continue
+        columns = cast("list[str]", index_metadata["columns"])
+        column_name = row.get("column_name")
+        if column_name is not None:
+            columns.append(str(column_name))
+        elif row.get("column_id") == _SQLITE_INDEX_EXPRESSION_COLUMN_ID:
+            columns.append("<expression>")
+
+    return [cast("IndexMetadata", metadata) for metadata in grouped.values()]
 
 
 def _format_sqlite_identifier(identifier: str) -> str:

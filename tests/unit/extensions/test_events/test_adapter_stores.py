@@ -1915,3 +1915,124 @@ def test_db2_event_stores_companion_index_reconcile() -> None:
     )
     async_store = Db2AsyncEventQueueStore(async_cfg)
     assert async_store._index_existence_target() == ("APP", "QUEUE_EVENTS")
+
+
+@pytest.mark.parametrize(
+    ("connection_config", "queue_table", "expected_dialect", "expected_target"),
+    [
+        ({"uri": "postgresql://localhost:5432/app"}, "sqlspec_event_queue", "postgres", (None, "sqlspec_event_queue")),
+        ({"driver_name": "sqlite", "uri": ":memory:"}, "app.events", "sqlite", ("app", "events")),
+        ({"driver_name": "duckdb", "path": ":memory:"}, "sqlspec_event_queue", "duckdb", (None, "sqlspec_event_queue")),
+        ({"uri": "oracle://localhost:1521/FREEPDB1"}, "APP.events", "oracle", ("APP", "events")),
+        ({"uri": "db2://localhost:50000/testdb"}, "app.queue_events", "db2", ("APP", "QUEUE_EVENTS")),
+        (
+            {"driver_name": "mssql", "uri": "mssql://localhost:1433/app"},
+            "dbo.queue_events",
+            "mssql",
+            ("dbo", "queue_events"),
+        ),
+    ],
+)
+def test_adbc_event_store_indexed_dialects_reconcile_once_when_absent(
+    connection_config: dict[str, str], queue_table: str, expected_dialect: str, expected_target: tuple[str | None, str]
+) -> None:
+    """ADBC event queue store exposes index existence targets and runs companion DDL once when absent."""
+    from unittest.mock import MagicMock
+
+    pytest.importorskip("adbc_driver_manager")
+    from sqlspec.adapters.adbc import AdbcConfig
+    from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
+
+    cfg = AdbcConfig(connection_config=connection_config, extension_config={"events": {"queue_table": queue_table}})
+    store = AdbcEventQueueStore(cfg)
+
+    assert store.dialect == expected_dialect
+    assert store._index_existence_target() == expected_target
+    targets = store.get_schema_targets()
+    assert len(targets) == 1
+    assert len(targets[0].create_table.columns) == 10
+
+    expected_schema, expected_table = expected_target
+    missing_driver = MagicMock()
+    missing_driver.data_dictionary.get_indexes.return_value = []
+    store.reconcile_companion_objects_sync(missing_driver)
+    missing_driver.data_dictionary.get_indexes.assert_called_once_with(
+        missing_driver, table=expected_table, schema=expected_schema
+    )
+    missing_driver.execute_script.assert_called_once_with(store.companion_index_statement())
+
+    present_driver = MagicMock()
+    present_driver.data_dictionary.get_indexes.return_value = [
+        {"index_name": store._index_name(), "table_name": expected_table, "schema_name": expected_schema}
+    ]
+    store.reconcile_companion_objects_sync(present_driver)
+    present_driver.execute_script.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("connection_config", "expected_dialect"),
+    [
+        ({"driver_name": "bigquery", "project_id": "proj", "dataset_id": "ds"}, "bigquery"),
+        ({"driver_name": "snowflake", "uri": "snowflake://acct/db/public"}, "snowflake"),
+    ],
+)
+def test_adbc_event_store_no_index_dialects_skip_companion_index(
+    connection_config: dict[str, str], expected_dialect: str
+) -> None:
+    """BigQuery and Snowflake ADBC event stores return None index target and skip index DDL."""
+    from unittest.mock import MagicMock
+
+    pytest.importorskip("adbc_driver_manager")
+    from sqlspec.adapters.adbc import AdbcConfig
+    from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
+
+    cfg = AdbcConfig(connection_config=connection_config)
+    store = AdbcEventQueueStore(cfg)
+
+    assert store.dialect == expected_dialect
+    assert store._index_existence_target() is None
+    assert store.companion_index_statement() is None
+    targets = store.get_schema_targets()
+    assert len(targets) == 1
+    assert len(targets[0].create_table.columns) == 10
+
+    driver = MagicMock()
+    store.reconcile_companion_objects_sync(driver)
+    driver.data_dictionary.get_indexes.assert_not_called()
+    driver.execute_script.assert_not_called()
+
+
+def test_adbc_event_store_flightsql_explicit_dialect_resolution() -> None:
+    """FlightSQL ADBC event store honors explicit non-sqlite StatementConfig dialects and keeps unhinted flightsql."""
+    pytest.importorskip("adbc_driver_manager")
+    from sqlspec.adapters.adbc import AdbcConfig
+    from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
+
+    pg_flight = AdbcConfig(
+        connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc://localhost:8815"},
+        statement_config=StatementConfig(dialect="postgres"),
+    )
+    pg_store = AdbcEventQueueStore(pg_flight)
+    assert pg_store.dialect == "postgres"
+    assert "JSONB" in pg_store.create_statements()[0]
+
+    mssql_flight = AdbcConfig(
+        connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc+tls://localhost:8815"},
+        statement_config=StatementConfig(dialect="tsql"),
+    )
+    assert AdbcEventQueueStore(mssql_flight).dialect == "mssql"
+
+    sqlite_flight = AdbcConfig(
+        connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc://localhost:8815"},
+        statement_config=StatementConfig(dialect="sqlite"),
+    )
+    assert AdbcEventQueueStore(sqlite_flight).dialect == "flightsql"
+
+    gizmo_duck_flight = AdbcConfig(
+        connection_config={
+            "driver_name": "adbc_driver_flightsql",
+            "uri": "grpc+tls://localhost:31337",
+            "gizmosql_backend": "duckdb",
+        }
+    )
+    assert AdbcEventQueueStore(gizmo_duck_flight).dialect == "duckdb"

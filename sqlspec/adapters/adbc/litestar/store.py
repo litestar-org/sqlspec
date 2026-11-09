@@ -14,13 +14,20 @@ Supports:
 """
 
 import contextlib
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.adbc.core import _DB2_INDEX_EXISTS_SQL, _DB2_TABLE_EXISTS_SQL, is_postgres_dialect
+from sqlspec.adapters.adbc.core import (
+    _DB2_INDEX_EXISTS_SQL,
+    _DB2_TABLE_EXISTS_SQL,
+    is_postgres_dialect,
+    resolve_reconcile_adbc_dialect,
+)
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.exceptions import IntegrityError
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import normalize_identifier
 
@@ -137,12 +144,101 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         return await async_(self._delete_expired)()
 
     def prepare_schema_sync(self, driver: Any) -> None:
-        """Cache dialect from the active driver without opening a nested session."""
+        """Cache dialect from explicit FlightSQL/GizmoSQL config hints or the active driver."""
         if self._dialect is not None:
             return
+        connection_config = getattr(self._config, "connection_config", None)
+        explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
+        if isinstance(connection_config, Mapping) and (connection_config.get("gizmosql_backend") or explicit_dialect):
+            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
+            if resolved is not None:
+                self._dialect = resolved
+                return
         dialect_value = getattr(driver, "dialect", None)
         raw_dialect = str(dialect_value).lower() if dialect_value else "postgres"
-        self._dialect = "mssql" if raw_dialect in {"tsql", "sqlserver"} else raw_dialect
+        if raw_dialect in {"tsql", "sqlserver"}:
+            self._dialect = "mssql"
+        elif raw_dialect == "postgresql":
+            self._dialect = "postgres"
+        else:
+            self._dialect = raw_dialect
+
+    def _resolve_schema_dialect(self) -> str:
+        """Return cached or config-classified dialect before falling back to a live session."""
+        if self._dialect is not None:
+            return self._dialect
+        connection_config = getattr(self._config, "connection_config", None)
+        if isinstance(connection_config, Mapping):
+            explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
+            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
+            if resolved is not None:
+                self._dialect = resolved
+                return resolved
+        return self._get_dialect()
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the primary session table SchemaTarget using the resolved ADBC backend dialect."""
+        dialect = self._resolve_schema_dialect()
+        parse_dialect = "postgres" if is_postgres_dialect(dialect) else ("tsql" if dialect == "mssql" else dialect)
+        if dialect == "db2":
+            schema_name, catalog_table = _split_db2_table_name(self._table_name)
+            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+        raw_schema, dot, raw_table = self._table_name.partition(".")
+        if dot:
+            schema_name = raw_schema.strip('"`[]') or None
+            bare_table = raw_table.strip('"`[]')
+        else:
+            schema_name = None
+            bare_table = self._table_name.strip('"`[]')
+        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return dialect-specific companion index definitions for ADBC session storage."""
+        dialect = self._resolve_schema_dialect()
+        if dialect in {"bigquery", "snowflake"}:
+            return []
+
+        if dialect == "oracle":
+            raw_schema, dot, raw_table = self._table_name.partition(".")
+            schema_name = raw_schema.strip('"') or None if dot else None
+            bare_table = raw_table.strip('"') if dot else self._table_name.strip('"')
+            index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
+            ddl = f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'CREATE INDEX {index_name} ON {self._table_name}(expires_at)';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE NOT IN (-955, -1408) THEN
+                        RAISE;
+                    END IF;
+            END;
+            """.strip()
+            return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
+
+        if dialect == "db2":
+            schema_name, catalog_table = _split_db2_table_name(self._table_name)
+            raw_index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
+            index_name = normalize_identifier(raw_index_name, "db2")
+            ddl = f"CREATE INDEX {raw_index_name} ON {self._table_name}(expires_at)"
+            return [CompanionIndex(name=index_name, table=catalog_table, schema=schema_name, ddl=ddl)]
+
+        if dialect == "mssql":
+            raw_schema, dot, raw_table = self._table_name.partition(".")
+            schema_name = raw_schema.strip('[]"') or None if dot else None
+            bare_table = raw_table.strip('[]"') if dot else self._table_name.strip('[]"')
+            index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
+            ddl = f"""
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.indexes
+                WHERE name = N'{index_name}'
+                AND object_id = OBJECT_ID(N'{self._table_name}')
+            )
+            CREATE INDEX {index_name}
+            ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
+            """.strip()
+            return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
+
+        return super().get_companion_indexes()
 
     def _get_dialect(self) -> str:
         """Get the database dialect, caching it after first access.
