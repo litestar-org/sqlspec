@@ -345,13 +345,23 @@ def test_duckdb_adk_rejects_catalog_qualified_table_names() -> None:
         DuckDBADKMemoryStore(_mock_config({"memory_table": "catalog.custom.memories"}))
 
 
-def test_schema_qualified_fts_table(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Schema-qualified memory tables format indexes without dots and macro as fts_{schema}_{table}."""
-    store = DuckDBADKMemoryStore(_mock_config({"memory_table": "custom.my_memories"}))
+@pytest.mark.parametrize(
+    ("memory_table", "fts_schema", "index_prefix"),
+    [
+        ("adk_memory", "fts_main_adk_memory", "idx_adk_memory"),
+        ("custom.my_memories", "fts_custom_my_memories", "idx_custom_my_memories"),
+    ],
+)
+def test_schema_qualified_fts_table(
+    monkeypatch: pytest.MonkeyPatch, memory_table: str, fts_schema: str, index_prefix: str
+) -> None:
+    """Memory tables format indexes without dots and share fts_{schema}_{table} identity."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_table": memory_table}))
     ddl = store._memory_table_ddl()
-    assert "CREATE INDEX IF NOT EXISTS idx_custom_my_memories_app_scope_user_time" in ddl
-    assert "CREATE INDEX IF NOT EXISTS idx_custom_my_memories_scope" in ddl
-    assert "CREATE INDEX IF NOT EXISTS idx_custom_my_memories_session" in ddl
+    assert store._fts_schema_name() == fts_schema
+    assert f"CREATE INDEX IF NOT EXISTS {index_prefix}_app_scope_user_time" in ddl
+    assert f"CREATE INDEX IF NOT EXISTS {index_prefix}_scope" in ddl
+    assert f"CREATE INDEX IF NOT EXISTS {index_prefix}_session" in ddl
 
     class _CaptureConn:
         def __init__(self) -> None:
@@ -375,12 +385,12 @@ def test_schema_qualified_fts_table(monkeypatch: pytest.MonkeyPatch) -> None:
             return None
 
     conn = _CaptureConn()
-    config = _mock_config({"memory_table": "custom.my_memories", "memory_use_fts": True})
+    config = _mock_config({"memory_table": memory_table, "memory_use_fts": True})
     config.provide_connection = lambda *_a, **_k: conn
     store_fts = DuckDBADKMemoryStore(config)
     monkeypatch.setattr(DuckDBADKMemoryStore, "_ensure_fts_extension", lambda _s, _c: True)
     store_fts.search_entries("test", "app", "user")
-    assert "fts_custom_my_memories.match_bm25" in conn.sql
+    assert f"{fts_schema}.match_bm25" in conn.sql
 
 
 def test_duckdb_companions_restore_dropped_session_index(tmp_path: Path) -> None:
@@ -512,3 +522,158 @@ def test_duckdb_companions_propagate_execute_error() -> None:
         store.reconcile_companion_objects_sync(driver)
 
     assert driver.commit.call_count == 0
+
+
+def _make_fts_driver(
+    *,
+    catalog_rows: list[dict[str, object]],
+    extension_rows: list[dict[str, object]] | None = None,
+    source_rows: list[dict[str, object]] | None = None,
+    fail_on_execute: str | None = None,
+) -> tuple[MagicMock, list[tuple[str, Any]], list[str]]:
+    """Create a SQL-routing mock driver recording select and execute statements."""
+    select_calls: list[tuple[str, Any]] = []
+    executed_statements: list[str] = []
+    resolved_extensions = extension_rows if extension_rows is not None else []
+    resolved_source = source_rows if source_rows is not None else []
+
+    def _select(sql: str, *params: Any) -> list[dict[str, object]]:
+        bound = params[0] if params else ()
+        select_calls.append((sql, bound))
+        if "information_schema.schemata" in sql:
+            return catalog_rows
+        if "duckdb_extensions()" in sql:
+            return resolved_extensions
+        return resolved_source
+
+    def _execute(sql: str, *params: Any) -> MagicMock:
+        del params
+        if fail_on_execute is not None and sql == fail_on_execute:
+            msg = "extension unavailable"
+            raise RuntimeError(msg)
+        executed_statements.append(sql)
+        return MagicMock()
+
+    driver = MagicMock()
+    driver.select.side_effect = _select
+    driver.execute.side_effect = _execute
+    return driver, select_calls, executed_statements
+
+
+@pytest.mark.parametrize(
+    ("memory_table", "fts_schema"),
+    [("adk_memory", "fts_main_adk_memory"), ("custom.my_memories", "fts_custom_my_memories")],
+)
+def test_duckdb_fts_companion_keeps_present_index(memory_table: str, fts_schema: str) -> None:
+    """Existing DuckDB FTS schemas remain untouched without INSTALL, LOAD, or PRAGMA calls."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_table": memory_table, "memory_use_fts": True}))
+    driver, select_calls, executed = _make_fts_driver(catalog_rows=[{"present": 1}], source_rows=[{"present": 1}])
+
+    store.reconcile_companion_objects_sync(driver)
+
+    assert len(select_calls) == 1
+    assert "information_schema.schemata" in select_calls[0][0]
+    assert select_calls[0][1] == (fts_schema,)
+    assert len(executed) == 3
+    assert not any(stmt.startswith(("INSTALL", "LOAD", "PRAGMA")) for stmt in executed)
+    assert driver.commit.call_count == 0
+
+
+def test_duckdb_fts_companion_loads_installed_extension() -> None:
+    """Installed but unloaded DuckDB FTS extension runs LOAD fts without INSTALL fts."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_table": "custom.my_memories", "memory_use_fts": True}))
+    driver, _, executed = _make_fts_driver(catalog_rows=[], extension_rows=[{"loaded": False, "installed": True}])
+
+    store.reconcile_companion_objects_sync(driver)
+
+    assert "INSTALL fts" not in executed
+    assert executed[-2:] == [
+        "LOAD fts",
+        "PRAGMA create_fts_index('custom.my_memories', 'id', 'content_text', stemmer='porter', stopwords='english', strip_accents=1, lower=1)",
+    ]
+    assert driver.commit.call_count == 0
+
+
+def test_duckdb_fts_companion_installs_missing_extension() -> None:
+    """Uninstalled DuckDB FTS extension runs INSTALL fts, LOAD fts, and PRAGMA in order."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_table": "custom.my_memories", "memory_use_fts": True}))
+    driver, _, executed = _make_fts_driver(catalog_rows=[], extension_rows=[{"loaded": False, "installed": False}])
+
+    store.reconcile_companion_objects_sync(driver)
+
+    assert executed[-3:] == [
+        "INSTALL fts",
+        "LOAD fts",
+        "PRAGMA create_fts_index('custom.my_memories', 'id', 'content_text', stemmer='porter', stopwords='english', strip_accents=1, lower=1)",
+    ]
+    assert driver.commit.call_count == 0
+
+
+def test_duckdb_fts_companion_skips_load_when_loaded() -> None:
+    """Already-loaded DuckDB FTS extension skips both INSTALL fts and LOAD fts."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_use_fts": True}))
+    driver, _, executed = _make_fts_driver(catalog_rows=[], extension_rows=[{"loaded": True, "installed": True}])
+
+    store.reconcile_companion_objects_sync(driver)
+
+    assert not any(stmt.startswith(("INSTALL", "LOAD")) for stmt in executed)
+    pragma_calls = [stmt for stmt in executed if stmt.startswith("PRAGMA")]
+    assert len(pragma_calls) == 1
+    assert driver.commit.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("memory_table", "fts_schema"),
+    [("adk_memory", "fts_main_adk_memory"), ("custom.my_memories", "fts_custom_my_memories")],
+)
+def test_duckdb_fts_companion_builds_for_populated_source(memory_table: str, fts_schema: str) -> None:
+    """Missing DuckDB FTS schema builds once for populated tables without overwrite."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_table": memory_table, "memory_use_fts": True}))
+    driver, select_calls, executed = _make_fts_driver(
+        catalog_rows=[], extension_rows=[{"loaded": True, "installed": True}], source_rows=[{"present": 1}]
+    )
+
+    store.reconcile_companion_objects_sync(driver)
+
+    assert select_calls[0][1] == (fts_schema,)
+    pragma_calls = [stmt for stmt in executed if stmt.startswith("PRAGMA create_fts_index")]
+    assert len(pragma_calls) == 1
+    assert "overwrite" not in pragma_calls[0]
+
+
+def test_duckdb_fts_companion_preserves_configured_options() -> None:
+    """DuckDB FTS companion build preserves configured memory_fts_options without overwrite."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_use_fts": True, "memory_fts_options": {"stemmer": "german"}}))
+    driver, _, executed = _make_fts_driver(catalog_rows=[], extension_rows=[{"loaded": True, "installed": True}])
+
+    store.reconcile_companion_objects_sync(driver)
+
+    pragma_calls = [stmt for stmt in executed if stmt.startswith("PRAGMA create_fts_index")]
+    assert len(pragma_calls) == 1
+    assert "stemmer='german'" in pragma_calls[0]
+    assert "overwrite" not in pragma_calls[0]
+
+
+def test_duckdb_fts_companion_propagates_load_failure() -> None:
+    """Failed LOAD fts propagates immediately without executing PRAGMA or commit."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_use_fts": True}))
+    driver, _, executed = _make_fts_driver(
+        catalog_rows=[], extension_rows=[{"loaded": False, "installed": True}], fail_on_execute="LOAD fts"
+    )
+
+    with pytest.raises(RuntimeError, match="extension unavailable"):
+        store.reconcile_companion_objects_sync(driver)
+
+    assert not any(stmt.startswith("PRAGMA") for stmt in executed)
+    assert driver.commit.call_count == 0
+
+
+def test_duckdb_fts_companion_skips_disabled_fts() -> None:
+    """Stores with memory_use_fts=False run ordinary indexes without querying schemata."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_use_fts": False}))
+    driver, select_calls, executed = _make_fts_driver(catalog_rows=[])
+
+    store.reconcile_companion_objects_sync(driver)
+
+    assert not any("information_schema.schemata" in sql for sql, _ in select_calls)
+    assert len(executed) == 3

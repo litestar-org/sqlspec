@@ -218,3 +218,185 @@ def test_duckdb_memory_companions_restore_dropped_index(tmp_path: Path) -> None:
         assert [r["event_id"] for r in results] == ["evt-idx-1"]
     finally:
         store.config.close_pool()
+
+
+def _skip_if_duckdb_fts_unavailable(store: DuckDBADKMemoryStore) -> None:
+    """Skip test if the offline environment lacks the DuckDB FTS extension."""
+    with store.config.provide_connection() as conn:
+        if not store._ensure_fts_extension(conn):
+            pytest.skip("DuckDB FTS extension is unavailable")
+
+
+def _ensure_custom_schema(config: DuckDBConfig, memory_table: str) -> None:
+    """Create the parent DuckDB schema when testing schema-qualified memory tables."""
+    if "." not in memory_table:
+        return
+    schema_name = memory_table.split(".", 1)[0]
+    with config.provide_session() as driver:
+        driver.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
+        driver.commit()
+
+
+@pytest.mark.parametrize(
+    ("memory_table", "fts_schema"),
+    [("adk_memory", "fts_main_adk_memory"), ("custom.my_memories", "fts_custom_my_memories")],
+)
+def test_duckdb_fts_companion_supports_search_after_empty_setup(
+    tmp_path: Path, memory_table: str, fts_schema: str
+) -> None:
+    """Companion reconciliation creates the FTS schema on empty tables and supports BM25 search."""
+    db_path = tmp_path / f"fts_empty_{fts_schema}.duckdb"
+    plain_config = DuckDBConfig(
+        connection_config={"database": str(db_path)},
+        extension_config={"adk": {"memory_table": memory_table, "memory_use_fts": False}},
+    )
+    fts_config = DuckDBConfig(
+        connection_config={"database": str(db_path)},
+        extension_config={"adk": {"memory_table": memory_table, "memory_use_fts": True}},
+    )
+    try:
+        _ensure_custom_schema(plain_config, memory_table)
+        plain_store = DuckDBADKMemoryStore(plain_config)
+        plain_store.create_tables()
+
+        fts_store = DuckDBADKMemoryStore(fts_config)
+        _skip_if_duckdb_fts_unavailable(fts_store)
+
+        with fts_config.provide_session() as driver:
+            fts_store.reconcile_companion_objects_sync(driver)
+            driver.commit()
+            rows = driver.select(
+                "SELECT 1 AS present FROM information_schema.schemata WHERE lower(schema_name) = lower(?)",
+                (fts_schema,),
+            )
+
+        assert len(rows) == 1
+        now = datetime.now(UTC)
+        record = _build_record(session_id="s1", event_id="evt-empty-1", content_text="espresso roast", inserted_at=now)
+        fts_store.insert_memory_entries([record])
+
+        results = fts_store.search_entries("espresso", "app", "user")
+        assert [r["event_id"] for r in results] == ["evt-empty-1"]
+        stemmed = fts_store.search_entries("roasting", "app", "user")
+        assert [r["event_id"] for r in stemmed] == ["evt-empty-1"]
+    finally:
+        plain_config.close_pool()
+        fts_config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("memory_table", "fts_schema"),
+    [("adk_memory", "fts_main_adk_memory"), ("custom.my_memories", "fts_custom_my_memories")],
+)
+def test_duckdb_fts_companion_repeat_keeps_populated_index(tmp_path: Path, memory_table: str, fts_schema: str) -> None:
+    """Repeated companion reconciliation keeps existing populated DuckDB FTS indexes intact."""
+    db_path = tmp_path / f"fts_repeat_{fts_schema}.duckdb"
+    fts_config = DuckDBConfig(
+        connection_config={"database": str(db_path)},
+        extension_config={"adk": {"memory_table": memory_table, "memory_use_fts": True}},
+    )
+    try:
+        _ensure_custom_schema(fts_config, memory_table)
+        fts_store = DuckDBADKMemoryStore(fts_config)
+        _skip_if_duckdb_fts_unavailable(fts_store)
+        fts_store.create_tables()
+
+        now = datetime.now(UTC)
+        record = _build_record(session_id="s1", event_id="evt-rep-1", content_text="espresso roast", inserted_at=now)
+        fts_store.insert_memory_entries([record])
+
+        with fts_config.provide_session() as driver:
+            fts_store.reconcile_companion_objects_sync(driver)
+            fts_store.reconcile_companion_objects_sync(driver)
+            driver.commit()
+
+        results = fts_store.search_entries("espresso", "app", "user")
+        assert [r["event_id"] for r in results] == ["evt-rep-1"]
+        stemmed = fts_store.search_entries("roasting", "app", "user")
+        assert [r["event_id"] for r in stemmed] == ["evt-rep-1"]
+    finally:
+        fts_config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("memory_table", "fts_schema"),
+    [("adk_memory", "fts_main_adk_memory"), ("custom.my_memories", "fts_custom_my_memories")],
+)
+def test_duckdb_fts_companion_indexes_existing_rows(tmp_path: Path, memory_table: str, fts_schema: str) -> None:
+    """Missing DuckDB FTS schema builds once and indexes pre-existing rows."""
+    db_path = tmp_path / f"fts_existing_{fts_schema}.duckdb"
+    plain_config = DuckDBConfig(
+        connection_config={"database": str(db_path)},
+        extension_config={"adk": {"memory_table": memory_table, "memory_use_fts": False}},
+    )
+    fts_config = DuckDBConfig(
+        connection_config={"database": str(db_path)},
+        extension_config={"adk": {"memory_table": memory_table, "memory_use_fts": True}},
+    )
+    try:
+        _ensure_custom_schema(plain_config, memory_table)
+        plain_store = DuckDBADKMemoryStore(plain_config)
+        plain_store.create_tables()
+
+        now = datetime.now(UTC)
+        record = _build_record(session_id="s1", event_id="evt-pre-1", content_text="espresso roast", inserted_at=now)
+        plain_store.insert_memory_entries([record])
+
+        fts_store = DuckDBADKMemoryStore(fts_config)
+        _skip_if_duckdb_fts_unavailable(fts_store)
+
+        with fts_config.provide_session() as driver:
+            fts_store.reconcile_companion_objects_sync(driver)
+            driver.commit()
+            rows = driver.select(
+                "SELECT 1 AS present FROM information_schema.schemata WHERE lower(schema_name) = lower(?)",
+                (fts_schema,),
+            )
+
+        assert len(rows) == 1
+        results = fts_store.search_entries("espresso", "app", "user")
+        assert [r["event_id"] for r in results] == ["evt-pre-1"]
+        stemmed = fts_store.search_entries("roasting", "app", "user")
+        assert [r["event_id"] for r in stemmed] == ["evt-pre-1"]
+    finally:
+        plain_config.close_pool()
+        fts_config.close_pool()
+
+
+def test_duckdb_fts_companion_rolls_back_with_runner(tmp_path: Path) -> None:
+    """DuckDB FTS schema creation rolls back cleanly with the caller transaction."""
+    db_path = tmp_path / "fts_rollback.duckdb"
+    plain_config = DuckDBConfig(
+        connection_config={"database": str(db_path)}, extension_config={"adk": {"memory_use_fts": False}}
+    )
+    fts_config = DuckDBConfig(
+        connection_config={"database": str(db_path)}, extension_config={"adk": {"memory_use_fts": True}}
+    )
+    try:
+        plain_store = DuckDBADKMemoryStore(plain_config)
+        plain_store.create_tables()
+        now = datetime.now(UTC)
+        record = _build_record(session_id="s1", event_id="evt-rb-1", content_text="espresso roast", inserted_at=now)
+        plain_store.insert_memory_entries([record])
+
+        fts_store = DuckDBADKMemoryStore(fts_config)
+        _skip_if_duckdb_fts_unavailable(fts_store)
+
+        with fts_config.provide_session() as driver:
+            driver.begin()
+            fts_store.reconcile_companion_objects_sync(driver)
+            in_tx_rows = driver.select(
+                "SELECT 1 AS present FROM information_schema.schemata WHERE lower(schema_name) = lower(?)",
+                ("fts_main_adk_memory",),
+            )
+            driver.rollback()
+            rows = driver.select(
+                "SELECT 1 AS present FROM information_schema.schemata WHERE lower(schema_name) = lower(?)",
+                ("fts_main_adk_memory",),
+            )
+
+        assert len(in_tx_rows) == 1
+        assert rows == []
+    finally:
+        plain_config.close_pool()
+        fts_config.close_pool()

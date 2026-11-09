@@ -1065,12 +1065,38 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             if option_name in options
         )
 
+    def _fts_schema_name(self) -> str:
+        """Return the DuckDB FTS schema name for the configured memory table."""
+        schema, bare_table = _split_duckdb_table_name(self._memory_table)
+        return f"fts_{schema}_{bare_table}"
+
+    def _fts_index_exists(self, driver: Any) -> bool:
+        """Return whether the DuckDB FTS schema already exists in the catalog."""
+        rows = driver.select(
+            "SELECT 1 AS present FROM information_schema.schemata WHERE lower(schema_name) = lower(?)",
+            (self._fts_schema_name(),),
+        )
+        return bool(rows)
+
+    def _load_fts_extension(self, driver: Any) -> None:
+        """Load the DuckDB FTS extension via transaction-safe catalog probing."""
+        rows = driver.select("SELECT loaded, installed FROM duckdb_extensions() WHERE extension_name = 'fts'")
+        if rows and bool(rows[0].get("loaded")):
+            return
+        if not rows or not bool(rows[0].get("installed")):
+            driver.execute("INSTALL fts")
+        driver.execute("LOAD fts")
+
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing DuckDB memory companion indexes without committing."""
+        """Create missing DuckDB memory companion indexes and FTS schema without committing."""
         if not self._enabled:
             return
+        fts_present = self._fts_index_exists(driver) if self._use_fts else True
         for statement in self._memory_index_statements():
             driver.execute(statement)
+        if self._use_fts and not fts_present:
+            self._load_fts_extension(driver)
+            driver.execute(self._fts_index_ddl(overwrite=False))
 
     def _memory_index_statements(self) -> list[str]:
         """Return canonical CREATE INDEX statements for the memory table."""
@@ -1233,8 +1259,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                 use_fts = False
 
             if use_fts:
-                schema, bare_table = _split_duckdb_table_name(self._memory_table)
-                fts_macro = f"fts_{schema}_{bare_table}"
+                fts_macro = self._fts_schema_name()
                 where_scope, scope_params = _build_duckdb_scope_where(app_name, user_id, scope_filter, prefix="m")
                 fts_sql = f"""
             SELECT m.*
