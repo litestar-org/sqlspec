@@ -20,6 +20,7 @@ from sqlspec.adapters.asyncmy._typing import (
 )
 from sqlspec.adapters.asyncmy.core import (
     AsyncmyStreamSource,
+    _resolve_column_types,
     build_insert_statement,
     build_load_data_statement,
     can_use_local_infile_records,
@@ -60,24 +61,6 @@ json_type_value = (
     AsyncmyFieldType.JSON if AsyncmyFieldType is not None and supports_json_type(AsyncmyFieldType) else None
 )
 ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
-
-_MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
-    0: "decimal",
-    1: "int32",
-    2: "int32",
-    3: "int64",
-    4: "float32",
-    5: "float64",
-    7: "timestamp",
-    8: "int64",
-    10: "date",
-    11: "time",
-    12: "timestamp",
-    246: "decimal",
-    252: "binary",
-    253: "string",
-    254: "string",
-}
 
 
 class AsyncmyExceptionHandler(BaseAsyncExceptionHandler):
@@ -485,22 +468,6 @@ def _write_asyncmy_local_infile_payload(records: "list[tuple[Any, ...]]") -> tup
         raise
     else:
         return directory, filename
-
-
-def _resolve_column_types(description: Any) -> "dict[str, str] | None":
-    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
-
-    Returns ``None`` when the cursor has no description or reports no
-    recognizable type codes.
-    """
-    if not description:
-        return None
-    column_types: dict[str, str] = {}
-    for col in description:
-        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
-        if token is not None:
-            column_types[col[0]] = token
-    return column_types or None
 
 
 register_driver_profile("asyncmy", driver_profile)
