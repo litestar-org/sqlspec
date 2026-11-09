@@ -196,3 +196,25 @@ def test_duckdb_memory_store_scoped_retention(tmp_path: Path) -> None:
     remaining = store.search_entries(query="old", app_name="app", user_id="user")
     assert len(remaining) == 1
     assert remaining[0]["event_id"] == "evt-ao"
+
+
+def test_duckdb_memory_companions_restore_dropped_index(tmp_path: Path) -> None:
+    """Companion reconciliation restores dropped DuckDB memory indexes while keeping rows."""
+    store = _build_store(tmp_path)
+    try:
+        now = datetime.now(UTC)
+        record = _build_record(session_id="s1", event_id="evt-idx-1", content_text="espresso", inserted_at=now)
+        store.insert_memory_entries([record])
+
+        with store.config.provide_session() as driver:
+            driver.execute("DROP INDEX idx_adk_memory_scope")
+            driver.commit()
+            store.reconcile_companion_objects_sync(driver)
+            driver.commit()
+            rows = driver.select("SELECT index_name FROM duckdb_indexes() WHERE table_name = ?", ("adk_memory",))
+
+        assert "idx_adk_memory_scope" in {str(row["index_name"]) for row in rows}
+        results = store.search_entries(query="espresso", app_name="app", user_id="user")
+        assert [r["event_id"] for r in results] == ["evt-idx-1"]
+    finally:
+        store.config.close_pool()

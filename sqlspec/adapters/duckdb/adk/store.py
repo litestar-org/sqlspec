@@ -321,6 +321,44 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """Set a metadata value."""
         self._set_metadata(key, value)
 
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing session and event companion indexes without committing."""
+        for statement in self._companion_index_statements():
+            driver.execute(statement)
+
+    def _session_index_statements(self) -> list[str]:
+        """Return canonical CREATE INDEX statements for the sessions table."""
+        return [
+            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, 'app_user')} ON {self._session_table}(app_name, user_id)",
+            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, 'update_time')} ON {self._session_table}(update_time DESC)",
+        ]
+
+    def _event_generated_column_index_statements(self) -> list[str]:
+        """Return optional generated-column index statements for the events table."""
+        adk_config = _adk_config(self._config)
+        if not (
+            adk_config.get("enable_event_generated_columns", False)
+            and adk_config.get("enable_event_generated_column_indexes", False)
+        ):
+            return []
+
+        return [
+            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, 'author_gc')} ON {self._events_table}(session_id, author_gc, timestamp ASC)",
+            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, 'node_path_gc')} ON {self._events_table}(session_id, node_path_gc, timestamp ASC)",
+        ]
+
+    def _event_index_statements(self) -> list[str]:
+        """Return canonical CREATE INDEX statements for the events table."""
+        return [
+            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, 'session')} ON {self._events_table}(session_id, timestamp ASC)",
+            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, 'app_timestamp')} ON {self._events_table}(app_name, timestamp ASC)",
+            *self._event_generated_column_index_statements(),
+        ]
+
+    def _companion_index_statements(self) -> list[str]:
+        """Return canonical CREATE INDEX statements for sessions and events tables."""
+        return [*self._session_index_statements(), *self._event_index_statements()]
+
     def _sessions_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for sessions.
 
@@ -331,18 +369,19 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR PRIMARY KEY,
-            app_name VARCHAR NOT NULL,
-            user_id VARCHAR NOT NULL{owner_id_line},
-            state JSON NOT NULL,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, "app_user")} ON {self._session_table}(app_name, user_id);
-        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, "update_time")} ON {self._session_table}(update_time DESC);
-        """
+        index_lines = "\n".join(f"        {stmt};" for stmt in self._session_index_statements())
+        return (
+            f"\n        CREATE TABLE IF NOT EXISTS {self._session_table} (\n"
+            f"            id VARCHAR PRIMARY KEY,\n"
+            f"            app_name VARCHAR NOT NULL,\n"
+            f"            user_id VARCHAR NOT NULL{owner_id_line},\n"
+            f"            state JSON NOT NULL,\n"
+            f"            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+            f"            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+            f"        );\n"
+            f"{index_lines}\n"
+            f"        "
+        )
 
     def _events_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for events.
@@ -351,22 +390,21 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             SQL statement to create adk_event table with indexes.
         """
         generated_columns = self._event_generated_columns_sql()
-        generated_indexes = self._event_generated_column_indexes_sql()
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR PRIMARY KEY,
-            app_name VARCHAR NOT NULL,
-            user_id VARCHAR NOT NULL,
-            session_id VARCHAR NOT NULL,
-            invocation_id VARCHAR,
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSON NOT NULL{generated_columns},
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
-        );
-        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, "session")} ON {self._events_table}(session_id, timestamp ASC);
-        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, "app_timestamp")} ON {self._events_table}(app_name, timestamp ASC);
-        {generated_indexes}
-        """
+        index_lines = "\n".join(f"        {stmt};" for stmt in self._event_index_statements())
+        return (
+            f"\n        CREATE TABLE IF NOT EXISTS {self._events_table} (\n"
+            f"            id VARCHAR PRIMARY KEY,\n"
+            f"            app_name VARCHAR NOT NULL,\n"
+            f"            user_id VARCHAR NOT NULL,\n"
+            f"            session_id VARCHAR NOT NULL,\n"
+            f"            invocation_id VARCHAR,\n"
+            f"            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+            f"            event_data JSON NOT NULL{generated_columns},\n"
+            f"            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)\n"
+            f"        );\n"
+            f"{index_lines}\n"
+            f"        "
+        )
 
     def _event_generated_columns_sql(self) -> str:
         """Return DuckDB ADK generated event projection columns."""
@@ -380,20 +418,10 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def _event_generated_column_indexes_sql(self) -> str:
         """Return optional indexes for generated event projection columns."""
-        adk_config = _adk_config(self._config)
-        if not (
-            adk_config.get("enable_event_generated_columns", False)
-            and adk_config.get("enable_event_generated_column_indexes", False)
-        ):
+        statements = self._event_generated_column_index_statements()
+        if not statements:
             return ""
-
-        return f"""
-        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, "author_gc")}
-            ON {self._events_table}(session_id, author_gc, timestamp ASC);
-
-        CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._events_table, "node_path_gc")}
-            ON {self._events_table}(session_id, node_path_gc, timestamp ASC);
-        """
+        return "\n".join(f"        {stmt};" for stmt in statements)
 
     def _app_states_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for app-scoped state."""
@@ -1037,6 +1065,24 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             if option_name in options
         )
 
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing DuckDB memory companion indexes without committing."""
+        if not self._enabled:
+            return
+        for statement in self._memory_index_statements():
+            driver.execute(statement)
+
+    def _memory_index_statements(self) -> list[str]:
+        """Return canonical CREATE INDEX statements for the memory table."""
+        idx_app_scope_user_time = _duckdb_index_name(self._memory_table, "app_scope_user_time")
+        idx_scope = _duckdb_index_name(self._memory_table, "scope")
+        idx_session = _duckdb_index_name(self._memory_table, "session")
+        return [
+            f"CREATE INDEX IF NOT EXISTS {idx_app_scope_user_time} ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)",
+            f"CREATE INDEX IF NOT EXISTS {idx_scope} ON {self._memory_table}(app_name, scope)",
+            f"CREATE INDEX IF NOT EXISTS {idx_session} ON {self._memory_table}(session_id)",
+        ]
+
     def _memory_table_ddl(self) -> str:
         """Get DuckDB CREATE TABLE SQL for memory entries.
 
@@ -1047,35 +1093,25 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        idx_app_scope_user_time = _duckdb_index_name(self._memory_table, "app_scope_user_time")
-        idx_scope = _duckdb_index_name(self._memory_table, "scope")
-        idx_session = _duckdb_index_name(self._memory_table, "session")
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
-            author VARCHAR(256){owner_id_line},
-            timestamp TIMESTAMP NOT NULL,
-            content_json JSON NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json JSON,
-            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS {idx_app_scope_user_time}
-            ON {self._memory_table}(app_name, scope, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS {idx_scope}
-            ON {self._memory_table}(app_name, scope);
-
-        CREATE INDEX IF NOT EXISTS {idx_session}
-            ON {self._memory_table}(session_id);
-        """
+        index_lines = "\n".join(f"        {stmt};" for stmt in self._memory_index_statements())
+        return (
+            f"\n        CREATE TABLE IF NOT EXISTS {self._memory_table} (\n"
+            f"            id VARCHAR(128) PRIMARY KEY,\n"
+            f"            session_id VARCHAR(128) NOT NULL,\n"
+            f"            app_name VARCHAR(128) NOT NULL,\n"
+            f"            user_id VARCHAR(128) NOT NULL,\n"
+            f"            scope VARCHAR(16) NOT NULL DEFAULT 'user',\n"
+            f"            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
+            f"            author VARCHAR(256){owner_id_line},\n"
+            f"            timestamp TIMESTAMP NOT NULL,\n"
+            f"            content_json JSON NOT NULL,\n"
+            f"            content_text TEXT NOT NULL,\n"
+            f"            metadata_json JSON,\n"
+            f"            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+            f"        );\n"
+            f"{index_lines}\n"
+            f"        "
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get DuckDB DROP TABLE SQL statements."""

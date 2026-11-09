@@ -2,6 +2,7 @@
 """Unit tests for DuckDB ADK store extension configuration."""
 
 from datetime import UTC, datetime
+from pathlib import Path
 from textwrap import dedent
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
@@ -11,6 +12,7 @@ import pytest
 
 import sqlspec.adapters.duckdb.adk as duckdb_adk
 from sqlspec.adapters.duckdb.adk import DuckDBADKMemoryStore, DuckDBADKStore
+from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.adapters.duckdb.litestar.store import DuckDBStore
 from sqlspec.config import ADKConfig
 
@@ -379,3 +381,134 @@ def test_schema_qualified_fts_table(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(DuckDBADKMemoryStore, "_ensure_fts_extension", lambda _s, _c: True)
     store_fts.search_entries("test", "app", "user")
     assert "fts_custom_my_memories.match_bm25" in conn.sql
+
+
+def test_duckdb_companions_restore_dropped_session_index(tmp_path: Path) -> None:
+    """Companion reconciliation restores dropped DuckDB session indexes without disturbing rows."""
+    db_path = tmp_path / "adk_session_companions.duckdb"
+    config = DuckDBConfig(connection_config={"database": str(db_path)})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        store.create_session("s1", "app", "user", {})
+
+        with config.provide_session() as driver:
+            driver.execute("DROP INDEX idx_adk_session_update_time")
+            driver.commit()
+            store.reconcile_companion_objects_sync(driver)
+            store.reconcile_companion_objects_sync(driver)
+            driver.commit()
+            rows = driver.select("SELECT index_name FROM duckdb_indexes() WHERE table_name = ?", ("adk_session",))
+
+        assert "idx_adk_session_update_time" in {str(row["index_name"]) for row in rows}
+        session = store.get_session("app", "user", "s1")
+        assert session is not None and session["id"] == "s1"
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_companions_do_not_commit(tmp_path: Path) -> None:
+    """Companion reconciliation participates in the caller transaction without committing."""
+    db_path = tmp_path / "adk_no_commit.duckdb"
+    config = DuckDBConfig(connection_config={"database": str(db_path)})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+
+        with config.provide_session() as driver:
+            driver.execute("DROP INDEX idx_adk_session_update_time")
+            driver.commit()
+            driver.begin()
+            store.reconcile_companion_objects_sync(driver)
+            driver.rollback()
+            rows = driver.select("SELECT index_name FROM duckdb_indexes() WHERE table_name = ?", ("adk_session",))
+
+        assert "idx_adk_session_update_time" not in {str(row["index_name"]) for row in rows}
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("adk_config", "expected_present"),
+    [
+        ({"enable_event_generated_columns": True, "enable_event_generated_column_indexes": True}, True),
+        ({"enable_event_generated_columns": True, "enable_event_generated_column_indexes": False}, False),
+        ({"enable_event_generated_columns": False, "enable_event_generated_column_indexes": True}, False),
+        ({}, False),
+    ],
+)
+def test_duckdb_companion_statements_include_generated_indexes(
+    adk_config: dict[str, object], expected_present: bool
+) -> None:
+    """Generated-column event index statements appear only when both flags are enabled."""
+    store = DuckDBADKStore(_mock_config(adk_config))
+    statements = store._companion_index_statements()
+
+    assert any("CREATE INDEX IF NOT EXISTS idx_adk_event_author_gc" in stmt for stmt in statements) is expected_present
+    assert (
+        any("CREATE INDEX IF NOT EXISTS idx_adk_event_node_path_gc" in stmt for stmt in statements) is expected_present
+    )
+
+
+@pytest.mark.parametrize(
+    ("adk_config", "expected_session_index"),
+    [
+        ({}, "idx_adk_session_app_user"),
+        ({"session_table": "main.adk_session", "events_table": "main.adk_event"}, "idx_adk_session_app_user"),
+        ({"session_table": "custom.s", "events_table": "custom.e"}, "idx_custom_s_app_user"),
+    ],
+)
+def test_duckdb_companion_statements_match_creation_ddl(
+    adk_config: dict[str, object], expected_session_index: str
+) -> None:
+    """Extracted session and event companion index statements match creation DDL."""
+    store = DuckDBADKStore(_mock_config(adk_config))
+    statements = store._companion_index_statements()
+    combined_ddl = _normalized(f"{store._sessions_table_ddl()} {store._events_table_ddl()}")
+
+    assert any(expected_session_index in stmt for stmt in statements)
+    for stmt in statements:
+        assert not stmt.rstrip().endswith(";")
+        assert _normalized(stmt) in combined_ddl
+
+
+@pytest.mark.parametrize(
+    ("memory_table", "expected_scope_index"),
+    [
+        ("adk_memory", "idx_adk_memory_scope"),
+        ("main.adk_memory", "idx_adk_memory_scope"),
+        ("custom.my_memories", "idx_custom_my_memories_scope"),
+    ],
+)
+def test_duckdb_memory_companion_statements_match_creation_ddl(memory_table: str, expected_scope_index: str) -> None:
+    """Extracted memory companion index statements match creation DDL."""
+    store = DuckDBADKMemoryStore(_mock_config({"memory_table": memory_table}))
+    statements = store._memory_index_statements()
+    ddl = _normalized(store._memory_table_ddl())
+
+    assert any(expected_scope_index in stmt for stmt in statements)
+    for stmt in statements:
+        assert not stmt.rstrip().endswith(";")
+        assert _normalized(stmt) in ddl
+
+
+def test_duckdb_memory_companions_skip_disabled_store() -> None:
+    """Disabled DuckDB memory stores skip companion execution."""
+    store = DuckDBADKMemoryStore(_mock_config({"enable_memory": False}))
+    driver = MagicMock()
+
+    store.reconcile_companion_objects_sync(driver)
+
+    assert driver.execute.call_count == 0
+
+
+def test_duckdb_companions_propagate_execute_error() -> None:
+    """DuckDB companion index execution propagates driver errors without committing."""
+    store = DuckDBADKStore(_mock_config())
+    driver = MagicMock()
+    driver.execute.side_effect = RuntimeError("ddl failure")
+
+    with pytest.raises(RuntimeError, match="ddl failure"):
+        store.reconcile_companion_objects_sync(driver)
+
+    assert driver.commit.call_count == 0
