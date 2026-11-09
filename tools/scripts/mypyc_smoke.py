@@ -10,7 +10,8 @@ import json
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -248,6 +249,188 @@ def _check_obstore_arrow_reads(*, require_compiled: bool = False) -> dict[str, A
                 assert table.equals(expected), f"{uri}: read_arrow_async"
                 assert pa.Table.from_batches(batches).equals(expected), f"{uri}: stream_arrow_async"
                 assert data == b"smoke", f"{uri}: read_bytes_async"
+    except Exception as exc:
+        underlying = exc.__cause__ or exc.__context__
+        detail = f" (from {type(underlying).__name__}: {underlying})" if underlying is not None else ""
+        result["error"] = f"{type(exc).__name__}: {exc}{detail}"
+    return result
+
+
+def _generate_failing_arrow_batches(pa: Any, target_schema: Any, /) -> Iterator[Any]:
+    """Yield a single batch and raise RuntimeError to simulate midstream failure."""
+    yield pa.RecordBatch.from_pydict({"id": [10]}, schema=target_schema)
+    raise RuntimeError("failing batch")
+
+
+def _generate_slow_arrow_batches(
+    pa: Any,
+    target_schema: Any,
+    started_event: asyncio.Event,
+    event_loop: asyncio.AbstractEventLoop,
+    /,
+) -> Iterator[Any]:
+    """Yield a batch, notify caller, pause to allow cancellation, and yield again."""
+    yield pa.RecordBatch.from_pydict({"id": [20]}, schema=target_schema)
+    event_loop.call_soon_threadsafe(started_event.set)
+    time.sleep(0.3)
+    yield pa.RecordBatch.from_pydict({"id": [21]}, schema=target_schema)
+
+
+async def _cancel_in_flight_write(
+    pipeline: Any,
+    destination: str,
+    pa: Any,
+    target_schema: Any,
+    /,
+) -> None:
+    """Launch async batch write, await start, cancel, and expect CancelledError."""
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    batches = _generate_slow_arrow_batches(pa, target_schema, started, loop)
+    task = asyncio.create_task(pipeline.write_arrow_batches_async(destination, batches))
+    await started.wait()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("task was not cancelled")
+
+
+def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Stream Arrow tables and batches through compiled pipelines over ObStoreBackend."""
+    result = _new_smoke_result(
+        name="pipeline_arrow_streaming",
+        module="sqlspec.storage.pipeline",
+        attribute="SyncStoragePipeline",
+        compiled_required=require_compiled,
+    )
+    for dependency in ("obstore", "pyarrow"):
+        if importlib.util.find_spec(dependency) is None:
+            result["skipped"] = True
+            result["skip_reason"] = f"optional dependency missing: {dependency}"
+            return result
+    try:
+        pipeline_module = importlib.import_module("sqlspec.storage.pipeline")
+        backend_module = importlib.import_module("sqlspec.storage.backends.obstore")
+        type_guards_module = importlib.import_module("sqlspec.utils.type_guards")
+        arrow_payload_module = importlib.import_module("sqlspec.storage._arrow_payload")
+        registry_module = importlib.import_module("sqlspec.storage.registry")
+        exceptions_module = importlib.import_module("sqlspec.exceptions")
+        pa = importlib.import_module("pyarrow")
+        decode_arrow = arrow_payload_module.decode_arrow_payload
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    compiled_pipeline = is_compiled_module(pipeline_module)
+    compiled_backend = is_compiled_module(backend_module)
+    compiled_type_guards = is_compiled_module(type_guards_module)
+    arrow_payload_interpreted = not is_compiled_module(arrow_payload_module)
+    result["compiled"] = compiled_pipeline and compiled_backend and compiled_type_guards
+
+    if require_compiled:
+        if not compiled_pipeline:
+            result["error"] = "sqlspec.storage.pipeline was imported from source, not a compiled extension"
+            return result
+        if not compiled_backend:
+            result["error"] = "sqlspec.storage.backends.obstore was imported from source, not a compiled extension"
+            return result
+        if not compiled_type_guards:
+            result["error"] = "sqlspec.utils.type_guards was imported from source, not a compiled extension"
+            return result
+        if not arrow_payload_interpreted:
+            result["error"] = "sqlspec.storage._arrow_payload should remain interpreted"
+            return result
+
+    expected_rows = 3
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            for uri, prefix in [("memory://", "mem"), (Path(tmp_dir).as_uri(), "file")]:
+                registry = registry_module.StorageRegistry()
+                alias = f"{prefix}_alias"
+                registry.register_alias(alias, uri, backend="obstore")
+                backend = registry.get(alias)
+                sync_p = pipeline_module.SyncStoragePipeline(registry=registry)
+                async_p = pipeline_module.AsyncStoragePipeline(registry=registry)
+
+                sample_table = pa.table({"id": [1, 2, 3], "label": ["a", "b", "c"]})
+
+                for fmt in ("parquet", "arrow-ipc", "csv"):
+                    dest_sync = f"alias://{alias}/sync_table_{fmt}.{fmt}"
+                    t_sync = sync_p.write_arrow(sample_table, dest_sync, format_hint=fmt)
+                    assert t_sync["backend"] == "obstore", f"{uri}: {fmt} sync backend"
+                    assert t_sync["rows_processed"] == expected_rows, f"{uri}: {fmt} sync rows"
+                    assert t_sync["bytes_processed"] > 0, f"{uri}: {fmt} sync bytes"
+                    assert t_sync["format"] == fmt, f"{uri}: {fmt} sync format"
+
+                    dest_sync_b = f"alias://{alias}/sync_batches_{fmt}.{fmt}"
+                    t_sync_b = sync_p.write_arrow_batches(
+                        dest_sync_b, sample_table.to_batches(), file_format=fmt
+                    )
+                    assert t_sync_b["backend"] == "obstore", f"{uri}: {fmt} sync batches backend"
+                    assert t_sync_b["rows_processed"] == expected_rows, f"{uri}: {fmt} sync batches rows"
+
+                    dest_async = f"alias://{alias}/async_table_{fmt}.{fmt}"
+                    t_async = asyncio.run(async_p.write_arrow(sample_table, dest_async, format_hint=fmt))
+                    assert t_async["backend"] == "obstore", f"{uri}: {fmt} async backend"
+                    assert t_async["rows_processed"] == expected_rows, f"{uri}: {fmt} async rows"
+
+                    dest_async_b = f"alias://{alias}/async_batches_{fmt}.{fmt}"
+                    t_async_b = asyncio.run(
+                        async_p.write_arrow_batches_async(
+                            dest_async_b, sample_table.to_batches(), file_format=fmt
+                        )
+                    )
+                    assert t_async_b["backend"] == "obstore", f"{uri}: {fmt} async batches backend"
+                    assert t_async_b["rows_processed"] == expected_rows, f"{uri}: {fmt} async batches rows"
+
+                    raw = backend.read_bytes_sync(f"sync_table_{fmt}.{fmt}")
+                    decoded = decode_arrow(raw, fmt)
+                    assert decoded.num_rows == expected_rows, f"{uri}: {fmt} decoded rows"
+
+                existing_table = pa.table({"id": [1]})
+                sync_p.write_arrow(existing_table, f"alias://{alias}/existing.parquet")
+
+                try:
+                    sync_p.write_arrow_batches(
+                        f"alias://{alias}/existing.parquet",
+                        _generate_failing_arrow_batches(pa, existing_table.schema),
+                    )
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError(f"{uri}: midstream failure did not raise RuntimeError")
+
+                assert backend.read_arrow_sync("existing.parquet").equals(existing_table), f"{uri}: existing preserved"
+
+                asyncio.run(
+                    _cancel_in_flight_write(
+                        async_p,
+                        f"alias://{alias}/existing.parquet",
+                        pa,
+                        existing_table.schema,
+                    )
+                )
+                assert backend.read_arrow_sync("existing.parquet").equals(existing_table), f"{uri}: cancel preserved"
+
+                once_dest = f"alias://{alias}/once.parquet"
+                sync_p.write_arrow(sample_table, once_dest, overwrite=False)
+                try:
+                    sync_p.write_arrow(sample_table, once_dest, overwrite=False)
+                except exceptions_module.FileExistsInStorageError:
+                    pass
+                else:
+                    raise AssertionError(f"{uri}: Sync overwrite=False did not raise FileExistsInStorageError")
+
+                try:
+                    asyncio.run(async_p.write_arrow(sample_table, once_dest, overwrite=False))
+                except exceptions_module.FileExistsInStorageError:
+                    pass
+                else:
+                    raise AssertionError(f"{uri}: Async overwrite=False did not raise FileExistsInStorageError")
     except Exception as exc:
         underlying = exc.__cause__ or exc.__context__
         detail = f" (from {type(underlying).__name__}: {underlying})" if underlying is not None else ""
@@ -1143,6 +1326,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
         _check_obstore_arrow_reads(require_compiled=require_compiled),
+        _check_pipeline_arrow_streaming(require_compiled=require_compiled),
         _check_service_subclasses(require_compiled=require_compiled),
         _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
         _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
