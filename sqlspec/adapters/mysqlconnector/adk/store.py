@@ -15,6 +15,7 @@ from sqlspec.extensions.adk import (
     normalize_session_list_options,
 )
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.migrations.schema import metadata_has_index
 from sqlspec.protocols import HasErrnoProtocol
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -60,8 +61,6 @@ def _mysql_index_name(table: str, suffix: str) -> str:
 
 _ADK_MEMORY_TABLE_DDL_TEMPLATE = ",\n            {0}"
 
-_ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = ",\n            FULLTEXT INDEX {0} (content_text)"
-
 _ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
@@ -77,10 +76,8 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "            content_text TEXT NOT NULL,\n"
     "            metadata_json JSON,\n"
     "            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
-    "            INDEX {2} (app_name, scope, user_id, timestamp),\n"
-    "            INDEX {3} (app_name, scope),\n"
-    "            INDEX {4} (session_id){5}{6}\n"
-    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{7}\n"
+    "            {2}{3}\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{4}\n"
     "        "
 )
 
@@ -95,16 +92,9 @@ _ADK_MYSQL_SESSIONS_DDL_TEMPLATE_2 = (
     "            state JSON NOT NULL,\n"
     "            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
     "            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),\n"
-    "            INDEX {2} (app_name, user_id),\n"
-    "            INDEX {3} (update_time DESC){4}\n"
-    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{5}\n"
+    "            {2}{3}\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{4}\n"
     "        "
-)
-
-_ADK_MYSQL_EVENTS_DDL_TEMPLATE = (
-    ",\n"
-    "            INDEX {0} (session_id, author_gc, timestamp ASC),\n"
-    "            INDEX {1} (session_id, node_path_gc, timestamp ASC)"
 )
 
 _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2 = (
@@ -118,10 +108,8 @@ _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2 = (
     "            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
     "            event_data JSON NOT NULL{1},\n"
     "            FOREIGN KEY (session_id) REFERENCES {2}(id) ON DELETE CASCADE,\n"
-    "            INDEX {3} (app_name, user_id, session_id, timestamp ASC{4}),\n"
-    "            INDEX {5} (session_id, timestamp ASC{6}),\n"
-    "            INDEX {9} (app_name, timestamp ASC){7}\n"
-    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{8}\n"
+    "            {3}\n"
+    "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{4}\n"
     "        "
 )
 
@@ -217,6 +205,23 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
         await self.reconcile_schema(assume_existing=True)
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing session and event secondary indexes on the active migration driver."""
+        adk_config = _adk_config(self._config)
+        session_db, session_bare = _mysql_split_table(self._session_table)
+        session_rows = await driver.data_dictionary.get_indexes(driver, table=session_bare, schema=session_db)
+        for statement in _mysql_missing_index_statements(
+            self._session_table, _mysql_session_index_specs(self._session_table), list(session_rows)
+        ):
+            await driver.execute(statement)
+
+        events_db, events_bare = _mysql_split_table(self._events_table)
+        event_rows = await driver.data_dictionary.get_indexes(driver, table=events_bare, schema=events_db)
+        for statement in _mysql_missing_index_statements(
+            self._events_table, _mysql_event_index_specs(self._events_table, adk_config), list(event_rows)
+        ):
+            await driver.execute(statement)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -583,6 +588,23 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
         self.reconcile_schema(assume_existing=True)
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing session and event secondary indexes on the active migration driver."""
+        adk_config = _adk_config(self._config)
+        session_db, session_bare = _mysql_split_table(self._session_table)
+        session_rows = driver.data_dictionary.get_indexes(driver, table=session_bare, schema=session_db)
+        for statement in _mysql_missing_index_statements(
+            self._session_table, _mysql_session_index_specs(self._session_table), list(session_rows)
+        ):
+            driver.execute(statement)
+
+        events_db, events_bare = _mysql_split_table(self._events_table)
+        event_rows = driver.data_dictionary.get_indexes(driver, table=events_bare, schema=events_db)
+        for statement in _mysql_missing_index_statements(
+            self._events_table, _mysql_event_index_specs(self._events_table, adk_config), list(event_rows)
+        ):
+            driver.execute(statement)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -966,6 +988,17 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             await driver.execute_script(await self._memory_table_ddl())
         await self.reconcile_schema(assume_existing=True)
 
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing memory ordinary and FULLTEXT indexes on the active migration driver."""
+        if not self._enabled:
+            return
+        memory_db, memory_bare = _mysql_split_table(self._memory_table)
+        memory_rows = await driver.data_dictionary.get_indexes(driver, table=memory_bare, schema=memory_db)
+        for statement in _mysql_missing_index_statements(
+            self._memory_table, _mysql_memory_index_specs(self._memory_table, use_fts=self._use_fts), list(memory_rows)
+        ):
+            await driver.execute(statement)
+
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1153,28 +1186,11 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
 
     async def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
-        owner_id_line = ""
-        fk_constraint = ""
-        if self._owner_id_column_ddl:
-            col_def, fk_def = _mysql_owner_id_column_parts(self._owner_id_column_ddl)
-            owner_id_line = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(col_def)
-            if fk_def:
-                fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(_mysql_index_name(self._memory_table, "fts"))
-        table_options = _mysql_table_options(adk_config, "memory_table_options")
-
-        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
-            _mysql_table_ref(self._memory_table),
-            owner_id_line,
-            _mysql_index_name(self._memory_table, "app_scope_user_time"),
-            _mysql_index_name(self._memory_table, "scope"),
-            _mysql_index_name(self._memory_table, "session"),
-            fts_index,
-            fk_constraint,
-            table_options,
+        return _mysql_memory_ddl(
+            self._memory_table,
+            self._owner_id_column_ddl,
+            use_fts=self._use_fts,
+            table_options=_mysql_table_options(adk_config, "memory_table_options"),
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -1213,6 +1229,17 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         with self._config.provide_session() as driver:
             driver.execute_script(self._memory_table_ddl())
         self.reconcile_schema(assume_existing=True)
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing memory ordinary and FULLTEXT indexes on the active migration driver."""
+        if not self._enabled:
+            return
+        memory_db, memory_bare = _mysql_split_table(self._memory_table)
+        memory_rows = driver.data_dictionary.get_indexes(driver, table=memory_bare, schema=memory_db)
+        for statement in _mysql_missing_index_statements(
+            self._memory_table, _mysql_memory_index_specs(self._memory_table, use_fts=self._use_fts), list(memory_rows)
+        ):
+            driver.execute(statement)
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -1403,28 +1430,11 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
 
     def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
-        owner_id_line = ""
-        fk_constraint = ""
-        if self._owner_id_column_ddl:
-            col_def, fk_def = _mysql_owner_id_column_parts(self._owner_id_column_ddl)
-            owner_id_line = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(col_def)
-            if fk_def:
-                fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(_mysql_index_name(self._memory_table, "fts"))
-        table_options = _mysql_table_options(adk_config, "memory_table_options")
-
-        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
-            _mysql_table_ref(self._memory_table),
-            owner_id_line,
-            _mysql_index_name(self._memory_table, "app_scope_user_time"),
-            _mysql_index_name(self._memory_table, "scope"),
-            _mysql_index_name(self._memory_table, "session"),
-            fts_index,
-            fk_constraint,
-            table_options,
+        return _mysql_memory_ddl(
+            self._memory_table,
+            self._owner_id_column_ddl,
+            use_fts=self._use_fts,
+            table_options=_mysql_table_options(adk_config, "memory_table_options"),
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -1645,6 +1655,80 @@ def _sync_execute_commit(store: MysqlConnectorSyncADKStore, sql: str, params: "t
         conn.commit()
 
 
+def _mysql_session_index_specs(session_table: str) -> list[tuple[str, str, str]]:
+    """Return (keyword, index_name, columns) specs for the ADK sessions table."""
+    return [
+        ("INDEX", _mysql_index_name(session_table, "app_user"), "app_name, user_id"),
+        ("INDEX", _mysql_index_name(session_table, "update_time"), "update_time DESC"),
+    ]
+
+
+def _mysql_event_index_specs(
+    events_table: str, adk_config: Mapping[str, Any] | None = None
+) -> list[tuple[str, str, str]]:
+    """Return (keyword, index_name, columns) specs for the ADK events table."""
+    resolved = adk_config or {}
+    covering_column = ", invocation_id" if resolved.get("enable_covering_indexes", False) else ""
+    specs: list[tuple[str, str, str]] = [
+        (
+            "INDEX",
+            _mysql_index_name(events_table, "scope"),
+            f"app_name, user_id, session_id, timestamp ASC{covering_column}",
+        ),
+        ("INDEX", _mysql_index_name(events_table, "session"), f"session_id, timestamp ASC{covering_column}"),
+        ("INDEX", _mysql_index_name(events_table, "app_timestamp"), "app_name, timestamp ASC"),
+    ]
+    if resolved.get("enable_event_generated_columns", False):
+        specs.extend((
+            ("INDEX", _mysql_index_name(events_table, "author_gc"), "session_id, author_gc, timestamp ASC"),
+            ("INDEX", _mysql_index_name(events_table, "node_path_gc"), "session_id, node_path_gc, timestamp ASC"),
+        ))
+    return specs
+
+
+def _mysql_memory_index_specs(memory_table: str, *, use_fts: bool) -> list[tuple[str, str, str]]:
+    """Return (keyword, index_name, columns) specs for the ADK memory table."""
+    specs: list[tuple[str, str, str]] = [
+        ("INDEX", _mysql_index_name(memory_table, "app_scope_user_time"), "app_name, scope, user_id, timestamp"),
+        ("INDEX", _mysql_index_name(memory_table, "scope"), "app_name, scope"),
+        ("INDEX", _mysql_index_name(memory_table, "session"), "session_id"),
+    ]
+    if use_fts:
+        specs.append(("FULLTEXT INDEX", _mysql_index_name(memory_table, "fts"), "content_text"))
+    return specs
+
+
+def _mysql_missing_index_statements(table: str, specs: list[tuple[str, str, str]], rows: list[Any]) -> list[str]:
+    """Build CREATE INDEX statements for specs absent from catalog index metadata."""
+    database_name, bare_table = _mysql_split_table(table)
+    table_ref = _mysql_table_ref(table)
+    return [
+        f"CREATE {keyword} {index_name} ON {table_ref} ({columns})"
+        for keyword, index_name, columns in specs
+        if not metadata_has_index(rows, bare_table, index_name, schema_name=database_name)
+    ]
+
+
+def _mysql_memory_ddl(
+    memory_table: str, owner_id_column_ddl: "str | None", *, use_fts: bool, table_options: str = ""
+) -> str:
+    owner_id_line = ""
+    fk_constraint = ""
+    if owner_id_column_ddl:
+        col_def, fk_def = _mysql_owner_id_column_parts(owner_id_column_ddl)
+        owner_id_line = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(col_def)
+        if fk_def:
+            fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
+
+    indexes_sql = ",\n            ".join(
+        f"{keyword} {index_name} ({columns})"
+        for keyword, index_name, columns in _mysql_memory_index_specs(memory_table, use_fts=use_fts)
+    )
+    return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
+        _mysql_table_ref(memory_table), owner_id_line, indexes_sql, fk_constraint, table_options
+    )
+
+
 def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", table_options: str = "") -> str:
     owner_id_line = ""
     fk_constraint = ""
@@ -1654,42 +1738,32 @@ def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", t
         if fk_def:
             fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
+    indexes_sql = ",\n            ".join(
+        f"{keyword} {index_name} ({columns})"
+        for keyword, index_name, columns in _mysql_session_index_specs(session_table)
+    )
+
     return _ADK_MYSQL_SESSIONS_DDL_TEMPLATE_2.format(
-        _mysql_table_ref(session_table),
-        owner_id_line,
-        _mysql_index_name(session_table, "app_user"),
-        _mysql_index_name(session_table, "update_time"),
-        fk_constraint,
-        table_options,
+        _mysql_table_ref(session_table), owner_id_line, indexes_sql, fk_constraint, table_options
     )
 
 
 def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping[str, Any] | None = None) -> str:
     adk_config = adk_config or {}
     generated_columns = ""
-    generated_indexes = ""
     if adk_config.get("enable_event_generated_columns", False):
         generated_columns = """,
             author_gc VARCHAR(256) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.author'))) STORED,
             node_path_gc VARCHAR(512) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.node_info.path'))) STORED"""
-        generated_indexes = _ADK_MYSQL_EVENTS_DDL_TEMPLATE.format(
-            _mysql_index_name(events_table, "author_gc"), _mysql_index_name(events_table, "node_path_gc")
-        )
 
-    covering_column = ", invocation_id" if adk_config.get("enable_covering_indexes", False) else ""
+    indexes_sql = ",\n            ".join(
+        f"{keyword} {index_name} ({columns})"
+        for keyword, index_name, columns in _mysql_event_index_specs(events_table, adk_config)
+    )
     table_options = _mysql_table_options(adk_config, "events_table_options")
 
     return _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2.format(
-        _mysql_table_ref(events_table),
-        generated_columns,
-        _mysql_table_ref(session_table),
-        _mysql_index_name(events_table, "scope"),
-        covering_column,
-        _mysql_index_name(events_table, "session"),
-        covering_column,
-        generated_indexes,
-        table_options,
-        _mysql_index_name(events_table, "app_timestamp"),
+        _mysql_table_ref(events_table), generated_columns, _mysql_table_ref(session_table), indexes_sql, table_options
     )
 
 

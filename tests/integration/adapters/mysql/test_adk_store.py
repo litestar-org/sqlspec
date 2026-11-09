@@ -581,3 +581,96 @@ async def test_mysql_adk_qualified_tables_missing_database(
         assert len(curr_tables) == 0
     finally:
         await _close_mysql_config(config, is_async=is_async)
+
+
+class _RecordingAsyncDriverProxy:
+    """Delegate driver calls while recording direct driver.execute statements."""
+
+    def __init__(self, driver: Any) -> None:
+        self._driver = driver
+        self.executed_statements: list[str] = []
+
+    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        self.executed_statements.append(str(statement))
+        return await self._driver.execute(statement, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._driver, name)
+
+
+class _RecordingSyncDriverProxy:
+    """Delegate sync driver calls while recording direct driver.execute statements."""
+
+    def __init__(self, driver: Any) -> None:
+        self._driver = driver
+        self.executed_statements: list[str] = []
+
+    def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        self.executed_statements.append(str(statement))
+        return self._driver.execute(statement, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._driver, name)
+
+
+async def _run_store_companions_once(harness: "MysqlAdkStoreHarness") -> list[str]:
+    """Run ADK companion reconciliation once on a live MySQL session and return executed DDL."""
+    if harness.is_async:
+        async with harness.config.provide_session() as driver:
+            proxy = _RecordingAsyncDriverProxy(driver)
+            await harness.store.reconcile_companion_objects_async(proxy)
+            return proxy.executed_statements
+    with harness.config.provide_session() as driver:
+        sync_proxy = _RecordingSyncDriverProxy(driver)
+        harness.store.reconcile_companion_objects_sync(sync_proxy)
+        return sync_proxy.executed_statements
+
+
+async def test_mysql_adk_companions_restore_dropped_index(mysql_adk_store_harness: "MysqlAdkStoreHarness") -> None:
+    """Verify companion hooks restore a dropped index, no-op on repeat, and preserve seeded rows across all 5 modes."""
+    session_table = mysql_adk_store_harness.session_table
+    dropped_index = f"idx_{session_table}_update_time"
+
+    await mysql_adk_store_harness.create_session(
+        mysql_adk_store_harness.store, "s-companion-1", "test-app", "user-1", {"preserved": True}
+    )
+
+    await mysql_adk_store_harness.execute_sql(
+        mysql_adk_store_harness.config, f"DROP INDEX {dropped_index} ON {session_table}"
+    )
+
+    before_indexes = await mysql_adk_store_harness.select_rows(
+        mysql_adk_store_harness.config,
+        """
+        SELECT INDEX_NAME AS index_name
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = :table_name
+        """,
+        table_name=session_table,
+    )
+    assert dropped_index not in {str(row["index_name"]) for row in before_indexes}
+
+    first_ddl = await _run_store_companions_once(mysql_adk_store_harness)
+    assert first_ddl == [f"CREATE INDEX {dropped_index} ON {session_table} (update_time DESC)"]
+
+    after_indexes = await mysql_adk_store_harness.select_rows(
+        mysql_adk_store_harness.config,
+        """
+        SELECT INDEX_NAME AS index_name
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = :table_name
+        """,
+        table_name=session_table,
+    )
+    assert dropped_index in {str(row["index_name"]) for row in after_indexes}
+
+    second_ddl = await _run_store_companions_once(mysql_adk_store_harness)
+    assert second_ddl == []
+
+    preserved = await mysql_adk_store_harness.get_session(
+        mysql_adk_store_harness.store, "test-app", "user-1", "s-companion-1"
+    )
+    assert preserved is not None
+    assert preserved["state"] == {"preserved": True}
