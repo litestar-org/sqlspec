@@ -1061,3 +1061,227 @@ async def test_oracle_async_adk_memory_hybrid_rrf_near_and_exact_fallback() -> N
     vec_sql, _ = cursor.calls[0]
     assert "FETCH APPROX" not in vec_sql
     assert "FETCH FIRST :top_k ROWS ONLY" in vec_sql
+
+
+def _companion_mock_driver(*, is_async: bool, rows: list[dict[str, str]]) -> MagicMock:
+    driver = MagicMock()
+    if is_async:
+        driver.data_dictionary.get_indexes = AsyncMock(return_value=rows)
+        driver.execute = AsyncMock()
+        driver.commit = AsyncMock()
+    else:
+        driver.data_dictionary.get_indexes = MagicMock(return_value=rows)
+        driver.execute = MagicMock()
+        driver.commit = MagicMock()
+    return driver
+
+
+async def _run_companion_hook(store: Any, driver: Any, *, is_async: bool) -> None:
+    if is_async:
+        await store.reconcile_companion_objects_async(driver)
+    else:
+        store.reconcile_companion_objects_sync(driver)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_companions_create_only_missing_index(is_async: bool) -> None:
+    config = _mock_config({})
+    store = OracleAsyncADKStore(config) if is_async else OracleSyncADKStore(config)
+    rows = [
+        {"table_name": "ADK_SESSION", "index_name": "IDX_ADK_SESSION_APP_USER"},
+        {"table_name": "ADK_EVENT", "index_name": "IDX_ADK_EVENT_SESSION"},
+        {"table_name": "ADK_EVENT", "index_name": "IDX_ADK_EVENT_INVOCATION"},
+        {"table_name": "ADK_EVENT", "index_name": "IDX_ADK_EVENT_TIMESTAMP"},
+        {"table_name": "ADK_EVENT", "index_name": "IDX_ADK_EVENT_APP_TIMESTAMP"},
+    ]
+    driver = _companion_mock_driver(is_async=is_async, rows=rows)
+
+    await _run_companion_hook(store, driver, is_async=is_async)
+
+    executed = [call.args[0] for call in driver.execute.call_args_list]
+    assert executed == ["CREATE INDEX idx_adk_session_update_time ON adk_session(update_time DESC)"]
+    assert config._oracle_version_cache.resolved is False
+    assert driver.commit.call_count == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_companions_repeat_is_noop(is_async: bool) -> None:
+    config = _mock_config({})
+    store = OracleAsyncADKStore(config) if is_async else OracleSyncADKStore(config)
+    rows = [
+        {"table_name": "ADK_SESSION", "index_name": "IDX_ADK_SESSION_APP_USER"},
+        {"table_name": "ADK_SESSION", "index_name": "IDX_ADK_SESSION_UPDATE_TIME"},
+        {"table_name": "ADK_EVENT", "index_name": "IDX_ADK_EVENT_SESSION"},
+        {"table_name": "ADK_EVENT", "index_name": "IDX_ADK_EVENT_INVOCATION"},
+        {"table_name": "ADK_EVENT", "index_name": "IDX_ADK_EVENT_TIMESTAMP"},
+        {"table_name": "ADK_EVENT", "index_name": "IDX_ADK_EVENT_APP_TIMESTAMP"},
+    ]
+    driver = _companion_mock_driver(is_async=is_async, rows=rows)
+
+    await _run_companion_hook(store, driver, is_async=is_async)
+
+    assert driver.execute.call_count == 0
+    assert config._oracle_version_cache.resolved is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_companions_propagate_name_owned_by_other_table(is_async: bool) -> None:
+    config = _mock_config({})
+    store = OracleAsyncADKStore(config) if is_async else OracleSyncADKStore(config)
+    rows = [{"table_name": "OTHER", "index_name": "IDX_ADK_SESSION_APP_USER"}]
+    driver = _companion_mock_driver(is_async=is_async, rows=rows)
+    driver.execute.side_effect = RuntimeError("ORA-00955: name is already used by an existing object")
+
+    with pytest.raises(RuntimeError, match="ORA-00955"):
+        await _run_companion_hook(store, driver, is_async=is_async)
+
+    assert driver.execute.call_args_list[0].args[0] == (
+        "CREATE INDEX idx_adk_session_app_user ON adk_session(app_name, user_id)"
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_memory_companions_create_context_index(is_async: bool) -> None:
+    config = _mock_config({"memory_use_fts": True})
+    store = OracleAsyncADKMemoryStore(config) if is_async else OracleSyncADKMemoryStore(config)
+    driver = _companion_mock_driver(is_async=is_async, rows=[])
+
+    await _run_companion_hook(store, driver, is_async=is_async)
+
+    executed = [call.args[0] for call in driver.execute.call_args_list]
+    assert executed == [
+        "CREATE INDEX idx_adk_memory_app_scope_user_time ON adk_memory(app_name, scope, user_id, timestamp DESC)",
+        "CREATE INDEX idx_adk_memory_scope ON adk_memory(app_name, scope)",
+        "CREATE INDEX idx_adk_memory_session ON adk_memory(session_id)",
+        "CREATE INDEX idx_adk_memory_fts ON adk_memory(content_text) INDEXTYPE IS CTXSYS.CONTEXT",
+    ]
+    assert config._oracle_version_cache.resolved is False
+    assert driver.commit.call_count == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_memory_companions_omit_context_index_without_fts(is_async: bool) -> None:
+    config = _mock_config({})
+    store = OracleAsyncADKMemoryStore(config) if is_async else OracleSyncADKMemoryStore(config)
+    driver = _companion_mock_driver(is_async=is_async, rows=[])
+
+    await _run_companion_hook(store, driver, is_async=is_async)
+
+    executed = [call.args[0] for call in driver.execute.call_args_list]
+    assert len(executed) == 3
+    assert all("CTXSYS" not in statement for statement in executed)
+    assert config._oracle_version_cache.resolved is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_memory_companions_skip_disabled_store(is_async: bool) -> None:
+    config = _mock_config({"enable_memory": False})
+    store = OracleAsyncADKMemoryStore(config) if is_async else OracleSyncADKMemoryStore(config)
+    driver = _companion_mock_driver(is_async=is_async, rows=[])
+
+    await _run_companion_hook(store, driver, is_async=is_async)
+
+    assert driver.data_dictionary.get_indexes.call_count == 0
+    assert driver.execute.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "storage_type", [JSONStorageType.JSON_NATIVE, JSONStorageType.BLOB_JSON, JSONStorageType.BLOB_PLAIN]
+)
+@pytest.mark.parametrize("is_async", [False, True])
+def test_oracle_companion_specs_match_creation_ddl(storage_type: JSONStorageType, is_async: bool) -> None:
+    from sqlspec.adapters.oracledb.adk.store import (
+        _oracle_event_index_specs,
+        _oracle_memory_index_specs,
+        _oracle_missing_index_statements,
+        _oracle_session_index_specs,
+    )
+
+    config = _mock_config({"memory_use_fts": True})
+    session_store = OracleAsyncADKStore(config) if is_async else OracleSyncADKStore(config)
+    memory_store = OracleAsyncADKMemoryStore(config) if is_async else OracleSyncADKMemoryStore(config)
+
+    normalized_session_ddl = " ".join(session_store._sessions_table_ddl_for_type(storage_type).split())
+    normalized_events_ddl = " ".join(session_store._events_table_ddl_for_type(storage_type).split())
+    normalized_memory_ddl = " ".join(memory_store._memory_table_ddl_for_type(storage_type).split())
+
+    for statement in _oracle_missing_index_statements(_oracle_session_index_specs(session_store.session_table), []):
+        assert " ".join(statement.split()) in normalized_session_ddl
+    for statement in _oracle_missing_index_statements(_oracle_event_index_specs(session_store.events_table), []):
+        assert " ".join(statement.split()) in normalized_events_ddl
+    for statement in _oracle_missing_index_statements(
+        _oracle_memory_index_specs(memory_store.memory_table, use_fts=True), []
+    ):
+        assert " ".join(statement.split()) in normalized_memory_ddl
+
+
+@pytest.mark.parametrize(
+    ("target_storage_type", "catalog_json_type"),
+    [(JSONStorageType.JSON_NATIVE, "BLOB"), (JSONStorageType.BLOB_PLAIN, "JSON")],
+)
+def test_oracle_reconcile_keeps_existing_json_storage(
+    target_storage_type: JSONStorageType, catalog_json_type: str
+) -> None:
+    from sqlspec.migrations.schema import ensure_schema_sync
+
+    config = _config_for_storage(target_storage_type)
+    config.extension_config = {"adk": {}}
+    config.statement_config.dialect = "oracle"
+    store = OracleSyncADKStore(config)
+
+    catalog_columns_by_table = {
+        "adk_session": [
+            {"column_name": "ID", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "APP_NAME", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "USER_ID", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "STATE", "data_type": catalog_json_type, "nullable": "N"},
+            {"column_name": "CREATE_TIME", "data_type": "TIMESTAMP(6) WITH TIME ZONE", "nullable": "N"},
+            {"column_name": "UPDATE_TIME", "data_type": "TIMESTAMP(6) WITH TIME ZONE", "nullable": "N"},
+        ],
+        "adk_event": [
+            {"column_name": "ID", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "APP_NAME", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "USER_ID", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "SESSION_ID", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "INVOCATION_ID", "data_type": "VARCHAR2", "nullable": "Y"},
+            {"column_name": "TIMESTAMP", "data_type": "TIMESTAMP(6) WITH TIME ZONE", "nullable": "N"},
+            {"column_name": "EVENT_DATA", "data_type": catalog_json_type, "nullable": "N"},
+        ],
+        "adk_app_state": [
+            {"column_name": "APP_NAME", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "STATE", "data_type": catalog_json_type, "nullable": "N"},
+            {"column_name": "UPDATE_TIME", "data_type": "TIMESTAMP(6) WITH TIME ZONE", "nullable": "N"},
+        ],
+        "adk_user_state": [
+            {"column_name": "APP_NAME", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "USER_ID", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "STATE", "data_type": catalog_json_type, "nullable": "N"},
+            {"column_name": "UPDATE_TIME", "data_type": "TIMESTAMP(6) WITH TIME ZONE", "nullable": "N"},
+        ],
+        "adk_internal_metadata": [
+            {"column_name": "KEY", "data_type": "VARCHAR2", "nullable": "N"},
+            {"column_name": "VALUE", "data_type": "VARCHAR2", "nullable": "N"},
+        ],
+    }
+
+    driver = MagicMock()
+    driver.data_dictionary.get_tables.return_value = [
+        {"table_name": table_name.upper()} for table_name in catalog_columns_by_table
+    ]
+    driver.data_dictionary.get_columns.side_effect = lambda _drv, table_name, **_kw: catalog_columns_by_table[
+        str(table_name).casefold()
+    ]
+
+    targets = store.get_schema_targets_sync(driver)
+    result = ensure_schema_sync(driver, targets, manage_schema=True, commit=False, strict=True)
+
+    assert result.created_tables == []
+    assert result.added_columns == {}
+    assert all("ALTER" not in str(call.args[0]).upper() for call in driver.execute.call_args_list)
+    assert driver.execute.call_count == 0
