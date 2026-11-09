@@ -1,18 +1,72 @@
 """pymssql Litestar Store implementation."""
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.adapters.pymssql._typing import PymssqlCursor
 from sqlspec.adapters.pymssql.core import escape_sql_literal, quote_bracket_identifier, split_schema_and_table
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
+from sqlspec.extensions.litestar.store import (
+    MAX_TABLE_NAME_LENGTH,
+    VALID_TABLE_NAME_PATTERN,
+    BaseSQLSpecStore,
+    CompanionIndex,
+)
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.pymssql.config import PymssqlConfig
 
 __all__ = ("PymssqlStore",)
+
+_MAX_TABLE_NAME_PARTS: Final = 2
+_MIN_QUOTED_SEGMENT_LENGTH: Final = 2
+
+
+def _unwrap_tsql_segment(segment: str) -> str | None:
+    if not segment or segment != segment.strip():
+        return None
+    if segment.startswith("["):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith("]"):
+            return None
+        inner = segment[1:-1]
+        if "[" in inner or "]" in inner.replace("]]", ""):
+            return None
+        return inner.replace("]]", "]")
+    if segment.startswith('"'):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith('"'):
+            return None
+        inner = segment[1:-1]
+        if '"' in inner.replace('""', ""):
+            return None
+        return inner.replace('""', '"')
+    return segment
+
+
+def _validate_session_table_name(table_name: str) -> None:
+    """Raise ValueError unless table_name is a valid 1- or 2-part T-SQL table name."""
+    if not table_name or not table_name.strip():
+        msg = "Table name must not be empty"
+        raise ValueError(msg)
+    if table_name != table_name.strip():
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    raw_segments = table_name.split(".")
+    if len(raw_segments) > _MAX_TABLE_NAME_PARTS:
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    unwrapped: list[str] = []
+    for raw_segment in raw_segments:
+        segment = _unwrap_tsql_segment(raw_segment)
+        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.match(segment):
+            msg = f"Invalid table name: {table_name!r}"
+            raise ValueError(msg)
+        unwrapped.append(segment)
+    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=True)
+    if parts != tuple(unwrapped):
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
 
 
 class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
@@ -22,6 +76,11 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
 
     def __init__(self, config: "PymssqlConfig") -> None:
         super().__init__(config)
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate 1- or 2-part T-SQL session table name."""
+        _validate_session_table_name(table_name)
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""

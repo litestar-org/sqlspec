@@ -292,3 +292,53 @@ def test_mssql_stores_companion_index_and_schema_target_parity() -> None:
     assert mssql_indexes[0].name == "IX_litestar_session_expires_at"
     assert mssql_indexes[0].table == "litestar_session"
     assert mssql_indexes[0].schema == "dbo"
+
+
+@pytest.mark.parametrize(
+    ("session_table", "expected_schema", "expected_table"),
+    [
+        ("litestar_session", "dbo", "litestar_session"),
+        ("auth.user_sessions", "auth", "user_sessions"),
+        ("[auth].[user_sessions]", "auth", "user_sessions"),
+    ],
+)
+def test_mssql_stores_accept_qualified_session_table_names(
+    session_table: str, expected_schema: str, expected_table: str
+) -> None:
+    """Both SQL Server Litestar stores accept 1- and 2-part session_table names and parse schema metadata."""
+    mssql_store = MssqlPythonStore(MssqlPythonConfig(extension_config={"litestar": {"session_table": session_table}}))
+    pymssql_store = PymssqlStore(PymssqlConfig(extension_config={"litestar": {"session_table": session_table}}))
+
+    for store in (mssql_store, pymssql_store):
+        target = store.get_schema_targets()[0]
+        index = store.get_companion_indexes()[0]
+        assert (target.schema, target.table_name) == (expected_schema, expected_table)
+        assert (index.schema, index.table, index.name) == (
+            expected_schema,
+            expected_table,
+            f"IX_{expected_table}_expires_at",
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_name",
+    [
+        "",
+        "   ",
+        "a.b.c",
+        "app..sess",
+        ".sess",
+        "sess.",
+        "[unclosed",
+        "bad;name",
+        "[bad;name]",
+        "x" * 64,
+        f"auth.{'x' * 64}",
+    ],
+)
+def test_mssql_stores_reject_invalid_qualified_session_table_names(invalid_name: str) -> None:
+    """Both SQL Server Litestar stores raise ValueError on invalid session_table names."""
+    with pytest.raises(ValueError):
+        MssqlPythonStore(MssqlPythonConfig(extension_config={"litestar": {"session_table": invalid_name}}))
+    with pytest.raises(ValueError):
+        PymssqlStore(PymssqlConfig(extension_config={"litestar": {"session_table": invalid_name}}))

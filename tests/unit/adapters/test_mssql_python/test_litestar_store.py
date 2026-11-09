@@ -301,3 +301,18 @@ def test_mssql_python_store_reconciles_missing_companion_index_on_existing_table
     assert litestar_reconcile(MigrationContext(config=config, driver=present_driver)) is None
     present_driver.execute_script.assert_not_called()
     present_driver.commit.assert_not_called()
+
+
+async def test_mssql_python_store_qualified_crud_uses_bracketed_table_ref() -> None:
+    """Qualified session_table constructs directly and emits [schema].[table] across set, get, and delete."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    connection = FakeConnection(rows=[{"data": b"payload", "expires_at": future}])
+    store = MssqlPythonStore(cast("Any", FakeConfig(connection=connection, table_name="auth.user_sessions")))
+
+    await store.set("s1", b"payload", expires_in=60)
+    assert await store.get("s1") == b"payload"
+    await store.delete("s1")
+
+    executed_sql = [sql for sql, _ in connection.executed]
+    assert len(executed_sql) == 3
+    assert all("[auth].[user_sessions]" in sql for sql in executed_sql)
