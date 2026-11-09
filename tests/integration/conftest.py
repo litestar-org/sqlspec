@@ -2,21 +2,15 @@
 
 import pkgutil
 from typing import TYPE_CHECKING
-from urllib.error import HTTPError, URLError
 
 import pytest
-from pytest_databases.docker.rustfs import RustfsService
-from pytest_databases.helpers import get_xdist_worker_num
 
 import tests.integration.fixtures as fixtures_pkg
 from tests.fixtures.modules import module_is_available
-from tests.fixtures.rustfs import ensure_rustfs_bucket, ensure_s3_bucket
+from tests.fixtures.rustfs import ensure_rustfs_bucket
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
-
-    from pytest_databases import DockerService
-    from pytest_databases.types import ServiceContainer, XdistIsolationLevel
+    from pytest_databases.docker.rustfs import RustfsService
 
 _DATABASE_PLUGINS: tuple[str, ...] = (
     "pytest_databases.docker.azure_blob",
@@ -34,6 +28,7 @@ _DATABASE_PLUGINS: tuple[str, ...] = (
     "pytest_databases.docker.snowflake",
     "pytest_databases.docker.spanner",
     "pytest_databases.docker.sqlanywhere",
+    "pytest_databases.docker.sybase",
 )
 
 _NON_PLUGIN_FIXTURE_MODULES: frozenset[str] = frozenset({"cleanup"})
@@ -57,6 +52,7 @@ _FIXTURE_DRIVER_REQUIREMENTS: dict[str, tuple[tuple[str, ...], ...]] = {
     "spanner_litestar": (("google.cloud.spanner", "litestar"),),
     "sqlanywhere": (("sqlanydb",),),
     "sqlite": ((),),
+    "sybase": (("pymssql",),),
 }
 
 
@@ -77,67 +73,6 @@ def pytest_configure(config: pytest.Config) -> None:
         plugin_name = f"{fixtures_pkg.__name__}.{module_info.name}"
         if not config.pluginmanager.has_plugin(plugin_name):
             config.pluginmanager.import_plugin(plugin_name)
-
-
-@pytest.fixture(scope="session")
-def rustfs_service(
-    docker_service: "DockerService",
-    rustfs_access_key: str,
-    rustfs_secret_key: str,
-    rustfs_secure: bool,
-    rustfs_default_bucket_name: str,
-    xdist_rustfs_isolation_level: "XdistIsolationLevel",
-    rustfs_image: str,
-) -> "Generator[RustfsService, None, None]":
-    """Start RustFS after signed bucket creation succeeds.
-
-    Yields:
-        RustfsService: Ready RustFS service with the default bucket provisioned.
-    """
-
-    def check(service: "ServiceContainer") -> bool:
-        scheme = "https" if rustfs_secure else "http"
-        try:
-            ensure_s3_bucket(
-                f"{scheme}://{service.host}:{service.port}",
-                rustfs_default_bucket_name,
-                access_key=rustfs_access_key,
-                secret_key=rustfs_secret_key,
-            )
-        except HTTPError as exc:
-            if exc.code == 503:
-                return False
-            raise
-        except (URLError, ConnectionError, TimeoutError):
-            return False
-        return True
-
-    worker_num = get_xdist_worker_num()
-    name = "rustfs"
-    transient = False
-    if worker_num is not None and xdist_rustfs_isolation_level == "server":
-        name = f"{name}_{worker_num}"
-        transient = True
-
-    with docker_service.run(
-        image=rustfs_image,
-        name=name,
-        container_port=9000,
-        timeout=30,
-        pause=0.5,
-        env={"RUSTFS_ROOT_USER": rustfs_access_key, "RUSTFS_ROOT_PASSWORD": rustfs_secret_key},
-        check=check,
-        transient=transient,
-    ) as service:
-        yield RustfsService(
-            host=service.host,
-            port=service.port,
-            container=service.container,
-            endpoint=f"{service.host}:{service.port}",
-            access_key=rustfs_access_key,
-            secret_key=rustfs_secret_key,
-            secure=rustfs_secure,
-        )
 
 
 @pytest.fixture(scope="session")

@@ -7,14 +7,16 @@ import http.server
 import importlib
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
-from pytest_databases.docker.floci import FlociGCPService
-from pytest_databases.helpers import get_xdist_worker_num
+from pytest_databases.docker.floci import (
+    FLOCI_CONTAINER_PORTS,
+    FLOCI_HEALTH_PATHS,
+    FlociGCPService,
+    provide_floci_container,
+)
 
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers import from_json
@@ -26,7 +28,7 @@ if TYPE_CHECKING:
     from pytest_databases import ContainerService
     from pytest_databases.docker.azure_blob import AzureBlobService
     from pytest_databases.docker.floci import FlociAWSService
-    from pytest_databases.types import ServiceContainer, XdistIsolationLevel
+    from pytest_databases.types import XdistIsolationLevel
 
     from sqlspec.protocols import ObjectStoreProtocol
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -35,7 +37,7 @@ else:
     FSSpecBackend = import_optional_attr("sqlspec.storage.backends.fsspec", "FSSpecBackend")
     ObStoreBackend = import_optional_attr("sqlspec.storage.backends.obstore", "ObStoreBackend")
 
-FLOCI_GCP_GATEWAY_PORT = 4588
+FLOCI_GCP_GATEWAY_PORT = FLOCI_CONTAINER_PORTS["gcp"]
 
 __all__ = (
     "FLOCI_GCP_GATEWAY_PORT",
@@ -70,20 +72,14 @@ def floci_gcp_service(
     xdist_floci_isolation_level: "XdistIsolationLevel",
 ) -> "Generator[FlociGCPService, None, None]":
     """Start and yield a ready Floci GCP emulator service container on gateway port 4588."""
-    worker_num = get_xdist_worker_num()
-    container_name = (
-        f"floci_gcp_{worker_num}" if worker_num is not None and xdist_floci_isolation_level == "server" else "floci_gcp"
-    )
-    transient = worker_num is not None and xdist_floci_isolation_level == "server"
     with (
-        container_service.run(
+        provide_floci_container(
+            container_service,
             image=floci_gcp_image,
-            name=container_name,
+            name="floci_gcp",
             container_port=FLOCI_GCP_GATEWAY_PORT,
-            check=_is_floci_gcp_ready,
-            timeout=60,
-            pause=0.25,
-            transient=transient,
+            health_path=FLOCI_HEALTH_PATHS["gcp"],
+            isolation_level=xdist_floci_isolation_level,
         ) as service,
         _provide_floci_gcs_header_proxy(service.host, service.port) as proxy_port,
     ):
@@ -184,19 +180,6 @@ def azurite_fsspec(
         account_key=azure_blob_service.account_key,
         connection_string=azure_blob_service.connection_string,
     )
-
-
-def _is_floci_gcp_ready(service: "ServiceContainer") -> bool:
-    """Return True when the Floci GCP HTTP health endpoint responds with HTTP 200."""
-    for path in ("/_floci-gcp/health", "/_floci/health", "/_localstack/health"):
-        request = urllib.request.Request(f"http://{service.host}:{service.port}{path}", method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=2.0) as response:
-                if response.status == 200:
-                    return True
-        except (urllib.error.URLError, TimeoutError, OSError):
-            continue
-    return False
 
 
 class _FlociGCSHeaderProxyHandler(http.server.BaseHTTPRequestHandler):
