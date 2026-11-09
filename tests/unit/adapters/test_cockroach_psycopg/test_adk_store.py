@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for CockroachDB psycopg ADK store extension configuration."""
 
 from datetime import UTC, datetime
@@ -17,6 +16,7 @@ from sqlspec.adapters.cockroach_psycopg.adk import (
     CockroachPsycopgSyncADKStore,
 )
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -185,11 +185,14 @@ class _RecordingCursor:
         return None
 
 
-class _RecordingAsyncCursor(_RecordingCursor):
-    async def execute(self, sql: Any, params: Any = None) -> None:  # type: ignore[override]
-        _RecordingCursor.execute(self, sql, params)
+class _RecordingAsyncCursor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
-    async def fetchall(self) -> "list[Any]":  # type: ignore[override]
+    async def execute(self, sql: Any, params: Any = None) -> None:
+        self.calls.append((sql.decode() if isinstance(sql, bytes) else str(sql), tuple(params or ())))
+
+    async def fetchall(self) -> "list[Any]":
         return []
 
     async def __aenter__(self) -> "Self":
@@ -200,7 +203,7 @@ class _RecordingAsyncCursor(_RecordingCursor):
 
 
 class _RecordingConnection:
-    def __init__(self, cursor: _RecordingCursor) -> None:
+    def __init__(self, cursor: _RecordingCursor | _RecordingAsyncCursor) -> None:
         self._cursor = cursor
 
     def cursor(self, **_: Any) -> Any:
@@ -223,7 +226,7 @@ def _normalized(sql: str) -> str:
     return " ".join(sql.split())
 
 
-def _async_session_store() -> "tuple[CockroachPsycopgAsyncADKStore, _RecordingCursor]":
+def _async_session_store() -> "tuple[CockroachPsycopgAsyncADKStore, _RecordingAsyncCursor]":
     cursor = _RecordingAsyncCursor()
     config = _mock_config()
     config.provide_connection = lambda *_a, **_k: _RecordingConnection(cursor)
@@ -405,3 +408,130 @@ async def test_cockroach_psycopg_memory_embedding_keeps_text_search(
         empty = await empty
     assert empty == []
     assert cursor.execute.call_count == 1
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_cockroach_psycopg_session_companions_use_qualified_identity(async_mode: bool) -> None:
+    """Sync and async session companion DDL uses schema-qualified index names without table DDL or commits."""
+    config = _mock_config({"session_table": "app.sessions", "events_table": "app.events"})
+    driver = MagicMock()
+    if async_mode:
+        driver.execute_script = AsyncMock()
+        driver.commit = AsyncMock()
+        store = CockroachPsycopgAsyncADKStore(config)
+        await store.reconcile_companion_objects_async(driver)
+    else:
+        sync_store = CockroachPsycopgSyncADKStore(config)
+        sync_store.reconcile_companion_objects_sync(driver)
+
+    statements = [_normalized(call.args[0]) for call in driver.execute_script.call_args_list]
+    assert statements == [
+        "CREATE INDEX IF NOT EXISTS idx_app_sessions_app_user ON app.sessions(app_name, user_id);",
+        "CREATE INDEX IF NOT EXISTS idx_app_sessions_update_time ON app.sessions(update_time DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_app_sessions_state ON app.sessions USING GIN (state) WHERE state != '{}'::jsonb;",
+        "CREATE INDEX IF NOT EXISTS idx_app_events_session ON app.events(session_id, timestamp ASC);",
+        "CREATE INDEX IF NOT EXISTS idx_app_events_event_data ON app.events USING GIN (event_data);",
+        "CREATE INDEX IF NOT EXISTS idx_app_events_app_timestamp ON app.events(app_name, timestamp ASC);",
+    ]
+    assert all("CREATE TABLE" not in sql for sql in statements)
+    driver.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize(
+    ("adk_config", "expected_names"),
+    [
+        pytest.param({"enable_memory": False}, [], id="disabled"),
+        pytest.param({"enable_memory": True}, ["idx_adk_memory_app_user_time", "idx_adk_memory_session"], id="default"),
+        pytest.param(
+            {"enable_memory": True, "memory_use_fts": True, "enable_memory_trigram_index": True},
+            [
+                "idx_adk_memory_app_user_time",
+                "idx_adk_memory_session",
+                "idx_adk_memory_fts",
+                "idx_adk_memory_content_trgm",
+            ],
+            id="fts-and-trigram",
+        ),
+    ],
+)
+async def test_cockroach_psycopg_memory_companions_follow_settings(
+    async_mode: bool, adk_config: dict[str, object], expected_names: list[str]
+) -> None:
+    """Sync and async memory companion indexes follow enable_memory, FTS, and trigram settings."""
+    driver = MagicMock()
+    if async_mode:
+        driver.execute_script = AsyncMock()
+        driver.commit = AsyncMock()
+        store = CockroachPsycopgAsyncADKMemoryStore(_mock_config(adk_config))
+        await store.reconcile_companion_objects_async(driver)
+    else:
+        sync_store = CockroachPsycopgSyncADKMemoryStore(_mock_config(adk_config))
+        sync_store.reconcile_companion_objects_sync(driver)
+
+    statements = [_normalized(call.args[0]) for call in driver.execute_script.call_args_list]
+    assert len(statements) == len(expected_names)
+    for statement, index_name in zip(statements, expected_names, strict=True):
+        assert f"CREATE INDEX IF NOT EXISTS {index_name} ON adk_memory" in statement
+    driver.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_cockroach_psycopg_companions_carry_tuning_clauses(async_mode: bool) -> None:
+    """Sync and async companion statements carry USING HASH and STORING clauses."""
+    config = _mock_config({"enable_hash_sharded_indexes": True, "enable_storing_indexes": True})
+    driver = MagicMock()
+    if async_mode:
+        driver.execute_script = AsyncMock()
+        store = CockroachPsycopgAsyncADKStore(config)
+        await store.reconcile_companion_objects_async(driver)
+    else:
+        sync_store = CockroachPsycopgSyncADKStore(config)
+        sync_store.reconcile_companion_objects_sync(driver)
+
+    statements = [_normalized(call.args[0]) for call in driver.execute_script.call_args_list]
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_app_user "
+        "ON adk_session(app_name, user_id) STORING (state, create_time, update_time);"
+    ) in statements
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_update_time ON adk_session(update_time DESC) USING HASH;"
+    ) in statements
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_session "
+        "ON adk_event(session_id, timestamp ASC) USING HASH STORING (invocation_id, event_data);"
+    ) in statements
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_cockroach_psycopg_prepare_installs_nothing(async_mode: bool) -> None:
+    """Sync and async CockroachDB memory stores install zero PostgreSQL extensions during prep."""
+    driver = MagicMock()
+    if async_mode:
+        driver.execute_script = AsyncMock()
+        store = CockroachPsycopgAsyncADKMemoryStore(_mock_config({"enable_memory": True}))
+        await store.prepare_schema_async(driver)
+        await store.prepare_reconcile_async(driver)
+    else:
+        sync_store = CockroachPsycopgSyncADKMemoryStore(_mock_config({"enable_memory": True}))
+        sync_store.prepare_schema_sync(driver)
+        sync_store.prepare_reconcile_sync(driver)
+
+    driver.execute_script.assert_not_called()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize(
+    ("adk_config", "expected_key"),
+    [
+        pytest.param({"enable_bm25": True}, "enable_bm25", id="bm25"),
+        pytest.param({"vector_index_type": "hnsw"}, "vector_index_type", id="vector-index"),
+    ],
+)
+def test_cockroach_psycopg_rejects_unsupported_search_settings(
+    async_mode: bool, adk_config: dict[str, object], expected_key: str
+) -> None:
+    """Unsupported PostgreSQL vector/BM25 settings raise ImproperConfigurationError before DDL."""
+    config_cls = CockroachPsycopgAsyncConfig if async_mode else CockroachPsycopgSyncConfig
+    with pytest.raises(ImproperConfigurationError, match=expected_key):
+        config_cls(extension_config={"adk": cast("Any", adk_config)})
