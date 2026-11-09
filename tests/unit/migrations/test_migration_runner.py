@@ -2500,6 +2500,17 @@ async def test_execute_reconciliation_nontransactional_implicit_tx_and_psycopg_f
     driver_implicit_fail.rollback.assert_called_once()
 
     runner_with_schema = runner_mode.runner(tmp_path, {"transactional": False, "default_schema": "app"})
+    driver_schema_ok = runner_mode.driver()
+    driver_schema_ok._connection_in_transaction = lambda: True
+    driver_schema_ok.record_event = Mock()
+    await runner_mode.call(
+        runner_with_schema.execute_reconciliation,
+        driver_schema_ok,
+        ExtensionReconcilerDescriptor(name="adk", module_path=ok_path),
+    )
+    assert driver_schema_ok.commit.call_count == 2
+    driver_schema_ok.reset_migration_session_schema.assert_called_once()
+
     fallback_events: list[str] = []
     driver_psycopg = runner_mode.driver()
     driver_psycopg.set_migration_non_transactional_schema.side_effect = lambda s: fallback_events.append(

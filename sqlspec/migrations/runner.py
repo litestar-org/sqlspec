@@ -1402,6 +1402,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         try:
             if default_schema:
                 await driver.reset_migration_session_schema()
+                if not use_transaction:
+                    await self._commit_nontransactional_if_needed(driver)
         except Exception as exc:
             self._finish_migration_span_error(
                 span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
