@@ -12,14 +12,28 @@ Configuration:
     }
 """
 
-from typing import NotRequired
+from typing import ClassVar, NotRequired
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.adapters.bigquery.core import _bigquery_partition_clauses, _positive_int_or_none, resolve_dataset_id
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.migrations.schema import SchemaTarget
 
 __all__ = ("BigQueryEventQueueStore", "BigQueryEventsConfig")
+
+
+def _bigquery_additive_target(target: SchemaTarget) -> SchemaTarget:
+    """Mark NOT NULL and defaulted columns as unsafe, because ALTER TABLE ADD COLUMN cannot add them."""
+    unsafe = {c.name.casefold() for c in target.create_table.columns if c.not_null or c.default is not None}
+    return SchemaTarget(
+        target.table_name,
+        target.create_table,
+        schema=target.schema,
+        create_statement=target.create_statement,
+        constraint_columns=target.constraint_columns,
+        unsafe_add_columns=target.unsafe_add_columns | unsafe,
+    )
 
 
 class BigQueryEventsConfig(EventsConfig):
@@ -46,6 +60,7 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
     """
 
     __slots__ = ("_partition_expiration_days", "_partitioning", "_require_partition_filter")
+    dialect: ClassVar[str] = "bigquery"
     extension_config_options = BaseEventQueueStore.extension_config_options | frozenset({
         "partition_expiration_days",
         "partitioning",
@@ -134,6 +149,9 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
             None, as BigQuery does not support traditional indexes.
         """
         return None
+
+    def _schema_target(self) -> SchemaTarget:
+        return _bigquery_additive_target(super()._schema_target())
 
 
 def _resolve_events_dataset_id(config: BigQueryConfig) -> "str | None":

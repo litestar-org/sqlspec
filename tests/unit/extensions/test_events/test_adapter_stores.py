@@ -1829,3 +1829,56 @@ async def test_spanner_event_store_reconcile_companion_index_and_sharded_target(
         ensure_schema_sync(
             missing_shard_drv, [target], manage_schema=True, create_schema=True, commit=False, strict=True
         )
+
+
+def test_bigquery_event_queue_store_reconcile_additive_and_refusal() -> None:
+    """BigQuery event queue store adds nullable columns and refuses defaulted or NOT NULL columns."""
+    from unittest.mock import MagicMock
+
+    pytest.importorskip("google.cloud.bigquery")
+    from sqlspec.adapters.bigquery.config import BigQueryConfig
+    from sqlspec.adapters.bigquery.events.store import BigQueryEventQueueStore
+    from sqlspec.exceptions import MigrationError
+    from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
+    from sqlspec.migrations.context import MigrationContext
+
+    config = BigQueryConfig(
+        connection_config={"project": "test-project"},
+        extension_config={"events": {"queue_table": "bq_events", "partitioning": True, "migration_mode": "reconcile"}},
+    )
+    store = BigQueryEventQueueStore(config)
+    assert store._index_ddl() is None
+    assert store.companion_index_statement() is None
+
+    all_cols = [
+        {"column_name": "event_id", "data_type": "STRING", "is_nullable": "NO"},
+        {"column_name": "channel", "data_type": "STRING", "is_nullable": "NO"},
+        {"column_name": "payload_json", "data_type": "JSON", "is_nullable": "NO"},
+        {"column_name": "metadata_json", "data_type": "JSON", "is_nullable": "YES"},
+        {"column_name": "status", "data_type": "STRING", "is_nullable": "NO"},
+        {"column_name": "available_at", "data_type": "TIMESTAMP", "is_nullable": "NO"},
+        {"column_name": "lease_expires_at", "data_type": "TIMESTAMP", "is_nullable": "YES"},
+        {"column_name": "attempts", "data_type": "INT64", "is_nullable": "NO"},
+        {"column_name": "created_at", "data_type": "TIMESTAMP", "is_nullable": "NO"},
+        {"column_name": "acknowledged_at", "data_type": "TIMESTAMP", "is_nullable": "YES"},
+    ]
+
+    add_nullable_drv = MagicMock()
+    add_nullable_drv.data_dictionary.get_tables.return_value = [{"table_name": "bq_events"}]
+    add_nullable_drv.data_dictionary.get_columns.return_value = [
+        row for row in all_cols if row["column_name"] != "acknowledged_at"
+    ]
+    assert events_reconcile(MigrationContext(config=config, dialect="bigquery", driver=add_nullable_drv)) is None
+    assert add_nullable_drv.execute.call_count == 1
+    stmt = add_nullable_drv.execute.call_args.args[0]
+    sql = stmt.sql if hasattr(stmt, "sql") else str(stmt)
+    assert "ADD COLUMN `acknowledged_at` TIMESTAMP" in sql
+
+    missing_default_drv = MagicMock()
+    missing_default_drv.data_dictionary.get_tables.return_value = [{"table_name": "bq_events"}]
+    missing_default_drv.data_dictionary.get_columns.return_value = [
+        row for row in all_cols if row["column_name"] != "status"
+    ]
+    with pytest.raises(MigrationError, match="status") as exc_info:
+        events_reconcile(MigrationContext(config=config, dialect="bigquery", driver=missing_default_drv))
+    assert 'migration_mode="versioned"' in str(exc_info.value)
