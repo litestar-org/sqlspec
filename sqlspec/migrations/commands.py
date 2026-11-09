@@ -13,7 +13,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Generic, NamedTuple, NoReturn, ParamSpec, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NamedTuple, NoReturn, ParamSpec, TypeVar, cast, overload
 
 import sqlglot
 from rich.console import Console
@@ -257,6 +257,75 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
 
     tracker: Any
     runner: CommandRunnerT
+
+    def ensure_reconcilers_allow(self, operation: Literal["upgrade", "downgrade"], revision: str) -> None:
+        """Raise MigrationError when enabled reconcilers forbid a historical upgrade or downgrade.
+
+        Args:
+            operation: Migration command operation (``"upgrade"`` or ``"downgrade"``).
+            revision: Requested target revision string.
+
+        Raises:
+            MigrationError: Enabled reconcilers forbid non-head upgrades or any downgrade.
+        """
+        if not self.extension_reconcilers or (operation == "upgrade" and revision == "head"):
+            return
+        enabled = ", ".join(descriptor.name for descriptor in self.extension_reconcilers)
+        if operation == "upgrade":
+            msg = (
+                f"Cannot upgrade to non-head revision {revision!r} while extension reconcilers ({enabled}) are "
+                "enabled; reconcilers target 'head' only. Run upgrade('head') or switch/exclude "
+                "migration_mode='reconcile' for historical revisions."
+            )
+            raise MigrationError(msg)
+        msg = (
+            f"Cannot downgrade ({revision!r}) while extension reconcilers ({enabled}) are enabled; "
+            "reconciled schema state cannot be reverted automatically. Switch or exclude "
+            "migration_mode='reconcile' for manual historical operations."
+        )
+        raise MigrationError(msg)
+
+    def report_reconciler_preview(
+        self, *, use_logger: bool = False, echo: bool = True, summary_only: bool = False
+    ) -> None:
+        """Emit read-only dry-run preview lines for configured extension reconcilers."""
+        if not self.extension_reconcilers:
+            return
+        total = len(self.extension_reconcilers)
+        for index, descriptor in enumerate(self.extension_reconcilers, start=1):
+            _output_info(
+                use_logger,
+                echo,
+                summary_only,
+                "Would invoke reconciler %d/%d: %s (%s)",
+                index,
+                total,
+                descriptor.name,
+                descriptor.module_path,
+                rich_message=(
+                    f"[cyan]Would invoke reconciler {index}/{total}:[/] {descriptor.name} "
+                    f"[dim]({descriptor.module_path})[/]"
+                ),
+            )
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "Reconciler DDL is determined by live catalog inspection during upgrade and is not evaluated during dry run.",
+            rich_message="[dim]Note: Reconciler DDL requires live catalog inspection and is not evaluated during dry run.[/]",
+        )
+
+    def _print_configured_reconcilers(self) -> None:
+        """Render a Rich table of configured extension reconcilers for verbose current output."""
+        if not self.extension_reconcilers:
+            return
+        table = Table(title="Configured reconcilers (run on every head upgrade)")
+        table.add_column("Order", style="cyan", justify="right")
+        table.add_column("Extension", style="green")
+        table.add_column("Module Path")
+        for index, descriptor in enumerate(self.extension_reconcilers, start=1):
+            table.add_row(str(index), descriptor.name, str(descriptor.module_path))
+        console.print(table)
 
     def _version_table_exclusion(self, include_migrations_table: bool = False) -> tuple[str, ...]:
         """Return the ``exclude_tables`` value for schema DDL introspection.
@@ -1135,14 +1204,19 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             The current migration version or None if no migrations applied.
         """
         with self.config.provide_session() as driver:
-            self.tracker.ensure_tracking_table(driver)
+            tables = driver.data_dictionary.get_tables(driver, schema=self.tracker.catalog_schema_name())
+            tracking_exists = self._tracking_table_exists(tables)
 
             applied: list[AppliedMigrationRecord] = []
-            if verbose:
-                applied = self.tracker.get_applied_migrations(driver)
-                current = applied[-1]["version_num"] if applied else None
+            if not tracking_exists:
+                current = None
             else:
-                current = self.tracker.get_current_version(driver)
+                self.tracker.ensure_tracking_table(driver)
+                if verbose:
+                    applied = self.tracker.get_applied_migrations(driver)
+                    current = applied[-1]["version_num"] if applied else None
+                else:
+                    current = self.tracker.get_current_version(driver)
             if not current:
                 log_with_context(
                     logger,
@@ -1154,6 +1228,8 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     verbose=verbose,
                     status="empty",
                 )
+                if verbose:
+                    self._print_configured_reconcilers()
                 console.print("[yellow]No migrations applied yet[/]")
                 return None
 
@@ -1177,6 +1253,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     )
 
                 console.print(table)
+                self._print_configured_reconcilers()
 
             applied_count = len(applied) if verbose else None
             log_with_context(
@@ -1227,6 +1304,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         applied_count = 0
         pending_count = 0
         reconcilers_invoked: list[str] = []
+        has_reconcilers = False
         db_system: str | None = None
         error: Exception | None = None
         ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, summary_only)
@@ -1237,6 +1315,8 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         start_time = time.perf_counter()
 
         try:
+            self.ensure_reconcilers_allow("upgrade", revision)
+            has_reconcilers = bool(self.extension_reconcilers)
             if dry_run:
                 output_info(
                     "DRY RUN MODE: No database changes will be applied",
@@ -1279,14 +1359,16 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                         summary_only=summary_value,
                     )
 
-                if not dry_run and revision == "head" and self.extension_reconcilers:
+                if dry_run:
+                    self.report_reconciler_preview(use_logger=ul, echo=echo_value, summary_only=summary_value)
+                elif revision == "head" and has_reconcilers:
                     self._run_reconcilers(
                         driver, reconcilers_invoked, use_logger=ul, echo=echo_value, summary_only=summary_value
                     )
 
                 if not pending:
                     _report_no_pending_migrations(
-                        ul, echo_value, summary_value, bool(all_migrations or self.extension_reconcilers)
+                        ul, echo_value, summary_value, bool(all_migrations or has_reconcilers)
                     )
                     return
 
@@ -1343,7 +1425,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 error=effective_error,
                 allow_missing=allow_missing,
                 auto_sync=auto_sync,
-                reconcilers_invoked=len(reconcilers_invoked) if self.extension_reconcilers else None,
+                reconcilers_invoked=len(reconcilers_invoked) if has_reconcilers else None,
             )
 
         if dry_run:
@@ -1393,6 +1475,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         start_time = time.perf_counter()
 
         try:
+            self.ensure_reconcilers_allow("downgrade", revision)
             if dry_run:
                 output_info(
                     "DRY RUN MODE: No database changes will be applied",
@@ -2209,14 +2292,19 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             The current migration version or None if no migrations applied.
         """
         async with self.config.provide_session() as driver:
-            await self.tracker.ensure_tracking_table(driver)
+            tables = await driver.data_dictionary.get_tables(driver, schema=self.tracker.catalog_schema_name())
+            tracking_exists = self._tracking_table_exists(tables)
 
             applied: list[AppliedMigrationRecord] = []
-            if verbose:
-                applied = await self.tracker.get_applied_migrations(driver)
-                current = applied[-1]["version_num"] if applied else None
+            if not tracking_exists:
+                current = None
             else:
-                current = await self.tracker.get_current_version(driver)
+                await self.tracker.ensure_tracking_table(driver)
+                if verbose:
+                    applied = await self.tracker.get_applied_migrations(driver)
+                    current = applied[-1]["version_num"] if applied else None
+                else:
+                    current = await self.tracker.get_current_version(driver)
             if not current:
                 log_with_context(
                     logger,
@@ -2228,6 +2316,8 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     verbose=verbose,
                     status="empty",
                 )
+                if verbose:
+                    self._print_configured_reconcilers()
                 console.print("[yellow]No migrations applied yet[/]")
                 return None
 
@@ -2248,6 +2338,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                         migration.get("applied_by", ""),
                     )
                 console.print(table)
+                self._print_configured_reconcilers()
 
             applied_count = len(applied) if verbose else None
             log_with_context(
@@ -2298,6 +2389,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         applied_count = 0
         pending_count = 0
         reconcilers_invoked: list[str] = []
+        has_reconcilers = False
         db_system: str | None = None
         error: Exception | None = None
         ul, echo_value, summary_value = self._resolve_output_policy(use_logger, echo, summary_only)
@@ -2308,6 +2400,8 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         start_time = time.perf_counter()
 
         try:
+            self.ensure_reconcilers_allow("upgrade", revision)
+            has_reconcilers = bool(self.extension_reconcilers)
             if dry_run:
                 output_info(
                     "DRY RUN MODE: No database changes will be applied",
@@ -2350,14 +2444,16 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                         summary_only=summary_value,
                     )
 
-                if not dry_run and revision == "head" and self.extension_reconcilers:
+                if dry_run:
+                    self.report_reconciler_preview(use_logger=ul, echo=echo_value, summary_only=summary_value)
+                elif revision == "head" and has_reconcilers:
                     await self._run_reconcilers(
                         driver, reconcilers_invoked, use_logger=ul, echo=echo_value, summary_only=summary_value
                     )
 
                 if not pending:
                     _report_no_pending_migrations(
-                        ul, echo_value, summary_value, bool(all_migrations or self.extension_reconcilers)
+                        ul, echo_value, summary_value, bool(all_migrations or has_reconcilers)
                     )
                     return
 
@@ -2416,7 +2512,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 error=effective_error,
                 allow_missing=allow_missing,
                 auto_sync=auto_sync,
-                reconcilers_invoked=len(reconcilers_invoked) if self.extension_reconcilers else None,
+                reconcilers_invoked=len(reconcilers_invoked) if has_reconcilers else None,
             )
 
         if dry_run:
@@ -2466,6 +2562,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         start_time = time.perf_counter()
 
         try:
+            self.ensure_reconcilers_allow("downgrade", revision)
             if dry_run:
                 output_info(
                     "DRY RUN MODE: No database changes will be applied",

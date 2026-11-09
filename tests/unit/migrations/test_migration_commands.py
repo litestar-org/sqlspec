@@ -111,9 +111,13 @@ def test_sync_current_verbose_reuses_applied_migration_query(sync_config: Sqlite
     """Verbose current output should derive the current version from its history query."""
     commands = SyncMigrationCommands(sync_config)
     driver = MagicMock()
+    driver.data_dictionary.get_tables.return_value = [{"table_name": "ddl_migrations"}]
     session = MagicMock()
     session.__enter__.return_value = driver
     commands.tracker = MagicMock()
+    commands.tracker.version_table_name = "ddl_migrations"
+    commands.tracker.version_table_schema = None
+    commands.tracker.catalog_schema_name.return_value = None
     commands.tracker.get_applied_migrations.return_value = [
         {
             "version_num": "0001",
@@ -139,10 +143,14 @@ async def test_async_current_verbose_reuses_applied_migration_query(async_config
     """Async verbose current output should also issue one history query."""
     commands = AsyncMigrationCommands(async_config)
     driver = MagicMock()
+    driver.data_dictionary.get_tables = AsyncMock(return_value=[{"table_name": "ddl_migrations"}])
     session = MagicMock()
     session.__aenter__ = AsyncMock(return_value=driver)
     session.__aexit__ = AsyncMock(return_value=None)
     commands.tracker = MagicMock()
+    commands.tracker.version_table_name = "ddl_migrations"
+    commands.tracker.version_table_schema = None
+    commands.tracker.catalog_schema_name.return_value = None
     commands.tracker.ensure_tracking_table = AsyncMock()
     commands.tracker.get_current_version = AsyncMock()
     commands.tracker.get_applied_migrations = AsyncMock(
@@ -558,6 +566,7 @@ async def test_migration_commands_route_over_direct_dsn() -> None:
     assert sync_commands.config.driver_features["direct_dsn"] is None
 
     mock_sync_driver = MagicMock()
+    mock_sync_driver.data_dictionary.get_tables.return_value = [{"table_name": "ddl_migrations"}]
     with (
         patch.object(sync_commands.config, "provide_session") as mock_direct_session,
         patch.object(pooled_sync, "provide_session") as mock_pooled_session,
@@ -565,6 +574,9 @@ async def test_migration_commands_route_over_direct_dsn() -> None:
     ):
         mock_direct_session.return_value.__enter__.return_value = mock_sync_driver
         sync_commands.tracker = MagicMock()
+        sync_commands.tracker.version_table_name = "ddl_migrations"
+        sync_commands.tracker.version_table_schema = None
+        sync_commands.tracker.catalog_schema_name.return_value = None
         sync_commands.tracker.get_current_version.return_value = "0001"
         assert sync_commands.current() == "0001"
         mock_direct_session.assert_called_once()
@@ -589,6 +601,7 @@ async def test_migration_commands_route_over_direct_dsn() -> None:
         assert async_commands.config.driver_features["pooler_mode"] == "session"
         assert async_commands.config.driver_features["direct_dsn"] is None
         mock_async_driver = AsyncMock()
+        mock_async_driver.data_dictionary.get_tables = AsyncMock(return_value=[{"table_name": "ddl_migrations"}])
         with (
             patch.object(async_commands.config, "provide_session") as mock_direct_async_session,
             patch.object(async_cfg, "provide_session") as mock_pooled_async_session,
@@ -596,6 +609,9 @@ async def test_migration_commands_route_over_direct_dsn() -> None:
         ):
             mock_direct_async_session.return_value.__aenter__.return_value = mock_async_driver
             async_commands.tracker = MagicMock()
+            async_commands.tracker.version_table_name = "ddl_migrations"
+            async_commands.tracker.version_table_schema = None
+            async_commands.tracker.catalog_schema_name.return_value = None
             async_commands.tracker.ensure_tracking_table = AsyncMock()
             async_commands.tracker.get_current_version = AsyncMock(return_value="0001")
             assert await async_commands.current() == "0001"
@@ -1201,3 +1217,379 @@ def reconcile(context):
         with patch.object(cmds.config, "provide_session") as mock_sess, pytest.raises(MigrationError, match="missing"):
             mock_sess.return_value.__enter__.return_value = mock_drv
             cmds.upgrade(echo=False)
+
+
+async def _run_downgrade(config: SqliteConfig | AiosqliteConfig, **kwargs: object) -> None:
+    from typing import Any, cast
+
+    cmds = create_migration_commands(config)
+    if isinstance(cmds, AsyncMigrationCommands):
+        await cmds.downgrade(**cast("dict[str, Any]", kwargs))
+    else:
+        cmds.downgrade(**cast("dict[str, Any]", kwargs))
+
+
+async def _run_current(config: SqliteConfig | AiosqliteConfig, *, verbose: bool = False) -> str | None:
+    cmds = create_migration_commands(config)
+    if isinstance(cmds, AsyncMigrationCommands):
+        return await cmds.current(verbose=verbose)
+    return cmds.current(verbose=verbose)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_historical_upgrade_and_downgrade_refused_before_session_with_reconcilers(
+    tmp_path: Path, is_async: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Non-head upgrade and all downgrades fail before session opening when reconcilers are enabled."""
+    import sqlite3
+
+    fresh_db = tmp_path / "fresh_guard.db"
+    core_dir = tmp_path / "migrations"
+    core_dir.mkdir()
+    (core_dir / "0001_app.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE app_t (id INTEGER PRIMARY KEY);\n\n"
+        "-- name: migrate-0001-down\nDROP TABLE app_t;\n",
+        encoding="utf-8",
+    )
+    (core_dir / "0002_extra.sql").write_text(
+        "-- name: migrate-0002-up\nCREATE TABLE extra_t (id INTEGER PRIMARY KEY);\n\n"
+        "-- name: migrate-0002-down\nDROP TABLE extra_t;\n",
+        encoding="utf-8",
+    )
+
+    poison_dir = tmp_path / "ext_demo_poison"
+    poison_dir.mkdir()
+    (poison_dir / "reconcile.py").write_text('raise RuntimeError("imported")\n', encoding="utf-8")
+
+    cfg_fresh = _build_sqlite_mode_config(
+        fresh_db,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": poison_dir, "migration_mode": "reconcile"}},
+    )
+
+    with (
+        caplog.at_level("ERROR", logger="sqlspec.migrations.commands"),
+        pytest.raises(MigrationError, match=r"demo.*head"),
+    ):
+        await _run_upgrade(cfg_fresh, revision="0001", use_logger=True, summary_only=True, echo=False)
+    summaries = [rec for rec in caplog.records if rec.getMessage() == "migration.command.summary"]
+    assert len(summaries) == 1
+    assert getattr(summaries[0], "extra_fields", {})["status"] == "failed"
+
+    with pytest.raises(MigrationError, match=r"demo.*head"):
+        await _run_upgrade(cfg_fresh, revision="0001", dry_run=True, echo=False)
+
+    if fresh_db.exists():
+        with sqlite3.connect(fresh_db) as conn:
+            assert conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall() == []
+    await _close_config_pool(cfg_fresh)
+
+    migrated_db = tmp_path / "migrated_guard.db"
+    noop_dir = tmp_path / "ext_demo_noop"
+    noop_dir.mkdir()
+    (noop_dir / "reconcile.py").write_text("def reconcile(context):\n    return None\n", encoding="utf-8")
+    cfg_migrated = _build_sqlite_mode_config(
+        migrated_db,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": noop_dir, "migration_mode": "reconcile"}},
+    )
+    await _run_upgrade(cfg_migrated, echo=False)
+
+    with pytest.raises(MigrationError, match="demo"):
+        await _run_downgrade(cfg_migrated, revision="-1", echo=False)
+    with pytest.raises(MigrationError, match="demo"):
+        await _run_downgrade(cfg_migrated, revision="-1", dry_run=True, echo=False)
+
+    ledger = [r["version_num"] for r in await _fetch_rows(cfg_migrated, "SELECT version_num FROM ddl_migrations")]
+    tables = {r["name"] for r in await _fetch_rows(cfg_migrated, "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    await _close_config_pool(cfg_migrated)
+    assert ledger == ["0001", "0002"]
+    assert "app_t" in tables
+
+    plain_db = tmp_path / "plain_hist.db"
+    cfg_plain = _build_sqlite_mode_config(plain_db, core_dir, is_async=is_async)
+    await _run_upgrade(cfg_plain, revision="0001", echo=False)
+    assert [r["version_num"] for r in await _fetch_rows(cfg_plain, "SELECT version_num FROM ddl_migrations")] == [
+        "0001"
+    ]
+    await _run_downgrade(cfg_plain, revision="-1", echo=False)
+    assert await _fetch_rows(cfg_plain, "SELECT version_num FROM ddl_migrations") == []
+    await _close_config_pool(cfg_plain)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_current_stamp_fix_and_squash_never_import_reconcile_module(tmp_path: Path, is_async: bool) -> None:
+    """current, stamp, fix, and squash never import reconcile.py and leave reconcile-mode numbered files untouched."""
+    core_dir = tmp_path / "migrations"
+    core_dir.mkdir()
+    (core_dir / "0001_u.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE u_t (id INTEGER PRIMARY KEY);\n\n"
+        "-- name: migrate-0001-down\nDROP TABLE u_t;\n",
+        encoding="utf-8",
+    )
+    (core_dir / "0002_p.sql").write_text(
+        "-- name: migrate-0002-up\nCREATE TABLE p_t (id INTEGER PRIMARY KEY);\n\n"
+        "-- name: migrate-0002-down\nDROP TABLE p_t;\n",
+        encoding="utf-8",
+    )
+
+    ext_dir = tmp_path / "ext_demo"
+    ext_dir.mkdir()
+    ext_sql = "-- name: migrate-20251011120000-up\nCREATE TABLE untouched (id INTEGER PRIMARY KEY);\n"
+    (ext_dir / "20251011120000_init.sql").write_text(ext_sql, encoding="utf-8")
+    (ext_dir / "reconcile.py").write_text('raise RuntimeError("poisoned_reconcile_module")\n', encoding="utf-8")
+
+    cfg = _build_sqlite_mode_config(
+        tmp_path / "tools.db",
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": ext_dir, "migration_mode": "reconcile"}},
+    )
+    cmds = create_migration_commands(cfg)
+    if isinstance(cmds, AsyncMigrationCommands):
+        assert await cmds.current(verbose=True) is None
+        await cmds.stamp("base")
+        await cmds.fix(dry_run=True, yes=True)
+        await cmds.squash(start_version="0001", end_version="0002", description="rel", update_database=False, yes=True)
+    else:
+        assert cmds.current(verbose=True) is None
+        cmds.stamp("base")
+        cmds.fix(dry_run=True, yes=True)
+        cmds.squash(start_version="0001", end_version="0002", description="rel", update_database=False, yes=True)
+    await _close_config_pool(cfg)
+    assert (ext_dir / "20251011120000_init.sql").read_text(encoding="utf-8") == ext_sql
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_upgrade_dry_run_preview_is_read_only_ordered_and_propagates_catalog_errors(
+    tmp_path: Path, is_async: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """upgrade(dry_run=True) previews reconcilers in order without creating/mutating ddl_migrations or importing callbacks."""
+    import sqlite3
+
+    from sqlspec.migrations.fix import MigrationFixer
+    from sqlspec.migrations.version import generate_conversion_map
+
+    fresh_db = tmp_path / "preview_fresh.db"
+    sqlite3.connect(fresh_db).close()
+    core_dir = tmp_path / "preview_migs"
+    core_dir.mkdir()
+    second_dir = tmp_path / "ext_second"
+    second_dir.mkdir()
+    first_dir = tmp_path / "ext_first"
+    first_dir.mkdir()
+    second_reconcile = second_dir / "reconcile.py"
+    first_reconcile = first_dir / "reconcile.py"
+    second_reconcile.write_text('raise RuntimeError("imported_second")\n', encoding="utf-8")
+    first_reconcile.write_text('raise RuntimeError("imported_first")\n', encoding="utf-8")
+
+    cfg_fresh = _build_sqlite_mode_config(
+        fresh_db,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["second", "first"],
+        extension_config={
+            "second": {"migrations_path": second_dir, "migration_mode": "reconcile"},
+            "first": {"migrations_path": first_dir, "migration_mode": "reconcile"},
+        },
+    )
+
+    with patch("sqlspec.migrations.commands.console") as mock_console:
+        await _run_upgrade(cfg_fresh, dry_run=True, echo=True)
+    printed = "\n".join(str(call.args[0]) for call in mock_console.print.call_args_list if call.args)
+    assert "second" in printed
+    assert str(second_reconcile) in printed
+    assert "live catalog inspection" in printed
+    with sqlite3.connect(fresh_db) as conn:
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall() == []
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="sqlspec.migrations.commands"):
+        await _run_upgrade(cfg_fresh, dry_run=True, use_logger=True, echo=False)
+    messages = [rec.getMessage() for rec in caplog.records]
+    idx_second = next(i for i, m in enumerate(messages) if "1/2: second" in m)
+    idx_first = next(i for i, m in enumerate(messages) if "2/2: first" in m)
+    assert idx_second < idx_first
+    assert any("live catalog inspection" in m for m in messages)
+    await _close_config_pool(cfg_fresh)
+
+    retained_db = tmp_path / "preview_retained.db"
+    retained_ext = tmp_path / "ext_ret"
+    retained_ext.mkdir()
+    (retained_ext / "0001_init.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE ret_t (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    cfg_v = _build_sqlite_mode_config(
+        retained_db,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["ret"],
+        extension_config={"ret": {"migrations_path": retained_ext, "migration_mode": "versioned"}},
+    )
+    await _run_upgrade(cfg_v, echo=False)
+    snap_before = await _fetch_rows(cfg_v, "SELECT * FROM ddl_migrations")
+    await _close_config_pool(cfg_v)
+
+    (retained_ext / "reconcile.py").write_text('raise RuntimeError("imported_ret")\n', encoding="utf-8")
+    cfg_r = _build_sqlite_mode_config(
+        retained_db,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["ret"],
+        extension_config={"ret": {"migrations_path": retained_ext, "migration_mode": "reconcile"}},
+    )
+    caplog.clear()
+    with caplog.at_level("INFO", logger="sqlspec.migrations.commands"):
+        await _run_upgrade(cfg_r, dry_run=True, use_logger=True, echo=False)
+    assert any("ret" in rec.getMessage() for rec in caplog.records)
+    assert await _fetch_rows(cfg_r, "SELECT * FROM ddl_migrations") == snap_before
+    await _close_config_pool(cfg_r)
+
+    fixer_db = tmp_path / "preview_fixer.db"
+    fixer_migs = tmp_path / "fixer_migs"
+    fixer_migs.mkdir()
+    (fixer_migs / "20251011120000_users.sql").write_text(
+        "-- name: migrate-20251011120000-up\nCREATE TABLE users_f (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    cfg_ts = _build_sqlite_mode_config(fixer_db, fixer_migs, is_async=is_async)
+    await _run_upgrade(cfg_ts, echo=False)
+    await _close_config_pool(cfg_ts)
+
+    fixer = MigrationFixer(fixer_migs)
+    conv_map = generate_conversion_map([("20251011120000", fixer_migs / "20251011120000_users.sql")])
+    fixer.apply_renames(fixer.plan_renames(conv_map))
+
+    noop_ext = tmp_path / "ext_noop"
+    noop_ext.mkdir()
+    (noop_ext / "reconcile.py").write_text("def reconcile(context):\n    return None\n", encoding="utf-8")
+    cfg_fixed = _build_sqlite_mode_config(
+        fixer_db,
+        fixer_migs,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": noop_ext, "migration_mode": "reconcile"}},
+    )
+    await _run_upgrade(cfg_fixed, dry_run=True, echo=False)
+    assert [r["version_num"] for r in await _fetch_rows(cfg_fixed, "SELECT version_num FROM ddl_migrations")] == [
+        "20251011120000"
+    ]
+    await _run_upgrade(cfg_fixed, echo=False)
+    assert [r["version_num"] for r in await _fetch_rows(cfg_fixed, "SELECT version_num FROM ddl_migrations")] == [
+        "0001"
+    ]
+    await _close_config_pool(cfg_fixed)
+
+    plain_migs = tmp_path / "plain_dry_migs"
+    plain_migs.mkdir()
+    (plain_migs / "0001_app.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE p_app (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    cfg_plain_dry = _build_sqlite_mode_config(tmp_path / "plain_dry.db", plain_migs, is_async=is_async)
+    caplog.clear()
+    with caplog.at_level("INFO", logger="sqlspec.migrations.commands"):
+        await _run_upgrade(cfg_plain_dry, dry_run=True, use_logger=True, echo=False)
+    plain_msgs = [rec.getMessage() for rec in caplog.records]
+    assert any("Would apply 0001" in m for m in plain_msgs)
+    assert not any("reconciler" in m.lower() for m in plain_msgs)
+    await _close_config_pool(cfg_plain_dry)
+
+    err_cmds = create_migration_commands(cfg_fresh)
+    if isinstance(err_cmds, AsyncMigrationCommands):
+        err_drv = AsyncMock()
+        err_drv.data_dictionary.get_tables = AsyncMock(side_effect=RuntimeError("catalog-down"))
+        with (
+            patch.object(err_cmds.config, "provide_session") as mock_sess,
+            pytest.raises(RuntimeError, match="catalog-down"),
+        ):
+            mock_sess.return_value.__aenter__.return_value = err_drv
+            await err_cmds.upgrade(dry_run=True, echo=False)
+    else:
+        err_drv = MagicMock()
+        err_drv.data_dictionary.get_tables.side_effect = RuntimeError("catalog-down")
+        with (
+            patch.object(err_cmds.config, "provide_session") as mock_sess,
+            pytest.raises(RuntimeError, match="catalog-down"),
+        ):
+            mock_sess.return_value.__enter__.return_value = err_drv
+            err_cmds.upgrade(dry_run=True, echo=False)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_current_is_read_only_and_verbose_renders_configured_reconcilers_table(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """current() never creates ddl_migrations on fresh DBs, and current(verbose=True) renders the reconcilers table."""
+    import sqlite3
+
+    from rich.table import Table
+
+    plain_fresh_db = tmp_path / "plain_current.db"
+    sqlite3.connect(plain_fresh_db).close()
+    core_dir = tmp_path / "current_migs"
+    core_dir.mkdir()
+    cfg_plain = _build_sqlite_mode_config(plain_fresh_db, core_dir, is_async=is_async)
+    assert await _run_current(cfg_plain, verbose=False) is None
+    with sqlite3.connect(plain_fresh_db) as conn:
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall() == []
+    await _close_config_pool(cfg_plain)
+
+    ext_dir = tmp_path / "ext_demo_cur"
+    ext_dir.mkdir()
+    (ext_dir / "reconcile.py").write_text('raise RuntimeError("imported_current")\n', encoding="utf-8")
+
+    rec_fresh_db = tmp_path / "rec_current_fresh.db"
+    sqlite3.connect(rec_fresh_db).close()
+    cfg_rec_fresh = _build_sqlite_mode_config(
+        rec_fresh_db,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": ext_dir, "migration_mode": "reconcile"}},
+    )
+    with patch("sqlspec.migrations.commands.console") as mock_console:
+        assert await _run_current(cfg_rec_fresh, verbose=True) is None
+    printed_tables = [
+        call.args[0] for call in mock_console.print.call_args_list if call.args and isinstance(call.args[0], Table)
+    ]
+    assert [t.title for t in printed_tables] == ["Configured reconcilers (run on every head upgrade)"]
+    assert printed_tables[0].row_count == 1
+    with sqlite3.connect(rec_fresh_db) as conn:
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall() == []
+    await _close_config_pool(cfg_rec_fresh)
+
+    pop_db = tmp_path / "rec_current_pop.db"
+    (core_dir / "0001_app.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE cur_app (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    cfg_seed = _build_sqlite_mode_config(pop_db, core_dir, is_async=is_async)
+    await _run_upgrade(cfg_seed, echo=False)
+    await _close_config_pool(cfg_seed)
+
+    cfg_rec_pop = _build_sqlite_mode_config(
+        pop_db,
+        core_dir,
+        is_async=is_async,
+        include_extensions=["demo"],
+        extension_config={"demo": {"migrations_path": ext_dir, "migration_mode": "reconcile"}},
+    )
+    with patch("sqlspec.migrations.commands.console") as mock_console_v:
+        assert await _run_current(cfg_rec_pop, verbose=True) == "0001"
+    pop_tables = [
+        call.args[0] for call in mock_console_v.print.call_args_list if call.args and isinstance(call.args[0], Table)
+    ]
+    assert [t.title for t in pop_tables] == ["Applied Migrations", "Configured reconcilers (run on every head upgrade)"]
+    assert pop_tables[0].row_count == 1
+    assert pop_tables[1].row_count == 1
+
+    with patch("sqlspec.migrations.commands.console") as mock_console_nv:
+        assert await _run_current(cfg_rec_pop, verbose=False) == "0001"
+    nv_tables = [
+        call.args[0] for call in mock_console_nv.print.call_args_list if call.args and isinstance(call.args[0], Table)
+    ]
+    assert nv_tables == []
+    await _close_config_pool(cfg_rec_pop)
