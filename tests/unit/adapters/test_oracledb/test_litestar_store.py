@@ -329,3 +329,40 @@ async def test_oracle_reconcile_creates_missing_companion_index_sync_and_async()
     await coro_present
     async_present.execute_script.assert_not_awaited()
     async_present.commit.assert_not_awaited()
+
+
+def test_oracle_stores_accept_qualified_session_table_names() -> None:
+    """Oracle sync and async stores accept validated schema.table names and scope targets and indexes."""
+    sync_cfg = OracleSyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"},
+        extension_config={"litestar": {"session_table": "APP.litestar_session"}},
+    )
+    async_cfg = OracleAsyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"},
+        extension_config={"litestar": {"session_table": "APP.litestar_session"}},
+    )
+
+    for store in (OracleSyncStore(sync_cfg), OracleAsyncStore(async_cfg)):
+        target = store.get_schema_targets()[0]
+        index = store.get_companion_indexes()[0]
+        assert target.schema == "APP"
+        assert target.table_name == "litestar_session"
+        assert index.schema == "APP"
+        assert index.table == "litestar_session"
+        assert index.name == "idx_APP_litestar_session_expir"
+        assert "ON APP.litestar_session(expires_at)" in index.ddl
+
+
+@pytest.mark.parametrize("invalid_name", ["", "   ", "A.B.C", "APP..T", ".T", "APP.", "bad;drop", "x" * 64])
+def test_oracle_stores_reject_invalid_qualified_session_table_names(invalid_name: str) -> None:
+    """Oracle sync and async stores raise ValueError for malformed or unsafe session_table names."""
+    sync_cfg = OracleSyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"}, extension_config={"litestar": {"session_table": invalid_name}}
+    )
+    async_cfg = OracleAsyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"}, extension_config={"litestar": {"session_table": invalid_name}}
+    )
+    with pytest.raises(ValueError):
+        OracleSyncStore(sync_cfg)
+    with pytest.raises(ValueError):
+        OracleAsyncStore(async_cfg)

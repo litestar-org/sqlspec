@@ -2,12 +2,12 @@
 
 import contextlib
 from datetime import UTC, timedelta
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, validate_oracle_identifier
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB, read_oracle_lob_async, read_oracle_lob_sync, resolve_rowcount
 from sqlspec.config import LitestarConfig
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
+from sqlspec.extensions.litestar.store import MAX_TABLE_NAME_LENGTH, BaseSQLSpecStore, CompanionIndex
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
 
@@ -24,6 +24,28 @@ __all__ = (
 
 
 ORACLE_SMALL_BLOB_LIMIT = 32000
+_MAX_ORACLE_TABLE_PARTS: Final = 2
+_ORACLE_LEGACY_IDENTIFIER_MAX_LENGTH: Final = 30
+
+
+def _split_and_validate_oracle_table_name(table_name: str) -> tuple[str | None, str]:
+    """Validate a 1- or 2-part Oracle table name and return (schema_name, bare_table)."""
+    if not table_name or not table_name.strip():
+        msg = "Table name cannot be empty"
+        raise ValueError(msg)
+    if table_name != table_name.strip():
+        msg = f"Invalid Oracle table name: {table_name!r}"
+        raise ValueError(msg)
+    parts = table_name.split(".")
+    if len(parts) > _MAX_ORACLE_TABLE_PARTS:
+        msg = f"Invalid Oracle table name: {table_name!r}"
+        raise ValueError(msg)
+    for part in parts:
+        if len(part) > MAX_TABLE_NAME_LENGTH:
+            msg = f"Table name too long: {len(part)} chars (max {MAX_TABLE_NAME_LENGTH})"
+            raise ValueError(msg)
+        validate_oracle_identifier(part, "table name")
+    return (parts[0], parts[1]) if len(parts) == _MAX_ORACLE_TABLE_PARTS else (None, parts[0])
 
 
 class OracleLitestarCompressionConfig(TypedDict):
@@ -110,11 +132,14 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             config: OracleAsyncConfig instance.
         """
         super().__init__(config)
-        for part in self._table_name.split("."):
-            validate_oracle_identifier(part, "table name")
 
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate 1- or 2-part Oracle session table name."""
+        _split_and_validate_oracle_table_name(table_name)
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -352,7 +377,8 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
     def _schema_target(self) -> SchemaTarget:
         """Build the Oracle session table SchemaTarget."""
-        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect="oracle")
+        schema_name, bare_table = _split_and_validate_oracle_table_name(self._table_name)
+        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect="oracle")
 
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return the Oracle session expiry companion index definition."""
@@ -396,11 +422,14 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             config: OracleSyncConfig instance.
         """
         super().__init__(config)
-        for part in self._table_name.split("."):
-            validate_oracle_identifier(part, "table name")
 
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate 1- or 2-part Oracle session table name."""
+        _split_and_validate_oracle_table_name(table_name)
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -480,7 +509,8 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
     def _schema_target(self) -> SchemaTarget:
         """Build the Oracle session table SchemaTarget."""
-        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect="oracle")
+        schema_name, bare_table = _split_and_validate_oracle_table_name(self._table_name)
+        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect="oracle")
 
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return the Oracle session expiry companion index definition."""
@@ -737,7 +767,8 @@ def _build_session_table_ddl(table_name: str, config: Any, in_memory: bool) -> s
 
 def _build_session_companion_index(table_name: str) -> CompanionIndex:
     """Build CompanionIndex metadata and PL/SQL-guarded DDL for Oracle session expiry."""
-    index_name = f"idx_{table_name.replace('.', '_')}_expires_at"[:30]
+    schema_name, bare_table = _split_and_validate_oracle_table_name(table_name)
+    index_name = f"idx_{table_name.replace('.', '_')}_expires_at"[:_ORACLE_LEGACY_IDENTIFIER_MAX_LENGTH]
     ddl = f"""
     BEGIN
         EXECUTE IMMEDIATE 'CREATE INDEX {index_name}
@@ -749,7 +780,7 @@ def _build_session_companion_index(table_name: str) -> CompanionIndex:
             END IF;
     END;
     """
-    return CompanionIndex(name=index_name, table=table_name, schema=None, ddl=ddl)
+    return CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)
 
 
 def _build_drop_session_table_sql(table_name: str) -> "list[str]":
