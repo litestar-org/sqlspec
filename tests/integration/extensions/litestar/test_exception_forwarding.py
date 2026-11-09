@@ -184,17 +184,16 @@ def test_psycopg_injected_connection_rolls_back_on_raise(postgres_service: "Post
     """Psycopg injected connection in manual mode rolls back on exception and next request succeeds."""
     pytest.importorskip("psycopg")
     pytest.importorskip("psycopg_pool")
+    import psycopg
+
     from sqlspec.adapters.psycopg import PsycopgAsyncConfig
     from tests.integration.fixtures.postgres import _postgres_conninfo
 
     conninfo = _postgres_conninfo(postgres_service)
-    with sqlite3.connect(":memory:") as _:
-        import psycopg
-
-        with psycopg.connect(conninfo, autocommit=True) as p_conn:
-            with p_conn.cursor() as cur:
-                cur.execute("CREATE TABLE IF NOT EXISTS litestar_psycopg_items (name VARCHAR(64) NOT NULL);")
-                cur.execute("DELETE FROM litestar_psycopg_items;")
+    with psycopg.connect(conninfo, autocommit=True) as p_conn:
+        with p_conn.cursor() as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS litestar_psycopg_items (name VARCHAR(64) NOT NULL);")
+            cur.execute("DELETE FROM litestar_psycopg_items;")
 
     config = PsycopgAsyncConfig(
         connection_config={"conninfo": conninfo, "min_size": 1, "max_size": 4},
@@ -222,8 +221,6 @@ def test_psycopg_injected_connection_rolls_back_on_raise(postgres_service: "Post
 
     assert res_raise.status_code == 500
     assert res_ok.status_code == 200
-
-    import psycopg
 
     with psycopg.connect(conninfo, autocommit=True) as p_conn:
         with p_conn.cursor() as cur:
@@ -274,3 +271,150 @@ def test_psycopg_injected_connection_clean_return_commits(postgres_service: "Pos
             rows = [row[0] for row in cur.fetchall()]
 
     assert rows == ["clean_work"]
+
+
+def test_litestar_autocommit_rolls_back_when_exception_handler_returns_200(tmp_path: Path) -> None:
+    """Autocommit rolls back uncommitted writes when a Litestar exception handler returns HTTP 200."""
+
+    class FallbackError(Exception):
+        pass
+
+    def fallback_handler(_request: Request[Any, Any, Any], _exc: FallbackError) -> Response[dict[str, bool]]:
+        return Response({"fallback": True}, status_code=200)
+
+    db_path = tmp_path / "mapped_200.db"
+    _setup_sqlite_db(db_path)
+
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)}, extension_config={"litestar": {"commit_mode": "autocommit"}}
+    )
+    spec = SQLSpec()
+    spec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec=spec)
+
+    @get("/injected-fail")
+    def injected_fail(db_session: NamedDependency[SyncDriverAdapterBase]) -> dict[str, str]:
+        db_session.execute("INSERT INTO items (name) VALUES (?)", ("injected_partial",))
+        raise FallbackError("abort injected")
+
+    @get("/ondemand-fail")
+    def ondemand_fail(request: Request[Any, Any, Any]) -> dict[str, str]:
+        p: SQLSpecPlugin = request.app.state.sqlspec
+        session = p.provide_request_session_sync("db_connection", request.app.state, request.scope)
+        session.execute("INSERT INTO items (name) VALUES (?)", ("ondemand_partial",))
+        raise FallbackError("abort ondemand")
+
+    app = Litestar(
+        route_handlers=[injected_fail, ondemand_fail],
+        plugins=[plugin],
+        exception_handlers={FallbackError: fallback_handler},
+    )
+
+    with TestClient(app=app, raise_server_exceptions=False) as client:
+        res_inj = client.get("/injected-fail")
+        res_ond = client.get("/ondemand-fail")
+
+    assert res_inj.status_code == 200
+    assert res_inj.json() == {"fallback": True}
+    assert res_ond.status_code == 200
+    assert res_ond.json() == {"fallback": True}
+    assert _read_sqlite_rows(db_path) == []
+
+
+def test_litestar_pre_response_cancelled_error_after_handover_releases_pool(tmp_path: Path) -> None:
+    """Pre-response.start CancelledError after DI handover rolls back aiosqlite and releases single-slot pool."""
+    import asyncio
+    import contextlib
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.driver import AsyncDriverAdapterBase
+
+    db_path = tmp_path / "cancel_handover.db"
+    _setup_sqlite_db(db_path)
+
+    config = AiosqliteConfig(
+        connection_config={"database": str(db_path), "pool_size": 1, "min_size": 1, "connect_timeout": 0.5},
+        extension_config={"litestar": {"commit_mode": "manual"}},
+    )
+    spec = SQLSpec()
+    spec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec=spec)
+
+    class _CancellingPreStartResponse(Response[dict[str, str]]):
+        def to_asgi_response(self, *args: Any, **kwargs: Any) -> Any:
+            _ = (args, kwargs)
+
+            async def cancelling_asgi_app(scope: Any, receive: Any, send: Any) -> None:
+                _ = (scope, receive, send)
+                raise asyncio.CancelledError()
+
+            return cancelling_asgi_app
+
+    @get("/abort")
+    async def abort_route(db_session: NamedDependency[AsyncDriverAdapterBase]) -> Response[dict[str, str]]:
+        await db_session.execute("INSERT INTO items (name) VALUES (:name)", name="aborted_write")
+        return _CancellingPreStartResponse({"status": "aborting"})
+
+    @get("/healthy")
+    async def healthy_route(db_session: NamedDependency[AsyncDriverAdapterBase]) -> dict[str, str]:
+        await db_session.execute("INSERT INTO items (name) VALUES (:name)", name="healthy_write")
+        return {"status": "ok"}
+
+    app = Litestar(route_handlers=[abort_route, healthy_route], plugins=[plugin])
+
+    with TestClient(app=app, raise_server_exceptions=False) as client:
+        with contextlib.suppress(BaseException):
+            client.get("/abort")
+        res_ok = client.get("/healthy")
+
+    assert res_ok.status_code == 200
+    assert _read_sqlite_rows(db_path) == ["healthy_write"]
+
+
+def test_litestar_streaming_post_response_start_on_demand_session_releases_pool(tmp_path: Path) -> None:
+    """On-demand session acquired inside a Stream response commits and releases single-slot pool."""
+    from collections.abc import AsyncGenerator
+
+    from litestar.response import Stream
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+    db_path = tmp_path / "streaming_ondemand.db"
+    _setup_sqlite_db(db_path)
+
+    config = AiosqliteConfig(
+        connection_config={"database": str(db_path), "pool_size": 1, "min_size": 1, "connect_timeout": 0.5},
+        extension_config={"litestar": {"commit_mode": "autocommit"}},
+    )
+    spec = SQLSpec()
+    spec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec=spec)
+
+    @get("/stream")
+    def stream_route(request: Request[Any, Any, Any]) -> Stream:
+        async def iterator() -> AsyncGenerator[bytes, None]:
+            yield b"chunk-1:"
+            p: SQLSpecPlugin = request.app.state.sqlspec
+            session = await p.provide_request_session_async("db_connection", request.app.state, request.scope)
+            await session.execute("INSERT INTO items (name) VALUES (:name)", name="stream_row")
+            yield b"chunk-2"
+
+        return Stream(iterator())
+
+    @get("/verify")
+    async def verify_route(request: Request[Any, Any, Any]) -> dict[str, list[str]]:
+        p: SQLSpecPlugin = request.app.state.sqlspec
+        session = await p.provide_request_session_async("db_connection", request.app.state, request.scope)
+        result = await session.execute("SELECT name FROM items ORDER BY rowid")
+        return {"rows": [row["name"] for row in result.all()]}
+
+    app = Litestar(route_handlers=[stream_route, verify_route], plugins=[plugin])
+
+    with TestClient(app=app, raise_server_exceptions=False) as client:
+        res_stream = client.get("/stream")
+        res_verify = client.get("/verify")
+
+    assert res_stream.status_code == 200
+    assert res_stream.text == "chunk-1:chunk-2"
+    assert res_verify.status_code == 200
+    assert res_verify.json() == {"rows": ["stream_row"]}

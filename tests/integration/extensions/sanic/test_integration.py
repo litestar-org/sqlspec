@@ -2,7 +2,7 @@
 
 import os
 import tempfile
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -475,3 +475,115 @@ def test_sanic_psycopg_manual_rolls_back_on_raise(postgres_service: "PostgresSer
             rows = [row[0] for row in cur.fetchall()]
 
     assert rows == ["succeeding"]
+
+
+def test_sanic_autocommit_and_manual_roll_back_when_exception_handler_returns_200() -> None:
+    """Mapped exceptions returning HTTP 200 must roll back in both autocommit and manual modes."""
+
+    class FallbackError(Exception):
+        pass
+
+    for mode in ("autocommit", "manual"):
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+            sqlspec = SQLSpec()
+            config = AiosqliteConfig(
+                connection_config={"database": tmp.name},
+                extension_config={"sanic": {"commit_mode": mode, "session_key": "db"}},
+            )
+            sqlspec.add_config(config)
+            plugin = SQLSpecPlugin(sqlspec)
+            app = _create_sanic_app(f"SQLSpecSanicMapped200_{mode}")
+
+            @app.exception(FallbackError)
+            async def handle_fallback(_request: Request, _exc: FallbackError):
+                return response.json({"fallback": True}, status=200)
+
+            @app.post("/setup")
+            async def setup(request: Request):
+                db = plugin.get_session(request, "db")
+                await db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
+                await db.execute("INSERT INTO test (name) VALUES (:name)", name="baseline")
+                if mode == "manual":
+                    await db.commit()
+                return response.json({"created": True})
+
+            @app.post("/partial-fail")
+            async def partial_fail(request: Request):
+                db = plugin.get_session(request, "db")
+                await db.execute("INSERT INTO test (name) VALUES (:name)", name="leaked_partial")
+                raise FallbackError("abort after write")
+
+            @app.get("/data")
+            async def data(request: Request):
+                db = plugin.get_session(request, "db")
+                result = await db.execute("SELECT name FROM test ORDER BY id")
+                return response.json({"names": [row["name"] for row in result.all()]})
+
+            plugin.init_app(app)
+
+            _, res_setup = app.test_client.post("/setup")
+            assert res_setup.status == 200
+
+            _, res_partial = app.test_client.post("/partial-fail")
+            assert res_partial.status == 200
+            assert res_partial.json == {"fallback": True}
+
+            _, res_data = app.test_client.get("/data")
+            assert res_data.status == 200
+            assert res_data.json == {"names": ["baseline"]}
+
+
+def test_sanic_abrupt_disconnect_cancellation_rolls_back_and_releases_pool() -> None:
+    """Cancelled request with closed transport rolls back aiosqlite and releases single-slot pool."""
+    import asyncio
+    import contextlib
+    import importlib
+
+    reusable_client_cls: Any = importlib.import_module("sanic_testing.reusable").ReusableClient
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(
+            connection_config={"database": tmp.name, "pool_size": 1, "min_size": 1, "connect_timeout": 0.5},
+            extension_config={"sanic": {"commit_mode": "manual", "session_key": "db"}},
+        )
+        sqlspec.add_config(config)
+        plugin = SQLSpecPlugin(sqlspec)
+        app = _create_sanic_app("SQLSpecSanicDisconnectCancel")
+
+        @app.post("/setup")
+        async def setup(request: Request):
+            db = plugin.get_session(request, "db")
+            await db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
+            await db.execute("INSERT INTO test (name) VALUES (:name)", name="initial")
+            await db.commit()
+            return response.json({"created": True})
+
+        @app.post("/disconnect-cancel")
+        async def disconnect_cancel(request: Request):
+            db = plugin.get_session(request, "db")
+            await db.execute("INSERT INTO test (name) VALUES (:name)", name="aborted_row")
+            protocol: Any = request.transport.get_protocol()
+            request.transport.close()
+            protocol.transport = None
+            raise asyncio.CancelledError()
+
+        @app.get("/data")
+        async def data(request: Request):
+            db = plugin.get_session(request, "db")
+            result = await db.execute("SELECT name FROM test ORDER BY id")
+            return response.json({"names": [row["name"] for row in result.all()]})
+
+        plugin.init_app(app)
+
+        client: Any = reusable_client_cls(app)
+        with client:
+            _, res_setup = client.post("/setup")
+            assert res_setup.status == 200
+
+            with contextlib.suppress(Exception):
+                client.post("/disconnect-cancel")
+
+            _, res_data = client.get("/data")
+            assert res_data.status == 200
+            assert res_data.json == {"names": ["initial"]}

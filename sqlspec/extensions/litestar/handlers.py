@@ -12,7 +12,7 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from litestar.constants import HTTP_DISCONNECT, HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
+from litestar.constants import HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
 from litestar.di import NamedDependency
 from litestar.enums import ScopeType
 from litestar.params import SkipValidation
@@ -48,10 +48,10 @@ __all__ = (
 )
 
 _REQUEST_EXCEPTION_KEY: Final = "request_exception"
-SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
+SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
 
 
-async def record_request_exception(exc: Exception, scope: "Scope") -> None:
+async def record_request_exception(exc: BaseException, scope: "Scope") -> None:
     """Record an unhandled exception in the ASGI scope state for connection cleanup.
 
     Args:
@@ -155,9 +155,12 @@ def autocommit_handler_maker(
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
         try:
             if connection is not None and message["type"] == HTTP_RESPONSE_START:
-                if (message["status"] in commit_range or message["status"] in extra_commit_statuses) and message[
-                    "status"
-                ] not in extra_rollback_statuses:
+                has_exception = get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is not None
+                if (
+                    not has_exception
+                    and (message["status"] in commit_range or message["status"] in extra_commit_statuses)
+                    and message["status"] not in extra_rollback_statuses
+                ):
                     await ensure_async_(connection.commit)()
                 else:
                     await ensure_async_(connection.rollback)()

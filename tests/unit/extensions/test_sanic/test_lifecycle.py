@@ -217,3 +217,162 @@ async def test_on_request_acquisition_failure_records_exception_and_releases() -
     assert cm1.exit_args is not None
     assert cm1.exit_args[0] is RuntimeError
     assert cm1.exit_args[1] is exc_info.value
+
+
+def test_init_app_registers_lifecycle_complete_signal() -> None:
+    """init_app should register http.lifecycle.complete signal listener."""
+    app = Sanic(f"SQLSpecLifecycleCompleteSignal{uuid4().hex}")
+    config = _make_config(pool=object())
+    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+
+    plugin.init_app(app)
+
+    assert "http.lifecycle.complete" in app.signal_router.name_index
+
+
+async def test_on_request_cancelled_error_mid_acquisition_releases_and_restores() -> None:
+    """_on_request must catch CancelledError, release already-acquired connections, and restore contexts."""
+    import asyncio
+
+    from sqlspec.core.sqlcommenter import SQLCommenterContext
+    from sqlspec.extensions.sanic._utils import get_context_value
+    from sqlspec.utils.correlation import CorrelationContext
+
+    conn1 = MagicMock()
+    cm1 = _AsyncConnectionManagerFake(conn1)
+
+    config1 = _make_config(pool=object())
+    config1.provide_connection = MagicMock(return_value=cm1)
+    config1.statement_config = SimpleNamespace(enable_sqlcommenter=True)
+    config1.extension_config = {
+        "sanic": {
+            "connection_key": "conn1",
+            "session_key": "sess1",
+            "pool_key": "pool1",
+            "enable_correlation_middleware": True,
+            "enable_sqlcommenter_middleware": True,
+        }
+    }
+
+    config2 = _make_config(pool=object())
+    config2.provide_connection = MagicMock(side_effect=asyncio.CancelledError("cancelled mid acquire"))
+    config2.statement_config = SimpleNamespace(enable_sqlcommenter=False)
+    config2.extension_config = {"sanic": {"connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}}
+
+    plugin = SQLSpecPlugin(MagicMock(configs={"db1": config1, "db2": config2}))
+    CorrelationContext.set("outer-cid")
+    SQLCommenterContext.set({"framework": "outer"})
+    try:
+        conn_info = SimpleNamespace(ctx=SimpleNamespace())
+        request = SimpleNamespace(
+            ctx=SimpleNamespace(),
+            conn_info=conn_info,
+            app=SimpleNamespace(ctx=SimpleNamespace(pool1=object(), pool2=object())),
+            headers={"x-request-id": "req-cid"},
+            path="/items",
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await plugin._on_request(request)
+
+        assert cm1.exit_args is not None
+        assert cm1.exit_args[0] is asyncio.CancelledError
+        assert isinstance(get_context_value(request.ctx, "sqlspec_request_exception"), asyncio.CancelledError)
+        assert not has_context_value(request.ctx, "conn1")
+        assert CorrelationContext.get() == "outer-cid"
+        assert SQLCommenterContext.get() == {"framework": "outer"}
+    finally:
+        CorrelationContext.set(None)
+        SQLCommenterContext.set(None)
+
+
+async def test_on_request_complete_releases_residual_connection_on_cancellation_and_is_idempotent() -> None:
+    """http.lifecycle.complete listener exits residual connections with CancelledError and is idempotent."""
+    import asyncio
+
+    from sqlspec.utils.correlation import CorrelationContext
+
+    conn = MagicMock()
+    conn.rollback = AsyncMock()
+    cm = _AsyncConnectionManagerFake(conn)
+
+    config = _make_config(pool=object())
+    config.provide_connection = MagicMock(return_value=cm)
+    config.statement_config = SimpleNamespace(enable_sqlcommenter=False)
+    config.extension_config = {"sanic": {"commit_mode": "autocommit", "enable_correlation_middleware": True}}
+
+    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    CorrelationContext.set("before-req")
+    try:
+        conn_info = SimpleNamespace(ctx=SimpleNamespace())
+        request = SimpleNamespace(
+            ctx=SimpleNamespace(),
+            conn_info=conn_info,
+            app=SimpleNamespace(ctx=SimpleNamespace(db_pool=object())),
+            headers={"x-request-id": "aborted-cid"},
+            path="/cancel",
+        )
+
+        await plugin._on_request(request)
+        assert CorrelationContext.get() == "aborted-cid"
+
+        await plugin._on_request_complete(conn_info=conn_info)
+
+        conn.rollback.assert_awaited_once_with()
+        assert cm.exit_args is not None
+        assert cm.exit_args[0] is asyncio.CancelledError
+        assert not has_context_value(request.ctx, "db_connection")
+        assert CorrelationContext.get() == "before-req"
+
+        cm2 = _AsyncConnectionManagerFake(MagicMock(commit=AsyncMock(), rollback=AsyncMock()))
+        config.provide_connection = MagicMock(return_value=cm2)
+        conn_info2 = SimpleNamespace(ctx=SimpleNamespace())
+        request2 = SimpleNamespace(
+            ctx=SimpleNamespace(),
+            conn_info=conn_info2,
+            app=SimpleNamespace(ctx=SimpleNamespace(db_pool=object())),
+            headers={"x-request-id": "clean-cid"},
+            path="/ok",
+        )
+        response2 = SimpleNamespace(status=200, headers={})
+
+        await plugin._on_request(request2)
+        await plugin._on_response(request2, response2)
+        assert cm2.exit_args == (None, None, None)
+
+        cm2.exit_args = ("sentinel", None, None)
+        await plugin._on_request_complete(conn_info=conn_info2)
+        assert cm2.exit_args == ("sentinel", None, None)
+    finally:
+        CorrelationContext.set(None)
+
+
+async def test_finalize_request_connection_rolls_back_when_exception_mapped_to_200() -> None:
+    """autocommit mode must roll back rather than commit when an exception was recorded despite 200 status."""
+    from sqlspec.extensions.sanic._utils import set_context_value
+
+    conn = MagicMock()
+    conn.commit = AsyncMock()
+    conn.rollback = AsyncMock()
+    cm = _AsyncConnectionManagerFake(conn)
+
+    config = _make_config(pool=object())
+    config.statement_config = SimpleNamespace(enable_sqlcommenter=False)
+    config.extension_config = {"sanic": {"commit_mode": "autocommit"}}
+    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    config_state = plugin._config_states[0]
+
+    request = SimpleNamespace(ctx=SimpleNamespace())
+    set_context_value(request.ctx, config_state.connection_key, conn)
+    set_context_value(request.ctx, plugin._connection_manager_key(config_state), cm)
+    err = ValueError("mapped to 200")
+    await plugin._on_lifecycle_exception(request, err)
+
+    response = SimpleNamespace(status=200, headers={})
+    await plugin._finalize_request_connection(request, response, config_state)
+
+    conn.commit.assert_not_awaited()
+    conn.rollback.assert_awaited_once_with()
+    assert cm.exit_args is not None
+    assert cm.exit_args[0] is ValueError
+    assert cm.exit_args[1] is err

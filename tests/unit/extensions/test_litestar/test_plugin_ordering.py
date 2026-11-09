@@ -22,7 +22,12 @@ from litestar.plugins import InitPluginProtocol
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.core import StatementConfig
-from sqlspec.extensions.litestar.plugin import CorrelationMiddleware, SQLCommenterMiddleware, SQLSpecPlugin
+from sqlspec.extensions.litestar.plugin import (
+    ConnectionCleanupMiddleware,
+    CorrelationMiddleware,
+    SQLCommenterMiddleware,
+    SQLSpecPlugin,
+)
 
 
 def _build_sqlspec_plugin() -> SQLSpecPlugin:
@@ -130,32 +135,36 @@ def _middleware_types(app_config: AppConfig) -> list[type[object]]:
 def test_on_app_init_middleware_on_app_init_installs_both_middlewares_when_enabled() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=True, sqlcommenter=True).on_app_init(app_config)
-    assert _middleware_types(app_config)[:2] == [CorrelationMiddleware, SQLCommenterMiddleware]
+    assert _middleware_types(app_config) == [CorrelationMiddleware, SQLCommenterMiddleware, ConnectionCleanupMiddleware]
 
 
 def test_on_app_init_middleware_on_app_init_installs_only_correlation_middleware() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=True, sqlcommenter=False).on_app_init(app_config)
-    assert _middleware_types(app_config) == [CorrelationMiddleware]
+    assert _middleware_types(app_config) == [CorrelationMiddleware, ConnectionCleanupMiddleware]
 
 
 def test_on_app_init_middleware_on_app_init_installs_only_sqlcommenter_middleware() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=False, sqlcommenter=True).on_app_init(app_config)
-    assert _middleware_types(app_config) == [SQLCommenterMiddleware]
+    assert _middleware_types(app_config) == [SQLCommenterMiddleware, ConnectionCleanupMiddleware]
 
 
 def test_on_app_init_middleware_on_app_init_installs_no_observability_middlewares_when_disabled() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=False, sqlcommenter=False).on_app_init(app_config)
-    assert app_config.middleware == []
+    assert _middleware_types(app_config) == [ConnectionCleanupMiddleware]
 
 
 def test_on_app_init_middleware_on_app_init_preserves_existing_middlewares() -> None:
     existing = DefineMiddleware(_ExistingMiddleware)
     app_config = AppConfig(middleware=[existing])
     _build_plugin(correlation=True, sqlcommenter=True).on_app_init(app_config)
-    assert _middleware_types(app_config)[:2] == [CorrelationMiddleware, SQLCommenterMiddleware]
+    assert _middleware_types(app_config)[:3] == [
+        CorrelationMiddleware,
+        SQLCommenterMiddleware,
+        ConnectionCleanupMiddleware,
+    ]
     assert app_config.middleware[-1] is existing
 
 
@@ -163,7 +172,12 @@ def test_existing_correlation_middleware_not_duplicated() -> None:
     existing = DefineMiddleware(CorrelationMiddleware, headers=("x-app-request-id",))
     app_config = AppConfig(middleware=[DefineMiddleware(_ExistingMiddleware), existing])
     _build_plugin(correlation=True, sqlcommenter=True).on_app_init(app_config)
-    assert _middleware_types(app_config) == [SQLCommenterMiddleware, _ExistingMiddleware, CorrelationMiddleware]
+    assert _middleware_types(app_config) == [
+        SQLCommenterMiddleware,
+        ConnectionCleanupMiddleware,
+        _ExistingMiddleware,
+        CorrelationMiddleware,
+    ]
     assert app_config.middleware[-1] is existing
     assert existing.kwargs == {"headers": ("x-app-request-id",)}
 
@@ -172,7 +186,7 @@ def test_repeated_on_app_init_keeps_single_correlation_middleware() -> None:
     app_config = AppConfig()
     _build_plugin(correlation=True).on_app_init(app_config)
     _build_plugin(correlation=True).on_app_init(app_config)
-    assert _middleware_types(app_config) == [CorrelationMiddleware]
+    assert _middleware_types(app_config) == [CorrelationMiddleware, ConnectionCleanupMiddleware]
 
 
 class _SubclassedCorrelationMiddleware(CorrelationMiddleware):
@@ -190,7 +204,8 @@ class _SubclassedCorrelationMiddleware(CorrelationMiddleware):
 def test_existing_correlation_middleware_subclass_not_duplicated(existing: Any) -> None:
     app_config = AppConfig(middleware=[existing])
     _build_plugin(correlation=True).on_app_init(app_config)
-    assert app_config.middleware == [existing]
+    assert len(app_config.middleware) == 2
+    assert app_config.middleware[-1] is existing
 
 
 @pytest.mark.parametrize(

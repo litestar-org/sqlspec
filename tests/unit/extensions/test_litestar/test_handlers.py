@@ -420,7 +420,7 @@ async def test_connection_provider_handover_on_http() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -452,7 +452,7 @@ async def test_manual_handler_terminus_after_handover() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -483,7 +483,7 @@ async def test_connection_provider_websocket_clean_exit() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -511,7 +511,7 @@ async def test_connection_provider_response_already_started() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -538,7 +538,7 @@ async def test_connection_provider_body_error_forwards_exception() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -570,7 +570,7 @@ async def test_connection_provider_suppressing_context_propagates_exception() ->
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -598,7 +598,7 @@ async def test_connection_provider_sync_manager_receives_exception() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -628,7 +628,7 @@ async def test_connection_provider_exit_failure_propagates_after_cleanup() -> No
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -703,3 +703,109 @@ async def test_autocommit_handler_forwards_exception_after_rollback() -> None:
     assert cm_fake.exit_args[1] is exc
     assert get_sqlspec_scope_state(scope, connection_key) is None
     assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is None
+
+
+def test_session_terminus_events_excludes_http_disconnect() -> None:
+    """SESSION_TERMINUS_ASGI_EVENTS only contains ASGI send events observed by before_send."""
+    from litestar.constants import HTTP_DISCONNECT, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT
+
+    from sqlspec.extensions.litestar.handlers import SESSION_TERMINUS_ASGI_EVENTS
+
+    assert HTTP_DISCONNECT not in SESSION_TERMINUS_ASGI_EVENTS
+    assert SESSION_TERMINUS_ASGI_EVENTS == {HTTP_RESPONSE_START, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
+
+
+async def test_autocommit_handler_rolls_back_when_exception_recorded_despite_200_status() -> None:
+    """Autocommit handler must roll back rather than commit when an exception is mapped to HTTP 200."""
+    from sqlspec.extensions.litestar.handlers import record_request_exception
+
+    connection_key = "test_connection"
+    handler = autocommit_handler_maker(connection_key, extra_commit_statuses={418})
+
+    mock_conn = AsyncMock()
+    mock_conn.commit = AsyncMock()
+    mock_conn.rollback = AsyncMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+
+    scope = cast("Scope", {})
+    set_sqlspec_scope_state(scope, connection_key, mock_conn)
+    set_sqlspec_scope_state(scope, f"{connection_key}_ctx", cm_fake)
+
+    exc = RuntimeError("mapped to 200 fallback")
+    await record_request_exception(exc, scope)
+
+    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
+    await handler(message, scope)
+
+    mock_conn.commit.assert_not_awaited()
+    mock_conn.rollback.assert_awaited_once()
+    assert cm_fake.exit_args is not None
+    assert cm_fake.exit_args[0] is RuntimeError
+    assert cm_fake.exit_args[1] is exc
+
+
+async def test_connection_cleanup_middleware_handles_aborts_and_post_start_sessions() -> None:
+    """ConnectionCleanupMiddleware exits residual handed-over and post-start connections safely."""
+    import asyncio
+
+    from sqlspec.extensions.litestar.plugin import ConnectionCleanupMiddleware, _ConnectionCleanupTarget
+
+    target = _ConnectionCleanupTarget(
+        connection_key="db_connection",
+        session_key="db_session",
+        commit_mode="autocommit",
+        extra_commit_statuses=frozenset(),
+        extra_rollback_statuses=frozenset(),
+    )
+
+    conn_cancel = AsyncMock()
+    cm_cancel = _AsyncContextManagerFake(conn_cancel)
+
+    async def cancelling_app(scope: Any, _receive: Any, _send: Any) -> None:
+        set_sqlspec_scope_state(scope, "db_connection", conn_cancel)
+        set_sqlspec_scope_state(scope, "db_connection_ctx", cm_cancel)
+        raise asyncio.CancelledError()
+
+    middleware_cancel = ConnectionCleanupMiddleware(cancelling_app, targets=(target,))
+    scope_cancel = cast("Scope", {"type": "http", "state": {}})
+    with pytest.raises(asyncio.CancelledError):
+        await middleware_cancel(scope_cancel, AsyncMock(), AsyncMock())
+
+    conn_cancel.rollback.assert_awaited_once()
+    assert cm_cancel.exit_args is not None
+    assert cm_cancel.exit_args[0] is asyncio.CancelledError
+    assert get_sqlspec_scope_state(scope_cancel, "db_connection") is None
+
+    conn_silent = AsyncMock()
+    cm_silent = _AsyncContextManagerFake(conn_silent)
+
+    async def silent_abort_app(scope: Any, _receive: Any, _send: Any) -> None:
+        set_sqlspec_scope_state(scope, "db_connection", conn_silent)
+        set_sqlspec_scope_state(scope, "db_connection_ctx", cm_silent)
+
+    middleware_silent = ConnectionCleanupMiddleware(silent_abort_app, targets=(target,))
+    scope_silent = cast("Scope", {"type": "http", "state": {}})
+    await middleware_silent(scope_silent, AsyncMock(), AsyncMock())
+
+    conn_silent.rollback.assert_awaited_once()
+    assert cm_silent.exit_args is not None
+    assert cm_silent.exit_args[0] is asyncio.CancelledError
+    assert get_sqlspec_scope_state(scope_silent, "db_connection") is None
+
+    conn_stream = AsyncMock()
+    cm_stream = _AsyncContextManagerFake(conn_stream)
+
+    async def streaming_app(scope: Any, _receive: Any, send: Any) -> None:
+        await send({"type": HTTP_RESPONSE_START, "status": 200, "headers": []})
+        set_sqlspec_scope_state(scope, "db_connection", conn_stream)
+        set_sqlspec_scope_state(scope, "db_connection_ctx", cm_stream)
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    middleware_stream = ConnectionCleanupMiddleware(streaming_app, targets=(target,))
+    scope_stream = cast("Scope", {"type": "http", "state": {}})
+    await middleware_stream(scope_stream, AsyncMock(), AsyncMock())
+
+    conn_stream.commit.assert_awaited_once()
+    conn_stream.rollback.assert_not_awaited()
+    assert cm_stream.exit_args == (None, None, None)
+    assert get_sqlspec_scope_state(scope_stream, "db_connection") is None
