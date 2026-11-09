@@ -359,3 +359,105 @@ def test_bigquery_litestar_store_omits_partition_filter_by_default() -> None:
 
     assert all("1970-01-01" not in sql for sql in executed)
     assert all("1970-01-01" not in sql for sql in selected)
+
+
+def test_bigquery_adk_reconcile_target_order_and_dataset_qualification() -> None:
+    """get_schema_targets_sync returns the five dataset-qualified ADK targets with BigQuery additive safety."""
+    from unittest.mock import MagicMock
+
+    store = _make_store({"owner_id_column": "tenant_id STRING"})
+    targets = store.get_schema_targets_sync(MagicMock())
+
+    assert [t.table_name for t in targets] == [
+        "adk_session",
+        "adk_event",
+        "adk_app_state",
+        "adk_user_state",
+        "adk_internal_metadata",
+    ]
+    assert all(t.schema == "test_dataset" for t in targets)
+
+    session_target, event_target, app_state_target, _, metadata_target = targets
+    assert {"id", "app_name", "user_id", "create_time", "update_time"} <= session_target.unsafe_add_columns
+    assert "tenant_id" not in session_target.unsafe_add_columns
+    assert "state" not in session_target.unsafe_add_columns
+    assert "invocation_id" not in event_target.unsafe_add_columns
+    assert "event_data" not in event_target.unsafe_add_columns
+    assert {"app_name", "update_time"} <= app_state_target.unsafe_add_columns
+    assert {"key", "value"} <= metadata_target.unsafe_add_columns
+
+
+def test_bigquery_adk_reconcile_adds_nullable_column_and_refuses_not_null() -> None:
+    """Built-in ADK reconcile adds nullable BigQuery columns and refuses missing NOT NULL columns."""
+    from unittest.mock import MagicMock
+
+    from sqlspec.exceptions import MigrationError
+    from sqlspec.extensions.adk.migrations.reconcile import reconcile as adk_reconcile
+    from sqlspec.migrations.context import MigrationContext
+
+    config = BigQueryConfig(
+        connection_config={"project": "test-project", "dataset_id": "test_dataset"},
+        extension_config={
+            "adk": {"enable_memory": False, "owner_id_column": "tenant_id STRING", "migration_mode": "reconcile"}
+        },
+    )
+
+    columns_by_table: dict[str, list[dict[str, str]]] = {
+        "adk_session": [
+            {"column_name": "id", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "app_name", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "user_id", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "state", "data_type": "JSON", "is_nullable": "YES"},
+            {"column_name": "create_time", "data_type": "TIMESTAMP", "is_nullable": "NO"},
+            {"column_name": "update_time", "data_type": "TIMESTAMP", "is_nullable": "NO"},
+        ],
+        "adk_event": [
+            {"column_name": "id", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "app_name", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "user_id", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "session_id", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "invocation_id", "data_type": "STRING", "is_nullable": "YES"},
+            {"column_name": "timestamp", "data_type": "TIMESTAMP", "is_nullable": "NO"},
+            {"column_name": "event_data", "data_type": "JSON", "is_nullable": "YES"},
+        ],
+        "adk_app_state": [
+            {"column_name": "app_name", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "state", "data_type": "JSON", "is_nullable": "YES"},
+            {"column_name": "update_time", "data_type": "TIMESTAMP", "is_nullable": "NO"},
+        ],
+        "adk_user_state": [
+            {"column_name": "app_name", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "user_id", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "state", "data_type": "JSON", "is_nullable": "YES"},
+            {"column_name": "update_time", "data_type": "TIMESTAMP", "is_nullable": "NO"},
+        ],
+        "adk_internal_metadata": [
+            {"column_name": "key", "data_type": "STRING", "is_nullable": "NO"},
+            {"column_name": "value", "data_type": "STRING", "is_nullable": "NO"},
+        ],
+    }
+
+    driver = MagicMock()
+    driver.data_dictionary.get_tables.return_value = [{"table_name": name} for name in columns_by_table]
+    driver.data_dictionary.get_columns.side_effect = lambda _drv, table, schema=None: columns_by_table[table]
+
+    assert adk_reconcile(MigrationContext(config=config, dialect="bigquery", driver=driver)) is None
+    assert driver.execute.call_count == 1
+    executed_stmt = driver.execute.call_args.args[0]
+    sql = executed_stmt.sql if hasattr(executed_stmt, "sql") else str(executed_stmt)
+    assert "ALTER TABLE `test_dataset`.`adk_session`" in sql
+    assert "ADD COLUMN `tenant_id` STRING" in sql
+    driver.commit.assert_not_called()
+
+    missing_not_null_cols = dict(columns_by_table)
+    missing_not_null_cols["adk_app_state"] = [
+        {"column_name": "app_name", "data_type": "STRING", "is_nullable": "NO"},
+        {"column_name": "state", "data_type": "JSON", "is_nullable": "YES"},
+    ]
+    bad_driver = MagicMock()
+    bad_driver.data_dictionary.get_tables.return_value = [{"table_name": name} for name in missing_not_null_cols]
+    bad_driver.data_dictionary.get_columns.side_effect = lambda _drv, table, schema=None: missing_not_null_cols[table]
+
+    with pytest.raises(MigrationError, match="update_time") as exc_info:
+        adk_reconcile(MigrationContext(config=config, dialect="bigquery", driver=bad_driver))
+    assert 'migration_mode="versioned"' in str(exc_info.value)
