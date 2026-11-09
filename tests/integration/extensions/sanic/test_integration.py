@@ -587,3 +587,75 @@ def test_sanic_abrupt_disconnect_cancellation_rolls_back_and_releases_pool() -> 
             _, res_data = client.get("/data")
             assert res_data.status == 200
             assert res_data.json == {"names": ["initial"]}
+
+
+def test_sanic_autocommit_deferred_fk_violation_forwards_commit_error_without_double_commit() -> None:
+    """Deferred FK violation during Sanic autocommit COMMIT rolls back once without a second COMMIT on exit."""
+    import importlib
+    import sqlite3
+
+    reusable_client_cls: Any = importlib.import_module("sanic_testing.reusable").ReusableClient
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        with sqlite3.connect(tmp.name) as setup_conn:
+            setup_conn.execute("PRAGMA foreign_keys = ON")
+            setup_conn.execute("CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+            setup_conn.execute(
+                "CREATE TABLE children ("
+                "id INTEGER PRIMARY KEY, "
+                "parent_id INTEGER NOT NULL REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED"
+                ")"
+            )
+
+        traced_statements: list[str] = []
+        sqlspec = SQLSpec()
+        config = AiosqliteConfig(
+            connection_config={
+                "database": tmp.name,
+                "pool_size": 1,
+                "min_size": 1,
+                "connect_timeout": 0.5,
+                "enable_foreign_keys": True,
+            },
+            driver_features={"trace_callback": traced_statements.append},
+            extension_config={"sanic": {"commit_mode": "autocommit", "session_key": "db"}},
+        )
+        sqlspec.add_config(config)
+        plugin = SQLSpecPlugin(sqlspec)
+        app = _create_sanic_app("SQLSpecSanicDeferredFKCommit")
+
+        @app.post("/violate")
+        async def violate(request: Request):
+            db = plugin.get_session(request, "db")
+            await db.execute("INSERT INTO children (id, parent_id) VALUES (:id, :parent_id)", id=1, parent_id=999)
+            return response.json({"status": "deferred_until_commit"})
+
+        @app.post("/valid")
+        async def valid(request: Request):
+            db = plugin.get_session(request, "db")
+            await db.execute("INSERT INTO parents (id) VALUES (:id)", id=10)
+            await db.execute("INSERT INTO children (id, parent_id) VALUES (:id, :parent_id)", id=2, parent_id=10)
+            return response.json({"status": "ok"})
+
+        @app.get("/children")
+        async def children(request: Request):
+            db = plugin.get_session(request, "db")
+            result = await db.execute("SELECT id, parent_id FROM children ORDER BY id")
+            return response.json({"rows": result.all()})
+
+        plugin.init_app(app)
+
+        client: Any = reusable_client_cls(app)
+        with client:
+            traced_statements.clear()
+            client.post("/violate")
+            violate_sql = [stmt.strip().upper() for stmt in traced_statements]
+
+            _, res_valid = client.post("/valid")
+            _, res_children = client.get("/children")
+
+        assert violate_sql.count("COMMIT") == 1
+        assert "ROLLBACK" in violate_sql
+        assert res_valid.status == 200
+        assert res_children.status == 200
+        assert res_children.json == {"rows": [{"id": 2, "parent_id": 10}]}

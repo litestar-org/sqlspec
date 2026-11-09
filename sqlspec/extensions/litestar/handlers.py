@@ -61,15 +61,18 @@ async def record_request_exception(exc: BaseException, scope: "Scope") -> None:
     set_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY, exc)
 
 
-async def _exit_connection_context(connection_cm: Any, connection: Any, scope: "Scope") -> None:
-    """Exit connection context manager forwarding recorded exception if any.
+async def _exit_connection_context(
+    connection_cm: Any, connection: Any, scope: "Scope", exc_override: BaseException | None = None
+) -> None:
+    """Exit connection context manager forwarding recorded or override exception if any.
 
     Args:
         connection_cm: The context manager or None.
         connection: The database connection instance.
         scope: The ASGI connection scope.
+        exc_override: Optional exception overriding any scope-recorded exception.
     """
-    exc = get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
+    exc = exc_override if exc_override is not None else get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
     exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
     if isinstance(connection_cm, AbstractAsyncContextManager):
         await connection_cm.__aexit__(*exit_args)
@@ -153,6 +156,7 @@ def autocommit_handler_maker(
             scope: ASGI Scope.
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
+        exc_override: BaseException | None = None
         try:
             if connection is not None and message["type"] == HTTP_RESPONSE_START:
                 has_exception = get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is not None
@@ -161,9 +165,17 @@ def autocommit_handler_maker(
                     and (message["status"] in commit_range or message["status"] in extra_commit_statuses)
                     and message["status"] not in extra_rollback_statuses
                 ):
-                    await ensure_async_(connection.commit)()
+                    try:
+                        await ensure_async_(connection.commit)()
+                    except BaseException:
+                        with contextlib.suppress(Exception):
+                            await ensure_async_(connection.rollback)()
+                        raise
                 else:
                     await ensure_async_(connection.rollback)()
+        except BaseException as finalization_exc:
+            exc_override = finalization_exc
+            raise
         finally:
             if (
                 connection
@@ -172,7 +184,7 @@ def autocommit_handler_maker(
             ):
                 connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
                 try:
-                    await _exit_connection_context(connection_cm, connection, scope)
+                    await _exit_connection_context(connection_cm, connection, scope, exc_override=exc_override)
                 finally:
                     delete_sqlspec_scope_state(scope, connection_scope_key)
 

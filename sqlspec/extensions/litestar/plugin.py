@@ -223,6 +223,15 @@ class _ConnectionCleanupTarget:
     extra_rollback_statuses: frozenset[int]
 
 
+def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:
+    """Select the primary teardown exception to re-raise after completing all targets."""
+    if current is None:
+        return candidate
+    if isinstance(current, Exception) and not isinstance(candidate, Exception):
+        return candidate
+    return current
+
+
 class ConnectionCleanupMiddleware:
     """ASGI middleware guaranteeing residual HTTP request connections are finalized and released.
 
@@ -260,9 +269,13 @@ class ConnectionCleanupMiddleware:
             raise
         finally:
             started = response_started or bool(ScopeState.from_scope(scope).response_started)
-            await self._cleanup_scope(
-                scope, caught_exc=caught_exc, response_started=started, response_status=response_status
-            )
+            try:
+                await self._cleanup_scope(
+                    scope, caught_exc=caught_exc, response_started=started, response_status=response_status
+                )
+            except Exception:
+                if caught_exc is None or isinstance(caught_exc, Exception):
+                    raise
 
     async def _cleanup_scope(
         self, scope: "Scope", *, caught_exc: BaseException | None, response_started: bool, response_status: int | None
@@ -277,43 +290,61 @@ class ConnectionCleanupMiddleware:
         else:
             effective_exc = None
 
+        primary_exc: BaseException | None = None
         for target in self._targets:
-            ctx_scope_key = f"{target.connection_key}_ctx"
-            provider_owned_key = f"{target.connection_key}_provider_owned"
-            session_scope_key = f"{target.session_key}_instance"
-            connection = get_sqlspec_scope_state(scope, target.connection_key)
-            connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
-
-            if connection is None and connection_cm is None:
-                delete_sqlspec_scope_state(scope, session_scope_key)
-                continue
-
-            if effective_exc is not None and get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is None:
-                set_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY, effective_exc)
-
             try:
-                if connection is not None and target.commit_mode != "manual":
-                    if effective_exc is not None:
-                        with suppress(Exception):
-                            await ensure_async_(connection.rollback)()
-                    else:
-                        commit_range = range(200, 400 if target.commit_mode == "autocommit_include_redirect" else 300)
-                        should_commit = (
-                            response_status is not None
-                            and (response_status in commit_range or response_status in target.extra_commit_statuses)
-                            and response_status not in target.extra_rollback_statuses
-                        )
-                        if should_commit:
-                            await ensure_async_(connection.commit)()
-                        else:
-                            await ensure_async_(connection.rollback)()
-            finally:
-                try:
-                    await _exit_connection_context(connection_cm, connection, scope)
-                finally:
-                    delete_sqlspec_scope_state(scope, target.connection_key)
-                    delete_sqlspec_scope_state(scope, provider_owned_key)
+                ctx_scope_key = f"{target.connection_key}_ctx"
+                provider_owned_key = f"{target.connection_key}_provider_owned"
+                session_scope_key = f"{target.session_key}_instance"
+                connection = get_sqlspec_scope_state(scope, target.connection_key)
+                connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
+
+                if connection is None and connection_cm is None:
                     delete_sqlspec_scope_state(scope, session_scope_key)
+                    continue
+
+                if effective_exc is not None and get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is None:
+                    set_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY, effective_exc)
+
+                exc_override: BaseException | None = None
+                try:
+                    if connection is not None and target.commit_mode != "manual":
+                        if effective_exc is not None:
+                            with suppress(Exception):
+                                await ensure_async_(connection.rollback)()
+                        else:
+                            commit_range = range(
+                                200, 400 if target.commit_mode == "autocommit_include_redirect" else 300
+                            )
+                            should_commit = (
+                                response_status is not None
+                                and (response_status in commit_range or response_status in target.extra_commit_statuses)
+                                and response_status not in target.extra_rollback_statuses
+                            )
+                            if should_commit:
+                                try:
+                                    await ensure_async_(connection.commit)()
+                                except BaseException:
+                                    with suppress(Exception):
+                                        await ensure_async_(connection.rollback)()
+                                    raise
+                            else:
+                                await ensure_async_(connection.rollback)()
+                except BaseException as finalization_exc:
+                    exc_override = finalization_exc
+                    raise
+                finally:
+                    try:
+                        await _exit_connection_context(connection_cm, connection, scope, exc_override=exc_override)
+                    finally:
+                        delete_sqlspec_scope_state(scope, target.connection_key)
+                        delete_sqlspec_scope_state(scope, provider_owned_key)
+                        delete_sqlspec_scope_state(scope, session_scope_key)
+            except BaseException as exc:
+                primary_exc = _select_teardown_exception(primary_exc, exc)
+
+        if primary_exc is not None:
+            raise primary_exc
 
 
 @dataclass

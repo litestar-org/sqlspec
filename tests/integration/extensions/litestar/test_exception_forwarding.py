@@ -418,3 +418,64 @@ def test_litestar_streaming_post_response_start_on_demand_session_releases_pool(
     assert res_stream.text == "chunk-1:chunk-2"
     assert res_verify.status_code == 200
     assert res_verify.json() == {"rows": ["stream_row"]}
+
+
+def test_litestar_autocommit_deferred_fk_violation_forwards_commit_error_without_double_commit(tmp_path: Path) -> None:
+    """Deferred FK violation during autocommit COMMIT rolls back once without a second COMMIT on exit."""
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.driver import AsyncDriverAdapterBase
+
+    db_path = tmp_path / "deferred_fk.db"
+    with sqlite3.connect(str(db_path)) as setup_conn:
+        setup_conn.execute("PRAGMA foreign_keys = ON")
+        setup_conn.execute("CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+        setup_conn.execute(
+            "CREATE TABLE children ("
+            "id INTEGER PRIMARY KEY, "
+            "parent_id INTEGER NOT NULL REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED"
+            ")"
+        )
+
+    traced_statements: list[str] = []
+    config = AiosqliteConfig(
+        connection_config={
+            "database": str(db_path),
+            "pool_size": 1,
+            "min_size": 1,
+            "connect_timeout": 0.5,
+            "enable_foreign_keys": True,
+        },
+        driver_features={"trace_callback": traced_statements.append},
+        extension_config={"litestar": {"commit_mode": "autocommit"}},
+    )
+    spec = SQLSpec()
+    spec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec=spec)
+
+    @get("/violate")
+    async def violate_route(db_session: NamedDependency[AsyncDriverAdapterBase]) -> dict[str, str]:
+        await db_session.execute("INSERT INTO children (id, parent_id) VALUES (:id, :parent_id)", id=1, parent_id=999)
+        return {"status": "deferred_until_commit"}
+
+    @get("/valid")
+    async def valid_route(db_session: NamedDependency[AsyncDriverAdapterBase]) -> dict[str, str]:
+        await db_session.execute("INSERT INTO parents (id) VALUES (:id)", id=10)
+        await db_session.execute("INSERT INTO children (id, parent_id) VALUES (:id, :parent_id)", id=2, parent_id=10)
+        return {"status": "ok"}
+
+    app = Litestar(route_handlers=[violate_route, valid_route], plugins=[plugin], debug=True)
+
+    with TestClient(app=app, raise_server_exceptions=False) as client:
+        traced_statements.clear()
+        res_violate = client.get("/violate")
+        violate_sql = [stmt.strip().upper() for stmt in traced_statements]
+        res_valid = client.get("/valid")
+
+    assert res_violate.status_code == 500
+    assert violate_sql.count("COMMIT") == 1
+    assert "ROLLBACK" in violate_sql
+    assert res_valid.status_code == 200
+
+    with sqlite3.connect(str(db_path)) as check_conn:
+        rows = check_conn.execute("SELECT id, parent_id FROM children ORDER BY id").fetchall()
+    assert rows == [(2, 10)]

@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from os import PathLike
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict
 
 from mypy_extensions import mypyc_attr
 
