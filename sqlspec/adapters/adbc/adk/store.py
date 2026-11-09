@@ -1,6 +1,7 @@
 """ADBC ADK store for Google Agent Development Kit session/event storage."""
 
 import contextlib
+import re
 import struct
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -10,18 +11,22 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 from sqlspec.adapters.adbc.core import (
     _DB2_INDEX_EXISTS_SQL,
     _DB2_TABLE_EXISTS_SQL,
+    RECONCILE_ADBC_DIALECTS,
     driver_kind_from_driver_name,
     is_postgres_dialect,
     is_shared_object_driver,
     is_sqlite_reconcile_target,
     resolve_dialect_from_config,
+    resolve_reconcile_adbc_dialect,
 )
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.config import ADKConfig
 from sqlspec.core.parameters._validator import PARAMETER_REGEX
+from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -67,6 +72,9 @@ DIALECT_ORACLE: Final = "oracle"
 DIALECT_DB2: Final = "db2"
 DIALECT_MSSQL: Final = "mssql"
 DIALECT_GENERIC: Final = "generic"
+
+_DB2_WITH_DEFAULT_RE: Final[re.Pattern[str]] = re.compile(r"\bWITH\s+DEFAULT\b", re.IGNORECASE)
+_SCHEMA_TARGET_PARSE_DIALECTS: Final[dict[str, str]] = {DIALECT_POSTGRESQL: "postgres", DIALECT_MSSQL: "tsql"}
 
 ADBC_TABLE_NOT_FOUND_PATTERNS: Final = (
     "no such table",
@@ -118,17 +126,49 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         self._dialect = self._detect_dialect()
 
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Reconcile SQLite session and event companion indexes on the migration driver.
+        """Reconcile session and event companion indexes for the active ADBC backend.
 
         Args:
             driver: Synchronous migration driver executing the reconciliation phase.
         """
-        for statement in (
-            f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id)",
-            f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC)",
-            f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC)",
-        ):
-            driver.execute(statement)
+        if self._dialect == DIALECT_SQLITE:
+            for statement in (
+                f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id)",
+                f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC)",
+                f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC)",
+            ):
+                driver.execute(statement)
+            return
+
+        if self._dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
+            return
+
+        _reconcile_adbc_indexes_sync(driver, self._dialect, self._session_index_specs())
+
+    def _session_index_specs(self) -> list[tuple[str, str, str]]:
+        """Return ordinary session and event companion index definitions."""
+        session_slug = _adbc_index_slug(self._session_table)
+        events_slug = _adbc_index_slug(self._events_table)
+        return [
+            (f"idx_{session_slug}_app_user", self._session_table, "app_name, user_id"),
+            (f"idx_{session_slug}_update_time", self._session_table, "update_time DESC"),
+            (f"idx_{events_slug}_session", self._events_table, "session_id, timestamp ASC"),
+        ]
+
+    def _adbc_target(self, table: str, ddl: str) -> SchemaTarget:
+        """Build a dialect-aware SchemaTarget for one ADK table."""
+        return _build_adbc_schema_target(self._dialect, table, ddl)
+
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct dialect-aware SchemaTarget definitions for all ADK session tables."""
+        ddl_targets = (
+            (self._session_table, self._sessions_table_ddl()),
+            (self._events_table, self._events_table_ddl()),
+            (self._app_state_table, self._app_states_table_ddl()),
+            (self._user_state_table, self._user_states_table_ddl()),
+            (self._metadata_table, self._metadata_table_ddl()),
+        )
+        return [self._adbc_target(table, ddl) for table, ddl in ddl_targets]
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -251,51 +291,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             Dialect identifier for DDL generation.
         """
-        driver_name = self._config.connection_config.get("driver_name", "")
-        if (
-            isinstance(driver_name, str)
-            and driver_name
-            and driver_kind_from_driver_name(driver_name) is None
-            and not is_shared_object_driver(driver_name)
-        ):
-            logger.warning(
+        return _detect_adbc_adk_dialect(
+            self._config,
+            unknown_warning=(
                 "Unknown ADBC driver: %s. Using generic SQL dialect. "
-                "Consider using a direct adapter for better performance.",
-                driver_name,
-            )
-            return DIALECT_GENERIC
-
-        resolved = resolve_dialect_from_config(self._config.connection_config)
-        stmt_dialect = self._config.statement_config.dialect
-        if (isinstance(stmt_dialect, str) and stmt_dialect.lower() in {"oracle", "db2", "mssql", "tsql"}) or (
-            resolved is None
-            and isinstance(stmt_dialect, str)
-            and stmt_dialect.lower() in {"sqlite", "duckdb", "bigquery", "snowflake"}
-        ):
-            resolved = stmt_dialect.lower()
-        if is_postgres_dialect(resolved):
-            return DIALECT_POSTGRESQL
-        if resolved == "sqlite":
-            return DIALECT_SQLITE
-        if resolved == "duckdb":
-            return DIALECT_DUCKDB
-        if resolved == "bigquery":
-            return DIALECT_BIGQUERY
-        if resolved == "snowflake":
-            return DIALECT_SNOWFLAKE
-        if resolved == "oracle":
-            return DIALECT_ORACLE
-        if resolved == "db2":
-            return DIALECT_DB2
-        if resolved in {"mssql", "tsql"}:
-            return DIALECT_MSSQL
-
-        logger.warning(
-            "Unknown ADBC driver: %s. Using generic SQL dialect. "
-            "Consider using a direct adapter for better performance.",
-            driver_name,
+                "Consider using a direct adapter for better performance."
+            ),
         )
-        return DIALECT_GENERIC
 
     def _encode_timestamp(self, value: datetime) -> Any:
         if self._dialect == DIALECT_SQLITE:
@@ -1716,8 +1718,19 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     def dialect(self) -> str:
         return self._dialect
 
+    def prepare_reconcile_sync(self, driver: Any) -> None:
+        """Validate PostgreSQL memory index settings before executing target DDL."""
+        del driver
+        if not self._enabled or self._dialect != DIALECT_POSTGRESQL:
+            return
+        self._postgres_memory_extra_index_specs()
+        if self._enable_bm25 and getattr(self._config, "_pg_textsearch_available", None) is False:
+            ensure_bm25 = getattr(self._config, "_ensure_pg_textsearch_available", None)
+            if callable(ensure_bm25):
+                ensure_bm25()
+
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Reconcile SQLite memory companion indexes and FTS5 objects on the migration driver.
+        """Reconcile memory companion indexes and SQLite FTS5 objects on the migration driver.
 
         Args:
             driver: Synchronous migration driver executing the reconciliation phase.
@@ -1725,33 +1738,66 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         if not self._enabled:
             return
 
-        for statement in self._memory_index_statements():
-            driver.execute(statement)
+        if self._dialect == DIALECT_SQLITE:
+            for statement in self._memory_index_statements():
+                driver.execute(statement)
 
-        if not self._use_fts:
+            if not self._use_fts:
+                return
+
+            fts_statements = self._memory_fts_statements()
+            if not fts_statements:
+                return
+
+            expected = list(fts_statements)
+            rows = driver.select(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger') AND lower(name) IN (?, ?, ?, ?)",
+                tuple(name.lower() for name in expected),
+            )
+            existing = {
+                str(row.get("name") or row.get("NAME") if isinstance(row, Mapping) else row[0]).lower() for row in rows
+            }
+            missing = [name for name in expected if name.lower() not in existing]
+            if not missing:
+                return
+
+            for name in missing:
+                driver.execute(fts_statements[name])
+
+            if driver.select(f"SELECT 1 AS present FROM {self._memory_table} LIMIT 1"):
+                driver.execute(self._memory_fts_rebuild_statement())
             return
 
-        fts_statements = self._memory_fts_statements()
-        if not fts_statements:
+        if self._dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
             return
 
-        expected = list(fts_statements)
-        rows = driver.select(
-            "SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger') AND lower(name) IN (?, ?, ?, ?)",
-            tuple(name.lower() for name in expected),
+        extra_specs = self._postgres_memory_extra_index_specs() if self._dialect == DIALECT_POSTGRESQL else ()
+        _reconcile_adbc_indexes_sync(
+            driver,
+            self._dialect,
+            self._memory_index_specs(),
+            extra_statement_specs=extra_specs,
+            extra_table_name=self._memory_table,
         )
-        existing = {
-            str(row.get("name") or row.get("NAME") if isinstance(row, Mapping) else row[0]).lower() for row in rows
-        }
-        missing = [name for name in expected if name.lower() not in existing]
-        if not missing:
-            return
 
-        for name in missing:
-            driver.execute(fts_statements[name])
+    def _memory_index_specs(self) -> list[tuple[str, str, str]]:
+        """Return ordinary memory companion index definitions."""
+        slug = _adbc_index_slug(self._memory_table)
+        return [
+            (f"idx_{slug}_app_scope_user_time", self._memory_table, "app_name, scope, user_id, timestamp DESC"),
+            (f"idx_{slug}_scope", self._memory_table, "app_name, scope"),
+            (f"idx_{slug}_session", self._memory_table, "session_id"),
+        ]
 
-        if driver.select(f"SELECT 1 AS present FROM {self._memory_table} LIMIT 1"):
-            driver.execute(self._memory_fts_rebuild_statement())
+    def _adbc_target(self, table: str, ddl: str) -> SchemaTarget:
+        """Build a dialect-aware SchemaTarget for the ADK memory table."""
+        return _build_adbc_schema_target(self._dialect, table, ddl)
+
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct the dialect-aware SchemaTarget definition for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
+        return [self._adbc_target(self._memory_table, self._memory_base_table_ddl())]
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1806,42 +1852,9 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             raise ImproperConfigurationError(msg)
 
     def _detect_dialect(self) -> str:
-        driver_name = self._config.connection_config.get("driver_name", "")
-        if (
-            isinstance(driver_name, str)
-            and driver_name
-            and driver_kind_from_driver_name(driver_name) is None
-            and not is_shared_object_driver(driver_name)
-        ):
-            logger.warning("Unknown ADBC driver: %s. Using generic SQL dialect.", driver_name)
-            return DIALECT_GENERIC
-
-        resolved = resolve_dialect_from_config(self._config.connection_config)
-        stmt_dialect = self._config.statement_config.dialect
-        if (isinstance(stmt_dialect, str) and stmt_dialect.lower() in {"oracle", "db2", "mssql", "tsql"}) or (
-            resolved is None
-            and isinstance(stmt_dialect, str)
-            and stmt_dialect.lower() in {"sqlite", "duckdb", "bigquery", "snowflake"}
-        ):
-            resolved = stmt_dialect.lower()
-        if is_postgres_dialect(resolved):
-            return DIALECT_POSTGRESQL
-        if resolved == "sqlite":
-            return DIALECT_SQLITE
-        if resolved == "duckdb":
-            return DIALECT_DUCKDB
-        if resolved == "bigquery":
-            return DIALECT_BIGQUERY
-        if resolved == "snowflake":
-            return DIALECT_SNOWFLAKE
-        if resolved == "oracle":
-            return DIALECT_ORACLE
-        if resolved == "db2":
-            return DIALECT_DB2
-        if resolved in {"mssql", "tsql"}:
-            return DIALECT_MSSQL
-        logger.warning("Unknown ADBC driver: %s. Using generic SQL dialect.", driver_name)
-        return DIALECT_GENERIC
+        return _detect_adbc_adk_dialect(
+            self._config, unknown_warning="Unknown ADBC driver: %s. Using generic SQL dialect."
+        )
 
     def _format_sql(self, sql: str) -> str:
         """Return SQL with dialect-appropriate positional placeholders."""
@@ -2222,16 +2235,21 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             finally:
                 cursor.close()
 
-    def _postgres_memory_extra_index_sql(self) -> "list[str]":
-        indexes: list[str] = []
+    def _postgres_memory_extra_index_specs(self) -> "list[tuple[str, str]]":
+        slug = _adbc_index_slug(self._memory_table)
+        indexes: list[tuple[str, str]] = []
         if self._use_fts:
-            indexes.append(
-                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts ON {self._memory_table} USING GIN (to_tsvector('english', content_text))"
-            )
+            index_name = f"idx_{slug}_fts"
+            indexes.append((
+                index_name,
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {self._memory_table} USING GIN (to_tsvector('english', content_text))",
+            ))
         if self._enable_bm25:
-            indexes.append(
-                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_bm25 ON {self._memory_table} USING bm25 (content_text) WITH (text_config='english')"
-            )
+            index_name = f"idx_{slug}_bm25"
+            indexes.append((
+                index_name,
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {self._memory_table} USING bm25 (content_text) WITH (text_config='english')",
+            ))
         if not self._pgvector_enabled():
             return indexes
 
@@ -2246,18 +2264,27 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             if self._scann_quantizer not in {"SQ8", "FP32"}:
                 msg = "extension_config['adk']['scann_quantizer'] must be 'SQ8' or 'FP32'"
                 raise ValueError(msg)
-            indexes.append(
-                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scann ON {self._memory_table} USING scann (embedding) WITH (num_leaves = {self._scann_num_leaves}, quantizer = '{self._scann_quantizer}')"
-            )
+            index_name = f"idx_{slug}_scann"
+            indexes.append((
+                index_name,
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {self._memory_table} USING scann (embedding) WITH (num_leaves = {self._scann_num_leaves}, quantizer = '{self._scann_quantizer}')",
+            ))
         elif self._vector_index_type == "ivfflat":
-            indexes.append(
-                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_ivfflat ON {self._memory_table} USING ivfflat (embedding vector_cosine_ops)"
-            )
+            index_name = f"idx_{slug}_ivfflat"
+            indexes.append((
+                index_name,
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {self._memory_table} USING ivfflat (embedding vector_cosine_ops)",
+            ))
         elif self._vector_index_type == "hnsw":
-            indexes.append(
-                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_hnsw ON {self._memory_table} USING hnsw (embedding vector_cosine_ops)"
-            )
+            index_name = f"idx_{slug}_hnsw"
+            indexes.append((
+                index_name,
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {self._memory_table} USING hnsw (embedding vector_cosine_ops)",
+            ))
         return indexes
+
+    def _postgres_memory_extra_index_sql(self) -> "list[str]":
+        return [sql for _, sql in self._postgres_memory_extra_index_specs()]
 
     def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -2883,27 +2910,142 @@ def _execute_table_ddl(cursor: Any, dialect: str, table_name: str, ddl: str) -> 
     cursor.execute(ddl)
 
 
-def _execute_index_ddl(cursor: Any, dialect: str, index_name: str, table_name: str, columns: str) -> None:
+def _adbc_index_slug(table_name: str) -> str:
+    return table_name.replace(".", "_").replace('"', "").replace("`", "").replace("[", "").replace("]", "")
+
+
+def _split_adbc_table_name(dialect: str, table_name: str) -> tuple[str | None, str]:
+    if dialect == DIALECT_DB2:
+        return _split_db2_table_name(table_name)
+    raw_schema, dot, raw_table = table_name.rpartition(".")
+    if dot:
+        return raw_schema.strip('"`[]') or None, raw_table.strip('"`[]')
+    return None, table_name.strip('"`[]')
+
+
+def _detect_adbc_adk_dialect(config: "AdbcConfig", *, unknown_warning: str) -> str:
+    driver_name = config.connection_config.get("driver_name", "")
+    if (
+        isinstance(driver_name, str)
+        and driver_name
+        and driver_kind_from_driver_name(driver_name) is None
+        and not is_shared_object_driver(driver_name)
+    ):
+        logger.warning(unknown_warning, driver_name)
+        return DIALECT_GENERIC
+
+    explicit_dialect = getattr(config, "explicit_statement_dialect", None)
+    if bool(config.connection_config):
+        reconciled = resolve_reconcile_adbc_dialect(config.connection_config, explicit_dialect)
+        if reconciled is not None:
+            return DIALECT_POSTGRESQL if is_postgres_dialect(reconciled) else reconciled
+    elif isinstance(explicit_dialect, str) and explicit_dialect.strip():
+        normalized_explicit = normalize_dialect_name(explicit_dialect.strip())
+        if normalized_explicit in RECONCILE_ADBC_DIALECTS:
+            return DIALECT_POSTGRESQL if is_postgres_dialect(normalized_explicit) else normalized_explicit
+
+    resolved = resolve_dialect_from_config(config.connection_config)
+    stmt_dialect = config.statement_config.dialect
+    if (isinstance(stmt_dialect, str) and stmt_dialect.lower() in {"oracle", "db2", "mssql", "tsql"}) or (
+        resolved is None
+        and isinstance(stmt_dialect, str)
+        and stmt_dialect.lower() in {"sqlite", "duckdb", "bigquery", "snowflake"}
+    ):
+        resolved = stmt_dialect.lower()
+    if is_postgres_dialect(resolved):
+        return DIALECT_POSTGRESQL
+    if resolved == "sqlite":
+        return DIALECT_SQLITE
+    if resolved == "duckdb":
+        return DIALECT_DUCKDB
+    if resolved == "bigquery":
+        return DIALECT_BIGQUERY
+    if resolved == "snowflake":
+        return DIALECT_SNOWFLAKE
+    if resolved == "oracle":
+        return DIALECT_ORACLE
+    if resolved == "db2":
+        return DIALECT_DB2
+    if resolved in {"mssql", "tsql"}:
+        return DIALECT_MSSQL
+
+    logger.warning(unknown_warning, driver_name)
+    return DIALECT_GENERIC
+
+
+def _build_adbc_schema_target(dialect: str, table: str, ddl: str) -> SchemaTarget:
+    parse_dialect = _SCHEMA_TARGET_PARSE_DIALECTS.get(dialect, dialect)
+    schema_name, catalog_table = _split_adbc_table_name(dialect, table)
+    if dialect == DIALECT_DB2:
+        parse_ddl = _DB2_WITH_DEFAULT_RE.sub("DEFAULT", ddl)
+        parsed = SchemaTarget.from_ddl(catalog_table, parse_ddl, schema=schema_name, dialect=parse_dialect)
+        return SchemaTarget(
+            catalog_table,
+            parsed.create_table,
+            schema=schema_name,
+            create_statement=ddl,
+            constraint_columns=parsed.constraint_columns,
+            unsafe_add_columns=parsed.unsafe_add_columns,
+        )
+    return SchemaTarget.from_ddl(catalog_table, ddl, schema=schema_name, dialect=parse_dialect)
+
+
+def _index_ddl_for_dialect(dialect: str, index_name: str, table_name: str, columns: str) -> str:
     if dialect == DIALECT_ORACLE:
-        stmt = (
+        return (
             f"BEGIN EXECUTE IMMEDIATE 'CREATE INDEX {index_name} ON {table_name}({columns})'; "
             "EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF; END;"
         )
-        cursor.execute(stmt)
-        return
     if dialect == DIALECT_DB2:
-        if not _db2_index_exists(cursor, index_name):
-            cursor.execute(f"CREATE INDEX {index_name} ON {table_name}({columns})")
-        return
+        schema_name, _ = _split_db2_table_name(table_name)
+        qualified_index = f"{schema_name}.{index_name}" if schema_name is not None else index_name
+        return f"CREATE INDEX {qualified_index} ON {table_name}({columns})"
     if dialect == DIALECT_MSSQL:
-        stmt = (
+        return (
             f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{index_name}' "
             f"AND object_id = OBJECT_ID(N'{table_name}')) "
             f"CREATE INDEX {index_name} ON {table_name}({columns})"
         )
-        cursor.execute(stmt)
+    return f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({columns})"
+
+
+def _reconcile_adbc_indexes_sync(
+    driver: Any,
+    dialect: str,
+    index_specs: "Sequence[tuple[str, str, str]]",
+    *,
+    extra_statement_specs: "Sequence[tuple[str, str]]" = (),
+    extra_table_name: str | None = None,
+) -> None:
+    indexes_by_table: dict[tuple[str | None, str], list[Any]] = {}
+    for index_name, table_name, columns in index_specs:
+        schema_name, catalog_table = _split_adbc_table_name(dialect, table_name)
+        cache_key = (schema_name, catalog_table)
+        rows = indexes_by_table.get(cache_key)
+        if rows is None:
+            rows = list(driver.data_dictionary.get_indexes(driver, table=catalog_table, schema=schema_name))
+            indexes_by_table[cache_key] = rows
+        if not metadata_has_index(rows, catalog_table, index_name, schema_name=schema_name):
+            driver.execute(_index_ddl_for_dialect(dialect, index_name, table_name, columns))
+
+    if extra_statement_specs and extra_table_name is not None:
+        schema_name, catalog_table = _split_adbc_table_name(dialect, extra_table_name)
+        cache_key = (schema_name, catalog_table)
+        rows = indexes_by_table.get(cache_key)
+        if rows is None:
+            rows = list(driver.data_dictionary.get_indexes(driver, table=catalog_table, schema=schema_name))
+            indexes_by_table[cache_key] = rows
+        for extra_index_name, extra_statement in extra_statement_specs:
+            if not metadata_has_index(rows, catalog_table, extra_index_name, schema_name=schema_name):
+                driver.execute(extra_statement)
+
+
+def _execute_index_ddl(cursor: Any, dialect: str, index_name: str, table_name: str, columns: str) -> None:
+    if dialect == DIALECT_DB2:
+        if not _db2_index_exists(cursor, index_name):
+            cursor.execute(_index_ddl_for_dialect(dialect, index_name, table_name, columns))
         return
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({columns})")
+    cursor.execute(_index_ddl_for_dialect(dialect, index_name, table_name, columns))
 
 
 def _drop_table_sql_for_dialect(dialect: str, table_name: str) -> str:
