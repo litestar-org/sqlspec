@@ -17,6 +17,7 @@ Configuration (optional override):
     }
 """
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING, Any, Literal, NotRequired
 
@@ -26,6 +27,7 @@ from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, vali
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, storage_type_from_version
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -167,6 +169,29 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
             for stmt in _oracle_drop_sql(self.table_name, self._index_name()):
                 driver.execute_script(stmt)
 
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Populate the pool-scoped Oracle version cache on an active synchronous driver."""
+        if self._json_storage_override is not None:
+            return
+        _prepare_oracle_events_schema_sync(self._config, driver)
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the Oracle queue table SchemaTarget using cached version storage when resolved."""
+        storage_type = _resolve_cached_oracle_json_storage(self._config, self._json_storage_override)
+        return SchemaTarget.from_ddl(
+            self.table_name,
+            _oracle_table_ddl(self.table_name, storage_type, self._table_feature_clause(), self._index_name()),
+            dialect="oracle",
+        )
+
+    def _index_existence_target(self) -> "tuple[str | None, str]":
+        """Return optional schema and table name for catalog index lookup."""
+        return _oracle_index_existence_target(self.table_name)
+
+    def _wrap_create_statement(self, statement: str, object_type: str) -> str:
+        """Wrap Oracle companion index DDL in PL/SQL duplicate-index error handling."""
+        return _oracle_wrap_create_statement(statement, object_type)
+
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Oracle column types based on storage mode."""
         storage = self._json_storage_override or JSONStorageType.BLOB_JSON
@@ -284,6 +309,29 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
             for stmt in _oracle_drop_sql(self.table_name, self._index_name()):
                 await driver.execute_script(stmt)
 
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Populate the pool-scoped Oracle version cache on an active asynchronous driver."""
+        if self._json_storage_override is not None:
+            return
+        await _prepare_oracle_events_schema_async(self._config, driver)
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the Oracle queue table SchemaTarget using cached version storage when resolved."""
+        storage_type = _resolve_cached_oracle_json_storage(self._config, self._json_storage_override)
+        return SchemaTarget.from_ddl(
+            self.table_name,
+            _oracle_table_ddl(self.table_name, storage_type, self._table_feature_clause(), self._index_name()),
+            dialect="oracle",
+        )
+
+    def _index_existence_target(self) -> "tuple[str | None, str]":
+        """Return optional schema and table name for catalog index lookup."""
+        return _oracle_index_existence_target(self.table_name)
+
+    def _wrap_create_statement(self, statement: str, object_type: str) -> str:
+        """Wrap Oracle companion index DDL in PL/SQL duplicate-index error handling."""
+        return _oracle_wrap_create_statement(statement, object_type)
+
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Oracle column types based on storage mode."""
         storage = self._json_storage_override or JSONStorageType.BLOB_JSON
@@ -338,6 +386,61 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
             table_options_key="table_options",
         )
         return report["plsql_clause"]
+
+
+def _prepare_oracle_events_schema_sync(config: "OracleSyncConfig", driver: Any) -> None:
+    """Resolve and cache the pool-scoped Oracle version on a synchronous driver."""
+    cache = getattr(config, "_oracle_version_cache", None)
+    if cache is None or cache.resolved:
+        return
+    if getattr(driver, "_oracle_version_cache", None) is None:
+        with contextlib.suppress(AttributeError):
+            driver._oracle_version_cache = cache
+    version_info = driver.data_dictionary.get_version(driver)
+    cache.version = version_info
+    cache.resolved = True
+
+
+async def _prepare_oracle_events_schema_async(config: "OracleAsyncConfig", driver: Any) -> None:
+    """Resolve and cache the pool-scoped Oracle version on an asynchronous driver."""
+    cache = getattr(config, "_oracle_version_cache", None)
+    if cache is None or cache.resolved:
+        return
+    if getattr(driver, "_oracle_version_cache", None) is None:
+        with contextlib.suppress(AttributeError):
+            driver._oracle_version_cache = cache
+    version_info = await driver.data_dictionary.get_version(driver)
+    cache.version = version_info
+    cache.resolved = True
+
+
+def _resolve_cached_oracle_json_storage(config: Any, override: "JSONStorageType | None") -> JSONStorageType:
+    """Resolve Oracle JSON storage type from explicit override or warm version cache."""
+    if override is not None:
+        return override
+    cache = getattr(config, "_oracle_version_cache", None)
+    if cache is not None and cache.resolved:
+        return storage_type_from_version(cache.version)
+    return JSONStorageType.BLOB_JSON
+
+
+def _oracle_index_existence_target(table_name: str) -> "tuple[str | None, str]":
+    """Split a table name into optional schema and bare table name."""
+    if "." in table_name:
+        schema_name, bare_table = table_name.split(".", 1)
+        return schema_name, bare_table
+    return None, table_name
+
+
+def _oracle_wrap_create_statement(statement: str, object_type: str) -> str:
+    """Wrap Oracle CREATE INDEX statements in PL/SQL duplicate-index handling."""
+    if object_type == "index":
+        escaped = statement.replace("'", "''")
+        return (
+            f"BEGIN EXECUTE IMMEDIATE '{escaped}'; "
+            "EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF; END;"
+        )
+    return statement
 
 
 def _init_oracle_settings(extension_settings: "dict[str, Any]") -> "tuple[bool, JSONStorageType | None]":

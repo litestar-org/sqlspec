@@ -329,3 +329,124 @@ def test_litestar_reconcile_refuses_nullable_data_column(tmp_path: Path) -> None
         assert cols == {"session_id", "data"}
     finally:
         cfg.close_pool()
+
+
+@pytest.mark.anyio
+async def test_events_reconcile_sync_and_async_end_to_end_partial_table_and_strict_refusal(tmp_path: Path) -> None:
+    from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
+    from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+
+    sync_migrations = tmp_path / "sync_events_migrations"
+    sync_migrations.mkdir(parents=True, exist_ok=True)
+    sync_db = tmp_path / "sync_events.db"
+    sync_cfg = SqliteConfig(
+        connection_config={"database": str(sync_db)},
+        migration_config={"script_location": str(sync_migrations)},
+        extension_config={"events": {"backend": "poll_queue", "migration_mode": "reconcile"}},
+    )
+
+    async_migrations = tmp_path / "async_events_migrations"
+    async_migrations.mkdir(parents=True, exist_ok=True)
+    async_db = tmp_path / "async_events.db"
+    async_cfg = AiosqliteConfig(
+        connection_config={"database": str(async_db)},
+        migration_config={"script_location": str(async_migrations)},
+        extension_config={"events": {"backend": "poll_queue", "migration_mode": "reconcile"}},
+    )
+
+    no_create_cfg = SqliteConfig(
+        connection_config={"database": str(tmp_path / "events_no_create.db")},
+        extension_config={"events": {"backend": "poll_queue", "migration_mode": "reconcile", "create_schema": False}},
+    )
+    missing_payload_cfg = SqliteConfig(
+        connection_config={"database": str(tmp_path / "events_missing_payload.db")},
+        extension_config={"events": {"backend": "poll_queue", "migration_mode": "reconcile"}},
+    )
+
+    partial_ddl = (
+        "CREATE TABLE sqlspec_event_queue ("
+        "event_id VARCHAR(64) PRIMARY KEY, "
+        "channel VARCHAR(128) NOT NULL, "
+        "payload_json TEXT NOT NULL, "
+        "metadata_json TEXT, "
+        "status VARCHAR(32) NOT NULL DEFAULT 'pending', "
+        "available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "lease_expires_at TIMESTAMP, "
+        "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        "); "
+        "INSERT INTO sqlspec_event_queue (event_id, channel, payload_json) VALUES ('e1', 'orders', '{}');"
+    )
+
+    try:
+        with sync_cfg.provide_session() as session:
+            session.execute_script(partial_ddl)
+            session.commit()
+
+        sync_commands = SyncMigrationCommands(sync_cfg)
+        sync_commands.upgrade()
+        sync_commands.upgrade()
+
+        with sync_cfg.provide_session() as session:
+            sync_cols = {
+                str(c["column_name"]).casefold()
+                for c in session.data_dictionary.get_columns(session, "sqlspec_event_queue")
+            }
+            sync_indexes = {
+                str(idx["index_name"]).casefold()
+                for idx in session.data_dictionary.get_indexes(session, table="sqlspec_event_queue")
+            }
+            sync_rows = session.select("SELECT event_id, attempts FROM sqlspec_event_queue")
+            sync_ledger = session.select("SELECT version_num FROM ddl_migrations")
+
+        assert {"acknowledged_at", "attempts"}.issubset(sync_cols)
+        assert "idx_sqlspec_event_queue_channel_status" in sync_indexes
+        assert len(sync_rows) == 1
+        assert sync_rows[0]["event_id"] == "e1"
+        assert sync_rows[0]["attempts"] == 0
+        assert all(not str(r["version_num"]).startswith("ext_events_") for r in sync_ledger)
+
+        with pytest.raises(MigrationError):
+            sync_commands.downgrade()
+
+        async with async_cfg.provide_session() as async_session:
+            await async_session.execute_script(partial_ddl)
+            await async_session.commit()
+
+        async_commands = AsyncMigrationCommands(async_cfg)
+        await async_commands.upgrade()
+        await async_commands.upgrade()
+
+        async with async_cfg.provide_session() as async_session:
+            async_cols = {
+                str(c["column_name"]).casefold()
+                for c in await async_session.data_dictionary.get_columns(async_session, "sqlspec_event_queue")
+            }
+            async_indexes = {
+                str(idx["index_name"]).casefold()
+                for idx in await async_session.data_dictionary.get_indexes(async_session, table="sqlspec_event_queue")
+            }
+            async_rows = await async_session.select("SELECT event_id, attempts FROM sqlspec_event_queue")
+
+        assert {"acknowledged_at", "attempts"}.issubset(async_cols)
+        assert "idx_sqlspec_event_queue_channel_status" in async_indexes
+        assert len(async_rows) == 1
+        assert async_rows[0]["attempts"] == 0
+
+        with pytest.raises(MigrationError):
+            await async_commands.downgrade()
+
+        with no_create_cfg.provide_session() as drv, pytest.raises(MigrationError, match="sqlspec_event_queue"):
+            events_reconcile(MigrationContext(config=no_create_cfg, driver=drv))
+
+        with missing_payload_cfg.provide_session() as drv:
+            drv.execute_script(
+                "CREATE TABLE sqlspec_event_queue (event_id VARCHAR(64) PRIMARY KEY, channel VARCHAR(128) NOT NULL)"
+            )
+            drv.commit()
+            with pytest.raises(MigrationError, match="payload_json"):
+                events_reconcile(MigrationContext(config=missing_payload_cfg, driver=drv))
+    finally:
+        sync_cfg.close_pool()
+        await async_cfg.close_pool()
+        no_create_cfg.close_pool()
+        missing_payload_cfg.close_pool()

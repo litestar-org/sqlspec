@@ -269,6 +269,11 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
                 return f"IF OBJECT_ID(N'{self.table_name}', N'U') IS NULL BEGIN {statement}; END"
             if object_type == "index":
                 return f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{self._index_name()}' AND object_id = OBJECT_ID(N'{self.table_name}')) BEGIN {statement}; END"
+        upper_statement = statement.upper()
+        if object_type == "table" and "CREATE TABLE IF NOT EXISTS" not in upper_statement:
+            return statement.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+        if object_type == "index" and "CREATE INDEX IF NOT EXISTS" not in upper_statement:
+            return statement.replace("CREATE INDEX", "CREATE INDEX IF NOT EXISTS", 1)
         return statement
 
     def _wrap_drop_statement(self, statement: str) -> str:

@@ -1099,3 +1099,159 @@ def test_sqlite_stores_same_column_types() -> None:
     async_store = AiosqliteEventQueueStore(async_config)
 
     assert sync_store._column_types() == async_store._column_types()
+
+
+@pytest.mark.anyio
+async def test_oracle_event_stores_prepare_schema_primes_version_cache_for_23ai_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Oracle sync and async event stores prime _oracle_version_cache on context.driver without changing create_statements."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.data_dictionary import OracleVersionInfo
+    from sqlspec.adapters.oracledb.events.store import OracleAsyncEventQueueStore, OracleSyncEventQueueStore
+
+    monkeypatch.setattr(OracleSyncConfig, "provide_session", MagicMock(side_effect=AssertionError("nested session")))
+    monkeypatch.setattr(OracleAsyncConfig, "provide_session", MagicMock(side_effect=AssertionError("nested session")))
+
+    for version, expected_token in (
+        (OracleVersionInfo(23, 4, 0, compatible="23.0.0"), "JSON"),
+        (OracleVersionInfo(19, 0, 0, compatible="19.0.0"), "BLOB"),
+    ):
+        sync_cfg = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
+        sync_store = OracleSyncEventQueueStore(sync_cfg)
+        before_sync_ddl = sync_store.create_statements()
+        sync_driver = MagicMock()
+        sync_driver.data_dictionary.get_version.return_value = version
+        sync_store.prepare_schema_sync(sync_driver)
+        after_sync_ddl = sync_store.create_statements()
+        assert before_sync_ddl == after_sync_ddl
+        sync_cols = {c.name: c.dtype.upper() for c in sync_store.get_schema_targets()[0].create_table.columns}
+        assert sync_cols["payload_json"] == expected_token
+        assert sync_cols["metadata_json"] == expected_token
+
+        async_cfg = OracleAsyncConfig(connection_config={"dsn": "localhost/xe"})
+        async_store = OracleAsyncEventQueueStore(async_cfg)
+        before_async_ddl = async_store.create_statements()
+        async_driver = MagicMock()
+        async_driver.data_dictionary.get_version = AsyncMock(return_value=version)
+        await async_store.prepare_schema_async(async_driver)
+        after_async_ddl = async_store.create_statements()
+        assert before_async_ddl == after_async_ddl
+        async_cols = {c.name: c.dtype.upper() for c in async_store.get_schema_targets()[0].create_table.columns}
+        assert async_cols["payload_json"] == expected_token
+        assert async_cols["metadata_json"] == expected_token
+
+
+def test_oracle_event_reconcile_accepts_existing_blob_queue_on_23ai() -> None:
+    """Existing BLOB event queue columns on Oracle 23ai remain compatible with reconcile JSON targets."""
+    from unittest.mock import MagicMock
+
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb import OracleSyncConfig
+    from sqlspec.adapters.oracledb.data_dictionary import OracleVersionInfo
+    from sqlspec.adapters.oracledb.events.store import OracleSyncEventQueueStore
+    from sqlspec.migrations.schema import ensure_schema_sync
+
+    cfg = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
+    store = OracleSyncEventQueueStore(cfg)
+    driver = MagicMock()
+    driver.data_dictionary.get_version.return_value = OracleVersionInfo(23, 4, 0, compatible="23.0.0")
+    driver.data_dictionary.get_tables.return_value = [{"table_name": "SQLSPEC_EVENT_QUEUE"}]
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": "EVENT_ID", "data_type": "VARCHAR2", "nullable": False},
+        {"column_name": "CHANNEL", "data_type": "VARCHAR2", "nullable": False},
+        {"column_name": "PAYLOAD_JSON", "data_type": "BLOB", "nullable": False},
+        {"column_name": "METADATA_JSON", "data_type": "BLOB", "nullable": True},
+        {"column_name": "STATUS", "data_type": "VARCHAR2", "nullable": False},
+        {"column_name": "AVAILABLE_AT", "data_type": "TIMESTAMP(6)", "nullable": False},
+        {"column_name": "LEASE_EXPIRES_AT", "data_type": "TIMESTAMP(6)", "nullable": True},
+        {"column_name": "ATTEMPTS", "data_type": "NUMBER", "nullable": False},
+        {"column_name": "CREATED_AT", "data_type": "TIMESTAMP(6)", "nullable": False},
+        {"column_name": "ACKNOWLEDGED_AT", "data_type": "TIMESTAMP(6)", "nullable": True},
+    ]
+
+    store.prepare_schema_sync(driver)
+    result = ensure_schema_sync(
+        driver, store.get_schema_targets(), manage_schema=True, create_schema=True, commit=False, strict=True
+    )
+
+    assert result.created_tables == []
+    assert result.added_columns == {}
+    driver.execute.assert_not_called()
+    driver.execute_script.assert_not_called()
+
+
+def test_oracle_event_stores_companion_index_seam() -> None:
+    """Oracle sync and async event stores expose _index_existence_target and PL/SQL companion index DDL."""
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.events.store import OracleAsyncEventQueueStore, OracleSyncEventQueueStore
+
+    sync_plain = OracleSyncEventQueueStore(OracleSyncConfig(connection_config={"dsn": "localhost/xe"}))
+    async_qual = OracleAsyncEventQueueStore(
+        OracleAsyncConfig(
+            connection_config={"dsn": "localhost/xe"},
+            extension_config={"events": {"queue_table": "APP.sqlspec_event_queue"}},
+        )
+    )
+
+    assert sync_plain._index_existence_target() == (None, "sqlspec_event_queue")
+    assert async_qual._index_existence_target() == ("APP", "sqlspec_event_queue")
+
+    for store in (sync_plain, async_qual):
+        stmt = store.companion_index_statement()
+        assert stmt is not None
+        assert len(store._index_name()) <= 30
+        assert store._index_name() in stmt
+        assert "SQLCODE NOT IN (-955, -1408)" in stmt
+
+
+def test_adbc_store_sqlite_and_duckdb_emit_if_not_exists_without_duplication() -> None:
+    """ADBC SQLite, DuckDB, FlightSQL, and PostgreSQL stores emit IF NOT EXISTS once without duplication."""
+    pytest.importorskip("adbc_driver_manager")
+    from sqlspec.adapters.adbc import AdbcConfig
+    from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
+
+    configs = [
+        AdbcConfig(connection_config={"uri": "sqlite:///:memory:"}),
+        AdbcConfig(connection_config={"uri": "duckdb:///:memory:"}),
+        AdbcConfig(connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc://localhost:8815"}),
+        AdbcConfig(connection_config={"driver_name": "postgres"}),
+    ]
+    for cfg in configs:
+        store = AdbcEventQueueStore(cfg)
+        stmts = store.create_statements()
+        assert len(stmts) == 2
+        assert stmts[0].upper().count("CREATE TABLE IF NOT EXISTS") == 1
+        assert "IF NOT EXISTS IF NOT EXISTS" not in stmts[0].upper()
+        assert stmts[1].upper().count("CREATE INDEX IF NOT EXISTS") == 1
+        assert "IF NOT EXISTS IF NOT EXISTS" not in stmts[1].upper()
+        companion = store.companion_index_statement()
+        assert companion is not None
+        assert companion.upper().count("CREATE INDEX IF NOT EXISTS") == 1
+        assert "IF NOT EXISTS IF NOT EXISTS" not in companion.upper()
+
+
+def test_adbc_store_sqlite_companion_index_reconcile_is_idempotent() -> None:
+    """Repeating AdbcEventQueueStore companion index reconciliation against SQLite succeeds without duplicate-index error."""
+    pytest.importorskip("adbc_driver_manager")
+    from sqlspec.adapters.adbc import AdbcConfig
+    from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    adbc_store = AdbcEventQueueStore(AdbcConfig(connection_config={"uri": "sqlite:///:memory:"}))
+    sqlite_cfg = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with sqlite_cfg.provide_session() as driver:
+            driver.begin()
+            for stmt in adbc_store.create_statements():
+                driver.execute_script(stmt)
+            adbc_store.reconcile_companion_objects_sync(driver)
+            adbc_store.reconcile_companion_objects_sync(driver)
+            assert driver.connection.in_transaction is True
+            driver.commit()
+    finally:
+        sqlite_cfg.close_pool()
