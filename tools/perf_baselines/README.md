@@ -67,6 +67,9 @@ local and service-backed drivers:
   executing a query per session
 - `observability_select`: repeated `SELECT` queries with statement observers
   enabled via `ObservabilityConfig`
+- `declared_parameters` (SQLite-only): repeated named `SELECT`s through a
+  loader-declared `SQL` object over a fixed 7000-row unindexed table, including
+  setup and cleanup in the timing
 
 ## Service-backed environment variables
 
