@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import inspect
 import secrets
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -80,6 +80,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     __slots__ = ("_data_dictionary", "_rowid_target_cache")
     dialect = "sqlite"
+    export_integers_may_widen: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -238,7 +239,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Execute a query and stream Arrow results into storage."""
 
         self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = await self._select_for_storage(
+            statement, *parameters, statement_config=statement_config, **kwargs
+        )
         async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline

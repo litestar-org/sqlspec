@@ -36,6 +36,9 @@ HOOK_ROUTED_ADAPTERS: list[tuple[str, str]] = [
     ("sqlspec.adapters.oracledb.driver", "OracleAsyncDriver"),
     ("sqlspec.adapters.bigquery.driver", "BigQueryDriver"),
     ("sqlspec.adapters.duckdb.driver", "DuckDBDriver"),
+    ("sqlspec.adapters.sqlite.driver", "SqliteDriver"),
+    ("sqlspec.adapters.aiosqlite.driver", "AiosqliteDriver"),
+    ("sqlspec.adapters.pymysql.driver", "PyMysqlDriver"),
 ]
 
 
@@ -431,3 +434,14 @@ async def test_select_to_storage_routes_through_hook(
         driver.select_to_storage("SELECT 1", tmp_path / "out.parquet")
 
     assert calls == ["SELECT 1"]
+
+
+def test_sqlite_drivers_declare_export_integers_may_widen() -> None:
+    """SqliteDriver and AiosqliteDriver enable integer-widening read-ahead for storage exports."""
+    from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
+    from sqlspec.adapters.pymysql.driver import PyMysqlDriver
+    from sqlspec.adapters.sqlite.driver import SqliteDriver
+
+    assert SqliteDriver.export_integers_may_widen is True
+    assert AiosqliteDriver.export_integers_may_widen is True
+    assert PyMysqlDriver.export_integers_may_widen is False
