@@ -142,6 +142,11 @@ class SyncRowStream(Generic[RowT]):
     def close(self) -> None:
         self._close(error=False)
 
+    @property
+    def column_types(self) -> "dict[str, str] | None":
+        """Return neutral column type tokens exposed by the row source."""
+        return cast("dict[str, str] | None", getattr(self._source, "column_types", None))
+
     @overload
     def _with_schema_type(self, schema_type: "type[SchemaRowT]") -> "SyncRowStream[SchemaRowT]": ...
     @overload
@@ -224,6 +229,11 @@ class AsyncRowStream(Generic[RowT]):
 
     async def aclose(self) -> None:
         await self._aclose(error=False)
+
+    @property
+    def column_types(self) -> "dict[str, str] | None":
+        """Return neutral column type tokens exposed by the row source."""
+        return cast("dict[str, str] | None", getattr(self._source, "column_types", None))
 
     @overload
     def _with_schema_type(self, schema_type: "type[SchemaRowT]") -> "AsyncRowStream[SchemaRowT]": ...
