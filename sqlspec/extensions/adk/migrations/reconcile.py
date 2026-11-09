@@ -1,6 +1,7 @@
-"""Built-in extension schema reconciler for Google ADK session and memory stores."""
+"""Built-in extension schema reconciler for Google ADK session, memory, and artifact stores."""
 
-from typing import TYPE_CHECKING, Any, NoReturn
+import importlib
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from sqlspec.exceptions import MigrationError, SQLSpecError
 from sqlspec.extensions.adk._config_utils import (
@@ -10,10 +11,12 @@ from sqlspec.extensions.adk._config_utils import (
     _adk_memory_migration_store_class,
     _adk_sessions_migration_enabled,
 )
+from sqlspec.extensions.adk.artifact.store import BaseAsyncADKArtifactStore, BaseSyncADKArtifactStore
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
 from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
+from sqlspec.utils.adapters import resolve_adapter_name
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -34,8 +37,56 @@ def _raise_missing_memory_store() -> NoReturn:
     raise MigrationError(msg)
 
 
-def _selected_stores(config: Any) -> list[Any]:
-    """Resolve and instantiate enabled ADK session and memory stores in canonical order."""
+def _adk_artifact_migration_store_class(config: Any) -> "type[Any] | None":
+    """Resolve the ADK artifact store class when the adapter provides one."""
+    target_cls = type(config)
+    explicit_store = getattr(config, "adk_artifact_store_class", None)
+    if not isinstance(explicit_store, type):
+        explicit_store = getattr(target_cls, "adk_artifact_store_class", None)
+    if isinstance(explicit_store, type):
+        return explicit_store
+
+    adapter_name = resolve_adapter_name(config)
+    if adapter_name is None:
+        return None
+
+    module_name = f"sqlspec.adapters.{adapter_name}.adk.artifact_store"
+    adapter_prefix = f"sqlspec.adapters.{adapter_name}"
+    try:
+        artifact_module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        missing_name = exc.name or ""
+        if missing_name == "sqlspec.adapters" or missing_name.startswith(adapter_prefix):
+            return None
+        raise
+
+    store_suffix = "ADKArtifactStore"
+    exported = tuple(
+        name
+        for name in getattr(artifact_module, "__all__", ())
+        if isinstance(name, str)
+        and name.endswith(store_suffix)
+        and isinstance(getattr(artifact_module, name, None), type)
+    )
+    for cls in target_cls.__mro__:
+        cls_name = cls.__name__
+        if cls_name.endswith("Config"):
+            expected_prefix = cls_name.removesuffix("Config").lower()
+            for exported_name in exported:
+                if exported_name[: -len(store_suffix)].lower() == expected_prefix:
+                    return cast("type[Any]", getattr(artifact_module, exported_name))
+    if len(exported) == 1:
+        return cast("type[Any]", getattr(artifact_module, exported[0]))
+    if len(exported) > 1:
+        mode_suffix = f"Async{store_suffix}" if bool(getattr(config, "is_async", False)) else f"Sync{store_suffix}"
+        for exported_name in exported:
+            if exported_name.endswith(mode_suffix):
+                return cast("type[Any]", getattr(artifact_module, exported_name))
+    return None
+
+
+def _selected_stores(config: Any, adk_config: dict[str, Any]) -> list[Any]:
+    """Resolve and instantiate enabled ADK session, memory, and artifact stores in canonical order."""
     stores: list[Any] = []
     try:
         if _adk_sessions_migration_enabled(config):
@@ -46,6 +97,10 @@ def _selected_stores(config: Any) -> list[Any]:
             if memory_store_cls is None:
                 _raise_missing_memory_store()
             stores.append(memory_store_cls(config=config))
+        if adk_config.get("artifact_table"):
+            artifact_store_cls = _adk_artifact_migration_store_class(config)
+            if artifact_store_cls is not None:
+                stores.append(artifact_store_cls(config=config))
     except MigrationError:
         raise
     except (SQLSpecError, ImportError, ValueError) as exc:
@@ -57,10 +112,14 @@ def _selected_stores(config: Any) -> list[Any]:
 def _validate_store_driver_mode(stores: list[Any], *, is_async_driver: bool) -> None:
     """Verify every selected ADK store matches the migration driver's sync/async mode."""
     for store in stores:
-        if is_async_driver and not isinstance(store, (BaseAsyncADKStore, BaseAsyncADKMemoryStore)):
+        if is_async_driver and not isinstance(
+            store, (BaseAsyncADKStore, BaseAsyncADKMemoryStore, BaseAsyncADKArtifactStore)
+        ):
             msg = f"ADK store '{type(store).__name__}' is synchronous, but MigrationContext supplied an async driver."
             raise MigrationError(msg)
-        if not is_async_driver and not isinstance(store, (BaseSyncADKStore, BaseSyncADKMemoryStore)):
+        if not is_async_driver and not isinstance(
+            store, (BaseSyncADKStore, BaseSyncADKMemoryStore, BaseSyncADKArtifactStore)
+        ):
             msg = (
                 f"ADK store '{type(store).__name__}' is asynchronous, "
                 "but MigrationContext supplied a synchronous driver."
@@ -127,13 +186,13 @@ def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":
 
     validate_builtin_reconcile_adapter(context.config)
     try:
-        _adk_config_from_extension(context.config)
+        adk_config = _adk_config_from_extension(context.config)
     except MigrationError:
         raise
     except SQLSpecError as exc:
         raise MigrationError(str(exc)) from exc
 
-    stores = _selected_stores(context.config)
+    stores = _selected_stores(context.config, adk_config)
     is_async = context.is_async_driver
     _validate_store_driver_mode(stores, is_async_driver=is_async)
     if not stores:

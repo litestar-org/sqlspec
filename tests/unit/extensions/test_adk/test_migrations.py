@@ -434,3 +434,92 @@ def test_adk_reconcile_requires_driver_and_config() -> None:
         assert driver.mock_calls == []
     finally:
         config.close_pool()
+
+
+@pytest.mark.anyio
+async def test_adk_reconcile_spanner_artifact_target_parsed() -> None:
+    """Spanner artifact stores parse primary key constraint columns while base artifact stores default to empty."""
+    from sqlspec.adapters.spanner.adk.artifact_store import SpannerAsyncADKArtifactStore, SpannerSyncADKArtifactStore
+    from sqlspec.extensions.adk.artifact.store import BaseAsyncADKArtifactStore, BaseSyncADKArtifactStore
+
+    sync_cfg = SpannerSyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        extension_config={"adk": {"artifact_table": "adk_artifact"}},
+    )
+    async_cfg = SpannerAsyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        extension_config={"adk": {"artifact_table": "adk_artifact"}},
+    )
+    sync_store = SpannerSyncADKArtifactStore(sync_cfg)
+    async_store = SpannerAsyncADKArtifactStore(async_cfg)
+
+    assert BaseSyncADKArtifactStore.get_schema_targets_sync(sync_store, MagicMock()) == []
+    assert await BaseAsyncADKArtifactStore.get_schema_targets_async(async_store, MagicMock()) == []
+
+    sync_targets = sync_store.get_schema_targets_sync(MagicMock())
+    async_targets = await async_store.get_schema_targets_async(MagicMock())
+    assert len(sync_targets) == 1
+    assert len(async_targets) == 1
+    expected_pk = frozenset({"app_name", "user_id", "session_id", "filename", "version"})
+    assert sync_targets[0].table_name == "adk_artifact"
+    assert sync_targets[0].constraint_columns == expected_pk
+    assert async_targets[0].table_name == "adk_artifact"
+    assert async_targets[0].constraint_columns == expected_pk
+
+
+def test_adk_reconcile_artifact_table_gated_by_setting_and_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADK reconcile includes artifact DDL only when artifact_table is configured and the adapter provides a store."""
+    reconcile_mod = importlib.import_module("sqlspec.extensions.adk.migrations.reconcile")
+
+    unset_cfg = SpannerSyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        extension_config={"adk": {"migration_mode": "reconcile", "enable_sessions": False, "enable_memory": False}},
+    )
+    unset_driver = MagicMock()
+    resolver_calls: list[Any] = []
+    original_resolver = reconcile_mod._adk_artifact_migration_store_class
+
+    def _track_resolver(cfg: Any) -> Any:
+        resolver_calls.append(cfg)
+        return original_resolver(cfg)
+
+    monkeypatch.setattr(reconcile_mod, "_adk_artifact_migration_store_class", _track_resolver)
+    assert reconcile_mod.reconcile(MigrationContext(config=unset_cfg, dialect="spanner", driver=unset_driver)) is None
+    assert resolver_calls == []
+    assert unset_driver.mock_calls == []
+
+    configured_cfg = SpannerSyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        extension_config={
+            "adk": {
+                "migration_mode": "reconcile",
+                "enable_sessions": False,
+                "enable_memory": False,
+                "artifact_table": "custom_artifacts",
+            }
+        },
+    )
+    spanner_driver = MagicMock()
+    spanner_driver.data_dictionary.get_tables.return_value = []
+    assert (
+        reconcile_mod.reconcile(MigrationContext(config=configured_cfg, dialect="spanner", driver=spanner_driver))
+        is None
+    )
+    executed_sql = [call.args[0] for call in spanner_driver.execute_script.call_args_list]
+    assert len(executed_sql) == 1
+    assert "CREATE TABLE IF NOT EXISTS custom_artifacts" in executed_sql[0]
+
+    sqlite_cfg = _sqlite_config({
+        "migration_mode": "reconcile",
+        "enable_sessions": False,
+        "enable_memory": False,
+        "artifact_table": "custom_artifacts",
+    })
+    try:
+        sqlite_driver = MagicMock()
+        assert (
+            reconcile_mod.reconcile(MigrationContext(config=sqlite_cfg, dialect="sqlite", driver=sqlite_driver)) is None
+        )
+        assert sqlite_driver.mock_calls == []
+    finally:
+        sqlite_cfg.close_pool()
