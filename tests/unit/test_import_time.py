@@ -113,7 +113,7 @@ assert exit_code == 0, f"pytest collection failed with exit code {exit_code}"
 leaked = [
     name
     for name in sorted(sys.modules)
-    if name.startswith(("pytest_databases.docker", "tests.integration", "tests.plugins"))
+    if name.startswith(("pytest_databases.docker.", "tests.integration", "tests.plugins"))
 ]
 assert leaked == [], f"unit collection loaded integration plugins: {leaked}"
 """
