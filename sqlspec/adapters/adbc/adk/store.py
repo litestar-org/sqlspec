@@ -13,6 +13,7 @@ from sqlspec.adapters.adbc.core import (
     driver_kind_from_driver_name,
     is_postgres_dialect,
     is_shared_object_driver,
+    is_sqlite_reconcile_target,
     resolve_dialect_from_config,
 )
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
@@ -1686,11 +1687,14 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     """ADBC synchronous ADK memory store for Arrow Database Connectivity."""
 
-    __slots__ = ("_dialect",)
+    __slots__ = ("_dialect", "_sqlite_fts_enabled")
 
     def __init__(self, config: "AdbcConfig") -> None:
         super().__init__(config)
         self._dialect = self._detect_dialect()
+        self._sqlite_fts_enabled = (
+            self._use_fts and self._dialect == DIALECT_SQLITE and is_sqlite_reconcile_target(config.connection_config)
+        )
         if self._vector_dimensions <= 0:
             msg = "vector_dimensions must be a positive integer"
             raise ImproperConfigurationError(msg)
@@ -1827,7 +1831,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         parsed = datetime.fromisoformat(str(value))
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
-    def _memory_table_ddl(self) -> str:
+    def _memory_base_table_ddl(self) -> str:
+        """Return the base CREATE TABLE DDL for the current dialect without FTS companions."""
         if self._dialect == DIALECT_POSTGRESQL:
             return self._memory_ddl_postgresql()
         if self._dialect == DIALECT_SQLITE:
@@ -1845,6 +1850,64 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         if self._dialect == DIALECT_MSSQL:
             return self._memory_ddl_mssql()
         return self._memory_ddl_generic()
+
+    def _memory_table_ddl(self) -> str | list[str]:
+        """Return memory table DDL, appending FTS5 companion statements on local SQLite."""
+        if self._sqlite_fts_enabled:
+            return [self._memory_base_table_ddl(), *self._memory_fts_statements().values()]
+        return self._memory_base_table_ddl()
+
+    def _memory_fts_statements(self) -> dict[str, str]:
+        """Return ordered SQLite FTS5 virtual table and trigger DDL statements when enabled."""
+        if not self._sqlite_fts_enabled:
+            return {}
+        table = self._memory_table
+        return {
+            f"{table}_fts": f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS {table}_fts USING fts5(
+                content_text,
+                content={table},
+                content_rowid=rowid
+            )
+            """,
+            f"{table}_ai": f"""
+            CREATE TRIGGER IF NOT EXISTS {table}_ai AFTER INSERT ON {table} BEGIN
+                INSERT INTO {table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+            END
+            """,
+            f"{table}_ad": f"""
+            CREATE TRIGGER IF NOT EXISTS {table}_ad AFTER DELETE ON {table} BEGIN
+                INSERT INTO {table}_fts({table}_fts, rowid, content_text)
+                VALUES('delete', old.rowid, old.content_text);
+            END
+            """,
+            f"{table}_au": f"""
+            CREATE TRIGGER IF NOT EXISTS {table}_au AFTER UPDATE ON {table} BEGIN
+                INSERT INTO {table}_fts({table}_fts, rowid, content_text)
+                VALUES('delete', old.rowid, old.content_text);
+                INSERT INTO {table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+            END
+            """,
+        }
+
+    def _memory_fts_rebuild_statement(self) -> str:
+        """Return the SQLite FTS5 external-content rebuild statement."""
+        table = self._memory_table
+        return f"INSERT INTO {table}_fts({table}_fts) VALUES('rebuild')"
+
+    def _missing_fts_objects(self, cursor: Any) -> list[str]:
+        """Return expected SQLite FTS5 object names missing from sqlite_master in creation order."""
+        expected = list(self._memory_fts_statements())
+        if not expected:
+            return []
+        self._execute(
+            cursor,
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger') AND lower(name) IN (?, ?, ?, ?)",
+            tuple(name.lower() for name in expected),
+        )
+        rows = cursor.fetchall() or []
+        existing = {str(row[0]).lower() for row in rows}
+        return [name for name in expected if name.lower() not in existing]
 
     def _memory_ddl_postgresql(self) -> str:
         owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
@@ -2028,8 +2091,18 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         )
         """
 
-    def _drop_memory_table_sql(self) -> "list[str]":
-        return [_drop_table_sql_for_dialect(self._dialect, self._memory_table)]
+    def _drop_memory_table_sql(self) -> list[str]:
+        base_drop = _drop_table_sql_for_dialect(self._dialect, self._memory_table)
+        if not self._sqlite_fts_enabled:
+            return [base_drop]
+        table = self._memory_table
+        return [
+            f"DROP TABLE IF EXISTS {table}_fts",
+            base_drop,
+            f"DROP TRIGGER IF EXISTS {table}_ai",
+            f"DROP TRIGGER IF EXISTS {table}_ad",
+            f"DROP TRIGGER IF EXISTS {table}_au",
+        ]
 
     def _create_tables(self) -> None:
         if not self._enabled:
@@ -2050,8 +2123,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                _execute_table_ddl(cursor, self._dialect, self._memory_table, self._memory_table_ddl())
+                _execute_table_ddl(cursor, self._dialect, self._memory_table, self._memory_base_table_ddl())
                 conn.commit()
+
+                missing_fts = self._missing_fts_objects(cursor) if self._sqlite_fts_enabled else []
 
                 if not skip_indexes:
                     _execute_index_ddl(
@@ -2077,6 +2152,15 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                         for index_sql in self._postgres_memory_extra_index_sql():
                             cursor.execute(index_sql)
                             conn.commit()
+
+                if self._sqlite_fts_enabled and missing_fts:
+                    fts_statements = self._memory_fts_statements()
+                    for name in missing_fts:
+                        cursor.execute(fts_statements[name])
+                    cursor.execute(f"SELECT 1 FROM {self._memory_table} LIMIT 1")
+                    if cursor.fetchone() is not None:
+                        cursor.execute(self._memory_fts_rebuild_statement())
+                    conn.commit()
             finally:
                 cursor.close()
 
