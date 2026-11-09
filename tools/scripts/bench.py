@@ -262,6 +262,17 @@ POSTGRES_DSN_ENV = "SQLSPEC_BENCH_POSTGRES_DSN"
 
 COCKROACH_DSN_ENV = "SQLSPEC_BENCH_COCKROACH_DSN"
 
+BENCH_DRIVER_PACKAGES = (
+    "adbc-driver-manager",
+    "aiosqlite",
+    "asyncmy",
+    "asyncpg",
+    "duckdb",
+    "oracledb",
+    "psqlpy",
+    "psycopg",
+)
+
 HOT_PATH_EXTENDED_SCENARIOS = (
     ("raw", "scalar_param_select"),
     ("sqlspec", "scalar_param_select"),
@@ -3229,14 +3240,28 @@ def _driver_has_core_scenarios(driver: str) -> bool:
 
 
 def _collect_environment_metadata() -> dict[str, Any]:
-    """Collect Python, platform, and key package versions for benchmark reproducibility."""
+    """Collect Python, platform, driver, and key package versions for benchmark reproducibility."""
     packages: dict[str, str | None] = {}
     for pkg_name in ("duckdb", "sqlglot", "aiosqlite", "pyarrow", "sqlspec"):
         try:
             packages[pkg_name] = importlib.metadata.version(pkg_name)
         except importlib.metadata.PackageNotFoundError:
             packages[pkg_name] = None
-    return {"python_version": platform.python_version(), "platform": platform.platform(), "packages": packages}
+    driver_versions: dict[str, str | None] = {}
+    for pkg_name in BENCH_DRIVER_PACKAGES:
+        try:
+            driver_versions[pkg_name] = importlib.metadata.version(pkg_name)
+        except importlib.metadata.PackageNotFoundError:
+            driver_versions[pkg_name] = None
+    return {
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "packages": packages,
+        "cpu_count": os.cpu_count(),
+        "sqlglot_version": packages["sqlglot"],
+        "driver_versions": {"sqlite3": sqlite3.sqlite_version, **driver_versions},
+        "service_id": os.environ.get("SQLSPEC_BENCH_SERVICE_ID"),
+    }
 
 
 def _write_json_results(
