@@ -36,22 +36,51 @@ _INFORMATION_SCHEMA_VIEWS: tuple[str, ...] = (
 class _EmulatorBigQueryDataDictionary(BigQueryDataDictionary):
     """Adapter over the INFORMATION_SCHEMA subset implemented by goccy/bigquery-emulator."""
 
-    def get_tables(self, driver: BigQueryDriver, schema: str | None = None) -> list[TableMetadata]:
+    def __init__(self) -> None:
+        super().__init__()
+        self._tables_cache: dict[str | None, list[TableMetadata]] = {}
+        self._columns_cache: dict[tuple[str | None, str | None], list[ColumnMetadata]] = {}
+
+    def _ensure_loaded(self, driver: BigQueryDriver, schema: str | None) -> None:
+        if schema in self._tables_cache:
+            return
         scope = BigQueryMetadataScope.from_schema(schema)
-        tables_view = scope.dataset_information_schema_table("TABLES")
-        sql = f"SELECT table_name, table_type FROM {tables_view} ORDER BY table_name"
-        return driver.select(sql, schema_type=TableMetadata)
+        columns_view = scope.dataset_information_schema_table("COLUMNS")
+        rows = driver.select(
+            f"SELECT table_name, column_name, data_type, is_nullable FROM {columns_view} "
+            "ORDER BY table_name, ordinal_position"
+        )
+        tables: list[TableMetadata] = []
+        seen_tables: set[str] = set()
+        by_table: dict[str, list[ColumnMetadata]] = {}
+        for row in rows:
+            t_name = str(row["table_name"])
+            if t_name not in seen_tables:
+                seen_tables.add(t_name)
+                tables.append(cast("TableMetadata", {"table_name": t_name, "table_type": "BASE TABLE"}))
+            by_table.setdefault(t_name, []).append(
+                cast(
+                    "ColumnMetadata",
+                    {
+                        "column_name": str(row["column_name"]),
+                        "data_type": str(row["data_type"]),
+                        "is_nullable": str(row["is_nullable"]),
+                    },
+                )
+            )
+        self._tables_cache[schema] = tables
+        for t_name, cols in by_table.items():
+            self._columns_cache[(schema, t_name)] = cols
+
+    def get_tables(self, driver: BigQueryDriver, schema: str | None = None) -> list[TableMetadata]:
+        self._ensure_loaded(driver, schema)
+        return list(self._tables_cache.get(schema, ()))
 
     def get_columns(
         self, driver: BigQueryDriver, table: str | None = None, schema: str | None = None
     ) -> list[ColumnMetadata]:
-        scope = BigQueryMetadataScope.from_schema(schema)
-        columns_view = scope.dataset_information_schema_table("COLUMNS")
-        sql = (
-            f"SELECT column_name, data_type, is_nullable FROM {columns_view} "
-            "WHERE table_name = @table_name ORDER BY ordinal_position"
-        )
-        return driver.select(sql, table_name=table, schema_type=ColumnMetadata)
+        self._ensure_loaded(driver, schema)
+        return list(self._columns_cache.get((schema, table), ()))
 
 
 def _anonymous_credentials() -> Credentials:
@@ -267,8 +296,16 @@ def test_bigquery_emulator_additive_alter_and_migrate_up_or_skip_emulator_gap(
         },
     )
 
+    created_session_table = False
     try:
         with config.provide_session() as driver:
+            try:
+                driver.execute(f"SELECT 1 FROM `{project}.{dataset}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE` LIMIT 1")
+                driver.data_dictionary.get_tables(driver, schema=dataset)
+            except (SQLSpecError, api_exceptions.GoogleAPICallError) as exc:
+                _skip_if_emulator_gap(exc)
+                raise
+            created_session_table = True
             driver.execute_script(
                 f"CREATE TABLE `{project}.{dataset}.{session_table}` ("
                 "id STRING NOT NULL, app_name STRING NOT NULL, user_id STRING NOT NULL, "
@@ -280,11 +317,6 @@ def test_bigquery_emulator_additive_alter_and_migrate_up_or_skip_emulator_gap(
                 "VALUES (?, ?, ?, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())",
                 ("s-keep", "app", "user"),
             )
-            try:
-                driver.data_dictionary.get_tables(driver, schema=dataset)
-            except (SQLSpecError, api_exceptions.GoogleAPICallError) as exc:
-                _skip_if_emulator_gap(exc)
-                raise
 
         try:
             config.migrate_up()
@@ -305,13 +337,14 @@ def test_bigquery_emulator_additive_alter_and_migrate_up_or_skip_emulator_gap(
                 ledger_rows = driver.select(f"SELECT version_num FROM `{project}.{dataset}.{ledger_table}`")
                 assert [r for r in ledger_rows if str(r["version_num"]).startswith("ext_adk_")] == []
     finally:
-        with config.provide_session() as driver:
-            for tbl in (
-                metadata_table,
-                user_state_table,
-                app_state_table,
-                adk_events_table,
-                session_table,
-                ledger_table,
-            ):
-                driver.execute_script(f"DROP TABLE IF EXISTS `{project}.{dataset}.{tbl}`")
+        if created_session_table:
+            with config.provide_session() as driver:
+                for tbl in (
+                    metadata_table,
+                    user_state_table,
+                    app_state_table,
+                    adk_events_table,
+                    session_table,
+                    ledger_table,
+                ):
+                    driver.execute_script(f"DROP TABLE IF EXISTS `{project}.{dataset}.{tbl}`")

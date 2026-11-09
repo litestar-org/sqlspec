@@ -201,6 +201,21 @@ async def _table_exists_async(config: Any, table: str) -> bool:
         return True
 
 
+def _driver_table_exists_sync(driver: Any, config: Any, table: str) -> bool:
+    if str(getattr(driver, "dialect", "")) == "spanner":
+        folded = table.casefold()
+        return any(str(row["table_name"]).casefold() == folded for row in driver.data_dictionary.get_tables(driver))
+    return _table_exists_sync(config, table)
+
+
+async def _driver_table_exists_async(driver: Any, config: Any, table: str) -> bool:
+    if str(getattr(driver, "dialect", "")) == "spanner":
+        folded = table.casefold()
+        rows = await driver.data_dictionary.get_tables(driver)
+        return any(str(row["table_name"]).casefold() == folded for row in rows)
+    return await _table_exists_async(config, table)
+
+
 def _recorded_count_sync(config: Any, version_table: str) -> int:
     with config.provide_session() as driver:
         try:
@@ -729,10 +744,10 @@ def assert_sync_extension_reconciliation_contract(make_config: Any, case: Migrat
         encoding="utf-8",
     )
     (ext_dir / "reconcile.py").write_text(
-        "from tests.integration.adapters._shared.migration_behaviors import _table_exists_sync\n\n\n"
+        "from tests.integration.adapters._shared.migration_behaviors import _driver_table_exists_sync\n\n\n"
         "def reconcile(context) -> None:\n"
         "    assert context.driver is not None\n"
-        f"    if not _table_exists_sync(context.config, {smoke_table!r}):\n"
+        f"    if not _driver_table_exists_sync(context.driver, context.config, {smoke_table!r}):\n"
         f"        context.driver.execute_script({create_smoke_sql!r})\n"
         f"    max_id = context.driver.select_value('SELECT MAX(id) FROM {smoke_table}')\n"
         "    next_id = (int(max_id) if max_id is not None else 0) + 1\n"
@@ -795,10 +810,10 @@ async def assert_async_extension_reconciliation_contract(make_config: Any, case:
         encoding="utf-8",
     )
     (ext_dir / "reconcile.py").write_text(
-        "from tests.integration.adapters._shared.migration_behaviors import _table_exists_async\n\n\n"
+        "from tests.integration.adapters._shared.migration_behaviors import _driver_table_exists_async\n\n\n"
         "async def reconcile(context) -> None:\n"
         "    assert context.driver is not None\n"
-        f"    if not await _table_exists_async(context.config, {smoke_table!r}):\n"
+        f"    if not await _driver_table_exists_async(context.driver, context.config, {smoke_table!r}):\n"
         f"        await context.driver.execute_script({create_smoke_sql!r})\n"
         f"    max_id = await context.driver.select_value('SELECT MAX(id) FROM {smoke_table}')\n"
         "    next_id = (int(max_id) if max_id is not None else 0) + 1\n"

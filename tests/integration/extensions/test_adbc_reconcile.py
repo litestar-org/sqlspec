@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import anyio
 import pytest
 
 pytest.importorskip("adbc_driver_manager")
@@ -15,6 +14,7 @@ from sqlspec.adapters.adbc.litestar.store import AdbcStore
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError, SQLSpecError
 from sqlspec.migrations.schema import metadata_has_index
+from sqlspec.utils.sync_tools import run_
 
 pytestmark = [pytest.mark.adbc, pytest.mark.integration]
 
@@ -211,8 +211,8 @@ def test_adbc_reconcile_converges_across_backends(
             assert int(driver.select_value(f"SELECT COUNT(*) FROM {mig_table}")) == 0
 
         session_store = AdbcStore(config)
-        anyio.run(session_store.set, "seed-session", b"persisted-payload")
-        assert anyio.run(session_store.get, "seed-session") == b"persisted-payload"
+        run_(session_store.set)("seed-session", b"persisted-payload")
+        assert run_(session_store.get)("seed-session") == b"persisted-payload"
 
         if drop_target == "litestar":
             index_table = litestar_table
@@ -241,7 +241,7 @@ def test_adbc_reconcile_converges_across_backends(
                 restored = driver.data_dictionary.get_indexes(driver, table=index_table)
                 assert metadata_has_index(restored, index_table, dropped_index)
 
-        assert anyio.run(session_store.get, "seed-session") == b"persisted-payload"
+        assert run_(session_store.get)("seed-session") == b"persisted-payload"
     finally:
         _drop_tables_best_effort(config, backend, (*tables, mig_table))
         config.close_pool()

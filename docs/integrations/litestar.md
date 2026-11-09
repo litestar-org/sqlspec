@@ -191,8 +191,6 @@ Call `await store.create_table()` during application startup (or configure `sess
 
 SQL Server, Oracle, and Arrow ODBC session stores accept schema-qualified `session_table` names (such as `"auth.litestar_session"`, `"[auth].[litestar_session]"`, or `"APP.litestar_session"`). The schema must already exist.
 
-### Opt-In Schema Reconciliation
-
 `session_table` (`True` or a custom table name) is still required to include Litestar session migrations (`migration_mode="versioned"` remains the default). Setting `migration_mode="reconcile"` converges the session table on every head `litestar db upgrade` or `sqlspec upgrade` without recording new `ext_litestar_*` rows while honoring `manage_schema` and `create_schema` (see [Migrations](../learn/migrations.md)):
 
 ```python

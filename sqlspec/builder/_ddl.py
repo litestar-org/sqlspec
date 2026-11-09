@@ -334,7 +334,7 @@ def build_column_expression(
             exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=_build_default_expression(col.default, dialect)))
         )
 
-    if col.not_null:
+    if col.not_null or (inline_primary_key and norm_dialect == "db2"):
         constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
 
     if inline_primary_key:
