@@ -61,6 +61,7 @@ def _reconcile_sync(driver: Any, store: "BaseSQLSpecStore[Any]") -> None:
     ensure_schema_sync(
         driver, store.get_schema_targets(), manage_schema=True, create_schema=create_schema, commit=False, strict=True
     )
+    store.reconcile_companion_objects_sync(driver)
 
 
 async def _reconcile_async(driver: Any, store: "BaseSQLSpecStore[Any]") -> None:
@@ -72,6 +73,7 @@ async def _reconcile_async(driver: Any, store: "BaseSQLSpecStore[Any]") -> None:
     await ensure_schema_async(
         driver, store.get_schema_targets(), manage_schema=True, create_schema=create_schema, commit=False, strict=True
     )
+    await store.reconcile_companion_objects_async(driver)
 
 
 def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":

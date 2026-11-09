@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -13,6 +13,8 @@ from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.litestar.store import AdbcStore
 from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKMemoryStore, AiosqliteADKStore
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
+from sqlspec.adapters.aiosqlite.litestar.store import AiosqliteStore
 from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.adapters.sqlite.driver import SqliteDriver
@@ -21,6 +23,7 @@ from sqlspec.adapters.sqlite.litestar.store import SqliteStore
 from sqlspec.exceptions import MigrationError
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
+from sqlspec.extensions.litestar.store import CompanionIndex
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_sync
 
@@ -125,7 +128,7 @@ def test_packaged_extension_migration_and_additive_ensure_are_independent(tmp_pa
     with config.provide_session() as driver:
 
         def run_packaged_migration(migration_driver: object) -> None:
-            migration_driver.execute_script("CREATE TABLE queue_jobs (id TEXT PRIMARY KEY)")  # type: ignore[attr-defined]
+            cast("Any", migration_driver).execute_script("CREATE TABLE queue_jobs (id TEXT PRIMARY KEY)")
             applied_versions.append("ext_litestar_queues_0001")
 
         result = ensure_schema_sync(
@@ -893,3 +896,247 @@ async def test_adk_reconcile_dispatches_on_driver_mode(tmp_path: Path) -> None:
     finally:
         sync_cfg.close_pool()
         await async_cfg.close_pool()
+
+
+def test_base_litestar_store_extracts_standalone_and_inline_mysql_companion_indexes() -> None:
+    cfg = SqliteConfig(connection_config={"database": ":memory:"})
+
+    class _PartialIndexStore(SqliteStore):
+        def _table_ddl(self) -> str:
+            return (
+                "CREATE TABLE IF NOT EXISTS litestar_session ("
+                "session_id TEXT PRIMARY KEY, data BLOB NOT NULL, expires_at TIMESTAMPTZ); "
+                "CREATE INDEX IF NOT EXISTS idx_litestar_session_expires_at "
+                "ON litestar_session (expires_at) WHERE expires_at IS NOT NULL"
+            )
+
+    class _InlineMysqlStore(SqliteStore):
+        __slots__ = ("_index_options",)
+
+        def __init__(self, config: SqliteConfig) -> None:
+            super().__init__(config)
+            self._index_options = " USING BTREE"
+
+        def _table_ddl(self) -> str:
+            return (
+                "CREATE TABLE IF NOT EXISTS litestar_session ("
+                "session_id VARCHAR(255) PRIMARY KEY, data LONGBLOB NOT NULL, expires_at DATETIME(6), "
+                f"INDEX idx_litestar_session_expires_at (expires_at){self._index_options}"
+                ") ENGINE=InnoDB"
+            )
+
+    class _IndexFreeStore(SqliteStore):
+        def _table_ddl(self) -> str:
+            return "CREATE TABLE IF NOT EXISTS litestar_session (session_id TEXT PRIMARY KEY, data BLOB NOT NULL)"
+
+    class _ProceduralStore(SqliteStore):
+        def _table_ddl(self) -> str:
+            return (
+                "IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'litestar_session') "
+                "BEGIN CREATE TABLE litestar_session (session_id NVARCHAR(255) PRIMARY KEY); "
+                "CREATE INDEX IX_litestar_session_expires_at ON litestar_session(expires_at); END;"
+            )
+
+    try:
+        sqlite_indexes = SqliteStore(cfg).get_companion_indexes()
+        assert len(sqlite_indexes) == 1
+        assert sqlite_indexes[0].name == "idx_litestar_session_expires_at"
+        assert sqlite_indexes[0].table == "litestar_session"
+        assert sqlite_indexes[0].schema is None
+        assert sqlite_indexes[0].ddl.startswith("CREATE INDEX IF NOT EXISTS idx_litestar_session_expires_at")
+        assert sqlite_indexes[0].ddl.endswith(";")
+
+        partial_indexes = _PartialIndexStore(cfg).get_companion_indexes()
+        assert partial_indexes == [
+            CompanionIndex(
+                name="idx_litestar_session_expires_at",
+                table="litestar_session",
+                schema=None,
+                ddl=(
+                    "CREATE INDEX IF NOT EXISTS idx_litestar_session_expires_at "
+                    "ON litestar_session (expires_at) WHERE expires_at IS NOT NULL;"
+                ),
+            )
+        ]
+
+        mysql_indexes = _InlineMysqlStore(cfg).get_companion_indexes()
+        assert mysql_indexes == [
+            CompanionIndex(
+                name="idx_litestar_session_expires_at",
+                table="litestar_session",
+                schema=None,
+                ddl="CREATE INDEX idx_litestar_session_expires_at ON litestar_session (expires_at) USING BTREE",
+            )
+        ]
+
+        index_free_store = _IndexFreeStore(cfg)
+        assert index_free_store.get_companion_indexes() == []
+        fake_driver = MagicMock()
+        index_free_store.reconcile_companion_objects_sync(fake_driver)
+        fake_driver.data_dictionary.get_indexes.assert_not_called()
+
+        assert _ProceduralStore(cfg).get_companion_indexes() == []
+    finally:
+        cfg.close_pool()
+
+
+@pytest.mark.anyio
+async def test_litestar_reconcile_restores_dropped_sqlite_expiry_index_sync_and_async(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync_db = tmp_path / "sync_drop_idx.db"
+    sync_cfg = SqliteConfig(
+        connection_config={"database": str(sync_db)}, extension_config={"litestar": {"migration_mode": "reconcile"}}
+    )
+    async_db = tmp_path / "async_drop_idx.db"
+    async_cfg = AiosqliteConfig(
+        connection_config={"database": str(async_db)}, extension_config={"litestar": {"migration_mode": "reconcile"}}
+    )
+    try:
+        await SqliteStore(sync_cfg).create_table()
+        with sync_cfg.provide_session() as sync_driver:
+            sync_driver.execute(
+                "INSERT INTO litestar_session (session_id, data, expires_at) VALUES (?, ?, ?)", ("s1", b"payload", 99.0)
+            )
+            sync_driver.execute_script("DROP INDEX idx_litestar_session_expires_at")
+            sync_driver.commit()
+            before_sync = {
+                str(idx["index_name"]).casefold()
+                for idx in sync_driver.data_dictionary.get_indexes(sync_driver, table="litestar_session")
+            }
+        assert "idx_litestar_session_expires_at" not in before_sync
+
+        with sync_cfg.provide_session() as sync_driver:
+            sync_driver.begin()
+            sync_commit_spy = MagicMock()
+            with monkeypatch.context() as m:
+                m.setattr(SqliteDriver, "commit", sync_commit_spy)
+                assert litestar_reconcile(MigrationContext(config=sync_cfg, driver=sync_driver)) is None
+            assert sync_commit_spy.call_count == 0
+            assert sync_driver.connection.in_transaction is True
+            sync_driver.commit()
+
+        with sync_cfg.provide_session() as sync_driver:
+            after_sync = {
+                str(idx["index_name"]).casefold()
+                for idx in sync_driver.data_dictionary.get_indexes(sync_driver, table="litestar_session")
+            }
+            sync_rows = sync_driver.select("SELECT session_id, data FROM litestar_session")
+        assert "idx_litestar_session_expires_at" in after_sync
+        assert len(sync_rows) == 1
+        assert sync_rows[0]["session_id"] == "s1"
+
+        await AiosqliteStore(async_cfg).create_table()
+        async with async_cfg.provide_session() as async_driver:
+            await async_driver.execute(
+                "INSERT INTO litestar_session (session_id, data, expires_at) VALUES (?, ?, ?)", ("s2", b"payload", 99.0)
+            )
+            await async_driver.execute_script("DROP INDEX idx_litestar_session_expires_at")
+            await async_driver.commit()
+            before_async = {
+                str(idx["index_name"]).casefold()
+                for idx in await async_driver.data_dictionary.get_indexes(async_driver, table="litestar_session")
+            }
+        assert "idx_litestar_session_expires_at" not in before_async
+
+        async with async_cfg.provide_session() as async_driver:
+            await async_driver.begin()
+            async_commit_spy = AsyncMock()
+            with monkeypatch.context() as m:
+                m.setattr(AiosqliteDriver, "commit", async_commit_spy)
+                coro = litestar_reconcile(MigrationContext(config=async_cfg, driver=async_driver))
+                assert inspect.isawaitable(coro)
+                await coro
+            assert async_commit_spy.call_count == 0
+            assert async_driver.connection.in_transaction is True
+            await async_driver.commit()
+
+        async with async_cfg.provide_session() as async_driver:
+            after_async = {
+                str(idx["index_name"]).casefold()
+                for idx in await async_driver.data_dictionary.get_indexes(async_driver, table="litestar_session")
+            }
+            async_rows = await async_driver.select("SELECT session_id FROM litestar_session")
+        assert "idx_litestar_session_expires_at" in after_async
+        assert len(async_rows) == 1
+        assert async_rows[0]["session_id"] == "s2"
+    finally:
+        sync_cfg.close_pool()
+        await async_cfg.close_pool()
+
+
+@pytest.mark.anyio
+async def test_litestar_companion_indexes_skipped_when_present_case_insensitive_and_schema_scoped() -> None:
+    cfg = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"litestar": {"session_table": "app.litestar_session"}},
+    )
+
+    class _QualifiedStore(SqliteStore):
+        @staticmethod
+        def _ensure_table_name(table_name: str) -> None:
+            del table_name
+
+        def _table_ddl(self) -> str:
+            return (
+                "CREATE TABLE app.litestar_session (session_id TEXT PRIMARY KEY, data BLOB NOT NULL, expires_at REAL); "
+                "CREATE INDEX idx_litestar_session_expires_at ON app.litestar_session (expires_at)"
+            )
+
+    try:
+        store = _QualifiedStore(cfg)
+        indexes = store.get_companion_indexes()
+        assert indexes == [
+            CompanionIndex(
+                name="idx_litestar_session_expires_at",
+                table="litestar_session",
+                schema="app",
+                ddl="CREATE INDEX idx_litestar_session_expires_at ON app.litestar_session (expires_at);",
+            )
+        ]
+
+        matching_rows = [
+            {"index_name": "IDX_LITESTAR_SESSION_EXPIRES_AT", "table_name": "LITESTAR_SESSION", "schema_name": "APP"}
+        ]
+        other_schema_rows = [
+            {"index_name": "IDX_LITESTAR_SESSION_EXPIRES_AT", "table_name": "LITESTAR_SESSION", "schema_name": "OTHER"}
+        ]
+
+        sync_present = MagicMock()
+        sync_present.data_dictionary.get_indexes.return_value = matching_rows
+        store.reconcile_companion_objects_sync(sync_present)
+        sync_present.data_dictionary.get_indexes.assert_called_once_with(
+            sync_present, table="litestar_session", schema="app"
+        )
+        sync_present.execute_script.assert_not_called()
+        sync_present.commit.assert_not_called()
+
+        sync_missing = MagicMock()
+        sync_missing.data_dictionary.get_indexes.return_value = other_schema_rows
+        store.reconcile_companion_objects_sync(sync_missing)
+        sync_missing.execute_script.assert_called_once_with(
+            "CREATE INDEX idx_litestar_session_expires_at ON app.litestar_session (expires_at);"
+        )
+        sync_missing.commit.assert_not_called()
+
+        async_present = SimpleNamespace(
+            data_dictionary=SimpleNamespace(get_indexes=AsyncMock(return_value=matching_rows)),
+            execute_script=AsyncMock(),
+            commit=AsyncMock(),
+        )
+        await store.reconcile_companion_objects_async(async_present)
+        async_present.execute_script.assert_not_awaited()
+        async_present.commit.assert_not_awaited()
+
+        async_missing = SimpleNamespace(
+            data_dictionary=SimpleNamespace(get_indexes=AsyncMock(return_value=other_schema_rows)),
+            execute_script=AsyncMock(),
+            commit=AsyncMock(),
+        )
+        await store.reconcile_companion_objects_async(async_missing)
+        async_missing.execute_script.assert_awaited_once_with(
+            "CREATE INDEX idx_litestar_session_expires_at ON app.litestar_session (expires_at);"
+        )
+        async_missing.commit.assert_not_awaited()
+    finally:
+        cfg.close_pool()
