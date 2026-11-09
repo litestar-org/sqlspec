@@ -1,5 +1,6 @@
 """Integration tests for ADBC ADK memory store."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -189,3 +190,116 @@ def test_adbc_sqlite_versioned_statements_execute(tmp_path: Path) -> None:
 
     objects = _sqlite_object_names(config)
     assert {"adk_memory", "adk_memory_fts", "adk_memory_ai", "adk_memory_ad", "adk_memory_au"}.issubset(objects)
+
+
+def test_adbc_sqlite_fts_search_matches_tokens(tmp_path: Path) -> None:
+    """FTS5 MATCH matches full tokens and does not match mid-word substrings."""
+    store = _build_store(tmp_path, use_fts=True)
+    now = datetime.now(UTC)
+    store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso roast", inserted_at=now)
+    ])
+
+    exact_results = store.search_entries(query="espresso", app_name="app", user_id="user")
+    assert len(exact_results) == 1
+    assert exact_results[0]["event_id"] == "evt-1"
+
+    partial_results = store.search_entries(query="press", app_name="app", user_id="user")
+    assert partial_results == []
+
+
+def test_adbc_sqlite_fts_search_tracks_update_and_delete(tmp_path: Path) -> None:
+    """FTS5 sync triggers update search results across UPDATE and DELETE mutations."""
+    store = _build_store(tmp_path, use_fts=True)
+    now = datetime.now(UTC)
+    store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso roast", inserted_at=now)
+    ])
+
+    with store.config.provide_session() as driver:
+        driver.execute("UPDATE adk_memory SET content_text = 'latte foam' WHERE event_id = 'evt-1'")
+        driver.commit()
+
+    assert store.search_entries(query="espresso", app_name="app", user_id="user") == []
+    updated = store.search_entries(query="latte", app_name="app", user_id="user")
+    assert len(updated) == 1
+    assert updated[0]["content_text"] == "latte foam"
+
+    store.delete_entries_by_session("s1")
+    assert store.search_entries(query="latte", app_name="app", user_id="user") == []
+
+
+def test_adbc_sqlite_fts_search_honors_scope_filter(tmp_path: Path) -> None:
+    """FTS5 search filters results by scope_filter ('app', 'user', 'all')."""
+    store = _build_store(tmp_path, use_fts=True)
+    now = datetime.now(UTC)
+    store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-user", content_text="cappuccino", inserted_at=now, scope="user"),
+        _build_record(session_id="s2", event_id="evt-app", content_text="cappuccino", inserted_at=now, scope="app"),
+    ])
+
+    app_only = store.search_entries(query="cappuccino", app_name="app", user_id="user", scope_filter="app")
+    assert [row["event_id"] for row in app_only] == ["evt-app"]
+
+    user_only = store.search_entries(query="cappuccino", app_name="app", user_id="user", scope_filter="user")
+    assert [row["event_id"] for row in user_only] == ["evt-user"]
+
+
+def test_adbc_sqlite_fts_search_finds_rebuilt_rows(tmp_path: Path) -> None:
+    """Rows inserted before FTS5 was enabled are returned by FTS5 search after create_tables rebuild."""
+    base_store = _build_store(tmp_path, use_fts=False)
+    now = datetime.now(UTC)
+    base_store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso crema", inserted_at=now)
+    ])
+
+    fts_store = _build_store(tmp_path, use_fts=True)
+    results = fts_store.search_entries(query="espresso", app_name="app", user_id="user")
+    assert len(results) == 1
+    assert results[0]["event_id"] == "evt-1"
+
+
+def test_adbc_sqlite_fts_search_recovers_invalid_query(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Invalid FTS5 MATCH syntax logs a warning and falls back to simple LIKE search."""
+    store = _build_store(tmp_path, use_fts=True)
+    now = datetime.now(UTC)
+    store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
+    ])
+
+    with caplog.at_level(logging.WARNING, logger="sqlspec.adapters.adbc.adk.store"):
+        results = store.search_entries("foo AND", "app", "user")
+
+    assert results == []
+    assert any("FTS search failed" in rec.message for rec in caplog.records)
+
+
+def test_adbc_sqlite_fts_search_recovers_missing_index(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Missing FTS5 virtual table logs a warning and returns simple LIKE search results."""
+    store = _build_store(tmp_path, use_fts=True)
+    now = datetime.now(UTC)
+    store.insert_memory_entries([
+        _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
+    ])
+
+    with store.config.provide_session() as driver:
+        driver.execute("DROP TABLE adk_memory_fts")
+        driver.commit()
+
+    with caplog.at_level(logging.WARNING, logger="sqlspec.adapters.adbc.adk.store"):
+        results = store.search_entries("espresso", "app", "user")
+
+    assert len(results) == 1
+    assert results[0]["event_id"] == "evt-1"
+    assert any("FTS search failed" in rec.message for rec in caplog.records)
+
+
+def test_adbc_sqlite_fts_search_missing_memory_table(tmp_path: Path) -> None:
+    """Searching when the base memory table does not exist returns an empty list."""
+    db_path = tmp_path / "uninitialized_adk_memory.db"
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite", "uri": f"file:{db_path}"},
+        extension_config={"adk": {"enable_memory": True, "memory_use_fts": True}},
+    )
+    store = AdbcADKMemoryStore(config)
+    assert store.search_entries("espresso", "app", "user") == []

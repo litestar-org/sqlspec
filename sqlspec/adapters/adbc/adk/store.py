@@ -2441,7 +2441,19 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     return []
                 raise
 
-        if self._use_fts and self._dialect != DIALECT_POSTGRESQL:
+        if self._sqlite_fts_enabled:
+            try:
+                return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+            except Exception as exc:
+                text = str(exc).lower()
+                if (
+                    any(pattern in text for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS)
+                    and f"{self._memory_table}_fts".lower() not in text
+                ):
+                    return []
+                logger.warning("FTS search failed; falling back to simple search: %s", exc)
+
+        if self._use_fts and self._dialect != DIALECT_POSTGRESQL and not self._sqlite_fts_enabled:
             logger.warning("ADBC memory store does not support FTS, falling back to simple search")
 
         where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
@@ -2485,6 +2497,30 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 return []
             raise
 
+        return self._rows_to_records(rows)
+
+    def _search_entries_fts(
+        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"]
+    ) -> "list[StoredMemory]":
+        """Search local SQLite memory entries via the external-content FTS5 virtual table."""
+        where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
+        sql = f"""
+        SELECT m.id, m.session_id, m.app_name, m.user_id, m.scope, m.event_id, m.author,
+               m.timestamp, m.content_json, m.content_text, m.metadata_json, m.inserted_at
+        FROM {self._memory_table} m
+        JOIN {self._memory_table}_fts fts ON m.rowid = fts.rowid
+        WHERE {where_scope}
+          AND fts.content_text MATCH ?
+        ORDER BY m.timestamp DESC
+        LIMIT ?
+        """
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                self._execute(cursor, sql, (*scope_params, query, limit))
+                rows = cursor.fetchall()
+            finally:
+                cursor.close()
         return self._rows_to_records(rows)
 
     def _search_entries_vector(

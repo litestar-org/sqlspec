@@ -1,5 +1,6 @@
 """Tests for ADBC ADK store dialect-specific DDL generation."""
 
+import logging
 import struct
 from datetime import UTC, datetime
 from typing import Any
@@ -1055,3 +1056,37 @@ def test_adbc_sqlite_fts_create_tables_skips_catalog_when_disabled_and_aborts_tr
     with pytest.raises(RuntimeError, match="no such module: fts5"):
         fts_store.create_tables()
     assert all("CREATE TRIGGER" not in stmt for stmt in executed_sql)
+
+
+def test_adbc_flightsql_search_keeps_like(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Remote FlightSQL endpoints keep LIKE search and emit the unsupported-FTS warning."""
+    captured: list[tuple[str, Any]] = []
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+    cursor.execute.side_effect = lambda sql, params=None: captured.append((_normalized(sql), params))
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    context = MagicMock()
+    context.__enter__.return_value = conn
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: context)
+
+    store = AdbcADKMemoryStore(
+        AdbcConfig(
+            connection_config={
+                "driver_name": "adbc_driver_flightsql",
+                "uri": "grpc://localhost:8815",
+                "gizmosql_backend": "sqlite",
+            },
+            extension_config={"adk": {"enable_memory": True, "memory_use_fts": True}},
+        )
+    )
+
+    with caplog.at_level(logging.WARNING, logger="sqlspec.adapters.adbc.adk.store"):
+        assert store.search_entries("espresso", "app", "user", limit=5) == []
+
+    assert len(captured) == 1
+    sql, params = captured[0]
+    assert "LIKE ?" in sql
+    assert "MATCH" not in sql
+    assert params == ("app", "user", "%espresso%", 5)
+    assert any("ADBC memory store does not support FTS" in rec.message for rec in caplog.records)
