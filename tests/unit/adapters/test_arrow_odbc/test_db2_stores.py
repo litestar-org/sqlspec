@@ -10,11 +10,18 @@ import sqlglot
 pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
-from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore
+from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore, _Db2AdkSql
 from sqlspec.adapters.arrow_odbc.core import split_db2_name
 from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
+from sqlspec.core import StatementConfig
+from sqlspec.exceptions import MigrationError
+from sqlspec.extensions.adk.migrations.reconcile import reconcile as adk_reconcile
+from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
+from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
+from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.schema import SchemaTarget
+from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
 from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
     DB2_CONNECTION_STRING,
     DB2_TIMESTAMP,
@@ -720,3 +727,225 @@ def test_arrow_odbc_db2_qualified_session_table_and_chunk_names(
     assert f"CREATE TABLE {expected_chunk_table}" in store._table_ddl()
     assert indexes[0].schema == expected_schema
     assert indexes[0].table == expected_table
+
+
+def _db2_tables_arrow(tables: list[tuple[str, str]]) -> pa.Table:
+    return pa.table({
+        "SCHEMA_NAME": pa.array([schema for schema, _ in tables], pa.string()),
+        "TABLE_NAME": pa.array([table for _, table in tables], pa.string()),
+        "TABLE_TYPE": pa.array(["BASE TABLE"] * len(tables), pa.string()),
+        "DEPENDENCY_LEVEL": pa.array([0] * len(tables), pa.int64()),
+        "LEVEL": pa.array([0] * len(tables), pa.int64()),
+    })
+
+
+def _db2_columns_arrow(schema: str, table: str, specs: list[tuple[str, str, bool]]) -> pa.Table:
+    return pa.table({
+        "SCHEMA_NAME": pa.array([schema] * len(specs), pa.string()),
+        "TABLE_NAME": pa.array([table] * len(specs), pa.string()),
+        "COLUMN_NAME": pa.array([col for col, _, _ in specs], pa.string()),
+        "DATA_TYPE": pa.array([dtype for _, dtype, _ in specs], pa.string()),
+        "IS_NULLABLE": pa.array([1 if nullable else 0 for _, _, nullable in specs], pa.int64()),
+        "ORDINAL_POSITION": pa.array(list(range(1, len(specs) + 1)), pa.int64()),
+    })
+
+
+def _db2_indexes_arrow(schema: str, table: str, index_names: list[str]) -> pa.Table:
+    return pa.table({
+        "SCHEMA_NAME": pa.array([schema] * len(index_names), pa.string()),
+        "TABLE_NAME": pa.array([table] * len(index_names), pa.string()),
+        "INDEX_NAME": pa.array(index_names, pa.string()),
+        "COLUMN_NAME": pa.array(["COL"] * len(index_names), pa.string()),
+        "COLUMN_POSITION": pa.array([1] * len(index_names), pa.int64()),
+        "IS_UNIQUE": pa.array([0] * len(index_names), pa.int64()),
+        "IS_PRIMARY": pa.array([0] * len(index_names), pa.int64()),
+    })
+
+
+def test_arrow_odbc_reconcile_guard_accepts_db2_and_refuses_unsupported_dialect() -> None:
+    """validate_builtin_reconcile_adapter accepts Arrow ODBC on db2 and refuses unsupported dialects."""
+    db2_config = _db2_config(FakeArrowOdbcConnection(result=EMPTY_RESULT))
+    assert validate_builtin_reconcile_adapter(db2_config) == "arrow_odbc"
+
+    unsupported = ArrowOdbcConfig(
+        connection_config={"connection_string": "Driver=x"}, statement_config=StatementConfig(dialect="postgres")
+    )
+    with pytest.raises(MigrationError, match='migration_mode="versioned"'):
+        validate_builtin_reconcile_adapter(unsupported)
+
+
+def test_arrow_odbc_db2_litestar_reconcile_restores_missing_chunk_table_and_index() -> None:
+    """Litestar reconciler on Db2 Arrow ODBC restores missing sess_chunks and IX_SESS_EXP without committing."""
+    sess_columns = _db2_columns_arrow(
+        "DB2INST1",
+        "SESS",
+        [
+            ("SESSION_ID", "VARCHAR", False),
+            ("DATA", "VARCHAR", True),
+            ("EXPIRES_AT", "TIMESTAMP", True),
+            ("CREATED_AT", "TIMESTAMP", False),
+            ("UPDATED_AT", "TIMESTAMP", False),
+        ],
+    )
+
+    def responder(sql: str, parameters: list[str | None] | None) -> pa.Table | None:
+        if "WITH dependency_tree" in sql:
+            return _db2_tables_arrow([("DB2INST1", "SESS")])
+        if "FROM SYSCAT.COLUMNS" in sql and parameters is not None and "SESS" in parameters:
+            return sess_columns
+        return EMPTY_RESULT
+
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=responder)
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": DB2_CONNECTION_STRING},
+        connection_instance=as_connection(connection),
+        extension_config={"litestar": {"session_table": "sess", "migration_mode": "reconcile"}},
+    )
+    with config.provide_session() as driver:
+        litestar_reconcile(MigrationContext(config=config, driver=driver, dialect="db2"))
+
+    ddl_calls = [sql for sql, _ in normalized_calls(connection) if sql.startswith("CREATE")]
+    assert any(sql.startswith("CREATE TABLE sess_chunks (") for sql in ddl_calls)
+    assert "CREATE INDEX IX_SESS_EXP ON sess(expires_at)" in ddl_calls
+    assert not any(sql.startswith("CREATE TABLE sess (") for sql in ddl_calls)
+    assert connection.commit_calls == 0
+
+
+def test_arrow_odbc_db2_event_store_reconcile_targets_and_repairs_index() -> None:
+    """Db2 ArrowOdbcEventQueueStore folds SchemaTarget names and repairs only missing queue indexes."""
+    unqualified_targets = _event_store("App_Events").get_schema_targets()
+    qualified_targets = _event_store("queue.app_events").get_schema_targets()
+    assert [(t.schema, t.table_name) for t in unqualified_targets] == [(None, "APP_EVENTS")]
+    assert [(t.schema, t.table_name) for t in qualified_targets] == [("QUEUE", "APP_EVENTS")]
+
+    event_columns = _db2_columns_arrow(
+        "DB2INST1",
+        "APP_EVENTS",
+        [
+            ("EVENT_ID", "VARCHAR", False),
+            ("CHANNEL", "VARCHAR", False),
+            ("PAYLOAD_JSON", "CLOB", False),
+            ("METADATA_JSON", "CLOB", True),
+            ("STATUS", "VARCHAR", False),
+            ("AVAILABLE_AT", "TIMESTAMP", False),
+            ("LEASE_EXPIRES_AT", "TIMESTAMP", True),
+            ("ATTEMPTS", "INTEGER", False),
+            ("CREATED_AT", "TIMESTAMP", False),
+            ("ACKNOWLEDGED_AT", "TIMESTAMP", True),
+        ],
+    )
+    present_indexes: list[str] = []
+
+    def responder(sql: str, parameters: list[str | None] | None) -> pa.Table | None:
+        if "WITH dependency_tree" in sql:
+            return _db2_tables_arrow([("DB2INST1", "APP_EVENTS")])
+        if "FROM SYSCAT.COLUMNS" in sql and parameters is not None and "APP_EVENTS" in parameters:
+            return event_columns
+        if "FROM SYSCAT.INDEXES" in sql and parameters is not None and "APP_EVENTS" in parameters:
+            return _db2_indexes_arrow("DB2INST1", "APP_EVENTS", present_indexes)
+        return EMPTY_RESULT
+
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=responder)
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": DB2_CONNECTION_STRING},
+        connection_instance=as_connection(connection),
+        extension_config={"events": {"queue_table": "app_events", "migration_mode": "reconcile"}},
+    )
+    with config.provide_session() as driver:
+        events_reconcile(MigrationContext(config=config, driver=driver, dialect="db2"))
+
+    ddl_calls = [sql for sql, _ in normalized_calls(connection) if sql.startswith("CREATE")]
+    assert ddl_calls == ["CREATE INDEX idx_app_events_channel_status ON app_events(channel, status, available_at)"]
+    assert connection.commit_calls == 0
+
+    connection.calls.clear()
+    present_indexes.append("IDX_APP_EVENTS_CHANNEL_STATUS")
+    with config.provide_session() as driver:
+        events_reconcile(MigrationContext(config=config, driver=driver, dialect="db2"))
+
+    assert [sql for sql, _ in normalized_calls(connection) if sql.startswith("CREATE")] == []
+    assert connection.commit_calls == 0
+
+
+def test_arrow_odbc_db2_adk_reconcile_creates_tables_and_repairs_missing_indexes() -> None:
+    """Db2 Arrow ODBC ADK session and memory stores build catalog-folded SchemaTargets and reconcile companion indexes."""
+    qualified_store = _adk_store(
+        FakeArrowOdbcConnection(result=EMPTY_RESULT), session_table="app.adk_session", events_table="app.adk_event"
+    )
+    qualified_targets = qualified_store.get_schema_targets_sync(None)
+    assert [(target.schema, target.table_name) for target in qualified_targets[:2]] == [
+        ("APP", "ADK_SESSION"),
+        ("APP", "ADK_EVENT"),
+    ]
+    assert isinstance(qualified_store._sql, _Db2AdkSql)
+    qualified_companions = qualified_store._sql.companion_indexes(qualified_store._index_specs())
+    assert qualified_companions[0].schema == "APP"
+    assert qualified_companions[0].table == "ADK_SESSION"
+    assert qualified_companions[0].name == "IDX_ADK_SESSION_APP_USER"
+    assert (
+        qualified_companions[0].ddl
+        == "CREATE INDEX app.idx_adk_session_app_user ON app.adk_session (app_name, user_id)"
+    )
+
+    disabled_memory = _memory_store(FakeArrowOdbcConnection(result=EMPTY_RESULT), enable_memory=False)
+    assert disabled_memory.get_schema_targets_sync(None) == []
+
+    empty_conn = FakeArrowOdbcConnection(result=EMPTY_RESULT)
+    reconcile_cfg = ArrowOdbcConfig(
+        connection_config={"connection_string": DB2_CONNECTION_STRING},
+        connection_instance=as_connection(empty_conn),
+        extension_config={"adk": {"enable_memory": True, "migration_mode": "reconcile"}},
+    )
+    with reconcile_cfg.provide_session() as driver:
+        adk_reconcile(MigrationContext(config=reconcile_cfg, driver=driver, dialect="db2"))
+
+    created_initial = [sql.split(" (", 1)[0] for sql, _ in normalized_calls(empty_conn) if sql.startswith("CREATE")]
+    assert created_initial[:6] == [
+        "CREATE TABLE adk_session",
+        "CREATE TABLE adk_event",
+        "CREATE TABLE adk_app_state",
+        "CREATE TABLE adk_user_state",
+        "CREATE TABLE adk_internal_metadata",
+        "CREATE TABLE adk_memory",
+    ]
+    assert len(created_initial) == 6 + 7 + 3
+    assert empty_conn.commit_calls == 0
+
+    existing_indexes = {
+        "ADK_SESSION": ["IDX_ADK_SESSION_APP_USER"],
+        "ADK_EVENT": [
+            "IDX_ADK_EVENT_SCOPE",
+            "IDX_ADK_EVENT_SESSION",
+            "IDX_ADK_EVENT_INVOCATION",
+            "IDX_ADK_EVENT_TIMESTAMP",
+            "IDX_ADK_EVENT_APP_TIMESTAMP",
+        ],
+        "ADK_MEMORY": ["IDX_ADK_MEMORY_SESSION", "IDX_ADK_MEMORY_INSERTED"],
+    }
+    session_store = ArrowOdbcADKStore(reconcile_cfg)
+    memory_store = ArrowOdbcADKMemoryStore(reconcile_cfg)
+
+    def index_responder(sql: str, parameters: list[str | None] | None) -> pa.Table | None:
+        if "FROM SYSCAT.INDEXES" in sql and parameters:
+            for table_name, names in existing_indexes.items():
+                if table_name in parameters:
+                    return _db2_indexes_arrow("DB2INST1", table_name, names)
+        return EMPTY_RESULT
+
+    repair_conn = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=index_responder)
+    repair_cfg = ArrowOdbcConfig(
+        connection_config={"connection_string": DB2_CONNECTION_STRING},
+        connection_instance=as_connection(repair_conn),
+        extension_config={"adk": {"enable_memory": True, "migration_mode": "reconcile"}},
+    )
+    with repair_cfg.provide_session() as driver:
+        session_store.reconcile_companion_objects_sync(driver)
+        memory_store.reconcile_companion_objects_sync(driver)
+
+    repaired = [sql for sql, _ in normalized_calls(repair_conn) if sql.startswith("CREATE")]
+    assert repaired == [
+        "CREATE INDEX idx_adk_session_update_time ON adk_session (update_time)",
+        "CREATE INDEX idx_adk_memory_scope ON adk_memory (app_name, user_id, scope, timestamp)",
+    ]
+    assert not [sql for sql, _ in normalized_calls(repair_conn) if "SELECT 1 FROM SYSCAT.INDEXES" in sql]
+    assert repair_conn.commit_calls == 0

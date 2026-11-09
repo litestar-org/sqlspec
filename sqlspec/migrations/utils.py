@@ -125,7 +125,7 @@ def validate_builtin_reconcile_adapter(config: Any) -> str:
 
     dialect = str(getattr(getattr(config, "statement_config", None), "dialect", "") or "").strip().lower()
     if adapter_name == "arrow_odbc":
-        if dialect in {"mssql", "tsql"}:
+        if dialect in {"mssql", "tsql", "db2"}:
             return "arrow_odbc"
         msg = (
             f"Built-in extension reconciliation does not support arrow_odbc with statement_config dialect "

@@ -1,7 +1,7 @@
 """arrow-odbc ADK stores for Google Agent Development Kit session storage."""
 
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NotRequired, cast
 
 from sqlspec.adapters.arrow_odbc.core import (
     DB2_INDEX_EXISTS_SQL,
@@ -17,6 +17,7 @@ from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory import BaseSyncADKMemoryStore, StoredMemory
+from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -37,6 +38,15 @@ JSON_COLUMN_TYPE: Final[str] = "NVARCHAR(MAX)"
 DB2_JSON_COLUMN_TYPE: Final[str] = "CLOB(1M)"
 DB2_UNDEFINED_OBJECT_ERROR: Final[int] = -204
 _QUALIFIED_PARTS_MIN: Final[int] = 2
+
+
+class _AdkCompanionIndex(NamedTuple):
+    """Catalog-resolved companion index definition for ADK schema reconciliation."""
+
+    name: str
+    table: str
+    schema: str | None
+    ddl: str
 
 
 class ArrowOdbcADKConfig(ADKConfig):
@@ -62,6 +72,16 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         super().__init__(config)
         self._sql = _adk_sql_for(config)
 
+    def _table_ddls(self) -> tuple[tuple[str, str], ...]:
+        """Return ordered ADK session-store table names paired with canonical CREATE TABLE DDL."""
+        return (
+            (self._session_table, self._sessions_table_ddl()),
+            (self._events_table, self._events_table_ddl()),
+            (self._app_state_table, self._app_states_table_ddl()),
+            (self._user_state_table, self._user_states_table_ddl()),
+            (self._metadata_table, self._metadata_table_ddl()),
+        )
+
     def create_tables(self) -> None:
         """Create the ADK tables and indexes the catalog reports as missing."""
         if not self.create_schema_enabled:
@@ -69,19 +89,18 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
             return
 
         with self._config.provide_session() as driver:
-            table_ddls = (
-                (self._session_table, self._sessions_table_ddl()),
-                (self._events_table, self._events_table_ddl()),
-                (self._app_state_table, self._app_states_table_ddl()),
-                (self._user_state_table, self._user_states_table_ddl()),
-                (self._metadata_table, self._metadata_table_ddl()),
-            )
-            self._sql.create_missing_objects(driver, table_ddls, self._index_specs())
+            self._sql.create_missing_objects(driver, self._table_ddls(), self._index_specs())
             driver.commit()
+
+    def _schema_targets(self) -> list[SchemaTarget]:
+        """Return ADK session-store SchemaTarget definitions with Db2 catalog folding when active."""
+        if isinstance(self._sql, _Db2AdkSql):
+            return self._sql.schema_targets(self._table_ddls())
+        return super()._schema_targets()
 
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
         """Create missing ADK session and event companion indexes without committing."""
-        self._sql.create_missing_objects(driver, (), self._index_specs())
+        self._sql.reconcile_companion_indexes(driver, self._index_specs())
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -461,11 +480,19 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
             )
             driver.commit()
 
+    def _schema_targets(self) -> list[SchemaTarget]:
+        """Return ADK memory-store SchemaTarget definitions with Db2 catalog folding when active."""
+        if not self._enabled:
+            return []
+        if isinstance(self._sql, _Db2AdkSql):
+            return self._sql.schema_targets(((self._memory_table, self._memory_table_ddl()),))
+        return super()._schema_targets()
+
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
         """Create missing ADK memory companion indexes without committing when enabled."""
         if not self._enabled:
             return
-        self._sql.create_missing_objects(driver, (), self._memory_index_specs())
+        self._sql.reconcile_companion_indexes(driver, self._memory_index_specs())
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Insert memory entries, skipping duplicates by event_id."""
@@ -1100,6 +1127,10 @@ class _TsqlAdkSql:
             if _index_key(target_schema, target_table, index_name) not in existing_indexes:
                 driver.execute(_create_index_sql(index_table, index_name, columns))
 
+    def reconcile_companion_indexes(self, driver: Any, index_specs: "Sequence[tuple[str, str, str]]") -> None:
+        """Create missing T-SQL ADK companion indexes using the data dictionary."""
+        self.create_missing_objects(driver, (), index_specs)
+
     def session_select_sql(self, table: str) -> str:
         return _session_select_sql(table)
 
@@ -1220,6 +1251,38 @@ class _Db2AdkSql:
         for index_name, index_table, columns in index_specs:
             if driver.select_one_or_none(DB2_INDEX_EXISTS_SQL, split_db2_name(index_name)) is None:
                 driver.execute(f"CREATE INDEX {index_name} ON {index_table} ({columns})")
+
+    def schema_targets(self, table_ddls: "Sequence[tuple[str, str]]") -> list[SchemaTarget]:
+        """Build Db2 SchemaTargets with catalog-folded schema and table names."""
+        targets: list[SchemaTarget] = []
+        for table, ddl in table_ddls:
+            schema, catalog_table = split_db2_name(table)
+            targets.append(SchemaTarget.from_ddl(catalog_table, ddl, schema=schema, dialect="db2"))
+        return targets
+
+    def companion_indexes(self, index_specs: "Sequence[tuple[str, str, str]]") -> list[_AdkCompanionIndex]:
+        """Build Db2 companion index descriptors with catalog-folded schema, table, and index names."""
+        indexes: list[_AdkCompanionIndex] = []
+        for index_name, index_table, columns in index_specs:
+            schema, catalog_table = split_db2_name(index_table)
+            _, catalog_index = split_db2_name(index_name)
+            raw_schema, dot, _ = index_table.partition(".")
+            index_ref = f"{raw_schema}.{index_name}" if dot else index_name
+            ddl = f"CREATE INDEX {index_ref} ON {index_table} ({columns})"
+            indexes.append(_AdkCompanionIndex(name=catalog_index, table=catalog_table, schema=schema, ddl=ddl))
+        return indexes
+
+    def reconcile_companion_indexes(self, driver: Any, index_specs: "Sequence[tuple[str, str, str]]") -> None:
+        """Create missing Db2 ADK companion indexes via data_dictionary.get_indexes without committing."""
+        indexes_by_table: dict[tuple[str | None, str], list[Any]] = {}
+        for item in self.companion_indexes(index_specs):
+            cache_key = (item.schema, item.table)
+            rows = indexes_by_table.get(cache_key)
+            if rows is None:
+                rows = list(driver.data_dictionary.get_indexes(driver, table=item.table, schema=item.schema))
+                indexes_by_table[cache_key] = rows
+            if not metadata_has_index(rows, item.table, item.name, schema_name=item.schema):
+                driver.execute(item.ddl)
 
     def session_select_sql(self, table: str) -> str:
         return (

@@ -257,3 +257,113 @@ def test_arrow_odbc_db2_qualified_litestar_session_chunked_round_trip(
     parsed = json.loads(output)
     assert parsed["round_trip"] is True
     assert parsed["chunks"] >= 2
+
+
+_RECONCILE_SCRIPT = """
+import json
+import os
+from uuid import uuid4
+
+from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
+from sqlspec.migrations.schema import metadata_has_index
+
+payload = json.loads(os.environ.pop("SQLSPEC_DB2_ODBC_CONFIG"))
+reconcile_payload = {**payload, "autocommit": True}
+prefix = "AO_REC_" + uuid4().hex[:6].upper()
+sess_table = f"{prefix}_SESS"
+chunk_table = f"{sess_table}_CHUNKS"
+events_table = f"{prefix}_EVT"
+adk_session = f"{prefix}_ADK_S"
+adk_event = f"{prefix}_ADK_E"
+adk_app = f"{prefix}_ADK_A"
+adk_user = f"{prefix}_ADK_U"
+adk_meta = f"{prefix}_ADK_M"
+adk_memory = f"{prefix}_ADK_MEM"
+dropped_adk_index = f"IDX_{adk_session}_UPDATE_TIME"
+
+config = ArrowOdbcConfig(
+    connection_config=reconcile_payload,
+    driver_features={"enable_pooling": False, "query_timeout_sec": 15},
+    extension_config={
+        "litestar": {"migration_mode": "reconcile", "session_table": sess_table.lower()},
+        "events": {"migration_mode": "reconcile", "queue_table": events_table.lower()},
+        "adk": {
+            "migration_mode": "reconcile",
+            "enable_memory": True,
+            "session_table": adk_session.lower(),
+            "events_table": adk_event.lower(),
+            "app_state_table": adk_app.lower(),
+            "user_state_table": adk_user.lower(),
+            "metadata_table": adk_meta.lower(),
+            "memory_table": adk_memory.lower(),
+        },
+    },
+)
+all_tables = (chunk_table, sess_table, events_table, adk_memory, adk_meta, adk_user, adk_app, adk_event, adk_session)
+try:
+    config.migrate_up()
+    with config.provide_session() as driver:
+        schema_name = str(driver.select_value("SELECT CURRENT SCHEMA FROM SYSIBM.SYSDUMMY1")).strip()
+        existing = {row["table_name"].upper() for row in driver.data_dictionary.get_tables(driver, schema=schema_name)}
+        assert set(all_tables).issubset(existing)
+        assert "DDL_MIGRATIONS" not in existing
+        driver.execute(f"DROP TABLE {chunk_table}")
+        driver.execute(f"DROP INDEX {dropped_adk_index}")
+
+    config.migrate_up()
+    with config.provide_session() as driver:
+        schema_name = str(driver.select_value("SELECT CURRENT SCHEMA FROM SYSIBM.SYSDUMMY1")).strip()
+        restored_tables = {
+            row["table_name"].upper() for row in driver.data_dictionary.get_tables(driver, schema=schema_name)
+        }
+        assert chunk_table in restored_tables
+        assert "DDL_MIGRATIONS" not in restored_tables
+        indexes = driver.data_dictionary.get_indexes(driver, table=adk_session, schema=schema_name)
+        assert metadata_has_index(indexes, adk_session, dropped_adk_index, schema_name=schema_name)
+finally:
+    try:
+        with config.provide_session() as cleanup:
+            for table in all_tables:
+                try:
+                    cleanup.execute(f"DROP TABLE {table}")
+                except Exception:
+                    pass
+    finally:
+        config.close_pool()
+
+print(json.dumps({"reconciled": True, "chunk_table": chunk_table}))
+"""
+
+
+def test_arrow_odbc_db2_extension_reconcile_restores_chunk_table_and_indexes(request: pytest.FixtureRequest) -> None:
+    """Db2 ArrowOdbcConfig migrate_up() reconciles litestar, events, and adk and repairs dropped objects."""
+    try:
+        db2_service: Db2Service = request.getfixturevalue("db2_service")
+        db2_connection_config: Db2ConnectionParams = request.getfixturevalue("db2_connection_config")
+        command, environment, driver = request.getfixturevalue("db2_arrow_odbc_runtime")
+    except pytest.skip.Exception:
+        raise
+    except Exception as exc:
+        pytest.skip(f"Db2 service container unavailable on host: {exc}")
+
+    password = str(db2_connection_config["password"])
+    parameters = {
+        "driver": driver,
+        "host": "127.0.0.1",
+        "database": db2_connection_config["database"],
+        "uid": db2_connection_config["user"],
+        "pwd": password,
+        "extra": {"Port": DB2_PORT, "Protocol": "TCPIP"},
+        "login_timeout": 15,
+        "autocommit": True,
+    }
+    result = db2_service.container.exec_run(
+        [*command, "-c", _RECONCILE_SCRIPT],
+        environment={**environment, "SQLSPEC_DB2_ODBC_CONFIG": json.dumps(parameters)},
+    )
+    output = exec_output_to_bytes(result.output).decode("utf-8", errors="replace")
+    if result.exit_code:
+        diagnostic = output.replace(password, "<redacted>")
+        pytest.fail(f"Native Arrow-ODBC Db2 extension reconcile failed (exit {result.exit_code}):\n{diagnostic}")
+    parsed = json.loads(output)
+    assert parsed["reconciled"] is True
