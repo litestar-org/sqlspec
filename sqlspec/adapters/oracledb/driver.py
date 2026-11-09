@@ -95,7 +95,7 @@ from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import Generator, Mapping, Sequence
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
@@ -385,6 +385,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         "_transaction_active",
     )
     dialect = "oracle"
+    native_arrow_export: ClassVar[bool] = True
     _pipeline_support: ClassVar[bool] = False
     _pipeline_support_reason: ClassVar[str] = "asyncio_thin_required"
 
@@ -846,7 +847,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 pa = import_pyarrow()
                 schema = arrow_schema if arrow_schema is not None else first_batch.schema
                 lazy_reader = pa.RecordBatchReader.from_batches(schema, chain((first_batch,), batch_generator))
-                return create_arrow_result(prepared_statement, lazy_reader, rows_affected=-1)
+                return create_arrow_result(
+                    prepared_statement, lazy_reader, rows_affected=-1, metadata={"stream_close": batch_generator.close}
+                )
 
             if return_format == "batches" and supports_df_batches(self.connection):
                 batches_result = cast(
@@ -914,7 +917,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Execute a query and stream Arrow-formatted output to storage (sync)."""
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
@@ -1249,7 +1252,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         parameters: "StatementParameters | None",
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
-    ) -> "Iterator[ArrowRecordBatch]":
+    ) -> "Generator[ArrowRecordBatch, None, None]":
         params = parameters if parameters is not None else []
         fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features, arrow_schema=arrow_schema)
         try:
@@ -1281,6 +1284,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                     yield import_pyarrow().RecordBatch.from_pylist([], schema=batch_table.schema)
         except OracleError as exc:
             raise create_mapped_exception(exc) from exc
+        finally:
+            close_dfs = getattr(oracle_dfs, "close", None)
+            if callable(close_dfs):
+                close_dfs()
 
     def _fetch_arrow_record_batches(
         self,
@@ -1873,7 +1880,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Execute a query and write Arrow-compatible output to storage (async)."""
         self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = await self._select_for_storage(
+            statement, *parameters, statement_config=statement_config, **kwargs
+        )
         async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline

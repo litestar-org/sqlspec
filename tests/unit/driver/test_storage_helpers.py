@@ -32,6 +32,10 @@ HOOK_ROUTED_ADAPTERS: list[tuple[str, str]] = [
     ("sqlspec.adapters.arrow_odbc.driver", "ArrowOdbcDriver"),
     ("sqlspec.adapters.spanner.driver", "SpannerSyncDriver"),
     ("sqlspec.adapters.spanner.driver", "SpannerAsyncDriver"),
+    ("sqlspec.adapters.oracledb.driver", "OracleSyncDriver"),
+    ("sqlspec.adapters.oracledb.driver", "OracleAsyncDriver"),
+    ("sqlspec.adapters.bigquery.driver", "BigQueryDriver"),
+    ("sqlspec.adapters.duckdb.driver", "DuckDBDriver"),
 ]
 
 

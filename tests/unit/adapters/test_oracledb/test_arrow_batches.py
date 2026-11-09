@@ -365,3 +365,31 @@ def test_sync_select_to_arrow_reader_yields_lazily() -> None:
     second_batch = reader.read_next_batch()
     assert second_batch.num_rows == 1
     assert yielded == [1, 2]
+
+
+def test_storage_reader_exposes_stream_close() -> None:
+    """OracleSyncDriver.select_to_arrow(return_format='reader') exposes stream_close metadata."""
+    finalized = False
+
+    def _generate_tables() -> Iterator[pa.Table]:
+        nonlocal finalized
+        try:
+            yield pa.table({"ID": [1, 2]})
+            yield pa.table({"ID": [3, 4]})
+        finally:
+            finalized = True
+
+    source_gen = _generate_tables()
+
+    class _ClosableBatchConnection:
+        def fetch_df_batches(self, **_kwargs: object) -> Iterator[pa.Table]:
+            return source_gen
+
+    driver = OracleSyncDriver(cast("OracleSyncConnection", _ClosableBatchConnection()))
+    result = driver.select_to_arrow("SELECT id FROM example", return_format="reader", batch_size=2)
+    assert finalized is False
+    assert "stream_close" in result.metadata
+    stream_close = result.metadata["stream_close"]
+    assert callable(stream_close)
+    stream_close()
+    assert finalized is True
