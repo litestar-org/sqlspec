@@ -39,6 +39,10 @@ HOOK_ROUTED_ADAPTERS: list[tuple[str, str]] = [
     ("sqlspec.adapters.sqlite.driver", "SqliteDriver"),
     ("sqlspec.adapters.aiosqlite.driver", "AiosqliteDriver"),
     ("sqlspec.adapters.pymysql.driver", "PyMysqlDriver"),
+    ("sqlspec.adapters.aiomysql.driver", "AiomysqlDriver"),
+    ("sqlspec.adapters.asyncmy.driver", "AsyncmyDriver"),
+    ("sqlspec.adapters.mysqlconnector.driver", "MysqlConnectorSyncDriver"),
+    ("sqlspec.adapters.mysqlconnector.driver", "MysqlConnectorAsyncDriver"),
 ]
 
 

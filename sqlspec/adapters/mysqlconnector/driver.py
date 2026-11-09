@@ -221,7 +221,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         **kwargs: Any,
     ) -> "StorageBridgeJob":
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
         pipeline = self._storage_pipeline()
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=pipeline
@@ -491,7 +491,9 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         **kwargs: Any,
     ) -> "StorageBridgeJob":
         self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = await self._select_for_storage(
+            statement, *parameters, statement_config=statement_config, **kwargs
+        )
         async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
