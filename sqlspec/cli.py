@@ -18,6 +18,7 @@ from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncCon
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.migrations import commands as migration_commands_module
 from sqlspec.migrations.squash import parse_version_range
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.config_tools import discover_config_from_pyproject, resolve_config_sync
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import run_
@@ -270,12 +271,15 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             await _close_cli_created_pool(store.config, had_pool=had_pool)
 
     async def _verify_memory_table_async(
-        config: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]", sql: str
+        config: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]", memory_table: str
     ) -> None:
         had_pool = getattr(config, "connection_instance", None) is not None
         try:
             async with config.provide_session() as driver:
-                await driver.execute(sql)
+                quoted_table = _quote_verified_table_identifier(
+                    config, memory_table, _resolve_verify_dialect(config, driver)
+                )
+                await driver.execute(f"SELECT 1 FROM {quoted_table} WHERE 1 = 0")
         finally:
             await _close_cli_created_pool(config, had_pool=had_pool)
 
@@ -1392,19 +1396,177 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 if isinstance(cfg, (AsyncDatabaseConfig, NoPoolAsyncConfig)):
                     async_cfg: AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] = cfg
                     async_store = cast("BaseAsyncADKMemoryStore[Any]", store_class(async_cfg))
-                    sql = f"SELECT 1 FROM {async_store.memory_table} WHERE 1 = 0"
-                    run_(_verify_memory_table_async)(async_cfg, sql)
+                    run_(_verify_memory_table_async)(async_cfg, async_store.memory_table)
                     console.print(f"[green]✓[/] {config_name}: memory table reachable")
                     continue
                 sync_store = cast("BaseSyncADKMemoryStore[Any]", store_class(cfg))
-                sql = f"SELECT 1 FROM {sync_store.memory_table} WHERE 1 = 0"
                 with cfg.provide_session() as driver:
-                    driver.execute(sql)
+                    quoted_table = _quote_verified_table_identifier(
+                        cfg, sync_store.memory_table, _resolve_verify_dialect(cfg, driver)
+                    )
+                    driver.execute(f"SELECT 1 FROM {quoted_table} WHERE 1 = 0")
                 console.print(f"[green]✓[/] {config_name}: memory table reachable")
             except Exception as exc:
                 console.print(f"[red]✗[/] {config_name}: {exc}")
 
     return database_group
+
+
+_BACKTICK_QUOTE_DIALECTS: frozenset[str] = frozenset({"mysql", "mariadb", "bigquery", "spanner"})
+_BRACKET_QUOTE_DIALECTS: frozenset[str] = frozenset({"tsql", "mssql", "sybase"})
+_UPPERCASE_QUOTE_DIALECTS: frozenset[str] = frozenset({"oracle", "db2", "snowflake"})
+_LOWERCASE_QUOTE_DIALECTS: frozenset[str] = frozenset({
+    "postgres",
+    "postgresql",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+    "pgtextsearch",
+    "cockroach",
+    "cockroachdb",
+    "spangres",
+})
+_DBO_DEFAULT_SCHEMA_ADAPTERS: frozenset[str] = frozenset({"mssql_python", "pymssql", "sybase"})
+_TSQL_DIALECTS: frozenset[str] = frozenset({"tsql", "mssql"})
+_MIN_QUOTED_TOKEN_LEN: int = 2
+
+
+def _normalize_verify_dialect(dialect: Any) -> str | None:
+    """Normalize a string or SQLGlot Dialect class/instance to a lowercase dialect name."""
+    from sqlglot.dialects.dialect import Dialect
+
+    if isinstance(dialect, str):
+        cleaned = dialect.strip().lower()
+        return cleaned or None
+    if isinstance(dialect, type) and issubclass(dialect, Dialect):
+        return dialect.__name__.lower()
+    if isinstance(dialect, Dialect):
+        return type(dialect).__name__.lower()
+    return None
+
+
+def _resolve_verify_dialect(config: Any, driver: Any = None) -> str | None:
+    """Resolve the active SQL dialect for ADK table verification."""
+    from sqlspec.migrations.context import MigrationContext
+
+    driver_dialect_name = getattr(driver, "_dialect_name", None)
+    if isinstance(driver_dialect_name, str):
+        cleaned_name = driver_dialect_name.strip().lower()
+        if cleaned_name:
+            return cleaned_name
+
+    stmt_dialect = _normalize_verify_dialect(getattr(getattr(driver, "statement_config", None), "dialect", None))
+    if stmt_dialect is not None:
+        return stmt_dialect
+
+    context_dialect = _normalize_verify_dialect(MigrationContext.from_config(config).dialect)
+    if context_dialect is not None:
+        return context_dialect
+
+    return _normalize_verify_dialect(getattr(driver, "dialect", None))
+
+
+def _split_identifier_tokens(identifier: str) -> list[tuple[str, bool]]:
+    """Split a qualified SQL identifier into ``(unquoted_part, was_quoted)`` tokens."""
+    cleaned = identifier.strip()
+    if not cleaned:
+        return []
+
+    raw_parts: list[str] = []
+    chars: list[str] = []
+    quote_end = ""
+    index = 0
+    length = len(cleaned)
+    while index < length:
+        char = cleaned[index]
+        if quote_end:
+            chars.append(char)
+            if char == quote_end:
+                if index + 1 < length and cleaned[index + 1] == quote_end:
+                    chars.append(cleaned[index + 1])
+                    index += 2
+                    continue
+                quote_end = ""
+            index += 1
+            continue
+        if char == "[":
+            quote_end = "]"
+            chars.append(char)
+            index += 1
+            continue
+        if char in {'"', "`"}:
+            quote_end = char
+            chars.append(char)
+            index += 1
+            continue
+        if char == ".":
+            part = "".join(chars).strip()
+            if part:
+                raw_parts.append(part)
+            chars.clear()
+            index += 1
+            continue
+        chars.append(char)
+        index += 1
+
+    tail = "".join(chars).strip()
+    if tail:
+        raw_parts.append(tail)
+
+    tokens: list[tuple[str, bool]] = []
+    for raw in raw_parts:
+        if len(raw) >= _MIN_QUOTED_TOKEN_LEN and raw[0] == "[" and raw[-1] == "]":
+            tokens.append((raw[1:-1].replace("]]", "]"), True))
+        elif len(raw) >= _MIN_QUOTED_TOKEN_LEN and raw[0] == '"' and raw[-1] == '"':
+            tokens.append((raw[1:-1].replace('""', '"'), True))
+        elif len(raw) >= _MIN_QUOTED_TOKEN_LEN and raw[0] == "`" and raw[-1] == "`":
+            tokens.append((raw[1:-1].replace("``", "`"), True))
+        else:
+            tokens.append((raw, False))
+    return tokens
+
+
+def _quote_identifier_token(part: str, *, was_quoted: bool, normalized_dialect: str) -> str:
+    """Quote a single identifier token using dialect-specific delimiters and case folding."""
+    if normalized_dialect in _BACKTICK_QUOTE_DIALECTS:
+        return f"`{part.replace('`', '``')}`"
+    if normalized_dialect in _BRACKET_QUOTE_DIALECTS:
+        return f"[{part.replace(']', ']]')}]"
+    if normalized_dialect in _UPPERCASE_QUOTE_DIALECTS:
+        folded = part if was_quoted else part.upper()
+        return f'"{folded.replace(chr(34), chr(34) * 2)}"'
+    if normalized_dialect in _LOWERCASE_QUOTE_DIALECTS:
+        folded = part if was_quoted else part.lower()
+        return f'"{folded.replace(chr(34), chr(34) * 2)}"'
+    return f'"{part.replace(chr(34), chr(34) * 2)}"'
+
+
+def _quote_identifier_for_dialect(identifier: str, dialect: str | None) -> str:
+    """Quote a single or qualified SQL identifier for the target dialect."""
+    normalized = (dialect or "").strip().lower()
+    tokens = _split_identifier_tokens(identifier)
+    if not tokens:
+        return _quote_identifier_token(identifier, was_quoted=False, normalized_dialect=normalized)
+    return ".".join(
+        _quote_identifier_token(part, was_quoted=was_quoted, normalized_dialect=normalized)
+        for part, was_quoted in tokens
+    )
+
+
+def _quote_verified_table_identifier(config: Any, memory_table: str, dialect: str | None) -> str:
+    """Quote and default-schema qualify an ADK memory table identifier for verification."""
+    normalized = (dialect or "").strip().lower()
+    tokens = _split_identifier_tokens(memory_table)
+    if len(tokens) == 1:
+        adapter_name = resolve_adapter_name(config)
+        cleaned_table = memory_table.strip()
+        if adapter_name in _DBO_DEFAULT_SCHEMA_ADAPTERS or (
+            adapter_name == "arrow_odbc" and normalized in _TSQL_DIALECTS
+        ):
+            return _quote_identifier_for_dialect(f"[dbo].{cleaned_table}", dialect)
+        if adapter_name == "sqlanywhere":
+            return _quote_identifier_for_dialect(f'"DBA".{cleaned_table}', dialect)
+    return _quote_identifier_for_dialect(memory_table, dialect)
 
 
 def __getattr__(name: str) -> Any:

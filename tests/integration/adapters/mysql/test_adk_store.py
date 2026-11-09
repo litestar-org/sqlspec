@@ -1,11 +1,12 @@
 """Unified MySQL ADK store integration tests across all MySQL driver modes."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pymysql
 import pytest
 
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.module_loader import import_optional_attr
 from tests.integration.fixtures.mysql import _build_mysql_adk_config_and_store, _close_mysql_config
 
@@ -440,10 +441,7 @@ async def test_mysql_adk_qualified_memory_round_trip(
         assert inserted1 == 1
 
         inserted2 = await _call(mysql_adk_store_harness, store.insert_memory_entries, [entry])
-        if mysql_adk_store_harness.driver_mode in ("aiomysql", "asyncmy"):
-            assert inserted2 == 1
-        else:
-            assert inserted2 == 0
+        assert inserted2 == 0
 
         found = await _call(mysql_adk_store_harness, store.search_entries, "hello", "app", "user")
         assert len(found) == 1
@@ -464,13 +462,13 @@ async def test_mysql_adk_qualified_memory_round_trip(
             "content_json": {"text": "hello memory 2"},
             "content_text": "hello memory 2",
             "metadata_json": {"tag": "test"},
-            "inserted_at": now,
+            "inserted_at": now - timedelta(days=2),
             "embedding": None,
         }
         reinserted = await _call(mysql_adk_store_harness, store.insert_memory_entries, [entry2])
         assert reinserted == 1
 
-        older_deleted = await _call(mysql_adk_store_harness, store.delete_entries_older_than, 0)
+        older_deleted = await _call(mysql_adk_store_harness, store.delete_entries_older_than, 1)
         assert older_deleted >= 1
 
         await _call(mysql_adk_store_harness, store.drop_tables)
@@ -566,7 +564,7 @@ async def test_mysql_adk_qualified_tables_missing_database(
         mysql_service, mysql_adk_store_harness.driver_mode, missing_tables
     )
     try:
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(SQLSpecError) as exc_info:
             await _call(mysql_adk_store_harness, store.create_tables)
         err_msg = str(exc_info.value).lower()
         assert "1049" in err_msg or "unknown database" in err_msg

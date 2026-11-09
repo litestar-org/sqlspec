@@ -472,3 +472,39 @@ async def test_oracle_adk_migration_propagates_dictionary_errors(
 
     with pytest.raises(RuntimeError, match="catalog"):
         await adk_migration.up(context)
+
+
+class _SlottedOracleStubDriver:
+    """Slotted driver stub omitting _oracle_version_cache to verify safe cache attachment."""
+
+    __slots__ = ("data_dictionary",)
+
+    def __init__(self, data_dictionary: Any) -> None:
+        self.data_dictionary = data_dictionary
+
+
+async def test_oracle_adk_prepare_schema_handles_slotted_driver_without_cache_slot() -> None:
+    """prepare_schema_sync and prepare_schema_async succeed when driver omits _oracle_version_cache slot."""
+    expected_version = OracleVersionInfo(23, 4, 0, compatible="23.4.0")
+
+    sync_dict = MagicMock()
+    sync_dict.get_version = MagicMock(return_value=expected_version)
+    sync_driver = _SlottedOracleStubDriver(sync_dict)
+
+    for sync_store_cls in (adk_store.OracleSyncADKStore, adk_store.OracleSyncADKMemoryStore):
+        sync_cfg = OracleSyncConfig(connection_config={"user": "u", "password": "p", "dsn": "d"})
+        store = sync_store_cls(sync_cfg)
+        store.prepare_schema_sync(sync_driver)
+        assert sync_cfg._oracle_version_cache.resolved is True
+        assert sync_cfg._oracle_version_cache.version == expected_version
+
+    async_dict = MagicMock()
+    async_dict.get_version = AsyncMock(return_value=expected_version)
+    async_driver = _SlottedOracleStubDriver(async_dict)
+
+    for async_store_cls in (adk_store.OracleAsyncADKStore, adk_store.OracleAsyncADKMemoryStore):
+        async_cfg = OracleAsyncConfig(connection_config={"user": "u", "password": "p", "dsn": "d"})
+        async_store = async_store_cls(async_cfg)
+        await async_store.prepare_schema_async(async_driver)
+        assert async_cfg._oracle_version_cache.resolved is True
+        assert async_cfg._oracle_version_cache.version == expected_version

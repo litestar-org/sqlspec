@@ -412,6 +412,60 @@ def _memory_insert_count(entry_count: int, batch_errors: "list[Any]") -> int:
     return entry_count - len(batch_errors)
 
 
+async def _prepare_oracle_schema_async(config: "OracleAsyncConfig", driver: Any) -> None:
+    """Resolve and cache the pool-scoped Oracle version on an asynchronous driver."""
+    cache = config._oracle_version_cache
+    if cache.resolved:
+        return
+    if getattr(driver, "_oracle_version_cache", None) is None:
+        with contextlib.suppress(AttributeError):
+            driver._oracle_version_cache = cache
+    version_info = await driver.data_dictionary.get_version(driver)
+    cache.resolved = True
+    cache.version = version_info
+    if version_info is None:
+        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+
+
+def _prepare_oracle_schema_sync(config: "OracleSyncConfig", driver: Any) -> None:
+    """Resolve and cache the pool-scoped Oracle version on a synchronous driver."""
+    cache = config._oracle_version_cache
+    if cache.resolved:
+        return
+    if getattr(driver, "_oracle_version_cache", None) is None:
+        with contextlib.suppress(AttributeError):
+            driver._oracle_version_cache = cache
+    version_info = driver.data_dictionary.get_version(driver)
+    cache.resolved = True
+    cache.version = version_info
+    if version_info is None:
+        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+
+
+async def _get_oracle_version_info_async(config: "OracleAsyncConfig") -> "OracleVersionInfo | None":
+    """Return the pool-scoped Oracle version through an asynchronous session."""
+    cache = config._oracle_version_cache
+    if cache.resolved:
+        return cache.version
+    async with config.provide_session() as driver:
+        version_info = await driver.data_dictionary.get_version(driver)
+    if version_info is None:
+        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+    return version_info
+
+
+def _get_oracle_version_info_sync(config: "OracleSyncConfig") -> "OracleVersionInfo | None":
+    """Return the pool-scoped Oracle version through a synchronous session."""
+    cache = config._oracle_version_cache
+    if cache.resolved:
+        return cache.version
+    with config.provide_session() as driver:
+        version_info = driver.data_dictionary.get_version(driver)
+    if version_info is None:
+        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+    return version_info
+
+
 def coerce_decimal_values(value: Any) -> Any:
     return _coerce_decimal_values(value)
 
@@ -1150,30 +1204,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
-        cache = self._config._oracle_version_cache
-        if cache.resolved:
-            return
-        if getattr(driver, "_oracle_version_cache", None) is None:
-            driver._oracle_version_cache = cache
-        version_info = await driver.data_dictionary.get_version(driver)
-        cache.resolved = True
-        cache.version = version_info
-        if version_info is None:
-            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+        await _prepare_oracle_schema_async(self._config, driver)
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
-        cache = self._config._oracle_version_cache
-        if cache.resolved:
-            return cache.version
-
-        async with self._config.provide_session() as driver:
-            version_info = await driver.data_dictionary.get_version(driver)
-
-        if version_info is None:
-            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
-
-        return version_info
+        return await _get_oracle_version_info_async(self._config)
 
     async def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":
         """Serialize state dictionary to appropriate format based on storage type.
@@ -2161,30 +2196,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def prepare_schema_sync(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with a synchronous driver."""
-        cache = self._config._oracle_version_cache
-        if cache.resolved:
-            return
-        if getattr(driver, "_oracle_version_cache", None) is None:
-            driver._oracle_version_cache = cache
-        version_info = driver.data_dictionary.get_version(driver)
-        cache.resolved = True
-        cache.version = version_info
-        if version_info is None:
-            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+        _prepare_oracle_schema_sync(self._config, driver)
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
-        cache = self._config._oracle_version_cache
-        if cache.resolved:
-            return cache.version
-
-        with self._config.provide_session() as driver:
-            version_info = driver.data_dictionary.get_version(driver)
-
-        if version_info is None:
-            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
-
-        return version_info
+        return _get_oracle_version_info_sync(self._config)
 
     def _serialize_state(self, state: "dict[str, Any]") -> "str | bytes":
         """Serialize state dictionary to appropriate format based on storage type.
@@ -2649,29 +2665,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
-        cache = self._config._oracle_version_cache
-        if cache.resolved:
-            return
-        if getattr(driver, "_oracle_version_cache", None) is None:
-            driver._oracle_version_cache = cache
-        version_info = await driver.data_dictionary.get_version(driver)
-        cache.resolved = True
-        cache.version = version_info
-        if version_info is None:
-            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+        await _prepare_oracle_schema_async(self._config, driver)
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
-        cache = self._config._oracle_version_cache
-        if cache.resolved:
-            return cache.version
-
-        async with self._config.provide_session() as driver:
-            version_info = await driver.data_dictionary.get_version(driver)
-
-        if version_info is None:
-            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
-
-        return version_info
+        return await _get_oracle_version_info_async(self._config)
 
     async def _serialize_json_field(self, value: Any) -> "str | bytes | None":
         if value is None:
@@ -3164,29 +3161,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
     def prepare_schema_sync(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with a synchronous driver."""
-        cache = self._config._oracle_version_cache
-        if cache.resolved:
-            return
-        if getattr(driver, "_oracle_version_cache", None) is None:
-            driver._oracle_version_cache = cache
-        version_info = driver.data_dictionary.get_version(driver)
-        cache.resolved = True
-        cache.version = version_info
-        if version_info is None:
-            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+        _prepare_oracle_schema_sync(self._config, driver)
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
-        cache = self._config._oracle_version_cache
-        if cache.resolved:
-            return cache.version
-
-        with self._config.provide_session() as driver:
-            version_info = driver.data_dictionary.get_version(driver)
-
-        if version_info is None:
-            logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
-
-        return version_info
+        return _get_oracle_version_info_sync(self._config)
 
     def _serialize_json_field(self, value: Any) -> "str | bytes | None":
         if value is None:

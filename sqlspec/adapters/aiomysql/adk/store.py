@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlProgrammingError, AiomysqlRawCursor
-from sqlspec.adapters.aiomysql.core import format_identifier, resolve_many_rowcount, resolve_rowcount
+from sqlspec.adapters.aiomysql.core import format_identifier, resolve_rowcount
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -636,7 +636,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
             AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
         ):
             await cursor.executemany(sql, params_list)
-            inserted_count = resolve_many_rowcount(cursor, params_list, fallback_count=len(params_list))
+            inserted_count = resolve_rowcount(cursor)
             await conn.commit()
         return inserted_count
 

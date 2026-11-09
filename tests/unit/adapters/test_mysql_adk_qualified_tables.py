@@ -22,6 +22,13 @@ _ADAPTERS: list[tuple[str, str, str, bool]] = [
     ("mysqlconnector", "MysqlConnectorAsyncADKStore", "MysqlConnectorAsyncADKMemoryStore", True),
 ]
 
+
+def _adapter_id(adapter_info: tuple[str, str, str, bool]) -> str:
+    if adapter_info[0] == "mysqlconnector":
+        return "mysqlconnector-async" if adapter_info[3] else "mysqlconnector-sync"
+    return adapter_info[0]
+
+
 _QUALIFIED_SESSION_SETTINGS: dict[str, str] = {
     "session_table": "app.t",
     "events_table": "app.e",
@@ -94,20 +101,28 @@ class _AsyncCursorHandle:
 class _AsyncCursor:
     """Asynchronous cursor fake recording statements and yielding dummy rows."""
 
-    __slots__ = ("_log", "_session_row", "description", "rowcount")
+    __slots__ = ("_cursor_rowcount", "_log", "_session_row", "description", "rowcount")
 
-    def __init__(self, log: _RecordingLog, session_row: tuple[Any, ...] | None) -> None:
+    def __init__(
+        self, log: _RecordingLog, session_row: tuple[Any, ...] | None, *, cursor_rowcount: int | None = None
+    ) -> None:
         self._log = log
         self._session_row = session_row
-        self.rowcount = 1
+        self._cursor_rowcount = cursor_rowcount
+        self.rowcount = 1 if cursor_rowcount is None else cursor_rowcount
         self.description = None
 
     async def execute(self, sql: str, params: Any = None) -> None:
         self._log.record(sql)
+        if self._cursor_rowcount is not None:
+            self.rowcount = self._cursor_rowcount
 
     async def executemany(self, sql: str, params_list: Any) -> None:
         self._log.record(sql)
-        self.rowcount = len(params_list) if hasattr(params_list, "__len__") else 1
+        if self._cursor_rowcount is not None:
+            self.rowcount = self._cursor_rowcount
+        else:
+            self.rowcount = len(params_list) if hasattr(params_list, "__len__") else 1
 
     async def fetchone(self) -> tuple[Any, ...] | None:
         return self._session_row
@@ -178,20 +193,28 @@ class _AsyncDriver:
 class _SyncCursor:
     """Synchronous cursor fake recording statements and yielding dummy rows."""
 
-    __slots__ = ("_log", "_session_row", "description", "rowcount")
+    __slots__ = ("_cursor_rowcount", "_log", "_session_row", "description", "rowcount")
 
-    def __init__(self, log: _RecordingLog, session_row: tuple[Any, ...] | None) -> None:
+    def __init__(
+        self, log: _RecordingLog, session_row: tuple[Any, ...] | None, *, cursor_rowcount: int | None = None
+    ) -> None:
         self._log = log
         self._session_row = session_row
-        self.rowcount = 1
+        self._cursor_rowcount = cursor_rowcount
+        self.rowcount = 1 if cursor_rowcount is None else cursor_rowcount
         self.description = None
 
     def execute(self, sql: str, params: Any = None) -> None:
         self._log.record(sql)
+        if self._cursor_rowcount is not None:
+            self.rowcount = self._cursor_rowcount
 
     def executemany(self, sql: str, params_list: Any) -> None:
         self._log.record(sql)
-        self.rowcount = len(params_list) if hasattr(params_list, "__len__") else 1
+        if self._cursor_rowcount is not None:
+            self.rowcount = self._cursor_rowcount
+        else:
+            self.rowcount = len(params_list) if hasattr(params_list, "__len__") else 1
 
     def fetchone(self) -> tuple[Any, ...] | None:
         return self._session_row
@@ -268,6 +291,7 @@ def _store(
     settings: dict[str, Any],
     session_row: tuple[Any, ...] | None = None,
     is_memory: bool = False,
+    cursor_rowcount: int | None = None,
 ) -> tuple[Any, list[str]]:
     adapter_pkg, session_cls_name, memory_cls_name, is_async = adapter_info
     store_cls_name = memory_cls_name if is_memory else session_cls_name
@@ -281,14 +305,16 @@ def _store(
     config = MagicMock()
     config.extension_config = {"adk": adk_settings}
 
+    conn: _AsyncConnection | _SyncConnection
+    driver: _AsyncDriver | _SyncDriver
     if is_async:
-        cursor = _AsyncCursor(log, session_row)
+        cursor = _AsyncCursor(log, session_row, cursor_rowcount=cursor_rowcount)
         conn = _AsyncConnection(cursor)
         driver = _AsyncDriver(log)
     else:
-        sync_cursor = _SyncCursor(log, session_row)
-        conn = _SyncConnection(sync_cursor)  # type: ignore[assignment]
-        driver = _SyncDriver(log)  # type: ignore[assignment]
+        sync_cursor = _SyncCursor(log, session_row, cursor_rowcount=cursor_rowcount)
+        conn = _SyncConnection(sync_cursor)
+        driver = _SyncDriver(log)
 
     config.provide_connection = lambda *args, **kwargs: conn
     config.provide_session = lambda *args, **kwargs: driver
@@ -439,7 +465,7 @@ _DML_CASES: list[_DMLCase] = [
 _UNQUOTED_QUALIFIED_PATTERN = re.compile(r"(?<![`\w])app\.")
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 @pytest.mark.parametrize("case", _DML_CASES, ids=lambda c: c.name)
 async def test_mysql_adk_qualified_dml_sweep(adapter_info: tuple[str, str, str, bool], case: _DMLCase) -> None:
     """Qualified DML calls format database.table references with backticks and avoid unquoted parts."""
@@ -457,7 +483,7 @@ async def test_mysql_adk_qualified_dml_sweep(adapter_info: tuple[str, str, str, 
         assert not _UNQUOTED_QUALIFIED_PATTERN.search(stmt), f"Found unquoted app. in statement: {stmt}"
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 @pytest.mark.parametrize("case", _DML_CASES, ids=lambda c: c.name)
 async def test_mysql_adk_bare_dml_keeps_unquoted_names(
     adapter_info: tuple[str, str, str, bool], case: _DMLCase
@@ -476,7 +502,7 @@ async def test_mysql_adk_bare_dml_keeps_unquoted_names(
             assert token not in stmt, f"Found prohibited backticked token {token!r} in bare statement: {stmt}"
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 async def test_mysql_adk_qualified_session_ddl(adapter_info: tuple[str, str, str, bool]) -> None:
     """Session DDL uses backtick table references and bare-name index identifiers."""
     store, _ = _store(adapter_info, _QUALIFIED_SESSION_SETTINGS)
@@ -488,7 +514,7 @@ async def test_mysql_adk_qualified_session_ddl(adapter_info: tuple[str, str, str
     assert "idx_app" not in ddl
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 async def test_mysql_adk_qualified_events_reference_sessions(adapter_info: tuple[str, str, str, bool]) -> None:
     """Events DDL references qualified session table and derives index from bare table name."""
     store, _ = _store(adapter_info, _QUALIFIED_SESSION_SETTINGS)
@@ -498,7 +524,7 @@ async def test_mysql_adk_qualified_events_reference_sessions(adapter_info: tuple
     assert "INDEX idx_e_session" in ddl
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 async def test_mysql_adk_qualified_memory_ddl(adapter_info: tuple[str, str, str, bool]) -> None:
     """Memory DDL formats qualified table and bare index names including full-text index."""
     settings = {"memory_table": "app.m", "use_fts": True}
@@ -510,7 +536,7 @@ async def test_mysql_adk_qualified_memory_ddl(adapter_info: tuple[str, str, str,
     assert "FULLTEXT INDEX idx_m_fts (content_text)" in ddl
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 async def test_mysql_adk_qualified_schema_target(adapter_info: tuple[str, str, str, bool]) -> None:
     """SchemaTarget parses schema and table_name components from qualified ADK DDL."""
     store, _ = _store(adapter_info, _QUALIFIED_SESSION_SETTINGS)
@@ -521,7 +547,7 @@ async def test_mysql_adk_qualified_schema_target(adapter_info: tuple[str, str, s
     assert target.table_name == "t"
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 async def test_mysql_adk_bare_ddl_is_unchanged(adapter_info: tuple[str, str, str, bool]) -> None:
     """Default table names produce identical unquoted DDL and preserved index identifiers."""
     store, _ = _store(adapter_info, {})
@@ -531,7 +557,7 @@ async def test_mysql_adk_bare_ddl_is_unchanged(adapter_info: tuple[str, str, str
     assert "INDEX idx_adk_session_app_user (app_name, user_id)" in ddl
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 async def test_mysql_adk_split_database_tables(adapter_info: tuple[str, str, str, bool]) -> None:
     """Tables located across different databases maintain independent qualification and FKs."""
     settings = {"session_table": "a.t", "events_table": "b.e"}
@@ -548,7 +574,7 @@ async def test_mysql_adk_split_database_tables(adapter_info: tuple[str, str, str
     assert any("`b`.`e`" in stmt for stmt in log)
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 async def test_mysql_adk_same_bare_table_in_two_databases(adapter_info: tuple[str, str, str, bool]) -> None:
     """Identical bare table names in distinct databases produce non-conflicting table-scoped indexes."""
     store1, _ = _store(adapter_info, {"session_table": "a.t"})
@@ -561,7 +587,7 @@ async def test_mysql_adk_same_bare_table_in_two_databases(adapter_info: tuple[st
     assert "INDEX idx_t_app_user" in ddl2
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 @pytest.mark.parametrize("invalid_name", ["x.app.t", "app.t-1", "`app`.`t`", '"app"."t"'])
 def test_mysql_adk_rejects_invalid_qualified_names(adapter_info: tuple[str, str, str, bool], invalid_name: str) -> None:
     """Names with >2 parts, invalid identifier syntax, or explicit quoting are rejected."""
@@ -572,7 +598,7 @@ def test_mysql_adk_rejects_invalid_qualified_names(adapter_info: tuple[str, str,
         _store(adapter_info, {"memory_table": invalid_name}, is_memory=True)
 
 
-@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=lambda a: a[0])
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
 def test_mysql_adk_public_table_properties_keep_configured_value(adapter_info: tuple[str, str, str, bool]) -> None:
     """Configured qualified table names are preserved verbatim on public store properties."""
     session_store, _ = _store(adapter_info, _QUALIFIED_SESSION_SETTINGS, is_memory=False)
@@ -584,3 +610,13 @@ def test_mysql_adk_public_table_properties_keep_configured_value(adapter_info: t
     assert session_store.user_state_table == "app.u"
     assert session_store.metadata_table == "app.d"
     assert memory_store.memory_table == "app.m"
+
+
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
+async def test_mysql_adk_insert_memory_entries_returns_zero_on_duplicates(
+    adapter_info: tuple[str, str, str, bool],
+) -> None:
+    """Duplicate INSERT IGNORE batches with cursor.rowcount == 0 return 0 across all MySQL drivers."""
+    store, _ = _store(adapter_info, _QUALIFIED_MEMORY_SETTINGS, is_memory=True, cursor_rowcount=0)
+    inserted = await _call(adapter_info[3], store, "insert_memory_entries", [_SAMPLE_MEMORY])
+    assert inserted == 0
