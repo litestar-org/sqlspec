@@ -512,20 +512,43 @@ class BaseMigrationRunner:
     @staticmethod
     def _has_active_implicit_transaction(driver: "SyncDriverAdapterBase | AsyncDriverAdapterBase") -> bool:
         """Return True when a non-transactional driver currently holds an open implicit DBAPI transaction."""
-        if not isinstance(driver, (SyncDriverAdapterBase, AsyncDriverAdapterBase)) and (
-            "_connection_in_transaction" not in getattr(driver, "__dict__", {})
-            and not hasattr(type(driver), "_connection_in_transaction")
+        driver_dict = getattr(driver, "__dict__", {})
+        driver_type = type(driver)
+        has_explicit_hook = "_connection_in_transaction" in driver_dict or hasattr(
+            driver_type, "_connection_in_transaction"
+        )
+        has_implicit_hook = "_has_implicit_transaction" in driver_dict or hasattr(
+            driver_type, "_has_implicit_transaction"
+        )
+        if not isinstance(driver, (SyncDriverAdapterBase, AsyncDriverAdapterBase)) and not (
+            has_explicit_hook or has_implicit_hook
         ):
             return False
-        try:
-            in_tx: Any = driver._connection_in_transaction()
-        except (NotImplementedError, AttributeError):
-            return False
-        if inspect.isawaitable(in_tx):
-            if inspect.iscoroutine(in_tx):
-                in_tx.close()
-            return False
-        return in_tx is True
+        if has_explicit_hook or isinstance(driver, (SyncDriverAdapterBase, AsyncDriverAdapterBase)):
+            try:
+                in_tx: Any = driver._connection_in_transaction()
+            except (NotImplementedError, AttributeError):
+                in_tx = False
+            if inspect.isawaitable(in_tx):
+                if inspect.iscoroutine(in_tx):
+                    in_tx.close()
+                in_tx = False
+            if in_tx is True:
+                return True
+        if has_implicit_hook:
+            implicit_fn = getattr(driver, "_has_implicit_transaction", None)
+            if not callable(implicit_fn):
+                return False
+            try:
+                implicit_tx: Any = implicit_fn()
+            except (NotImplementedError, AttributeError):
+                return False
+            if inspect.isawaitable(implicit_tx):
+                if inspect.iscoroutine(implicit_tx):
+                    implicit_tx.close()
+                return False
+            return implicit_tx is True
+        return False
 
     @staticmethod
     def _validate_reconciler_return_value(descriptor: "ExtensionReconcilerDescriptor", result: Any) -> None:
@@ -963,6 +986,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
         try:
             if default_schema:
                 driver.reset_migration_session_schema()
+                if not use_transaction:
+                    self._commit_nontransactional_if_needed(driver)
         except Exception as exc:
             self._finish_migration_span_error(
                 span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc

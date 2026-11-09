@@ -7,7 +7,12 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.adapters.adbc.core import is_sqlite_reconcile_target
+from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.adapters.adbc.core import (
+    RECONCILE_ADBC_DIALECTS,
+    is_sqlite_reconcile_target,
+    resolve_reconcile_adbc_dialect,
+)
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk.store import SqliteADKStore
@@ -336,6 +341,7 @@ def test_validate_builtin_reconcile_adapter_supported_matrix() -> None:
         "bigquery",
         "sqlanywhere",
         "sybase",
+        "db2",
     }
     assert UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS == expected_unconditional
 
@@ -344,6 +350,7 @@ def test_validate_builtin_reconcile_adapter_supported_matrix() -> None:
 
     assert validate_builtin_reconcile_adapter(_make_adapter_stub("arrow_odbc", dialect="mssql")) == "arrow_odbc"
     assert validate_builtin_reconcile_adapter(_make_adapter_stub("arrow_odbc", dialect="tsql")) == "arrow_odbc"
+    assert validate_builtin_reconcile_adapter(_make_adapter_stub("arrow_odbc", dialect="db2")) == "arrow_odbc"
 
     for adbc_conn in (
         {"driver_name": "adbc_driver_sqlite"},
@@ -430,3 +437,105 @@ def test_store_allowlist_still_rejects_unknown_option() -> None:
     )
     with pytest.raises(ImproperConfigurationError, match="unknown_option"):
         SqliteStore(config)
+
+
+def test_adbc_explicit_statement_dialect_and_derive_pool() -> None:
+    assert RECONCILE_ADBC_DIALECTS == frozenset({
+        "bigquery",
+        "db2",
+        "duckdb",
+        "mssql",
+        "oracle",
+        "postgres",
+        "snowflake",
+        "sqlite",
+    })
+
+    auto_cfg = AdbcConfig(connection_config={"uri": "grpc+tls://h:8815"})
+    assert auto_cfg.statement_config.dialect == "duckdb"
+    assert auto_cfg.explicit_statement_dialect is None
+    derived_auto = auto_cfg.derive_pool()
+    assert derived_auto.explicit_statement_dialect is None
+
+    explicit_cfg = AdbcConfig(
+        connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc://h:8815"},
+        statement_config=StatementConfig(dialect="postgres"),
+    )
+    assert explicit_cfg.explicit_statement_dialect == "postgres"
+    derived_explicit = explicit_cfg.derive_pool()
+    assert derived_explicit.explicit_statement_dialect == "postgres"
+
+
+def test_resolve_reconcile_adbc_dialect_known_backends() -> None:
+    cases: list[tuple[AdbcConfig, str]] = [
+        (AdbcConfig(connection_config={"driver_name": "adbc_driver_postgresql"}), "postgres"),
+        (AdbcConfig(connection_config={"uri": "duckdb:///:memory:"}), "duckdb"),
+        (AdbcConfig(connection_config={"driver_name": "adbc_driver_snowflake"}), "snowflake"),
+        (AdbcConfig(connection_config={"driver_name": "adbc_driver_bigquery"}), "bigquery"),
+        (AdbcConfig(connection_config={"uri": "oracle://h/s"}), "oracle"),
+        (AdbcConfig(connection_config={"uri": "db2://h/d"}), "db2"),
+        (AdbcConfig(connection_config={"uri": "mssql://h/d"}), "mssql"),
+        (AdbcConfig(connection_config={"driver_name": "adbc_driver_sqlite"}), "sqlite"),
+        (AdbcConfig(connection_config={"driver_name": "gizmosql"}), "duckdb"),
+        (AdbcConfig(connection_config={"driver_name": "gizmosql", "gizmosql_backend": "sqlite"}), "sqlite"),
+        (
+            AdbcConfig(
+                connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc://h:8815"},
+                statement_config=StatementConfig(dialect="postgres"),
+            ),
+            "postgres",
+        ),
+        (
+            AdbcConfig(
+                connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc://h:8815"},
+                statement_config=StatementConfig(dialect="tsql"),
+            ),
+            "mssql",
+        ),
+        (
+            AdbcConfig(
+                connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc://h:8815"},
+                statement_config=StatementConfig(dialect="postgresql"),
+            ),
+            "postgres",
+        ),
+    ]
+    for cfg, expected_dialect in cases:
+        resolved = resolve_reconcile_adbc_dialect(cfg.connection_config, cfg.explicit_statement_dialect)
+        assert resolved == expected_dialect
+        assert validate_builtin_reconcile_adapter(cfg) == "adbc"
+
+
+def test_adbc_flightsql_refusals_require_explicit_non_sqlite_dialect() -> None:
+    refused_configs = [
+        AdbcConfig(connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc://h:8815"}),
+        AdbcConfig(connection_config={"uri": "grpc+tls://h:8815"}),
+        AdbcConfig(
+            connection_config={"driver_name": "adbc_driver_flightsql", "uri": "grpc://h:8815"},
+            statement_config=StatementConfig(dialect="sqlite"),
+        ),
+        AdbcConfig(connection_config={"driver_name": "/opt/postgresql/libvendor.so"}),
+    ]
+    for cfg in refused_configs:
+        assert resolve_reconcile_adbc_dialect(cfg.connection_config, cfg.explicit_statement_dialect) is None
+        with pytest.raises(MigrationError) as exc_info:
+            validate_builtin_reconcile_adapter(cfg)
+        err_text = str(exc_info.value)
+        assert "statement_config" in err_text
+        assert "gizmosql_backend" in err_text
+        assert 'migration_mode="versioned"' in err_text
+
+
+def test_adbc_nontransactional_migrate_up_commits_reconciled_ddl(tmp_path: Path) -> None:
+    pytest.importorskip("adbc_driver_sqlite")
+    db_file = tmp_path / "adbc_reconcile_persist.db"
+    config = AdbcConfig(
+        connection_config={"driver_name": "adbc_driver_sqlite", "uri": str(db_file)},
+        migration_config={"script_location": str(tmp_path / "migrations"), "include_extensions": ["litestar"]},
+        extension_config={"litestar": {"session_table": "ls_persisted", "migration_mode": "reconcile"}},
+    )
+    config.migrate_up()
+    with config.provide_session() as session:
+        tables = {str(t.get("table_name") or "").lower() for t in session.data_dictionary.get_tables(session)}
+        assert "ls_persisted" in tables
+    config.close_pool()

@@ -25,6 +25,7 @@ from sqlspec.core import (
     build_statement_config_from_profile,
 )
 from sqlspec.core.parameters import type_coercion_dispatcher
+from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
     from sqlspec.utils.dispatch import TypeDispatcher
 
 __all__ = (
+    "RECONCILE_ADBC_DIALECTS",
     "apply_driver_features",
     "build_connection_config",
     "build_profile",
@@ -100,10 +102,21 @@ __all__ = (
     "resolve_driver_name_from_config",
     "resolve_many_rowcount",
     "resolve_parameter_casts",
+    "resolve_reconcile_adbc_dialect",
     "resolve_rowcount",
 )
 
 COLUMN_CACHE_MAX_SIZE: int = 256
+RECONCILE_ADBC_DIALECTS: Final = frozenset({
+    "bigquery",
+    "db2",
+    "duckdb",
+    "mssql",
+    "oracle",
+    "postgres",
+    "snowflake",
+    "sqlite",
+})
 _IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _UUID_TYPES: Final[tuple[type[Any], ...]] = tuple(build_uuid_coercions())
 NoneType: Final = type(None)
@@ -685,6 +698,63 @@ def is_sqlite_reconcile_target(connection_config: "Mapping[str, Any]") -> bool:
     if has_driver_name:
         return True
     return driver_kind_from_driver_name(resolve_driver_name_from_config(connection_config)) == "sqlite"
+
+
+def resolve_reconcile_adbc_dialect(connection_config: "Mapping[str, Any]", statement_dialect: str | None) -> str | None:
+    """Return the reconcile dialect for an ADBC config, or None when it cannot be determined.
+
+    Args:
+        connection_config: Raw or normalized ADBC connection configuration mapping.
+        statement_dialect: Caller-supplied statement dialect, or ``None`` when filled automatically.
+
+    Returns:
+        Canonical dialect name from ``RECONCILE_ADBC_DIALECTS``, or ``None`` when undetermined.
+    """
+    backend = connection_config.get("gizmosql_backend")
+    if isinstance(backend, str) and backend.strip():
+        normalized_backend = normalize_dialect_name(backend.strip())
+        if normalized_backend in {"duckdb", "sqlite"}:
+            return normalized_backend
+        return None
+
+    if is_sqlite_reconcile_target(connection_config):
+        return "sqlite"
+
+    raw_driver = connection_config.get("driver_name") or connection_config.get("driver")
+    db_kwargs = connection_config.get("db_kwargs")
+    nested_uri = db_kwargs.get("uri") if isinstance(db_kwargs, Mapping) else None
+    raw_uri = (
+        connection_config.get("uri")
+        or connection_config.get("url")
+        or connection_config.get("dsn")
+        or connection_config.get("connection_string")
+        or nested_uri
+    )
+
+    driver_kind: str | None = None
+    if isinstance(raw_driver, str) and raw_driver.strip():
+        driver_candidate = (
+            raw_driver.replace("\\", "/").rsplit("/", 1)[-1] if is_shared_object_driver(raw_driver) else raw_driver
+        )
+        driver_kind = driver_kind_from_driver_name(driver_candidate)
+    elif isinstance(raw_uri, str) and raw_uri.strip():
+        driver_kind = driver_kind_from_uri(raw_uri)
+
+    if driver_kind is None:
+        return None
+
+    if driver_kind not in {"flightsql", "grpc"}:
+        resolved = normalize_dialect_name(resolve_dialect_from_config(connection_config))
+        if resolved in RECONCILE_ADBC_DIALECTS and resolved != "sqlite":
+            return resolved
+        return None
+
+    if isinstance(statement_dialect, str) and statement_dialect.strip():
+        normalized_statement = normalize_dialect_name(statement_dialect.strip())
+        if normalized_statement in RECONCILE_ADBC_DIALECTS and normalized_statement != "sqlite":
+            return normalized_statement
+
+    return None
 
 
 def normalize_connection_aliases(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":

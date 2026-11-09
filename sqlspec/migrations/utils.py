@@ -138,12 +138,15 @@ def validate_builtin_reconcile_adapter(config: Any) -> str:
         from sqlspec.adapters.adbc.core import (
             driver_kind_from_driver_name,
             driver_kind_from_uri,
-            is_sqlite_reconcile_target,
+            is_shared_object_driver,
+            resolve_reconcile_adbc_dialect,
         )
 
         raw_conn_cfg = getattr(config, "connection_config", None)
         conn_cfg: Mapping[str, Any] = raw_conn_cfg if isinstance(raw_conn_cfg, Mapping) else {}
-        if dialect == "sqlite" and is_sqlite_reconcile_target(conn_cfg):
+        raw_explicit_dialect = getattr(config, "explicit_statement_dialect", None)
+        explicit_dialect = raw_explicit_dialect if isinstance(raw_explicit_dialect, str) else None
+        if resolve_reconcile_adbc_dialect(conn_cfg, explicit_dialect) is not None:
             return "adbc"
 
         raw_driver = conn_cfg.get("driver_name") or conn_cfg.get("driver")
@@ -156,11 +159,14 @@ def validate_builtin_reconcile_adapter(config: Any) -> str:
             or conn_cfg.get("connection_string")
             or nested_uri
         )
-        driver_kind = (
-            driver_kind_from_driver_name(raw_driver)
-            if isinstance(raw_driver, str) and raw_driver.strip()
-            else (driver_kind_from_uri(raw_uri) if isinstance(raw_uri, str) and raw_uri.strip() else None)
-        )
+        driver_kind: str | None = None
+        if isinstance(raw_driver, str) and raw_driver.strip():
+            driver_candidate = (
+                raw_driver.replace("\\", "/").rsplit("/", 1)[-1] if is_shared_object_driver(raw_driver) else raw_driver
+            )
+            driver_kind = driver_kind_from_driver_name(driver_candidate)
+        elif isinstance(raw_uri, str) and raw_uri.strip():
+            driver_kind = driver_kind_from_uri(raw_uri)
         target_desc = f"adbc ({driver_kind})" if driver_kind else "adbc"
         msg = (
             f"Built-in extension reconciliation does not support {target_desc} with statement_config dialect "
