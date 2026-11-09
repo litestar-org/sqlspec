@@ -1138,20 +1138,44 @@ async def test_write_bytes_forwards_valid_options_and_validates_kwargs() -> None
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
-def test_obstore_direct_stream_write_protocol_and_capabilities() -> None:
-    """ObStoreBackend satisfies DirectStreamWriteProtocol and reports format support."""
+def test_obstore_direct_stream_write_protocol_and_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ObStoreBackend satisfies DirectStreamWriteProtocol and reports overwrite=False capability per store."""
+    monkeypatch.delenv("AWS_COPY_IF_NOT_EXISTS", raising=False)
     store = ObStoreBackend("memory://")
     assert supports_direct_stream_write(store) is True
 
     supported_formats: tuple[Any, ...] = ("parquet", "arrow-ipc", "csv")
     for fmt in supported_formats:
         assert store.supports_direct_arrow_write(fmt, overwrite=True) is True
-        assert store.supports_direct_arrow_write(fmt, overwrite=False) is False
+        assert store.supports_direct_arrow_write(fmt, overwrite=False) is True
 
     unsupported_formats: tuple[Any, ...] = ("json", "jsonl", "unsupported")
     for fmt in unsupported_formats:
         assert store.supports_direct_arrow_write(fmt, overwrite=True) is False
         assert store.supports_direct_arrow_write(fmt, overwrite=False) is False
+
+    s3_without_copy = ObStoreBackend("s3://bucket", skip_signature=True, region="us-east-1")
+    s3_with_copy = ObStoreBackend(
+        "s3://bucket", skip_signature=True, region="us-east-1", copy_if_not_exists="multipart"
+    )
+    assert s3_without_copy.supports_direct_arrow_write("parquet", overwrite=True) is True
+    assert s3_without_copy.supports_direct_arrow_write("parquet", overwrite=False) is False
+    assert s3_with_copy.supports_direct_arrow_write("parquet", overwrite=False) is True
+
+    monkeypatch.setenv("AWS_COPY_IF_NOT_EXISTS", "multipart")
+    assert s3_without_copy.supports_direct_arrow_write("parquet", overwrite=False) is True
+    monkeypatch.delenv("AWS_COPY_IF_NOT_EXISTS", raising=False)
+
+    http_double = ObStoreBackend.__new__(ObStoreBackend)
+    http_double.protocol = "http"
+    http_double.base_path = ""
+    http_double.store_uri = "http://example.com"
+    http_double.store_options = {}
+    http_double._is_local_store = False
+    http_double._local_store_root = ""
+    http_double.store = object()
+    assert http_double.supports_direct_arrow_write("parquet", overwrite=True) is True
+    assert http_double.supports_direct_arrow_write("parquet", overwrite=False) is False
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
@@ -1393,18 +1417,20 @@ async def test_write_arrow_multi_format_and_snappy_and_single_log(
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
-async def test_pre_execution_validation_errors(tmp_path: Path) -> None:
+async def test_pre_execution_validation_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Pre-execution validation errors propagate without StorageOperationFailedError wrapping."""
     import pyarrow as pa
 
+    monkeypatch.delenv("AWS_COPY_IF_NOT_EXISTS", raising=False)
     store = ObStoreBackend(f"file://{tmp_path}")
+    s3_no_copy = ObStoreBackend("s3://bucket", skip_signature=True, region="us-east-1")
     table = pa.table({"a": [1]})
 
     with pytest.raises(StorageCapabilityError):
-        store.open_write_stream_sync("k", overwrite=False)
+        s3_no_copy.open_write_stream_sync("k", overwrite=False)
 
     with pytest.raises(StorageCapabilityError):
-        store.open_write_stream_async("k", mode="create")
+        s3_no_copy.open_write_stream_async("k", mode="create")
 
     with pytest.raises(ValueError, match="Conflicting write options"):
         store.open_write_stream_sync("k", overwrite=False, mode="overwrite")
@@ -1492,3 +1518,167 @@ async def test_async_obstore_sink_close_marks_closed_and_ignores_writes() -> Non
         assert async_sink.closed is True
         assert await async_sink.write(b"ignored") == 0
     assert await store.read_bytes_async("close_sym.bin") == b"first"
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
+@pytest.mark.parametrize("use_file_uri", [False, True])
+async def test_obstore_staged_create_only_streams_publish_conflict_abort_cancel(
+    tmp_path: Path, use_file_uri: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ObStoreBackend staged overwrite=False streams publish atomically, reject conflicts, and clean stage keys."""
+    import pyarrow as pa
+
+    import sqlspec.storage.backends.obstore as obstore_module
+
+    uri = f"file://{tmp_path}" if use_file_uri else "memory://"
+    store = ObStoreBackend(uri)
+
+    for key_prefix in ("", "nested/"):
+        sync_key = f"{key_prefix}o_sync.bin"
+        with store.open_write_stream_sync(sync_key, overwrite=False) as sync_sink:
+            sync_sink.write(b"x")
+        assert store.read_bytes_sync(sync_key) == b"x"
+        assert [k for k in store.list_objects_sync() if ".sqlspec-stage-" in k] == []
+
+        with (
+            pytest.raises(FileExistsInStorageError),
+            store.open_write_stream_sync(sync_key, overwrite=False) as dup_sink,
+        ):
+            dup_sink.write(b"y")
+        assert store.read_bytes_sync(sync_key) == b"x"
+        assert [k for k in store.list_objects_sync() if ".sqlspec-stage-" in k] == []
+
+        async_key = f"{key_prefix}o_async.bin"
+        async with store.open_write_stream_async(async_key, overwrite=False) as async_sink:
+            await async_sink.write(b"x")
+        assert await store.read_bytes_async(async_key) == b"x"
+        assert [k for k in await store.list_objects_async() if ".sqlspec-stage-" in k] == []
+
+        with pytest.raises(FileExistsInStorageError):
+            async with store.open_write_stream_async(async_key, overwrite=False) as dup_async_sink:
+                await dup_async_sink.write(b"y")
+        assert await store.read_bytes_async(async_key) == b"x"
+        assert [k for k in await store.list_objects_async() if ".sqlspec-stage-" in k] == []
+
+    with (
+        pytest.raises(RuntimeError, match="abort-staged-sync"),
+        store.open_write_stream_sync("aborted_sync.bin", overwrite=False) as bad_sink,
+    ):
+        bad_sink.write(b"partial")
+        raise RuntimeError("abort-staged-sync")
+    assert store.exists_sync("aborted_sync.bin") is False
+    assert [k for k in store.list_objects_sync() if ".sqlspec-stage-" in k] == []
+
+    with pytest.raises(RuntimeError, match="abort-staged-async"):
+        async with store.open_write_stream_async("aborted_async.bin", overwrite=False) as bad_async_sink:
+            await bad_async_sink.write(b"partial")
+            raise RuntimeError("abort-staged-async")
+    assert await store.exists_async("aborted_async.bin") is False
+    assert [k for k in await store.list_objects_async() if ".sqlspec-stage-" in k] == []
+
+    started = asyncio.Event()
+    park = asyncio.Event()
+
+    async def _parked_create() -> None:
+        async with store.open_write_stream_async("cancelled_create.bin", overwrite=False) as s:
+            await s.write(b"partial-cancel")
+            started.set()
+            await park.wait()
+
+    cancel_task = asyncio.create_task(_parked_create())
+    await started.wait()
+    cancel_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_task
+    assert await store.exists_async("cancelled_create.bin") is False
+    assert [k for k in await store.list_objects_async() if ".sqlspec-stage-" in k] == []
+
+    log_events: list[dict[str, Any]] = []
+    orig_log = obstore_module.log_storage_event
+
+    def _capture_write_log(event_name: str, **kwargs: Any) -> None:
+        if event_name == "storage.write":
+            log_events.append(dict(kwargs))
+        orig_log(event_name, **kwargs)
+
+    monkeypatch.setattr(obstore_module, "log_storage_event", _capture_write_log)
+    tbl = pa.table({"id": [1, 2]})
+
+    log_events.clear()
+    store.write_arrow_sync("staged_arrow.parquet", tbl, overwrite=False)
+    assert len(log_events) == 1
+    assert log_events[0]["operation"] == "write_arrow"
+    assert [k for k in store.list_objects_sync() if ".sqlspec-stage-" in k] == []
+    with pytest.raises(FileExistsInStorageError):
+        store.write_arrow_sync("staged_arrow.parquet", tbl, overwrite=False)
+    assert [k for k in store.list_objects_sync() if ".sqlspec-stage-" in k] == []
+
+    log_events.clear()
+    await store.write_arrow_async("staged_arrow_async.parquet", tbl, overwrite=False)
+    assert len(log_events) == 1
+    assert log_events[0]["operation"] == "write_arrow"
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_arrow_async("staged_arrow_async.parquet", tbl, overwrite=False)
+    assert [k for k in await store.list_objects_async() if ".sqlspec-stage-" in k] == []
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED or not PYARROW_INSTALLED, reason="obstore or PyArrow missing")
+async def test_obstore_s3_attributes_refused_on_stream_and_fallback_on_write_arrow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3 create-only streams reject attributes/tags while write_arrow_* falls back to atomic put; GCS uses obs.copy."""
+    import pyarrow as pa
+
+    import sqlspec.storage.backends.obstore as obstore_module
+
+    monkeypatch.delenv("AWS_COPY_IF_NOT_EXISTS", raising=False)
+    s3_store = ObStoreBackend("s3://bucket", skip_signature=True, region="us-east-1", copy_if_not_exists="multipart")
+
+    with pytest.raises(StorageCapabilityError):
+        s3_store.open_write_stream_sync("x.bin", overwrite=False, attributes={"Content-Type": "a/b"})
+    with pytest.raises(StorageCapabilityError):
+        s3_store.open_write_stream_async("x.bin", overwrite=False, tags={"env": "prod"})
+
+    fake_put = _FakePutStore()
+    s3_store.store = fake_put
+    monkeypatch.setenv("AWS_COPY_IF_NOT_EXISTS", "multipart")
+    tbl = pa.table({"id": [1]})
+
+    s3_store.write_arrow_sync("attr.parquet", tbl, overwrite=False, attributes={"Content-Type": "application/parquet"})
+    assert len(fake_put.sync_calls) == 1
+    assert fake_put.sync_calls[0][0] == "attr.parquet"
+    assert fake_put.sync_calls[0][2] == {"attributes": {"Content-Type": "application/parquet"}, "mode": "create"}
+
+    await s3_store.write_arrow_async("tag.parquet", tbl, overwrite=False, tags={"team": "data"})
+    assert len(fake_put.async_calls) == 1
+    assert fake_put.async_calls[0][0] == "tag.parquet"
+    assert fake_put.async_calls[0][2] == {"tags": {"team": "data"}, "mode": "create"}
+
+    obs_real = obstore_module.import_obstore()
+    recorded_ops: list[tuple[str, str, str | None, dict[str, Any]]] = []
+
+    class _ObsSpy:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(obs_real, name)
+
+        def copy(self, st: Any, src: str, dst: str, **kw: Any) -> Any:
+            recorded_ops.append(("copy", src, dst, dict(kw)))
+            return obs_real.copy(st, src, dst, **kw)
+
+        def delete(self, st: Any, target: str) -> Any:
+            recorded_ops.append(("delete", target, None, {}))
+            return obs_real.delete(st, target)
+
+    monkeypatch.setattr(obstore_module, "import_obstore", lambda: _ObsSpy())
+    gcs_double = ObStoreBackend("memory://")
+    gcs_double.protocol = "gs"
+    with gcs_double.open_write_stream_sync("prefix/item.bin", overwrite=False) as gs_sink:
+        gs_sink.write(b"gcs-bytes")
+
+    assert gcs_double.read_bytes_sync("prefix/item.bin") == b"gcs-bytes"
+    assert len(recorded_ops) == 2
+    assert recorded_ops[0][0] == "copy"
+    assert recorded_ops[0][1].startswith("prefix/.sqlspec-stage-")
+    assert recorded_ops[0][2] == "prefix/item.bin"
+    assert recorded_ops[0][3] == {"overwrite": False}
+    assert recorded_ops[1] == ("delete", recorded_ops[0][1], None, {})
