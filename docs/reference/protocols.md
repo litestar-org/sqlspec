@@ -7,9 +7,11 @@ from sqlspec.protocols import (
     AsyncDeleteProtocol,
     AsyncReadableProtocol,
     AsyncReadBytesProtocol,
+    AsyncWritableBytesSink,
     AsyncWriteBytesProtocol,
     CursorMetadataProtocol,
     DictProtocol,
+    DirectStreamWriteProtocol,
     HasAddListenerProtocol,
     HasAsDictProtocol,
     HasConfigProtocol,
@@ -42,7 +44,9 @@ from sqlspec.protocols import (
     SupportsCloseProtocol,
     SyncDataDictionaryProtocol,
     WithMethodProtocol,
+    WritableBytesSink,
 )
+from sqlspec.utils.type_guards import supports_direct_stream_write
 ```
 
 Runtime-checkable structural `Protocol` definitions used across SQLSpec for static type checking and `isinstance()` narrowing.
@@ -192,6 +196,27 @@ Runtime-checkable structural `Protocol` definitions used across SQLSpec for stat
     options:
       heading_level: 4
       members: false
+
+::: sqlspec.protocols.DirectStreamWriteProtocol
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.protocols.WritableBytesSink
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.protocols.AsyncWritableBytesSink
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.utils.type_guards.supports_direct_stream_write
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
 
 ## Configuration, Event & Model Structural Protocols
 
