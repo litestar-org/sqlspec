@@ -893,3 +893,195 @@ async def test_fsspec_sink_errors_open_errors_and_cancelled_open(
 
     assert not file_store.exists_sync("cancel_open.bin")
     assert _fsspec_stage_entries(file_store) == []
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_fsspec_commit_and_block_strategies_and_conflict_mapping() -> None:
+    """FSSpec commit (s3/gs) and block (az) strategies commit, discard on abort/error, map conflicts, and clear fs.transaction.files."""
+    from collections import deque
+    from collections.abc import Callable
+
+    from sqlspec.exceptions import StorageOperationFailedError
+    from sqlspec.storage._arrow_payload import StorageFormat
+    from sqlspec.storage.backends.fsspec import FSSpecBackend, _forget_transaction_file
+
+    class _TxHolder:
+        def __init__(self) -> None:
+            self.files: deque[Any] = deque()
+
+    class _CommitFileDouble:
+        def __init__(self, *, commit_exc: Exception | None = None) -> None:
+            self.calls: list[str] = []
+            self.closed = False
+            self._commit_exc = commit_exc
+
+        def write(self, data: bytes) -> int:
+            self.calls.append(f"write:{len(data)}")
+            return len(data)
+
+        def close(self) -> None:
+            self.calls.append("close")
+            self.closed = True
+
+        def commit(self) -> None:
+            self.calls.append("commit")
+            if self._commit_exc is not None:
+                raise self._commit_exc
+
+        def discard(self) -> None:
+            self.calls.append("discard")
+
+    class _CommitFSDouble:
+        def __init__(self, factory: Callable[[], _CommitFileDouble]) -> None:
+            self.transaction = _TxHolder()
+            self._factory = factory
+            self.opened: list[tuple[str, str, dict[str, Any], _CommitFileDouble]] = []
+
+        def open(self, path: str, mode: str = "rb", **kwargs: Any) -> _CommitFileDouble:
+            f = self._factory()
+            if kwargs.get("autocommit") is False:
+                self.transaction.files.append(f)
+            self.opened.append((path, mode, kwargs, f))
+            return f
+
+    def _make_remote_store(protocol: str, fs_double: Any) -> FSSpecBackend:
+        st = FSSpecBackend.__new__(FSSpecBackend)
+        st.protocol = protocol
+        st.base_path = "bucket"
+        st._fs_uri = f"{protocol}://bucket"
+        st.fs = fs_double
+        return st
+
+    s3_fs = _CommitFSDouble(_CommitFileDouble)
+    s3_store = _make_remote_store("s3", s3_fs)
+    formats: tuple[StorageFormat, ...] = ("parquet", "arrow-ipc", "csv")
+    for fmt in formats:
+        assert s3_store.supports_direct_arrow_write(fmt, overwrite=True) is True
+        assert s3_store.supports_direct_arrow_write(fmt, overwrite=False) is True
+
+    with s3_store.open_write_stream_sync("ok.parquet", overwrite=True) as sink:
+        assert len(s3_fs.transaction.files) == 0
+        sink.write(b"abc")
+    path_0, mode_0, kw_0, file_0 = s3_fs.opened[0]
+    assert path_0 == "bucket/ok.parquet"
+    assert mode_0 == "wb"
+    assert kw_0 == {"autocommit": False}
+    assert file_0.calls == ["write:3", "close", "commit"]
+    assert len(s3_fs.transaction.files) == 0
+
+    with pytest.raises(RuntimeError, match="caller-abort"), s3_store.open_write_stream_sync("abort.parquet") as sink:
+        sink.write(b"xyz")
+        raise RuntimeError("caller-abort")
+    file_1 = s3_fs.opened[1][3]
+    assert file_1.calls == ["write:3", "discard"]
+    assert file_1.closed is True
+    assert len(s3_fs.transaction.files) == 0
+
+    with pytest.raises(RuntimeError, match="async-abort"):
+        async with s3_store.open_write_stream_async("abort_async.parquet", overwrite=False) as async_sink:
+            await async_sink.write(b"xy")
+            raise RuntimeError("async-abort")
+    _, mode_2, _, file_2 = s3_fs.opened[2]
+    assert mode_2 == "xb"
+    assert file_2.calls == ["write:2", "discard"]
+    assert file_2.closed is True
+    assert len(s3_fs.transaction.files) == 0
+
+    fail_commit_fs = _CommitFSDouble(lambda: _CommitFileDouble(commit_exc=OSError(5, "io")))
+    fail_commit_store = _make_remote_store("s3", fail_commit_fs)
+    with pytest.raises(StorageOperationFailedError), fail_commit_store.open_write_stream_sync("fail.parquet") as sink:
+        sink.write(b"123")
+    fail_file = fail_commit_fs.opened[0][3]
+    assert fail_file.calls == ["write:3", "close", "commit", "discard"]
+    assert fail_file.closed is True
+
+    class _ClientErrorLike(Exception):
+        def __init__(self) -> None:
+            super().__init__("PreconditionFailed")
+            self.response = {"Error": {"Code": "PreconditionFailed"}}
+
+    def _s3_precondition_file() -> _CommitFileDouble:
+        outer = OSError(22, "PreconditionFailed")
+        outer.__cause__ = _ClientErrorLike()
+        return _CommitFileDouble(commit_exc=outer)
+
+    conflict_s3_fs = _CommitFSDouble(_s3_precondition_file)
+    conflict_s3_store = _make_remote_store("s3", conflict_s3_fs)
+    with (
+        pytest.raises(FileExistsInStorageError),
+        conflict_s3_store.open_write_stream_sync("dup.parquet", overwrite=False) as sink,
+    ):
+        sink.write(b"dup")
+    assert "discard" in conflict_s3_fs.opened[0][3].calls
+    assert conflict_s3_fs.opened[0][3].closed is True
+
+    gcs_conflict_fs = _CommitFSDouble(lambda: _CommitFileDouble(commit_exc=FileExistsError("bucket/dup_gcs.parquet")))
+    gcs_store = _make_remote_store("gs", gcs_conflict_fs)
+    with pytest.raises(FileExistsInStorageError):
+        async with gcs_store.open_write_stream_async("dup_gcs.parquet", overwrite=False) as async_sink:
+            await async_sink.write(b"dup")
+    assert "discard" in gcs_conflict_fs.opened[0][3].calls
+    assert gcs_conflict_fs.opened[0][3].closed is True
+
+    class _BlockFileDouble:
+        def __init__(self) -> None:
+            self.forced = False
+            self.closed = False
+            self.close_forced_snapshots: list[bool] = []
+
+        def write(self, data: bytes) -> int:
+            return len(data)
+
+        def close(self) -> None:
+            self.close_forced_snapshots.append(self.forced)
+            self.closed = True
+
+    class _BlockFSDouble:
+        def __init__(self) -> None:
+            self.opened: list[tuple[str, str, _BlockFileDouble]] = []
+
+        def open(self, path: str, mode: str = "rb", **_kwargs: Any) -> _BlockFileDouble:
+            f = _BlockFileDouble()
+            self.opened.append((path, mode, f))
+            return f
+
+    az_fs = _BlockFSDouble()
+    az_store = _make_remote_store("az", az_fs)
+    assert az_store.supports_direct_arrow_write("parquet", overwrite=True) is True
+    assert az_store.supports_direct_arrow_write("parquet", overwrite=False) is True
+
+    with az_store.open_write_stream_sync("ok_az.parquet", overwrite=False) as sink:
+        sink.write(b"123")
+    assert az_fs.opened[0][1] == "xb"
+    assert az_fs.opened[0][2].close_forced_snapshots == [False]
+
+    with pytest.raises(RuntimeError, match="az-abort"), az_store.open_write_stream_sync("bad_az.parquet") as sink:
+        sink.write(b"123")
+        raise RuntimeError("az-abort")
+    assert az_fs.opened[1][2].forced is True
+    assert az_fs.opened[1][2].close_forced_snapshots == [True]
+
+    class _FlakyTxFiles:
+        def __init__(self) -> None:
+            self.attempts = 0
+            self.items = ["sentinel"]
+
+        def remove(self, item: Any) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise IndexError("concurrent deque mutation")
+            self.items.remove(item)
+
+    class _FlakyTxHolder:
+        def __init__(self) -> None:
+            self.files = _FlakyTxFiles()
+
+    class _FlakyTxFS:
+        def __init__(self) -> None:
+            self.transaction = _FlakyTxHolder()
+
+    flaky_fs = _FlakyTxFS()
+    _forget_transaction_file(flaky_fs, "sentinel")
+    assert flaky_fs.transaction.files.items == []
+    assert flaky_fs.transaction.files.attempts == 2
+    _forget_transaction_file(flaky_fs, "missing")

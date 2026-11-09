@@ -143,11 +143,7 @@ class FSSpecBackend:
             True when the format and protocol strategy support direct streaming.
         """
         strategy = _fsspec_write_strategy(self.protocol)
-        return (
-            file_format in _FSSPEC_ARROW_FORMATS
-            and strategy in {"local", "staged"}
-            and (overwrite or strategy != "staged")
-        )
+        return file_format in _FSSPEC_ARROW_FORMATS and (overwrite or strategy != "staged")
 
     def open_write_stream_sync(
         self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
@@ -730,10 +726,38 @@ def _prepare_fsspec_stream_options(
     if strategy == "staged" and not overwrite:
         msg = f"Direct write streams do not support overwrite=False for fsspec protocol {protocol!r}"
         raise StorageCapabilityError(msg, capability="overwrite_false_stream")
-    if strategy not in {"local", "staged"}:
-        msg = f"Direct write streams are not supported for fsspec strategy {strategy!r}"
-        raise StorageCapabilityError(msg, capability="direct_stream_write")
     return strategy, open_mode, options
+
+
+def _as_create_conflict(error: Exception, path: str) -> Exception:
+    """Return FileExistsError for an S3 precondition failure, otherwise the original error."""
+    cause = getattr(error, "__cause__", None)
+    response = getattr(cause, "response", None)
+    if isinstance(response, dict):
+        error_payload = response.get("Error")
+        if isinstance(error_payload, dict) and error_payload.get("Code") == "PreconditionFailed":
+            return FileExistsError(path)
+    return error
+
+
+def _forget_transaction_file(fs: Any, file: Any) -> None:
+    """Remove a deferred-commit file from the filesystem's cached transaction list."""
+    tx = getattr(fs, "transaction", None)
+    files = getattr(tx, "files", None)
+    if files is None:
+        return
+    remove_fn = getattr(files, "remove", None)
+    if not callable(remove_fn):
+        return
+    for _ in range(3):
+        try:
+            remove_fn(file)
+        except ValueError:
+            return
+        except IndexError:
+            continue
+        else:
+            return
 
 
 def _fsspec_stage_key(destination: str) -> str:
@@ -748,10 +772,15 @@ def _open_fsspec_stream_target(
     strategy: "_FsspecStrategy", fs: Any, destination: str, mode: str, options: "dict[str, Any]"
 ) -> "tuple[str | None, Any]":
     """Open the underlying file handle for an fsspec direct write stream."""
-    _ = mode
     if strategy == "local":
         stage_path, file_obj = _open_local_stage(Path(destination))
         return str(stage_path), file_obj
+    if strategy == "commit":
+        committed_file = fs.open(destination, mode=mode, autocommit=False, **options)
+        _forget_transaction_file(fs, committed_file)
+        return None, committed_file
+    if strategy == "block":
+        return None, fs.open(destination, mode=mode, **options)
     stage_key = _fsspec_stage_key(destination)
     return stage_key, fs.open(stage_key, mode="wb", **options)
 
@@ -763,6 +792,29 @@ def _close_and_publish_fsspec_stream(
     if strategy == "local":
         assert stage is not None
         _close_and_publish_local_stage(Path(stage), file_obj, Path(destination), overwrite=overwrite)
+        return
+    if strategy == "commit":
+        try:
+            file_obj.close()
+            file_obj.commit()
+        except Exception as error:
+            with contextlib.suppress(Exception):
+                file_obj.discard()
+            with contextlib.suppress(Exception):
+                file_obj.closed = True
+            mapped = _as_create_conflict(error, destination)
+            if mapped is not error:
+                raise mapped from error
+            raise
+        except BaseException:
+            with contextlib.suppress(Exception):
+                file_obj.discard()
+            with contextlib.suppress(Exception):
+                file_obj.closed = True
+            raise
+        return
+    if strategy == "block":
+        file_obj.close()
         return
     assert stage is not None
     try:
@@ -779,6 +831,18 @@ def _abort_fsspec_stream(strategy: "_FsspecStrategy", fs: Any, stage: "str | Non
     if strategy == "local":
         if stage is not None:
             _abort_local_stage(Path(stage), file_obj)
+        return
+    if strategy == "commit":
+        with contextlib.suppress(Exception):
+            file_obj.discard()
+        with contextlib.suppress(Exception):
+            file_obj.closed = True
+        return
+    if strategy == "block":
+        with contextlib.suppress(Exception):
+            file_obj.forced = True
+        with contextlib.suppress(Exception):
+            file_obj.close()
         return
     with contextlib.suppress(Exception):
         file_obj.close()
