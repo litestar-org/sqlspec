@@ -1882,3 +1882,36 @@ def test_bigquery_event_queue_store_reconcile_additive_and_refusal() -> None:
     with pytest.raises(MigrationError, match="status") as exc_info:
         events_reconcile(MigrationContext(config=config, dialect="bigquery", driver=missing_default_drv))
     assert 'migration_mode="versioned"' in str(exc_info.value)
+
+
+def test_db2_event_stores_companion_index_reconcile() -> None:
+    """Db2 event queue stores probe catalog-folded index metadata before executing CREATE INDEX."""
+    from unittest.mock import MagicMock
+
+    from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
+    from sqlspec.adapters.db2.events.store import Db2AsyncEventQueueStore, Db2SyncEventQueueStore
+
+    sync_cfg = Db2SyncConfig(connection_config={"database": "TESTDB"})
+    sync_store = Db2SyncEventQueueStore(sync_cfg)
+    assert sync_store._index_existence_target() == (None, "SQLSPEC_EVENT_QUEUE")
+    assert sync_store.get_schema_targets()[0].table_name.lower() == "sqlspec_event_queue"
+
+    missing_driver = MagicMock()
+    missing_driver.data_dictionary.get_indexes.return_value = []
+    sync_store.reconcile_companion_objects_sync(missing_driver)
+    missing_driver.execute_script.assert_called_once_with(
+        "CREATE INDEX idx_sqlspec_event_queue_channel_status ON sqlspec_event_queue(channel, status, available_at)"
+    )
+
+    present_driver = MagicMock()
+    present_driver.data_dictionary.get_indexes.return_value = [
+        {"index_name": "IDX_SQLSPEC_EVENT_QUEUE_CHANNEL_STATUS", "table_name": "SQLSPEC_EVENT_QUEUE"}
+    ]
+    sync_store.reconcile_companion_objects_sync(present_driver)
+    present_driver.execute_script.assert_not_called()
+
+    async_cfg = Db2AsyncConfig(
+        connection_config={"database": "TESTDB"}, extension_config={"events": {"queue_table": "app.queue_events"}}
+    )
+    async_store = Db2AsyncEventQueueStore(async_cfg)
+    assert async_store._index_existence_target() == ("APP", "QUEUE_EVENTS")

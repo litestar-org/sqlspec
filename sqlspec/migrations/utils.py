@@ -59,6 +59,7 @@ UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS: frozenset[str] = frozenset({
     "bigquery",
     "sqlanywhere",
     "sybase",
+    "db2",
 })
 
 
