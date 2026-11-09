@@ -1,5 +1,6 @@
 """Static analyzer contract for lazy optional typing exports."""
 
+from pathlib import Path
 from typing import TypeVar, assert_type
 
 from litestar.dto.data_structures import DTOData as LitestarDTOData
@@ -7,8 +8,10 @@ from pyarrow import Table as PyArrowTable
 from pydantic import BaseModel as PydanticBaseModel
 
 from sqlspec import SQL, Select, SQLSpec, StatementConfig, sql
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.builder import SQLFactory
 from sqlspec.builder._base import BuiltQuery
+from sqlspec.config import ADKConfig, EventsConfig, ExtensionMigrationMode, LitestarConfig
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.protocols import AsyncWritableBytesSink, DirectStreamWriteProtocol, ObjectStoreProtocol, WritableBytesSink
 from sqlspec.storage import encode_arrow_to_async_sink, encode_arrow_to_sink, supports_direct_stream_write
@@ -78,3 +81,12 @@ def storage_encoder_typing(table: ArrowTable, sync_sink: WritableBytesSink) -> N
 
 async def async_storage_encoder_typing(table: ArrowTable, async_sink: AsyncWritableBytesSink) -> None:
     assert_type(await encode_arrow_to_async_sink(table, async_sink), tuple[int, int])
+
+
+def extension_migration_mode_exports() -> ExtensionMigrationMode:
+    adk_cfg: ADKConfig = {"migration_mode": "reconcile"}
+    litestar_cfg: LitestarConfig = {"session_table": True, "migration_mode": "reconcile"}
+    events_cfg: EventsConfig = {"migration_mode": "versioned"}
+    config = SqliteConfig(extension_config={"adk": adk_cfg, "litestar": litestar_cfg, "events": events_cfg})
+    config.add_extension_migrations("ext_demo", Path("migrations"), migration_mode="reconcile")
+    return "reconcile"

@@ -4,31 +4,172 @@ import importlib
 import inspect
 import os
 import subprocess
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateValidationError, build_template_settings
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
     from sqlspec.config import DatabaseConfigProtocol
 __all__ = (
+    "UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS",
+    "VALID_EXTENSION_MIGRATION_MODES",
+    "ExtensionMigrationMode",
     "create_migration_file",
     "get_author",
     "resolve_default_schema",
+    "resolve_extension_migration_mode",
     "resolve_extension_migrations_path",
     "resolve_tracker_schema",
+    "validate_builtin_reconcile_adapter",
 )
 
 logger = get_logger(__name__)
 
 _MIN_MODULE_NAME_LENGTH = 2
+
+ExtensionMigrationMode = Literal["versioned", "reconcile"]
+VALID_EXTENSION_MIGRATION_MODES: frozenset[str] = frozenset({"versioned", "reconcile"})
+UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS: frozenset[str] = frozenset({
+    "sqlite",
+    "aiosqlite",
+    "asyncpg",
+    "psycopg",
+    "psqlpy",
+    "cockroach_asyncpg",
+    "cockroach_psycopg",
+    "aiomysql",
+    "asyncmy",
+    "pymysql",
+    "mysqlconnector",
+    "duckdb",
+    "mssql_python",
+    "pymssql",
+    "oracledb",
+})
+
+
+def _validate_migration_mode_value(value: object, *, extension_name: str) -> ExtensionMigrationMode:
+    """Validate a single migration_mode setting and return its typed value."""
+    if isinstance(value, bool) or not isinstance(value, str) or value not in VALID_EXTENSION_MIGRATION_MODES:
+        msg = (
+            f"Extension '{extension_name}' configured invalid migration_mode {value!r}; "
+            "expected 'versioned' or 'reconcile'."
+        )
+        raise MigrationError(msg)
+    return cast("ExtensionMigrationMode", value)
+
+
+def resolve_extension_migration_mode(
+    explicit_mode: ExtensionMigrationMode | None, settings: "Mapping[str, Any] | None", *, extension_name: str
+) -> ExtensionMigrationMode:
+    """Resolve and validate the effective migration mode for an extension.
+
+    Args:
+        explicit_mode: Mode passed directly to ``add_extension_migrations``, or ``None``.
+        settings: Extension configuration mapping that may contain ``migration_mode``.
+        extension_name: Extension identifier used in validation error messages.
+
+    Raises:
+        MigrationError: Either ``settings["migration_mode"]`` or ``explicit_mode`` is invalid.
+
+    Returns:
+        Effective validated migration mode, defaulting to ``"versioned"``.
+    """
+    settings_mode: ExtensionMigrationMode | None = None
+    if isinstance(settings, Mapping) and "migration_mode" in settings:
+        settings_mode = _validate_migration_mode_value(settings["migration_mode"], extension_name=extension_name)
+    if explicit_mode is not None:
+        return _validate_migration_mode_value(explicit_mode, extension_name=extension_name)
+    if settings_mode is not None:
+        return settings_mode
+    return "versioned"
+
+
+def validate_builtin_reconcile_adapter(config: Any) -> str:
+    """Return canonical adapter name if supported by built-in reconcilers, else raise MigrationError.
+
+    Args:
+        config: Database configuration instance or class.
+
+    Raises:
+        MigrationError: Adapter cannot be determined or is unsupported by built-in reconcilers.
+
+    Returns:
+        Canonical adapter name string.
+    """
+    adapter_name = resolve_adapter_name(config)
+    if adapter_name is None:
+        msg = (
+            "Built-in extension reconciliation could not resolve an adapter for this configuration; "
+            'set migration_mode="versioned" or register a custom reconcile.py via add_extension_migrations.'
+        )
+        raise MigrationError(msg)
+
+    if adapter_name in UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS:
+        return adapter_name
+
+    dialect = str(getattr(getattr(config, "statement_config", None), "dialect", "") or "").strip().lower()
+    if adapter_name == "arrow_odbc":
+        if dialect in {"mssql", "tsql"}:
+            return "arrow_odbc"
+        msg = (
+            f"Built-in extension reconciliation does not support arrow_odbc with statement_config dialect "
+            f'{dialect or "unset"!r}; set migration_mode="versioned" or register a custom reconcile.py via '
+            "add_extension_migrations."
+        )
+        raise MigrationError(msg)
+
+    if adapter_name == "adbc":
+        from sqlspec.adapters.adbc.core import (
+            driver_kind_from_driver_name,
+            driver_kind_from_uri,
+            is_sqlite_reconcile_target,
+        )
+
+        raw_conn_cfg = getattr(config, "connection_config", None)
+        conn_cfg: Mapping[str, Any] = raw_conn_cfg if isinstance(raw_conn_cfg, Mapping) else {}
+        if dialect == "sqlite" and is_sqlite_reconcile_target(conn_cfg):
+            return "adbc"
+
+        raw_driver = conn_cfg.get("driver_name") or conn_cfg.get("driver")
+        db_kwargs = conn_cfg.get("db_kwargs")
+        nested_uri = db_kwargs.get("uri") if isinstance(db_kwargs, Mapping) else None
+        raw_uri = (
+            conn_cfg.get("uri")
+            or conn_cfg.get("url")
+            or conn_cfg.get("dsn")
+            or conn_cfg.get("connection_string")
+            or nested_uri
+        )
+        driver_kind = (
+            driver_kind_from_driver_name(raw_driver)
+            if isinstance(raw_driver, str) and raw_driver.strip()
+            else (driver_kind_from_uri(raw_uri) if isinstance(raw_uri, str) and raw_uri.strip() else None)
+        )
+        target_desc = f"adbc ({driver_kind})" if driver_kind else "adbc"
+        msg = (
+            f"Built-in extension reconciliation does not support {target_desc} with statement_config dialect "
+            f"{dialect or 'unset'!r}; configure an explicit statement_config dialect or gizmosql_backend where "
+            'supported, set migration_mode="versioned", or register a custom reconcile.py via '
+            "add_extension_migrations."
+        )
+        raise MigrationError(msg)
+
+    msg = (
+        f"Built-in extension reconciliation does not support adapter '{adapter_name}'; "
+        'set migration_mode="versioned" or register a custom reconcile.py via add_extension_migrations.'
+    )
+    raise MigrationError(msg)
 
 
 def resolve_default_schema(migration_config: "Mapping[str, Any] | None") -> str | None:

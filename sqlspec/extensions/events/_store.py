@@ -45,6 +45,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         "event_poll_interval",
         "lease_seconds",
         "manage_schema",
+        "migration_mode",
         "migrations_path",
         "poll_interval",
         "queue_table",

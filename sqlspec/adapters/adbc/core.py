@@ -5,7 +5,7 @@ import datetime as dt
 import decimal
 import re
 import tempfile
-from collections.abc import Sized
+from collections.abc import Mapping, Sized
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -55,7 +55,7 @@ from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
 from sqlspec.utils.uuids import uuid4, uuid_from_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
     from sqlspec.core import SQL
     from sqlspec.utils.dispatch import TypeDispatcher
@@ -80,6 +80,7 @@ __all__ = (
     "handle_postgres_rollback",
     "is_postgres_dialect",
     "is_shared_object_driver",
+    "is_sqlite_reconcile_target",
     "normalize_column_names",
     "normalize_connection_aliases",
     "normalize_driver_path",
@@ -637,6 +638,53 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
             return "duckdb"
 
     return resolve_dialect_from_driver_path(resolve_driver_name_from_config(connection_config))
+
+
+def is_sqlite_reconcile_target(connection_config: "Mapping[str, Any]") -> bool:
+    """Return whether an ADBC connection configuration targets local SQLite.
+
+    Args:
+        connection_config: Raw ADBC connection configuration mapping.
+
+    Returns:
+        True when the configuration unambiguously resolves to a local SQLite ADBC target.
+    """
+    backend = connection_config.get("gizmosql_backend")
+    if isinstance(backend, str) and backend.strip().lower() not in {"", "sqlite"}:
+        return False
+
+    raw_driver_name = connection_config.get("driver_name") or connection_config.get("driver")
+    has_driver_name = isinstance(raw_driver_name, str) and bool(raw_driver_name.strip())
+    if has_driver_name:
+        assert isinstance(raw_driver_name, str)
+        if is_shared_object_driver(raw_driver_name):
+            basename = raw_driver_name.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            if "sqlite" not in basename:
+                return False
+        elif driver_kind_from_driver_name(raw_driver_name) != "sqlite":
+            return False
+
+    db_kwargs = connection_config.get("db_kwargs")
+    nested_uri = db_kwargs.get("uri") if isinstance(db_kwargs, Mapping) else None
+    raw_uri = (
+        connection_config.get("uri")
+        or connection_config.get("url")
+        or connection_config.get("dsn")
+        or connection_config.get("connection_string")
+        or nested_uri
+    )
+    has_uri = isinstance(raw_uri, str) and bool(raw_uri.strip())
+    if has_uri:
+        assert isinstance(raw_uri, str)
+        if driver_kind_from_uri(raw_uri) not in {"sqlite", None}:
+            return False
+        if not has_driver_name:
+            return driver_kind_from_driver_name(resolve_driver_name_from_config(connection_config)) == "sqlite"
+        return True
+
+    if has_driver_name:
+        return True
+    return driver_kind_from_driver_name(resolve_driver_name_from_config(connection_config)) == "sqlite"
 
 
 def normalize_connection_aliases(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":

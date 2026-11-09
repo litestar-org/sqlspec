@@ -64,6 +64,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         "extra_rollback_statuses",
         "manage_lifespan",
         "manage_schema",
+        "migration_mode",
         "migrations_path",
         "pool_key",
         "session_key",

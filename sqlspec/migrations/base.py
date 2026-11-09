@@ -3,6 +3,7 @@
 import importlib
 import os
 from abc import abstractmethod
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, NotRequired, TypeVar, cast
 
@@ -19,7 +20,12 @@ from sqlspec.builder._update import Update
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
-from sqlspec.migrations.utils import resolve_default_schema, resolve_extension_migrations_path, resolve_tracker_schema
+from sqlspec.migrations.utils import (
+    resolve_default_schema,
+    resolve_extension_migration_mode,
+    resolve_extension_migrations_path,
+    resolve_tracker_schema,
+)
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
@@ -30,7 +36,13 @@ if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.observability import ObservabilityRuntime
 
-__all__ = ("AppliedMigrationRecord", "BaseMigrationCommands", "BaseMigrationTracker", "LoadedMigrationMetadata")
+__all__ = (
+    "AppliedMigrationRecord",
+    "BaseMigrationCommands",
+    "BaseMigrationTracker",
+    "ExtensionReconcilerDescriptor",
+    "LoadedMigrationMetadata",
+)
 
 DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
@@ -473,11 +485,33 @@ class BaseMigrationTracker(Generic[DriverT]):
         return "autocommit" in exc_str or "cannot commit" in exc_str
 
 
+class ExtensionReconcilerDescriptor:
+    """Immutable descriptor locating an opted-in extension reconciler module."""
+
+    __slots__ = ("module_path", "name")
+
+    def __init__(self, name: str, module_path: Path) -> None:
+        self.name = name
+        self.module_path = module_path
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ExtensionReconcilerDescriptor):
+            return NotImplemented
+        return self.name == other.name and self.module_path == other.module_path
+
+    def __hash__(self) -> int:
+        return hash((self.name, self.module_path))
+
+    def __repr__(self) -> str:
+        return f"ExtensionReconcilerDescriptor(name={self.name!r}, module_path={self.module_path!r})"
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class BaseMigrationCommands(Generic[ConfigT, DriverT]):
     """Base class for migration commands."""
 
     extension_configs: "dict[str, dict[str, Any]]"
+    extension_reconcilers: "tuple[ExtensionReconcilerDescriptor, ...]"
 
     def __init__(self, config: ConfigT) -> None:
         """Initialize migration commands.
@@ -499,6 +533,7 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         self.project_root = Path(migration_config["project_root"]) if "project_root" in migration_config else None
         self.include_extensions = migration_config.get("include_extensions", [])
         self.extension_configs = self._parse_extension_configs()
+        self.extension_reconcilers = self._discover_extension_reconcilers()
         self._template_settings: MigrationTemplateSettings = build_template_settings(migration_config)
         self._runtime: ObservabilityRuntime | None = self.config.get_observability_runtime()
         self._last_command_error: Exception | None = None
@@ -627,9 +662,10 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         extension listed in include_extensions.
 
         Returns:
-            Dictionary mapping extension names to their configurations.
+            Dictionary mapping extension names to shallow copies of their configurations.
         """
-        configs = {}
+        configs: dict[str, dict[str, Any]] = {}
+        extension_config_map = cast("dict[str, Any]", self.config.extension_config)
 
         for ext_config in self.include_extensions:
             if not isinstance(ext_config, str):
@@ -637,59 +673,128 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
                 continue
 
             ext_name = ext_config
-            ext_options = cast("dict[str, Any]", self.config.extension_config).get(ext_name, {})
-            configs[ext_name] = ext_options
+            if ext_name in configs:
+                continue
+            raw_options = extension_config_map.get(ext_name, {})
+            configs[ext_name] = dict(raw_options) if isinstance(raw_options, Mapping) else {}
 
         return configs
 
+    def _resolve_extension_migrations_dir(self, ext_name: str, ext_options: "Mapping[str, Any]") -> "Path | None":
+        """Resolve the filesystem directory containing migrations for an extension.
+
+        Args:
+            ext_name: Configured extension name.
+            ext_options: Per-extension configuration mapping.
+
+        Raises:
+            MigrationError: Extension uses ``reconcile`` mode and its migrations directory cannot be resolved.
+
+        Returns:
+            Resolved directory path, or ``None`` when absent in ``versioned`` mode.
+        """
+        mode = resolve_extension_migration_mode(None, ext_options, extension_name=ext_name)
+        spec = ext_options.get("migrations_path")
+        if spec is not None:
+            resolved = resolve_extension_migrations_path(ext_name, spec)
+            if resolved is None:
+                if mode == "reconcile":
+                    msg = (
+                        f"Extension '{ext_name}' configured migration_mode='reconcile', "
+                        f"but migrations_path {spec!r} is not an existing directory."
+                    )
+                    raise MigrationError(msg)
+                logger.warning(
+                    "Extension '%s' migrations_path %r is not an existing directory; "
+                    "no migrations were registered for it.",
+                    ext_name,
+                    spec,
+                )
+                return None
+            return resolved
+
+        module_name = f"sqlspec.extensions.{ext_name}"
+        try:
+            module_path = module_to_os_path(module_name)
+        except ImportError as exc:
+            if mode == "reconcile":
+                msg = (
+                    f"Extension '{ext_name}' configured migration_mode='reconcile', "
+                    f"but '{module_name}' could not be imported ({exc}). "
+                    f"Set extension_config['{ext_name}']['migrations_path'] to register "
+                    "reconcilers shipped by another package."
+                )
+                raise MigrationError(msg) from exc
+            logger.warning(
+                "Extension '%s' is configured but '%s' is not importable; no migrations were "
+                "registered for it. Set extension_config['%s']['migrations_path'] to register "
+                "migrations shipped by another package.",
+                ext_name,
+                module_name,
+                ext_name,
+            )
+            return None
+
+        migrations_dir = module_path / "migrations"
+        if not migrations_dir.is_dir():
+            if mode == "reconcile":
+                msg = (
+                    f"Extension '{ext_name}' configured migration_mode='reconcile', "
+                    f"but ships no migrations directory at '{migrations_dir}'."
+                )
+                raise MigrationError(msg)
+            logger.debug("Extension %s ships no migrations directory", ext_name)
+            return None
+
+        return migrations_dir
+
+    def _discover_extension_reconcilers(self) -> "tuple[ExtensionReconcilerDescriptor, ...]":
+        """Discover opted-in extension reconciler modules without importing them.
+
+        Raises:
+            MigrationError: A ``reconcile`` extension lacks a ``reconcile.py`` file.
+
+        Returns:
+            Ordered tuple of reconciler descriptors matching ``include_extensions`` order.
+        """
+        reconcilers: list[ExtensionReconcilerDescriptor] = []
+        for ext_name, ext_options in self.extension_configs.items():
+            mode = resolve_extension_migration_mode(None, ext_options, extension_name=ext_name)
+            if mode != "reconcile":
+                continue
+            ext_dir = self._resolve_extension_migrations_dir(ext_name, ext_options)
+            assert ext_dir is not None
+            reconcile_path = ext_dir / "reconcile.py"
+            if not reconcile_path.is_file():
+                msg = (
+                    f"Extension '{ext_name}' configured migration_mode='reconcile', "
+                    f"but no reconcile.py file exists at '{reconcile_path}'."
+                )
+                raise MigrationError(msg)
+            reconcilers.append(ExtensionReconcilerDescriptor(ext_name, reconcile_path))
+        return tuple(reconcilers)
+
     def _discover_extension_migrations(self) -> "dict[str, Path]":
-        """Discover migration paths for configured extensions.
+        """Discover migration paths for configured versioned extensions.
 
         An extension may declare ``migrations_path`` in its ``extension_config`` entry to
         ship migrations from any package. Extensions without it resolve against the
-        ``sqlspec.extensions.<name>`` namespace.
+        ``sqlspec.extensions.<name>`` namespace. Extensions configured with
+        ``migration_mode='reconcile'`` are omitted from numbered migration discovery.
 
         Returns:
             Dictionary mapping extension names to their migration paths.
         """
-        extension_migrations = {}
+        extension_migrations: dict[str, Path] = {}
 
         for ext_name, ext_options in self.extension_configs.items():
-            spec = ext_options.get("migrations_path")
-            if spec is not None:
-                resolved = resolve_extension_migrations_path(ext_name, spec)
-                if resolved is None:
-                    logger.warning(
-                        "Extension '%s' migrations_path %r is not an existing directory; "
-                        "no migrations were registered for it.",
-                        ext_name,
-                        spec,
-                    )
-                else:
-                    extension_migrations[ext_name] = resolved
-                    logger.debug("Found migrations for extension %s at %s", ext_name, resolved)
+            mode = resolve_extension_migration_mode(None, ext_options, extension_name=ext_name)
+            if mode == "reconcile":
                 continue
-
-            module_name = f"sqlspec.extensions.{ext_name}"
-            try:
-                module_path = module_to_os_path(module_name)
-            except ImportError:
-                logger.warning(
-                    "Extension '%s' is configured but '%s' is not importable; no migrations were "
-                    "registered for it. Set extension_config['%s']['migrations_path'] to register "
-                    "migrations shipped by another package.",
-                    ext_name,
-                    module_name,
-                    ext_name,
-                )
-                continue
-
-            migrations_dir = module_path / "migrations"
-            if migrations_dir.exists():
-                extension_migrations[ext_name] = migrations_dir
-                logger.debug("Found migrations for extension %s at %s", ext_name, migrations_dir)
-            else:
-                logger.debug("Extension %s ships no migrations directory", ext_name)
+            resolved = self._resolve_extension_migrations_dir(ext_name, ext_options)
+            if resolved is not None:
+                extension_migrations[ext_name] = resolved
+                logger.debug("Found migrations for extension %s at %s", ext_name, resolved)
 
         return extension_migrations
 
