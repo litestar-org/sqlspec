@@ -186,3 +186,72 @@ def test_pymysql_dispatch_execute_script_delegates_to_super() -> None:
     result = driver.dispatch_execute_script(cursor, statement)
     assert result.statement_count == 2
     assert result.successful_statements == 2
+
+
+@pytest.mark.parametrize(
+    ("column_descriptor", "expected"),
+    [
+        (("amount", 246, None, 12, 12, 2, True), {"amount": "decimal(11,2)"}),
+        (("n", 246, None, 11, 11, 0, True), {"n": "decimal(11,0)"}),
+        (("n", 0, None, 11, 11, 2, True), {"n": "decimal"}),
+        (("n", 246, None, None, None, 2, True), {"n": "decimal"}),
+        (("n", 246, None, 90, 90, 2, True), {"n": "decimal"}),
+    ],
+)
+def test_pymysql_resolve_column_types_decimals(column_descriptor: tuple[Any, ...], expected: dict[str, str]) -> None:
+    """_resolve_column_types in pymysql.core emits exact decimal(P,S) tokens for NEWDECIMAL metadata."""
+    from sqlspec.adapters.pymysql.core import _resolve_column_types
+
+    assert _resolve_column_types([column_descriptor]) == expected
+
+
+def test_pymysql_stream_source_exposes_column_types_to_arrow_batches() -> None:
+    """PyMysqlStreamSource sets column_types on start() so all-NULL streamed columns keep declared Arrow types."""
+    import pyarrow as pa
+
+    from sqlspec.adapters.pymysql.core import PyMysqlStreamSource
+    from sqlspec.driver import SyncRowStream
+    from sqlspec.utils.arrow_helpers import arrow_batches_from_rows
+
+    class _StreamCursor:
+        def __init__(self, description: list[tuple[Any, ...]], chunks: list[list[tuple[Any, ...]]]) -> None:
+            self.description = description
+            self._chunks = list(chunks)
+            self.closed = False
+
+        def execute(self, statement: str, parameters: Any = None) -> None:
+            _ = (statement, parameters)
+
+        def fetchmany(self, size: int) -> list[tuple[Any, ...]]:
+            _ = size
+            return self._chunks.pop(0) if self._chunks else []
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _StreamConnection(_FakeConnection):
+        def __init__(self, stream_cursor: _StreamCursor) -> None:
+            super().__init__()
+            self._stream_cursor = stream_cursor
+
+        def cursor(self, cursor_type: Any = None) -> Any:
+            _ = cursor_type
+            return self._stream_cursor
+
+    cursor = _StreamCursor(description=[("id", 3, None, None, None, None, True)], chunks=[[(None,), (None,)]])
+    driver = PyMysqlDriver(cast("Any", _StreamConnection(cursor)))
+    source = PyMysqlStreamSource(driver, "SELECT id FROM demo", (), 10, set())
+    source.start()
+    assert source.column_types == {"id": "int64"}
+    source.close()
+
+    cursor_for_arrow = _StreamCursor(description=[("id", 3, None, None, None, None, True)], chunks=[[(None,), (None,)]])
+    driver_for_arrow = PyMysqlDriver(cast("Any", _StreamConnection(cursor_for_arrow)))
+    stream: SyncRowStream[dict[str, Any]] = SyncRowStream(
+        PyMysqlStreamSource(driver_for_arrow, "SELECT id FROM demo", (), 10, set())
+    )
+    reader = arrow_batches_from_rows(stream, batch_size=10)
+    batches = list(reader) if reader is not None else []
+    assert len(batches) == 1
+    assert batches[0].schema.field("id").type == pa.int64()
+    assert batches[0].column("id").to_pylist() == [None, None]
