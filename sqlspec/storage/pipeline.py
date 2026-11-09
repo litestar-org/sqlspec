@@ -1,6 +1,5 @@
 """Storage pipeline scaffolding for driver-aware storage bridge."""
 
-import contextlib
 from collections import deque
 from collections.abc import Sequence
 from functools import partial
@@ -899,9 +898,19 @@ def _encode_arrow_source_to_bytes(
     return buffer.getvalue().to_pybytes(), rows_written
 
 
+async def _close_async_batch_iterator(iterator: Any) -> None:
+    aclose = getattr(iterator, "aclose", None)
+    if callable(aclose):
+        try:
+            await cast("Callable[[], Awaitable[Any]]", aclose)()
+        except Exception:
+            return
+
+
 async def _collect_async_batches(source: Any) -> "list[ArrowRecordBatch]":
     iterator = source.__aiter__()
     batches: list[ArrowRecordBatch] = []
+    pending_exc: BaseException | None = None
     try:
         while True:
             try:
@@ -909,11 +918,11 @@ async def _collect_async_batches(source: Any) -> "list[ArrowRecordBatch]":
             except StopAsyncIteration:
                 break
             batches.append(batch)
-    finally:
-        aclose = getattr(iterator, "aclose", None)
-        if callable(aclose):
-            with contextlib.suppress(Exception):
-                await cast("Callable[[], Awaitable[Any]]", aclose)()
+    except BaseException as stream_exc:
+        pending_exc = stream_exc
+    await _close_async_batch_iterator(iterator)
+    if pending_exc is not None:
+        raise pending_exc
     return batches
 
 

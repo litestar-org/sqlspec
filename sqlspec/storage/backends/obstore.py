@@ -1668,10 +1668,12 @@ class _AsyncObstoreWriteStream:
                     "storage.write", backend_type=self._backend_type, path=self._resolved_path, **self._log_fields
                 )
         else:
-            with contextlib.suppress(Exception):
+            try:
                 exit_fut = entered_writer.__aexit__(exc_type, exc, traceback)
                 if inspect.isawaitable(exit_fut):
                     await join_shielded(asyncio.ensure_future(exit_fut), suppress_result=True)
+            except Exception:
+                return
 
 
 def _obstore_stage_key(destination: str) -> str:
@@ -1729,6 +1731,16 @@ class _ObstoreStagedCreateStream:
             )
 
 
+async def _delete_obstore_stage_async(store: Any, stage: str) -> None:
+    """Delete a temporary staged obstore object while suppressing cleanup errors."""
+    obs = import_obstore()
+    try:
+        del_coro = obs.delete_async(store, stage)
+        await join_shielded(asyncio.ensure_future(del_coro), suppress_result=True)
+    except Exception:
+        return
+
+
 class _AsyncObstoreStagedCreateStream:
     """Asynchronously stage a create-only obstore stream and publish via shielded conditional copy."""
 
@@ -1759,13 +1771,15 @@ class _AsyncObstoreStagedCreateStream:
             await self._inner.__aexit__(exc_type, exc, traceback)
             return
         obs = import_obstore()
+        cancel_exc: asyncio.CancelledError | None = None
         try:
             await self._inner.__aexit__(None, None, None)
-        except asyncio.CancelledError:
-            with contextlib.suppress(Exception):
-                del_coro = obs.delete_async(self._store, self._stage)
-                await join_shielded(asyncio.ensure_future(del_coro), suppress_result=True)
-            raise
+        except asyncio.CancelledError as caught_cancel:
+            cancel_exc = caught_cancel
+        if cancel_exc is not None:
+            await _delete_obstore_stage_async(self._store, self._stage)
+            raise cancel_exc
+        pending_exc: BaseException | None = None
         try:
             copy_coro = obs.copy_async(self._store, self._stage, self._destination, overwrite=False)
             await execute_async_storage_operation(
@@ -1774,10 +1788,11 @@ class _AsyncObstoreStagedCreateStream:
                 operation="write_stream_close",
                 path=self._destination,
             )
-        finally:
-            with contextlib.suppress(Exception):
-                del_coro = obs.delete_async(self._store, self._stage)
-                await join_shielded(asyncio.ensure_future(del_coro), suppress_result=True)
+        except BaseException as publish_exc:
+            pending_exc = publish_exc
+        await _delete_obstore_stage_async(self._store, self._stage)
+        if pending_exc is not None:
+            raise pending_exc
         if self._log_fields is not None:
             log_storage_event(
                 "storage.write", backend_type=self._backend_type, path=self._destination, **self._log_fields
