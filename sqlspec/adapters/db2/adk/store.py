@@ -23,6 +23,7 @@ from sqlspec.extensions.adk import (
     normalize_session_list_options,
 )
 from sqlspec.extensions.adk.memory import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore, StoredMemory
+from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier
 
@@ -310,6 +311,26 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         """Return Db2 DDL for the ADK metadata table."""
         return _metadata_table_ddl(self._metadata_table)
 
+    def _schema_targets(self) -> list[SchemaTarget]:
+        """Build Db2 SchemaTarget definitions for all ADK session tables."""
+        ddl_targets = (
+            (self._session_table, self._sessions_table_ddl()),
+            (self._events_table, self._events_table_ddl()),
+            (self._app_state_table, self._app_states_table_ddl()),
+            (self._user_state_table, self._user_states_table_ddl()),
+            (self._metadata_table, self._metadata_table_ddl()),
+        )
+        return [_db2_schema_target(table, ddl) for table, ddl in ddl_targets]
+
+    def get_schema_targets_sync(self, driver: Any) -> list[SchemaTarget]:
+        """Return Db2 session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Db2 ADK session and event indexes without committing."""
+        _reconcile_db2_indexes_sync(driver, self._index_specs())
+
     def _fetch_scoped_row(self, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         """Read one row, treating a missing table as no row."""
         try:
@@ -561,6 +582,26 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         """Return Db2 DDL for the ADK metadata table."""
         return _metadata_table_ddl(self._metadata_table)
 
+    async def _schema_targets(self) -> list[SchemaTarget]:
+        """Build Db2 SchemaTarget definitions for all ADK session tables."""
+        ddl_targets = (
+            (self._session_table, await self._sessions_table_ddl()),
+            (self._events_table, await self._events_table_ddl()),
+            (self._app_state_table, await self._app_states_table_ddl()),
+            (self._user_state_table, await self._user_states_table_ddl()),
+            (self._metadata_table, await self._metadata_table_ddl()),
+        )
+        return [_db2_schema_target(table, ddl) for table, ddl in ddl_targets]
+
+    async def get_schema_targets_async(self, driver: Any) -> list[SchemaTarget]:
+        """Return Db2 session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return await self._schema_targets()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing Db2 ADK session and event indexes without committing."""
+        await _reconcile_db2_indexes_async(driver, self._index_specs())
+
     async def _fetch_scoped_row(self, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         """Read one row, treating a missing table as no row."""
         try:
@@ -719,6 +760,23 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
     def _memory_table_ddl(self) -> str:
         return _memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
 
+    def _schema_targets(self) -> list[SchemaTarget]:
+        """Build the Db2 SchemaTarget definition for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
+        return [_db2_schema_target(self._memory_table, self._memory_table_ddl())]
+
+    def get_schema_targets_sync(self, driver: Any) -> list[SchemaTarget]:
+        """Return Db2 memory-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Db2 ADK memory indexes when enabled without committing."""
+        if not self._enabled:
+            return
+        _reconcile_db2_indexes_sync(driver, self._memory_index_specs())
+
     def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         with self._config.provide_session() as driver:
             return driver.select(sql, params)
@@ -838,6 +896,23 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
 
     async def _memory_table_ddl(self) -> str:
         return _memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
+
+    async def _schema_targets(self) -> list[SchemaTarget]:
+        """Build the Db2 SchemaTarget definition for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
+        return [_db2_schema_target(self._memory_table, await self._memory_table_ddl())]
+
+    async def get_schema_targets_async(self, driver: Any) -> list[SchemaTarget]:
+        """Return Db2 memory-store SchemaTarget definitions without opening a session."""
+        del driver
+        return await self._schema_targets()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing Db2 ADK memory indexes when enabled without committing."""
+        if not self._enabled:
+            return
+        await _reconcile_db2_indexes_async(driver, self._memory_index_specs())
 
     async def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         async with self._config.provide_session() as driver:
@@ -1233,6 +1308,40 @@ async def _create_missing_async(
             schema = table_schema
     if await driver.select_one_or_none(probe_sql, (schema, object_name)) is None:
         await driver.execute(ddl)
+
+
+def _db2_schema_target(table: str, ddl: str) -> SchemaTarget:
+    """Build a Db2 SchemaTarget with catalog-folded schema and table metadata."""
+    schema, table_name = split_db2_table_name(table)
+    return SchemaTarget.from_ddl(table_name, ddl, schema=schema, dialect="db2")
+
+
+def _reconcile_db2_indexes_sync(driver: Any, index_specs: Sequence[tuple[str, str, str]]) -> None:
+    """Probe Db2 index metadata once per table and create absent companion indexes without committing."""
+    indexes_by_table: dict[tuple[str | None, str], list[Any]] = {}
+    for index_name, index_table, columns in index_specs:
+        schema, table = split_db2_table_name(index_table)
+        cache_key = (schema, table)
+        rows = indexes_by_table.get(cache_key)
+        if rows is None:
+            rows = list(driver.data_dictionary.get_indexes(driver, table=table, schema=schema))
+            indexes_by_table[cache_key] = rows
+        if not metadata_has_index(rows, table, index_name, schema_name=schema):
+            driver.execute(_create_index_sql(index_table, index_name, columns))
+
+
+async def _reconcile_db2_indexes_async(driver: Any, index_specs: Sequence[tuple[str, str, str]]) -> None:
+    """Probe Db2 index metadata once per table and create absent companion indexes on an async driver."""
+    indexes_by_table: dict[tuple[str | None, str], list[Any]] = {}
+    for index_name, index_table, columns in index_specs:
+        schema, table = split_db2_table_name(index_table)
+        cache_key = (schema, table)
+        rows = indexes_by_table.get(cache_key)
+        if rows is None:
+            rows = list(await driver.data_dictionary.get_indexes(driver, table=table, schema=schema))
+            indexes_by_table[cache_key] = rows
+        if not metadata_has_index(rows, table, index_name, schema_name=schema):
+            await driver.execute(_create_index_sql(index_table, index_name, columns))
 
 
 def _insert_session_sql(table: str, owner_column_name: "str | None") -> str:

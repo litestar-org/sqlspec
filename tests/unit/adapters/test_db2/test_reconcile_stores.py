@@ -1,4 +1,4 @@
-"""Unit tests for Db2 Litestar and event queue schema reconciliation."""
+"""Unit tests for Db2 Litestar, event queue, and ADK schema reconciliation."""
 
 from typing import Any
 
@@ -7,6 +7,7 @@ import pytest
 from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.litestar import Db2AsyncStore, Db2SyncStore
 from sqlspec.adapters.db2.litestar.store import _session_companion_index, session_index_ddl
+from sqlspec.extensions.adk.migrations.reconcile import reconcile as reconcile_adk
 from sqlspec.extensions.events.migrations.reconcile import reconcile as reconcile_events
 from sqlspec.extensions.litestar.migrations.reconcile import reconcile as reconcile_litestar
 from sqlspec.migrations.context import MigrationContext
@@ -200,3 +201,102 @@ async def test_db2_events_reconcile_repairs_missing_index_and_skips_when_present
         reconcile_events, MigrationContext(config=config, dialect="db2", driver=db2_mode.driver(present_conn))
     )
     assert _executed_ddl(present_conn) == []
+
+
+def _adk_table_columns(table: str) -> list[tuple[Any, ...]]:
+    if table == "ADK_SESSION":
+        return [
+            _col_row(table, "ID", "VARCHAR", nullable=False, ordinal=1, primary=True),
+            _col_row(table, "APP_NAME", "VARCHAR", nullable=False, ordinal=2),
+            _col_row(table, "USER_ID", "VARCHAR", nullable=False, ordinal=3),
+            _col_row(table, "STATE", "CLOB", nullable=False, ordinal=4),
+            _col_row(table, "CREATE_TIME", "TIMESTAMP", nullable=False, ordinal=5),
+            _col_row(table, "UPDATE_TIME", "TIMESTAMP", nullable=False, ordinal=6),
+        ]
+    if table == "ADK_EVENT":
+        return [
+            _col_row(table, "ID", "VARCHAR", nullable=False, ordinal=1, primary=True),
+            _col_row(table, "APP_NAME", "VARCHAR", nullable=False, ordinal=2),
+            _col_row(table, "USER_ID", "VARCHAR", nullable=False, ordinal=3),
+            _col_row(table, "SESSION_ID", "VARCHAR", nullable=False, ordinal=4),
+            _col_row(table, "INVOCATION_ID", "VARCHAR", nullable=False, ordinal=5),
+            _col_row(table, "TIMESTAMP", "TIMESTAMP", nullable=False, ordinal=6),
+            _col_row(table, "EVENT_DATA", "CLOB", nullable=False, ordinal=7),
+        ]
+    if table == "ADK_APP_STATE":
+        return [
+            _col_row(table, "APP_NAME", "VARCHAR", nullable=False, ordinal=1, primary=True),
+            _col_row(table, "STATE", "CLOB", nullable=False, ordinal=2),
+            _col_row(table, "UPDATE_TIME", "TIMESTAMP", nullable=False, ordinal=3),
+        ]
+    if table == "ADK_USER_STATE":
+        return [
+            _col_row(table, "APP_NAME", "VARCHAR", nullable=False, ordinal=1, primary=True),
+            _col_row(table, "USER_ID", "VARCHAR", nullable=False, ordinal=2, primary=True),
+            _col_row(table, "STATE", "CLOB", nullable=False, ordinal=3),
+            _col_row(table, "UPDATE_TIME", "TIMESTAMP", nullable=False, ordinal=4),
+        ]
+    if table == "ADK_INTERNAL_METADATA":
+        return [
+            _col_row(table, "KEY", "VARCHAR", nullable=False, ordinal=1, primary=True),
+            _col_row(table, "VALUE", "VARCHAR", nullable=False, ordinal=2),
+        ]
+    return [
+        _col_row(table, "ID", "VARCHAR", nullable=False, ordinal=1, primary=True),
+        _col_row(table, "SESSION_ID", "VARCHAR", nullable=False, ordinal=2),
+        _col_row(table, "APP_NAME", "VARCHAR", nullable=False, ordinal=3),
+        _col_row(table, "USER_ID", "VARCHAR", nullable=False, ordinal=4),
+        _col_row(table, "SCOPE", "VARCHAR", nullable=False, ordinal=5),
+        _col_row(table, "EVENT_ID", "VARCHAR", nullable=False, ordinal=6),
+        _col_row(table, "AUTHOR", "VARCHAR", nullable=True, ordinal=7),
+        _col_row(table, "TIMESTAMP", "TIMESTAMP", nullable=False, ordinal=8),
+        _col_row(table, "CONTENT_JSON", "CLOB", nullable=False, ordinal=9),
+        _col_row(table, "CONTENT_TEXT", "CLOB", nullable=False, ordinal=10),
+        _col_row(table, "METADATA_JSON", "CLOB", nullable=True, ordinal=11),
+        _col_row(table, "INSERTED_AT", "TIMESTAMP", nullable=False, ordinal=12),
+    ]
+
+
+async def test_db2_adk_reconcile_entrypoint_repairs_session_and_memory_indexes(db2_mode: DriverMode) -> None:
+    """ADK reconcile repairs a single missing Db2 memory index across session and memory stores without committing."""
+    adk_tables = ["ADK_SESSION", "ADK_EVENT", "ADK_APP_STATE", "ADK_USER_STATE", "ADK_INTERNAL_METADATA", "ADK_MEMORY"]
+    table_rows = [("DB2INST1", name, "BASE TABLE") for name in adk_tables]
+    session_indexes = [
+        ("DB2INST1", "ADK_SESSION", "IDX_ADK_SESSION_APP_USER", "APP_NAME", 1, 0, 0),
+        ("DB2INST1", "ADK_SESSION", "IDX_ADK_SESSION_UPDATE_TIME", "UPDATE_TIME", 1, 0, 0),
+    ]
+    event_indexes = [
+        ("DB2INST1", "ADK_EVENT", "IDX_ADK_EVENT_SCOPE", "APP_NAME", 1, 0, 0),
+        ("DB2INST1", "ADK_EVENT", "IDX_ADK_EVENT_SESSION", "SESSION_ID", 1, 0, 0),
+        ("DB2INST1", "ADK_EVENT", "IDX_ADK_EVENT_INVOCATION", "INVOCATION_ID", 1, 0, 0),
+        ("DB2INST1", "ADK_EVENT", "IDX_ADK_EVENT_TIMESTAMP", "TIMESTAMP", 1, 0, 0),
+        ("DB2INST1", "ADK_EVENT", "IDX_ADK_EVENT_APP_TIMESTAMP", "APP_NAME", 1, 0, 0),
+    ]
+    memory_indexes = [
+        ("DB2INST1", "ADK_MEMORY", "IDX_ADK_MEMORY_SCOPE", "APP_NAME", 1, 0, 0),
+        ("DB2INST1", "ADK_MEMORY", "IDX_ADK_MEMORY_SESSION", "SESSION_ID", 1, 0, 0),
+    ]
+    cursors = [
+        FakeDb2Cursor(rows=table_rows, description=db2_description(*_TABLE_COLUMNS)),
+        FakeDb2Cursor(rows=table_rows, description=db2_description(*_TABLE_COLUMNS)),
+        *(
+            FakeDb2Cursor(rows=_adk_table_columns(name), description=db2_description(*_COLUMN_COLUMNS))
+            for name in adk_tables
+        ),
+        FakeDb2Cursor(rows=session_indexes, description=db2_description(*_INDEX_COLUMNS)),
+        FakeDb2Cursor(rows=event_indexes, description=db2_description(*_INDEX_COLUMNS)),
+        FakeDb2Cursor(rows=memory_indexes, description=db2_description(*_INDEX_COLUMNS)),
+        FakeDb2Cursor(),
+    ]
+    connection = FakeDb2Connection(cursors)
+    config = db2_mode.config(
+        connection_config={"database": "TESTDB"},
+        extension_config={"adk": {"migration_mode": "reconcile", "enable_memory": True}},
+    )
+
+    await db2_mode.call(
+        reconcile_adk, MigrationContext(config=config, dialect="db2", driver=db2_mode.driver(connection))
+    )
+
+    assert _executed_ddl(connection) == ["CREATE INDEX idx_adk_memory_inserted ON adk_memory (inserted_at)"]
+    assert connection.commits == 0
