@@ -5,8 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
 from sqlspec.adapters.arrow_odbc.adk import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.core import StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError, MigrationError
+from sqlspec.extensions.adk.migrations.reconcile import reconcile
+from sqlspec.migrations.context import MigrationContext
 
 
 def _mock_config(adk_config: "dict[str, object] | None" = None) -> MagicMock:
@@ -331,3 +335,94 @@ def test_arrow_odbc_memory_create_tables_creates_index_owned_by_other_table() ->
 
     executed = [str(call.args[0]) for call in driver.execute.call_args_list]
     assert any(f"CREATE INDEX [idx_{store._memory_table}_session]" in stmt for stmt in executed)
+
+
+def test_arrow_odbc_companions_create_only_missing_index() -> None:
+    """Arrow ODBC ADK companion reconciliation creates only absent indexes without committing."""
+    store, driver, _ = _store_with_driver()
+    missing_name = f"idx_{store._session_table}_update_time"
+    driver.data_dictionary.get_indexes.return_value = [
+        row for row in _all_indexes(store) if row["index_name"] != missing_name
+    ]
+
+    store.reconcile_companion_objects_sync(driver)
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert executed == [f"CREATE INDEX [{missing_name}] ON [dbo].[{store._session_table}] (update_time DESC)"]
+    assert driver.commit.call_count == 0
+
+
+def test_arrow_odbc_companions_repeat_is_noop() -> None:
+    """Arrow ODBC ADK companion reconciliation issues zero CREATE INDEX statements when complete."""
+    store, driver, _ = _store_with_driver()
+    driver.data_dictionary.get_indexes.return_value = _all_indexes(store)
+
+    store.reconcile_companion_objects_sync(driver)
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert not any("CREATE INDEX" in stmt for stmt in executed)
+    assert executed == []
+    assert driver.commit.call_count == 0
+
+
+def test_arrow_odbc_companions_create_index_owned_by_other_table() -> None:
+    """Arrow ODBC ADK companion reconciliation creates an index when another table owns the same name."""
+    store, driver, _ = _store_with_driver()
+    driver.data_dictionary.get_indexes.return_value = [
+        {"schema_name": "dbo", "table_name": "other_table", "index_name": f"idx_{store._session_table}_app_user"}
+    ]
+
+    store.reconcile_companion_objects_sync(driver)
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert (
+        f"CREATE INDEX [idx_{store._session_table}_app_user] ON [dbo].[{store._session_table}] (app_name, user_id)"
+        in executed
+    )
+    assert driver.commit.call_count == 0
+
+
+def test_arrow_odbc_memory_companions_target_two_part_table() -> None:
+    """Arrow ODBC memory companion reconciliation creates all 4 indexes on a two-part table and skips when disabled."""
+    config = _mock_config({"enable_memory": True, "memory_table": "app.mem"})
+    config.statement_config.dialect = "mssql"
+    store = ArrowOdbcADKMemoryStore(config)
+    driver = MagicMock()
+    driver.data_dictionary.get_indexes.return_value = []
+
+    store.reconcile_companion_objects_sync(driver)
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert executed == [
+        "CREATE INDEX [idx_mem_app_scope_user_time] ON [app].[mem] (app_name, scope, user_id, timestamp DESC)",
+        "CREATE INDEX [idx_mem_scope] ON [app].[mem] (app_name, scope)",
+        "CREATE INDEX [idx_mem_session] ON [app].[mem] (session_id)",
+        "CREATE INDEX [idx_mem_timestamp] ON [app].[mem] (timestamp DESC)",
+    ]
+    driver.data_dictionary.get_indexes.assert_called_once_with(driver, schema="app")
+    assert driver.commit.call_count == 0
+
+    disabled_config = _mock_config({"enable_memory": False})
+    disabled_config.statement_config.dialect = "mssql"
+    disabled_store = ArrowOdbcADKMemoryStore(disabled_config)
+    disabled_driver = MagicMock()
+
+    disabled_store.reconcile_companion_objects_sync(disabled_driver)
+
+    disabled_driver.data_dictionary.get_indexes.assert_not_called()
+    disabled_driver.execute.assert_not_called()
+
+
+def test_arrow_odbc_reconcile_refuses_dialect_without_hooks() -> None:
+    """Arrow ODBC ADK reconcile refuses dialects without store hooks before executing DDL."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": "Driver=x"},
+        statement_config=StatementConfig(dialect="postgres"),
+        extension_config={"adk": {"migration_mode": "reconcile"}},
+    )
+    driver = MagicMock()
+
+    with pytest.raises(MigrationError):
+        reconcile(MigrationContext(config=config, driver=driver, dialect="postgres"))
+
+    assert driver.execute.call_count == 0

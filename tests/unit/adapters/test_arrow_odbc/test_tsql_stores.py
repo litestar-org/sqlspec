@@ -633,6 +633,7 @@ def test_tsql_adk_memory_create_tables_and_insert_without_owner() -> None:
         "CREATE INDEX [idx_adk_memory_app_scope_user_time] ON [dbo].[adk_memory]",
         "CREATE INDEX [idx_adk_memory_scope] ON [dbo].[adk_memory]",
         "CREATE INDEX [idx_adk_memory_session] ON [dbo].[adk_memory]",
+        "CREATE INDEX [idx_adk_memory_timestamp] ON [dbo].[adk_memory]",
     ]
     assert statements[-2] == (
         "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, event_id, author, timestamp, "

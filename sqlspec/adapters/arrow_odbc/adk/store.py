@@ -79,6 +79,10 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
             self._sql.create_missing_objects(driver, table_ddls, self._index_specs())
             driver.commit()
 
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing ADK session and event companion indexes without committing."""
+        self._sql.create_missing_objects(driver, (), self._index_specs())
+
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
@@ -457,6 +461,12 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
             )
             driver.commit()
 
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing ADK memory companion indexes without committing when enabled."""
+        if not self._enabled:
+            return
+        self._sql.create_missing_objects(driver, (), self._memory_index_specs())
+
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Insert memory entries, skipping duplicates by event_id."""
         if not self._enabled:
@@ -642,6 +652,7 @@ def _tsql_memory_index_specs(table: str) -> "list[tuple[str, str, str]]":
         (f"idx_{bare_table}_app_scope_user_time", table, "app_name, scope, user_id, timestamp DESC"),
         (f"idx_{bare_table}_scope", table, "app_name, scope"),
         (f"idx_{bare_table}_session", table, "session_id"),
+        (f"idx_{bare_table}_timestamp", table, "timestamp DESC"),
     ]
 
 
@@ -1061,22 +1072,24 @@ class _TsqlAdkSql:
         existing_tables: set[tuple[str, str]] = set()
         existing_indexes: set[tuple[str, str, str]] = set()
         for schema in schemas:
-            for row in dd.get_tables(driver, schema=schema):
-                row_schema = str(_row_field(row, "schema_name") or schema)
-                table_name = str(_row_field(row, "table_name") or "")
-                if not table_name:
-                    continue
-                existing_tables.add((
-                    row_schema.strip("[]").casefold(),
-                    table_name.rsplit(".", 1)[-1].strip("[]").casefold(),
-                ))
-            for row in dd.get_indexes(driver, schema=schema):
-                row_schema = str(_row_field(row, "schema_name") or schema)
-                table_name = str(_row_field(row, "table_name") or "")
-                index_name = str(_row_field(row, "index_name") or "")
-                if not table_name or not index_name:
-                    continue
-                existing_indexes.add(_index_key(row_schema, table_name, index_name))
+            if table_ddls:
+                for row in dd.get_tables(driver, schema=schema):
+                    row_schema = str(_row_field(row, "schema_name") or schema)
+                    table_name = str(_row_field(row, "table_name") or "")
+                    if not table_name:
+                        continue
+                    existing_tables.add((
+                        row_schema.strip("[]").casefold(),
+                        table_name.rsplit(".", 1)[-1].strip("[]").casefold(),
+                    ))
+            if index_specs:
+                for row in dd.get_indexes(driver, schema=schema):
+                    row_schema = str(_row_field(row, "schema_name") or schema)
+                    table_name = str(_row_field(row, "table_name") or "")
+                    index_name = str(_row_field(row, "index_name") or "")
+                    if not table_name or not index_name:
+                        continue
+                    existing_indexes.add(_index_key(row_schema, table_name, index_name))
         for table, ddl in table_ddls:
             target_schema, target_table = _split_tsql_table(table)
             table_key = (target_schema.strip("[]").casefold(), target_table.strip("[]").casefold())
