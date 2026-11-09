@@ -4,7 +4,7 @@ import asyncio
 import os
 import threading
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -110,6 +110,25 @@ async def test_rustfs_s3_fsspec_streaming(rustfs_service: "RustfsService", rustf
 
 
 @pytest.mark.xdist_group("rustfs")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_rustfs_s3_fsspec_direct_stream_abort_and_create_only(
+    rustfs_service: "RustfsService", rustfs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify FSSpecBackend multipart commit, discard on abort/cancel, and create-only conflicts on RustFS."""
+    s3fs_core = pytest.importorskip("s3fs.core")
+    abort_probe: list[bool] = []
+    orig_discard = s3fs_core.S3File.discard
+
+    def _probed_discard(self_file: Any) -> Any:
+        abort_probe.append(bool(getattr(self_file, "mpu", None) and getattr(self_file, "parts", None)))
+        return orig_discard(self_file)
+
+    monkeypatch.setattr(s3fs_core.S3File, "discard", _probed_discard)
+    backend = FSSpecBackend(f"s3://{rustfs_bucket_name}", **rustfs_fsspec_kwargs(rustfs_service))
+    await _assert_fsspec_direct_streaming(backend, "streaming/rustfs_fsspec_direct", abort_probe)
+
+
+@pytest.mark.xdist_group("rustfs")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_rustfs_s3_obstore_streaming(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
     """Verify sync and async chunked streaming against RustFS S3 via ObStoreBackend."""
@@ -171,8 +190,18 @@ async def test_floci_gcs_obstore_streaming_and_pipeline(
 
 @pytest.mark.xdist_group("floci_gcp")
 async def test_floci_gcs_fsspec_streaming(floci_gcs_fsspec: "ObjectStoreProtocol") -> None:
-    """Verify FSSpecBackend streaming and Arrow round-trips on Floci GCS."""
+    """Verify FSSpecBackend streaming and direct Arrow format round-trips on Floci GCS."""
     await _assert_backend_streaming_and_arrow(floci_gcs_fsspec, "streaming/floci_gcs_fsspec")
+    if PYARROW_INSTALLED and pyarrow is not None:
+        from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload
+
+        tbl = pyarrow.table({"id": [1, 2], "label": ["g1", "g2"]})
+        formats: tuple[StorageFormat, ...] = ("parquet", "arrow-ipc", "csv")
+        for fmt in formats:
+            key = f"streaming/floci_gcs_fsspec/direct_{fmt}.{fmt}"
+            await floci_gcs_fsspec.write_arrow_async(key, tbl, format_hint=fmt)
+            loaded = decode_arrow_payload(await floci_gcs_fsspec.read_bytes_async(key), fmt)
+            assert loaded.to_pylist() == tbl.to_pylist()
 
 
 @pytest.mark.xdist_group("azure_blob")
@@ -215,6 +244,109 @@ async def test_azurite_obstore_streaming_and_pipeline(
 async def test_azurite_fsspec_streaming(azurite_fsspec: "ObjectStoreProtocol") -> None:
     """Verify FSSpecBackend streaming and Arrow round-trips on Azurite."""
     await _assert_backend_streaming_and_arrow(azurite_fsspec, "streaming/azurite_fsspec")
+
+
+@pytest.mark.xdist_group("azure_blob")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_azurite_fsspec_direct_stream_abort_and_create_only(
+    azurite_fsspec: "ObjectStoreProtocol", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify FSSpecBackend block staging, forced-close abort/cancel, and create-only conflicts on Azurite."""
+    adlfs_spec = pytest.importorskip("adlfs.spec")
+    abort_probe: list[bool] = []
+    orig_close = adlfs_spec.AzureBlobFile.close
+
+    def _probed_close(self_file: Any) -> Any:
+        if getattr(self_file, "forced", False):
+            abort_probe.append(bool(getattr(self_file, "_block_list", None)))
+        return orig_close(self_file)
+
+    monkeypatch.setattr(adlfs_spec.AzureBlobFile, "close", _probed_close)
+    await _assert_fsspec_direct_streaming(
+        cast("FSSpecBackend", azurite_fsspec), "streaming/azurite_fsspec_direct", abort_probe
+    )
+
+
+async def _assert_fsspec_direct_streaming(backend: "FSSpecBackend", prefix: str, abort_probe: "list[bool]") -> None:
+    """Assert multipart success, abort, cancellation, and create-only conflict for one backend."""
+    block_size = 5_242_880
+    payload_12mb = os.urandom(12 * 1024 * 1024)
+    chunks = [payload_12mb[i : i + 1_048_576] for i in range(0, len(payload_12mb), 1_048_576)]
+
+    multipart_key = f"{prefix}/multipart_12mb.bin"
+    with backend.open_write_stream_sync(multipart_key, block_size=block_size) as sink:
+        for chunk in chunks:
+            sink.write(chunk)
+
+    loaded_bytes = backend.read_bytes_sync(multipart_key)
+    assert len(loaded_bytes) == 12_582_912
+    assert loaded_bytes == payload_12mb
+
+    seeded_key = f"{prefix}/abort_seeded.bin"
+    backend.write_bytes_sync(seeded_key, b"v1")
+    abort_probe.clear()
+    with (
+        pytest.raises(RuntimeError, match="fsspec abort seeded"),
+        backend.open_write_stream_sync(seeded_key, block_size=block_size) as sink,
+    ):
+        for chunk in chunks:
+            sink.write(chunk)
+        raise RuntimeError("fsspec abort seeded")
+
+    assert backend.read_bytes_sync(seeded_key) == b"v1"
+    assert True in abort_probe
+
+    fresh_key = f"{prefix}/abort_fresh.bin"
+    abort_probe.clear()
+    with (
+        pytest.raises(RuntimeError, match="fsspec abort fresh"),
+        backend.open_write_stream_sync(fresh_key, block_size=block_size) as sink,
+    ):
+        for chunk in chunks:
+            sink.write(chunk)
+        raise RuntimeError("fsspec abort fresh")
+
+    assert not backend.exists_sync(fresh_key)
+    assert True in abort_probe
+
+    cancel_key = f"{prefix}/cancel_seeded.bin"
+    backend.write_bytes_sync(cancel_key, b"v1")
+    abort_probe.clear()
+    uploaded = asyncio.Event()
+    park = asyncio.Event()
+
+    async def _parked_upload() -> None:
+        async with backend.open_write_stream_async(cancel_key, block_size=block_size) as async_sink:
+            for chunk in chunks:
+                await async_sink.write(chunk)
+            uploaded.set()
+            await park.wait()
+
+    cancel_task = asyncio.create_task(_parked_upload())
+    await uploaded.wait()
+    cancel_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_task
+
+    assert await backend.read_bytes_async(cancel_key) == b"v1"
+    assert True in abort_probe
+
+    once_key = f"{prefix}/create_only.bin"
+    with backend.open_write_stream_sync(once_key, overwrite=False, block_size=block_size) as sink:
+        sink.write(b"first-value")
+
+    with (
+        pytest.raises(FileExistsInStorageError),
+        backend.open_write_stream_sync(once_key, overwrite=False, block_size=block_size) as sink,
+    ):
+        for chunk in chunks:
+            sink.write(chunk)
+
+    with pytest.raises(FileExistsInStorageError):
+        async with backend.open_write_stream_async(once_key, overwrite=False, block_size=block_size) as async_sink:
+            await async_sink.write(b"second-value")
+
+    assert backend.read_bytes_sync(once_key) == b"first-value"
 
 
 async def _assert_backend_streaming_and_arrow(backend: "ObjectStoreProtocol", prefix: str) -> None:
