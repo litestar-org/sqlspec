@@ -2,20 +2,25 @@
 """Focused storage payload codec and write-format contract tests."""
 
 import asyncio
+import concurrent.futures
 import gc
 import os
 import threading
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 import pytest
 
 import sqlspec.storage.pipeline as storage_pipeline
+from sqlspec.core.result import ArrowResult
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import StorageCapabilityError
 from sqlspec.storage._arrow_payload import (
     StorageFormat,
+    _AsyncSinkBridge,
     decode_arrow_payload,
     encode_arrow_payload,
     encode_arrow_to_async_sink,
@@ -725,3 +730,159 @@ async def test_direct_stream_pipeline_bypasses_buffered_encoding_seams(monkeypat
     assert t_async["rows_processed"] == 2
     assert registry.get("mem_direct").read_arrow_sync("sync.parquet").equals(table)
     assert (await registry.get("mem_direct").read_arrow_async("async.parquet")).equals(table)
+
+
+async def test_async_batch_generator_round_trip() -> None:
+    """Async batch iterators stream through encode_arrow_to_async_sink and decode identically."""
+    schema = pa.table({"id": [1], "name": ["a"]}).schema
+    batches = [
+        pa.record_batch([pa.array([1]), pa.array(["a"])], schema=schema),
+        pa.record_batch([pa.array([2]), pa.array(["b"])], schema=schema),
+        pa.record_batch([pa.array([3]), pa.array(["c"])], schema=schema),
+    ]
+    closed = False
+
+    async def source() -> AsyncIterator[pa.RecordBatch]:
+        nonlocal closed
+        try:
+            for item in batches:
+                yield item
+        finally:
+            closed = True
+
+    sink = _AsyncTrackingBytesSink()
+    nbytes, rows = await encode_arrow_to_async_sink(source(), sink, format_hint="parquet")
+    assert rows == 3
+    assert nbytes == len(sink.data)
+    assert closed is True
+    restored = decode_arrow_payload(sink.data, "parquet")
+    assert restored.to_pylist() == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}, {"id": 3, "name": "c"}]
+
+
+async def test_async_batch_generator_source_failure_propagates_and_closes() -> None:
+    """Exceptions raised by an async batch source propagate unchanged and run the generator finally block."""
+    schema = pa.schema([("id", pa.int64())])
+    batch = pa.record_batch([pa.array([1])], schema=schema)
+    closed = False
+
+    async def failing_source() -> AsyncIterator[pa.RecordBatch]:
+        nonlocal closed
+        try:
+            yield batch
+            raise RuntimeError("boom")
+        finally:
+            closed = True
+
+    sink = _AsyncTrackingBytesSink()
+    with pytest.raises(RuntimeError, match="boom"):
+        await encode_arrow_to_async_sink(failing_source(), sink, format_hint="parquet")
+    assert closed is True
+
+
+async def test_async_batch_generator_cancellation_unparks_and_closes() -> None:
+    """Cancelling an encode over a parked async batch generator exits the worker and closes the source."""
+    schema = pa.schema([("id", pa.int64())])
+    batch = pa.record_batch([pa.array([1])], schema=schema)
+    parked = asyncio.Event()
+    never = asyncio.Event()
+    closed = False
+
+    async def parked_source() -> AsyncIterator[pa.RecordBatch]:
+        nonlocal closed
+        try:
+            yield batch
+            parked.set()
+            await never.wait()
+        finally:
+            closed = True
+
+    sink = _AsyncTrackingBytesSink()
+    task = asyncio.create_task(encode_arrow_to_async_sink(parked_source(), sink, format_hint="arrow-ipc", chunk_size=8))
+    await asyncio.wait_for(parked.wait(), timeout=5.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5.0)
+    assert closed is True
+
+
+async def test_async_sink_bridge_set_pending_cancels_after_abort() -> None:
+    """_AsyncSinkBridge.set_pending cancels a future immediately if abort() already fired."""
+    bridge = _AsyncSinkBridge(asyncio.get_running_loop(), 1024)
+    bridge.abort()
+    fut: concurrent.futures.Future[object] = concurrent.futures.Future()
+    bridge.set_pending(fut)
+    assert fut.cancelled() is True
+
+
+async def test_async_batch_generator_sink_failure_aborts_parked_anext() -> None:
+    """A sink write failure cancels a concurrently parked __anext__ call and closes the async generator."""
+    schema = pa.schema([("payload", pa.binary())])
+    batch = pa.record_batch([pa.array([b"x" * 600])], schema=schema)
+    parked = asyncio.Event()
+    never = asyncio.Event()
+    closed = False
+
+    async def parked_after_one() -> AsyncIterator[pa.RecordBatch]:
+        nonlocal closed
+        try:
+            yield batch
+            parked.set()
+            await never.wait()
+        finally:
+            closed = True
+
+    class _FailFirstWriteSink:
+        async def write(self, data: bytes, /) -> int | None:
+            await parked.wait()
+            raise OSError("sink write failed")
+
+    with pytest.raises(OSError, match="sink write failed"):
+        await asyncio.wait_for(
+            encode_arrow_to_async_sink(
+                parked_after_one(), _FailFirstWriteSink(), format_hint="arrow-ipc", chunk_size=512
+            ),
+            timeout=5.0,
+        )
+    assert closed is True
+
+
+async def test_arrow_result_rejects_sync_write_for_async_batches_and_routes_async(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ArrowResult rejects write_to_storage_sync on async batch sources and routes write_to_storage_async."""
+    schema = pa.schema([("id", pa.int64())])
+    batch = pa.record_batch([pa.array([10, 20])], schema=schema)
+
+    async def gen_sync() -> AsyncGenerator[pa.RecordBatch, None]:
+        yield batch
+
+    sync_gen = gen_sync()
+    try:
+        result_sync = ArrowResult(statement=SQL("SELECT 1"), data=sync_gen)
+        with pytest.raises(TypeError, match="require write_to_storage_async"):
+            result_sync.write_to_storage_sync("out.parquet")
+    finally:
+        await sync_gen.aclose()
+
+    async def gen_stream() -> AsyncIterator[pa.RecordBatch]:
+        yield batch
+        yield pa.record_batch([pa.array([30])], schema=schema)
+
+    out_path = tmp_path / "streamed.parquet"
+    result_stream = ArrowResult(statement=SQL("SELECT 1"), data=gen_stream())
+    stream_telemetry = await result_stream.write_to_storage_async(out_path, format_hint="parquet")
+    assert stream_telemetry["rows_processed"] == 3
+    assert decode_arrow_payload(out_path.read_bytes(), "parquet").to_pylist() == [{"id": 10}, {"id": 20}, {"id": 30}]
+
+    async def gen_buffered() -> AsyncIterator[pa.RecordBatch]:
+        yield batch
+        yield pa.record_batch([pa.array([30])], schema=schema)
+
+    pipeline = AsyncStoragePipeline()
+    backend = _install_backend(monkeypatch, AsyncStoragePipeline)
+    result_async = ArrowResult(statement=SQL("SELECT 1"), data=gen_buffered())
+    telemetry = await result_async.write_to_storage_async("payload", format_hint="parquet", pipeline=pipeline)
+    assert telemetry["rows_processed"] == 3
+    assert len(backend.writes) == 1
+    restored = decode_arrow_payload(backend.writes[0][1], "parquet")
+    assert restored.to_pylist() == [{"id": 10}, {"id": 20}, {"id": 30}]

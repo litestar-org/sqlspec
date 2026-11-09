@@ -10,7 +10,7 @@ Classes:
 """
 
 from abc import abstractmethod
-from collections.abc import AsyncIterable, Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from mypy_extensions import mypyc_attr
@@ -1051,6 +1051,9 @@ class ArrowResult(StatementResult):
         if self.data is None:
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
+        if hasattr(self.data, "__aiter__"):
+            msg = "Async Arrow batch sources require write_to_storage_async"
+            raise TypeError(msg)
         active_pipeline = pipeline or SyncStoragePipeline()
         if has_arrow_table_stats(self.data) and hasattr(self.data, "combine_chunks"):
             return active_pipeline.write_arrow(
@@ -1073,11 +1076,7 @@ class ArrowResult(StatementResult):
                 write_options=write_options,
                 overwrite=overwrite,
             )
-        if (
-            has_arrow_table_stats(self.data)
-            or hasattr(self.data, "__arrow_c_stream__")
-            or isinstance(self.data, AsyncIterable)
-        ):
+        if has_arrow_table_stats(self.data) or hasattr(self.data, "__arrow_c_stream__"):
             return active_pipeline.write_arrow_batches(
                 destination,
                 self.data,
@@ -1128,6 +1127,16 @@ class ArrowResult(StatementResult):
             msg = "No Arrow table available for this result"
             raise ValueError(msg)
         active_pipeline = pipeline or AsyncStoragePipeline()
+        if hasattr(self.data, "__aiter__"):
+            return await active_pipeline.write_arrow_batches_async(
+                destination,
+                self.data,
+                file_format=format_hint or "parquet",
+                compression=compression,
+                write_options=write_options,
+                storage_options=storage_options,
+                overwrite=overwrite,
+            )
         if has_arrow_table_stats(self.data) and hasattr(self.data, "combine_chunks"):
             return await active_pipeline.write_arrow(
                 cast("ArrowTable", self.data),
@@ -1149,11 +1158,7 @@ class ArrowResult(StatementResult):
                 write_options=write_options,
                 overwrite=overwrite,
             )
-        if (
-            has_arrow_table_stats(self.data)
-            or hasattr(self.data, "__arrow_c_stream__")
-            or isinstance(self.data, AsyncIterable)
-        ):
+        if has_arrow_table_stats(self.data) or hasattr(self.data, "__arrow_c_stream__"):
             return await active_pipeline.write_arrow_batches_async(
                 destination,
                 self.data,

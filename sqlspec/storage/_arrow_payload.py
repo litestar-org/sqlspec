@@ -2,6 +2,7 @@
 
 import asyncio
 import collections
+import concurrent.futures
 import contextlib
 import itertools
 import threading
@@ -31,6 +32,7 @@ StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv"]
 
 _PYARROW_JSON_BLOCK_SIZE = 1 << 20
 _MAX_PENDING_CHUNKS = 2
+_END = object()
 
 _PARQUET_ALLOWED_WRITE_OPTIONS = frozenset({
     "allow_truncated_timestamps",
@@ -156,6 +158,7 @@ class _AsyncSinkBridge:
         "_data_available",
         "_failed",
         "_loop",
+        "_pending",
         "_queue",
         "_worker_done",
     )
@@ -167,6 +170,7 @@ class _AsyncSinkBridge:
         self._queue: collections.deque[bytes] = collections.deque()
         self._cond = threading.Condition()
         self._data_available = asyncio.Event()
+        self._pending: concurrent.futures.Future[Any] | None = None
         self._worker_done = False
         self._failed = False
         self._aborted = False
@@ -241,7 +245,23 @@ class _AsyncSinkBridge:
             self._aborted = True
             self._buffer.clear()
             self._queue.clear()
+            pending = self._pending
+            self._pending = None
+            if pending is not None:
+                pending.cancel()
             self._cond.notify_all()
+
+    def raise_if_aborted(self) -> None:
+        with self._cond:
+            if self._aborted:
+                raise _BridgeAbortedError
+
+    def set_pending(self, future: "concurrent.futures.Future[Any] | None") -> None:
+        with self._cond:
+            if future is not None and self._aborted:
+                future.cancel()
+                return
+            self._pending = future
 
     async def dequeue(self) -> bytes | None:
         while True:
@@ -536,6 +556,34 @@ async def join_shielded(future: "asyncio.Future[Any] | asyncio.Task[Any]", *, su
     return future.result()
 
 
+async def _next_batch(iterator: Any, active_tasks: "list[asyncio.Task[Any]]") -> Any:
+    current = asyncio.current_task()
+    if current is not None:
+        active_tasks[:] = [current]
+    try:
+        return await anext(iterator)
+    except StopAsyncIteration:
+        return _END
+
+
+def _iter_async_source(
+    iterator: Any, loop: asyncio.AbstractEventLoop, bridge: _AsyncSinkBridge, active_tasks: "list[asyncio.Task[Any]]"
+) -> Any:
+    while True:
+        bridge.raise_if_aborted()
+        future = asyncio.run_coroutine_threadsafe(_next_batch(iterator, active_tasks), loop)
+        bridge.set_pending(future)
+        try:
+            item = future.result()
+        except concurrent.futures.CancelledError as exc:
+            raise _BridgeAbortedError from exc
+        finally:
+            bridge.set_pending(None)
+        if item is _END:
+            break
+        yield item
+
+
 async def encode_arrow_to_async_sink(
     data: "ArrowTable | Any",
     sink: "AsyncWritableBytesSink",
@@ -549,7 +597,7 @@ async def encode_arrow_to_async_sink(
 
     Args:
         data: Arrow Table, RecordBatch, RecordBatchReader, Arrow stream producer,
-            or iterable of RecordBatch objects.
+            or sync/async iterable of RecordBatch objects.
         sink: Asynchronous writable byte sink receiving coalesced byte chunks.
         format_hint: Target serialization format (parquet, arrow-ipc, or csv).
         compression: Optional codec name forwarded to Parquet or Arrow IPC writers.
@@ -576,11 +624,16 @@ async def encode_arrow_to_async_sink(
 
     loop = asyncio.get_running_loop()
     bridge = _AsyncSinkBridge(loop, chunk_size)
+    async_iterator: Any = aiter(cast("Any", data)) if hasattr(data, "__aiter__") else None
+    active_tasks: list[asyncio.Task[Any]] = []
+    worker_source: Any = (
+        _iter_async_source(async_iterator, loop, bridge, active_tasks) if async_iterator is not None else data
+    )
 
     def _worker() -> tuple[int, int]:
         try:
             result = encode_arrow_to_sink(
-                data, bridge, format_hint=format_hint, compression=compression, write_options=write_options
+                worker_source, bridge, format_hint=format_hint, compression=compression, write_options=write_options
             )
             bridge.finish()
         except _BridgeAbortedError:
@@ -594,15 +647,26 @@ async def encode_arrow_to_async_sink(
 
     worker_future = loop.run_in_executor(None, _worker)
     try:
-        while True:
-            chunk = await bridge.dequeue()
-            if chunk is None:
-                break
-            await sink.write(chunk)
-        return await worker_future
+        try:
+            while True:
+                chunk = await bridge.dequeue()
+                if chunk is None:
+                    break
+                await sink.write(chunk)
+            return await worker_future
+        finally:
+            bridge.abort()
+            await join_shielded(worker_future, suppress_result=True)
     finally:
-        bridge.abort()
-        await join_shielded(worker_future, suppress_result=True)
+        if async_iterator is not None:
+            for pending_task in active_tasks:
+                if not pending_task.done():
+                    pending_task.cancel()
+                    await join_shielded(pending_task, suppress_result=True)
+            aclose = getattr(async_iterator, "aclose", None)
+            if callable(aclose):
+                with contextlib.suppress(Exception):
+                    await join_shielded(asyncio.ensure_future(cast("Any", aclose)()), suppress_result=True)
 
 
 def encode_arrow_payload(

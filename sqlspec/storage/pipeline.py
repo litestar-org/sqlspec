@@ -1,5 +1,6 @@
 """Storage pipeline scaffolding for driver-aware storage bridge."""
 
+import contextlib
 from collections import deque
 from collections.abc import Sequence
 from functools import partial
@@ -34,7 +35,7 @@ from sqlspec.utils.type_guards import (
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
     from sqlspec.protocols import ObjectStoreProtocol
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
@@ -746,8 +747,9 @@ class AsyncStoragePipeline(_StoragePipelineBase):
             }
             return telemetry
 
+        buffered_source = await _collect_async_batches(batches) if hasattr(batches, "__aiter__") else batches
         payload, rows_written = await async_(_encode_arrow_source_to_bytes)(
-            batches, file_format, compression=compression, write_options=resolved_write_options
+            buffered_source, file_format, compression=compression, write_options=resolved_write_options
         )
         return await self._write_bytes_async(
             payload,
@@ -895,6 +897,24 @@ def _encode_arrow_source_to_bytes(
         source, buffer, format_hint=format_choice, compression=compression, write_options=write_options
     )
     return buffer.getvalue().to_pybytes(), rows_written
+
+
+async def _collect_async_batches(source: Any) -> "list[ArrowRecordBatch]":
+    iterator = source.__aiter__()
+    batches: list[ArrowRecordBatch] = []
+    try:
+        while True:
+            try:
+                batch = await iterator.__anext__()
+            except StopAsyncIteration:
+                break
+            batches.append(batch)
+    finally:
+        aclose = getattr(iterator, "aclose", None)
+        if callable(aclose):
+            with contextlib.suppress(Exception):
+                await cast("Callable[[], Awaitable[Any]]", aclose)()
+    return batches
 
 
 def _write_backend_sync(
