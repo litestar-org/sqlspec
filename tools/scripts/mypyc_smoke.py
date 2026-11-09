@@ -306,6 +306,9 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
         backend_module = importlib.import_module("sqlspec.storage.backends.obstore")
         local_module = importlib.import_module("sqlspec.storage.backends.local")
         type_guards_module = importlib.import_module("sqlspec.utils.type_guards")
+        sync_driver_module = importlib.import_module("sqlspec.driver._sync")
+        base_module = importlib.import_module("sqlspec.base")
+        sqlite_module = importlib.import_module("sqlspec.adapters.sqlite")
         arrow_payload_module = importlib.import_module("sqlspec.storage._arrow_payload")
         registry_module = importlib.import_module("sqlspec.storage.registry")
         exceptions_module = importlib.import_module("sqlspec.exceptions")
@@ -320,8 +323,11 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
     compiled_backend = is_compiled_module(backend_module)
     compiled_local = is_compiled_module(local_module)
     compiled_type_guards = is_compiled_module(type_guards_module)
+    compiled_sync_driver = is_compiled_module(sync_driver_module)
     arrow_payload_interpreted = not is_compiled_module(arrow_payload_module)
-    result["compiled"] = compiled_pipeline and compiled_backend and compiled_local and compiled_type_guards
+    result["compiled"] = (
+        compiled_pipeline and compiled_backend and compiled_local and compiled_type_guards and compiled_sync_driver
+    )
 
     if require_compiled:
         if not compiled_pipeline:
@@ -335,6 +341,9 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
             return result
         if not compiled_type_guards:
             result["error"] = "sqlspec.utils.type_guards was imported from source, not a compiled extension"
+            return result
+        if not compiled_sync_driver:
+            result["error"] = "sqlspec.driver._sync was imported from source, not a compiled extension"
             return result
         if not arrow_payload_interpreted:
             result["error"] = "sqlspec.storage._arrow_payload should remain interpreted"
@@ -443,6 +452,51 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
                     else:
                         raise AssertionError("memory:// staged overwrite=False batches did not raise conflict")
                     assert [k for k in backend.list_objects_sync() if ".sqlspec-stage-" in k] == []
+
+            spec = base_module.SQLSpec()
+            sqlite_cfg = sqlite_module.SqliteConfig()
+            spec.add_config(sqlite_cfg)
+            try:
+                with spec.provide_session(sqlite_cfg) as sqlite_session:
+                    sqlite_session.execute("CREATE TABLE smoke_export (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+                    sqlite_rows = [(1, "one"), (2, "two"), (3, "three"), (4, "four"), (5, "five")]
+                    sqlite_session.execute_many("INSERT INTO smoke_export (id, label) VALUES (?, ?)", sqlite_rows)
+                    sqlite_session.commit()
+
+                    export_dest = local_dir / "sqlite_export.parquet"
+                    export_job = sqlite_session.select_to_storage(
+                        "SELECT id, label FROM smoke_export WHERE id >= ? ORDER BY id",
+                        export_dest,
+                        (1,),
+                        format_hint="parquet",
+                        batch_size=2,
+                    )
+                    assert export_job.telemetry["rows_processed"] == len(sqlite_rows)
+                    assert export_job.telemetry["bytes_processed"] > 0
+                    decoded_export = decode_arrow(export_dest.read_bytes(), "parquet")
+                    assert decoded_export.column_names == ["id", "label"]
+                    assert decoded_export.to_pylist() == [
+                        {"id": 1, "label": "one"},
+                        {"id": 2, "label": "two"},
+                        {"id": 3, "label": "three"},
+                        {"id": 4, "label": "four"},
+                        {"id": 5, "label": "five"},
+                    ]
+
+                    empty_dest = local_dir / "sqlite_empty.parquet"
+                    empty_job = sqlite_session.select_to_storage(
+                        "SELECT id, label FROM smoke_export WHERE id < ?",
+                        empty_dest,
+                        (0,),
+                        format_hint="parquet",
+                        batch_size=2,
+                    )
+                    assert empty_job.telemetry["rows_processed"] == 0
+                    decoded_empty = decode_arrow(empty_dest.read_bytes(), "parquet")
+                    assert decoded_empty.num_rows == 0
+                    assert decoded_empty.column_names == ["id", "label"]
+            finally:
+                sqlite_cfg.close_pool()
     except Exception as exc:
         underlying = exc.__cause__ or exc.__context__
         detail = f" (from {type(underlying).__name__}: {underlying})" if underlying is not None else ""
