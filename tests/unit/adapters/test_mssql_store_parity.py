@@ -2,6 +2,7 @@
 """Cross-driver SQL parity between the mssql-python and pymssql extension stores."""
 
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -109,3 +110,160 @@ def _normalized(sql: str) -> str:
 
 def _qmark(sql: str) -> str:
     return sql.replace("%s", "?")
+
+
+def _mock_session(monkeypatch: pytest.MonkeyPatch, config_cls: type[Any], driver: MagicMock) -> None:
+    session_cm = MagicMock()
+    session_cm.__enter__.return_value = driver
+    session_cm.__exit__.return_value = False
+    monkeypatch.setattr(config_cls, "provide_session", lambda _self: session_cm)
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "config_cls"), [(MssqlPythonADKStore, MssqlPythonConfig), (PymssqlADKStore, PymssqlConfig)]
+)
+def test_adk_create_tables_creates_index_owned_by_other_table(
+    store_cls: type[Any], config_cls: type[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A required index is created when an identically named index belongs to another table."""
+    config = config_cls(extension_config={"adk": {"native_json": False}})
+    driver = MagicMock()
+    driver.data_dictionary.get_indexes.return_value = [
+        {"schema_name": "dbo", "table_name": "other_table", "index_name": "idx_adk_session_app_user"}
+    ]
+    _mock_session(monkeypatch, config_cls, driver)
+    monkeypatch.setattr(store_cls, "reconcile_schema", lambda _self, *, assume_existing=False: None)
+
+    store = store_cls(config)
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert any("CREATE INDEX [idx_adk_session_app_user] ON [dbo].[adk_session]" in stmt for stmt in executed)
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "config_cls"), [(MssqlPythonADKStore, MssqlPythonConfig), (PymssqlADKStore, PymssqlConfig)]
+)
+def test_adk_create_tables_skips_index_on_exact_target(
+    store_cls: type[Any], config_cls: type[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An index already existing on the exact target table is skipped case-insensitively."""
+    config = config_cls(extension_config={"adk": {"native_json": False}})
+    driver = MagicMock()
+    driver.data_dictionary.get_indexes.return_value = [
+        {"schema_name": "DBO", "table_name": "ADK_SESSION", "index_name": "IDX_ADK_SESSION_APP_USER"}
+    ]
+    _mock_session(monkeypatch, config_cls, driver)
+    monkeypatch.setattr(store_cls, "reconcile_schema", lambda _self, *, assume_existing=False: None)
+
+    store = store_cls(config)
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert not any("idx_adk_session_app_user" in stmt for stmt in executed)
+    assert any("CREATE INDEX [idx_adk_session_update_time] ON [dbo].[adk_session]" in stmt for stmt in executed)
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "config_cls"), [(MssqlPythonADKStore, MssqlPythonConfig), (PymssqlADKStore, PymssqlConfig)]
+)
+def test_adk_create_tables_uses_queried_schema_for_rows_without_schema(
+    store_cls: type[Any], config_cls: type[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catalog rows omitting schema_name default to the queried schema."""
+    config = config_cls(extension_config={"adk": {"native_json": False}})
+    driver = MagicMock()
+    driver.data_dictionary.get_indexes.return_value = [
+        {"table_name": "adk_session", "index_name": "idx_adk_session_app_user"}
+    ]
+    _mock_session(monkeypatch, config_cls, driver)
+    monkeypatch.setattr(store_cls, "reconcile_schema", lambda _self, *, assume_existing=False: None)
+
+    store = store_cls(config)
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert not any("idx_adk_session_app_user" in stmt for stmt in executed)
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "config_cls"), [(MssqlPythonADKStore, MssqlPythonConfig), (PymssqlADKStore, PymssqlConfig)]
+)
+def test_adk_create_tables_keeps_configured_schemas_distinct(
+    store_cls: type[Any], config_cls: type[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Distinct configured schemas do not cross-contaminate index existence checks."""
+    config = config_cls(
+        extension_config={
+            "adk": {"native_json": False, "session_table": "app.sessions", "events_table": "audit.events"}
+        }
+    )
+    driver = MagicMock()
+
+    def mock_get_indexes(_driver: Any, schema: str | None = None) -> list[dict[str, Any]]:
+        if schema == "audit":
+            return [{"schema_name": "audit", "table_name": "sessions", "index_name": "idx_sessions_app_user"}]
+        return []
+
+    driver.data_dictionary.get_indexes.side_effect = mock_get_indexes
+    _mock_session(monkeypatch, config_cls, driver)
+    monkeypatch.setattr(store_cls, "reconcile_schema", lambda _self, *, assume_existing=False: None)
+
+    store = store_cls(config)
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert any("CREATE INDEX [idx_sessions_app_user] ON [app].[sessions]" in stmt for stmt in executed)
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "config_cls"), [(MssqlPythonADKStore, MssqlPythonConfig), (PymssqlADKStore, PymssqlConfig)]
+)
+def test_adk_bracketed_identifiers_normalize_in_helpers_and_catalog_rows(
+    store_cls: type[Any], config_cls: type[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bracketed table and index names normalize cleanly across helpers and catalog output."""
+    from sqlspec.adapters.arrow_odbc.adk.store import _split_tsql_table
+    from sqlspec.adapters.mssql_python.core import split_schema_and_table as mssql_split
+    from sqlspec.adapters.pymssql.core import split_schema_and_table as pymssql_split
+
+    assert mssql_split("[app].[sessions]") == ("app", "sessions")
+    assert pymssql_split("[app].[sessions]") == ("app", "sessions")
+    assert _split_tsql_table("[app].[sessions]") == ("app", "sessions")
+
+    config = config_cls(extension_config={"adk": {"native_json": False, "session_table": "app.sessions"}})
+    driver = MagicMock()
+    driver.data_dictionary.get_indexes.return_value = [
+        {"schema_name": "[app]", "table_name": "[sessions]", "index_name": "[idx_sessions_app_user]"}
+    ]
+    _mock_session(monkeypatch, config_cls, driver)
+    monkeypatch.setattr(store_cls, "reconcile_schema", lambda _self, *, assume_existing=False: None)
+
+    store = store_cls(config)
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert not any("idx_sessions_app_user" in stmt for stmt in executed)
+
+
+@pytest.mark.parametrize(
+    ("memory_cls", "config_cls"),
+    [(MssqlPythonADKMemoryStore, MssqlPythonConfig), (PymssqlADKMemoryStore, PymssqlConfig)],
+)
+def test_adk_memory_create_tables_creates_index_owned_by_other_table(
+    memory_cls: type[Any], config_cls: type[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Memory store creates its index when an unrelated table owns the same index name."""
+    config = config_cls(extension_config={"adk": {"native_json": False, "enable_memory": True}})
+    driver = MagicMock()
+    driver.data_dictionary.get_indexes.return_value = [
+        {"schema_name": "dbo", "table_name": "other_table", "index_name": "idx_adk_memory_session"}
+    ]
+    _mock_session(monkeypatch, config_cls, driver)
+    monkeypatch.setattr(memory_cls, "reconcile_schema", lambda _self, *, assume_existing=False: None)
+
+    store = memory_cls(config)
+    store.create_tables()
+
+    executed = [str(call.args[0]) for call in driver.execute.call_args_list]
+    assert any("CREATE INDEX [idx_adk_memory_session] ON [dbo].[adk_memory]" in stmt for stmt in executed)

@@ -11,22 +11,28 @@ Covers the C1 contract:
 - a single ``JSONStorageType`` object across the events/adk surfaces.
 """
 
+import importlib
+import logging
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sqlspec.adapters.oracledb import config as oracle_config_module
 from sqlspec.adapters.oracledb.adk import store as adk_store
-from sqlspec.adapters.oracledb.config import OracleSyncConfig
+from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.data_dictionary import (
     JSONStorageType,
+    OracledbAsyncDataDictionary,
     OracledbSyncDataDictionary,
     OracleVersionCache,
     OracleVersionInfo,
     storage_type_from_version,
 )
 from sqlspec.adapters.oracledb.events import store as events_store
+from sqlspec.migrations.context import MigrationContext
+
+adk_migration = importlib.import_module("sqlspec.extensions.adk.migrations.0001_create_adk_tables")
 
 
 def _version_for_rung(rung: JSONStorageType) -> OracleVersionInfo:
@@ -258,3 +264,247 @@ def test_resolve_oracle_connection_major_from_core() -> None:
     cache = OracleVersionCache()
     assert resolve_oracle_connection_major(conn, cache) == 23
     assert resolve_oracle_connection_compatible_major(conn, cache) == 23
+
+
+def _migration_driver(
+    cache: OracleVersionCache, version_text: str | None, compatible: str | None, *, is_async: bool
+) -> MagicMock:
+    query_mock = AsyncMock if is_async else MagicMock
+    driver = MagicMock()
+    driver._oracle_version_cache = cache
+    driver.select_one_or_none = query_mock(return_value=version_text)
+    driver.select_value = query_mock(return_value=compatible)
+    driver.select_value_or_none = query_mock(return_value=None)
+    driver.data_dictionary = OracledbAsyncDataDictionary() if is_async else OracledbSyncDataDictionary()
+    return driver
+
+
+@pytest.mark.parametrize(("config_cls", "is_async"), [(OracleSyncConfig, False), (OracleAsyncConfig, True)])
+async def test_oracle_adk_migration_sessions_only_native(
+    config_cls: type[Any], is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cold-cache Oracle sessions migration creates native JSON tables without second session."""
+    config = config_cls(
+        connection_config={"user": "u", "password": "p", "dsn": "d"},
+        extension_config={"adk": {"enable_sessions": True, "enable_memory": False}},
+    )
+    driver = _migration_driver(
+        config._oracle_version_cache, "Oracle Database 21c 21.3.0.0.0", "21.0.0", is_async=is_async
+    )
+    monkeypatch.setattr(config_cls, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+    context = MigrationContext(config=config, dialect="oracle", driver=driver)
+
+    statements = await adk_migration.up(context)
+
+    assert len(statements) == 5
+    assert not any("BLOB CHECK" in s for s in statements)
+    assert config._oracle_version_cache.resolved is True
+    assert config._oracle_version_cache.version is not None
+    assert config._oracle_version_cache.version.major == 21
+
+
+@pytest.mark.parametrize(("config_cls", "is_async"), [(OracleSyncConfig, False), (OracleAsyncConfig, True)])
+async def test_oracle_adk_migration_sessions_only_blob(
+    config_cls: type[Any], is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cold-cache Oracle sessions migration creates BLOB tables on 19c without second session."""
+    config = config_cls(
+        connection_config={"user": "u", "password": "p", "dsn": "d"},
+        extension_config={"adk": {"enable_sessions": True, "enable_memory": False}},
+    )
+    driver = _migration_driver(
+        config._oracle_version_cache, "Oracle Database 19c 19.3.0.0.0", "19.0.0", is_async=is_async
+    )
+    monkeypatch.setattr(config_cls, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+    context = MigrationContext(config=config, dialect="oracle", driver=driver)
+
+    statements = await adk_migration.up(context)
+
+    assert len(statements) == 5
+    assert any("state BLOB CHECK" in s for s in statements)
+
+
+@pytest.mark.parametrize(("config_cls", "is_async"), [(OracleSyncConfig, False), (OracleAsyncConfig, True)])
+async def test_oracle_adk_migration_memory_only_native(
+    config_cls: type[Any], is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cold-cache Oracle memory migration creates native JSON table without second session."""
+    config = config_cls(
+        connection_config={"user": "u", "password": "p", "dsn": "d"},
+        extension_config={"adk": {"enable_sessions": False, "enable_memory": True}},
+    )
+    driver = _migration_driver(
+        config._oracle_version_cache, "Oracle Database 21c 21.3.0.0.0", "21.0.0", is_async=is_async
+    )
+    monkeypatch.setattr(config_cls, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+    context = MigrationContext(config=config, dialect="oracle", driver=driver)
+
+    statements = await adk_migration.up(context)
+
+    assert len(statements) == 1
+    assert "content_json JSON" in statements[0]
+    assert "BLOB CHECK" not in statements[0]
+
+
+@pytest.mark.parametrize(("config_cls", "is_async"), [(OracleSyncConfig, False), (OracleAsyncConfig, True)])
+async def test_oracle_adk_migration_memory_only_blob(
+    config_cls: type[Any], is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cold-cache Oracle memory migration creates BLOB table on 19c without second session."""
+    config = config_cls(
+        connection_config={"user": "u", "password": "p", "dsn": "d"},
+        extension_config={"adk": {"enable_sessions": False, "enable_memory": True}},
+    )
+    driver = _migration_driver(
+        config._oracle_version_cache, "Oracle Database 19c 19.3.0.0.0", "19.0.0", is_async=is_async
+    )
+    monkeypatch.setattr(config_cls, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+    context = MigrationContext(config=config, dialect="oracle", driver=driver)
+
+    statements = await adk_migration.up(context)
+
+    assert len(statements) == 1
+    assert "content_json BLOB CHECK" in statements[0]
+
+
+@pytest.mark.parametrize(("config_cls", "is_async"), [(OracleSyncConfig, False), (OracleAsyncConfig, True)])
+async def test_oracle_adk_migration_combined_blob(
+    config_cls: type[Any], is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Combined sessions and memory query version exactly once on cold cache without second session."""
+    config = config_cls(
+        connection_config={"user": "u", "password": "p", "dsn": "d"},
+        extension_config={"adk": {"enable_sessions": True, "enable_memory": True}},
+    )
+    driver = _migration_driver(
+        config._oracle_version_cache, "Oracle Database 19c 19.3.0.0.0", "19.0.0", is_async=is_async
+    )
+    monkeypatch.setattr(config_cls, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+    context = MigrationContext(config=config, dialect="oracle", driver=driver)
+
+    statements = await adk_migration.up(context)
+
+    assert len(statements) == 6
+    assert any("state BLOB CHECK" in s for s in statements)
+    assert any("content_json BLOB CHECK" in s for s in statements)
+    assert driver.select_one_or_none.call_count == 1
+
+
+@pytest.mark.parametrize(("config_cls", "is_async"), [(OracleSyncConfig, False), (OracleAsyncConfig, True)])
+@pytest.mark.parametrize(
+    "adk_config",
+    [
+        {"enable_sessions": True, "enable_memory": False},
+        {"enable_sessions": False, "enable_memory": True},
+        {"enable_sessions": True, "enable_memory": True},
+    ],
+)
+async def test_oracle_adk_migration_warns_when_version_unknown(
+    config_cls: type[Any],
+    is_async: bool,
+    adk_config: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When Oracle version cannot be detected, warning is emitted exactly once and BLOB is used."""
+    config = config_cls(
+        connection_config={"user": "u", "password": "p", "dsn": "d"}, extension_config={"adk": adk_config}
+    )
+    driver = _migration_driver(config._oracle_version_cache, None, None, is_async=is_async)
+    monkeypatch.setattr(config_cls, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+    context = MigrationContext(config=config, dialect="oracle", driver=driver)
+
+    with caplog.at_level(logging.WARNING, logger="sqlspec.adapters.oracledb.adk.store"):
+        statements = await adk_migration.up(context)
+
+    warning_records = [
+        r
+        for r in caplog.records
+        if "Could not detect Oracle version, defaulting to BLOB_JSON storage" in r.getMessage()
+    ]
+    assert len(warning_records) == 1
+    assert config._oracle_version_cache.resolved is True
+    assert config._oracle_version_cache.version is None
+    assert any("BLOB CHECK" in s for s in statements)
+
+
+@pytest.mark.parametrize(("config_cls", "is_async"), [(OracleSyncConfig, False), (OracleAsyncConfig, True)])
+async def test_oracle_adk_migration_skips_version_query_when_cache_resolved(
+    config_cls: type[Any], is_async: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Pre-resolved version cache avoids database queries and warnings."""
+    config = config_cls(
+        connection_config={"user": "u", "password": "p", "dsn": "d"},
+        extension_config={"adk": {"enable_sessions": True, "enable_memory": False}},
+    )
+    config._oracle_version_cache.resolved = True
+    config._oracle_version_cache.version = None
+    driver = _migration_driver(config._oracle_version_cache, None, None, is_async=is_async)
+    monkeypatch.setattr(config_cls, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+    context = MigrationContext(config=config, dialect="oracle", driver=driver)
+
+    with caplog.at_level(logging.WARNING, logger="sqlspec.adapters.oracledb.adk.store"):
+        statements = await adk_migration.up(context)
+
+    assert driver.select_one_or_none.call_count == 0
+    warning_records = [
+        r
+        for r in caplog.records
+        if "Could not detect Oracle version, defaulting to BLOB_JSON storage" in r.getMessage()
+    ]
+    assert len(warning_records) == 0
+    assert len(statements) == 5
+
+
+@pytest.mark.parametrize(("config_cls", "is_async"), [(OracleSyncConfig, False), (OracleAsyncConfig, True)])
+async def test_oracle_adk_migration_propagates_dictionary_errors(
+    config_cls: type[Any], is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catalog errors during preparation propagate without masking."""
+    config = config_cls(
+        connection_config={"user": "u", "password": "p", "dsn": "d"},
+        extension_config={"adk": {"enable_sessions": True, "enable_memory": False}},
+    )
+    driver = _migration_driver(config._oracle_version_cache, None, None, is_async=is_async)
+    driver.select_one_or_none.side_effect = RuntimeError("catalog")
+    monkeypatch.setattr(config_cls, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+    context = MigrationContext(config=config, dialect="oracle", driver=driver)
+
+    with pytest.raises(RuntimeError, match="catalog"):
+        await adk_migration.up(context)
+
+
+class _SlottedOracleStubDriver:
+    """Slotted driver stub omitting _oracle_version_cache to verify safe cache attachment."""
+
+    __slots__ = ("data_dictionary",)
+
+    def __init__(self, data_dictionary: Any) -> None:
+        self.data_dictionary = data_dictionary
+
+
+async def test_oracle_adk_prepare_schema_handles_slotted_driver_without_cache_slot() -> None:
+    """prepare_schema_sync and prepare_schema_async succeed when driver omits _oracle_version_cache slot."""
+    expected_version = OracleVersionInfo(23, 4, 0, compatible="23.4.0")
+
+    sync_dict = MagicMock()
+    sync_dict.get_version = MagicMock(return_value=expected_version)
+    sync_driver = _SlottedOracleStubDriver(sync_dict)
+
+    for sync_store_cls in (adk_store.OracleSyncADKStore, adk_store.OracleSyncADKMemoryStore):
+        sync_cfg = OracleSyncConfig(connection_config={"user": "u", "password": "p", "dsn": "d"})
+        store = sync_store_cls(sync_cfg)
+        store.prepare_schema_sync(sync_driver)
+        assert sync_cfg._oracle_version_cache.resolved is True
+        assert sync_cfg._oracle_version_cache.version == expected_version
+
+    async_dict = MagicMock()
+    async_dict.get_version = AsyncMock(return_value=expected_version)
+    async_driver = _SlottedOracleStubDriver(async_dict)
+
+    for async_store_cls in (adk_store.OracleAsyncADKStore, adk_store.OracleAsyncADKMemoryStore):
+        async_cfg = OracleAsyncConfig(connection_config={"user": "u", "password": "p", "dsn": "d"})
+        async_store = async_store_cls(async_cfg)
+        await async_store.prepare_schema_async(async_driver)
+        assert async_cfg._oracle_version_cache.resolved is True
+        assert async_cfg._oracle_version_cache.version == expected_version

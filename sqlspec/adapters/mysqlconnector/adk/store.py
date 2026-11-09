@@ -2,9 +2,10 @@
 
 import re
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
+from sqlspec.adapters.mysqlconnector.core import format_identifier
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
@@ -36,9 +37,30 @@ __all__ = (
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
 
 
+def _mysql_split_table(table: str) -> tuple[str | None, str]:
+    """Split a validated 1- or 2-part MySQL table name into (database, bare_table)."""
+    if "." in table:
+        database_name, bare_table = table.split(".", 1)
+        return database_name, bare_table
+    return None, table
+
+
+def _mysql_table_ref(table: str) -> str:
+    """Render database.table via format_identifier while keeping bare names unquoted."""
+    if "." in table:
+        return format_identifier(table)
+    return table
+
+
+def _mysql_index_name(table: str, suffix: str) -> str:
+    """Derive a per-table MySQL index identifier from the bare table name."""
+    _, bare_table = _mysql_split_table(table)
+    return f"idx_{bare_table}_{suffix}"
+
+
 _ADK_MEMORY_TABLE_DDL_TEMPLATE = ",\n            {0}"
 
-_ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = ",\n            FULLTEXT INDEX idx_{0}_fts (content_text)"
+_ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = ",\n            FULLTEXT INDEX {0} (content_text)"
 
 _ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "\n"
@@ -55,9 +77,9 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "            content_text TEXT NOT NULL,\n"
     "            metadata_json JSON,\n"
     "            inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
-    "            INDEX idx_{2}_app_scope_user_time (app_name, scope, user_id, timestamp),\n"
-    "            INDEX idx_{3}_scope (app_name, scope),\n"
-    "            INDEX idx_{4}_session (session_id){5}{6}\n"
+    "            INDEX {2} (app_name, scope, user_id, timestamp),\n"
+    "            INDEX {3} (app_name, scope),\n"
+    "            INDEX {4} (session_id){5}{6}\n"
     "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{7}\n"
     "        "
 )
@@ -73,16 +95,16 @@ _ADK_MYSQL_SESSIONS_DDL_TEMPLATE_2 = (
     "            state JSON NOT NULL,\n"
     "            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
     "            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),\n"
-    "            INDEX idx_{2}_app_user (app_name, user_id),\n"
-    "            INDEX idx_{3}_update_time (update_time DESC){4}\n"
+    "            INDEX {2} (app_name, user_id),\n"
+    "            INDEX {3} (update_time DESC){4}\n"
     "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{5}\n"
     "        "
 )
 
 _ADK_MYSQL_EVENTS_DDL_TEMPLATE = (
     ",\n"
-    "            INDEX idx_{0}_author_gc (session_id, author_gc, timestamp ASC),\n"
-    "            INDEX idx_{1}_node_path_gc (session_id, node_path_gc, timestamp ASC)"
+    "            INDEX {0} (session_id, author_gc, timestamp ASC),\n"
+    "            INDEX {1} (session_id, node_path_gc, timestamp ASC)"
 )
 
 _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2 = (
@@ -96,9 +118,9 @@ _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2 = (
     "            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
     "            event_data JSON NOT NULL{1},\n"
     "            FOREIGN KEY (session_id) REFERENCES {2}(id) ON DELETE CASCADE,\n"
-    "            INDEX idx_{3}_scope (app_name, user_id, session_id, timestamp ASC{4}),\n"
-    "            INDEX idx_{5}_session (session_id, timestamp ASC{6}),\n"
-    "            INDEX idx_{9}_app_timestamp (app_name, timestamp ASC){7}\n"
+    "            INDEX {3} (app_name, user_id, session_id, timestamp ASC{4}),\n"
+    "            INDEX {5} (session_id, timestamp ASC{6}),\n"
+    "            INDEX {9} (app_name, timestamp ASC){7}\n"
     "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{8}\n"
     "        "
 )
@@ -168,6 +190,8 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     __slots__ = ("_json_deserializer", "_json_serializer")
 
+    _max_table_name_parts: ClassVar[int] = 2
+
     def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
         super().__init__(config)
         driver_features = getattr(config, "driver_features", None)
@@ -201,13 +225,13 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         state_json = self._json_serializer(state)
         if self._owner_id_column_name:
             sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
+            INSERT INTO {_mysql_table_ref(self._session_table)} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
             params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            INSERT INTO {_mysql_table_ref(self._session_table)} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
             params = (session_id, app_name, user_id, state_json)
@@ -237,7 +261,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                         await cursor.execute(
                             f"""
-                            UPDATE {self._session_table}
+                            UPDATE {_mysql_table_ref(self._session_table)}
                             SET update_time = UTC_TIMESTAMP(6)
                             WHERE app_name = %s AND user_id = %s AND id = %s
                             """,
@@ -248,7 +272,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     await cursor.execute(
                         f"""
                         SELECT id, app_name, user_id, state, create_time, update_time
-                        FROM {self._session_table}
+                        FROM {_mysql_table_ref(self._session_table)}
                         WHERE app_name = %s AND user_id = %s AND id = %s
                         """,
                         (app_name, user_id, session_id),
@@ -265,7 +289,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         sql = f"""
-        UPDATE {self._session_table}
+        UPDATE {_mysql_table_ref(self._session_table)}
         SET state = %s, update_time = UTC_TIMESTAMP(6)
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
@@ -310,7 +334,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             raise
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
+        sql = f"DELETE FROM {_mysql_table_ref(self._session_table)} WHERE app_name = %s AND user_id = %s AND id = %s"
         async with self._config.provide_connection() as conn:
             cursor = await conn.cursor()
             try:
@@ -321,7 +345,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     async def append_event(self, event_record: StoredEvent) -> None:
         sql = f"""
-        INSERT INTO {self._events_table} (
+        INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
@@ -345,18 +369,18 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         insert_sql = f"""
-        INSERT INTO {self._events_table} (
+        INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         update_sql = f"""
-        UPDATE {self._session_table}
+        UPDATE {_mysql_table_ref(self._session_table)}
         SET state = %s, update_time = UTC_TIMESTAMP(6)
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
         select_sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
+        FROM {_mysql_table_ref(self._session_table)}
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
         async with self._config.provide_connection() as conn:
@@ -420,7 +444,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
         sql = f"""
         SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        FROM {self._events_table}
+        FROM {_mysql_table_ref(self._events_table)}
         WHERE {" AND ".join(where_clauses)}
         ORDER BY timestamp ASC{limit_clause}
         """
@@ -468,7 +492,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     async def get_metadata(self, key: str) -> "str | None":
 
-        sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
+        sql = f"SELECT value FROM {_mysql_table_ref(self._metadata_table)} WHERE `key` = %s"
         try:
             async with self._config.provide_connection() as conn:
                 cursor = await conn.cursor()
@@ -508,21 +532,21 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         return _mysql_metadata_ddl(self._metadata_table)
 
     def _drop_app_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+        return f"DROP TABLE IF EXISTS {_mysql_table_ref(self._app_state_table)}"
 
     def _drop_user_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+        return f"DROP TABLE IF EXISTS {_mysql_table_ref(self._user_state_table)}"
 
     def _drop_metadata_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+        return f"DROP TABLE IF EXISTS {_mysql_table_ref(self._metadata_table)}"
 
     def _drop_tables_sql(self) -> "list[str]":
         return [
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
             self._drop_app_states_table_sql(),
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
+            f"DROP TABLE IF EXISTS {_mysql_table_ref(self._events_table)}",
+            f"DROP TABLE IF EXISTS {_mysql_table_ref(self._session_table)}",
         ]
 
 
@@ -530,6 +554,8 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB ADK store using mysql-connector sync driver."""
 
     __slots__ = ("_json_deserializer", "_json_serializer")
+
+    _max_table_name_parts: ClassVar[int] = 2
 
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
         super().__init__(config)
@@ -566,13 +592,13 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         state_json = self._json_serializer(state)
         if self._owner_id_column_name:
             sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
+            INSERT INTO {_mysql_table_ref(self._session_table)} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
             params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            INSERT INTO {_mysql_table_ref(self._session_table)} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
             params = (session_id, app_name, user_id, state_json)
@@ -603,7 +629,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                     if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                         cursor.execute(
                             f"""
-                            UPDATE {self._session_table}
+                            UPDATE {_mysql_table_ref(self._session_table)}
                             SET update_time = UTC_TIMESTAMP(6)
                             WHERE app_name = %s AND user_id = %s AND id = %s
                             """,
@@ -614,7 +640,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                     cursor.execute(
                         f"""
                         SELECT id, app_name, user_id, state, create_time, update_time
-                        FROM {self._session_table}
+                        FROM {_mysql_table_ref(self._session_table)}
                         WHERE app_name = %s AND user_id = %s AND id = %s
                         """,
                         (app_name, user_id, session_id),
@@ -631,7 +657,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
         sql = f"""
-        UPDATE {self._session_table}
+        UPDATE {_mysql_table_ref(self._session_table)}
         SET state = %s, update_time = UTC_TIMESTAMP(6)
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
@@ -678,7 +704,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
+        sql = f"DELETE FROM {_mysql_table_ref(self._session_table)} WHERE app_name = %s AND user_id = %s AND id = %s"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -690,7 +716,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
         sql = f"""
-        INSERT INTO {self._events_table} (
+        INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
@@ -715,18 +741,18 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     ) -> StoredSession:
         """Atomically append an event and update the session's durable state."""
         insert_sql = f"""
-        INSERT INTO {self._events_table} (
+        INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         update_sql = f"""
-        UPDATE {self._session_table}
+        UPDATE {_mysql_table_ref(self._session_table)}
         SET state = %s, update_time = UTC_TIMESTAMP(6)
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
         select_sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
+        FROM {_mysql_table_ref(self._session_table)}
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
@@ -793,7 +819,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
         sql = f"""
         SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        FROM {self._events_table}
+        FROM {_mysql_table_ref(self._events_table)}
         WHERE {" AND ".join(where_clauses)}
         ORDER BY timestamp ASC{limit_clause}
         """
@@ -849,7 +875,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
 
-        sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
+        sql = f"SELECT value FROM {_mysql_table_ref(self._metadata_table)} WHERE `key` = %s"
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
@@ -890,21 +916,21 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         return _mysql_metadata_ddl(self._metadata_table)
 
     def _drop_app_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+        return f"DROP TABLE IF EXISTS {_mysql_table_ref(self._app_state_table)}"
 
     def _drop_user_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+        return f"DROP TABLE IF EXISTS {_mysql_table_ref(self._user_state_table)}"
 
     def _drop_metadata_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+        return f"DROP TABLE IF EXISTS {_mysql_table_ref(self._metadata_table)}"
 
     def _drop_tables_sql(self) -> "list[str]":
         return [
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
             self._drop_app_states_table_sql(),
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
+            f"DROP TABLE IF EXISTS {_mysql_table_ref(self._events_table)}",
+            f"DROP TABLE IF EXISTS {_mysql_table_ref(self._session_table)}",
         ]
 
 
@@ -912,6 +938,8 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
     """MySQL/MariaDB ADK memory store using mysql-connector async driver."""
 
     __slots__ = ("_json_deserializer", "_json_serializer")
+
+    _max_table_name_parts: ClassVar[int] = 2
 
     def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
         super().__init__(config)
@@ -949,7 +977,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         inserted_count = 0
         if self._owner_id_column_name:
             sql = f"""
-            INSERT IGNORE INTO {self._memory_table} (
+            INSERT IGNORE INTO {_mysql_table_ref(self._memory_table)} (
                 id, session_id, app_name, user_id, scope, event_id, author,
                 {self._owner_id_column_name}, timestamp, content_json,
                 content_text, metadata_json, inserted_at
@@ -957,7 +985,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             """
         else:
             sql = f"""
-            INSERT IGNORE INTO {self._memory_table} (
+            INSERT IGNORE INTO {_mysql_table_ref(self._memory_table)} (
                 id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -1029,7 +1057,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         where_scope, scope_params = _build_mysql_scope_where(app_name, user_id, scope_filter)
         if self._use_fts:
             sql = f"""
-            SELECT * FROM {self._memory_table}
+            SELECT * FROM {_mysql_table_ref(self._memory_table)}
             WHERE {where_scope}
               AND MATCH(content_text) AGAINST (%s IN NATURAL LANGUAGE MODE)
             ORDER BY timestamp DESC
@@ -1038,7 +1066,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             params = (*scope_params, query, limit_value)
         else:
             sql = f"""
-            SELECT * FROM {self._memory_table}
+            SELECT * FROM {_mysql_table_ref(self._memory_table)}
             WHERE {where_scope} AND content_text LIKE %s
             ORDER BY timestamp DESC
             LIMIT %s
@@ -1076,7 +1104,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
+        sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE session_id = %s"
         try:
             async with self._config.provide_connection() as conn:
                 cursor = await conn.cursor()
@@ -1108,7 +1136,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             params.append(scope)
 
         where_sql = " AND ".join(clauses)
-        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
+        sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE {where_sql}"
         try:
             async with self._config.provide_connection() as conn:
                 cursor = await conn.cursor()
@@ -1133,31 +1161,32 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             if fk_def:
                 fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
-        safe_index_table = self._memory_table.replace(".", "_")
         fts_index = ""
         if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(safe_index_table)
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(_mysql_index_name(self._memory_table, "fts"))
         table_options = _mysql_table_options(adk_config, "memory_table_options")
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
-            self._memory_table,
+            _mysql_table_ref(self._memory_table),
             owner_id_line,
-            safe_index_table,
-            safe_index_table,
-            safe_index_table,
+            _mysql_index_name(self._memory_table, "app_scope_user_time"),
+            _mysql_index_name(self._memory_table, "scope"),
+            _mysql_index_name(self._memory_table, "session"),
             fts_index,
             fk_constraint,
             table_options,
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+        return [f"DROP TABLE IF EXISTS {_mysql_table_ref(self._memory_table)}"]
 
 
 class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB ADK memory store using mysql-connector sync driver."""
 
     __slots__ = ("_json_deserializer", "_json_serializer")
+
+    _max_table_name_parts: ClassVar[int] = 2
 
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
         super().__init__(config)
@@ -1197,7 +1226,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         inserted_count = 0
         if self._owner_id_column_name:
             sql = f"""
-            INSERT IGNORE INTO {self._memory_table} (
+            INSERT IGNORE INTO {_mysql_table_ref(self._memory_table)} (
                 id, session_id, app_name, user_id, scope, event_id, author,
                 {self._owner_id_column_name}, timestamp, content_json,
                 content_text, metadata_json, inserted_at
@@ -1205,7 +1234,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             """
         else:
             sql = f"""
-            INSERT IGNORE INTO {self._memory_table} (
+            INSERT IGNORE INTO {_mysql_table_ref(self._memory_table)} (
                 id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -1278,7 +1307,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         where_scope, scope_params = _build_mysql_scope_where(app_name, user_id, scope_filter)
         if self._use_fts:
             sql = f"""
-            SELECT * FROM {self._memory_table}
+            SELECT * FROM {_mysql_table_ref(self._memory_table)}
             WHERE {where_scope}
               AND MATCH(content_text) AGAINST (%s IN NATURAL LANGUAGE MODE)
             ORDER BY timestamp DESC
@@ -1287,7 +1316,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             params = (*scope_params, query, limit_value)
         else:
             sql = f"""
-            SELECT * FROM {self._memory_table}
+            SELECT * FROM {_mysql_table_ref(self._memory_table)}
             WHERE {where_scope} AND content_text LIKE %s
             ORDER BY timestamp DESC
             LIMIT %s
@@ -1326,7 +1355,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
+        sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE session_id = %s"
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
@@ -1357,7 +1386,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             params.append(scope)
 
         where_sql = " AND ".join(clauses)
-        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
+        sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE {where_sql}"
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
@@ -1382,25 +1411,24 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             if fk_def:
                 fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
-        safe_index_table = self._memory_table.replace(".", "_")
         fts_index = ""
         if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(safe_index_table)
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(_mysql_index_name(self._memory_table, "fts"))
         table_options = _mysql_table_options(adk_config, "memory_table_options")
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
-            self._memory_table,
+            _mysql_table_ref(self._memory_table),
             owner_id_line,
-            safe_index_table,
-            safe_index_table,
-            safe_index_table,
+            _mysql_index_name(self._memory_table, "app_scope_user_time"),
+            _mysql_index_name(self._memory_table, "scope"),
+            _mysql_index_name(self._memory_table, "session"),
             fts_index,
             fk_constraint,
             table_options,
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+        return [f"DROP TABLE IF EXISTS {_mysql_table_ref(self._memory_table)}"]
 
 
 def _mysql_owner_id_column_parts(column_ddl: str) -> "tuple[str, str]":
@@ -1505,7 +1533,7 @@ async def _async_delete_before(
     app_name: "str | None" = None,
 ) -> int:
 
-    sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
+    sql = f"DELETE FROM {_mysql_table_ref(table_name)} WHERE {column_name} < %s"
     params: list[Any] = [threshold]
     if app_name is not None:
         sql += " AND app_name = %s"
@@ -1531,7 +1559,7 @@ async def _async_state(
     store: MysqlConnectorAsyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
 
-    sql = f"SELECT state FROM {table_name} WHERE {where_clause} LIMIT 1"
+    sql = f"SELECT state FROM {_mysql_table_ref(table_name)} WHERE {where_clause} LIMIT 1"
     try:
         async with store._config.provide_connection() as conn:
             cursor = await conn.cursor()
@@ -1565,7 +1593,7 @@ def _sync_delete_before(
     app_name: "str | None" = None,
 ) -> int:
 
-    sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
+    sql = f"DELETE FROM {_mysql_table_ref(table_name)} WHERE {column_name} < %s"
     params: list[Any] = [threshold]
     if app_name is not None:
         sql += " AND app_name = %s"
@@ -1591,7 +1619,7 @@ def _sync_state(
     store: MysqlConnectorSyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
 
-    sql = f"SELECT state FROM {table_name} WHERE {where_clause} LIMIT 1"
+    sql = f"SELECT state FROM {_mysql_table_ref(table_name)} WHERE {where_clause} LIMIT 1"
     try:
         with store._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -1626,55 +1654,60 @@ def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", t
         if fk_def:
             fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
-    safe_index_table = session_table.replace(".", "_")
     return _ADK_MYSQL_SESSIONS_DDL_TEMPLATE_2.format(
-        session_table, owner_id_line, safe_index_table, safe_index_table, fk_constraint, table_options
+        _mysql_table_ref(session_table),
+        owner_id_line,
+        _mysql_index_name(session_table, "app_user"),
+        _mysql_index_name(session_table, "update_time"),
+        fk_constraint,
+        table_options,
     )
 
 
 def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping[str, Any] | None = None) -> str:
     adk_config = adk_config or {}
-    safe_index_table = events_table.replace(".", "_")
     generated_columns = ""
     generated_indexes = ""
     if adk_config.get("enable_event_generated_columns", False):
         generated_columns = """,
             author_gc VARCHAR(256) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.author'))) STORED,
             node_path_gc VARCHAR(512) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.node_info.path'))) STORED"""
-        generated_indexes = _ADK_MYSQL_EVENTS_DDL_TEMPLATE.format(safe_index_table, safe_index_table)
+        generated_indexes = _ADK_MYSQL_EVENTS_DDL_TEMPLATE.format(
+            _mysql_index_name(events_table, "author_gc"), _mysql_index_name(events_table, "node_path_gc")
+        )
 
     covering_column = ", invocation_id" if adk_config.get("enable_covering_indexes", False) else ""
     table_options = _mysql_table_options(adk_config, "events_table_options")
 
     return _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2.format(
-        events_table,
+        _mysql_table_ref(events_table),
         generated_columns,
-        session_table,
-        safe_index_table,
+        _mysql_table_ref(session_table),
+        _mysql_index_name(events_table, "scope"),
         covering_column,
-        safe_index_table,
+        _mysql_index_name(events_table, "session"),
         covering_column,
         generated_indexes,
         table_options,
-        safe_index_table,
+        _mysql_index_name(events_table, "app_timestamp"),
     )
 
 
 def _mysql_app_state_ddl(app_state_table: str, table_options: str = "") -> str:
-    return _ADK_MYSQL_APP_STATE_DDL_TEMPLATE.format(app_state_table, table_options)
+    return _ADK_MYSQL_APP_STATE_DDL_TEMPLATE.format(_mysql_table_ref(app_state_table), table_options)
 
 
 def _mysql_user_state_ddl(user_state_table: str, table_options: str = "") -> str:
-    return _ADK_MYSQL_USER_STATE_DDL_TEMPLATE.format(user_state_table, table_options)
+    return _ADK_MYSQL_USER_STATE_DDL_TEMPLATE.format(_mysql_table_ref(user_state_table), table_options)
 
 
 def _mysql_metadata_ddl(metadata_table: str) -> str:
-    return _ADK_MYSQL_METADATA_DDL_TEMPLATE.format(metadata_table)
+    return _ADK_MYSQL_METADATA_DDL_TEMPLATE.format(_mysql_table_ref(metadata_table))
 
 
 def _mysql_upsert_app_state_sql(app_state_table: str) -> str:
     return f"""
-        INSERT INTO {app_state_table} (app_name, state, update_time)
+        INSERT INTO {_mysql_table_ref(app_state_table)} (app_name, state, update_time)
         VALUES (%s, %s, UTC_TIMESTAMP(6))
         ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
         """
@@ -1682,7 +1715,7 @@ def _mysql_upsert_app_state_sql(app_state_table: str) -> str:
 
 def _mysql_upsert_user_state_sql(user_state_table: str) -> str:
     return f"""
-        INSERT INTO {user_state_table} (app_name, user_id, state, update_time)
+        INSERT INTO {_mysql_table_ref(user_state_table)} (app_name, user_id, state, update_time)
         VALUES (%s, %s, %s, UTC_TIMESTAMP(6))
         ON DUPLICATE KEY UPDATE state = VALUES(state), update_time = UTC_TIMESTAMP(6)
         """
@@ -1690,7 +1723,7 @@ def _mysql_upsert_user_state_sql(user_state_table: str) -> str:
 
 def _mysql_upsert_metadata_sql(metadata_table: str) -> str:
     return f"""
-        INSERT INTO {metadata_table} (`key`, value)
+        INSERT INTO {_mysql_table_ref(metadata_table)} (`key`, value)
         VALUES (%s, %s)
         ON DUPLICATE KEY UPDATE value = VALUES(value)
         """
@@ -1729,7 +1762,7 @@ def _session_list_query(
 
     sql = f"""
     SELECT id, app_name, user_id, state, create_time, update_time
-    FROM {session_table}
+    FROM {_mysql_table_ref(session_table)}
     WHERE {where_clause}
     ORDER BY {column} {direction}, id {direction}{page_clause}
     """

@@ -76,9 +76,9 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
             index_specs = self._index_specs()
-            existing_indexes = _existing_index_names(driver, index_specs)
+            existing_indexes = _existing_index_keys(driver, index_specs)
             for index_name, index_table, columns in index_specs:
-                if _bare_name(index_name) not in existing_indexes:
+                if _index_key(*split_schema_and_table(index_table), index_name) not in existing_indexes:
                     driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
         self.reconcile_schema(assume_existing=True)
@@ -460,9 +460,9 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
                 )
             driver.execute_script(self._memory_table_ddl())
             index_specs = self._memory_index_specs()
-            existing_indexes = _existing_index_names(driver, index_specs)
+            existing_indexes = _existing_index_keys(driver, index_specs)
             for index_name, index_table, columns in index_specs:
-                if _bare_name(index_name) not in existing_indexes:
+                if _index_key(*split_schema_and_table(index_table), index_name) not in existing_indexes:
                     driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
         self.reconcile_schema(assume_existing=True)
@@ -657,11 +657,35 @@ def _json_column_type_from_sync_driver(driver: "PymssqlDriver") -> str:
     return JSON_FALLBACK_COLUMN_TYPE
 
 
-def _existing_index_names(driver: "PymssqlDriver", index_specs: "list[tuple[str, str, str]]") -> "set[str]":
+def _index_key(schema: str, table: str, index_name: str) -> tuple[str, str, str]:
+    """Return case-folded, bracket-stripped (schema, bare_table, bare_index) identity key."""
+    return (
+        schema.strip("[]").casefold(),
+        table.rsplit(".", 1)[-1].strip("[]").casefold(),
+        index_name.rsplit(".", 1)[-1].strip("[]").casefold(),
+    )
+
+
+def _row_field(row: Any, key: str) -> Any:
+    if hasattr(row, "get"):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _existing_index_keys(
+    driver: "PymssqlDriver", index_specs: "list[tuple[str, str, str]]"
+) -> set[tuple[str, str, str]]:
+    """Collect (schema, table, index) keys across all schemas referenced by index_specs."""
     schemas = {split_schema_and_table(index_table)[0] for _, index_table, _ in index_specs} or {MSSQL_SCHEMA}
-    existing: set[str] = set()
+    existing: set[tuple[str, str, str]] = set()
     for schema_name in schemas:
-        existing.update(_casefold_names(driver.data_dictionary.get_indexes(driver, schema=schema_name), "index_name"))
+        for row in driver.data_dictionary.get_indexes(driver, schema=schema_name):
+            row_schema = str(_row_field(row, "schema_name") or schema_name)
+            row_table = str(_row_field(row, "table_name") or "")
+            row_index = str(_row_field(row, "index_name") or "")
+            if not row_table or not row_index:
+                continue
+            existing.add(_index_key(row_schema, row_table, row_index))
     return existing
 
 
@@ -775,16 +799,6 @@ END;
 
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:
     return f"CREATE INDEX {quote_bracket_identifier(index_name)} ON {_table_ref(table)} ({columns})"
-
-
-def _casefold_names(rows: "list[Any]", key: str) -> "set[str]":
-    """Collapse data-dictionary rows into a case-folded, schema-stripped name set."""
-    return {str(row.get(key, "")).rsplit(".", 1)[-1].casefold() for row in rows}
-
-
-def _bare_name(name: str) -> str:
-    """Return the case-folded, schema-stripped object name for membership checks."""
-    return name.rsplit(".", 1)[-1].casefold()
 
 
 def _insert_event_sql(table: str) -> str:
