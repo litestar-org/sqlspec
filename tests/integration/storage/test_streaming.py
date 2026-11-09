@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from pytest_databases.docker.azure_blob import AzureBlobService
-    from pytest_databases.docker.floci import FlociGCPService
+    from pytest_databases.docker.floci import FlociAWSService, FlociGCPService
     from pytest_databases.docker.rustfs import RustfsService
 
     from sqlspec.protocols import ObjectStoreProtocol
@@ -148,6 +148,54 @@ async def test_rustfs_s3_obstore_streaming(rustfs_service: "RustfsService", rust
     )
 
 
+@pytest.mark.xdist_group("rustfs")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_rustfs_s3_obstore_create_only_stream(
+    rustfs_service: "RustfsService", rustfs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify ObStoreBackend staged create-only streaming with copy_if_not_exists and buffered fallback without it."""
+    monkeypatch.delenv("AWS_COPY_IF_NOT_EXISTS", raising=False)
+    plain_backend = ObStoreBackend(f"s3://{rustfs_bucket_name}", **rustfs_obstore_kwargs(rustfs_service))
+    assert plain_backend.supports_direct_arrow_write("parquet", overwrite=False) is False
+    if PYARROW_INSTALLED and pyarrow is not None:
+        tbl = pyarrow.table({"id": [1, 2]})
+        plain_key = "streaming/rustfs_obstore_plain_once/table.parquet"
+        plain_backend.write_arrow_sync(plain_key, tbl, overwrite=False)
+        with pytest.raises(FileExistsInStorageError):
+            plain_backend.write_arrow_sync(plain_key, tbl, overwrite=False)
+
+    staged_backend = ObStoreBackend(
+        f"s3://{rustfs_bucket_name}", copy_if_not_exists="multipart", **rustfs_obstore_kwargs(rustfs_service)
+    )
+    await _assert_obstore_create_only_stream(staged_backend, "streaming/rustfs_obstore_staged_once")
+
+
+@pytest.mark.xdist_group("floci_aws")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_floci_aws_s3_obstore_create_only_stream(
+    floci_aws_service: "FlociAWSService",
+    floci_aws_s3_bucket_name: str,
+    floci_aws_s3_obstore: "ObjectStoreProtocol",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify ObStoreBackend direct streaming and create-only streams against Floci AWS S3."""
+    monkeypatch.delenv("AWS_COPY_IF_NOT_EXISTS", raising=False)
+    await _assert_backend_streaming_and_arrow(floci_aws_s3_obstore, "streaming/floci_aws_obstore")
+    assert cast("ObStoreBackend", floci_aws_s3_obstore).supports_direct_arrow_write("parquet", overwrite=False) is False
+
+    staged_floci_aws = ObStoreBackend(
+        f"s3://{floci_aws_s3_bucket_name}",
+        aws_endpoint=floci_aws_service.endpoint_url,
+        aws_access_key_id=floci_aws_service.access_key,
+        aws_secret_access_key=floci_aws_service.secret_key,
+        aws_region=floci_aws_service.region,
+        aws_virtual_hosted_style_request=False,
+        copy_if_not_exists="multipart",
+        client_options={"allow_http": True},
+    )
+    await _assert_obstore_create_only_stream(staged_floci_aws, "streaming/floci_aws_obstore_staged_once")
+
+
 @pytest.mark.xdist_group("floci_gcp")
 async def test_floci_gcs_obstore_streaming_and_pipeline(
     floci_gcp_service: "FlociGCPService", floci_gcs_bucket_name: str, floci_gcs_obstore: "ObjectStoreProtocol"
@@ -238,6 +286,13 @@ async def test_azurite_obstore_streaming_and_pipeline(
         check_overwrite_false_conflict=True,
         check_multipart_12mb=True,
     )
+
+
+@pytest.mark.xdist_group("azure_blob")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_azurite_obstore_create_only_stream(azurite_obstore: "ObjectStoreProtocol") -> None:
+    """Verify ObStoreBackend staged 12 MiB create-only stream publish and conflict on Azurite."""
+    await _assert_obstore_create_only_stream(cast("ObStoreBackend", azurite_obstore), "streaming/azurite_obstore_once")
 
 
 @pytest.mark.xdist_group("azure_blob")
@@ -347,6 +402,37 @@ async def _assert_fsspec_direct_streaming(backend: "FSSpecBackend", prefix: str,
             await async_sink.write(b"second-value")
 
     assert backend.read_bytes_sync(once_key) == b"first-value"
+
+
+async def _assert_obstore_create_only_stream(backend: "ObStoreBackend", prefix: str) -> None:
+    """Assert 12 MiB staged create-only streaming, conflict rejection, and stage cleanup on ObStoreBackend."""
+    assert backend.supports_direct_arrow_write("parquet", overwrite=False) is True
+
+    payload_12mb = os.urandom(12 * 1024 * 1024)
+    chunks = [payload_12mb[i : i + 1_048_576] for i in range(0, len(payload_12mb), 1_048_576)]
+
+    once_key = f"{prefix}/create_only_12mb.bin"
+    with backend.open_write_stream_sync(once_key, overwrite=False, chunk_size=5_242_880) as sink:
+        for chunk in chunks:
+            sink.write(chunk)
+
+    loaded = backend.read_bytes_sync(once_key)
+    assert len(loaded) == 12_582_912
+    assert loaded == payload_12mb
+    assert [k for k in backend.list_objects_sync(f"{prefix}/") if ".sqlspec-stage-" in k] == []
+
+    with (
+        pytest.raises(FileExistsInStorageError),
+        backend.open_write_stream_sync(once_key, overwrite=False, chunk_size=5_242_880) as dup_sink,
+    ):
+        dup_sink.write(b"duplicate-sync")
+    assert [k for k in backend.list_objects_sync(f"{prefix}/") if ".sqlspec-stage-" in k] == []
+
+    with pytest.raises(FileExistsInStorageError):
+        async with backend.open_write_stream_async(once_key, overwrite=False, chunk_size=5_242_880) as dup_async_sink:
+            await dup_async_sink.write(b"duplicate-async")
+    assert [k for k in await backend.list_objects_async(f"{prefix}/") if ".sqlspec-stage-" in k] == []
+    assert backend.get_metadata_sync(once_key)["size"] == 12_582_912
 
 
 async def _assert_backend_streaming_and_arrow(backend: "ObjectStoreProtocol", prefix: str) -> None:

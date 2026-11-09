@@ -425,6 +425,24 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
                     pass
                 else:
                     raise AssertionError(f"{uri}: Async overwrite=False did not raise FileExistsInStorageError")
+
+                if uri == "memory://":
+                    assert backend.supports_direct_arrow_write("parquet", overwrite=False) is True
+                    once_batches_dest = f"alias://{alias}/once_batches.parquet"
+                    t_once_b = sync_p.write_arrow_batches(
+                        once_batches_dest, sample_table.to_batches(), file_format="parquet", overwrite=False
+                    )
+                    assert t_once_b["rows_processed"] == expected_rows
+                    assert [k for k in backend.list_objects_sync() if ".sqlspec-stage-" in k] == []
+                    try:
+                        sync_p.write_arrow_batches(
+                            once_batches_dest, sample_table.to_batches(), file_format="parquet", overwrite=False
+                        )
+                    except exceptions_module.FileExistsInStorageError:
+                        pass
+                    else:
+                        raise AssertionError("memory:// staged overwrite=False batches did not raise conflict")
+                    assert [k for k in backend.list_objects_sync() if ".sqlspec-stage-" in k] == []
     except Exception as exc:
         underlying = exc.__cause__ or exc.__context__
         detail = f" (from {type(underlying).__name__}: {underlying})" if underlying is not None else ""
