@@ -99,7 +99,7 @@ When wiring an ADK `Runner`, pass `SQLSpecSessionService(store)`, `SQLSpecMemory
 `ADKMemoryStore` (`AiosqliteADKMemoryStore`, `AsyncpgADKMemoryStore`, `OracleAsyncADKMemoryStore`, `SpannerAsyncADKMemoryStore`, `DuckDBADKMemoryStore`) supports four search modes across engines:
 
 1. **Simple (`simple`)**: Portable case-insensitive substring matching across all ADK-enabled adapters.
-2. **Full-Text (`fts`)**: Native lexical ranking (`FTS5` on `sqlite`/`aiosqlite`, `tsvector` or `pg_textsearch` BM25 on PostgreSQL, Oracle Text `CONTAINS` with `"AND"`, `"OR"`, `"ACCUM"`, and `"NEAR"` operators, `MATCH ... AGAINST` on MySQL, and `TOKENIZE_FULLTEXT`/`SEARCH` on Spanner).
+2. **Full-Text (`fts`)**: Native lexical ranking (`FTS5` on `sqlite`, `aiosqlite`, and local SQLite `adbc` with one-time index rebuild when enabled on an existing table, `tsvector` or `pg_textsearch` BM25 on PostgreSQL, Oracle Text `CONTAINS` with `"AND"`, `"OR"`, `"ACCUM"`, and `"NEAR"` operators, `MATCH ... AGAINST` on MySQL, and `TOKENIZE_FULLTEXT`/`SEARCH` on Spanner). Remote Flight SQL, gRPC, and GizmoSQL ADBC endpoints use substring `LIKE` search because the client cannot detect the server engine's search features.
 3. **Vector (`vector`)**: Cosine or inner-product similarity search on `asyncpg`, `psycopg`, `psqlpy`, `adbc` (`pgvector`), `oracledb` (Oracle 26ai HNSW `FETCH APPROX FIRST` or exact top-K), `spanner` (`APPROX_COSINE_DISTANCE`), and `duckdb` (`array_cosine_similarity`).
 4. **Hybrid RRF (`hybrid`)**: Single-round-trip Reciprocal Rank Fusion (`1 / (k + rank)`) combining vector distance and full-text rank in one SQL CTE on PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`, `adbc`), Oracle 26ai (`oracledb`), Cloud Spanner (`spanner`), and DuckDB (`duckdb`).
 
