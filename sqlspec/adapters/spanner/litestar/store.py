@@ -1,7 +1,7 @@
 """Spanner session store for Litestar integration."""
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, NotRequired, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NotRequired, Protocol, cast
 
 from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
@@ -16,7 +16,7 @@ from sqlspec.adapters.spanner.core import (
 )
 from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
 from sqlspec.config import LitestarConfig
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -76,6 +76,7 @@ class _SpannerLitestarStoreCommonMixin:
 
     __slots__ = ()
 
+    _dialect: ClassVar[str] = "spanner"
     _table_name: str
     _shard_count: int
     _table_options: "str | None"
@@ -227,6 +228,14 @@ CREATE TABLE IF NOT EXISTS {self._table_name} (
         if self._index_options:
             opts = f" OPTIONS ({self._index_options})"
         return f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at ON {self._table_name}({leading}){opts}"
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the session expiry index."""
+        return [
+            CompanionIndex(
+                name=f"idx_{self._table_name}_expires_at", table=self._table_name, schema=None, ddl=self._index_ddl()
+            )
+        ]
 
     def _drop_table_sql(self) -> "list[str]":
         return [f"DROP INDEX idx_{self._table_name}_expires_at", f"DROP TABLE {self._table_name}"]

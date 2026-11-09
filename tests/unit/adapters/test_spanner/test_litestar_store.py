@@ -253,3 +253,111 @@ async def test_async_store_get_exists_expires_in() -> None:
 
     ttl = await store.expires_in("s1")
     assert ttl in range(1, 121)
+
+
+def test_validate_builtin_reconcile_adapter_accepts_spanner() -> None:
+    """Built-in extension reconciliation guard accepts Spanner sync and async configs."""
+    from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
+    from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
+
+    conn = {"project": "test-project", "instance_id": "inst", "database_id": "db"}
+    assert validate_builtin_reconcile_adapter(SpannerSyncConfig(connection_config=conn)) == "spanner"
+    assert validate_builtin_reconcile_adapter(SpannerAsyncConfig(connection_config=conn)) == "spanner"
+
+
+async def test_spanner_litestar_companion_index_reconcile_sync_and_async() -> None:
+    """Spanner session stores repair missing expiry indexes once and skip uppercase catalog matches."""
+    import inspect
+
+    from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
+    from sqlspec.config import ExtensionConfigs
+    from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
+    from sqlspec.migrations.context import MigrationContext
+
+    conn: dict[str, Any] = {"project": "test-project", "instance_id": "inst", "database_id": "db"}
+    litestar_ext: dict[str, Any] = {"session_table": "sess", "shard_count": 4, "migration_mode": "reconcile"}
+    ext: ExtensionConfigs = {"litestar": litestar_ext}
+    sync_cfg = SpannerSyncConfig(connection_config=conn, extension_config=ext)
+    async_cfg = SpannerAsyncConfig(connection_config=conn, extension_config=ext)
+    sync_store = SpannerSyncStore(sync_cfg)
+    async_store = SpannerAsyncStore(async_cfg)
+
+    cols = [
+        {"column_name": "session_id", "data_type": "STRING(128)", "nullable": False},
+        {"column_name": "data", "data_type": "BYTES(MAX)", "nullable": False},
+        {"column_name": "expires_at", "data_type": "TIMESTAMP", "nullable": True},
+        {"column_name": "created_at", "data_type": "TIMESTAMP", "nullable": False},
+        {"column_name": "updated_at", "data_type": "TIMESTAMP", "nullable": False},
+        {"column_name": "shard_id", "data_type": "INT64", "nullable": True},
+    ]
+
+    sync_drv = MagicMock()
+    sync_drv.data_dictionary.get_tables.return_value = [{"table_name": "sess"}]
+    sync_drv.data_dictionary.get_columns.return_value = cols
+    sync_drv.data_dictionary.get_indexes.return_value = []
+    assert litestar_reconcile(MigrationContext(config=sync_cfg, driver=sync_drv)) is None
+    sync_drv.execute_script.assert_called_once_with(sync_store._index_ddl())
+    sync_drv.commit.assert_not_called()
+
+    sync_drv.execute_script.reset_mock()
+    sync_drv.data_dictionary.get_indexes.return_value = [{"index_name": "IDX_SESS_EXPIRES_AT", "table_name": "SESS"}]
+    sync_store.reconcile_companion_objects_sync(sync_drv)
+    sync_drv.execute_script.assert_not_called()
+
+    async_drv = MagicMock()
+    async_drv.data_dictionary.get_tables = AsyncMock(return_value=[{"table_name": "sess"}])
+    async_drv.data_dictionary.get_columns = AsyncMock(return_value=cols)
+    async_drv.data_dictionary.get_indexes = AsyncMock(return_value=[])
+    async_drv.execute_script = AsyncMock()
+    async_drv.commit = AsyncMock()
+    coro = litestar_reconcile(MigrationContext(config=async_cfg, driver=async_drv))
+    assert inspect.isawaitable(coro)
+    await coro
+    async_drv.execute_script.assert_awaited_once_with(async_store._index_ddl())
+    async_drv.commit.assert_not_awaited()
+
+    async_drv.execute_script.reset_mock()
+    async_drv.data_dictionary.get_indexes = AsyncMock(
+        return_value=[{"index_name": "IDX_SESS_EXPIRES_AT", "table_name": "SESS"}]
+    )
+    await async_store.reconcile_companion_objects_async(async_drv)
+    async_drv.execute_script.assert_not_awaited()
+
+
+def test_spanner_litestar_sharded_schema_target_and_strict_refusal() -> None:
+    """Sharded Spanner session target tracks PK/generated columns and refuses missing shard_id."""
+    import pytest
+
+    from sqlspec.adapters.spanner import SpannerSyncConfig
+    from sqlspec.exceptions import MigrationError
+    from sqlspec.migrations.schema import ensure_schema_sync
+
+    cfg = SpannerSyncConfig(
+        connection_config={"project": "test-project", "instance_id": "inst", "database_id": "db"},
+        extension_config={
+            "litestar": {
+                "session_table": "sess",
+                "shard_count": 4,
+                "enable_row_deletion_policy": True,
+                "table_options": "optimizer_version=1",
+            }
+        },
+    )
+    store = SpannerSyncStore(cfg)
+    target = store.get_schema_targets()[0]
+
+    assert target.constraint_columns == frozenset({"shard_id", "session_id"})
+    assert "shard_id" in target.unsafe_add_columns
+    assert "ROW DELETION POLICY" in str(target.create_statement)
+
+    drv = MagicMock()
+    drv.data_dictionary.get_tables.return_value = [{"table_name": "sess"}]
+    drv.data_dictionary.get_columns.return_value = [
+        {"column_name": "session_id", "data_type": "STRING(128)", "nullable": False},
+        {"column_name": "data", "data_type": "BYTES(MAX)", "nullable": False},
+        {"column_name": "expires_at", "data_type": "TIMESTAMP", "nullable": True},
+        {"column_name": "created_at", "data_type": "TIMESTAMP", "nullable": False},
+        {"column_name": "updated_at", "data_type": "TIMESTAMP", "nullable": False},
+    ]
+    with pytest.raises(MigrationError, match=r'shard_id.*migration_mode="versioned"'):
+        ensure_schema_sync(drv, [target], manage_schema=True, create_schema=True, commit=False, strict=True)

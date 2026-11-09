@@ -332,6 +332,7 @@ def test_validate_builtin_reconcile_adapter_supported_matrix() -> None:
         "mssql_python",
         "pymssql",
         "oracledb",
+        "spanner",
     }
     assert UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS == expected_unconditional
 

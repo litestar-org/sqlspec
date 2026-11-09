@@ -55,6 +55,7 @@ UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS: frozenset[str] = frozenset({
     "mssql_python",
     "pymssql",
     "oracledb",
+    "spanner",
 })
 
 

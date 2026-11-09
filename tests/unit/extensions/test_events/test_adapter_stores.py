@@ -1744,3 +1744,88 @@ async def test_native_oracle_create_schema_false_and_privilege_errors_sync_and_a
         other_drv.execute.side_effect = other_err
     with pytest.raises(SQLSpecError, match="ORA-00942"):
         await _call(other_drv, create_schema=True)
+
+
+@pytest.mark.anyio
+async def test_spanner_event_store_reconcile_companion_index_and_sharded_target() -> None:
+    """Spanner event stores parse sharded DDL without mutating create_statement and repair indexes idempotently."""
+    import inspect
+    from unittest.mock import AsyncMock, MagicMock
+
+    pytest.importorskip("google.cloud.spanner")
+    from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
+    from sqlspec.adapters.spanner.events.store import SpannerAsyncEventQueueStore, SpannerSyncEventQueueStore
+    from sqlspec.exceptions import MigrationError
+    from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
+    from sqlspec.migrations.context import MigrationContext
+    from sqlspec.migrations.schema import ensure_schema_sync
+
+    conn = {"project": "test-project", "instance_id": "inst", "database_id": "db"}
+    sync_cfg = SpannerSyncConfig(
+        connection_config=conn, extension_config={"events": {"shard_count": 4, "migration_mode": "reconcile"}}
+    )
+    async_cfg = SpannerAsyncConfig(
+        connection_config=conn,
+        extension_config={"events": {"queue_table": "app.events_q", "shard_count": 4, "migration_mode": "reconcile"}},
+    )
+    sync_store = SpannerSyncEventQueueStore(sync_cfg)
+    async_store = SpannerAsyncEventQueueStore(async_cfg)
+
+    assert sync_store._index_existence_target() == (None, "sqlspec_event_queue")
+    assert async_store._index_existence_target() == ("app", "events_q")
+
+    target = sync_store._schema_target()
+    assert "shard_id" in target.unsafe_add_columns
+    assert target.constraint_columns == frozenset({"shard_id", "event_id"})
+    assert "NOT NULL AS (" in str(target.create_statement)
+
+    full_cols = [
+        {"column_name": "event_id", "data_type": "STRING(64)", "nullable": False},
+        {"column_name": "shard_id", "data_type": "INT64", "nullable": False},
+        {"column_name": "channel", "data_type": "STRING(128)", "nullable": False},
+        {"column_name": "payload_json", "data_type": "JSON", "nullable": False},
+        {"column_name": "metadata_json", "data_type": "JSON", "nullable": True},
+        {"column_name": "status", "data_type": "STRING(32)", "nullable": False},
+        {"column_name": "available_at", "data_type": "TIMESTAMP", "nullable": False},
+        {"column_name": "lease_expires_at", "data_type": "TIMESTAMP", "nullable": True},
+        {"column_name": "attempts", "data_type": "INT64", "nullable": False},
+        {"column_name": "created_at", "data_type": "TIMESTAMP", "nullable": False},
+        {"column_name": "acknowledged_at", "data_type": "TIMESTAMP", "nullable": True},
+    ]
+
+    sync_drv = MagicMock()
+    sync_drv.data_dictionary.get_tables.return_value = [{"table_name": "sqlspec_event_queue"}]
+    sync_drv.data_dictionary.get_columns.return_value = full_cols
+    sync_drv.data_dictionary.get_indexes.return_value = []
+    assert events_reconcile(MigrationContext(config=sync_cfg, driver=sync_drv)) is None
+    sync_drv.execute_script.assert_called_once_with(sync_store._index_ddl())
+    sync_drv.commit.assert_not_called()
+
+    sync_drv.execute_script.reset_mock()
+    sync_drv.data_dictionary.get_indexes.return_value = [
+        {"index_name": sync_store._index_name().upper(), "table_name": "SQLSPEC_EVENT_QUEUE"}
+    ]
+    sync_store.reconcile_companion_objects_sync(sync_drv)
+    sync_drv.execute_script.assert_not_called()
+
+    async_drv = MagicMock()
+    async_drv.data_dictionary.get_tables = AsyncMock(return_value=[{"table_name": "events_q"}])
+    async_drv.data_dictionary.get_columns = AsyncMock(return_value=full_cols)
+    async_drv.data_dictionary.get_indexes = AsyncMock(return_value=[])
+    async_drv.execute_script = AsyncMock()
+    async_drv.commit = AsyncMock()
+    coro = events_reconcile(MigrationContext(config=async_cfg, driver=async_drv))
+    assert inspect.isawaitable(coro)
+    await coro
+    async_drv.execute_script.assert_awaited_once_with(async_store._index_ddl())
+    async_drv.commit.assert_not_awaited()
+
+    missing_shard_drv = MagicMock()
+    missing_shard_drv.data_dictionary.get_tables.return_value = [{"table_name": "sqlspec_event_queue"}]
+    missing_shard_drv.data_dictionary.get_columns.return_value = [
+        row for row in full_cols if row["column_name"] != "shard_id"
+    ]
+    with pytest.raises(MigrationError, match=r'shard_id.*migration_mode="versioned"'):
+        ensure_schema_sync(
+            missing_shard_drv, [target], manage_schema=True, create_schema=True, commit=False, strict=True
+        )

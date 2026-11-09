@@ -10,7 +10,8 @@ Spanner requires:
 
 import logging
 import math
-from typing import TYPE_CHECKING, Any
+import re
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
@@ -23,11 +24,13 @@ from sqlspec.adapters.spanner.core import (
 )
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.logging import get_logger, log_with_context
 
 __all__ = ("SpannerAsyncEventQueueStore", "SpannerSyncEventQueueStore")
 
 logger = get_logger("sqlspec.adapters.spanner.events.store")
+_SPANNER_GENERATED_NOT_NULL: Final = re.compile(r"\s+NOT NULL\s+AS\s*\(", re.IGNORECASE)
 
 
 class _SpannerEventStoreMixin:
@@ -187,6 +190,28 @@ class _SpannerEventStoreMixin:
             f"CREATE INDEX {self._index_name()} ON {self.table_name}"
             f"({shard_prefix}channel, status, created_at, available_at) "
             f"{covering_keyword} (payload_json, metadata_json, attempts, lease_expires_at)"
+        )
+
+    def _index_existence_target(self) -> "tuple[str | None, str]":
+        """Return the catalog schema and table used to find the queue index."""
+        raw_schema, dot, raw_table = self.table_name.partition(".")
+        if dot:
+            return raw_schema.strip('"`') or None, raw_table.strip('"`')
+        return None, self.table_name
+
+    def _schema_target(self) -> SchemaTarget:
+        """Parse the queue DDL, removing NOT NULL before a generated expression only for parsing."""
+        statement = self.create_statements()[0]
+        parsed = SchemaTarget.from_ddl(
+            self.table_name, _SPANNER_GENERATED_NOT_NULL.sub(" AS (", statement), dialect="spanner"
+        )
+        return SchemaTarget(
+            parsed.table_name,
+            parsed.create_table,
+            schema=parsed.schema,
+            create_statement=statement,
+            constraint_columns=parsed.constraint_columns,
+            unsafe_add_columns=parsed.unsafe_add_columns,
         )
 
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
