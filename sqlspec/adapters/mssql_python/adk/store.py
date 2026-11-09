@@ -57,6 +57,17 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
         self._json_column_type: str | None = None
 
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Resolve the SQL Server JSON column type on the supplied synchronous driver."""
+        if self._json_column_type is not None:
+            return
+        configured = _configured_json_column_type(self._native_json)
+        self._json_column_type = configured if configured is not None else _json_column_type_from_sync_driver(driver)
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing ADK session and event companion indexes without committing."""
+        _create_missing_indexes(driver, self._index_specs())
+
     def create_tables(self) -> None:
         """Create ADK tables (idempotent T-SQL) and DD-gated indexes."""
         if not self.create_schema_enabled:
@@ -64,21 +75,13 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             return
 
         with self._config.provide_session() as driver:
-            if self._json_column_type is None:
-                configured = _configured_json_column_type(self._native_json)
-                self._json_column_type = (
-                    configured if configured is not None else _json_column_type_from_sync_driver(driver)
-                )
+            self.prepare_schema_sync(driver)
             driver.execute_script(self._sessions_table_ddl())
             driver.execute_script(self._events_table_ddl())
             driver.execute_script(self._app_states_table_ddl())
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
-            index_specs = self._index_specs()
-            existing_indexes = _existing_index_keys(driver, index_specs)
-            for index_name, index_table, columns in index_specs:
-                if _index_key(*split_schema_and_table(index_table), index_name) not in existing_indexes:
-                    driver.execute(_create_index_sql(index_table, index_name, columns))
+            _create_missing_indexes(driver, self._index_specs())
             driver.commit()
         self.reconcile_schema(assume_existing=True)
 
@@ -443,6 +446,19 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
         self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
         self._json_column_type: str | None = None
 
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Resolve the SQL Server JSON column type for enabled memory stores on the supplied driver."""
+        if not self._enabled or self._json_column_type is not None:
+            return
+        configured = _configured_json_column_type(self._native_json)
+        self._json_column_type = configured if configured is not None else _json_column_type_from_sync_driver(driver)
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing ADK memory companion indexes without committing when enabled."""
+        if not self._enabled:
+            return
+        _create_missing_indexes(driver, self._memory_index_specs())
+
     def create_tables(self) -> None:
         """Create the memory table (idempotent T-SQL) and DD-gated indexes."""
         if not self.create_schema_enabled:
@@ -452,17 +468,9 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
         if not self._enabled:
             return
         with self._config.provide_session() as driver:
-            if self._json_column_type is None:
-                configured = _configured_json_column_type(self._native_json)
-                self._json_column_type = (
-                    configured if configured is not None else _json_column_type_from_sync_driver(driver)
-                )
+            self.prepare_schema_sync(driver)
             driver.execute_script(self._memory_table_ddl())
-            index_specs = self._memory_index_specs()
-            existing_indexes = _existing_index_keys(driver, index_specs)
-            for index_name, index_table, columns in index_specs:
-                if _index_key(*split_schema_and_table(index_table), index_name) not in existing_indexes:
-                    driver.execute(_create_index_sql(index_table, index_name, columns))
+            _create_missing_indexes(driver, self._memory_index_specs())
             driver.commit()
         self.reconcile_schema(assume_existing=True)
 
@@ -693,6 +701,14 @@ def _existing_index_keys(
                 continue
             existing.add(_index_key(row_schema, row_table, row_index))
     return existing
+
+
+def _create_missing_indexes(driver: "MssqlPythonDriver", index_specs: "list[tuple[str, str, str]]") -> None:
+    """Create companion indexes whose (schema, table, index) key is absent from the catalog."""
+    existing_indexes = _existing_index_keys(driver, index_specs)
+    for index_name, index_table, columns in index_specs:
+        if _index_key(*split_schema_and_table(index_table), index_name) not in existing_indexes:
+            driver.execute(_create_index_sql(index_table, index_name, columns))
 
 
 def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:
