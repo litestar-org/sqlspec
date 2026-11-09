@@ -578,11 +578,7 @@ class ObStoreBackend:
 
             def _do_stream_write() -> None:
                 with _ObstoreWriteStream(
-                    self.store,
-                    resolved_path,
-                    writer_options,
-                    backend_type=self.backend_type,
-                    log_fields=None,
+                    self.store, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
                 ) as sink:
                     encode_arrow_to_sink(
                         table,
@@ -614,10 +610,7 @@ class ObStoreBackend:
 
             def _do_buffered_write() -> None:
                 payload = encode_arrow_payload(
-                    table,
-                    format_hint,
-                    compression=compression,
-                    write_options=merged_write_options,
+                    table, format_hint, compression=compression, write_options=merged_write_options
                 )
                 self.store.put(resolved_path, payload, **put_options)
 
@@ -994,11 +987,7 @@ class ObStoreBackend:
 
             async def _do_stream_write_async() -> None:
                 async with _AsyncObstoreWriteStream(
-                    self.store,
-                    resolved_path,
-                    writer_options,
-                    backend_type=self.backend_type,
-                    log_fields=None,
+                    self.store, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
                 ) as sink:
                     chunk_size = writer_options.get("buffer_size", 1048576)
                     await encode_arrow_to_async_sink(
@@ -1032,10 +1021,7 @@ class ObStoreBackend:
 
             async def _do_buffered_write_async() -> None:
                 payload = await async_(encode_arrow_payload)(
-                    table,
-                    format_hint,
-                    compression=compression,
-                    write_options=merged_write_options,
+                    table, format_hint, compression=compression, write_options=merged_write_options
                 )
                 await self.store.put_async(resolved_path, payload, **put_options)
 
@@ -1483,10 +1469,7 @@ class _ObstoreWriteStream:
             path=self._resolved_path,
         )
         entered_writer = execute_sync_storage_operation(
-            raw_writer.__enter__,
-            backend=self._backend_type,
-            operation="open_write_stream",
-            path=self._resolved_path,
+            raw_writer.__enter__, backend=self._backend_type, operation="open_write_stream", path=self._resolved_path
         )
         self._entered = entered_writer
         sink = _ObstoreSink(entered_writer, backend=self._backend_type, path=self._resolved_path)
@@ -1509,10 +1492,7 @@ class _ObstoreWriteStream:
             )
             if self._log_fields is not None:
                 log_storage_event(
-                    "storage.write",
-                    backend_type=self._backend_type,
-                    path=self._resolved_path,
-                    **self._log_fields,
+                    "storage.write", backend_type=self._backend_type, path=self._resolved_path, **self._log_fields
                 )
         else:
             with contextlib.suppress(Exception):
@@ -1550,10 +1530,7 @@ class _AsyncObstoreWriteStream:
             path=self._resolved_path,
         )
         entered_writer = await execute_async_storage_operation(
-            raw_writer.__aenter__,
-            backend=self._backend_type,
-            operation="open_write_stream",
-            path=self._resolved_path,
+            raw_writer.__aenter__, backend=self._backend_type, operation="open_write_stream", path=self._resolved_path
         )
         self._entered = entered_writer
         sink = _AsyncObstoreSink(entered_writer, backend=self._backend_type, path=self._resolved_path)
@@ -1578,18 +1555,13 @@ class _AsyncObstoreWriteStream:
                 )
             if self._log_fields is not None:
                 log_storage_event(
-                    "storage.write",
-                    backend_type=self._backend_type,
-                    path=self._resolved_path,
-                    **self._log_fields,
+                    "storage.write", backend_type=self._backend_type, path=self._resolved_path, **self._log_fields
                 )
         else:
-            exit_fut = entered_writer.__aexit__(exc_type, exc, traceback)
-            if inspect.isawaitable(exit_fut):
-                await join_shielded(
-                    asyncio.ensure_future(exit_fut),
-                    suppress_result=True,
-                )
+            with contextlib.suppress(Exception):
+                exit_fut = entered_writer.__aexit__(exc_type, exc, traceback)
+                if inspect.isawaitable(exit_fut):
+                    await join_shielded(asyncio.ensure_future(exit_fut), suppress_result=True)
 
 
 class _ObstoreSink:
@@ -1635,10 +1607,7 @@ class _ObstoreSink:
         flush_fn = getattr(self._writer, "flush", None)
         if callable(flush_fn):
             execute_sync_storage_operation(
-                flush_fn,
-                backend=self._backend,
-                operation="write_stream_flush",
-                path=self._path,
+                flush_fn, backend=self._backend, operation="write_stream_flush", path=self._path
             )
 
     def close(self) -> None:
@@ -1685,3 +1654,6 @@ class _AsyncObstoreSink:
                     await result
             except Exception as error:
                 raise_storage_error(error, backend=self._backend, operation="write_stream_flush", path=self._path)
+
+    async def close(self) -> None:
+        self._closed = True

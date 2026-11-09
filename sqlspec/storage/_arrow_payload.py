@@ -113,7 +113,24 @@ class _PoisonableCountingSink:
         nbytes = len(payload)
         if nbytes == 0:
             return 0
-        self._sink.write(payload)
+        written = self._sink.write(payload)
+        if written is not None and written < nbytes:
+            if written <= 0:
+                msg = "Writable sink returned 0 bytes for non-empty write"
+                raise OSError(msg)
+            view = memoryview(payload)
+            offset = written
+            while offset < nbytes:
+                if self._closed:
+                    return offset
+                step = self._sink.write(view[offset:].tobytes())
+                if step is None:
+                    offset = nbytes
+                    break
+                if step <= 0:
+                    msg = "Writable sink returned 0 bytes for non-empty write"
+                    raise OSError(msg)
+                offset += step
         self.bytes_written += nbytes
         return nbytes
 
@@ -155,14 +172,18 @@ class _AsyncSinkBridge:
         self._aborted = False
 
     def write(self, data: Any, /) -> int:
+        if self._aborted:
+            raise _BridgeAbortedError
         payload = data if type(data) is bytes else bytes(data)
         total_len = len(payload)
-        if total_len == 0 or self._aborted:
+        if total_len == 0:
             return 0
 
         offset = 0
         chunk_size = self._chunk_size
-        while offset < total_len and not self._aborted:
+        while offset < total_len:
+            if self._aborted:
+                raise _BridgeAbortedError
             needed = chunk_size - len(self._buffer)
             available = total_len - offset
             take = min(needed, available)
@@ -172,6 +193,8 @@ class _AsyncSinkBridge:
                 self._enqueue(bytes(self._buffer))
                 self._buffer.clear()
 
+        if self._aborted:
+            raise _BridgeAbortedError
         return total_len
 
     def _enqueue(self, chunk: bytes) -> None:
@@ -187,10 +210,17 @@ class _AsyncSinkBridge:
     def finish(self) -> None:
         with self._cond:
             if self._aborted:
-                return
+                raise _BridgeAbortedError
             if self._buffer:
                 self._queue.append(bytes(self._buffer))
                 self._buffer.clear()
+            self._worker_done = True
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(self._data_available.set)
+            self._cond.notify_all()
+
+    def mark_aborted_done(self) -> None:
+        with self._cond:
             self._worker_done = True
             with contextlib.suppress(RuntimeError):
                 self._loop.call_soon_threadsafe(self._data_available.set)
@@ -482,7 +512,14 @@ async def join_shielded(future: "asyncio.Future[Any] | asyncio.Task[Any]", *, su
         try:
             await asyncio.shield(future)
         except asyncio.CancelledError as exc:
-            cancelled_exc = exc
+            if not future.cancelled():
+                cancelled_exc = exc
+        except Exception:
+            if not suppress_result and cancelled_exc is None:
+                if not future.cancelled():
+                    with contextlib.suppress(Exception):
+                        future.exception()
+                raise
 
     if cancelled_exc is not None:
         if not future.cancelled():
@@ -547,7 +584,7 @@ async def encode_arrow_to_async_sink(
             )
             bridge.finish()
         except _BridgeAbortedError:
-            bridge.finish()
+            bridge.mark_aborted_done()
             return (0, 0)
         except BaseException:
             bridge.fail()

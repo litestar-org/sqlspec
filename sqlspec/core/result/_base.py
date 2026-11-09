@@ -10,6 +10,7 @@ Classes:
 """
 
 from abc import abstractmethod
+from collections.abc import AsyncIterable, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from mypy_extensions import mypyc_attr
@@ -44,7 +45,7 @@ from sqlspec.utils.schema import to_schema
 from sqlspec.utils.type_guards import has_arrow_table_stats
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Sequence
 
     from sqlspec.core.compiler import OperationType
     from sqlspec.core.statement import StatementConfig
@@ -57,8 +58,59 @@ T = TypeVar("T")
 RowFormat = Literal["dict", "tuple", "record"]
 _EMPTY_RESULT_STATEMENT: Final = SQL("-- empty stack result --")
 _EMPTY_RESULT_DATA: Final[tuple[Any, ...]] = ()
+_PEEK_EMPTY: Final = object()
 _DEFAULT_DML_METADATA: Final[dict[str, Any]] = {}
 _TWO_COLUMN_THRESHOLD: Final[int] = 2
+
+
+class _ChainedCloseableIterator:
+    """Chain a peeked first item with an iterator while releasing the first item and forwarding close()."""
+
+    __slots__ = ("_exhausted_first", "_first", "_iterator")
+
+    def __init__(self, first: Any, iterator: Iterator[Any]) -> None:
+        self._first = first
+        self._iterator = iterator
+        self._exhausted_first = False
+
+    def __iter__(self) -> "_ChainedCloseableIterator":
+        return self
+
+    def __next__(self) -> Any:
+        if not self._exhausted_first:
+            self._exhausted_first = True
+            first = self._first
+            self._first = None
+            return first
+        return next(self._iterator)
+
+    def close(self) -> None:
+        close_fn = getattr(self._iterator, "close", None)
+        if callable(close_fn):
+            close_fn()
+
+
+def _resolve_arrow_result_batches_source(data: Any) -> Any:
+    """Resolve an iterable or batch-producing object into a streaming batch source."""
+    source = data
+    if not isinstance(source, Iterable):
+        to_batches_fn = getattr(source, "to_batches", None)
+        if callable(to_batches_fn):
+            source = to_batches_fn()
+        else:
+            iter_batches_fn = getattr(source, "iter_batches", None)
+            if callable(iter_batches_fn):
+                source = iter_batches_fn()
+    iterable_source = cast("Iterable[Any]", source)
+    iterator = iter(iterable_source)
+    first = next(iterator, _PEEK_EMPTY)
+    if first is _PEEK_EMPTY:
+        return ()
+    chained = _ChainedCloseableIterator(first, iterator)
+    if has_arrow_table_stats(first) and not hasattr(first, "combine_chunks"):
+        return chained
+    _cols, batch_iter = coerce_arrow_batches(chained)
+    return batch_iter
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1010,7 +1062,22 @@ class ArrowResult(StatementResult):
                 write_options=write_options,
                 overwrite=overwrite,
             )
-        if has_arrow_table_stats(self.data) or hasattr(self.data, "__arrow_c_stream__"):
+        if isinstance(self.data, Mapping):
+            table = coerce_arrow_table(self.data)
+            return active_pipeline.write_arrow(
+                table,
+                destination,
+                format_hint=format_hint,
+                storage_options=storage_options,
+                compression=compression,
+                write_options=write_options,
+                overwrite=overwrite,
+            )
+        if (
+            has_arrow_table_stats(self.data)
+            or hasattr(self.data, "__arrow_c_stream__")
+            or isinstance(self.data, AsyncIterable)
+        ):
             return active_pipeline.write_arrow_batches(
                 destination,
                 self.data,
@@ -1020,8 +1087,12 @@ class ArrowResult(StatementResult):
                 storage_options=storage_options,
                 overwrite=overwrite,
             )
-        if hasattr(self.data, "to_batches") or hasattr(self.data, "iter_batches") or hasattr(self.data, "__iter__"):
-            _cols, batch_iter = coerce_arrow_batches(self.data)
+        if (
+            (isinstance(self.data, Iterable) and not isinstance(self.data, (str, bytes, bytearray)))
+            or callable(getattr(self.data, "to_batches", None))
+            or callable(getattr(self.data, "iter_batches", None))
+        ):
+            batch_iter = _resolve_arrow_result_batches_source(self.data)
             return active_pipeline.write_arrow_batches(
                 destination,
                 batch_iter,
@@ -1067,7 +1138,22 @@ class ArrowResult(StatementResult):
                 write_options=write_options,
                 overwrite=overwrite,
             )
-        if has_arrow_table_stats(self.data) or hasattr(self.data, "__arrow_c_stream__"):
+        if isinstance(self.data, Mapping):
+            table = coerce_arrow_table(self.data)
+            return await active_pipeline.write_arrow(
+                table,
+                destination,
+                format_hint=format_hint,
+                storage_options=storage_options,
+                compression=compression,
+                write_options=write_options,
+                overwrite=overwrite,
+            )
+        if (
+            has_arrow_table_stats(self.data)
+            or hasattr(self.data, "__arrow_c_stream__")
+            or isinstance(self.data, AsyncIterable)
+        ):
             return await active_pipeline.write_arrow_batches_async(
                 destination,
                 self.data,
@@ -1077,8 +1163,12 @@ class ArrowResult(StatementResult):
                 storage_options=storage_options,
                 overwrite=overwrite,
             )
-        if hasattr(self.data, "to_batches") or hasattr(self.data, "iter_batches") or hasattr(self.data, "__iter__"):
-            _cols, batch_iter = coerce_arrow_batches(self.data)
+        if (
+            (isinstance(self.data, Iterable) and not isinstance(self.data, (str, bytes, bytearray)))
+            or callable(getattr(self.data, "to_batches", None))
+            or callable(getattr(self.data, "iter_batches", None))
+        ):
+            batch_iter = _resolve_arrow_result_batches_source(self.data)
             return await active_pipeline.write_arrow_batches_async(
                 destination,
                 batch_iter,

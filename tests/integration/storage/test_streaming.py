@@ -1,6 +1,7 @@
 """Integration tests for sync and async storage streaming across local and multi-cloud backends."""
 
 import asyncio
+import os
 import threading
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
@@ -8,10 +9,12 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from sqlspec.exceptions import FileExistsInStorageError
+from sqlspec.storage._arrow_payload import encode_arrow_to_async_sink, encode_arrow_to_sink
 from sqlspec.storage.pipeline import AsyncStoragePipeline, SyncStoragePipeline
 from sqlspec.storage.registry import StorageRegistry
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils.module_loader import import_optional, import_optional_attr
+from sqlspec.utils.type_guards import supports_direct_stream_write
 from tests.fixtures.rustfs import rustfs_fsspec_kwargs, rustfs_obstore_kwargs
 from tests.integration.fixtures.cloud_storage import floci_gcs_obstore_kwargs
 
@@ -115,10 +118,7 @@ async def test_rustfs_s3_obstore_streaming(rustfs_service: "RustfsService", rust
 
     registry = StorageRegistry()
     registry.register_alias(
-        "rustfs-s3-stream",
-        f"s3://{rustfs_bucket_name}",
-        backend="obstore",
-        **rustfs_obstore_kwargs(rustfs_service),
+        "rustfs-s3-stream", f"s3://{rustfs_bucket_name}", backend="obstore", **rustfs_obstore_kwargs(rustfs_service)
     )
     await _assert_pipeline_direct_arrow_streaming(
         registry,
@@ -283,9 +283,10 @@ async def _assert_pipeline_direct_arrow_streaming(
         assert t_async_b["backend"] == "obstore"
         assert t_async_b["rows_processed"] == 4
 
-        if fmt == "parquet":
-            read_back = backend.read_arrow_sync(f"{prefix}/sync_table_parquet.parquet")
-            assert read_back.equals(sample_table)
+        decoded_sync, _ = sync_pipeline.read_arrow(dest_sync, file_format=fmt)
+        assert decoded_sync.to_pylist() == sample_table.to_pylist()
+        decoded_async, _ = await async_pipeline.read_arrow_async(dest_async_b, file_format=fmt)
+        assert decoded_async.to_pylist() == sample_table.to_pylist()
 
     v1 = pyarrow.table({"id": [1], "label": ["v1"]})
     sync_pipeline.write_arrow(v1, f"alias://{alias_name}/{prefix}/existing.parquet")
@@ -372,16 +373,33 @@ async def _assert_pipeline_direct_arrow_streaming(
         assert backend.read_arrow_sync(f"{prefix}/once.parquet").equals(v1)
 
     if check_multipart_12mb:
-        chunk_data = b"x" * (1024 * 1024)
-        large_batches = [
-            pyarrow.RecordBatch.from_pydict({"chunk": [chunk_data]}) for _ in range(12)
-        ]
+        random_chunks = [os.urandom(1024 * 1024) for _ in range(12)]
+        large_batches = [pyarrow.RecordBatch.from_pydict({"chunk": [blob]}) for blob in random_chunks]
         large_dest = f"alias://{alias_name}/{prefix}/multipart_12mb.parquet"
-        t_large = sync_pipeline.write_arrow_batches(
-            large_dest,
-            large_batches,
-        )
+        t_large = sync_pipeline.write_arrow_batches(large_dest, large_batches)
         assert t_large["rows_processed"] == 12
         assert t_large["bytes_processed"] > 10_485_760
         loaded_large = backend.read_arrow_sync(f"{prefix}/multipart_12mb.parquet")
-        assert loaded_large.num_rows == 12
+        assert loaded_large.column("chunk").to_pylist() == random_chunks
+
+        stream_backend = backend
+        assert supports_direct_stream_write(stream_backend)
+        unaligned_key = f"{prefix}/multipart_unaligned_5242887.parquet"
+        with stream_backend.open_write_stream_sync(unaligned_key, chunk_size=5_242_887) as sync_sink:
+            written_bytes, written_rows = encode_arrow_to_sink(
+                iter(large_batches), sync_sink, format_hint="parquet", compression="NONE"
+            )
+        assert written_rows == 12
+        assert written_bytes > 10_485_760
+        loaded_unaligned = backend.read_arrow_sync(unaligned_key)
+        assert loaded_unaligned.column("chunk").to_pylist() == random_chunks
+
+        async_unaligned_key = f"{prefix}/multipart_async_unaligned_5242887.parquet"
+        async with stream_backend.open_write_stream_async(async_unaligned_key, chunk_size=5_242_887) as async_sink:
+            async_bytes, async_rows = await encode_arrow_to_async_sink(
+                iter(large_batches), async_sink, format_hint="parquet", compression="NONE", chunk_size=1_048_576
+            )
+        assert async_rows == 12
+        assert async_bytes > 10_485_760
+        loaded_async_unaligned = await backend.read_arrow_async(async_unaligned_key)
+        assert loaded_async_unaligned.column("chunk").to_pylist() == random_chunks

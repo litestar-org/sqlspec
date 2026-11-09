@@ -905,11 +905,11 @@ def test_write_arrow_csv_no_header() -> None:
 
 def test_csv_roundtrip_encode_decode() -> None:
     """Roundtrip: encode Arrow table to CSV bytes, decode back, compare."""
-    from sqlspec.storage.pipeline import _decode_arrow_payload, _encode_arrow_payload
+    from sqlspec.storage._arrow_payload import decode_arrow_payload, encode_arrow_payload
 
     original = pa.table({"id": [1, 2, 3], "score": [9.5, 8.0, 7.2]})
-    payload = _encode_arrow_payload(original, "csv", compression=None)
-    restored = _decode_arrow_payload(payload, "csv")
+    payload = encode_arrow_payload(original, "csv", compression=None)
+    restored = decode_arrow_payload(payload, "csv")
 
     assert restored.num_rows == original.num_rows
     assert restored.column_names == original.column_names
@@ -918,11 +918,11 @@ def test_csv_roundtrip_encode_decode() -> None:
 
 def test_read_arrow_csv() -> None:
     """Read a CSV artifact back into an Arrow table via SyncStoragePipeline.read_arrow()."""
-    from sqlspec.storage.pipeline import _encode_arrow_payload
+    from sqlspec.storage._arrow_payload import encode_arrow_payload
 
     backend = _CsvTestBackend()
     original = pa.table({"a": [1, 2], "b": ["x", "y"]})
-    csv_bytes = _encode_arrow_payload(original, "csv", compression=None)
+    csv_bytes = encode_arrow_payload(original, "csv", compression=None)
     backend.payloads["input.csv"] = csv_bytes
 
     pipeline = SyncStoragePipeline(registry=cast(Any, _CsvTestRegistry(backend)))
@@ -1032,19 +1032,21 @@ async def test_supports_direct_stream_write_opt_in_instance_true() -> None:
 
 
 def test_storage_lazy_direct_stream_exports() -> None:
-    """Verify PEP 562 lazy exports in sqlspec.storage for direct stream symbols."""
+    """Verify PEP 562 lazy exports in sqlspec.storage for direct stream and sink encoder symbols."""
     import sqlspec.storage as storage_pkg
 
-    assert "AsyncWritableBytesSink" in storage_pkg.__all__
-    assert "DirectStreamWriteProtocol" in storage_pkg.__all__
-    assert "WritableBytesSink" in storage_pkg.__all__
-    assert "supports_direct_stream_write" in storage_pkg.__all__
-
+    expected_names = (
+        "AsyncWritableBytesSink",
+        "DirectStreamWriteProtocol",
+        "WritableBytesSink",
+        "encode_arrow_to_async_sink",
+        "encode_arrow_to_sink",
+        "supports_direct_stream_write",
+    )
     module_dir = dir(storage_pkg)
-    assert "AsyncWritableBytesSink" in module_dir
-    assert "DirectStreamWriteProtocol" in module_dir
-    assert "WritableBytesSink" in module_dir
-    assert "supports_direct_stream_write" in module_dir
+    for symbol in expected_names:
+        assert symbol in storage_pkg.__all__
+        assert symbol in module_dir
 
     from sqlspec.protocols import AsyncWritableBytesSink as ProtoAsyncWritableBytesSink
     from sqlspec.protocols import DirectStreamWriteProtocol as ProtoDirectStreamWriteProtocol
@@ -1052,10 +1054,16 @@ def test_storage_lazy_direct_stream_exports() -> None:
     from sqlspec.storage import AsyncWritableBytesSink as StorageAsyncWritableBytesSink
     from sqlspec.storage import DirectStreamWriteProtocol as StorageDirectStreamWriteProtocol
     from sqlspec.storage import WritableBytesSink as StorageWritableBytesSink
+    from sqlspec.storage import encode_arrow_to_async_sink as storage_encode_arrow_to_async_sink
+    from sqlspec.storage import encode_arrow_to_sink as storage_encode_arrow_to_sink
     from sqlspec.storage import supports_direct_stream_write as storage_supports_direct_stream_write
+    from sqlspec.storage._arrow_payload import encode_arrow_to_async_sink as payload_encode_arrow_to_async_sink
+    from sqlspec.storage._arrow_payload import encode_arrow_to_sink as payload_encode_arrow_to_sink
     from sqlspec.utils.type_guards import supports_direct_stream_write as guard_supports_direct_stream_write
 
     assert StorageAsyncWritableBytesSink is ProtoAsyncWritableBytesSink
     assert StorageDirectStreamWriteProtocol is ProtoDirectStreamWriteProtocol
     assert StorageWritableBytesSink is ProtoWritableBytesSink
+    assert storage_encode_arrow_to_sink is payload_encode_arrow_to_sink
+    assert storage_encode_arrow_to_async_sink is payload_encode_arrow_to_async_sink
     assert storage_supports_direct_stream_write is guard_supports_direct_stream_write

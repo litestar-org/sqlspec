@@ -15,6 +15,7 @@ import pytest
 import sqlspec.storage.pipeline as storage_pipeline
 from sqlspec.exceptions import StorageCapabilityError
 from sqlspec.storage._arrow_payload import (
+    StorageFormat,
     decode_arrow_payload,
     encode_arrow_payload,
     encode_arrow_to_async_sink,
@@ -97,11 +98,11 @@ def test_json_array_decode_keeps_existing_shape() -> None:
 
 
 @pytest.mark.parametrize("format_choice", ["parquet", "arrow-ipc", "csv"])
-def test_arrow_payload_round_trip_has_expected_signature(format_choice: str) -> None:
+def test_arrow_payload_round_trip_has_expected_signature(format_choice: StorageFormat) -> None:
     table = pa.table({"id": [1, 2], "name": ["alpha", "beta"]})
 
-    payload = encode_arrow_payload(table, format_choice, compression=None)  # type: ignore[arg-type]
-    restored = decode_arrow_payload(payload, format_choice)  # type: ignore[arg-type]
+    payload = encode_arrow_payload(table, format_choice, compression=None)
+    restored = decode_arrow_payload(payload, format_choice)
 
     signatures = {"parquet": b"PAR1", "arrow-ipc": b"ARROW1", "csv": b'"id","name"'}
     assert payload.startswith(signatures[format_choice])
@@ -110,7 +111,7 @@ def test_arrow_payload_round_trip_has_expected_signature(format_choice: str) -> 
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc", "csv"])
 def test_sync_row_write_rejects_arrow_formats_before_encoding_or_io(
-    monkeypatch: pytest.MonkeyPatch, format_hint: str
+    monkeypatch: pytest.MonkeyPatch, format_hint: StorageFormat
 ) -> None:
     pipeline = SyncStoragePipeline()
     backend = _install_backend(monkeypatch, SyncStoragePipeline)
@@ -119,7 +120,7 @@ def test_sync_row_write_rejects_arrow_formats_before_encoding_or_io(
     reset_storage_bridge_events()
 
     with pytest.raises(StorageCapabilityError, match="Row storage writes support only JSON and JSONL"):
-        pipeline.write_rows([{"id": 1}], "payload", format_hint=format_hint)  # type: ignore[arg-type]
+        pipeline.write_rows([{"id": 1}], "payload", format_hint=format_hint)
 
     assert backend.writes == []
     assert get_recent_storage_events() == []
@@ -127,15 +128,16 @@ def test_sync_row_write_rejects_arrow_formats_before_encoding_or_io(
 
 @pytest.mark.parametrize("format_hint", ["json", "jsonl"])
 def test_sync_arrow_write_rejects_row_formats_before_encoding_or_io(
-    monkeypatch: pytest.MonkeyPatch, format_hint: str
+    monkeypatch: pytest.MonkeyPatch, format_hint: StorageFormat
 ) -> None:
     pipeline = SyncStoragePipeline()
     backend = _install_backend(monkeypatch, SyncStoragePipeline)
-    monkeypatch.setattr(storage_pipeline, "_encode_arrow_payload", pytest.fail)
+    monkeypatch.setattr(storage_pipeline, "_encode_arrow_source_to_bytes", pytest.fail)
+    monkeypatch.setattr(storage_pipeline, "encode_arrow_to_sink", pytest.fail)
     reset_storage_bridge_events()
 
     with pytest.raises(StorageCapabilityError, match="Arrow storage writes support only Parquet, Arrow IPC, and CSV"):
-        pipeline.write_arrow(pa.table({"id": [1]}), "payload", format_hint=format_hint)  # type: ignore[arg-type]
+        pipeline.write_arrow(pa.table({"id": [1]}), "payload", format_hint=format_hint)
 
     assert backend.writes == []
     assert get_recent_storage_events() == []
@@ -143,7 +145,7 @@ def test_sync_arrow_write_rejects_row_formats_before_encoding_or_io(
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc", "csv"])
 async def test_async_row_write_rejects_arrow_formats_before_io(
-    monkeypatch: pytest.MonkeyPatch, format_hint: str
+    monkeypatch: pytest.MonkeyPatch, format_hint: StorageFormat
 ) -> None:
     pipeline = AsyncStoragePipeline()
     backend = _install_backend(monkeypatch, AsyncStoragePipeline)
@@ -152,7 +154,7 @@ async def test_async_row_write_rejects_arrow_formats_before_io(
     reset_storage_bridge_events()
 
     with pytest.raises(StorageCapabilityError, match="Row storage writes support only JSON and JSONL"):
-        await pipeline.write_rows([{"id": 1}], "payload", format_hint=format_hint)  # type: ignore[arg-type]
+        await pipeline.write_rows([{"id": 1}], "payload", format_hint=format_hint)
 
     assert backend.writes == []
     assert get_recent_storage_events() == []
@@ -160,15 +162,16 @@ async def test_async_row_write_rejects_arrow_formats_before_io(
 
 @pytest.mark.parametrize("format_hint", ["json", "jsonl"])
 async def test_async_arrow_write_rejects_row_formats_before_io(
-    monkeypatch: pytest.MonkeyPatch, format_hint: str
+    monkeypatch: pytest.MonkeyPatch, format_hint: StorageFormat
 ) -> None:
     pipeline = AsyncStoragePipeline()
     backend = _install_backend(monkeypatch, AsyncStoragePipeline)
-    monkeypatch.setattr(storage_pipeline, "_encode_arrow_payload", pytest.fail)
+    monkeypatch.setattr(storage_pipeline, "_encode_arrow_source_to_bytes", pytest.fail)
+    monkeypatch.setattr(storage_pipeline, "encode_arrow_to_async_sink", pytest.fail)
     reset_storage_bridge_events()
 
     with pytest.raises(StorageCapabilityError, match="Arrow storage writes support only Parquet, Arrow IPC, and CSV"):
-        await pipeline.write_arrow(pa.table({"id": [1]}), "payload", format_hint=format_hint)  # type: ignore[arg-type]
+        await pipeline.write_arrow(pa.table({"id": [1]}), "payload", format_hint=format_hint)
 
     assert backend.writes == []
     assert get_recent_storage_events() == []
@@ -239,25 +242,25 @@ def _make_source(kind: str) -> Any:
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc", "csv"])
 @pytest.mark.parametrize("source_kind", ["table", "batch", "reader", "c_stream", "iterable"])
-def test_encode_arrow_to_sink_sources_roundtrip(format_hint: str, source_kind: str) -> None:
+def test_encode_arrow_to_sink_sources_roundtrip(format_hint: StorageFormat, source_kind: str) -> None:
     source = _make_source(source_kind)
     sink = _TrackingBytesSink()
-    nbytes, rows = encode_arrow_to_sink(source, sink, format_hint=format_hint)  # type: ignore[arg-type]
+    nbytes, rows = encode_arrow_to_sink(source, sink, format_hint=format_hint)
     assert nbytes == len(sink.data)
     assert rows == 3
-    restored = decode_arrow_payload(bytes(sink.data), format_hint)  # type: ignore[arg-type]
+    restored = decode_arrow_payload(bytes(sink.data), format_hint)
     assert restored.to_pylist() == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}, {"id": 3, "name": "c"}]
 
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc", "csv"])
 @pytest.mark.parametrize("source_kind", ["table", "batch", "reader", "c_stream", "iterable"])
-async def test_encode_arrow_to_async_sink_sources_roundtrip(format_hint: str, source_kind: str) -> None:
+async def test_encode_arrow_to_async_sink_sources_roundtrip(format_hint: StorageFormat, source_kind: str) -> None:
     source = _make_source(source_kind)
     sink = _AsyncTrackingBytesSink()
-    nbytes, rows = await encode_arrow_to_async_sink(source, sink, format_hint=format_hint, chunk_size=32)  # type: ignore[arg-type]
+    nbytes, rows = await encode_arrow_to_async_sink(source, sink, format_hint=format_hint, chunk_size=32)
     assert nbytes == len(sink.data)
     assert rows == 3
-    restored = decode_arrow_payload(bytes(sink.data), format_hint)  # type: ignore[arg-type]
+    restored = decode_arrow_payload(bytes(sink.data), format_hint)
     assert restored.to_pylist() == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}, {"id": 3, "name": "c"}]
 
 
@@ -284,25 +287,17 @@ def test_sink_receives_bytes_incrementally_before_stream_exhausted() -> None:
 
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc", "csv"])
-def test_native_sink_bypass_and_byte_parity(format_hint: str) -> None:
+def test_native_sink_bypass_and_byte_parity(format_hint: StorageFormat) -> None:
     table = pa.table({"x": [10, 20], "y": ["hello", "world"]})
     native_sink = pa.BufferOutputStream()
-    native_bytes_written, native_rows = encode_arrow_to_sink(
-        table,
-        native_sink,
-        format_hint=format_hint,  # type: ignore[arg-type]
-    )
+    native_bytes_written, native_rows = encode_arrow_to_sink(table, native_sink, format_hint=format_hint)
     assert native_sink.closed is False
     buffer = native_sink.getvalue()
     assert native_bytes_written == buffer.size
     assert native_rows == 2
 
     tracking_sink = _TrackingBytesSink()
-    tracking_bytes_written, tracking_rows = encode_arrow_to_sink(
-        table,
-        tracking_sink,
-        format_hint=format_hint,  # type: ignore[arg-type]
-    )
+    tracking_bytes_written, tracking_rows = encode_arrow_to_sink(table, tracking_sink, format_hint=format_hint)
     assert tracking_bytes_written == native_bytes_written
     assert bytes(tracking_sink.data) == buffer.to_pybytes()
     assert tracking_rows == 2
@@ -343,7 +338,7 @@ def test_csv_write_options_custom_delimiter_and_header() -> None:
 
 @pytest.mark.parametrize("as_reader", [False, True])
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc"])
-def test_float_vector_and_decimal64_fidelity(as_reader: bool, format_hint: str) -> None:
+def test_float_vector_and_decimal64_fidelity(as_reader: bool, format_hint: StorageFormat) -> None:
     schema = pa.schema([("embedding", pa.list_(pa.float32(), 2)), ("amount", pa.decimal64(10, 2))])
     rows = [
         {"embedding": [1.0, 2.0], "amount": Decimal("12.34")},
@@ -353,10 +348,10 @@ def test_float_vector_and_decimal64_fidelity(as_reader: bool, format_hint: str) 
     source = pa.RecordBatchReader.from_batches(schema, table.to_batches()) if as_reader else table
 
     sink = _TrackingBytesSink()
-    _nbytes, count = encode_arrow_to_sink(source, sink, format_hint=format_hint)  # type: ignore[arg-type]
+    _nbytes, count = encode_arrow_to_sink(source, sink, format_hint=format_hint)
     assert count == 2
 
-    restored = decode_arrow_payload(bytes(sink.data), format_hint)  # type: ignore[arg-type]
+    restored = decode_arrow_payload(bytes(sink.data), format_hint)
     if format_hint == "arrow-ipc":
         assert restored.schema.field("amount").type == pa.decimal64(10, 2)
     else:
@@ -382,35 +377,35 @@ def test_decimal_only_csv_and_vector_rejection() -> None:
 
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc", "csv"])
-def test_zero_row_schema_retention(format_hint: str) -> None:
+def test_zero_row_schema_retention(format_hint: StorageFormat) -> None:
     schema_fields: list[tuple[str, pa.DataType]] = [("id", pa.int64()), ("label", pa.string())]
     schema = pa.schema(schema_fields)
     empty_reader = pa.RecordBatchReader.from_batches(schema, [])
     sink = _TrackingBytesSink()
-    nbytes, count = encode_arrow_to_sink(empty_reader, sink, format_hint=format_hint)  # type: ignore[arg-type]
+    nbytes, count = encode_arrow_to_sink(empty_reader, sink, format_hint=format_hint)
     assert count == 0
     assert nbytes > 0
-    restored = decode_arrow_payload(bytes(sink.data), format_hint)  # type: ignore[arg-type]
+    restored = decode_arrow_payload(bytes(sink.data), format_hint)
     assert restored.num_rows == 0
     assert restored.column_names == ["id", "label"]
 
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc", "csv"])
-def test_empty_list_fallback(format_hint: str) -> None:
+def test_empty_list_fallback(format_hint: StorageFormat) -> None:
     sink = _TrackingBytesSink()
-    nbytes, count = encode_arrow_to_sink([], sink, format_hint=format_hint)  # type: ignore[arg-type]
+    nbytes, count = encode_arrow_to_sink([], sink, format_hint=format_hint)
     assert count == 0
     if format_hint == "csv":
         assert nbytes == 0
         assert len(sink.data) == 0
     else:
         assert nbytes > 0
-        restored = decode_arrow_payload(bytes(sink.data), format_hint)  # type: ignore[arg-type]
+        restored = decode_arrow_payload(bytes(sink.data), format_hint)
         assert restored.num_rows == 0
         assert restored.num_columns == 0
 
 
-def _run_failing_encoder(format_hint: str) -> tuple[int, _TrackingBytesSink]:
+def _run_failing_encoder(format_hint: StorageFormat) -> tuple[int, _TrackingBytesSink]:
     schema = pa.schema([("id", pa.int64())])
     b1 = pa.record_batch([pa.array([1, 2])], schema=schema)
     sink = _TrackingBytesSink()
@@ -423,13 +418,13 @@ def _run_failing_encoder(format_hint: str) -> tuple[int, _TrackingBytesSink]:
         raise RuntimeError("mid-batch boom")
 
     with pytest.raises(RuntimeError, match="mid-batch boom"):
-        encode_arrow_to_sink(failing_batches(), sink, format_hint=format_hint)  # type: ignore[arg-type]
+        encode_arrow_to_sink(failing_batches(), sink, format_hint=format_hint)
 
     return before_len, sink
 
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc"])
-def test_poisoned_failure_writes_nothing_further(format_hint: str) -> None:
+def test_poisoned_failure_writes_nothing_further(format_hint: StorageFormat) -> None:
     before_len, sink = _run_failing_encoder(format_hint)
     gc.collect()
 
@@ -449,11 +444,11 @@ def test_poisoned_failure_writes_nothing_further(format_hint: str) -> None:
         ("csv", {"row_group_size": 10}),
     ],
 )
-def test_validate_arrow_write_options_unsupported(format_hint: str, bad_options: dict[str, Any]) -> None:
+def test_validate_arrow_write_options_unsupported(format_hint: StorageFormat, bad_options: dict[str, Any]) -> None:
     sink = _TrackingBytesSink()
     table = pa.table({"a": [1]})
     with pytest.raises(TypeError, match=r"^Unsupported write option\(s\)"):
-        encode_arrow_to_sink(table, sink, format_hint=format_hint, write_options=bad_options)  # type: ignore[arg-type]
+        encode_arrow_to_sink(table, sink, format_hint=format_hint, write_options=bad_options)
     assert len(sink.data) == 0
 
 
@@ -605,7 +600,7 @@ def test_reject_row_formats_and_invalid_chunk_size() -> None:
     sink = _TrackingBytesSink()
 
     with pytest.raises(StorageCapabilityError, match="Arrow storage writes support only Parquet, Arrow IPC, and CSV"):
-        encode_arrow_to_sink(table, sink, format_hint="jsonl")  # type: ignore[arg-type]
+        encode_arrow_to_sink(table, sink, format_hint="jsonl")
 
     assert len(sink.data) == 0
 
@@ -621,3 +616,112 @@ async def test_async_reject_invalid_chunk_size() -> None:
         await encode_arrow_to_async_sink(table, async_sink, chunk_size=-10)
 
     assert len(async_sink.data) == 0
+
+
+@pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc", "csv"])
+def test_poisonable_counting_sink_loops_on_partial_writes(format_hint: StorageFormat) -> None:
+    """_PoisonableCountingSink loops until all bytes are written when sink.write returns partial counts."""
+
+    class _PartialWriteSink:
+        def __init__(self, max_step: int) -> None:
+            self._max_step = max_step
+            self.data = bytearray()
+            self.write_calls = 0
+
+        def write(self, data: bytes, /) -> int:
+            assert isinstance(data, bytes)
+            self.write_calls += 1
+            step = min(len(data), self._max_step)
+            self.data.extend(data[:step])
+            return step
+
+    table = pa.table({"id": [1, 2, 3, 4], "name": ["alpha", "beta", "gamma", "delta"]})
+    partial_sink = _PartialWriteSink(max_step=7)
+    nbytes, rows = encode_arrow_to_sink(table, partial_sink, format_hint=format_hint)
+
+    assert rows == 4
+    assert nbytes == len(partial_sink.data)
+    assert partial_sink.write_calls > 1
+    expected = encode_arrow_payload(table, format_hint, compression=None)
+    assert bytes(partial_sink.data) == expected
+
+
+async def test_async_abort_halts_worker_before_second_batch_consumed() -> None:
+    """Cancelling an async encode halts the worker immediately without consuming subsequent batches."""
+    schema = pa.table({"id": [1], "name": ["a"]}).schema
+    batch_1 = pa.record_batch([pa.array([1]), pa.array(["first"])], schema=schema)
+    batch_2 = pa.record_batch([pa.array([2]), pa.array(["second"])], schema=schema)
+
+    entered_gen = threading.Event()
+    proceed_after_abort = threading.Event()
+    batches_yielded = 0
+
+    def tracked_batches() -> Iterator[pa.RecordBatch]:
+        nonlocal batches_yielded
+        entered_gen.set()
+        proceed_after_abort.wait(timeout=5.0)
+        batches_yielded += 1
+        yield batch_1
+        batches_yielded += 1
+        yield batch_2
+
+    sink = _AsyncTrackingBytesSink()
+    task = asyncio.create_task(
+        encode_arrow_to_async_sink(tracked_batches(), sink, chunk_size=1_048_576, format_hint="arrow-ipc")
+    )
+
+    await asyncio.to_thread(entered_gen.wait, 5.0)
+    task.cancel()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    proceed_after_abort.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert batches_yielded == 1
+    assert sink.chunks == []
+
+
+async def test_join_shielded_suppresses_delayed_worker_exception_and_preserves_cancel() -> None:
+    """join_shielded suppresses delayed worker exceptions when suppress_result=True and prioritizes CancelledError."""
+    loop = asyncio.get_running_loop()
+
+    suppressed_fut: asyncio.Future[None] = loop.create_future()
+    suppress_task = asyncio.create_task(join_shielded(suppressed_fut, suppress_result=True))
+    await asyncio.sleep(0)
+    suppressed_fut.set_exception(RuntimeError("delayed worker failure"))
+    assert await suppress_task is None
+
+    cancel_fut: asyncio.Future[None] = loop.create_future()
+    cancel_task = asyncio.create_task(join_shielded(cancel_fut, suppress_result=False))
+    await asyncio.sleep(0)
+    cancel_task.cancel()
+    await asyncio.sleep(0)
+    cancel_fut.set_exception(RuntimeError("delayed worker failure after cancel"))
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_task
+
+
+async def test_direct_stream_pipeline_bypasses_buffered_encoding_seams(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct-stream pipeline writes bypass _encode_arrow_source_to_bytes and backend write_bytes."""
+    from sqlspec.storage import StorageRegistry
+    from sqlspec.storage.backends.obstore import ObStoreBackend
+
+    monkeypatch.setattr(ObStoreBackend, "write_bytes_sync", pytest.fail)
+    monkeypatch.setattr(ObStoreBackend, "write_bytes_async", pytest.fail)
+    monkeypatch.setattr(storage_pipeline, "_encode_arrow_source_to_bytes", pytest.fail)
+
+    registry = StorageRegistry()
+    registry.register_alias("mem_direct", "memory://", backend="obstore")
+
+    sync_pipeline = SyncStoragePipeline(registry=registry)
+    async_pipeline = AsyncStoragePipeline(registry=registry)
+    table = pa.table({"id": [1, 2]})
+
+    t_sync = sync_pipeline.write_arrow(table, "alias://mem_direct/sync.parquet")
+    assert t_sync["rows_processed"] == 2
+    t_async = await async_pipeline.write_arrow(table, "alias://mem_direct/async.parquet")
+    assert t_async["rows_processed"] == 2
+    assert registry.get("mem_direct").read_arrow_sync("sync.parquet").equals(table)
+    assert (await registry.get("mem_direct").read_arrow_async("async.parquet")).equals(table)

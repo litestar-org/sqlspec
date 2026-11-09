@@ -15,7 +15,6 @@ from sqlspec.exceptions import ImproperConfigurationError, StorageCapabilityErro
 from sqlspec.storage._arrow_payload import (
     StorageFormat,
     decode_arrow_payload,
-    encode_arrow_payload,
     encode_arrow_to_async_sink,
     encode_arrow_to_sink,
 )
@@ -794,12 +793,7 @@ class AsyncStoragePipeline(_StoragePipelineBase):
                 if not overwrite
                 else partial(backend.write_bytes_async, path, payload)
             )
-            await execute_async_storage_operation(
-                operation,
-                backend=backend_name,
-                operation="write_bytes",
-                path=path,
-            )
+            await execute_async_storage_operation(operation, backend=backend_name, operation="write_bytes", path=path)
         else:
             await async_(_write_backend_sync)(
                 backend=backend, path=path, payload=payload, backend_name=backend_name, overwrite=overwrite
@@ -825,19 +819,6 @@ def _storage_options(default_options: "dict[str, Any]", storage_options: "dict[s
 
 def _csv_write_options_from_kwargs(storage_options: "dict[str, Any]") -> "dict[str, Any] | None":
     return cast("dict[str, Any] | None", storage_options.get("write_options"))
-
-
-def _csv_write_options(
-    format_choice: StorageFormat,
-    resolved_options: "dict[str, Any]",
-    default_options: "dict[str, Any]",
-    default_write_options: "dict[str, Any] | None",
-) -> "dict[str, Any] | None":
-    if format_choice != "csv":
-        return None
-    if resolved_options is default_options:
-        return default_write_options
-    return _csv_write_options_from_kwargs(resolved_options)
 
 
 def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
@@ -916,32 +897,15 @@ def _encode_arrow_source_to_bytes(
     return buffer.getvalue().to_pybytes(), rows_written
 
 
-def _encode_arrow_payload(
-    table: "ArrowTable",
-    format_choice: StorageFormat,
-    *,
-    compression: str | None,
-    write_options: "dict[str, Any] | None" = None,
-) -> bytes:
-    return encode_arrow_payload(table, format_choice, compression=compression, write_options=write_options)
-
-
 def _write_backend_sync(
-    backend: "ObjectStoreProtocol",
-    path: str,
-    payload: bytes,
-    *,
-    backend_name: str,
-    overwrite: bool = True,
+    backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str, overwrite: bool = True
 ) -> None:
     operation = (
         partial(backend.write_bytes_sync, path, payload, overwrite=False)
         if not overwrite
         else partial(backend.write_bytes_sync, path, payload)
     )
-    execute_sync_storage_operation(
-        operation, backend=backend_name, operation="write_bytes", path=path
-    )
+    execute_sync_storage_operation(operation, backend=backend_name, operation="write_bytes", path=path)
 
 
 def _read_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> bytes:

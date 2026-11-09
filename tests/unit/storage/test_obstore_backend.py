@@ -1160,13 +1160,14 @@ async def test_open_write_stream_sync_and_async_round_trip(tmp_path: Path, use_f
     """Sync and async write streams round trip bytes and manage closed state."""
     uri = f"file://{tmp_path}" if use_file_uri else "memory://"
     store = ObStoreBackend(uri)
-    extra_kwargs: dict[str, Any] = {"attributes": {"Content-Type": "application/octet-stream"}} if not use_file_uri else {}
+    extra_kwargs: dict[str, Any] = (
+        {"attributes": {"Content-Type": "application/octet-stream"}} if not use_file_uri else {}
+    )
 
-    with store.open_write_stream_sync(
-        "sync_stream.bin",
-        chunk_size=1024,
-        **extra_kwargs,
-    ) as sync_sink:
+    from sqlspec.storage.backends.obstore import _AsyncObstoreSink, _ObstoreSink
+
+    with store.open_write_stream_sync("sync_stream.bin", chunk_size=1024, **extra_kwargs) as sync_sink:
+        assert isinstance(sync_sink, _ObstoreSink)
         assert sync_sink.closed is False
         sync_sink.write(cast("Any", bytearray(b"part-1")))
         sync_sink.write(cast("Any", memoryview(b"-part-2")))
@@ -1174,10 +1175,8 @@ async def test_open_write_stream_sync_and_async_round_trip(tmp_path: Path, use_f
     assert sync_sink.closed is True
     assert store.read_bytes_sync("sync_stream.bin") == b"part-1-part-2"
 
-    async with store.open_write_stream_async(
-        "async_stream.bin",
-        chunk_size=1024,
-    ) as async_sink:
+    async with store.open_write_stream_async("async_stream.bin", chunk_size=1024) as async_sink:
+        assert isinstance(async_sink, _AsyncObstoreSink)
         assert async_sink.closed is False
         assert isinstance(async_sink.closed, bool)
         await async_sink.write(cast("Any", bytearray(b"async-1")))
@@ -1315,13 +1314,7 @@ async def test_async_obstore_write_stream_cancel_during_commit() -> None:
         def write(self, data: bytes) -> int:
             return len(data)
 
-    stream = _AsyncObstoreWriteStream(
-        None,
-        "dummy.parquet",
-        {},
-        backend_type="obstore",
-        log_fields=None,
-    )
+    stream = _AsyncObstoreWriteStream(None, "dummy.parquet", {}, backend_type="obstore", log_fields=None)
     stream._entered = _SpyAsyncWriter()
 
     async def do_exit() -> None:
@@ -1358,10 +1351,7 @@ async def test_write_arrow_multi_format_and_snappy_and_single_log(
     uri = f"file://{tmp_path}" if use_file_uri else "memory://"
     store = ObStoreBackend(uri)
 
-    table = pa.table({
-        "id": [1, 2],
-        "amt": pa.array([Decimal("12.34"), Decimal("56.78")], type=pa.decimal64(10, 2)),
-    })
+    table = pa.table({"id": [1, 2], "amt": pa.array([Decimal("12.34"), Decimal("56.78")], type=pa.decimal64(10, 2))})
 
     log_events: list[dict[str, Any]] = []
 
@@ -1450,3 +1440,55 @@ async def test_pre_execution_validation_errors(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="chunk_size must be positive"):
         store.write_arrow_sync("k", table, overwrite=False, chunk_size=0)
 
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_async_obstore_write_stream_suppresses_abort_error_preserving_original_and_cancel() -> None:
+    """_AsyncObstoreWriteStream.__aexit__ suppresses AbortMultipartUpload errors on exception or CancelledError."""
+
+    class _FailingAbortAsyncWriter:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            if exc_type is not None:
+                await asyncio.sleep(0)
+                raise OSError("AbortMultipartUpload 500 Internal Error")
+
+        def write(self, data: bytes) -> int:
+            return len(data)
+
+    stream_err = _AsyncObstoreWriteStream(None, "dummy_err.parquet", {}, backend_type="obstore", log_fields=None)
+    stream_err._entered = _FailingAbortAsyncWriter()
+
+    with pytest.raises(RuntimeError, match="caller domain error"):
+        try:
+            raise RuntimeError("caller domain error")
+        except RuntimeError as exc:
+            await stream_err.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
+
+    stream_cancel = _AsyncObstoreWriteStream(None, "dummy_cancel.parquet", {}, backend_type="obstore", log_fields=None)
+    stream_cancel._entered = _FailingAbortAsyncWriter()
+
+    with pytest.raises(asyncio.CancelledError):
+        try:
+            raise asyncio.CancelledError
+        except asyncio.CancelledError as exc:
+            await stream_cancel.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_async_obstore_sink_close_marks_closed_and_ignores_writes() -> None:
+    """_AsyncObstoreSink.close() marks the sink closed symmetrically with _ObstoreSink."""
+    from sqlspec.storage.backends.obstore import _AsyncObstoreSink
+
+    store = ObStoreBackend("memory://")
+    async with store.open_write_stream_async("close_sym.bin") as async_sink:
+        assert isinstance(async_sink, _AsyncObstoreSink)
+        await async_sink.write(b"first")
+        assert async_sink.closed is False
+        await async_sink.close()
+        assert async_sink.closed is True
+        assert await async_sink.write(b"ignored") == 0
+    assert await store.read_bytes_async("close_sym.bin") == b"first"

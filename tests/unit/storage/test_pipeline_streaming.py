@@ -168,43 +168,55 @@ class _MapRegistry:
 
 
 async def test_pipeline_format_and_telemetry_parity(tmp_path: Path) -> None:
-    """Format and telemetry parity across direct obstore and fallback local backends."""
-    registry = StorageRegistry()
-    registry.register_alias("mem", "memory://")
-    registry.register_alias("loc", f"file://{tmp_path}", backend="local")
+    """Format and telemetry parity across direct obstore, local, and non-direct buffered backends with decimal64."""
+
+    class _BufferedMemoryBackend:
+        backend_type = "buffered_mem"
+        protocol = "bufmem"
+
+        def __init__(self) -> None:
+            self.objects: dict[str, bytes] = {}
+
+        def write_bytes_sync(self, path: str, payload: bytes) -> None:
+            self.objects[path] = payload
+
+        async def write_bytes_async(self, path: str, payload: bytes) -> None:
+            self.objects[path] = payload
+
+        def read_bytes_sync(self, path: str) -> bytes:
+            return self.objects[path]
+
+        async def read_bytes_async(self, path: str) -> bytes:
+            return self.objects[path]
+
+    mem_backend = ObStoreBackend("memory://")
+    loc_backend = LocalStore(str(tmp_path))
+    buf_backend = _BufferedMemoryBackend()
+    registry = cast("StorageRegistry", _MapRegistry({"mem": mem_backend, "loc": loc_backend, "buf": buf_backend}))
     sync_p = SyncStoragePipeline(registry=registry)
     async_p = AsyncStoragePipeline(registry=registry)
 
-    schema_scalar = pa.schema(
-        cast("Any", [
-            ("id", pa.int64()),
-            ("amount", pa.decimal128(10, 2)),
-        ])
-    )
+    schema_scalar = pa.schema(cast("Any", [("id", pa.int64()), ("amount", pa.decimal64(10, 2))]))
     table_scalar = pa.Table.from_arrays(
         [
             pa.array([1, 2, 3, 4, 5], type=pa.int64()),
             pa.array(
                 [Decimal("1.25"), Decimal("2.50"), Decimal("3.75"), Decimal("5.00"), Decimal("6.25")],
-                type=pa.decimal128(10, 2),
+                type=pa.decimal64(10, 2),
             ),
         ],
         schema=schema_scalar,
     )
 
     schema_vector = pa.schema(
-        cast("Any", [
-            ("id", pa.int64()),
-            ("amount", pa.decimal128(10, 2)),
-            ("vec", pa.list_(pa.float32(), 2)),
-        ])
+        cast("Any", [("id", pa.int64()), ("amount", pa.decimal64(10, 2)), ("vec", pa.list_(pa.float32(), 2))])
     )
     table_vector = pa.Table.from_arrays(
         [
             pa.array([1, 2, 3, 4, 5], type=pa.int64()),
             pa.array(
                 [Decimal("1.25"), Decimal("2.50"), Decimal("3.75"), Decimal("5.00"), Decimal("6.25")],
-                type=pa.decimal128(10, 2),
+                type=pa.decimal64(10, 2),
             ),
             pa.FixedSizeListArray.from_arrays(
                 pa.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], type=pa.float32()), 2
@@ -213,25 +225,36 @@ async def test_pipeline_format_and_telemetry_parity(tmp_path: Path) -> None:
         schema=schema_vector,
     )
 
-    cases = [
-        ("parquet", table_vector),
-        ("arrow-ipc", table_vector),
-        ("csv", table_scalar),
-    ]
+    cases = [("parquet", table_vector), ("arrow-ipc", table_vector), ("csv", table_scalar)]
 
     for fmt, tbl in cases:
-        for dest_alias, expected_backend in [("alias://mem", "obstore"), ("alias://loc", "local")]:
+        bytes_by_backend: dict[str, int] = {}
+        for dest_alias, expected_backend in [
+            ("alias://mem", "obstore"),
+            ("alias://loc", "local"),
+            ("alias://buf", "buffered_mem"),
+        ]:
             sync_dest = f"{dest_alias}/sync_pop_{fmt}.{fmt}"
             t_sync = sync_p.write_arrow(tbl, sync_dest, format_hint=cast("Any", fmt))
             assert t_sync["rows_processed"] == 5
             assert t_sync["bytes_processed"] > 0
             assert t_sync["backend"] == expected_backend
             assert t_sync["format"] == fmt
+            bytes_by_backend[expected_backend] = t_sync["bytes_processed"]
+
+            decoded_sync, _ = sync_p.read_arrow(sync_dest, file_format=cast("Any", fmt))
+            assert decoded_sync.num_rows == 5
+            if fmt == "arrow-ipc":
+                assert decoded_sync.schema.field("amount").type == pa.decimal64(10, 2)
+                assert decoded_sync.column("amount").to_pylist() == tbl.column("amount").to_pylist()
+            elif fmt == "parquet":
+                assert decoded_sync.schema.field("amount").type == pa.decimal128(10, 2)
+                assert decoded_sync.column("amount").to_pylist() == tbl.column("amount").to_pylist()
 
             async_dest = f"{dest_alias}/async_pop_{fmt}.{fmt}"
             t_async = await async_p.write_arrow(tbl, async_dest, format_hint=cast("Any", fmt))
             assert t_async["rows_processed"] == 5
-            assert t_async["bytes_processed"] > 0
+            assert t_async["bytes_processed"] == t_sync["bytes_processed"]
             assert t_async["backend"] == expected_backend
             assert t_async["format"] == fmt
 
@@ -254,6 +277,9 @@ async def test_pipeline_format_and_telemetry_parity(tmp_path: Path) -> None:
                 f"{dest_alias}/ar_btch_{fmt}.{fmt}", format_hint=cast("Any", fmt), pipeline=async_p
             )
             assert t_ar_btch["rows_processed"] == 5
+
+        assert bytes_by_backend["obstore"] == bytes_by_backend["buffered_mem"]
+        assert bytes_by_backend["local"] == bytes_by_backend["buffered_mem"]
 
 
 async def test_pipeline_backpressure_stops_generator() -> None:
@@ -282,9 +308,7 @@ async def test_pipeline_backpressure_stops_generator() -> None:
             return file_format == "arrow-ipc" and overwrite
 
         @contextlib.contextmanager
-        def open_write_stream_sync(
-            self, path: str, *, overwrite: bool = True, **kwargs: Any
-        ) -> Iterator[Any]:
+        def open_write_stream_sync(self, path: str, *, overwrite: bool = True, **kwargs: Any) -> Iterator[Any]:
             raise NotImplementedError
 
         @contextlib.asynccontextmanager
@@ -303,10 +327,7 @@ async def test_pipeline_backpressure_stops_generator() -> None:
         nonlocal yield_count
         for i in range(40):
             yield_count += 1
-            yield pa.RecordBatch.from_pydict(
-                {"id": [i], "payload": [b"x" * 131_072]},
-                schema=schema,
-            )
+            yield pa.RecordBatch.from_pydict({"id": [i], "payload": [b"x" * 131_072]}, schema=schema)
 
     task = asyncio.create_task(
         pipeline.write_arrow_batches_async("alias://gate/stream.ipc", _generate_batches(), file_format="arrow-ipc")
@@ -435,86 +456,121 @@ async def test_pipeline_overwrite_false_raises_across_backends(tmp_path: Path) -
             await ar_new.write_to_storage_async(ar_dest, overwrite=False, pipeline=async_p)
 
 
-async def test_pipeline_midstream_failure_and_cancellation_preserves_object() -> None:
-    """Mid-stream errors and asyncio.CancelledError preserve pre-existing object and write 0 metric bytes."""
+async def test_pipeline_midstream_failure_and_cancellation_preserves_object(tmp_path: Path) -> None:
+    """Mid-stream errors and asyncio.CancelledError preserve pre-existing object across memory:// and file://."""
     mem_backend = ObStoreBackend("memory://")
-    registry = cast("StorageRegistry", _MapRegistry({"mem": mem_backend}))
+    file_backend = ObStoreBackend(f"file://{tmp_path}")
+    registry = cast("StorageRegistry", _MapRegistry({"mem": mem_backend, "obfile": file_backend}))
     sync_p = SyncStoragePipeline(registry=registry)
     async_p = AsyncStoragePipeline(registry=registry)
 
     schema = pa.schema([("id", pa.int64())])
     initial_table = pa.Table.from_arrays([pa.array([1], type=pa.int64())], schema=schema)
-    sync_p.write_arrow(initial_table, "alias://mem/existing.parquet")
 
-    def _failing_batches() -> Iterator[pa.RecordBatch]:
-        yield pa.RecordBatch.from_pydict({"id": [10]}, schema=schema)
-        raise ValueError("bad batch")
+    for alias_prefix in ("alias://mem", "alias://obfile"):
+        dest = f"{alias_prefix}/existing.parquet"
+        sync_p.write_arrow(initial_table, dest)
 
-    reset_storage_bridge_metrics()
-    with pytest.raises(ValueError, match="bad batch"):
-        sync_p.write_arrow_batches("alias://mem/existing.parquet", _failing_batches())
+        def _failing_batches() -> Iterator[pa.RecordBatch]:
+            yield pa.RecordBatch.from_pydict({"id": [10]}, schema=schema)
+            raise ValueError("bad batch")
 
-    assert get_storage_bridge_metrics().get("storage_bridge.bytes_written", 0) == 0
-    read_back, _ = sync_p.read_arrow("alias://mem/existing.parquet", file_format="parquet")
-    assert read_back.column("id").to_pylist() == [1]
+        reset_storage_bridge_metrics()
+        with pytest.raises(ValueError, match="bad batch"):
+            sync_p.write_arrow_batches(dest, _failing_batches())
 
-    def _failing_batches_async() -> Iterator[pa.RecordBatch]:
-        yield pa.RecordBatch.from_pydict({"id": [20]}, schema=schema)
-        raise ValueError("bad async batch")
+        assert get_storage_bridge_metrics().get("storage_bridge.bytes_written", 0) == 0
+        read_back, _ = sync_p.read_arrow(dest, file_format="parquet")
+        assert read_back.column("id").to_pylist() == [1]
 
-    reset_storage_bridge_metrics()
-    with pytest.raises(ValueError, match="bad async batch"):
-        await async_p.write_arrow_batches_async("alias://mem/existing.parquet", _failing_batches_async())
+        def _failing_batches_async() -> Iterator[pa.RecordBatch]:
+            yield pa.RecordBatch.from_pydict({"id": [20]}, schema=schema)
+            raise ValueError("bad async batch")
 
-    assert get_storage_bridge_metrics().get("storage_bridge.bytes_written", 0) == 0
-    read_back, _ = sync_p.read_arrow("alias://mem/existing.parquet", file_format="parquet")
-    assert read_back.column("id").to_pylist() == [1]
+        reset_storage_bridge_metrics()
+        with pytest.raises(ValueError, match="bad async batch"):
+            await async_p.write_arrow_batches_async(dest, _failing_batches_async())
 
-    started = asyncio.Event()
-    stop_event = threading.Event()
-    loop = asyncio.get_running_loop()
+        assert get_storage_bridge_metrics().get("storage_bridge.bytes_written", 0) == 0
+        read_back, _ = sync_p.read_arrow(dest, file_format="parquet")
+        assert read_back.column("id").to_pylist() == [1]
 
-    def _slow_batches_async() -> Iterator[pa.RecordBatch]:
-        yield pa.RecordBatch.from_pydict({"id": [30]}, schema=schema)
-        loop.call_soon_threadsafe(started.set)
-        stop_event.wait(timeout=0.5)
-        yield pa.RecordBatch.from_pydict({"id": [31]}, schema=schema)
+        started = asyncio.Event()
+        stop_event = threading.Event()
+        loop = asyncio.get_running_loop()
 
-    reset_storage_bridge_metrics()
-    task = asyncio.create_task(
-        async_p.write_arrow_batches_async("alias://mem/existing.parquet", _slow_batches_async())
-    )
-    await started.wait()
-    task.cancel()
-    stop_event.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+        def _slow_batches_async(
+            ready: asyncio.Event = started, release: threading.Event = stop_event
+        ) -> Iterator[pa.RecordBatch]:
+            yield pa.RecordBatch.from_pydict({"id": [30]}, schema=schema)
+            loop.call_soon_threadsafe(ready.set)
+            release.wait(timeout=0.5)
+            yield pa.RecordBatch.from_pydict({"id": [31]}, schema=schema)
 
-    assert get_storage_bridge_metrics().get("storage_bridge.bytes_written", 0) == 0
-    read_back, _ = sync_p.read_arrow("alias://mem/existing.parquet", file_format="parquet")
-    assert read_back.column("id").to_pylist() == [1]
+        reset_storage_bridge_metrics()
+        task = asyncio.create_task(async_p.write_arrow_batches_async(dest, _slow_batches_async()))
+        await started.wait()
+        task.cancel()
+        stop_event.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert get_storage_bridge_metrics().get("storage_bridge.bytes_written", 0) == 0
+        read_back, _ = sync_p.read_arrow(dest, file_format="parquet")
+        assert read_back.column("id").to_pylist() == [1]
 
 
-def test_pipeline_write_options_precedence_and_stripping(tmp_path: Path) -> None:
-    """write_options precedence: explicit overrides call storage_options, constructor applies to CSV only, and write_options is stripped."""
-    registry = cast("StorageRegistry", _MapRegistry({"ob": ObStoreBackend(f"file://{tmp_path}")}))
+async def test_pipeline_write_options_precedence_and_stripping(tmp_path: Path) -> None:
+    """write_options precedence, real StorageRegistry kwarg stripping, and single _backend resolution per call."""
+
+    class _CountingRealRegistry(StorageRegistry):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[tuple[str, str | None, dict[str, Any]]] = []
+
+        def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> Any:
+            self.calls.append((str(uri_or_alias), backend, dict(kwargs)))
+            return super().get(uri_or_alias, backend=backend, **kwargs)
+
+    registry = _CountingRealRegistry()
+    registry.register_alias("ob", f"file://{tmp_path}", backend="obstore")
     pipeline = SyncStoragePipeline(registry=registry, storage_options={"write_options": {"delimiter": "|"}})
+    async_pipeline = AsyncStoragePipeline(registry=registry, storage_options={"write_options": {"delimiter": "|"}})
 
     schema = pa.schema([("id", pa.int64())])
     table = pa.Table.from_arrays([pa.array(list(range(6)), type=pa.int64())], schema=schema)
 
-    pipeline.write_arrow(
-        table,
-        "alias://ob/call_opt.parquet",
-        storage_options={"backend": "obstore", "write_options": {"row_group_size": 3}},
-    )
+    registry.calls.clear()
+    pipeline.write_arrow(table, "alias://ob/call_opt.parquet", storage_options={"write_options": {"row_group_size": 3}})
+    assert len(registry.calls) == 1
+    assert "write_options" not in registry.calls[0][2]
     pf1 = pq.ParquetFile(tmp_path / "call_opt.parquet")
     assert pf1.num_row_groups == 2
+
+    direct_file_uri = f"file://{tmp_path / 'direct_uri_opt.parquet'}"
+    registry.calls.clear()
+    pipeline.write_arrow(
+        table, direct_file_uri, storage_options={"backend": "obstore", "write_options": {"row_group_size": 3}}
+    )
+    assert len(registry.calls) == 1
+    assert registry.calls[0] == (direct_file_uri, "obstore", {})
+    assert pq.ParquetFile(tmp_path / "direct_uri_opt.parquet").num_row_groups == 2
+
+    buffered_file_uri = f"file://{tmp_path / 'buffered_once.parquet'}"
+    registry.calls.clear()
+    await async_pipeline.write_arrow(
+        table,
+        buffered_file_uri,
+        storage_options={"backend": "obstore", "write_options": {"row_group_size": 2}},
+        overwrite=False,
+    )
+    assert len(registry.calls) == 1
+    assert registry.calls[0] == (buffered_file_uri, "obstore", {})
 
     pipeline.write_arrow(
         table,
         "alias://ob/explicit_opt.parquet",
-        storage_options={"backend": "obstore", "write_options": {"row_group_size": 3}},
+        storage_options={"write_options": {"row_group_size": 3}},
         write_options={"row_group_size": 2},
     )
     pf2 = pq.ParquetFile(tmp_path / "explicit_opt.parquet")
@@ -529,6 +585,74 @@ def test_pipeline_write_options_precedence_and_stripping(tmp_path: Path) -> None
     assert '"id"' in csv_text or "id" in csv_text
     table_from_csv = pa_csv.read_csv(tmp_path / "delim.csv", parse_options=pa_csv.ParseOptions(delimiter="|"))
     assert table_from_csv.num_rows == 6
+
+
+async def test_arrow_result_write_to_storage_batches_iterables_and_zero_row_mapping(tmp_path: Path) -> None:
+    """ArrowResult.write_to_storage_* streams list/Iterator[RecordBatch] and preserves 0-row typed Mapping schema."""
+    registry = StorageRegistry()
+    registry.register_alias("ob", f"file://{tmp_path}", backend="obstore")
+    sync_p = SyncStoragePipeline(registry=registry)
+    async_p = AsyncStoragePipeline(registry=registry)
+
+    schema = pa.table({"id": [1], "label": ["a"]}).schema
+    b1 = pa.RecordBatch.from_pydict({"id": [1, 2], "label": ["a", "b"]}, schema=schema)
+    b2 = pa.RecordBatch.from_pydict({"id": [3], "label": ["c"]}, schema=schema)
+
+    res_list_sync = ArrowResult(statement=cast("Any", None), data=[b1, b2])
+    t1 = res_list_sync.write_to_storage_sync("alias://ob/list_sync.parquet", pipeline=sync_p)
+    assert t1["rows_processed"] == 3
+    loaded_1, _ = sync_p.read_arrow("alias://ob/list_sync.parquet", file_format="parquet")
+    assert loaded_1.to_pylist() == [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}, {"id": 3, "label": "c"}]
+
+    res_list_async = ArrowResult(statement=cast("Any", None), data=[b1, b2])
+    t2 = await res_list_async.write_to_storage_async("alias://ob/list_async.parquet", pipeline=async_p)
+    assert t2["rows_processed"] == 3
+    loaded_2, _ = await async_p.read_arrow_async("alias://ob/list_async.parquet", file_format="parquet")
+    assert loaded_2.to_pylist() == [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}, {"id": 3, "label": "c"}]
+
+    res_iter_sync = ArrowResult(statement=cast("Any", None), data=iter([b1, b2]))
+    t3 = res_iter_sync.write_to_storage_sync("alias://ob/iter_sync.ipc", format_hint="arrow-ipc", pipeline=sync_p)
+    assert t3["rows_processed"] == 3
+    loaded_3, _ = sync_p.read_arrow("alias://ob/iter_sync.ipc", file_format="arrow-ipc")
+    assert loaded_3.to_pylist() == [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}, {"id": 3, "label": "c"}]
+
+    res_iter_async = ArrowResult(statement=cast("Any", None), data=iter([b1, b2]))
+    t4 = await res_iter_async.write_to_storage_async(
+        "alias://ob/iter_async.ipc", format_hint="arrow-ipc", pipeline=async_p
+    )
+    assert t4["rows_processed"] == 3
+    loaded_4, _ = await async_p.read_arrow_async("alias://ob/iter_async.ipc", file_format="arrow-ipc")
+    assert loaded_4.to_pylist() == [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}, {"id": 3, "label": "c"}]
+
+    empty_typed_mapping = {"id": pa.array([], type=pa.int64()), "label": pa.array([], type=pa.string())}
+    for fmt in ("parquet", "arrow-ipc", "csv"):
+        res_map_sync = ArrowResult(statement=cast("Any", None), data=empty_typed_mapping)
+        t_map_s = res_map_sync.write_to_storage_sync(
+            f"alias://ob/zero_map_sync.{fmt}", format_hint=fmt, pipeline=sync_p
+        )
+        assert t_map_s["rows_processed"] == 0
+        loaded_ms, _ = sync_p.read_arrow(f"alias://ob/zero_map_sync.{fmt}", file_format=fmt)
+        assert loaded_ms.num_rows == 0
+        assert loaded_ms.column_names == ["id", "label"]
+        if fmt != "csv":
+            assert loaded_ms.schema.field("id").type == pa.int64()
+
+        res_map_async = ArrowResult(statement=cast("Any", None), data=empty_typed_mapping)
+        t_map_a = await res_map_async.write_to_storage_async(
+            f"alias://ob/zero_map_async.{fmt}", format_hint=fmt, pipeline=async_p
+        )
+        assert t_map_a["rows_processed"] == 0
+        loaded_ma, _ = await async_p.read_arrow_async(f"alias://ob/zero_map_async.{fmt}", file_format=fmt)
+        assert loaded_ma.num_rows == 0
+        assert loaded_ma.column_names == ["id", "label"]
+
+    res_dicts = ArrowResult(statement=cast("Any", None), data=[{"id": 7, "label": "row"}])
+    t_dicts = res_dicts.write_to_storage_sync("alias://ob/dicts.parquet", pipeline=sync_p)
+    assert t_dicts["rows_processed"] == 1
+
+    res_empty_list = ArrowResult(statement=cast("Any", None), data=[])
+    t_empty = await res_empty_list.write_to_storage_async("alias://ob/empty_list.parquet", pipeline=async_p)
+    assert t_empty["rows_processed"] == 0
 
 
 async def test_sql_result_write_to_storage_overwrite_false() -> None:
