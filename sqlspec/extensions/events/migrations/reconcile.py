@@ -17,16 +17,16 @@ if TYPE_CHECKING:
 __all__ = ("reconcile",)
 
 
-def _requires_queue_table(config: Any, settings: dict[str, Any]) -> bool:
-    """Return whether the configured events backend uses the SQL queue table."""
+def _resolve_backend(config: Any, settings: dict[str, Any]) -> tuple[str, bool]:
+    """Resolve the configured events backend name and whether it uses the SQL queue table."""
     try:
         backend_name = _resolve_backend_name(config, settings, resolve_adapter_name(config))
     except ImproperConfigurationError as exc:
         raise MigrationError(str(exc)) from exc
-    return backend_name != "notify"
+    return backend_name, backend_name != "notify"
 
 
-def _resolve_store(context: "MigrationContext") -> "tuple[BaseEventQueueStore[Any], bool, bool]":
+def _resolve_store(context: "MigrationContext") -> "tuple[BaseEventQueueStore[Any], bool, str, bool]":
     """Validate adapter support and instantiate the configured events queue store."""
     if context.driver is None:
         msg = "Events schema reconciliation requires an active database driver on MigrationContext."
@@ -47,36 +47,42 @@ def _resolve_store(context: "MigrationContext") -> "tuple[BaseEventQueueStore[An
         store: BaseEventQueueStore[Any] = store_cls(context.config)
     except (ImproperConfigurationError, ValueError) as exc:
         raise MigrationError(str(exc)) from exc
-    needs_table = _requires_queue_table(context.config, store.settings)
-    return store, is_async, needs_table
+    backend_name, needs_table = _resolve_backend(context.config, store.settings)
+    return store, is_async, backend_name, needs_table
 
 
-def _reconcile_sync(driver: Any, store: "BaseEventQueueStore[Any]", needs_table: bool) -> None:
-    """Reconcile the events queue table and companion index on a synchronous driver."""
+def _reconcile_sync(driver: Any, store: "BaseEventQueueStore[Any]", backend_name: str, needs_table: bool) -> None:
+    """Reconcile the events queue table, companion index, and native backend objects on a synchronous driver."""
     if not needs_table:
         return
     manage_schema, create_schema = store._schema_management_flags()
     if not manage_schema:
         return
     store.prepare_schema_sync(driver)
+    targets = store.native_backend_targets(backend_name)
     ensure_schema_sync(
         driver, store.get_schema_targets(), manage_schema=True, create_schema=create_schema, commit=False, strict=True
     )
     store.reconcile_companion_objects_sync(driver)
+    store.reconcile_native_backend_sync(driver, backend_name, targets, create_schema=create_schema)
 
 
-async def _reconcile_async(driver: Any, store: "BaseEventQueueStore[Any]", needs_table: bool) -> None:
-    """Reconcile the events queue table and companion index on an asynchronous driver."""
+async def _reconcile_async(
+    driver: Any, store: "BaseEventQueueStore[Any]", backend_name: str, needs_table: bool
+) -> None:
+    """Reconcile the events queue table, companion index, and native backend objects on an asynchronous driver."""
     if not needs_table:
         return
     manage_schema, create_schema = store._schema_management_flags()
     if not manage_schema:
         return
     await store.prepare_schema_async(driver)
+    targets = store.native_backend_targets(backend_name)
     await ensure_schema_async(
         driver, store.get_schema_targets(), manage_schema=True, create_schema=create_schema, commit=False, strict=True
     )
     await store.reconcile_companion_objects_async(driver)
+    await store.reconcile_native_backend_async(driver, backend_name, targets, create_schema=create_schema)
 
 
 def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":
@@ -88,8 +94,8 @@ def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":
     Returns:
         ``None`` for synchronous drivers or an awaitable resolving to ``None`` for async drivers.
     """
-    store, is_async, needs_table = _resolve_store(context)
+    store, is_async, backend_name, needs_table = _resolve_store(context)
     if is_async:
-        return _reconcile_async(context.driver, store, needs_table)
-    _reconcile_sync(context.driver, store, needs_table)
+        return _reconcile_async(context.driver, store, backend_name, needs_table)
+    _reconcile_sync(context.driver, store, backend_name, needs_table)
     return None

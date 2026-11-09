@@ -129,6 +129,20 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
                 return
         await driver.execute_script(statement)
 
+    def native_backend_targets(self, backend_name: str) -> tuple[str, ...]:
+        """Return validated native object names, refusing invalid settings; the default returns none."""
+        return ()
+
+    def reconcile_native_backend_sync(
+        self, driver: Any, backend_name: str, targets: tuple[str, ...], *, create_schema: bool
+    ) -> None:
+        """Provision native backend objects; the default does nothing."""
+
+    async def reconcile_native_backend_async(
+        self, driver: Any, backend_name: str, targets: tuple[str, ...], *, create_schema: bool
+    ) -> None:
+        """Provision native backend objects; the default does nothing."""
+
     def reconcile_schema_sync(self, driver: Any) -> SchemaEnsureResult:
         """Apply additive queue-table changes with a synchronous driver."""
         from sqlspec.migrations.schema import ensure_schema_sync

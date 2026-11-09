@@ -1255,3 +1255,492 @@ def test_adbc_store_sqlite_companion_index_reconcile_is_idempotent() -> None:
             driver.commit()
     finally:
         sqlite_cfg.close_pool()
+
+
+@pytest.mark.anyio
+async def test_native_backend_base_store_defaults_and_aq_channels_runtime_non_restriction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BaseEventQueueStore native hooks default to no-ops and aq_channels never restricts runtime publish."""
+    from typing import Any, cast, get_type_hints
+    from unittest.mock import MagicMock
+
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.events.backend import OracleSyncAQEventBackend
+    from sqlspec.adapters.oracledb.events.store import (
+        OracleAsyncEventQueueStore,
+        OracleEventsConfig,
+        OracleSyncEventQueueStore,
+    )
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.adapters.sqlite.events.store import SqliteEventQueueStore
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    hints = get_type_hints(OracleEventsConfig, include_extras=True)
+    assert "aq_channels" in hints
+
+    sqlite_cfg = SqliteConfig(connection_config={"database": ":memory:"})
+    sqlite_store = SqliteEventQueueStore(sqlite_cfg)
+    sync_driver = MagicMock()
+    async_driver = MagicMock()
+    assert sqlite_store.native_backend_targets("poll_queue") == ()
+    sqlite_store.reconcile_native_backend_sync(sync_driver, "poll_queue", (), create_schema=True)
+    await sqlite_store.reconcile_native_backend_async(async_driver, "poll_queue", (), create_schema=True)
+    sync_driver.select.assert_not_called()
+    sync_driver.execute.assert_not_called()
+    async_driver.select.assert_not_called()
+    async_driver.execute.assert_not_called()
+
+    bad_sqlite_cfg = SqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"events": {"aq_channels": ["alpha"]}}
+    )
+    with pytest.raises(ImproperConfigurationError, match="aq_channels"):
+        SqliteEventQueueStore(bad_sqlite_cfg)
+
+    ora_sync_cfg = OracleSyncConfig(
+        connection_config={"dsn": "localhost/xe"},
+        extension_config={"events": {"backend": "aq", "aq_queue": "EVT_{channel}", "aq_channels": ["alpha"]}},
+    )
+    ora_async_cfg = OracleAsyncConfig(
+        connection_config={"dsn": "localhost/xe"},
+        extension_config={"events": {"backend": "txeventq", "aq_queue": "EVT_{channel}", "aq_channels": ["alpha"]}},
+    )
+    assert OracleSyncEventQueueStore(ora_sync_cfg).native_backend_targets("aq") == ("EVT_ALPHA",)
+    assert OracleAsyncEventQueueStore(ora_async_cfg).native_backend_targets("txeventq") == ("EVT_ALPHA",)
+
+    opened_queues: list[tuple[str, str]] = []
+    mock_queue = MagicMock()
+    mock_conn = MagicMock()
+
+    def _open_queue(name: str, payload_type: str) -> MagicMock:
+        opened_queues.append((name, payload_type))
+        return mock_queue
+
+    mock_conn.queue.side_effect = _open_queue
+    mock_session_driver = MagicMock()
+    mock_session_driver.connection = mock_conn
+    mock_cm = MagicMock()
+    mock_cm.__enter__.return_value = mock_session_driver
+    mock_cm.__exit__.return_value = False
+    monkeypatch.setattr(OracleSyncConfig, "provide_session", lambda _self: mock_cm)
+
+    backend = OracleSyncAQEventBackend(ora_sync_cfg, cast("dict[str, Any]", ora_sync_cfg.extension_config["events"]))
+    published_id = backend.publish("beta", {"hello": "world"})
+    assert len(published_id) == 32
+    assert opened_queues == [("EVT_BETA", "JSON")]
+    mock_queue.enqone.assert_called_once()
+
+
+def test_native_oracle_target_resolution_and_refusals() -> None:
+    """Oracle native_backend_targets expands templates, folds identifiers, and refuses invalid settings or <21c."""
+    from typing import Any
+
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.data_dictionary import OracleVersionInfo
+    from sqlspec.adapters.oracledb.events.store import OracleAsyncEventQueueStore, OracleSyncEventQueueStore
+    from sqlspec.exceptions import MigrationError
+
+    default_store = OracleSyncEventQueueStore(OracleSyncConfig(connection_config={"dsn": "localhost/xe"}))
+    assert default_store.native_backend_targets("poll_queue") == ()
+    assert default_store.native_backend_targets("aq") == ("SQLSPEC_EVENTS_QUEUE",)
+    assert default_store.native_backend_targets("txeventq") == ("SQLSPEC_EVENTS_QUEUE",)
+
+    lower_store = OracleSyncEventQueueStore(
+        OracleSyncConfig(connection_config={"dsn": "localhost/xe"}, extension_config={"events": {"aq_queue": "evt"}})
+    )
+    assert lower_store.native_backend_targets("aq") == ("EVT",)
+
+    expanded_async_store = OracleAsyncEventQueueStore(
+        OracleAsyncConfig(
+            connection_config={"dsn": "localhost/xe"},
+            extension_config={"events": {"aq_queue": "evt_{channel}", "aq_channels": ["alpha", "beta"]}},
+        )
+    )
+    assert expanded_async_store.native_backend_targets("txeventq") == ("EVT_ALPHA", "EVT_BETA")
+
+    empty_channel_cases: tuple[dict[str, object], ...] = ({}, {"aq_channels": []})
+    for channels_setting in empty_channel_cases:
+        events_cfg: Any = {"aq_queue": "EVT_{channel}", **channels_setting}
+        missing_channels_store = OracleSyncEventQueueStore(
+            OracleSyncConfig(connection_config={"dsn": "localhost/xe"}, extension_config={"events": events_cfg})
+        )
+        with pytest.raises(MigrationError, match=r'aq_channels.*migration_mode="versioned"'):
+            missing_channels_store.native_backend_targets("aq")
+
+    fixed_with_channels_store = OracleSyncEventQueueStore(
+        OracleSyncConfig(
+            connection_config={"dsn": "localhost/xe"},
+            extension_config={"events": {"aq_queue": "EVT", "aq_channels": ["a"]}},
+        )
+    )
+    with pytest.raises(MigrationError) as exc_fixed:
+        fixed_with_channels_store.native_backend_targets("aq")
+    assert "aq_channels" in str(exc_fixed.value)
+    assert "aq_queue" in str(exc_fixed.value)
+
+    bad_channel_store = OracleSyncEventQueueStore(
+        OracleSyncConfig(
+            connection_config={"dsn": "localhost/xe"},
+            extension_config={"events": {"aq_queue": "EVT_{channel}", "aq_channels": ["bad-name!"]}},
+        )
+    )
+    with pytest.raises(MigrationError, match="Invalid events channel name"):
+        bad_channel_store.native_backend_targets("aq")
+
+    dotted_store = OracleSyncEventQueueStore(
+        OracleSyncConfig(
+            connection_config={"dsn": "localhost/xe"}, extension_config={"events": {"aq_queue": "owner.evt"}}
+        )
+    )
+    with pytest.raises(MigrationError, match="bare"):
+        dotted_store.native_backend_targets("aq")
+
+    old_cfg = OracleSyncConfig(connection_config={"dsn": "localhost/xe"})
+    old_cfg._oracle_version_cache.version = OracleVersionInfo(19, 0, 0, compatible="19.0.0")
+    old_cfg._oracle_version_cache.resolved = True
+    old_store = OracleSyncEventQueueStore(old_cfg)
+    with pytest.raises(MigrationError, match=r'Oracle 21c.*migration_mode="versioned"'):
+        old_store.native_backend_targets("aq")
+    assert old_store.native_backend_targets("poll_queue") == ()
+
+
+@pytest.mark.anyio
+async def test_native_oracle_events_reconcile_refuses_before_table_ddl_and_honors_manage_schema() -> None:
+    """Events reconcile refuses bad AQ settings or Oracle <21c before table DDL and skips when manage_schema=False."""
+    import inspect
+    from typing import Any, cast
+    from unittest.mock import AsyncMock, MagicMock
+
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.data_dictionary import OracleVersionInfo
+    from sqlspec.exceptions import MigrationError
+    from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
+    from sqlspec.migrations.context import MigrationContext
+
+    bad_settings_cases: list[dict[str, object]] = [
+        {"backend": "aq", "aq_queue": "EVT_{channel}", "migration_mode": "reconcile"},
+        {"backend": "aq", "aq_queue": "EVT", "aq_channels": ["a"], "migration_mode": "reconcile"},
+        {"backend": "aq", "aq_queue": "EVT_{channel}", "aq_channels": ["bad-name!"], "migration_mode": "reconcile"},
+        {"backend": "txeventq", "aq_queue": "owner.evt", "migration_mode": "reconcile"},
+    ]
+    for events_settings in bad_settings_cases:
+        cfg = OracleSyncConfig(
+            connection_config={"dsn": "localhost/xe"}, extension_config={"events": cast("Any", events_settings)}
+        )
+        drv = MagicMock()
+        drv.data_dictionary.get_version.return_value = OracleVersionInfo(23, 4, 0, compatible="23.0.0")
+        with pytest.raises(MigrationError):
+            events_reconcile(MigrationContext(config=cfg, driver=drv))
+        drv.data_dictionary.get_tables.assert_not_called()
+        drv.execute_script.assert_not_called()
+        drv.execute.assert_not_called()
+
+    ora19_cfg = OracleAsyncConfig(
+        connection_config={"dsn": "localhost/xe"},
+        extension_config={"events": {"backend": "aq", "json_storage": "blob_json", "migration_mode": "reconcile"}},
+    )
+    ora19_drv = MagicMock()
+    ora19_drv.data_dictionary.get_version = AsyncMock(return_value=OracleVersionInfo(19, 0, 0, compatible="19.0.0"))
+    ora19_drv.data_dictionary.get_tables = AsyncMock(return_value=[])
+    ora19_drv.execute_script = AsyncMock()
+    ora19_drv.execute = AsyncMock()
+    coro = events_reconcile(MigrationContext(config=ora19_cfg, driver=ora19_drv))
+    assert inspect.isawaitable(coro)
+    with pytest.raises(MigrationError, match="Oracle 21c"):
+        await coro
+    ora19_drv.data_dictionary.get_tables.assert_not_awaited()
+    ora19_drv.execute_script.assert_not_awaited()
+    ora19_drv.execute.assert_not_awaited()
+
+    unmanaged_sync_cfg = OracleSyncConfig(
+        connection_config={"dsn": "localhost/xe"},
+        extension_config={
+            "events": {
+                "backend": "aq",
+                "aq_queue": "EVT_{channel}",
+                "manage_schema": False,
+                "migration_mode": "reconcile",
+            }
+        },
+    )
+    unmanaged_sync_drv = MagicMock()
+    assert events_reconcile(MigrationContext(config=unmanaged_sync_cfg, driver=unmanaged_sync_drv)) is None
+    unmanaged_sync_drv.data_dictionary.get_version.assert_not_called()
+    unmanaged_sync_drv.data_dictionary.get_tables.assert_not_called()
+    unmanaged_sync_drv.select.assert_not_called()
+    unmanaged_sync_drv.execute.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_native_oracle_aq_and_txeventq_provisioning_sync_and_async(is_async: bool) -> None:
+    """Oracle event stores provision AQ and TxEventQ queues idempotently after table reconcile."""
+    import inspect
+    from typing import Any
+    from unittest.mock import AsyncMock, MagicMock
+
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.data_dictionary import OracleVersionInfo
+    from sqlspec.adapters.oracledb.events.store import OracleAsyncEventQueueStore, OracleSyncEventQueueStore
+    from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
+    from sqlspec.migrations.context import MigrationContext
+
+    def _make_driver(
+        queue_rows: dict[str, list[dict[str, str]]],
+        qt_rows: set[str],
+        select_calls: list[tuple[str, dict[str, Any]]],
+        exec_calls: list[tuple[str, dict[str, Any]]],
+        call_order: list[str] | None = None,
+    ) -> MagicMock:
+        drv = MagicMock()
+
+        def _handle_select(sql: str, params: dict[str, Any]) -> list[dict[str, str]]:
+            select_calls.append((sql, dict(params)))
+            if call_order is not None:
+                call_order.append("select_catalog")
+            if "FROM user_queues" in sql:
+                return queue_rows.get(params["name"], [])
+            if "FROM user_queue_tables" in sql:
+                return [{"queue_table": params["name"]}] if params["name"] in qt_rows else []
+            msg = f"Unexpected select SQL: {sql}"
+            raise AssertionError(msg)
+
+        def _handle_exec(sql: str, params: dict[str, Any]) -> None:
+            exec_calls.append((sql, dict(params)))
+            if call_order is not None:
+                call_order.append("exec_aqadm")
+
+        def _get_version(_d: object) -> OracleVersionInfo:
+            if call_order is not None:
+                call_order.append("get_version")
+            return OracleVersionInfo(23, 4, 0, compatible="23.0.0")
+
+        def _get_tables(_d: object, schema: str | None = None) -> list[dict[str, str]]:
+            if call_order is not None:
+                call_order.append("get_tables")
+            return []
+
+        def _get_indexes(_d: object, table: str | None = None, schema: str | None = None) -> list[dict[str, str]]:
+            if call_order is not None:
+                call_order.append("get_indexes")
+            return []
+
+        def _exec_script(_s: str) -> None:
+            if call_order is not None:
+                call_order.append("execute_script")
+
+        if is_async:
+            drv.select = AsyncMock(side_effect=_handle_select)
+            drv.execute = AsyncMock(side_effect=_handle_exec)
+            drv.data_dictionary.get_version = AsyncMock(side_effect=_get_version)
+            drv.data_dictionary.get_tables = AsyncMock(side_effect=_get_tables)
+            drv.data_dictionary.get_indexes = AsyncMock(side_effect=_get_indexes)
+            drv.execute_script = AsyncMock(side_effect=_exec_script)
+        else:
+            drv.select.side_effect = _handle_select
+            drv.execute.side_effect = _handle_exec
+            drv.data_dictionary.get_version.side_effect = _get_version
+            drv.data_dictionary.get_tables.side_effect = _get_tables
+            drv.data_dictionary.get_indexes.side_effect = _get_indexes
+            drv.execute_script.side_effect = _exec_script
+        return drv
+
+    async def _run_hook(
+        store: OracleSyncEventQueueStore | OracleAsyncEventQueueStore,
+        drv: MagicMock,
+        backend_name: str,
+        targets: tuple[str, ...],
+    ) -> None:
+        if isinstance(store, OracleAsyncEventQueueStore):
+            await store.reconcile_native_backend_async(drv, backend_name, targets, create_schema=True)
+        else:
+            store.reconcile_native_backend_sync(drv, backend_name, targets, create_schema=True)
+
+    store_cls: Any = OracleAsyncEventQueueStore if is_async else OracleSyncEventQueueStore
+    cfg_cls: Any = OracleAsyncConfig if is_async else OracleSyncConfig
+
+    long_queue = "Q" + ("X" * 127)
+    expected_long_qt = f"{long_queue[:125]}_QT"
+    assert len(expected_long_qt) == 128
+
+    aq_store = store_cls(
+        cfg_cls(connection_config={"dsn": "localhost/xe"}, extension_config={"events": {"aq_queue": "evt"}})
+    )
+    select_calls: list[tuple[str, dict[str, Any]]] = []
+    exec_calls: list[tuple[str, dict[str, Any]]] = []
+    drv = _make_driver({}, set(), select_calls, exec_calls)
+    await _run_hook(aq_store, drv, "aq", ("evt", long_queue))
+    assert select_calls == [
+        (
+            "SELECT name, TRIM(enqueue_enabled), TRIM(dequeue_enabled) FROM user_queues WHERE name = :name",
+            {"name": "EVT"},
+        ),
+        ("SELECT queue_table FROM user_queue_tables WHERE queue_table = :name", {"name": "EVT_QT"}),
+        (
+            "SELECT name, TRIM(enqueue_enabled), TRIM(dequeue_enabled) FROM user_queues WHERE name = :name",
+            {"name": long_queue},
+        ),
+        ("SELECT queue_table FROM user_queue_tables WHERE queue_table = :name", {"name": expected_long_qt}),
+    ]
+    assert len(exec_calls) == 6
+    assert "DBMS_AQADM.CREATE_QUEUE_TABLE" in exec_calls[0][0]
+    assert "queue_payload_type => 'JSON'" in exec_calls[0][0]
+    assert exec_calls[0][1] == {"queue_table": "EVT_QT"}
+    assert "DBMS_AQADM.CREATE_QUEUE(" in exec_calls[1][0]
+    assert exec_calls[1][1] == {"queue_name": "EVT", "queue_table": "EVT_QT"}
+    assert "DBMS_AQADM.START_QUEUE" in exec_calls[2][0]
+    assert exec_calls[2][1] == {"queue_name": "EVT"}
+    assert exec_calls[3][1] == {"queue_table": expected_long_qt}
+    assert exec_calls[4][1] == {"queue_name": long_queue, "queue_table": expected_long_qt}
+    assert exec_calls[5][1] == {"queue_name": long_queue}
+
+    tx_select: list[tuple[str, dict[str, Any]]] = []
+    tx_exec: list[tuple[str, dict[str, Any]]] = []
+    tx_drv = _make_driver({}, set(), tx_select, tx_exec)
+    await _run_hook(aq_store, tx_drv, "txeventq", ("EVT",))
+    assert tx_select == [
+        (
+            "SELECT name, TRIM(enqueue_enabled), TRIM(dequeue_enabled) FROM user_queues WHERE name = :name",
+            {"name": "EVT"},
+        )
+    ]
+    assert len(tx_exec) == 2
+    assert "DBMS_AQADM.CREATE_TRANSACTIONAL_EVENT_QUEUE" in tx_exec[0][0]
+    assert "queue_payload_type => 'JSON'" in tx_exec[0][0]
+    assert tx_exec[0][1] == {"queue_name": "EVT"}
+    assert "DBMS_AQADM.START_QUEUE" in tx_exec[1][0]
+    assert tx_exec[1][1] == {"queue_name": "EVT"}
+
+    existing_select: list[tuple[str, dict[str, Any]]] = []
+    existing_exec: list[tuple[str, dict[str, Any]]] = []
+    existing_drv = _make_driver(
+        {"EVT": [{"name": "EVT", "trim(enqueue_enabled)": "YES", "trim(dequeue_enabled)": "YES"}]},
+        set(),
+        existing_select,
+        existing_exec,
+    )
+    await _run_hook(aq_store, existing_drv, "aq", ("EVT",))
+    assert len(existing_select) == 1
+    assert "user_queues" in existing_select[0][0]
+    assert existing_exec == []
+
+    partial_select: list[tuple[str, dict[str, Any]]] = []
+    partial_exec: list[tuple[str, dict[str, Any]]] = []
+    partial_drv = _make_driver({}, {"EVT_QT"}, partial_select, partial_exec)
+    await _run_hook(aq_store, partial_drv, "aq", ("EVT",))
+    assert len(partial_select) == 2
+    assert len(partial_exec) == 2
+    assert "CREATE_QUEUE(" in partial_exec[0][0]
+    assert "START_QUEUE" in partial_exec[1][0]
+
+    stopped_select: list[tuple[str, dict[str, Any]]] = []
+    stopped_exec: list[tuple[str, dict[str, Any]]] = []
+    stopped_drv = _make_driver(
+        {"EVT": [{"name": "EVT", "trim(enqueue_enabled)": "NO", "trim(dequeue_enabled)": "YES"}]},
+        set(),
+        stopped_select,
+        stopped_exec,
+    )
+    await _run_hook(aq_store, stopped_drv, "aq", ("EVT",))
+    assert len(stopped_select) == 1
+    assert len(stopped_exec) == 1
+    assert "START_QUEUE" in stopped_exec[0][0]
+    assert stopped_exec[0][1] == {"queue_name": "EVT"}
+
+    e2e_cfg = cfg_cls(
+        connection_config={"dsn": "localhost/xe"},
+        extension_config={"events": {"backend": "txeventq", "aq_queue": "EVT", "migration_mode": "reconcile"}},
+    )
+    e2e_select: list[tuple[str, dict[str, Any]]] = []
+    e2e_exec: list[tuple[str, dict[str, Any]]] = []
+    order: list[str] = []
+    e2e_drv = _make_driver({}, set(), e2e_select, e2e_exec, call_order=order)
+    outcome = events_reconcile(MigrationContext(config=e2e_cfg, driver=e2e_drv))
+    if inspect.isawaitable(outcome):
+        await outcome
+    assert order == [
+        "get_version",
+        "get_tables",
+        "execute_script",
+        "get_indexes",
+        "execute_script",
+        "select_catalog",
+        "exec_aqadm",
+        "exec_aqadm",
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_native_oracle_create_schema_false_and_privilege_errors_sync_and_async(is_async: bool) -> None:
+    """Oracle native provisioning enforces create_schema=False and wraps only DBMS_AQADM privilege errors."""
+    from typing import Any
+    from unittest.mock import AsyncMock, MagicMock
+
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.events.store import OracleAsyncEventQueueStore, OracleSyncEventQueueStore
+    from sqlspec.exceptions import MigrationError, SQLSpecError
+
+    store_cls: Any = OracleAsyncEventQueueStore if is_async else OracleSyncEventQueueStore
+    cfg_cls: Any = OracleAsyncConfig if is_async else OracleSyncConfig
+    store = store_cls(cfg_cls(connection_config={"dsn": "localhost/xe"}))
+
+    async def _call(drv: MagicMock, *, create_schema: bool) -> None:
+        if isinstance(store, OracleAsyncEventQueueStore):
+            await store.reconcile_native_backend_async(drv, "aq", ("EVT",), create_schema=create_schema)
+        else:
+            store.reconcile_native_backend_sync(drv, "aq", ("EVT",), create_schema=create_schema)
+
+    for rows in ([], [{"name": "EVT", "trim(enqueue_enabled)": "YES", "trim(dequeue_enabled)": "NO"}]):
+        drv = MagicMock()
+        if is_async:
+            drv.select = AsyncMock(return_value=rows)
+            drv.execute = AsyncMock()
+        else:
+            drv.select.return_value = rows
+        with pytest.raises(MigrationError, match=r"EVT.*create_schema"):
+            await _call(drv, create_schema=False)
+        drv.execute.assert_not_called()
+
+    started_drv = MagicMock()
+    started_rows = [{"name": "EVT", "trim(enqueue_enabled)": "YES", "trim(dequeue_enabled)": "YES"}]
+    if is_async:
+        started_drv.select = AsyncMock(return_value=started_rows)
+        started_drv.execute = AsyncMock()
+    else:
+        started_drv.select.return_value = started_rows
+    await _call(started_drv, create_schema=False)
+    started_drv.execute.assert_not_called()
+
+    priv_errors = [
+        SQLSpecError("ORA-01031: insufficient privileges"),
+        SQLSpecError("ORA-06550: line 1, column 7:\nPLS-00201: identifier 'DBMS_AQADM' must be declared"),
+    ]
+    for err in priv_errors:
+        priv_drv = MagicMock()
+        if is_async:
+            priv_drv.select = AsyncMock(return_value=[])
+            priv_drv.execute = AsyncMock(side_effect=err)
+        else:
+            priv_drv.select.return_value = []
+            priv_drv.execute.side_effect = err
+        with pytest.raises(MigrationError) as exc_info:
+            await _call(priv_drv, create_schema=True)
+        assert "GRANT EXECUTE ON DBMS_AQADM" in str(exc_info.value)
+        assert "AQ_ADMINISTRATOR_ROLE" in str(exc_info.value)
+
+    other_err = SQLSpecError("ORA-00942: table or view does not exist")
+    other_drv = MagicMock()
+    if is_async:
+        other_drv.select = AsyncMock(return_value=[])
+        other_drv.execute = AsyncMock(side_effect=other_err)
+    else:
+        other_drv.select.return_value = []
+        other_drv.execute.side_effect = other_err
+    with pytest.raises(SQLSpecError, match="ORA-00942"):
+        await _call(other_drv, create_schema=True)
