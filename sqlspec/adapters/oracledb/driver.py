@@ -95,7 +95,7 @@ from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping, Sequence
+    from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
@@ -385,6 +385,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         "_transaction_active",
     )
     dialect = "oracle"
+    export_integers_may_widen: ClassVar[bool] = True
     native_arrow_export: ClassVar[bool] = True
     _pipeline_support: ClassVar[bool] = False
     _pipeline_support_reason: ClassVar[str] = "asyncio_thin_required"
@@ -1343,6 +1344,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         "_transaction_active",
     )
     dialect = "oracle"
+    export_integers_may_widen: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -1890,6 +1892,45 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
+    async def _select_for_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Return an Arrow result that streams Oracle frames on demand for storage exports."""
+        if "return_format" in kwargs or kwargs.get("native_only") or not supports_df_batches(self.connection):
+            return await super()._select_for_storage(
+                statement, *parameters, statement_config=statement_config, **kwargs
+            )
+
+        ensure_pyarrow()
+        batch_size = cast("int | None", kwargs.pop("batch_size", None))
+        arrow_schema = cast("ArrowSchema | None", kwargs.pop("arrow_schema", None))
+
+        config = statement_config or self.statement_config
+        prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
+        prepared_parameters = await coerce_large_parameters_async(
+            self.connection,
+            prepared_parameters,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
+        )
+        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
+        self._apply_session_tracing(self.connection)
+        return create_arrow_result(
+            prepared_statement,
+            self._iter_arrow_record_batches(sql, prepared_parameters, batch_size, arrow_schema),
+            rows_affected=0,
+            metadata={"streamed": True},
+        )
+
     async def load_from_arrow(
         self,
         table: str,
@@ -2211,6 +2252,59 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             return await self.connection.fetch_df_all(
                 statement=sql, parameters=params, arraysize=batch_size or 1000, **retry_kwargs
             )
+
+    async def _iter_arrow_record_batches(
+        self,
+        sql: str,
+        parameters: "StatementParameters | None",
+        batch_size: int | None,
+        arrow_schema: "ArrowSchema | None",
+    ) -> "AsyncIterator[ArrowRecordBatch]":
+        params = parameters if parameters is not None else []
+        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features, arrow_schema=arrow_schema)
+        try:
+            oracle_dfs = self.connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
+            )
+        except TypeError as exc:
+            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
+            if retry_kwargs is None:
+                raise
+            oracle_dfs = self.connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
+            )
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        yielded = False
+        try:
+            async for oracle_df in oracle_dfs:
+                batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
+                column_names = normalize_column_names(batch_table.column_names, self.driver_features)
+                if column_names != batch_table.column_names:
+                    batch_table = batch_table.rename_columns(column_names).replace_schema_metadata(
+                        batch_table.schema.metadata
+                    )
+                if arrow_schema is not None:
+                    batch_table = batch_table.cast(arrow_schema)
+                if batch_table.num_rows:
+                    for batch in batch_table.to_batches():
+                        yielded = True
+                        yield batch
+                else:
+                    yielded = True
+                    yield import_pyarrow().RecordBatch.from_pylist([], schema=batch_table.schema)
+            if not yielded and arrow_schema is not None:
+                yield import_pyarrow().RecordBatch.from_pylist([], schema=arrow_schema)
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        finally:
+            aclose_dfs = getattr(oracle_dfs, "aclose", None)
+            if callable(aclose_dfs):
+                await cast("Any", aclose_dfs)()
+            else:
+                close_dfs = getattr(oracle_dfs, "close", None)
+                if callable(close_dfs):
+                    close_dfs()
 
     async def _fetch_arrow_record_batches(
         self,
