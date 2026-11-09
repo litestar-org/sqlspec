@@ -1,24 +1,39 @@
 """Storage backend using fsspec."""
 
+import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Iterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeAlias, cast, overload
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.exceptions import StorageCapabilityError
+from sqlspec.storage._arrow_payload import StorageFormat, join_shielded
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import is_file_destination, parse_file_uri_path, resolve_storage_path
 from sqlspec.storage._utils import import_fsspec, import_pyarrow_parquet, log_storage_event
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
-from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
+from sqlspec.storage.backends.local import (
+    _STAGE_PREFIX,
+    _abort_local_stage,
+    _close_and_publish_local_stage,
+    _open_local_stage,
+)
+from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
+    from sqlspec.protocols import AsyncWritableBytesSink, WritableBytesSink
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("FSSpecBackend",)
+
+_FsspecStrategy: TypeAlias = Literal["local", "commit", "block", "staged"]
 
 _OBJECT_STORE_PROTOCOLS = {"s3", "gs", "az", "gcs"}
 _FSSPEC_VALIDATED_PROTOCOLS: Final[frozenset[str]] = frozenset({"file", "memory"})
@@ -28,6 +43,10 @@ _FSSPEC_BASIC_OPEN_OPTIONS: Final[frozenset[str]] = frozenset({
     "cache_options",
     "compression",
 })
+_FSSPEC_ARROW_FORMATS: Final[frozenset[str]] = frozenset({"parquet", "arrow-ipc", "csv"})
+_COMMIT_PROTOCOLS: Final[frozenset[str]] = frozenset({"s3", "s3a", "gs", "gcs"})
+_BLOCK_PROTOCOLS: Final[frozenset[str]] = frozenset({"az", "abfs", "abfss"})
+_LOCAL_PROTOCOLS: Final[frozenset[str]] = frozenset({"file", "local"})
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -112,6 +131,57 @@ class FSSpecBackend:
             Always False for fsspec backends.
         """
         return False
+
+    def supports_direct_arrow_write(self, file_format: StorageFormat, *, overwrite: bool = True) -> bool:
+        """Return whether direct streaming Arrow writes are supported for the protocol and overwrite mode.
+
+        Args:
+            file_format: Target storage format.
+            overwrite: Whether existing objects may be replaced.
+
+        Returns:
+            True when the format and protocol strategy support direct streaming.
+        """
+        strategy = _fsspec_write_strategy(self.protocol)
+        return (
+            file_format in _FSSPEC_ARROW_FORMATS
+            and strategy in {"local", "staged"}
+            and (overwrite or strategy != "staged")
+        )
+
+    def open_write_stream_sync(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> "AbstractContextManager[WritableBytesSink]":
+        """Open a synchronous direct write stream using the protocol's commit strategy."""
+        strategy, open_mode, options = _prepare_fsspec_stream_options(self.protocol, overwrite, kwargs)
+        destination = self._resolve_path(path)
+        return _FsspecWriteStream(
+            self.fs,
+            destination,
+            strategy=strategy,
+            mode=open_mode,
+            options=options,
+            overwrite=overwrite,
+            backend_type=self.backend_type,
+            log_fields={"protocol": self.protocol, "operation": "write_stream", "mode": "sync"},
+        )
+
+    def open_write_stream_async(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[AsyncWritableBytesSink]":
+        """Open an asynchronous direct write stream using the protocol's commit strategy."""
+        strategy, open_mode, options = _prepare_fsspec_stream_options(self.protocol, overwrite, kwargs)
+        destination = self._resolve_path(path)
+        return _AsyncFsspecWriteStream(
+            self.fs,
+            destination,
+            strategy=strategy,
+            mode=open_mode,
+            options=options,
+            overwrite=overwrite,
+            backend_type=self.backend_type,
+            log_fields={"protocol": self.protocol, "operation": "write_stream", "mode": "async"},
+        )
 
     @classmethod
     def from_config(cls, config: "dict[str, Any]") -> "FSSpecBackend":
@@ -635,3 +705,359 @@ def _write_fsspec_arrow(fs: Any, resolved_path: str, table: "ArrowTable", pq: An
     """Write an Arrow table via an fsspec filesystem handle."""
     with fs.open(resolved_path, mode="wb") as file_obj:
         pq.write_table(table, file_obj, **options)  # pyright: ignore
+
+
+def _fsspec_write_strategy(protocol: str) -> "_FsspecStrategy":
+    """Return the direct-stream commit strategy for an fsspec protocol."""
+    if protocol in _LOCAL_PROTOCOLS:
+        return "local"
+    if protocol in _COMMIT_PROTOCOLS:
+        return "commit"
+    if protocol in _BLOCK_PROTOCOLS:
+        return "block"
+    return "staged"
+
+
+def _prepare_fsspec_stream_options(
+    protocol: str, overwrite: bool, kwargs: "dict[str, Any]"
+) -> "tuple[_FsspecStrategy, str, dict[str, Any]]":
+    """Validate stream options and resolve strategy, open mode, and fs.open kwargs."""
+    if "autocommit" in kwargs:
+        msg = "Unsupported keyword argument 'autocommit' for open_write_stream; commit lifecycle is managed by the stream."
+        raise TypeError(msg)
+    open_mode, options = _resolve_fsspec_write_options(protocol, overwrite, dict(kwargs))
+    strategy = _fsspec_write_strategy(protocol)
+    if strategy == "staged" and not overwrite:
+        msg = f"Direct write streams do not support overwrite=False for fsspec protocol {protocol!r}"
+        raise StorageCapabilityError(msg, capability="overwrite_false_stream")
+    if strategy not in {"local", "staged"}:
+        msg = f"Direct write streams are not supported for fsspec strategy {strategy!r}"
+        raise StorageCapabilityError(msg, capability="direct_stream_write")
+    return strategy, open_mode, options
+
+
+def _fsspec_stage_key(destination: str) -> str:
+    """Construct a hidden sibling stage key in the destination's parent prefix."""
+    if "/" in destination:
+        parent, _ = destination.rsplit("/", 1)
+        return f"{parent}/{_STAGE_PREFIX}{uuid4().hex}" if parent else f"/{_STAGE_PREFIX}{uuid4().hex}"
+    return f"{_STAGE_PREFIX}{uuid4().hex}"
+
+
+def _open_fsspec_stream_target(
+    strategy: "_FsspecStrategy", fs: Any, destination: str, mode: str, options: "dict[str, Any]"
+) -> "tuple[str | None, Any]":
+    """Open the underlying file handle for an fsspec direct write stream."""
+    _ = mode
+    if strategy == "local":
+        stage_path, file_obj = _open_local_stage(Path(destination))
+        return str(stage_path), file_obj
+    stage_key = _fsspec_stage_key(destination)
+    return stage_key, fs.open(stage_key, mode="wb", **options)
+
+
+def _close_and_publish_fsspec_stream(
+    strategy: "_FsspecStrategy", fs: Any, stage: "str | None", file_obj: Any, destination: str, *, overwrite: bool
+) -> None:
+    """Close and atomically publish an fsspec direct write stream."""
+    if strategy == "local":
+        assert stage is not None
+        _close_and_publish_local_stage(Path(stage), file_obj, Path(destination), overwrite=overwrite)
+        return
+    assert stage is not None
+    try:
+        file_obj.close()
+        fs.mv(stage, destination)
+    finally:
+        with contextlib.suppress(Exception):
+            if fs.exists(stage):
+                fs.rm(stage)
+
+
+def _abort_fsspec_stream(strategy: "_FsspecStrategy", fs: Any, stage: "str | None", file_obj: Any) -> None:
+    """Abort an fsspec direct write stream without touching the destination."""
+    if strategy == "local":
+        if stage is not None:
+            _abort_local_stage(Path(stage), file_obj)
+        return
+    with contextlib.suppress(Exception):
+        file_obj.close()
+    if stage is not None:
+        with contextlib.suppress(Exception):
+            fs.rm(stage)
+
+
+class _FsspecSink:
+    """Write to one fsspec file, normalizing storage failures."""
+
+    __slots__ = ("_backend", "_closed", "_file", "_path")
+
+    def __init__(self, file: Any, *, backend: str, path: str) -> None:
+        self._file = file
+        self._backend = backend
+        self._path = path
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed or bool(getattr(self._file, "closed", False))
+
+    def write(self, data: Any, /) -> int:
+        if self._closed:
+            return 0
+        payload = bytes(data) if isinstance(data, (bytearray, memoryview)) else data
+        if not payload:
+            return 0
+        try:
+            return int(self._file.write(payload))
+        except Exception as error:
+            raise_storage_error(error, backend=self._backend, operation="write_stream", path=self._path)
+
+    def flush(self) -> None:
+        if self._closed:
+            return
+        flush_fn = getattr(self._file, "flush", None)
+        if callable(flush_fn):
+            try:
+                flush_fn()
+            except Exception as error:
+                raise_storage_error(error, backend=self._backend, operation="write_stream", path=self._path)
+
+    def close(self) -> None:
+        self._closed = True
+
+
+class _AsyncFsspecSink:
+    """Run fsspec file writes off the event loop, normalizing storage failures."""
+
+    __slots__ = ("_backend", "_closed", "_file", "_path")
+
+    def __init__(self, file: Any, *, backend: str, path: str) -> None:
+        self._file = file
+        self._backend = backend
+        self._path = path
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed or bool(getattr(self._file, "closed", False))
+
+    async def write(self, data: Any, /) -> int:
+        if self._closed:
+            return 0
+        payload = bytes(data) if isinstance(data, (bytearray, memoryview)) else data
+        if not payload:
+            return 0
+        try:
+            return int(await async_(self._file.write)(payload))
+        except Exception as error:
+            raise_storage_error(error, backend=self._backend, operation="write_stream", path=self._path)
+
+    async def flush(self) -> None:
+        if self._closed:
+            return
+        flush_fn = getattr(self._file, "flush", None)
+        if callable(flush_fn):
+            try:
+                await async_(flush_fn)()
+            except Exception as error:
+                raise_storage_error(error, backend=self._backend, operation="write_stream", path=self._path)
+
+    async def close(self) -> None:
+        self._closed = True
+
+
+class _FsspecWriteStream:
+    """Synchronous fsspec write stream context manager."""
+
+    __slots__ = (
+        "_backend_type",
+        "_destination",
+        "_file",
+        "_fs",
+        "_log_fields",
+        "_mode",
+        "_options",
+        "_overwrite",
+        "_sink",
+        "_stage",
+        "_strategy",
+    )
+
+    def __init__(
+        self,
+        fs: Any,
+        destination: str,
+        *,
+        strategy: "_FsspecStrategy",
+        mode: str,
+        options: "dict[str, Any]",
+        overwrite: bool,
+        backend_type: str,
+        log_fields: "dict[str, Any] | None",
+    ) -> None:
+        self._fs = fs
+        self._destination = destination
+        self._strategy: _FsspecStrategy = strategy
+        self._mode = mode
+        self._options = options
+        self._overwrite = overwrite
+        self._backend_type = backend_type
+        self._log_fields = log_fields
+        self._stage: str | None = None
+        self._file: Any = None
+        self._sink: _FsspecSink | None = None
+
+    def __enter__(self) -> "_FsspecSink":
+        stage, file_obj = execute_sync_storage_operation(
+            lambda: _open_fsspec_stream_target(self._strategy, self._fs, self._destination, self._mode, self._options),
+            backend=self._backend_type,
+            operation="open_write_stream",
+            path=self._destination,
+        )
+        self._stage = stage
+        self._file = file_obj
+        sink = _FsspecSink(file_obj, backend=self._backend_type, path=self._destination)
+        self._sink = sink
+        return sink
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        _ = (exc, traceback)
+        sink = self._sink
+        if sink is not None:
+            sink._closed = True
+        file_obj = self._file
+        if file_obj is None:
+            return
+        if exc_type is None:
+            execute_sync_storage_operation(
+                partial(
+                    _close_and_publish_fsspec_stream,
+                    self._strategy,
+                    self._fs,
+                    self._stage,
+                    file_obj,
+                    self._destination,
+                    overwrite=self._overwrite,
+                ),
+                backend=self._backend_type,
+                operation="write_stream_close",
+                path=self._destination,
+            )
+            if self._log_fields is not None:
+                log_storage_event(
+                    "storage.write", backend_type=self._backend_type, path=self._destination, **self._log_fields
+                )
+        else:
+            _abort_fsspec_stream(self._strategy, self._fs, self._stage, file_obj)
+
+
+class _AsyncFsspecWriteStream:
+    """Asynchronous fsspec write stream context manager with shielded completion."""
+
+    __slots__ = (
+        "_backend_type",
+        "_destination",
+        "_file",
+        "_fs",
+        "_log_fields",
+        "_mode",
+        "_options",
+        "_overwrite",
+        "_sink",
+        "_stage",
+        "_strategy",
+    )
+
+    def __init__(
+        self,
+        fs: Any,
+        destination: str,
+        *,
+        strategy: "_FsspecStrategy",
+        mode: str,
+        options: "dict[str, Any]",
+        overwrite: bool,
+        backend_type: str,
+        log_fields: "dict[str, Any] | None",
+    ) -> None:
+        self._fs = fs
+        self._destination = destination
+        self._strategy: _FsspecStrategy = strategy
+        self._mode = mode
+        self._options = options
+        self._overwrite = overwrite
+        self._backend_type = backend_type
+        self._log_fields = log_fields
+        self._stage: str | None = None
+        self._file: Any = None
+        self._sink: _AsyncFsspecSink | None = None
+
+    async def __aenter__(self) -> "_AsyncFsspecSink":
+        open_fut = asyncio.ensure_future(
+            async_(
+                lambda: _open_fsspec_stream_target(
+                    self._strategy, self._fs, self._destination, self._mode, self._options
+                )
+            )()
+        )
+        try:
+            stage, file_obj = await execute_async_storage_operation(
+                partial(join_shielded, open_fut),
+                backend=self._backend_type,
+                operation="open_write_stream",
+                path=self._destination,
+            )
+        except asyncio.CancelledError:
+            if open_fut.done() and not open_fut.cancelled() and open_fut.exception() is None:
+                opened_stage, opened_file = open_fut.result()
+                await join_shielded(
+                    asyncio.ensure_future(
+                        async_(_abort_fsspec_stream)(self._strategy, self._fs, opened_stage, opened_file)
+                    ),
+                    suppress_result=True,
+                )
+            raise
+        self._stage = stage
+        self._file = file_obj
+        sink = _AsyncFsspecSink(file_obj, backend=self._backend_type, path=self._destination)
+        self._sink = sink
+        return sink
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        _ = (exc, traceback)
+        sink = self._sink
+        if sink is not None:
+            sink._closed = True
+        file_obj = self._file
+        if file_obj is None:
+            return
+        if exc_type is None:
+            publish_fut = asyncio.ensure_future(
+                async_(
+                    partial(
+                        _close_and_publish_fsspec_stream,
+                        self._strategy,
+                        self._fs,
+                        self._stage,
+                        file_obj,
+                        self._destination,
+                        overwrite=self._overwrite,
+                    )
+                )()
+            )
+            await execute_async_storage_operation(
+                partial(join_shielded, publish_fut),
+                backend=self._backend_type,
+                operation="write_stream_close",
+                path=self._destination,
+            )
+            if self._log_fields is not None:
+                log_storage_event(
+                    "storage.write", backend_type=self._backend_type, path=self._destination, **self._log_fields
+                )
+        else:
+            abort_fut = asyncio.ensure_future(
+                async_(_abort_fsspec_stream)(self._strategy, self._fs, self._stage, file_obj)
+            )
+            await join_shielded(abort_fut, suppress_result=True)
