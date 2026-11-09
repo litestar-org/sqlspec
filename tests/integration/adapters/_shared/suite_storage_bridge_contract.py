@@ -10,9 +10,21 @@ from tests.integration.adapters._shared._cases import (
     sync_driver_params_with,
 )
 from tests.integration.adapters._shared.behaviors import (
+    assert_async_select_to_storage_local_contract,
     assert_async_storage_bridge_local_contract,
+    assert_sync_select_to_storage_local_contract,
     assert_sync_storage_bridge_local_contract,
 )
+
+
+def test_sync_select_to_storage_local_contract(sync_driver_case: DriverCaseContext, tmp_path: Path) -> None:
+    """Sync drivers stream multi-chunk and empty parameterized queries to local Parquet."""
+    assert_sync_select_to_storage_local_contract(sync_driver_case.driver, sync_driver_case.case, tmp_path)
+
+
+async def test_async_select_to_storage_local_contract(async_driver_case: DriverCaseContext, tmp_path: Path) -> None:
+    """Async drivers stream multi-chunk and empty parameterized queries to local Parquet."""
+    await assert_async_select_to_storage_local_contract(async_driver_case.driver, async_driver_case.case, tmp_path)
 
 
 @pytest.mark.parametrize(

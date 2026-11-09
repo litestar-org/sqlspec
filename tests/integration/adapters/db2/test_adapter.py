@@ -6,6 +6,7 @@ from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -17,7 +18,7 @@ pytest.importorskip("ibm_db_dbi")
 from sqlspec import sql
 from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.core import extract_sqlstate
-from sqlspec.adapters.db2.driver import Db2SyncDriver
+from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 from sqlspec.adapters.db2.events import Db2SyncEventQueueStore
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -131,6 +132,30 @@ def test_db2_integration_arrow_conversion(db2_session: Db2SyncDriver, clean_user
 
     assert isinstance(table, pa.Table)
     assert table.to_pydict() == {"id": [42], "name": ["ArrowUser"]}
+
+
+async def test_db2_select_to_storage_round_trip(
+    db2_session: Db2SyncDriver, db2_async_session: Db2AsyncDriver, tmp_path: Path
+) -> None:
+    """Sync and async Db2 sessions export query rows to Parquet via select_to_storage."""
+    pytest.importorskip("pyarrow")
+    import pyarrow.parquet as pq
+
+    sync_path = tmp_path / "db2_sync.parquet"
+    sync_job = db2_session.select_to_storage("SELECT 1 AS a FROM SYSIBM.SYSDUMMY1", sync_path, format_hint="parquet")
+    assert sync_job.telemetry["rows_processed"] == 1
+    sync_rows = pq.read_table(sync_path).to_pylist()
+    assert len(sync_rows) == 1
+    assert {key.lower(): value for key, value in sync_rows[0].items()} == {"a": 1}
+
+    async_path = tmp_path / "db2_async.parquet"
+    async_job = await db2_async_session.select_to_storage(
+        "SELECT 1 AS a FROM SYSIBM.SYSDUMMY1", async_path, format_hint="parquet"
+    )
+    assert async_job.telemetry["rows_processed"] == 1
+    async_rows = pq.read_table(async_path).to_pylist()
+    assert len(async_rows) == 1
+    assert {key.lower(): value for key, value in async_rows[0].items()} == {"a": 1}
 
 
 def test_db2_semicolon_schema_survives_native_dsn_roundtrip(db2_connection_config: dict[str, Any]) -> None:

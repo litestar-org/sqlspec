@@ -705,3 +705,474 @@ async def test_write_async_rejects_invalid_kwargs_and_forwards_remote_options(tm
 
     remote_store.write_bytes_sync("obj.bin", b"payload", overwrite=False, acl="private")
     assert captured == [("my-bucket/obj.bin", "xb", {"acl": "private"})]
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_fsspec_write_strategy_and_initial_capabilities(tmp_path: Path) -> None:
+    """_fsspec_write_strategy maps protocols cleanly and supports_direct_arrow_write matches strategy capabilities."""
+    from sqlspec.exceptions import StorageCapabilityError
+    from sqlspec.storage._arrow_payload import StorageFormat
+    from sqlspec.storage.backends.fsspec import FSSpecBackend, _fsspec_write_strategy
+    from sqlspec.utils.type_guards import supports_direct_stream_write
+
+    expected_map = {
+        "file": "local",
+        "local": "local",
+        "s3": "commit",
+        "s3a": "commit",
+        "gs": "commit",
+        "gcs": "commit",
+        "az": "block",
+        "abfs": "block",
+        "abfss": "block",
+        "memory": "staged",
+        "dropbox": "staged",
+    }
+    for proto, expected_strategy in expected_map.items():
+        assert _fsspec_write_strategy(proto) == expected_strategy
+
+    mem_store = FSSpecBackend("memory", base_path=f"/cap_{tmp_path.name}")
+    file_store = FSSpecBackend(f"file://{tmp_path}")
+    assert supports_direct_stream_write(mem_store) is True
+    assert supports_direct_stream_write(file_store) is True
+
+    arrow_formats: tuple[StorageFormat, ...] = ("parquet", "arrow-ipc", "csv")
+    for fmt in arrow_formats:
+        assert mem_store.supports_direct_arrow_write(fmt, overwrite=True) is True
+        assert mem_store.supports_direct_arrow_write(fmt, overwrite=False) is False
+        assert file_store.supports_direct_arrow_write(fmt, overwrite=True) is True
+        assert file_store.supports_direct_arrow_write(fmt, overwrite=False) is True
+
+    assert mem_store.supports_direct_arrow_write("json", overwrite=True) is False
+    assert file_store.supports_direct_arrow_write("json", overwrite=True) is False
+
+    with pytest.raises(StorageCapabilityError):
+        mem_store.open_write_stream_sync("x.bin", overwrite=False)
+    with pytest.raises(StorageCapabilityError):
+        mem_store.open_write_stream_async("x.bin", overwrite=False)
+    with pytest.raises(TypeError, match="autocommit"):
+        file_store.open_write_stream_sync("x.bin", autocommit=True)
+    with pytest.raises(TypeError, match="autocommit"):
+        file_store.open_write_stream_async("x.bin", autocommit=False)
+
+
+def _fsspec_stage_entries(store: "FSSpecBackend", directory_or_prefix: str = "") -> list[str]:
+    items = store.list_objects_sync(prefix=directory_or_prefix)
+    return [item for item in items if ".sqlspec-stage-" in item]
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+@pytest.mark.parametrize("protocol_kind", ["file", "memory"])
+async def test_fsspec_local_and_staged_streams_round_trip_abort_and_cancel(tmp_path: Path, protocol_kind: str) -> None:
+    """FSSpec local and staged write streams publish atomically and preserve existing objects on abort or cancel."""
+    import asyncio
+    from typing import cast
+
+    from sqlspec.storage.backends.fsspec import FSSpecBackend, _AsyncFsspecSink, _FsspecSink
+
+    base = str(tmp_path) if protocol_kind == "file" else f"/stream_{tmp_path.name}"
+    store = FSSpecBackend(protocol_kind, base_path=base)
+
+    with store.open_write_stream_sync("nested/sync.bin") as sink:
+        assert isinstance(sink, _FsspecSink)
+        assert sink.write(b"a") == 1
+        assert sink.write(cast("Any", memoryview(b"b"))) == 1
+        sink.flush()
+
+    assert store.read_bytes_sync("nested/sync.bin") == b"ab"
+    assert _fsspec_stage_entries(store) == []
+
+    async with store.open_write_stream_async("nested/async.bin") as async_sink:
+        assert isinstance(async_sink, _AsyncFsspecSink)
+        assert await async_sink.write(cast("Any", bytearray(b"a"))) == 1
+        assert await async_sink.write(b"b") == 1
+        await async_sink.flush()
+
+    assert await store.read_bytes_async("nested/async.bin") == b"ab"
+    assert _fsspec_stage_entries(store) == []
+
+    store.write_bytes_sync("existing.bin", b"v1")
+
+    with pytest.raises(RuntimeError, match="abort-sync"), store.open_write_stream_sync("existing.bin") as sink:
+        sink.write(b"partial")
+        raise RuntimeError("abort-sync")
+
+    assert store.read_bytes_sync("existing.bin") == b"v1"
+    assert _fsspec_stage_entries(store) == []
+
+    with pytest.raises(RuntimeError, match="abort-async"):
+        async with store.open_write_stream_async("existing.bin") as async_sink:
+            await async_sink.write(b"partial-async")
+            raise RuntimeError("abort-async")
+
+    assert store.read_bytes_sync("existing.bin") == b"v1"
+    assert _fsspec_stage_entries(store) == []
+
+    started = asyncio.Event()
+    park = asyncio.Event()
+
+    async def _parked_write() -> None:
+        async with store.open_write_stream_async("existing.bin") as async_sink:
+            await async_sink.write(b"partial-cancel")
+            started.set()
+            await park.wait()
+
+    task = asyncio.create_task(_parked_write())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert store.read_bytes_sync("existing.bin") == b"v1"
+    assert _fsspec_stage_entries(store) == []
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_fsspec_sink_errors_open_errors_and_cancelled_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_FsspecSink/_AsyncFsspecSink and open errors normalize to StorageOperationFailedError; cancelled open removes stage."""
+    import asyncio
+    import errno
+    import time
+
+    from sqlspec.exceptions import StorageOperationFailedError
+    from sqlspec.storage.backends import fsspec as fsspec_mod
+    from sqlspec.storage.backends.fsspec import FSSpecBackend, _AsyncFsspecSink, _FsspecSink
+
+    class _FailingDouble:
+        closed = False
+
+        def write(self, _data: Any) -> int:
+            raise OSError(errno.ENOSPC, "full")
+
+        def flush(self) -> None:
+            raise OSError(errno.EIO, "io")
+
+    sync_sink = _FsspecSink(_FailingDouble(), backend="fsspec", path="x")
+    with pytest.raises(StorageOperationFailedError):
+        sync_sink.write(b"data")
+    with pytest.raises(StorageOperationFailedError):
+        sync_sink.flush()
+
+    async_sink = _AsyncFsspecSink(_FailingDouble(), backend="fsspec", path="x")
+    with pytest.raises(StorageOperationFailedError):
+        await async_sink.write(b"data")
+    with pytest.raises(StorageOperationFailedError):
+        await async_sink.flush()
+
+    file_store = FSSpecBackend(f"file://{tmp_path}")
+    file_store.write_bytes_sync("blocked", b"regular-file")
+    with pytest.raises(StorageOperationFailedError), file_store.open_write_stream_sync("blocked/x.bin"):
+        pass
+    with pytest.raises(StorageOperationFailedError):
+        async with file_store.open_write_stream_async("blocked/x.bin"):
+            pass
+
+    orig_open_stage = fsspec_mod._open_local_stage
+    entered_open = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _delayed_open(destination: Path) -> Any:
+        result = orig_open_stage(destination)
+        loop.call_soon_threadsafe(entered_open.set)
+        time.sleep(0.05)
+        return result
+
+    monkeypatch.setattr(fsspec_mod, "_open_local_stage", _delayed_open)
+
+    async def _open_then_cancel() -> None:
+        async with file_store.open_write_stream_async("cancel_open.bin") as s:
+            await s.write(b"x")
+
+    cancel_task = asyncio.create_task(_open_then_cancel())
+    await entered_open.wait()
+    cancel_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_task
+
+    assert not file_store.exists_sync("cancel_open.bin")
+    assert _fsspec_stage_entries(file_store) == []
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_fsspec_commit_and_block_strategies_and_conflict_mapping() -> None:
+    """FSSpec commit (s3/gs) and block (az) strategies commit, discard on abort/error, map conflicts, and clear fs.transaction.files."""
+    from collections import deque
+    from collections.abc import Callable
+
+    from sqlspec.exceptions import StorageOperationFailedError
+    from sqlspec.storage._arrow_payload import StorageFormat
+    from sqlspec.storage.backends.fsspec import FSSpecBackend, _forget_transaction_file
+
+    class _TxHolder:
+        def __init__(self) -> None:
+            self.files: deque[Any] = deque()
+
+    class _CommitFileDouble:
+        def __init__(self, *, commit_exc: Exception | None = None) -> None:
+            self.calls: list[str] = []
+            self.closed = False
+            self._commit_exc = commit_exc
+
+        def write(self, data: bytes) -> int:
+            self.calls.append(f"write:{len(data)}")
+            return len(data)
+
+        def close(self) -> None:
+            self.calls.append("close")
+            self.closed = True
+
+        def commit(self) -> None:
+            self.calls.append("commit")
+            if self._commit_exc is not None:
+                raise self._commit_exc
+
+        def discard(self) -> None:
+            self.calls.append("discard")
+
+    class _CommitFSDouble:
+        def __init__(self, factory: Callable[[], _CommitFileDouble]) -> None:
+            self.transaction = _TxHolder()
+            self._factory = factory
+            self.opened: list[tuple[str, str, dict[str, Any], _CommitFileDouble]] = []
+
+        def open(self, path: str, mode: str = "rb", **kwargs: Any) -> _CommitFileDouble:
+            f = self._factory()
+            if kwargs.get("autocommit") is False:
+                self.transaction.files.append(f)
+            self.opened.append((path, mode, kwargs, f))
+            return f
+
+    def _make_remote_store(protocol: str, fs_double: Any) -> FSSpecBackend:
+        st = FSSpecBackend.__new__(FSSpecBackend)
+        st.protocol = protocol
+        st.base_path = "bucket"
+        st._fs_uri = f"{protocol}://bucket"
+        st.fs = fs_double
+        return st
+
+    s3_fs = _CommitFSDouble(_CommitFileDouble)
+    s3_store = _make_remote_store("s3", s3_fs)
+    formats: tuple[StorageFormat, ...] = ("parquet", "arrow-ipc", "csv")
+    for fmt in formats:
+        assert s3_store.supports_direct_arrow_write(fmt, overwrite=True) is True
+        assert s3_store.supports_direct_arrow_write(fmt, overwrite=False) is True
+
+    with s3_store.open_write_stream_sync("ok.parquet", overwrite=True) as sink:
+        assert len(s3_fs.transaction.files) == 0
+        sink.write(b"abc")
+    path_0, mode_0, kw_0, file_0 = s3_fs.opened[0]
+    assert path_0 == "bucket/ok.parquet"
+    assert mode_0 == "wb"
+    assert kw_0 == {"autocommit": False}
+    assert file_0.calls == ["write:3", "close", "commit"]
+    assert len(s3_fs.transaction.files) == 0
+
+    with pytest.raises(RuntimeError, match="caller-abort"), s3_store.open_write_stream_sync("abort.parquet") as sink:
+        sink.write(b"xyz")
+        raise RuntimeError("caller-abort")
+    file_1 = s3_fs.opened[1][3]
+    assert file_1.calls == ["write:3", "discard"]
+    assert file_1.closed is True
+    assert len(s3_fs.transaction.files) == 0
+
+    with pytest.raises(RuntimeError, match="async-abort"):
+        async with s3_store.open_write_stream_async("abort_async.parquet", overwrite=False) as async_sink:
+            await async_sink.write(b"xy")
+            raise RuntimeError("async-abort")
+    _, mode_2, _, file_2 = s3_fs.opened[2]
+    assert mode_2 == "xb"
+    assert file_2.calls == ["write:2", "discard"]
+    assert file_2.closed is True
+    assert len(s3_fs.transaction.files) == 0
+
+    fail_commit_fs = _CommitFSDouble(lambda: _CommitFileDouble(commit_exc=OSError(5, "io")))
+    fail_commit_store = _make_remote_store("s3", fail_commit_fs)
+    with pytest.raises(StorageOperationFailedError), fail_commit_store.open_write_stream_sync("fail.parquet") as sink:
+        sink.write(b"123")
+    fail_file = fail_commit_fs.opened[0][3]
+    assert fail_file.calls == ["write:3", "close", "commit", "discard"]
+    assert fail_file.closed is True
+
+    class _ClientErrorLike(Exception):
+        def __init__(self) -> None:
+            super().__init__("PreconditionFailed")
+            self.response = {"Error": {"Code": "PreconditionFailed"}}
+
+    def _s3_precondition_file() -> _CommitFileDouble:
+        outer = OSError(22, "PreconditionFailed")
+        outer.__cause__ = _ClientErrorLike()
+        return _CommitFileDouble(commit_exc=outer)
+
+    conflict_s3_fs = _CommitFSDouble(_s3_precondition_file)
+    conflict_s3_store = _make_remote_store("s3", conflict_s3_fs)
+    with (
+        pytest.raises(FileExistsInStorageError),
+        conflict_s3_store.open_write_stream_sync("dup.parquet", overwrite=False) as sink,
+    ):
+        sink.write(b"dup")
+    assert "discard" in conflict_s3_fs.opened[0][3].calls
+    assert conflict_s3_fs.opened[0][3].closed is True
+
+    gcs_conflict_fs = _CommitFSDouble(lambda: _CommitFileDouble(commit_exc=FileExistsError("bucket/dup_gcs.parquet")))
+    gcs_store = _make_remote_store("gs", gcs_conflict_fs)
+    with pytest.raises(FileExistsInStorageError):
+        async with gcs_store.open_write_stream_async("dup_gcs.parquet", overwrite=False) as async_sink:
+            await async_sink.write(b"dup")
+    assert "discard" in gcs_conflict_fs.opened[0][3].calls
+    assert gcs_conflict_fs.opened[0][3].closed is True
+
+    class _BlockFileDouble:
+        def __init__(self) -> None:
+            self.forced = False
+            self.closed = False
+            self.close_forced_snapshots: list[bool] = []
+
+        def write(self, data: bytes) -> int:
+            return len(data)
+
+        def close(self) -> None:
+            self.close_forced_snapshots.append(self.forced)
+            self.closed = True
+
+    class _BlockFSDouble:
+        def __init__(self) -> None:
+            self.opened: list[tuple[str, str, _BlockFileDouble]] = []
+
+        def open(self, path: str, mode: str = "rb", **_kwargs: Any) -> _BlockFileDouble:
+            f = _BlockFileDouble()
+            self.opened.append((path, mode, f))
+            return f
+
+    az_fs = _BlockFSDouble()
+    az_store = _make_remote_store("az", az_fs)
+    assert az_store.supports_direct_arrow_write("parquet", overwrite=True) is True
+    assert az_store.supports_direct_arrow_write("parquet", overwrite=False) is True
+
+    with az_store.open_write_stream_sync("ok_az.parquet", overwrite=False) as sink:
+        sink.write(b"123")
+    assert az_fs.opened[0][1] == "xb"
+    assert az_fs.opened[0][2].close_forced_snapshots == [False]
+
+    with pytest.raises(RuntimeError, match="az-abort"), az_store.open_write_stream_sync("bad_az.parquet") as sink:
+        sink.write(b"123")
+        raise RuntimeError("az-abort")
+    assert az_fs.opened[1][2].forced is True
+    assert az_fs.opened[1][2].close_forced_snapshots == [True]
+
+    class _FlakyTxFiles:
+        def __init__(self) -> None:
+            self.attempts = 0
+            self.items = ["sentinel"]
+
+        def remove(self, item: Any) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise IndexError("concurrent deque mutation")
+            self.items.remove(item)
+
+    class _FlakyTxHolder:
+        def __init__(self) -> None:
+            self.files = _FlakyTxFiles()
+
+    class _FlakyTxFS:
+        def __init__(self) -> None:
+            self.transaction = _FlakyTxHolder()
+
+    flaky_fs = _FlakyTxFS()
+    _forget_transaction_file(flaky_fs, "sentinel")
+    assert flaky_fs.transaction.files.items == []
+    assert flaky_fs.transaction.files.attempts == 2
+    _forget_transaction_file(flaky_fs, "missing")
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or pyarrow missing")
+@pytest.mark.parametrize("protocol_kind", ["file", "memory"])
+async def test_fsspec_write_arrow_parity_formats_overwrite_and_failure_preservation(
+    tmp_path: Path, protocol_kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FSSpecBackend.write_arrow_* supports parquet/arrow-ipc/csv, overwrite=False, single telemetry event, and atomic failure preservation."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from sqlspec.exceptions import StorageCapabilityError, StorageOperationFailedError
+    from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload
+    from sqlspec.storage.backends import fsspec as fsspec_mod
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    base = str(tmp_path) if protocol_kind == "file" else f"/arrow_parity_{tmp_path.name}"
+    store = FSSpecBackend(protocol_kind, base_path=base)
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    orig_log = fsspec_mod.log_storage_event
+
+    def _capture_log(event_name: str, **fields: Any) -> None:
+        events.append((event_name, fields))
+        orig_log(event_name, **fields)
+
+    monkeypatch.setattr(fsspec_mod, "log_storage_event", _capture_log)
+
+    table = pa.table({"id": [1, 2, 3], "name": ["x", "y", "z"]})
+    formats: tuple[StorageFormat, ...] = ("parquet", "arrow-ipc", "csv")
+
+    for fmt in formats:
+        events.clear()
+        sync_key = f"sync_item.{fmt}"
+        store.write_arrow_sync(sync_key, table, format_hint=fmt)
+        write_events = [e for e in events if e[0] == "storage.write"]
+        assert len(write_events) == 1
+        assert write_events[0][1]["operation"] == "write_arrow"
+        decoded_sync = decode_arrow_payload(store.read_bytes_sync(sync_key), fmt)
+        assert decoded_sync.to_pylist() == table.to_pylist()
+
+        events.clear()
+        async_key = f"async_item.{fmt}"
+        await store.write_arrow_async(async_key, table, format_hint=fmt)
+        async_write_events = [e for e in events if e[0] == "storage.write"]
+        assert len(async_write_events) == 1
+        assert async_write_events[0][1]["operation"] == "write_arrow"
+        decoded_async = decode_arrow_payload(await store.read_bytes_async(async_key), fmt)
+        assert decoded_async.to_pylist() == table.to_pylist()
+
+    other_table = pa.table({"id": [99], "name": ["other"]})
+    store.write_arrow_sync("create_only_sync.parquet", table, overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        store.write_arrow_sync("create_only_sync.parquet", other_table, overwrite=False)
+    assert store.read_arrow_sync("create_only_sync.parquet").to_pylist() == table.to_pylist()
+
+    await store.write_arrow_async("create_only_async.parquet", table, overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_arrow_async("create_only_async.parquet", other_table, overwrite=False)
+    assert (await store.read_arrow_async("create_only_async.parquet")).to_pylist() == table.to_pylist()
+
+    store.write_arrow_sync("zstd.parquet", table, write_options={"compression": "zstd"})
+    zstd_meta = pq.read_metadata(pa.BufferReader(store.read_bytes_sync("zstd.parquet")))
+    assert zstd_meta.row_group(0).column(0).compression == "ZSTD"
+
+    store.write_arrow_sync("default_comp.parquet", table)
+    default_meta = pq.read_metadata(pa.BufferReader(store.read_bytes_sync("default_comp.parquet")))
+    assert default_meta.row_group(0).column(0).compression == "SNAPPY"
+
+    with pytest.raises(TypeError):
+        store.write_arrow_sync("bad_opt.parquet", table, unknown_parquet_kwarg=123)
+    with pytest.raises(TypeError):
+        await store.write_arrow_async("bad_opt.parquet", table, unknown_parquet_kwarg=123)
+
+    with pytest.raises(StorageCapabilityError):
+        store.write_arrow_sync("bad_fmt.json", table, format_hint="json")
+    assert not store.exists_sync("bad_fmt.json")
+
+    sparse_union = pa.UnionArray.from_sparse(pa.array([0, 1], type=pa.int8()), [pa.array([1, 2]), pa.array(["a", "b"])])
+    bad_table = pa.table({"u": sparse_union})
+
+    store.write_bytes_sync("seeded.parquet", b"original-bytes")
+    with pytest.raises(StorageOperationFailedError):
+        store.write_arrow_sync("seeded.parquet", bad_table, format_hint="parquet")
+    assert store.read_bytes_sync("seeded.parquet") == b"original-bytes"
+    assert _fsspec_stage_entries(store) == []
+
+    with pytest.raises(StorageOperationFailedError):
+        await store.write_arrow_async("seeded.parquet", bad_table, format_hint="parquet")
+    assert store.read_bytes_sync("seeded.parquet") == b"original-bytes"
+    assert _fsspec_stage_entries(store) == []

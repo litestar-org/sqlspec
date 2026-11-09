@@ -23,6 +23,7 @@ from sqlspec.adapters.aiomysql._typing import (
 )
 from sqlspec.adapters.aiomysql.core import (
     AiomysqlStreamSource,
+    _resolve_column_types,
     build_insert_statement,
     build_load_data_statement,
     can_use_local_infile_records,
@@ -63,24 +64,6 @@ json_type_value = (
     AiomysqlFieldType.JSON if AiomysqlFieldType is not None and supports_json_type(AiomysqlFieldType) else None
 )
 AIOMYSQL_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
-
-_MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
-    0: "decimal",
-    1: "int32",
-    2: "int32",
-    3: "int64",
-    4: "float32",
-    5: "float64",
-    7: "timestamp",
-    8: "int64",
-    10: "date",
-    11: "time",
-    12: "timestamp",
-    246: "decimal",
-    252: "binary",
-    253: "string",
-    254: "string",
-}
 
 
 class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
@@ -297,7 +280,9 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """Execute a query and stream Arrow-formatted results into storage."""
 
         self._require_capability("arrow_export_enabled")
-        arrow_result = await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = await self._select_for_storage(
+            statement, *parameters, statement_config=statement_config, **kwargs
+        )
         async_pipeline = self._storage_pipeline()
         telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
@@ -440,22 +425,6 @@ def _write_local_infile_tempfile(payload: bytes) -> str:
     with os.fdopen(fd, "wb") as tmp:
         tmp.write(payload)
     return tmp_name
-
-
-def _resolve_column_types(description: Any) -> "dict[str, str] | None":
-    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
-
-    Returns ``None`` when the cursor has no description or reports no
-    recognizable type codes.
-    """
-    if not description:
-        return None
-    column_types: dict[str, str] = {}
-    for col in description:
-        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
-        if token is not None:
-            column_types[col[0]] = token
-    return column_types or None
 
 
 register_driver_profile("aiomysql", driver_profile)

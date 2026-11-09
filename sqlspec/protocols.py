@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, Self, overlo
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+    from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from pathlib import Path
 
     from sqlglot import exp
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
         TableMetadata,
         VersionInfo,
     )
+    from sqlspec.storage._arrow_payload import StorageFormat
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
@@ -36,9 +38,11 @@ __all__ = (
     "AsyncDeleteProtocol",
     "AsyncReadBytesProtocol",
     "AsyncReadableProtocol",
+    "AsyncWritableBytesSink",
     "AsyncWriteBytesProtocol",
     "CursorMetadataProtocol",
     "DictProtocol",
+    "DirectStreamWriteProtocol",
     "HasAddListenerProtocol",
     "HasAsDictProtocol",
     "HasConfigProtocol",
@@ -88,6 +92,7 @@ __all__ = (
     "SupportsJsonTypeProtocol",
     "SyncDataDictionaryProtocol",
     "WithMethodProtocol",
+    "WritableBytesSink",
 )
 
 
@@ -348,6 +353,85 @@ class AsyncDeleteProtocol(Protocol):
     """Protocol for async delete support."""
 
     async def delete_async(self, path: "str | Path", **kwargs: Any) -> None: ...
+
+
+@runtime_checkable
+class WritableBytesSink(Protocol):
+    """Synchronous writable byte sink returned by DirectStreamWriteProtocol."""
+
+    def write(self, data: bytes, /) -> int | None:
+        """Write a contiguous byte buffer to the underlying stream.
+
+        Args:
+            data: Raw byte payload to write.
+
+        Returns:
+            Number of bytes written, or None if the sink does not report byte counts.
+        """
+        ...
+
+
+@runtime_checkable
+class AsyncWritableBytesSink(Protocol):
+    """Asynchronous writable byte sink returned by DirectStreamWriteProtocol."""
+
+    async def write(self, data: bytes, /) -> int | None:
+        """Write a contiguous byte buffer to the underlying stream asynchronously.
+
+        Args:
+            data: Raw byte payload to write.
+
+        Returns:
+            Number of bytes written, or None if the sink does not report byte counts.
+        """
+        ...
+
+
+@runtime_checkable
+class DirectStreamWriteProtocol(Protocol):
+    """Optional capability protocol for backends supporting streaming Arrow writes."""
+
+    def supports_direct_arrow_write(self, file_format: "StorageFormat", *, overwrite: bool = True) -> bool:
+        """Return whether the backend can stream the requested Arrow format directly.
+
+        Args:
+            file_format: Target storage format (such as parquet, arrow-ipc, or csv).
+            overwrite: Whether replacing an existing destination object is permitted.
+
+        Returns:
+            True when the backend supports direct streaming for the format and overwrite mode.
+        """
+        ...
+
+    def open_write_stream_sync(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> "AbstractContextManager[WritableBytesSink]":
+        """Open a synchronous streaming byte-sink session that aborts on unhandled exceptions.
+
+        Args:
+            path: Destination object path or URI segment.
+            overwrite: Whether replacing an existing destination object is permitted.
+            **kwargs: Backend-specific writer configuration options.
+
+        Returns:
+            Context manager yielding a synchronous writable byte sink.
+        """
+        ...
+
+    def open_write_stream_async(
+        self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[AsyncWritableBytesSink]":
+        """Open an asynchronous streaming byte-sink session that aborts on errors or cancellation.
+
+        Args:
+            path: Destination object path or URI segment.
+            overwrite: Whether replacing an existing destination object is permitted.
+            **kwargs: Backend-specific writer configuration options.
+
+        Returns:
+            Async context manager yielding an asynchronous writable byte sink.
+        """
+        ...
 
 
 @runtime_checkable

@@ -53,6 +53,7 @@ if TYPE_CHECKING:
         AsyncReadBytesProtocol,
         AsyncWriteBytesProtocol,
         CursorMetadataProtocol,
+        DirectStreamWriteProtocol,
         HasAddListenerProtocol,
         HasAsDictProtocol,
         HasConfigProtocol,
@@ -185,6 +186,7 @@ __all__ = (
     "supports_async_read_bytes",
     "supports_async_write_bytes",
     "supports_close",
+    "supports_direct_stream_write",
     "supports_json_type",
     "supports_where",
 )
@@ -373,6 +375,27 @@ def supports_async_write_bytes(obj: Any) -> "TypeGuard[AsyncWriteBytesProtocol]"
     """Check if backend supports async write_bytes."""
     try:
         return callable(obj.write_bytes_async)
+    except AttributeError:
+        return False
+
+
+def supports_direct_stream_write(obj: Any) -> "TypeGuard[DirectStreamWriteProtocol]":
+    """Return whether a storage backend instance implements DirectStreamWriteProtocol.
+
+    Args:
+        obj: Candidate storage backend object to inspect.
+
+    Returns:
+        True if obj is an instance exposing direct synchronous and asynchronous write streams.
+    """
+    if isinstance(obj, type):
+        return False
+    try:
+        return (
+            callable(obj.supports_direct_arrow_write)
+            and callable(obj.open_write_stream_sync)
+            and callable(obj.open_write_stream_async)
+        )
     except AttributeError:
         return False
 

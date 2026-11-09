@@ -4,6 +4,7 @@ Every test runs in both driver modes through the ``db2_mode`` fixture.
 """
 
 import importlib
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -18,6 +19,7 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     QueryTimeoutError,
     SQLParsingError,
+    StorageCapabilityError,
     TransactionError,
     UniqueViolationError,
 )
@@ -353,3 +355,33 @@ def test_session_driver_type_resolution_is_cached(monkeypatch: pytest.MonkeyPatc
 
     db2_driver_imports = [c for c in import_calls if c == "sqlspec.adapters.db2.driver"]
     assert len(db2_driver_imports) == 1
+
+
+async def test_db2_select_to_storage_writes_parquet(db2_mode: DriverMode, tmp_path: Path) -> None:
+    """Db2 sync and async drivers stream query rows to Parquet via select_to_storage and enforce capabilities."""
+    pytest.importorskip("pyarrow")
+    import pyarrow.parquet as pq
+
+    config = db2_mode.config(connection_config={"database": "SAMPLE"})
+    cursor = FakeDb2Cursor(rows=[(1,), (2,)], description=db2_description("A"))
+    driver = config._prepare_driver(
+        db2_mode.driver(FakeDb2Connection(lambda: cursor), driver_features=config.driver_features)
+    )
+
+    parquet_path = tmp_path / "db2_export.parquet"
+    job = await db2_mode.call(
+        driver.select_to_storage,
+        "SELECT 1 AS a FROM SYSIBM.SYSDUMMY1",
+        parquet_path,
+        format_hint="parquet",
+        batch_size=1,
+    )
+    assert job.telemetry["rows_processed"] == 2
+    assert pq.read_table(parquet_path).to_pylist() == [{"a": 1}, {"a": 2}]
+    assert cursor.closed is True
+
+    disabled_driver = db2_mode.driver(
+        FakeDb2Connection(), driver_features={"storage_capabilities": {"arrow_export_enabled": False}}
+    )
+    with pytest.raises(StorageCapabilityError):
+        await db2_mode.call(disabled_driver.select_to_storage, "SELECT 1 FROM SYSIBM.SYSDUMMY1", parquet_path)

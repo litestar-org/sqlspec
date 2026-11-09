@@ -1,13 +1,20 @@
 """Integration tests for sync and async storage streaming across local and multi-cloud backends."""
 
-from typing import TYPE_CHECKING, Any
+import asyncio
+import os
+import threading
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from sqlspec.exceptions import FileExistsInStorageError
+from sqlspec.storage._arrow_payload import encode_arrow_to_async_sink, encode_arrow_to_sink
 from sqlspec.storage.pipeline import AsyncStoragePipeline, SyncStoragePipeline
 from sqlspec.storage.registry import StorageRegistry
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils.module_loader import import_optional, import_optional_attr
+from sqlspec.utils.type_guards import supports_direct_stream_write
 from tests.fixtures.rustfs import rustfs_fsspec_kwargs, rustfs_obstore_kwargs
 from tests.integration.fixtures.cloud_storage import floci_gcs_obstore_kwargs
 
@@ -15,7 +22,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from pytest_databases.docker.azure_blob import AzureBlobService
-    from pytest_databases.docker.floci import FlociGCPService
+    from pytest_databases.docker.floci import FlociAWSService, FlociGCPService
     from pytest_databases.docker.rustfs import RustfsService
 
     from sqlspec.protocols import ObjectStoreProtocol
@@ -103,11 +110,90 @@ async def test_rustfs_s3_fsspec_streaming(rustfs_service: "RustfsService", rustf
 
 
 @pytest.mark.xdist_group("rustfs")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_rustfs_s3_fsspec_direct_stream_abort_and_create_only(
+    rustfs_service: "RustfsService", rustfs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify FSSpecBackend multipart commit, discard on abort/cancel, and create-only conflicts on RustFS."""
+    s3fs_core = pytest.importorskip("s3fs.core")
+    abort_probe: list[bool] = []
+    orig_discard = s3fs_core.S3File.discard
+
+    def _probed_discard(self_file: Any) -> Any:
+        abort_probe.append(bool(getattr(self_file, "mpu", None) and getattr(self_file, "parts", None)))
+        return orig_discard(self_file)
+
+    monkeypatch.setattr(s3fs_core.S3File, "discard", _probed_discard)
+    backend = FSSpecBackend(f"s3://{rustfs_bucket_name}", **rustfs_fsspec_kwargs(rustfs_service))
+    await _assert_fsspec_direct_streaming(backend, "streaming/rustfs_fsspec_direct", abort_probe)
+
+
+@pytest.mark.xdist_group("rustfs")
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
 async def test_rustfs_s3_obstore_streaming(rustfs_service: "RustfsService", rustfs_bucket_name: str) -> None:
     """Verify sync and async chunked streaming against RustFS S3 via ObStoreBackend."""
     backend = ObStoreBackend(f"s3://{rustfs_bucket_name}", **rustfs_obstore_kwargs(rustfs_service))
     await _assert_backend_streaming_and_arrow(backend, "streaming/rustfs_obstore")
+
+    registry = StorageRegistry()
+    registry.register_alias(
+        "rustfs-s3-stream", f"s3://{rustfs_bucket_name}", backend="obstore", **rustfs_obstore_kwargs(rustfs_service)
+    )
+    await _assert_pipeline_direct_arrow_streaming(
+        registry,
+        "rustfs-s3-stream",
+        "streaming/pipeline_arrow_s3",
+        check_overwrite_false_conflict=True,
+        check_multipart_12mb=True,
+    )
+
+
+@pytest.mark.xdist_group("rustfs")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_rustfs_s3_obstore_create_only_stream(
+    rustfs_service: "RustfsService", rustfs_bucket_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify ObStoreBackend staged create-only streaming with copy_if_not_exists and buffered fallback without it."""
+    monkeypatch.delenv("AWS_COPY_IF_NOT_EXISTS", raising=False)
+    plain_backend = ObStoreBackend(f"s3://{rustfs_bucket_name}", **rustfs_obstore_kwargs(rustfs_service))
+    assert plain_backend.supports_direct_arrow_write("parquet", overwrite=False) is False
+    if PYARROW_INSTALLED and pyarrow is not None:
+        tbl = pyarrow.table({"id": [1, 2]})
+        plain_key = "streaming/rustfs_obstore_plain_once/table.parquet"
+        plain_backend.write_arrow_sync(plain_key, tbl, overwrite=False)
+        with pytest.raises(FileExistsInStorageError):
+            plain_backend.write_arrow_sync(plain_key, tbl, overwrite=False)
+
+    staged_backend = ObStoreBackend(
+        f"s3://{rustfs_bucket_name}", copy_if_not_exists="multipart", **rustfs_obstore_kwargs(rustfs_service)
+    )
+    await _assert_obstore_create_only_stream(staged_backend, "streaming/rustfs_obstore_staged_once")
+
+
+@pytest.mark.xdist_group("floci_aws")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_floci_aws_s3_obstore_create_only_stream(
+    floci_aws_service: "FlociAWSService",
+    floci_aws_s3_bucket_name: str,
+    floci_aws_s3_obstore: "ObjectStoreProtocol",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify ObStoreBackend direct streaming and create-only streams against Floci AWS S3."""
+    monkeypatch.delenv("AWS_COPY_IF_NOT_EXISTS", raising=False)
+    await _assert_backend_streaming_and_arrow(floci_aws_s3_obstore, "streaming/floci_aws_obstore")
+    assert cast("ObStoreBackend", floci_aws_s3_obstore).supports_direct_arrow_write("parquet", overwrite=False) is False
+
+    staged_floci_aws = ObStoreBackend(
+        f"s3://{floci_aws_s3_bucket_name}",
+        aws_endpoint=floci_aws_service.endpoint_url,
+        aws_access_key_id=floci_aws_service.access_key,
+        aws_secret_access_key=floci_aws_service.secret_key,
+        aws_region=floci_aws_service.region,
+        aws_virtual_hosted_style_request=False,
+        copy_if_not_exists="multipart",
+        client_options={"allow_http": True},
+    )
+    await _assert_obstore_create_only_stream(staged_floci_aws, "streaming/floci_aws_obstore_staged_once")
 
 
 @pytest.mark.xdist_group("floci_gcp")
@@ -141,11 +227,29 @@ async def test_floci_gcs_obstore_streaming_and_pipeline(
     async_chunks = [chunk async for chunk in async_stream]
     assert b"".join(async_chunks) == STREAM_PAYLOAD
 
+    await _assert_pipeline_direct_arrow_streaming(
+        registry,
+        "floci-gcs-stream",
+        "streaming/pipeline_arrow_gcs",
+        check_overwrite_false_conflict=False,
+        check_multipart_12mb=False,
+    )
+
 
 @pytest.mark.xdist_group("floci_gcp")
 async def test_floci_gcs_fsspec_streaming(floci_gcs_fsspec: "ObjectStoreProtocol") -> None:
-    """Verify FSSpecBackend streaming and Arrow round-trips on Floci GCS."""
+    """Verify FSSpecBackend streaming and direct Arrow format round-trips on Floci GCS."""
     await _assert_backend_streaming_and_arrow(floci_gcs_fsspec, "streaming/floci_gcs_fsspec")
+    if PYARROW_INSTALLED and pyarrow is not None:
+        from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload
+
+        tbl = pyarrow.table({"id": [1, 2], "label": ["g1", "g2"]})
+        formats: tuple[StorageFormat, ...] = ("parquet", "arrow-ipc", "csv")
+        for fmt in formats:
+            key = f"streaming/floci_gcs_fsspec/direct_{fmt}.{fmt}"
+            await floci_gcs_fsspec.write_arrow_async(key, tbl, format_hint=fmt)
+            loaded = decode_arrow_payload(await floci_gcs_fsspec.read_bytes_async(key), fmt)
+            assert loaded.to_pylist() == tbl.to_pylist()
 
 
 @pytest.mark.xdist_group("azure_blob")
@@ -175,11 +279,160 @@ async def test_azurite_obstore_streaming_and_pipeline(
     assert len(sync_chunks) > 1
     assert b"".join(sync_chunks) == STREAM_PAYLOAD
 
+    await _assert_pipeline_direct_arrow_streaming(
+        registry,
+        "azurite-stream",
+        "streaming/pipeline_arrow_az",
+        check_overwrite_false_conflict=True,
+        check_multipart_12mb=True,
+    )
+
+
+@pytest.mark.xdist_group("azure_blob")
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+async def test_azurite_obstore_create_only_stream(azurite_obstore: "ObjectStoreProtocol") -> None:
+    """Verify ObStoreBackend staged 12 MiB create-only stream publish and conflict on Azurite."""
+    await _assert_obstore_create_only_stream(cast("ObStoreBackend", azurite_obstore), "streaming/azurite_obstore_once")
+
 
 @pytest.mark.xdist_group("azure_blob")
 async def test_azurite_fsspec_streaming(azurite_fsspec: "ObjectStoreProtocol") -> None:
     """Verify FSSpecBackend streaming and Arrow round-trips on Azurite."""
     await _assert_backend_streaming_and_arrow(azurite_fsspec, "streaming/azurite_fsspec")
+
+
+@pytest.mark.xdist_group("azure_blob")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+async def test_azurite_fsspec_direct_stream_abort_and_create_only(
+    azurite_fsspec: "ObjectStoreProtocol", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify FSSpecBackend block staging, forced-close abort/cancel, and create-only conflicts on Azurite."""
+    adlfs_spec = pytest.importorskip("adlfs.spec")
+    abort_probe: list[bool] = []
+    orig_close = adlfs_spec.AzureBlobFile.close
+
+    def _probed_close(self_file: Any) -> Any:
+        if getattr(self_file, "forced", False):
+            abort_probe.append(bool(getattr(self_file, "_block_list", None)))
+        return orig_close(self_file)
+
+    monkeypatch.setattr(adlfs_spec.AzureBlobFile, "close", _probed_close)
+    await _assert_fsspec_direct_streaming(
+        cast("FSSpecBackend", azurite_fsspec), "streaming/azurite_fsspec_direct", abort_probe
+    )
+
+
+async def _assert_fsspec_direct_streaming(backend: "FSSpecBackend", prefix: str, abort_probe: "list[bool]") -> None:
+    """Assert multipart success, abort, cancellation, and create-only conflict for one backend."""
+    block_size = 5_242_880
+    payload_12mb = os.urandom(12 * 1024 * 1024)
+    chunks = [payload_12mb[i : i + 1_048_576] for i in range(0, len(payload_12mb), 1_048_576)]
+
+    multipart_key = f"{prefix}/multipart_12mb.bin"
+    with backend.open_write_stream_sync(multipart_key, block_size=block_size) as sink:
+        for chunk in chunks:
+            sink.write(chunk)
+
+    loaded_bytes = backend.read_bytes_sync(multipart_key)
+    assert len(loaded_bytes) == 12_582_912
+    assert loaded_bytes == payload_12mb
+
+    seeded_key = f"{prefix}/abort_seeded.bin"
+    backend.write_bytes_sync(seeded_key, b"v1")
+    abort_probe.clear()
+    with (
+        pytest.raises(RuntimeError, match="fsspec abort seeded"),
+        backend.open_write_stream_sync(seeded_key, block_size=block_size) as sink,
+    ):
+        for chunk in chunks:
+            sink.write(chunk)
+        raise RuntimeError("fsspec abort seeded")
+
+    assert backend.read_bytes_sync(seeded_key) == b"v1"
+    assert True in abort_probe
+
+    fresh_key = f"{prefix}/abort_fresh.bin"
+    abort_probe.clear()
+    with (
+        pytest.raises(RuntimeError, match="fsspec abort fresh"),
+        backend.open_write_stream_sync(fresh_key, block_size=block_size) as sink,
+    ):
+        for chunk in chunks:
+            sink.write(chunk)
+        raise RuntimeError("fsspec abort fresh")
+
+    assert not backend.exists_sync(fresh_key)
+    assert True in abort_probe
+
+    cancel_key = f"{prefix}/cancel_seeded.bin"
+    backend.write_bytes_sync(cancel_key, b"v1")
+    abort_probe.clear()
+    uploaded = asyncio.Event()
+    park = asyncio.Event()
+
+    async def _parked_upload() -> None:
+        async with backend.open_write_stream_async(cancel_key, block_size=block_size) as async_sink:
+            for chunk in chunks:
+                await async_sink.write(chunk)
+            uploaded.set()
+            await park.wait()
+
+    cancel_task = asyncio.create_task(_parked_upload())
+    await uploaded.wait()
+    cancel_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_task
+
+    assert await backend.read_bytes_async(cancel_key) == b"v1"
+    assert True in abort_probe
+
+    once_key = f"{prefix}/create_only.bin"
+    with backend.open_write_stream_sync(once_key, overwrite=False, block_size=block_size) as sink:
+        sink.write(b"first-value")
+
+    with (
+        pytest.raises(FileExistsInStorageError),
+        backend.open_write_stream_sync(once_key, overwrite=False, block_size=block_size) as sink,
+    ):
+        for chunk in chunks:
+            sink.write(chunk)
+
+    with pytest.raises(FileExistsInStorageError):
+        async with backend.open_write_stream_async(once_key, overwrite=False, block_size=block_size) as async_sink:
+            await async_sink.write(b"second-value")
+
+    assert backend.read_bytes_sync(once_key) == b"first-value"
+
+
+async def _assert_obstore_create_only_stream(backend: "ObStoreBackend", prefix: str) -> None:
+    """Assert 12 MiB staged create-only streaming, conflict rejection, and stage cleanup on ObStoreBackend."""
+    assert backend.supports_direct_arrow_write("parquet", overwrite=False) is True
+
+    payload_12mb = os.urandom(12 * 1024 * 1024)
+    chunks = [payload_12mb[i : i + 1_048_576] for i in range(0, len(payload_12mb), 1_048_576)]
+
+    once_key = f"{prefix}/create_only_12mb.bin"
+    with backend.open_write_stream_sync(once_key, overwrite=False, chunk_size=5_242_880) as sink:
+        for chunk in chunks:
+            sink.write(chunk)
+
+    loaded = backend.read_bytes_sync(once_key)
+    assert len(loaded) == 12_582_912
+    assert loaded == payload_12mb
+    assert [k for k in backend.list_objects_sync(f"{prefix}/") if ".sqlspec-stage-" in k] == []
+
+    with (
+        pytest.raises(FileExistsInStorageError),
+        backend.open_write_stream_sync(once_key, overwrite=False, chunk_size=5_242_880) as dup_sink,
+    ):
+        dup_sink.write(b"duplicate-sync")
+    assert [k for k in backend.list_objects_sync(f"{prefix}/") if ".sqlspec-stage-" in k] == []
+
+    with pytest.raises(FileExistsInStorageError):
+        async with backend.open_write_stream_async(once_key, overwrite=False, chunk_size=5_242_880) as dup_async_sink:
+            await dup_async_sink.write(b"duplicate-async")
+    assert [k for k in await backend.list_objects_async(f"{prefix}/") if ".sqlspec-stage-" in k] == []
+    assert backend.get_metadata_sync(once_key)["size"] == 12_582_912
 
 
 async def _assert_backend_streaming_and_arrow(backend: "ObjectStoreProtocol", prefix: str) -> None:
@@ -202,3 +455,169 @@ async def _assert_backend_streaming_and_arrow(backend: "ObjectStoreProtocol", pr
         backend.write_arrow_sync(arrow_path, expected_table)
         loaded_table = backend.read_arrow_sync(arrow_path)
         assert loaded_table.equals(expected_table)
+
+
+async def _assert_pipeline_direct_arrow_streaming(
+    registry: StorageRegistry,
+    alias_name: str,
+    prefix: str,
+    *,
+    check_overwrite_false_conflict: bool = True,
+    check_multipart_12mb: bool = False,
+) -> None:
+    """Assert pipeline direct Arrow streaming, abort semantics, and overwrite protection."""
+    if not OBSTORE_INSTALLED or not PYARROW_INSTALLED or pyarrow is None:
+        return
+
+    backend = registry.get(alias_name)
+    sync_pipeline = SyncStoragePipeline(registry=registry)
+    async_pipeline = AsyncStoragePipeline(registry=registry)
+
+    sample_table = pyarrow.table({"id": [1, 2, 3, 4], "label": ["a", "b", "c", "d"]})
+
+    for fmt in ("parquet", "arrow-ipc", "csv"):
+        dest_sync = f"alias://{alias_name}/{prefix}/sync_table_{fmt}.{fmt}"
+        t_sync = sync_pipeline.write_arrow(sample_table, dest_sync, format_hint=fmt)
+        assert t_sync["backend"] == "obstore"
+        assert t_sync["rows_processed"] == 4
+        assert t_sync["bytes_processed"] > 0
+        assert t_sync["format"] == fmt
+
+        reader = pyarrow.RecordBatchReader.from_batches(sample_table.schema, sample_table.to_batches())
+        dest_sync_b = f"alias://{alias_name}/{prefix}/sync_reader_{fmt}.{fmt}"
+        t_sync_b = sync_pipeline.write_arrow_batches(dest_sync_b, reader, file_format=fmt)
+        assert t_sync_b["backend"] == "obstore"
+        assert t_sync_b["rows_processed"] == 4
+
+        dest_async = f"alias://{alias_name}/{prefix}/async_table_{fmt}.{fmt}"
+        t_async = await async_pipeline.write_arrow(sample_table, dest_async, format_hint=fmt)
+        assert t_async["backend"] == "obstore"
+        assert t_async["rows_processed"] == 4
+
+        dest_async_b = f"alias://{alias_name}/{prefix}/async_batches_{fmt}.{fmt}"
+        t_async_b = await async_pipeline.write_arrow_batches_async(
+            dest_async_b, sample_table.to_batches(), file_format=fmt
+        )
+        assert t_async_b["backend"] == "obstore"
+        assert t_async_b["rows_processed"] == 4
+
+        decoded_sync, _ = sync_pipeline.read_arrow(dest_sync, file_format=fmt)
+        assert decoded_sync.to_pylist() == sample_table.to_pylist()
+        decoded_async, _ = await async_pipeline.read_arrow_async(dest_async_b, file_format=fmt)
+        assert decoded_async.to_pylist() == sample_table.to_pylist()
+
+    v1 = pyarrow.table({"id": [1], "label": ["v1"]})
+    sync_pipeline.write_arrow(v1, f"alias://{alias_name}/{prefix}/existing.parquet")
+
+    def _failing_batches() -> Iterator[Any]:
+        yield pyarrow.RecordBatch.from_pydict({"id": [10], "label": ["fail"]}, schema=v1.schema)
+        raise RuntimeError("emulator stream abort")
+
+    with pytest.raises(RuntimeError, match="emulator stream abort"):
+        sync_pipeline.write_arrow_batches(f"alias://{alias_name}/{prefix}/existing.parquet", _failing_batches())
+
+    assert backend.read_arrow_sync(f"{prefix}/existing.parquet").equals(v1)
+
+    with pytest.raises(RuntimeError, match="emulator stream abort"):
+        sync_pipeline.write_arrow_batches(f"alias://{alias_name}/{prefix}/fresh_aborted.parquet", _failing_batches())
+
+    assert not backend.exists_sync(f"{prefix}/fresh_aborted.parquet")
+
+    with pytest.raises(RuntimeError, match="emulator stream abort"):
+        await async_pipeline.write_arrow_batches_async(
+            f"alias://{alias_name}/{prefix}/existing.parquet", _failing_batches()
+        )
+
+    assert backend.read_arrow_sync(f"{prefix}/existing.parquet").equals(v1)
+
+    with pytest.raises(RuntimeError, match="emulator stream abort"):
+        await async_pipeline.write_arrow_batches_async(
+            f"alias://{alias_name}/{prefix}/fresh_aborted_async.parquet", _failing_batches()
+        )
+
+    assert not backend.exists_sync(f"{prefix}/fresh_aborted_async.parquet")
+
+    cancel_existing_dest = f"alias://{alias_name}/{prefix}/cancel_existing.parquet"
+    sync_pipeline.write_arrow(v1, cancel_existing_dest)
+
+    first_batch_emitted = threading.Event()
+    release_generator = threading.Event()
+
+    def _cancellable_batches() -> Iterator[Any]:
+        yield pyarrow.RecordBatch.from_pydict({"id": [100], "label": ["c1"]}, schema=v1.schema)
+        first_batch_emitted.set()
+        release_generator.wait(timeout=5.0)
+        yield pyarrow.RecordBatch.from_pydict({"id": [101], "label": ["c2"]}, schema=v1.schema)
+
+    task_existing = asyncio.create_task(
+        async_pipeline.write_arrow_batches_async(cancel_existing_dest, _cancellable_batches())
+    )
+    await asyncio.to_thread(first_batch_emitted.wait, 5.0)
+    task_existing.cancel()
+    release_generator.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task_existing
+
+    assert backend.read_arrow_sync(f"{prefix}/cancel_existing.parquet").equals(v1)
+
+    cancel_fresh_dest = f"alias://{alias_name}/{prefix}/cancel_fresh.parquet"
+    first_batch_fresh = threading.Event()
+    release_fresh = threading.Event()
+
+    def _cancellable_fresh_batches() -> Iterator[Any]:
+        yield pyarrow.RecordBatch.from_pydict({"id": [200], "label": ["f1"]}, schema=v1.schema)
+        first_batch_fresh.set()
+        release_fresh.wait(timeout=5.0)
+        yield pyarrow.RecordBatch.from_pydict({"id": [201], "label": ["f2"]}, schema=v1.schema)
+
+    task_fresh = asyncio.create_task(
+        async_pipeline.write_arrow_batches_async(cancel_fresh_dest, _cancellable_fresh_batches())
+    )
+    await asyncio.to_thread(first_batch_fresh.wait, 5.0)
+    task_fresh.cancel()
+    release_fresh.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task_fresh
+
+    assert not await backend.exists_async(f"{prefix}/cancel_fresh.parquet")
+
+    if check_overwrite_false_conflict:
+        once_dest = f"alias://{alias_name}/{prefix}/once.parquet"
+        sync_pipeline.write_arrow(v1, once_dest, overwrite=False)
+        with pytest.raises(FileExistsInStorageError):
+            sync_pipeline.write_arrow(v1, once_dest, overwrite=False)
+        with pytest.raises(FileExistsInStorageError):
+            await async_pipeline.write_arrow(v1, once_dest, overwrite=False)
+        assert backend.read_arrow_sync(f"{prefix}/once.parquet").equals(v1)
+
+    if check_multipart_12mb:
+        random_chunks = [os.urandom(1024 * 1024) for _ in range(12)]
+        large_batches = [pyarrow.RecordBatch.from_pydict({"chunk": [blob]}) for blob in random_chunks]
+        large_dest = f"alias://{alias_name}/{prefix}/multipart_12mb.parquet"
+        t_large = sync_pipeline.write_arrow_batches(large_dest, large_batches)
+        assert t_large["rows_processed"] == 12
+        assert t_large["bytes_processed"] > 10_485_760
+        loaded_large = backend.read_arrow_sync(f"{prefix}/multipart_12mb.parquet")
+        assert loaded_large.column("chunk").to_pylist() == random_chunks
+
+        stream_backend = backend
+        assert supports_direct_stream_write(stream_backend)
+        unaligned_key = f"{prefix}/multipart_unaligned_5242887.parquet"
+        with stream_backend.open_write_stream_sync(unaligned_key, chunk_size=5_242_887) as sync_sink:
+            written_bytes, written_rows = encode_arrow_to_sink(
+                iter(large_batches), sync_sink, format_hint="parquet", compression="NONE"
+            )
+        assert written_rows == 12
+        assert written_bytes > 10_485_760
+        loaded_unaligned = backend.read_arrow_sync(unaligned_key)
+        assert loaded_unaligned.column("chunk").to_pylist() == random_chunks
+
+        async_unaligned_key = f"{prefix}/multipart_async_unaligned_5242887.parquet"
+        async with stream_backend.open_write_stream_async(async_unaligned_key, chunk_size=5_242_887) as async_sink:
+            async_bytes, async_rows = await encode_arrow_to_async_sink(
+                iter(large_batches), async_sink, format_hint="parquet", compression="NONE", chunk_size=1_048_576
+            )
+        assert async_rows == 12
+        assert async_bytes > 10_485_760
+        loaded_async_unaligned = await backend.read_arrow_async(async_unaligned_key)
+        assert loaded_async_unaligned.column("chunk").to_pylist() == random_chunks

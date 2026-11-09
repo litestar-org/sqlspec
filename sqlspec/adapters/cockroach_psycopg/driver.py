@@ -77,6 +77,10 @@ class CockroachPsycopgSyncStreamSource:
         self._underlying = underlying
         self._auto_started = auto_started
 
+    @property
+    def column_types(self) -> "dict[str, str] | None":
+        return getattr(self._underlying, "column_types", None)
+
     def start(self) -> None:
         try:
             self._underlying.start()
@@ -113,6 +117,10 @@ class CockroachPsycopgAsyncStreamSource:
         self._statement = statement
         self._underlying = underlying
         self._auto_started = False
+
+    @property
+    def column_types(self) -> "dict[str, str] | None":
+        return getattr(self._underlying, "column_types", None)
 
     async def start(self) -> None:
         if self._driver._wants_follower_read(self._statement):

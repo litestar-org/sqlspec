@@ -5,14 +5,18 @@ format, handling empty results, NULL values, and type inference.
 """
 
 import contextlib
+import logging
+import re
 import struct
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from functools import lru_cache
+from itertools import islice
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.exceptions import ImproperConfigurationError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import (
     ensure_pandas,
     ensure_polars,
@@ -33,6 +37,8 @@ __all__ = (
     "PG_BINARY_COPY_HEADER",
     "PG_BINARY_COPY_TRAILER",
     "arrow_batch_to_rows",
+    "arrow_batches_from_async_rows",
+    "arrow_batches_from_rows",
     "arrow_reader_to_return_format",
     "arrow_reader_with_deferred_close",
     "arrow_table_column_names",
@@ -63,12 +69,14 @@ __all__ = (
     "sql_type_for_category",
     "sql_type_from_arrow_type",
 )
+logger = get_logger("sqlspec.utils.arrow_helpers")
 PG_BINARY_COPY_HEADER: Final[bytes] = b"PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 PG_BINARY_COPY_TRAILER: Final[bytes] = b"\xff\xff"
 _PG_DATE_EPOCH_DAYS: Final[int] = 10957
 _PG_EPOCH_OFFSET_US: Final[int] = 946_684_800_000_000
 _PG_NULL_MARKER: Final[bytes] = b"\xff\xff\xff\xff"
 _ARROW_TABLE_COERCER: "TypeDispatcher[Any] | None" = None
+_DEFERRED_CLOSE_READER_CLS: "type[Any] | None" = None
 _ARROW_SCHEMA_DECISION_CACHE_SIZE = 512
 _CONFIG_CATEGORY_DEFAULTS: "dict[str, str]" = {
     "uuid": "UUID",
@@ -142,6 +150,20 @@ _ARROW_TOKEN_FACTORIES: "dict[str, Callable[[Any], Any]]" = {
     "timestamptz": lambda pa: pa.timestamp("us", tz="UTC"),
     "duration": lambda pa: pa.duration("us"),
 }
+_DECIMAL128_MAX_PRECISION = 38
+_DECIMAL256_MAX_PRECISION = 76
+_DECIMAL_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^decimal\((\d+),(\d+)\)$")
+_PINNABLE_NULL_TOKENS: Final[frozenset[str]] = frozenset({
+    "bool",
+    "int16",
+    "int32",
+    "int64",
+    "float32",
+    "float64",
+    "date",
+    "timestamp",
+    "timestamptz",
+})
 
 
 @overload
@@ -243,13 +265,21 @@ def arrow_type_from_token(token: str) -> Any:
 
     Unknown tokens resolve to ``string`` so an adapter reporting a type this
     module does not model degrades to the safe fallback rather than raising.
+    Exact ``decimal(P,S)`` tokens resolve to ``decimal128`` for ``P <= 38``
+    and ``decimal256`` for ``38 < P <= 76``.
     """
     import pyarrow as pa
 
     factory = _ARROW_TOKEN_FACTORIES.get(token)
-    if factory is None:
-        return pa.string()
-    return factory(pa)
+    if factory is not None:
+        return factory(pa)
+    parsed_decimal = _parse_decimal_token(token)
+    if parsed_decimal is not None:
+        precision, scale = parsed_decimal
+        if precision <= _DECIMAL128_MAX_PRECISION:
+            return pa.decimal128(precision, scale)
+        return pa.decimal256(precision, scale)
+    return pa.string()
 
 
 def sql_type_from_arrow_type(arrow_type: Any, dialect: str | None = None) -> str:
@@ -370,6 +400,248 @@ def convert_dict_to_arrow_with_schema(
             ])
             table = pa.Table.from_pydict({name: [] for name in schema.names}, schema=schema)
     return arrow_table_to_return_format(table, return_format=return_format, batch_size=batch_size)
+
+
+def arrow_batches_from_rows(
+    rows: "Iterator[dict[str, Any]]",
+    *,
+    batch_size: int,
+    arrow_schema: Any = None,
+    integer_may_widen: bool = False,
+    on_read_ahead: "Callable[[tuple[str, ...]], None] | None" = None,
+) -> "ArrowRecordBatchReader | None":
+    """Convert a synchronous row iterator into a lazy Arrow RecordBatchReader.
+
+    Args:
+        rows: Synchronous iterator yielding row dictionaries.
+        batch_size: Maximum number of rows to convert per batch.
+        arrow_schema: Optional explicit PyArrow schema overriding inference.
+        integer_may_widen: Whether top-level integer columns may widen to floats in later chunks.
+        on_read_ahead: Optional callback receiving unsettled column names when read-ahead occurs.
+
+    Returns:
+        A ``pyarrow.RecordBatchReader`` streaming converted batches, or ``None`` when ``rows`` is empty.
+
+    Raises:
+        ValueError: When ``batch_size < 1``.
+        TypeError: When ``arrow_schema`` is provided and is not a ``pyarrow.Schema``.
+    """
+    if batch_size < 1:
+        msg = "batch_size must be greater than or equal to 1"
+        raise ValueError(msg)
+
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if arrow_schema is not None and not isinstance(arrow_schema, pa.Schema):
+        _close_sync_rows(rows)
+        msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
+        raise TypeError(msg)
+
+    try:
+        iterator = iter(rows)
+        first_chunk = list(islice(iterator, batch_size))
+        if not first_chunk:
+            _close_sync_rows(rows)
+            return None
+
+        raw_types = getattr(rows, "column_types", None)
+        column_types: Mapping[str, str] | None = raw_types if isinstance(raw_types, Mapping) else None
+        probe = pa.Table.from_pylist(first_chunk)
+
+        if arrow_schema is not None:
+            _reject_lost_struct_fields(probe.schema, arrow_schema)
+            first_table = cast(
+                "ArrowTable",
+                convert_dict_to_arrow_with_schema(
+                    first_chunk, return_format="table", arrow_schema=arrow_schema, column_types=column_types
+                ),
+            )
+            schema = first_table.schema
+        else:
+            declared = _declared_types(probe.schema, column_types)
+            unsettled = tuple(
+                field.name
+                for field in probe.schema
+                if field.name not in declared and _type_is_unsettled(field.type, integer_may_widen=integer_may_widen)
+            )
+            if unsettled:
+                log_with_context(
+                    logger, logging.INFO, "storage.export.read_ahead", columns=list(unsettled), mode="sync"
+                )
+                if on_read_ahead is not None:
+                    on_read_ahead(unsettled)
+                tables = [probe]
+                while True:
+                    next_chunk = list(islice(iterator, batch_size))
+                    if not next_chunk:
+                        break
+                    tables.append(pa.Table.from_pylist(next_chunk))
+                _close_sync_rows(rows)
+                combined = _resolve_null_columns(pa.concat_tables(tables, promote_options="permissive"), column_types)
+                if declared:
+                    declared_schema = pa.schema([
+                        field.with_type(declared[field.name]) if field.name in declared else field
+                        for field in combined.schema
+                    ])
+                    combined = combined.cast(declared_schema)
+                return pa.RecordBatchReader.from_batches(combined.schema, combined.to_batches(max_chunksize=batch_size))
+
+            if declared:
+                pinned_schema = pa.schema([
+                    field.with_type(declared[field.name]) if field.name in declared else field for field in probe.schema
+                ])
+                first_table = probe.cast(pinned_schema)
+            else:
+                first_table = probe
+            schema = first_table.schema
+    except BaseException:
+        _close_sync_rows(rows)
+        raise
+
+    explicit = arrow_schema is not None
+    rows_closed = False
+
+    def _close_rows_once() -> None:
+        nonlocal rows_closed
+        if not rows_closed:
+            rows_closed = True
+            _close_sync_rows(rows)
+
+    def _iter_batches() -> "Iterator[ArrowRecordBatch]":
+        try:
+            yield from first_table.to_batches(max_chunksize=batch_size)
+            while True:
+                later_chunk = list(islice(iterator, batch_size))
+                if not later_chunk:
+                    break
+                later_table = _convert_later_chunk(later_chunk, schema, explicit=explicit)
+                yield from later_table.to_batches(max_chunksize=batch_size)
+        finally:
+            _close_rows_once()
+
+    return arrow_reader_with_deferred_close(
+        pa.RecordBatchReader.from_batches(schema, _iter_batches()), _close_rows_once
+    )
+
+
+async def arrow_batches_from_async_rows(
+    rows: "AsyncIterator[dict[str, Any]]",
+    *,
+    batch_size: int,
+    arrow_schema: Any = None,
+    integer_may_widen: bool = False,
+    on_read_ahead: "Callable[[tuple[str, ...]], None] | None" = None,
+) -> "AsyncIterator[ArrowRecordBatch] | None":
+    """Convert an asynchronous row iterator into an async Arrow RecordBatch iterator.
+
+    Args:
+        rows: Asynchronous iterator yielding row dictionaries.
+        batch_size: Maximum number of rows to convert per batch.
+        arrow_schema: Optional explicit PyArrow schema overriding inference.
+        integer_may_widen: Whether top-level integer columns may widen to floats in later chunks.
+        on_read_ahead: Optional callback receiving unsettled column names when read-ahead occurs.
+
+    Returns:
+        An async iterator yielding ``pyarrow.RecordBatch`` objects, or ``None`` when ``rows`` is empty.
+
+    Raises:
+        ValueError: When ``batch_size < 1``.
+        TypeError: When ``arrow_schema`` is provided and is not a ``pyarrow.Schema``.
+    """
+    if batch_size < 1:
+        msg = "batch_size must be greater than or equal to 1"
+        raise ValueError(msg)
+
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if arrow_schema is not None and not isinstance(arrow_schema, pa.Schema):
+        await _aclose_async_rows(rows)
+        msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
+        raise TypeError(msg)
+
+    try:
+        iterator = aiter(rows)
+        first_chunk = await _read_async_chunk(iterator, batch_size)
+        if not first_chunk:
+            await _aclose_async_rows(rows)
+            return None
+
+        raw_types = getattr(rows, "column_types", None)
+        column_types: Mapping[str, str] | None = raw_types if isinstance(raw_types, Mapping) else None
+        probe = pa.Table.from_pylist(first_chunk)
+
+        if arrow_schema is not None:
+            _reject_lost_struct_fields(probe.schema, arrow_schema)
+            first_table = cast(
+                "ArrowTable",
+                convert_dict_to_arrow_with_schema(
+                    first_chunk, return_format="table", arrow_schema=arrow_schema, column_types=column_types
+                ),
+            )
+            schema = first_table.schema
+        else:
+            declared = _declared_types(probe.schema, column_types)
+            unsettled = tuple(
+                field.name
+                for field in probe.schema
+                if field.name not in declared and _type_is_unsettled(field.type, integer_may_widen=integer_may_widen)
+            )
+            if unsettled:
+                log_with_context(
+                    logger, logging.INFO, "storage.export.read_ahead", columns=list(unsettled), mode="async"
+                )
+                if on_read_ahead is not None:
+                    on_read_ahead(unsettled)
+                tables = [probe]
+                while True:
+                    next_chunk = await _read_async_chunk(iterator, batch_size)
+                    if not next_chunk:
+                        break
+                    tables.append(pa.Table.from_pylist(next_chunk))
+                await _aclose_async_rows(rows)
+                combined = _resolve_null_columns(pa.concat_tables(tables, promote_options="permissive"), column_types)
+                if declared:
+                    declared_schema = pa.schema([
+                        field.with_type(declared[field.name]) if field.name in declared else field
+                        for field in combined.schema
+                    ])
+                    combined = combined.cast(declared_schema)
+                read_ahead_batches = combined.to_batches(max_chunksize=batch_size)
+
+                async def _iter_read_ahead() -> "AsyncIterator[ArrowRecordBatch]":
+                    for batch in read_ahead_batches:
+                        yield batch
+
+                return _AsyncRowBatchIterator(_iter_read_ahead(), None)
+
+            if declared:
+                pinned_schema = pa.schema([
+                    field.with_type(declared[field.name]) if field.name in declared else field for field in probe.schema
+                ])
+                first_table = probe.cast(pinned_schema)
+            else:
+                first_table = probe
+            schema = first_table.schema
+    except BaseException:
+        await _aclose_async_rows(rows)
+        raise
+
+    explicit = arrow_schema is not None
+
+    async def _iter_pinned() -> "AsyncIterator[ArrowRecordBatch]":
+        for batch in first_table.to_batches(max_chunksize=batch_size):
+            yield batch
+        while True:
+            later_chunk = await _read_async_chunk(iterator, batch_size)
+            if not later_chunk:
+                break
+            later_table = _convert_later_chunk(later_chunk, schema, explicit=explicit)
+            for batch in later_table.to_batches(max_chunksize=batch_size):
+                yield batch
+
+    return _AsyncRowBatchIterator(_iter_pinned(), rows)
 
 
 def records_to_arrow_table(
@@ -649,11 +921,14 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
 
 
 def arrow_reader_with_deferred_close(reader: Any, close_callback: "Callable[[], None]") -> "ArrowRecordBatchReader":
-    """Wrap a RecordBatchReader so close_callback fires when it is exhausted or errors."""
+    """Wrap a RecordBatchReader so close_callback fires on close, exhaustion, or error."""
     ensure_pyarrow()
     import pyarrow as pa
 
-    return pa.RecordBatchReader.from_batches(reader.schema, _DeferredCloseBatchIterator(reader, close_callback))
+    iterator = _DeferredCloseBatchIterator(reader, close_callback)
+    base_reader = pa.RecordBatchReader.from_batches(reader.schema, iterator)
+    reader_cls = _get_deferred_close_reader_cls()
+    return cast("ArrowRecordBatchReader", reader_cls(base_reader, iterator.close))
 
 
 def arrow_reader_to_return_format(
@@ -674,17 +949,34 @@ def arrow_reader_to_return_format(
         raise TypeError(msg)
     if arrow_schema is not None:
         if not isinstance(arrow_schema, pa.Schema):
+            reader_close = getattr(reader, "close", None)
+            if callable(reader_close):
+                with contextlib.suppress(Exception):
+                    reader_close()
             msg = f"arrow_schema must be a pyarrow.Schema, got {type(arrow_schema).__name__}"
             raise TypeError(msg)
-        reader = reader.cast(arrow_schema)
+        try:
+            reader = reader.cast(arrow_schema)
+        except BaseException:
+            reader_close = getattr(reader, "close", None)
+            if callable(reader_close):
+                with contextlib.suppress(Exception):
+                    reader_close()
+            raise
     if return_format == "reader":
         return reader, -1
-    if return_format == "batches":
-        batches = list(reader)
-        return batches, sum(batch.num_rows for batch in batches)
-    table = reader.read_all()
-    shaped = arrow_table_to_return_format(table, return_format=return_format, batch_size=batch_size)
-    return shaped, int(table.num_rows)
+    try:
+        if return_format == "batches":
+            batches = list(reader)
+            return batches, sum(batch.num_rows for batch in batches)
+        table = reader.read_all()
+        shaped = arrow_table_to_return_format(table, return_format=return_format, batch_size=batch_size)
+        return shaped, int(table.num_rows)
+    finally:
+        reader_close = getattr(reader, "close", None)
+        if callable(reader_close):
+            with contextlib.suppress(Exception):
+                reader_close()
 
 
 def encode_arrow_batch_pg_binary(
@@ -1361,6 +1653,220 @@ def _resolve_null_columns(table: "ArrowTable", column_types: "Mapping[str, str] 
     return table.cast(pa.schema(fields))
 
 
+def _parse_decimal_token(token: str) -> "tuple[int, int] | None":
+    match = _DECIMAL_TOKEN_PATTERN.match(token)
+    if match is None:
+        return None
+    precision = int(match.group(1))
+    scale = int(match.group(2))
+    if precision < 1 or precision > _DECIMAL256_MAX_PRECISION or scale > precision:
+        return None
+    return precision, scale
+
+
+def _declared_types(probe_schema: Any, column_types: "Mapping[str, str] | None") -> "dict[str, Any]":
+    if not column_types:
+        return {}
+    import pyarrow as pa
+
+    declared: dict[str, Any] = {}
+    for field in probe_schema:
+        token = column_types.get(field.name)
+        if token is None:
+            continue
+        if pa.types.is_decimal(field.type):
+            if _parse_decimal_token(token) is not None:
+                declared[field.name] = arrow_type_from_token(token)
+        elif pa.types.is_null(field.type) and (
+            token in _PINNABLE_NULL_TOKENS or _parse_decimal_token(token) is not None
+        ):
+            declared[field.name] = arrow_type_from_token(token)
+    return declared
+
+
+def _is_any_list_type(pa: Any, data_type: Any) -> bool:
+    types = pa.types
+    return bool(
+        types.is_list(data_type)
+        or types.is_large_list(data_type)
+        or types.is_fixed_size_list(data_type)
+        or getattr(types, "is_list_view", lambda _: False)(data_type)
+        or getattr(types, "is_large_list_view", lambda _: False)(data_type)
+    )
+
+
+def _type_is_unsettled(data_type: Any, *, integer_may_widen: bool = False, _in_list: bool = False) -> bool:
+    import pyarrow as pa
+
+    types = pa.types
+    if types.is_null(data_type) or types.is_decimal(data_type) or types.is_struct(data_type) or types.is_map(data_type):
+        return True
+    if types.is_integer(data_type):
+        return _in_list or integer_may_widen
+    if _is_any_list_type(pa, data_type):
+        return _type_is_unsettled(data_type.value_type, integer_may_widen=integer_may_widen, _in_list=True)
+    return False
+
+
+def _struct_loses_fields(pa: Any, found_type: Any, target_type: Any) -> bool:
+    types = pa.types
+    if types.is_struct(found_type) and types.is_struct(target_type):
+        target_fields = {child.name: child.type for child in target_type}
+        for child in found_type:
+            if child.name not in target_fields:
+                return True
+            if _struct_loses_fields(pa, child.type, target_fields[child.name]):
+                return True
+        return False
+    if _is_any_list_type(pa, found_type) and _is_any_list_type(pa, target_type):
+        return _struct_loses_fields(pa, found_type.value_type, target_type.value_type)
+    if types.is_map(found_type) and types.is_map(target_type):
+        return _struct_loses_fields(pa, found_type.key_type, target_type.key_type) or _struct_loses_fields(
+            pa, found_type.item_type, target_type.item_type
+        )
+    return False
+
+
+def _reject_lost_struct_fields(inferred_schema: Any, target_schema: Any) -> None:
+    import pyarrow as pa
+
+    target_fields = {field.name: field.type for field in target_schema}
+    for field in inferred_schema:
+        target_type = target_fields.get(field.name)
+        if target_type is not None and _struct_loses_fields(pa, field.type, target_type):
+            msg = f"Column {field.name!r} changed type from {target_type} to {field.type} during streaming"
+            raise pa.ArrowTypeError(msg)
+
+
+def _pinned_type_family(pa: Any, data_type: Any) -> str | None:
+    types = pa.types
+    if types.is_integer(data_type):
+        return "integer"
+    if types.is_floating(data_type):
+        return "floating"
+    if (
+        types.is_string(data_type)
+        or types.is_large_string(data_type)
+        or getattr(types, "is_string_view", lambda _: False)(data_type)
+    ):
+        return "string"
+    if (
+        types.is_binary(data_type)
+        or types.is_large_binary(data_type)
+        or types.is_fixed_size_binary(data_type)
+        or getattr(types, "is_binary_view", lambda _: False)(data_type)
+    ):
+        return "binary"
+    if types.is_boolean(data_type):
+        return "boolean"
+    if types.is_temporal(data_type):
+        return "temporal"
+    if types.is_decimal(data_type):
+        return "decimal"
+    return None
+
+
+def _pinned_type_accepts(pa: Any, target_type: Any, found_type: Any) -> bool:
+    if pa.types.is_null(found_type) or target_type == found_type:
+        return True
+    if _is_any_list_type(pa, target_type) and _is_any_list_type(pa, found_type):
+        return _pinned_type_accepts(pa, target_type.value_type, found_type.value_type)
+    target_family = _pinned_type_family(pa, target_type)
+    found_family = _pinned_type_family(pa, found_type)
+    if target_family is not None and target_family == found_family:
+        return True
+    return target_family == "floating" and found_family == "integer"
+
+
+def _convert_later_chunk(chunk: "list[dict[str, Any]]", schema: Any, *, explicit: bool) -> "ArrowTable":
+    import pyarrow as pa
+
+    inferred = pa.Table.from_pylist(chunk)
+    _reject_lost_struct_fields(inferred.schema, schema)
+    if not explicit:
+        target_fields = {field.name: field.type for field in schema}
+        for field in inferred.schema:
+            if field.name not in target_fields:
+                msg = f"Column {field.name!r} appeared after schema was pinned during streaming"
+                raise pa.ArrowTypeError(msg)
+            target_type = target_fields[field.name]
+            if not _pinned_type_accepts(pa, target_type, field.type):
+                msg = f"Column {field.name!r} changed type from {target_type} to {field.type} during streaming"
+                raise pa.ArrowTypeError(msg)
+    if inferred.column_names != schema.names and set(inferred.column_names) <= set(schema.names):
+        present = set(inferred.column_names)
+        columns = [
+            inferred.column(field.name) if field.name in present else pa.nulls(inferred.num_rows, type=field.type)
+            for field in schema
+        ]
+        inferred = pa.Table.from_arrays(
+            columns,
+            schema=pa.schema([
+                inferred.schema.field(field.name) if field.name in present else field for field in schema
+            ]),
+        )
+    return inferred.cast(schema)
+
+
+def _close_sync_rows(rows: Any) -> None:
+    close = getattr(rows, "close", None)
+    if callable(close):
+        close()
+
+
+async def _aclose_async_rows(rows: Any) -> None:
+    aclose = getattr(rows, "aclose", None)
+    if callable(aclose):
+        await cast("Callable[[], Awaitable[Any]]", aclose)()
+
+
+async def _read_async_chunk(iterator: "AsyncIterator[dict[str, Any]]", batch_size: int) -> "list[dict[str, Any]]":
+    chunk: list[dict[str, Any]] = []
+    for _ in range(batch_size):
+        try:
+            chunk.append(await anext(iterator))
+        except StopAsyncIteration:
+            break
+    return chunk
+
+
+class _AsyncRowBatchIterator:
+    """Async RecordBatch iterator ensuring the underlying row source closes on exhaustion or aclose."""
+
+    __slots__ = ("_closed", "_gen", "_rows")
+
+    def __init__(self, gen: "AsyncIterator[ArrowRecordBatch]", rows: Any) -> None:
+        self._gen = gen
+        self._rows = rows
+        self._closed = False
+
+    def __aiter__(self) -> "_AsyncRowBatchIterator":
+        return self
+
+    async def __anext__(self) -> "ArrowRecordBatch":
+        try:
+            return await self._gen.__anext__()
+        except StopAsyncIteration:
+            await self._finalize()
+            raise
+        except BaseException:
+            await self._finalize()
+            raise
+
+    async def aclose(self) -> None:
+        gen_aclose = getattr(self._gen, "aclose", None)
+        try:
+            if callable(gen_aclose):
+                await cast("Callable[[], Awaitable[Any]]", gen_aclose)()
+        finally:
+            await self._finalize()
+
+    async def _finalize(self) -> None:
+        if not self._closed:
+            self._closed = True
+            await _aclose_async_rows(self._rows)
+
+
 def _coerce_arrow_table_identity(source: Any) -> Any:
     return source
 
@@ -1452,6 +1958,115 @@ class _DeferredCloseBatchIterator:
             self._closed = True
             with contextlib.suppress(Exception):
                 self._close_callback()
+
+
+def _deferred_reader_init(self: Any, reader: Any, close_fn: "Callable[[], None] | None") -> None:
+    self._reader = reader
+    self._close_fn = close_fn
+
+
+def _deferred_reader_enter(self: Any) -> Any:
+    return self
+
+
+def _deferred_reader_exit(self: Any, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    _ = (exc_type, exc_val, exc_tb)
+    self.close()
+
+
+def _deferred_reader_iter(self: Any) -> Any:
+    return self
+
+
+def _deferred_reader_next(self: Any) -> Any:
+    return self._reader.read_next_batch()
+
+
+def _deferred_reader_read_next_batch(self: Any) -> Any:
+    return self._reader.read_next_batch()
+
+
+def _deferred_reader_read_next_batch_with_custom_metadata(self: Any) -> Any:
+    return self._reader.read_next_batch_with_custom_metadata()
+
+
+def _deferred_reader_iter_batches_with_custom_metadata(self: Any) -> Any:
+    return self._reader.iter_batches_with_custom_metadata()
+
+
+def _deferred_reader_read_all(self: Any) -> Any:
+    try:
+        return self._reader.read_all()
+    finally:
+        self.close()
+
+
+def _deferred_reader_read_pandas(self: Any, **options: Any) -> Any:
+    try:
+        return self._reader.read_pandas(**options)
+    finally:
+        self.close()
+
+
+def _deferred_reader_export_to_c(self: Any, out_ptr: int) -> None:
+    self._reader._export_to_c(out_ptr)
+
+
+def _deferred_reader_arrow_c_stream(self: Any, requested_schema: Any = None) -> Any:
+    return self._reader.__arrow_c_stream__(requested_schema=requested_schema)
+
+
+def _deferred_reader_cast(self: Any, target_schema: Any) -> Any:
+    fn = self._close_fn
+    casted = self._reader.cast(target_schema)
+    self._close_fn = None
+    return type(self)(casted, fn)
+
+
+def _deferred_reader_close(self: Any) -> None:
+    reader = getattr(self, "_reader", None)
+    try:
+        reader_close = getattr(reader, "close", None)
+        if callable(reader_close):
+            with contextlib.suppress(Exception):
+                reader_close()
+    finally:
+        fn = getattr(self, "_close_fn", None)
+        if fn is not None:
+            self._close_fn = None
+            if callable(fn):
+                with contextlib.suppress(Exception):
+                    fn()
+
+
+def _get_deferred_close_reader_cls() -> "type[Any]":
+    global _DEFERRED_CLOSE_READER_CLS
+    if _DEFERRED_CLOSE_READER_CLS is None:
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        namespace: dict[str, Any] = {
+            "__module__": __name__,
+            "__slots__": ("_close_fn", "_reader"),
+            "__init__": _deferred_reader_init,
+            "__del__": _deferred_reader_close,
+            "__enter__": _deferred_reader_enter,
+            "__exit__": _deferred_reader_exit,
+            "__iter__": _deferred_reader_iter,
+            "__next__": _deferred_reader_next,
+            "schema": property(lambda self: self._reader.schema),
+            "read_next_batch": _deferred_reader_read_next_batch,
+            "read_next_batch_with_custom_metadata": _deferred_reader_read_next_batch_with_custom_metadata,
+            "iter_batches_with_custom_metadata": _deferred_reader_iter_batches_with_custom_metadata,
+            "read_all": _deferred_reader_read_all,
+            "read_pandas": _deferred_reader_read_pandas,
+            "_export_to_c": _deferred_reader_export_to_c,
+            "__arrow_c_stream__": _deferred_reader_arrow_c_stream,
+            "cast": _deferred_reader_cast,
+            "close": _deferred_reader_close,
+        }
+        _DEFERRED_CLOSE_READER_CLS = type("_DeferredCloseReader", (pa.RecordBatchReader,), namespace)
+    return _DEFERRED_CLOSE_READER_CLS
 
 
 class _AsyncBytesIterator:

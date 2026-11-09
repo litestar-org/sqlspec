@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from sqlglot import exp
 
@@ -130,6 +130,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_session_id",
     )
     dialect = "bigquery"
+    native_arrow_export: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -697,7 +698,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 self.observability.end_storage_span(span, telemetry=native_telemetry)
                 self._attach_partition_telemetry(native_telemetry, partitioner)
                 return self._storage_job(native_telemetry, telemetry)
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline

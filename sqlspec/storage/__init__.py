@@ -12,6 +12,8 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from sqlspec.protocols import AsyncWritableBytesSink, DirectStreamWriteProtocol, WritableBytesSink
+    from sqlspec.storage._arrow_payload import encode_arrow_to_async_sink, encode_arrow_to_sink
     from sqlspec.storage._paths import resolve_storage_path
     from sqlspec.storage.pipeline import (
         AsyncStoragePipeline,
@@ -30,9 +32,12 @@ if TYPE_CHECKING:
         reset_storage_bridge_metrics,
     )
     from sqlspec.storage.registry import StorageRegistry, storage_registry
+    from sqlspec.utils.type_guards import supports_direct_stream_write
 
 __all__ = (
     "AsyncStoragePipeline",
+    "AsyncWritableBytesSink",
+    "DirectStreamWriteProtocol",
     "PartitionStrategyConfig",
     "ResolvedStorageTarget",
     "StorageBridgeJob",
@@ -42,17 +47,23 @@ __all__ = (
     "StorageRegistry",
     "StorageTelemetry",
     "SyncStoragePipeline",
+    "WritableBytesSink",
     "aggregate_storage_telemetry",
     "create_storage_bridge_job",
+    "encode_arrow_to_async_sink",
+    "encode_arrow_to_sink",
     "get_storage_bridge_diagnostics",
     "get_storage_bridge_metrics",
     "reset_storage_bridge_metrics",
     "resolve_storage_path",
     "storage_registry",
+    "supports_direct_stream_write",
 )
 
 _EXPORTS: dict[str, tuple[str, str]] = {
     "AsyncStoragePipeline": ("sqlspec.storage.pipeline", "AsyncStoragePipeline"),
+    "AsyncWritableBytesSink": ("sqlspec.protocols", "AsyncWritableBytesSink"),
+    "DirectStreamWriteProtocol": ("sqlspec.protocols", "DirectStreamWriteProtocol"),
     "PartitionStrategyConfig": ("sqlspec.storage.pipeline", "PartitionStrategyConfig"),
     "ResolvedStorageTarget": ("sqlspec.storage.pipeline", "ResolvedStorageTarget"),
     "StorageBridgeJob": ("sqlspec.storage.pipeline", "StorageBridgeJob"),
@@ -62,13 +73,17 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "StorageRegistry": ("sqlspec.storage.registry", "StorageRegistry"),
     "StorageTelemetry": ("sqlspec.storage.pipeline", "StorageTelemetry"),
     "SyncStoragePipeline": ("sqlspec.storage.pipeline", "SyncStoragePipeline"),
+    "WritableBytesSink": ("sqlspec.protocols", "WritableBytesSink"),
     "aggregate_storage_telemetry": ("sqlspec.storage.pipeline", "aggregate_storage_telemetry"),
     "create_storage_bridge_job": ("sqlspec.storage.pipeline", "create_storage_bridge_job"),
+    "encode_arrow_to_async_sink": ("sqlspec.storage._arrow_payload", "encode_arrow_to_async_sink"),
+    "encode_arrow_to_sink": ("sqlspec.storage._arrow_payload", "encode_arrow_to_sink"),
     "get_storage_bridge_diagnostics": ("sqlspec.storage.pipeline", "get_storage_bridge_diagnostics"),
     "get_storage_bridge_metrics": ("sqlspec.storage.pipeline", "get_storage_bridge_metrics"),
     "reset_storage_bridge_metrics": ("sqlspec.storage.pipeline", "reset_storage_bridge_metrics"),
     "resolve_storage_path": ("sqlspec.storage._paths", "resolve_storage_path"),
     "storage_registry": ("sqlspec.storage.registry", "storage_registry"),
+    "supports_direct_stream_write": ("sqlspec.utils.type_guards", "supports_direct_stream_write"),
 }
 
 _COMPILED = getattr(__spec__, "origin", "").endswith((".so", ".pyd"))

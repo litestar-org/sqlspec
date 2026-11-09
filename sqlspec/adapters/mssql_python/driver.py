@@ -3,7 +3,7 @@
 import contextlib
 import sys
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.mssql_python._typing import (
     MssqlPythonConnection,
@@ -154,6 +154,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         "_transaction_active",
     )
     dialect = "tsql"
+    native_arrow_export: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -445,6 +446,28 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             result = self._run_with_exception_handler(exc_handler, _fetch_arrow)
         self._check_pending_exception(exc_handler)
         return cast("ArrowResult", result)
+
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream the Arrow result to storage."""
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
+        pipeline = self._storage_pipeline()
+        telemetry_payload = self._write_storage_result(
+            arrow_result, destination, format_hint=format_hint, pipeline=pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
 
     def bulk_copy(
         self,

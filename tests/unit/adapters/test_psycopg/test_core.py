@@ -4,7 +4,7 @@
 import asyncio
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pytest
 from psycopg import errors as pg_errors
@@ -240,3 +240,206 @@ def test_escape_literal_percent_preserves_placeholders_and_doubles_literals() ->
     sql = "SELECT * FROM items WHERE label LIKE '100%' AND code = %s"
     escaped = escape_literal_percent(sql, ("abc",), validator)
     assert escaped == "SELECT * FROM items WHERE label LIKE '100%%' AND code = %s"
+
+
+@pytest.mark.parametrize(
+    ("precision", "scale", "expected"),
+    [
+        (12, 2, {"amount": "decimal(12,2)"}),
+        (12, 0, {"amount": "decimal(12,0)"}),
+        (None, None, {"amount": "decimal"}),
+        (90, 2, {"amount": "decimal"}),
+    ],
+)
+def test_psycopg_resolve_column_types_numeric_precision(
+    precision: int | None, scale: int | None, expected: dict[str, str]
+) -> None:
+    """_resolve_column_types emits decimal(P,S) for constrained PostgreSQL numeric OID 1700."""
+    from sqlspec.adapters.psycopg.driver import _resolve_column_types
+
+    column = SimpleNamespace(name="amount", type_code=1700, precision=precision, scale=scale)
+    assert _resolve_column_types([column]) == expected
+
+
+def test_psycopg_sync_stream_source_column_types_and_arrow_batches() -> None:
+    """PsycopgSyncStreamSource populates column_types on start() when given a resolver and leaves None otherwise."""
+    from decimal import Decimal
+
+    import pyarrow as pa
+
+    from sqlspec.adapters.psycopg.core import PsycopgSyncStreamSource
+    from sqlspec.adapters.psycopg.driver import _resolve_column_types
+    from sqlspec.driver import SyncRowStream
+    from sqlspec.utils.arrow_helpers import arrow_batches_from_rows
+
+    description = [
+        SimpleNamespace(name="id", type_code=20, precision=None, scale=None),
+        SimpleNamespace(name="amount", type_code=1700, precision=12, scale=2),
+    ]
+
+    class _SyncTx:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class _SyncCursor:
+        def __init__(self, chunks: list[list[tuple[Any, ...]]]) -> None:
+            self.description = description
+            self._chunks = list(chunks)
+            self.itersize = 0
+            self.closed = False
+
+        def execute(self, sql: str, params: Any = None) -> None:
+            _ = (sql, params)
+
+        def fetchmany(self, size: int) -> list[tuple[Any, ...]]:
+            _ = size
+            return self._chunks.pop(0) if self._chunks else []
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _SyncConnection:
+        def __init__(self, cursor: _SyncCursor) -> None:
+            self._cursor = cursor
+
+        def transaction(self) -> _SyncTx:
+            return _SyncTx()
+
+        def cursor(self, name: str | None = None) -> _SyncCursor:
+            _ = name
+            return self._cursor
+
+    class _SyncDriverDouble:
+        def __init__(self, connection: _SyncConnection) -> None:
+            self.connection = connection
+
+        def handle_database_exceptions(self) -> object:
+            return object()
+
+        def _run_with_exception_handler(self, _handler: object, fn: Any, *args: Any) -> Any:
+            return fn(*args)
+
+        def _check_pending_exception(self, _handler: object) -> None:
+            return None
+
+    no_resolver_source = PsycopgSyncStreamSource(
+        _SyncDriverDouble(_SyncConnection(_SyncCursor([]))), "SELECT 1", (), 10
+    )
+    no_resolver_source.start()
+    assert no_resolver_source.column_types is None
+    no_resolver_source.close()
+
+    with_resolver_source = PsycopgSyncStreamSource(
+        _SyncDriverDouble(_SyncConnection(_SyncCursor([]))),
+        "SELECT 1",
+        (),
+        10,
+        column_types_resolver=_resolve_column_types,
+    )
+    with_resolver_source.start()
+    assert with_resolver_source.column_types == {"id": "int64", "amount": "decimal(12,2)"}
+    with_resolver_source.close()
+
+    read_ahead: list[tuple[str, ...]] = []
+    arrow_cursor = _SyncCursor([[(1, Decimal("12.34"))], [(2, Decimal("56.78"))]])
+    stream: SyncRowStream[dict[str, Any]] = SyncRowStream(
+        PsycopgSyncStreamSource(
+            _SyncDriverDouble(_SyncConnection(arrow_cursor)),
+            "SELECT id, amount FROM demo",
+            (),
+            1,
+            column_types_resolver=_resolve_column_types,
+        )
+    )
+    reader = arrow_batches_from_rows(stream, batch_size=1, on_read_ahead=read_ahead.append)
+    batches = list(reader) if reader is not None else []
+    assert len(batches) == 2
+    assert batches[0].schema.field("amount").type == pa.decimal128(12, 2)
+    assert read_ahead == []
+
+
+async def test_psycopg_async_stream_source_and_cockroach_delegation() -> None:
+    """PsycopgAsyncStreamSource sets column_types on start() and Cockroach wrappers delegate column_types."""
+    from sqlspec.adapters.cockroach_psycopg.driver import (
+        CockroachPsycopgAsyncStreamSource,
+        CockroachPsycopgSyncStreamSource,
+    )
+    from sqlspec.adapters.psycopg.core import PsycopgAsyncStreamSource
+    from sqlspec.adapters.psycopg.driver import _resolve_column_types
+
+    description = [
+        SimpleNamespace(name="id", type_code=20, precision=None, scale=None),
+        SimpleNamespace(name="amount", type_code=1700, precision=12, scale=2),
+    ]
+
+    class _AsyncTx:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class _AsyncCursor:
+        def __init__(self) -> None:
+            self.description = description
+            self.itersize = 0
+            self.closed = False
+
+        async def execute(self, sql: str, params: Any = None) -> None:
+            _ = (sql, params)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class _AsyncConnection:
+        def __init__(self, cursor: _AsyncCursor) -> None:
+            self._cursor = cursor
+
+        def transaction(self) -> _AsyncTx:
+            return _AsyncTx()
+
+        def cursor(self, name: str | None = None) -> _AsyncCursor:
+            _ = name
+            return self._cursor
+
+    class _AsyncDriverDouble:
+        def __init__(self, connection: _AsyncConnection) -> None:
+            self.connection = connection
+
+        def handle_database_exceptions(self) -> object:
+            return object()
+
+        async def _run_with_exception_handler(self, _handler: object, fn: Any, *args: Any) -> Any:
+            return await fn(*args)
+
+        def _check_pending_exception(self, _handler: object) -> None:
+            return None
+
+    no_resolver_async = PsycopgAsyncStreamSource(
+        _AsyncDriverDouble(_AsyncConnection(_AsyncCursor())), "SELECT 1", (), 10
+    )
+    await no_resolver_async.start()
+    assert no_resolver_async.column_types is None
+    await no_resolver_async.close()
+
+    with_resolver_async = PsycopgAsyncStreamSource(
+        _AsyncDriverDouble(_AsyncConnection(_AsyncCursor())),
+        "SELECT 1",
+        (),
+        10,
+        column_types_resolver=_resolve_column_types,
+    )
+    await with_resolver_async.start()
+    assert with_resolver_async.column_types == {"id": "int64", "amount": "decimal(12,2)"}
+    await with_resolver_async.close()
+
+    underlying_double = SimpleNamespace(column_types={"a": "int64"})
+    sync_wrapper = CockroachPsycopgSyncStreamSource(cast("Any", object()), cast("Any", underlying_double), False)
+    async_wrapper = CockroachPsycopgAsyncStreamSource(
+        cast("Any", object()), cast("Any", object()), cast("Any", underlying_double)
+    )
+    assert sync_wrapper.column_types == {"a": "int64"}
+    assert async_wrapper.column_types == {"a": "int64"}

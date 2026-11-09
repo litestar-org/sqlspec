@@ -1,6 +1,9 @@
 """Tests for arrow_helpers conversion utilities."""
 
+import logging
 import math
+from collections.abc import AsyncIterator, Iterator
+from decimal import Decimal
 from typing import Any, Literal
 
 import pytest
@@ -8,7 +11,10 @@ import pytest
 from sqlspec.exceptions import MissingDependencyError, SQLBuilderError
 from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.arrow_helpers import (
+    arrow_batches_from_async_rows,
+    arrow_batches_from_rows,
     arrow_table_to_return_format,
+    arrow_type_from_token,
     coerce_arrow_table,
     convert_dict_to_arrow,
     convert_dict_to_arrow_with_schema,
@@ -508,3 +514,365 @@ def test_sap_decimal_precision_keeps_exact_values_and_rejects_overflow(dialect: 
     if dialect == "sybase":
         with pytest.raises(SQLBuilderError, match="maximum precision 38 supported by sybase"):
             sql_type_from_arrow_type(pa.decimal256(50, 4), dialect)
+
+
+class _TrackingSyncRowSource:
+    """In-process row iterator tracking consumption count, close calls, and late column_types."""
+
+    def __init__(self, rows: list[dict[str, Any]], column_types: dict[str, str] | None = None) -> None:
+        self._rows = list(rows)
+        self._declared = column_types
+        self._index = 0
+        self.consumed = 0
+        self.closed = False
+        self.column_types: dict[str, str] | None = None
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        return self
+
+    def __next__(self) -> dict[str, Any]:
+        if self._index == 0:
+            self.column_types = self._declared
+        if self._index >= len(self._rows):
+            raise StopIteration
+        row = self._rows[self._index]
+        self._index += 1
+        self.consumed += 1
+        return row
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _TrackingAsyncRowSource:
+    """Async in-process row iterator tracking consumption count, aclose calls, and late column_types."""
+
+    def __init__(self, rows: list[dict[str, Any]], column_types: dict[str, str] | None = None) -> None:
+        self._rows = list(rows)
+        self._declared = column_types
+        self._index = 0
+        self.consumed = 0
+        self.closed = False
+        self.column_types: dict[str, str] | None = None
+
+    def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
+        return self
+
+    async def __anext__(self) -> dict[str, Any]:
+        if self._index == 0:
+            self.column_types = self._declared
+        if self._index >= len(self._rows):
+            raise StopAsyncIteration
+        row = self._rows[self._index]
+        self._index += 1
+        self.consumed += 1
+        return row
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+async def _read_all_async_batches(batches: AsyncIterator[Any]) -> Any:
+    """Collect an async batch iterator into a single PyArrow Table."""
+    import pyarrow as pa
+
+    collected = [batch async for batch in batches]
+    return pa.Table.from_batches(collected)
+
+
+def test_decimal_token_parsing() -> None:
+    """arrow_type_from_token parses exact decimal(P,S) tokens and falls back to string on invalid input."""
+    import pyarrow as pa
+
+    assert arrow_type_from_token("decimal(10,2)") == pa.decimal128(10, 2)
+    assert arrow_type_from_token("decimal(65,30)") == pa.decimal256(65, 30)
+    assert arrow_type_from_token("decimal(2,5)") == pa.string()
+    assert arrow_type_from_token("decimal(0,0)") == pa.string()
+    assert arrow_type_from_token("decimal(80,2)") == pa.string()
+    assert arrow_type_from_token("decimal(bad)") == pa.string()
+
+
+@pytest.mark.parametrize("batch_size", [0, -1])
+async def test_arrow_batches_rejects_non_positive_batch_size(batch_size: int) -> None:
+    """Both row batch helpers reject batch_size < 1."""
+    with pytest.raises(ValueError, match="batch_size must be greater than or equal to 1"):
+        arrow_batches_from_rows(iter([{"a": 1}]), batch_size=batch_size)
+    with pytest.raises(ValueError, match="batch_size must be greater than or equal to 1"):
+        await arrow_batches_from_async_rows(_TrackingAsyncRowSource([{"a": 1}]), batch_size=batch_size)
+
+
+async def test_arrow_batches_empty_returns_none_and_closes_source() -> None:
+    """Empty row sources return None and close immediately."""
+    sync_src = _TrackingSyncRowSource([])
+    assert arrow_batches_from_rows(sync_src, batch_size=2) is None
+    assert sync_src.closed
+
+    async_src = _TrackingAsyncRowSource([])
+    assert await arrow_batches_from_async_rows(async_src, batch_size=2) is None
+    assert async_src.closed
+
+
+async def test_arrow_batches_streams_lazily_with_pinned_schema() -> None:
+    """Settled columns consume at most batch_size rows upfront and pin schema without read-ahead."""
+    import pyarrow as pa
+
+    rows = [{"a": idx} for idx in range(5)]
+    sync_src = _TrackingSyncRowSource(rows)
+    reader = arrow_batches_from_rows(sync_src, batch_size=2)
+    assert reader is not None
+    assert sync_src.consumed <= 2
+    assert reader.schema.field("a").type == pa.int64()
+
+    first = reader.read_next_batch()
+    assert first.to_pylist() == [{"a": 0}, {"a": 1}]
+    assert sync_src.consumed <= 4
+    rest = [first, *list(reader)]
+    assert pa.Table.from_batches(rest).to_pylist() == rows
+    assert sync_src.closed
+
+    async_src = _TrackingAsyncRowSource([{"a": 1}, {"a": 2}])
+    async_batches = await arrow_batches_from_async_rows(async_src, batch_size=1)
+    assert async_batches is not None
+    assert async_src.consumed <= 1
+    first_async = await anext(async_batches)
+    assert first_async.schema.field("a").type == pa.int64()
+    aclose = getattr(async_batches, "aclose", None)
+    assert aclose is not None
+    await aclose()
+    assert async_src.closed
+
+
+async def test_arrow_batches_null_and_declared_column_types() -> None:
+    """Safe declared tokens pin null columns lazily while unsafe or undeclared null columns read ahead."""
+    import pyarrow as pa
+
+    untyped = arrow_batches_from_rows(_TrackingSyncRowSource([{"a": None}, {"a": 7}]), batch_size=1)
+    assert untyped is not None
+    untyped_table = untyped.read_all()
+    assert untyped_table.schema.field("a").type == pa.int64()
+    assert untyped_table.to_pydict()["a"] == [None, 7]
+
+    all_null = arrow_batches_from_rows(
+        _TrackingSyncRowSource([{"a": None}, {"a": None}], column_types={"a": "int32"}), batch_size=1
+    )
+    assert all_null is not None
+    assert all_null.schema.field("a").type == pa.int32()
+
+    safe_seen: list[tuple[str, ...]] = []
+    safe_src = _TrackingSyncRowSource([{"a": None}, {"a": 7}], column_types={"a": "int32"})
+    safe_reader = arrow_batches_from_rows(safe_src, batch_size=1, on_read_ahead=safe_seen.append)
+    assert safe_reader is not None
+    assert safe_src.consumed <= 1
+    assert safe_seen == []
+    assert safe_reader.schema.field("a").type == pa.int32()
+    assert safe_reader.read_all().to_pydict()["a"] == [None, 7]
+
+    unsafe_seen: list[tuple[str, ...]] = []
+    unsafe_reader = arrow_batches_from_rows(
+        _TrackingSyncRowSource([{"a": None}], column_types={"a": "binary"}),
+        batch_size=1,
+        on_read_ahead=unsafe_seen.append,
+    )
+    assert unsafe_reader is not None
+    assert unsafe_seen == [("a",)]
+    assert unsafe_reader.schema.field("a").type == pa.binary()
+
+
+async def test_arrow_batches_list_and_vector_settlement() -> None:
+    """Float vectors settle from chunk one while integer and struct lists read ahead unless arrow_schema is set."""
+    import pyarrow as pa
+
+    vec_seen: list[tuple[str, ...]] = []
+    vec_src = _TrackingSyncRowSource([{"v": [1.0, 2.0]}, {"v": [3.0]}])
+    vec_reader = arrow_batches_from_rows(vec_src, batch_size=1, on_read_ahead=vec_seen.append)
+    assert vec_reader is not None
+    assert vec_src.consumed <= 1
+    assert vec_seen == []
+    assert vec_reader.schema.field("v").type == pa.list_(pa.float64())
+    assert vec_reader.read_all().to_pydict()["v"] == [[1.0, 2.0], [3.0]]
+
+    int_list_seen: list[tuple[str, ...]] = []
+    int_list_rows: list[dict[str, Any]] = [{"v": [1, 2]}, {"v": [1.5]}]
+    int_list_reader = arrow_batches_from_rows(
+        _TrackingSyncRowSource(int_list_rows), batch_size=1, on_read_ahead=int_list_seen.append
+    )
+    assert int_list_reader is not None
+    assert int_list_seen == [("v",)]
+    int_list_table = int_list_reader.read_all()
+    assert int_list_table.schema.field("v").type == pa.list_(pa.float64())
+    assert int_list_table.to_pydict()["v"] == [[1.0, 2.0], [1.5]]
+    assert int_list_table == convert_dict_to_arrow_with_schema(int_list_rows, return_format="table")
+
+    nested_seen: list[tuple[str, ...]] = []
+    nested_reader = arrow_batches_from_rows(
+        _TrackingSyncRowSource([{"v": [[1]]}, {"v": [[1.5]]}]), batch_size=1, on_read_ahead=nested_seen.append
+    )
+    assert nested_reader is not None
+    assert nested_seen == [("v",)]
+    assert nested_reader.schema.field("v").type == pa.list_(pa.list_(pa.float64()))
+
+    explicit_seen: list[tuple[str, ...]] = []
+    explicit_schema = pa.schema([("v", pa.list_(pa.int64()))])
+    explicit_reader = arrow_batches_from_rows(
+        _TrackingSyncRowSource([{"v": [1]}]),
+        batch_size=1,
+        arrow_schema=explicit_schema,
+        on_read_ahead=explicit_seen.append,
+    )
+    assert explicit_reader is not None
+    assert explicit_seen == []
+    assert explicit_reader.schema.field("v").type == pa.list_(pa.int64())
+
+    struct_list_seen: list[tuple[str, ...]] = []
+    struct_list_reader = arrow_batches_from_rows(
+        _TrackingSyncRowSource([{"v": [{"x": 1}]}, {"v": [{"x": 1, "y": 2}]}]),
+        batch_size=1,
+        on_read_ahead=struct_list_seen.append,
+    )
+    assert struct_list_reader is not None
+    assert struct_list_seen == [("v",)]
+    struct_list_type = struct_list_reader.schema.field("v").type
+    assert pa.types.is_list(struct_list_type)
+    assert pa.types.is_struct(struct_list_type.value_type)
+    assert [f.name for f in struct_list_type.value_type] == ["x", "y"]
+
+
+@pytest.mark.parametrize(
+    "all_rows",
+    [
+        [{"n": Decimal("1.50")}, {"n": Decimal("100.25")}],
+        [{"n": Decimal("1.5")}, {"n": Decimal("1.255")}],
+        [{"s": {"x": 1}}, {"s": {"x": 1, "y": "z"}}],
+        [{"s": {"y": 2, "x": 1}}, {"s": {"x": 3, "y": 4}}],
+        [{"v": [{"x": 1}]}, {"v": [{"x": 1, "y": 2}]}],
+        [{"v": [1, 2]}, {"v": [1.5]}],
+        [{"a": None}, {"a": 7}],
+    ],
+)
+async def test_arrow_batches_whole_result_parity(all_rows: list[dict[str, Any]]) -> None:
+    """Read-ahead conversion matches convert_dict_to_arrow_with_schema across sync and async helpers."""
+    import pyarrow as pa
+
+    expected = convert_dict_to_arrow_with_schema(all_rows, return_format="table")
+    assert isinstance(expected, pa.Table)
+
+    sync_reader = arrow_batches_from_rows(_TrackingSyncRowSource(all_rows), batch_size=1)
+    assert sync_reader is not None
+    sync_table = sync_reader.read_all()
+    assert sync_table.schema == expected.schema
+    assert sync_table == expected
+
+    async_batches = await arrow_batches_from_async_rows(_TrackingAsyncRowSource(all_rows), batch_size=1)
+    assert async_batches is not None
+    async_table = await _read_all_async_batches(async_batches)
+    assert async_table.schema == expected.schema
+    assert async_table == expected
+
+
+async def test_arrow_batches_exact_decimal_and_read_ahead_reporting(caplog: pytest.LogCaptureFixture) -> None:
+    """Exact decimal tokens pin without read-ahead, overflow raises ArrowInvalid, and read-ahead logs columns."""
+    import pyarrow as pa
+
+    decimal_rows = [{"n": Decimal("1.50")}, {"n": Decimal("100.25")}]
+    exact_seen: list[tuple[str, ...]] = []
+    exact_src = _TrackingSyncRowSource(decimal_rows, column_types={"n": "decimal(10,2)"})
+    exact_reader = arrow_batches_from_rows(exact_src, batch_size=1, on_read_ahead=exact_seen.append)
+    assert exact_reader is not None
+    assert exact_src.consumed <= 1
+    assert exact_seen == []
+    assert exact_reader.schema.field("n").type == pa.decimal128(10, 2)
+    assert exact_reader.read_all().to_pydict()["n"] == [Decimal("1.50"), Decimal("100.25")]
+
+    overflow_reader = arrow_batches_from_rows(
+        _TrackingSyncRowSource(decimal_rows, column_types={"n": "decimal(3,2)"}), batch_size=1
+    )
+    assert overflow_reader is not None
+    with pytest.raises(pa.ArrowInvalid):
+        overflow_reader.read_all()
+
+    seen: list[tuple[str, ...]] = []
+    with caplog.at_level(logging.INFO, logger="sqlspec.utils.arrow_helpers"):
+        reported_reader = arrow_batches_from_rows(
+            _TrackingSyncRowSource([{"n": Decimal("1.5"), "a": 1}]), batch_size=2, on_read_ahead=seen.append
+        )
+    assert reported_reader is not None
+    assert seen == [("n",)]
+    events = [rec for rec in caplog.records if rec.getMessage() == "storage.export.read_ahead"]
+    assert len(events) == 1
+    assert events[0].__dict__["extra_fields"] == {"columns": ["n"], "mode": "sync"}
+
+
+async def test_arrow_batches_integer_widening_and_family_conflicts() -> None:
+    """Pinned schemas reject type-family changes while allowing integer-to-float and null chunks."""
+    import pyarrow as pa
+
+    widened_seen: list[tuple[str, ...]] = []
+    widened_reader = arrow_batches_from_rows(
+        _TrackingSyncRowSource([{"a": 1}, {"a": 1.5}]),
+        batch_size=1,
+        integer_may_widen=True,
+        on_read_ahead=widened_seen.append,
+    )
+    assert widened_reader is not None
+    assert widened_seen == [("a",)]
+    widened_table = widened_reader.read_all()
+    assert widened_table.schema.field("a").type == pa.float64()
+    assert widened_table.to_pydict()["a"] == [1.0, 1.5]
+
+    bad_cases: tuple[list[dict[str, Any]], ...] = (
+        [{"a": "x"}, {"a": 1}],
+        [{"a": 1}, {"a": 1.5}],
+        [{"a": 1}, {"a": "x"}],
+    )
+    for bad_rows in bad_cases:
+        bad_reader = arrow_batches_from_rows(_TrackingSyncRowSource(bad_rows), batch_size=1)
+        assert bad_reader is not None
+        with pytest.raises(pa.ArrowTypeError, match="'a'"):
+            bad_reader.read_all()
+
+        bad_async = await arrow_batches_from_async_rows(_TrackingAsyncRowSource(bad_rows), batch_size=1)
+        assert bad_async is not None
+        with pytest.raises(pa.ArrowTypeError, match="'a'"):
+            await _read_all_async_batches(bad_async)
+
+    float_reader = arrow_batches_from_rows(_TrackingSyncRowSource([{"a": 1.5}, {"a": 2}]), batch_size=1)
+    assert float_reader is not None
+    float_table = float_reader.read_all()
+    assert float_table.schema.field("a").type == pa.float64()
+    assert float_table.to_pydict()["a"] == [1.5, 2.0]
+
+    null_later_reader = arrow_batches_from_rows(_TrackingSyncRowSource([{"a": 1}, {"a": None}]), batch_size=1)
+    assert null_later_reader is not None
+    null_later_table = null_later_reader.read_all()
+    assert null_later_table.schema.field("a").type == pa.int64()
+    assert null_later_table.to_pydict()["a"] == [1, None]
+
+
+async def test_arrow_batches_explicit_schema_and_struct_field_loss_guards() -> None:
+    """Explicit arrow_schema wins without read-ahead and refuses silent struct key drops."""
+    import pyarrow as pa
+
+    struct_schema = pa.schema([("s", pa.struct([("x", pa.int64())]))])
+
+    later_loss_reader = arrow_batches_from_rows(
+        _TrackingSyncRowSource([{"s": {"x": 1}}, {"s": {"x": 1, "y": "z"}}]), batch_size=1, arrow_schema=struct_schema
+    )
+    assert later_loss_reader is not None
+    with pytest.raises(pa.ArrowTypeError, match="'s'"):
+        later_loss_reader.read_all()
+
+    first_loss_src = _TrackingSyncRowSource([{"s": {"x": 1, "y": "z"}}])
+    with pytest.raises(pa.ArrowTypeError, match="'s'"):
+        arrow_batches_from_rows(first_loss_src, batch_size=1, arrow_schema=struct_schema)
+    assert first_loss_src.closed
+
+    seen: list[tuple[str, ...]] = []
+    explicit_null_reader = arrow_batches_from_rows(
+        _TrackingSyncRowSource([{"a": None}]),
+        batch_size=1,
+        arrow_schema=pa.schema([("a", pa.string())]),
+        on_read_ahead=seen.append,
+    )
+    assert explicit_null_reader is not None
+    assert seen == []
+    assert explicit_null_reader.schema.field("a").type == pa.string()

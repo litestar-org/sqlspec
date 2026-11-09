@@ -6,6 +6,7 @@ and ``AsyncExceptionHandler`` stores mapped exceptions on ``pending_exception``
 rather than raising inside ``__aexit__`` across C-extension ABI boundaries.
 """
 
+import asyncio
 import logging
 import sys
 from abc import abstractmethod
@@ -58,7 +59,8 @@ from sqlspec.driver._stream import AsyncRowStream, _LazyEagerAsyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
 from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-from sqlspec.utils.arrow_helpers import convert_dict_to_arrow_with_schema
+from sqlspec.storage.pipeline import close_async_arrow_result_resources
+from sqlspec.utils.arrow_helpers import arrow_batches_from_async_rows, convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
 from sqlspec.utils.type_guards import resolve_row_format
@@ -88,6 +90,7 @@ __all__ = ("AsyncDataDictionaryBase", "AsyncDriverAdapterBase", "AsyncPoolConnec
 
 
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
+_DEFAULT_EXPORT_BATCH_SIZE: Final[int] = 10_000
 logger = get_logger(_LOGGER_NAME)
 _AsyncResultT = TypeVar("_AsyncResultT")
 _AsyncDriverT = TypeVar("_AsyncDriverT", bound="AsyncDriverAdapterBase")
@@ -179,6 +182,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     __slots__ = ()
 
     dialect: "DialectType | None" = None
+    native_arrow_export: ClassVar[bool] = False
+    export_integers_may_widen: ClassVar[bool] = False
 
     @property
     def is_async(self) -> bool:
@@ -2052,19 +2057,94 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             StorageTelemetry with write metrics.
         """
         runtime = self.observability
-        span = runtime.start_storage_span(
-            "write", destination=stringify_storage_target(destination), format_label=format_hint
-        )
+        span: Any = None
+        span_started = False
+        telemetry: StorageTelemetry | None = None
+        pending_exc: BaseException | None = None
+        result_metadata = result.metadata
+        stream_aclose = result_metadata.get("stream_aclose") if isinstance(result_metadata, dict) else None
+        stream_close = result_metadata.get("stream_close") if isinstance(result_metadata, dict) else None
         try:
+            span = runtime.start_storage_span(
+                "write", destination=stringify_storage_target(destination), format_label=format_hint
+            )
+            span_started = True
             telemetry = await result.write_to_storage_async(
                 destination, format_hint=format_hint, storage_options=storage_options, pipeline=pipeline
             )
-        except Exception as exc:
-            runtime.end_storage_span(span, error=exc)
-            raise
+        except BaseException as exc:
+            pending_exc = exc
+        cleanup_cancel: asyncio.CancelledError | None = None
+        try:
+            await close_async_arrow_result_resources(
+                result.data,
+                stream_aclose=stream_aclose if callable(stream_aclose) else None,
+                stream_close=stream_close if callable(stream_close) else None,
+            )
+        except asyncio.CancelledError as caught_cancel:
+            cleanup_cancel = caught_cancel
+        if pending_exc is not None:
+            if span_started and isinstance(pending_exc, Exception):
+                runtime.end_storage_span(span, error=pending_exc)
+            raise pending_exc
+        if cleanup_cancel is not None:
+            raise cleanup_cancel
+        if telemetry is None:
+            msg = "Unreachable"
+            raise RuntimeError(msg)
+        read_ahead_columns = result_metadata.get("read_ahead_columns") if isinstance(result_metadata, dict) else None
+        if read_ahead_columns:
+            extra = telemetry.get("extra")
+            if extra is None:
+                extra = {}
+                telemetry["extra"] = extra
+            extra["read_ahead_columns"] = read_ahead_columns
         telemetry = runtime.annotate_storage_telemetry(telemetry)
         runtime.end_storage_span(span, telemetry=telemetry)
         return telemetry
+
+    async def _select_for_storage(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Return an Arrow result that streams rows to storage asynchronously."""
+        if "return_format" in kwargs or kwargs.get("native_only"):
+            return await self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        if self.native_arrow_export:
+            return await self.select_to_arrow(
+                statement, *parameters, statement_config=statement_config, return_format="reader", **kwargs
+            )
+        fallback_kwargs = dict(kwargs)
+        raw_batch_size = kwargs.pop("batch_size", None)
+        batch_size = _DEFAULT_EXPORT_BATCH_SIZE if raw_batch_size is None else int(raw_batch_size)
+        arrow_schema = kwargs.pop("arrow_schema", None)
+        stream = self.select_stream(
+            statement, *parameters, statement_config=statement_config, chunk_size=batch_size, **kwargs
+        )
+        read_ahead: list[str] = []
+        batches = await arrow_batches_from_async_rows(
+            stream,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+            integer_may_widen=self.export_integers_may_widen,
+            on_read_ahead=read_ahead.extend,
+        )
+        if batches is None:
+            await stream.aclose()
+            return await self.select_to_arrow(
+                statement, *parameters, statement_config=statement_config, **fallback_kwargs
+            )
+        metadata: dict[str, Any] = {"streamed": True, "row_stream_batches": True, "stream_aclose": stream.aclose}
+        if read_ahead:
+            metadata["read_ahead_columns"] = tuple(read_ahead)
+        prepared = self.prepare_statement(
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs={}
+        )
+        return create_arrow_result(statement=prepared, data=batches, rows_affected=0, metadata=metadata)
 
     async def _read_storage_arrow(
         self,

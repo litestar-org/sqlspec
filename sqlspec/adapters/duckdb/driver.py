@@ -2,7 +2,7 @@
 
 import contextlib
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from sqlglot import exp
 
@@ -96,6 +96,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
     __slots__ = ("_created_profile_path", "_data_dictionary", "_migration_schema_restore", "_transaction_active")
     dialect = "duckdb"
+    native_arrow_export: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -591,7 +592,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                         partitioner=partitioner,
                         telemetry=telemetry,
                     )
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
         )

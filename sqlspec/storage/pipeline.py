@@ -1,5 +1,6 @@
 """Storage pipeline scaffolding for driver-aware storage bridge."""
 
+import asyncio
 from collections import deque
 from collections.abc import Sequence
 from functools import partial
@@ -14,22 +15,28 @@ from typing_extensions import TypedDict
 from sqlspec.exceptions import ImproperConfigurationError, StorageCapabilityError
 from sqlspec.storage._arrow_payload import (
     StorageFormat,
-    batches_to_arrow_table,
     decode_arrow_payload,
-    encode_arrow_payload,
+    encode_arrow_to_async_sink,
+    encode_arrow_to_sink,
+    join_shielded,
 )
 from sqlspec.storage._arrow_stream import iter_streamed_arrow_batches
 from sqlspec.storage._paths import FILE_PROTOCOL, FILE_SCHEME_PREFIX, parse_file_uri_path
+from sqlspec.storage._utils import import_pyarrow
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
 from sqlspec.utils.sync_tools import async_
-from sqlspec.utils.type_guards import supports_async_read_bytes, supports_async_write_bytes
+from sqlspec.utils.type_guards import (
+    supports_async_read_bytes,
+    supports_async_write_bytes,
+    supports_direct_stream_write,
+)
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
     from sqlspec.protocols import ObjectStoreProtocol
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
@@ -200,6 +207,16 @@ _ROW_WRITE_FORMATS = frozenset({"json", "jsonl"})
 _CLOUD_OBJECT_STORE_SCHEMES = frozenset({"s3", "gs", "gcs", "az", "azure"})
 
 
+def _strip_write_options(options: "dict[str, Any] | None") -> "dict[str, Any]":
+    """Strip write_options from storage options before forwarding to backend factories."""
+    if not options:
+        return _EMPTY_STORAGE_OPTIONS
+    if "write_options" not in options:
+        return options
+    stripped = {k: v for k, v in options.items() if k != "write_options"}
+    return stripped or _EMPTY_STORAGE_OPTIONS
+
+
 def get_storage_bridge_metrics() -> "dict[str, int]":
     """Return aggregated storage bridge metrics."""
 
@@ -259,8 +276,9 @@ class _StoragePipelineBase:
     ) -> None:
         self.registry = storage_registry if registry is None else registry
         self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str, str]] = {}
-        self._storage_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
-        self._csv_write_options = _csv_write_options_from_kwargs(self._storage_options)
+        raw_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
+        self._csv_write_options = _csv_write_options_from_kwargs(raw_options)
+        self._storage_options = _strip_write_options(raw_options)
 
     def clear_cache(self) -> None:
         """Clear cached storage backend resolutions for this pipeline instance."""
@@ -287,7 +305,8 @@ class _StoragePipelineBase:
             ImproperConfigurationError: If the destination or alias is invalid.
             StoragePathTraversalError: If the backend rejects the local path.
         """
-        backend, path, _backend_name = self._backend(destination, storage_options)
+        backend_opts = _strip_write_options(storage_options) if storage_options is not None else None
+        backend, path, _backend_name = self._backend(destination, backend_opts)
         destination_str = str(destination)
         if destination_str.startswith("alias://"):
             uri = backend.resolve_uri(path)
@@ -327,6 +346,7 @@ class SyncStoragePipeline(_StoragePipelineBase):
         *,
         format_hint: StorageFormat | None = None,
         storage_options: "dict[str, Any] | None" = None,
+        overwrite: bool = True,
     ) -> StorageTelemetry:
         """Write dictionary rows to storage using cached serializers."""
 
@@ -334,9 +354,14 @@ class SyncStoragePipeline(_StoragePipelineBase):
         _validate_row_write_format(format_choice)
         serialized = serialize_collection(rows)
         payload = _encode_row_payload(serialized, format_choice)
-        resolved_options = _storage_options(self._storage_options, storage_options)
+        resolved_options = _strip_write_options(_storage_options(self._storage_options, storage_options))
         return self._write_bytes(
-            payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
+            payload,
+            destination,
+            rows=len(serialized),
+            format_label=format_choice,
+            storage_options=resolved_options,
+            overwrite=overwrite,
         )
 
     def write_arrow(
@@ -347,20 +372,54 @@ class SyncStoragePipeline(_StoragePipelineBase):
         format_hint: StorageFormat | None = None,
         storage_options: "dict[str, Any] | None" = None,
         compression: str | None = None,
+        write_options: "dict[str, Any] | None" = None,
+        overwrite: bool = True,
     ) -> StorageTelemetry:
         """Write an Arrow table to storage using zero-copy buffers."""
 
         format_choice = format_hint or "parquet"
         _validate_arrow_write_format(format_choice)
-        resolved_options = _storage_options(self._storage_options, storage_options)
-        format_write_options = _csv_write_options(
-            format_choice, resolved_options, self._storage_options, self._csv_write_options
+        resolved_write_options = _resolve_arrow_write_options(
+            format_choice, write_options, storage_options, self._csv_write_options
         )
-        payload = _encode_arrow_payload(
-            table, format_choice, compression=compression, write_options=format_write_options
+        backend_options = _strip_write_options(_storage_options(self._storage_options, storage_options))
+        target = self._backend(destination, backend_options)
+        backend, path, backend_name = target
+        if supports_direct_stream_write(backend) and backend.supports_direct_arrow_write(
+            format_choice, overwrite=overwrite
+        ):
+            start = perf_counter()
+            with backend.open_write_stream_sync(path, overwrite=overwrite) as sink:
+                bytes_written, rows_written = encode_arrow_to_sink(
+                    table,
+                    sink,
+                    format_hint=format_choice,
+                    compression=compression,
+                    write_options=resolved_write_options,
+                )
+            elapsed = perf_counter() - start
+            _METRICS.record_bytes(bytes_written)
+            telemetry: StorageTelemetry = {
+                "destination": path,
+                "bytes_processed": bytes_written,
+                "rows_processed": rows_written,
+                "duration_s": elapsed,
+                "format": format_choice,
+                "backend": backend_name,
+            }
+            return telemetry
+
+        payload, rows_written = _encode_arrow_source_to_bytes(
+            table, format_choice, compression=compression, write_options=resolved_write_options
         )
         return self._write_bytes(
-            payload, destination, rows=int(table.num_rows), format_label=format_choice, storage_options=resolved_options
+            payload,
+            destination,
+            rows=rows_written,
+            format_label=format_choice,
+            storage_options=backend_options,
+            overwrite=overwrite,
+            resolved_target=target,
         )
 
     def read_arrow(
@@ -420,18 +479,55 @@ class SyncStoragePipeline(_StoragePipelineBase):
         compression: str | None = None,
         write_options: "dict[str, Any] | None" = None,
         storage_options: "dict[str, Any] | None" = None,
+        overwrite: bool = True,
     ) -> StorageTelemetry:
         """Write Arrow record batches to storage synchronously."""
-        _validate_arrow_write_format(file_format)
-        resolved_options = _storage_options(self._storage_options, storage_options)
-        format_write_options = write_options or _csv_write_options(
-            file_format, resolved_options, self._storage_options, self._csv_write_options
-        )
-        table = batches_to_arrow_table(batches)
-        payload = _encode_arrow_payload(table, file_format, compression=compression, write_options=format_write_options)
-        return self._write_bytes(
-            payload, destination, rows=int(table.num_rows), format_label=file_format, storage_options=resolved_options
-        )
+        try:
+            _validate_arrow_write_format(file_format)
+            resolved_write_options = _resolve_arrow_write_options(
+                file_format, write_options, storage_options, self._csv_write_options
+            )
+            backend_options = _strip_write_options(_storage_options(self._storage_options, storage_options))
+            target = self._backend(destination, backend_options)
+            backend, path, backend_name = target
+            if supports_direct_stream_write(backend) and backend.supports_direct_arrow_write(
+                file_format, overwrite=overwrite
+            ):
+                start = perf_counter()
+                with backend.open_write_stream_sync(path, overwrite=overwrite) as sink:
+                    bytes_written, rows_written = encode_arrow_to_sink(
+                        batches,
+                        sink,
+                        format_hint=file_format,
+                        compression=compression,
+                        write_options=resolved_write_options,
+                    )
+                elapsed = perf_counter() - start
+                _METRICS.record_bytes(bytes_written)
+                telemetry: StorageTelemetry = {
+                    "destination": path,
+                    "bytes_processed": bytes_written,
+                    "rows_processed": rows_written,
+                    "duration_s": elapsed,
+                    "format": file_format,
+                    "backend": backend_name,
+                }
+                return telemetry
+
+            payload, rows_written = _encode_arrow_source_to_bytes(
+                batches, file_format, compression=compression, write_options=resolved_write_options
+            )
+            return self._write_bytes(
+                payload,
+                destination,
+                rows=rows_written,
+                format_label=file_format,
+                storage_options=backend_options,
+                overwrite=overwrite,
+                resolved_target=target,
+            )
+        finally:
+            close_sync_arrow_source(batches)
 
     def list_sources(
         self,
@@ -451,10 +547,15 @@ class SyncStoragePipeline(_StoragePipelineBase):
         rows: int,
         format_label: str,
         storage_options: "dict[str, Any]",
+        overwrite: bool = True,
+        resolved_target: "tuple[ObjectStoreProtocol, str, str] | None" = None,
     ) -> StorageTelemetry:
-        backend, path, backend_name = self._backend(destination, storage_options)
+        if resolved_target is not None:
+            backend, path, backend_name = resolved_target
+        else:
+            backend, path, backend_name = self._backend(destination, storage_options)
         start = perf_counter()
-        _write_backend_sync(backend, path, payload, backend_name=backend_name)
+        _write_backend_sync(backend, path, payload, backend_name=backend_name, overwrite=overwrite)
         elapsed = perf_counter() - start
         bytes_written = len(payload)
         _METRICS.record_bytes(bytes_written)
@@ -482,13 +583,19 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         *,
         format_hint: StorageFormat | None = None,
         storage_options: "dict[str, Any] | None" = None,
+        overwrite: bool = True,
     ) -> StorageTelemetry:
         format_choice = format_hint or "jsonl"
         _validate_row_write_format(format_choice)
         payload, row_count = await async_(_serialize_and_encode_row_payload)(rows, format_choice)
-        resolved_options = _storage_options(self._storage_options, storage_options)
+        resolved_options = _strip_write_options(_storage_options(self._storage_options, storage_options))
         return await self._write_bytes_async(
-            payload, destination, rows=row_count, format_label=format_choice, storage_options=resolved_options
+            payload,
+            destination,
+            rows=row_count,
+            format_label=format_choice,
+            storage_options=resolved_options,
+            overwrite=overwrite,
         )
 
     async def write_arrow(
@@ -499,18 +606,52 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         format_hint: StorageFormat | None = None,
         storage_options: "dict[str, Any] | None" = None,
         compression: str | None = None,
+        write_options: "dict[str, Any] | None" = None,
+        overwrite: bool = True,
     ) -> StorageTelemetry:
         format_choice = format_hint or "parquet"
         _validate_arrow_write_format(format_choice)
-        resolved_options = _storage_options(self._storage_options, storage_options)
-        format_write_options = _csv_write_options(
-            format_choice, resolved_options, self._storage_options, self._csv_write_options
+        resolved_write_options = _resolve_arrow_write_options(
+            format_choice, write_options, storage_options, self._csv_write_options
         )
-        payload = await async_(_encode_arrow_payload)(
-            table, format_choice, compression=compression, write_options=format_write_options
+        backend_options = _strip_write_options(_storage_options(self._storage_options, storage_options))
+        target = self._backend(destination, backend_options)
+        backend, path, backend_name = target
+        if supports_direct_stream_write(backend) and backend.supports_direct_arrow_write(
+            format_choice, overwrite=overwrite
+        ):
+            start = perf_counter()
+            async with backend.open_write_stream_async(path, overwrite=overwrite) as sink:
+                bytes_written, rows_written = await encode_arrow_to_async_sink(
+                    table,
+                    sink,
+                    format_hint=format_choice,
+                    compression=compression,
+                    write_options=resolved_write_options,
+                )
+            elapsed = perf_counter() - start
+            _METRICS.record_bytes(bytes_written)
+            telemetry: StorageTelemetry = {
+                "destination": path,
+                "bytes_processed": bytes_written,
+                "rows_processed": rows_written,
+                "duration_s": elapsed,
+                "format": format_choice,
+                "backend": backend_name,
+            }
+            return telemetry
+
+        payload, rows_written = await async_(_encode_arrow_source_to_bytes)(
+            table, format_choice, compression=compression, write_options=resolved_write_options
         )
         return await self._write_bytes_async(
-            payload, destination, rows=int(table.num_rows), format_label=format_choice, storage_options=resolved_options
+            payload,
+            destination,
+            rows=rows_written,
+            format_label=format_choice,
+            storage_options=backend_options,
+            overwrite=overwrite,
+            resolved_target=target,
         )
 
     async def read_arrow_async(
@@ -576,20 +717,70 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         compression: str | None = None,
         write_options: "dict[str, Any] | None" = None,
         storage_options: "dict[str, Any] | None" = None,
+        overwrite: bool = True,
     ) -> StorageTelemetry:
         """Write Arrow record batches to storage asynchronously."""
-        _validate_arrow_write_format(file_format)
-        resolved_options = _storage_options(self._storage_options, storage_options)
-        format_write_options = write_options or _csv_write_options(
-            file_format, resolved_options, self._storage_options, self._csv_write_options
-        )
-        table = await async_(batches_to_arrow_table)(batches)
-        payload = await async_(_encode_arrow_payload)(
-            table, file_format, compression=compression, write_options=format_write_options
-        )
-        return await self._write_bytes_async(
-            payload, destination, rows=int(table.num_rows), format_label=file_format, storage_options=resolved_options
-        )
+        telemetry: StorageTelemetry | None = None
+        pending_exc: BaseException | None = None
+        try:
+            _validate_arrow_write_format(file_format)
+            resolved_write_options = _resolve_arrow_write_options(
+                file_format, write_options, storage_options, self._csv_write_options
+            )
+            backend_options = _strip_write_options(_storage_options(self._storage_options, storage_options))
+            target = self._backend(destination, backend_options)
+            backend, path, backend_name = target
+            if supports_direct_stream_write(backend) and backend.supports_direct_arrow_write(
+                file_format, overwrite=overwrite
+            ):
+                start = perf_counter()
+                async with backend.open_write_stream_async(path, overwrite=overwrite) as sink:
+                    bytes_written, rows_written = await encode_arrow_to_async_sink(
+                        batches,
+                        sink,
+                        format_hint=file_format,
+                        compression=compression,
+                        write_options=resolved_write_options,
+                    )
+                elapsed = perf_counter() - start
+                _METRICS.record_bytes(bytes_written)
+                telemetry = {
+                    "destination": path,
+                    "bytes_processed": bytes_written,
+                    "rows_processed": rows_written,
+                    "duration_s": elapsed,
+                    "format": file_format,
+                    "backend": backend_name,
+                }
+            else:
+                buffered_source = await _collect_async_batches(batches) if hasattr(batches, "__aiter__") else batches
+                payload, rows_written = await async_(_encode_arrow_source_to_bytes)(
+                    buffered_source, file_format, compression=compression, write_options=resolved_write_options
+                )
+                telemetry = await self._write_bytes_async(
+                    payload,
+                    destination,
+                    rows=rows_written,
+                    format_label=file_format,
+                    storage_options=backend_options,
+                    overwrite=overwrite,
+                    resolved_target=target,
+                )
+        except BaseException as exc:
+            pending_exc = exc
+        cleanup_cancel: asyncio.CancelledError | None = None
+        try:
+            await _close_async_batch_iterator(batches)
+        except asyncio.CancelledError as caught_cancel:
+            cleanup_cancel = caught_cancel
+        if pending_exc is not None:
+            raise pending_exc
+        if cleanup_cancel is not None:
+            raise cleanup_cancel
+        if telemetry is None:
+            msg = "Unreachable"
+            raise RuntimeError(msg)
+        return telemetry
 
     async def list_sources_async(
         self,
@@ -611,18 +802,25 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         rows: int,
         format_label: str,
         storage_options: "dict[str, Any]",
+        overwrite: bool = True,
+        resolved_target: "tuple[ObjectStoreProtocol, str, str] | None" = None,
     ) -> StorageTelemetry:
-        backend, path, backend_name = self._backend(destination, storage_options)
+        if resolved_target is not None:
+            backend, path, backend_name = resolved_target
+        else:
+            backend, path, backend_name = self._backend(destination, storage_options)
         start = perf_counter()
         if supports_async_write_bytes(backend):
-            await execute_async_storage_operation(
-                partial(backend.write_bytes_async, path, payload),
-                backend=backend_name,
-                operation="write_bytes",
-                path=path,
+            operation = (
+                partial(backend.write_bytes_async, path, payload, overwrite=False)
+                if not overwrite
+                else partial(backend.write_bytes_async, path, payload)
             )
+            await execute_async_storage_operation(operation, backend=backend_name, operation="write_bytes", path=path)
         else:
-            await async_(_write_backend_sync)(backend=backend, path=path, payload=payload, backend_name=backend_name)
+            await async_(_write_backend_sync)(
+                backend=backend, path=path, payload=payload, backend_name=backend_name, overwrite=overwrite
+            )
 
         elapsed = perf_counter() - start
         bytes_written = len(payload)
@@ -644,19 +842,6 @@ def _storage_options(default_options: "dict[str, Any]", storage_options: "dict[s
 
 def _csv_write_options_from_kwargs(storage_options: "dict[str, Any]") -> "dict[str, Any] | None":
     return cast("dict[str, Any] | None", storage_options.get("write_options"))
-
-
-def _csv_write_options(
-    format_choice: StorageFormat,
-    resolved_options: "dict[str, Any]",
-    default_options: "dict[str, Any]",
-    default_write_options: "dict[str, Any] | None",
-) -> "dict[str, Any] | None":
-    if format_choice != "csv":
-        return None
-    if resolved_options is default_options:
-        return default_write_options
-    return _csv_write_options_from_kwargs(resolved_options)
 
 
 def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
@@ -706,20 +891,124 @@ def _validate_row_write_format(format_choice: StorageFormat) -> None:
         )
 
 
-def _encode_arrow_payload(
-    table: "ArrowTable",
+def _resolve_arrow_write_options(
+    format_choice: StorageFormat,
+    explicit_write_options: "dict[str, Any] | None",
+    call_storage_options: "dict[str, Any] | None",
+    default_write_options: "dict[str, Any] | None",
+) -> "dict[str, Any] | None":
+    if explicit_write_options is not None:
+        return explicit_write_options
+    if call_storage_options is not None and "write_options" in call_storage_options:
+        return cast("dict[str, Any] | None", call_storage_options["write_options"])
+    if format_choice == "csv":
+        return default_write_options
+    return None
+
+
+def _encode_arrow_source_to_bytes(
+    source: Any,
     format_choice: StorageFormat,
     *,
-    compression: str | None,
+    compression: str | None = None,
     write_options: "dict[str, Any] | None" = None,
-) -> bytes:
-    return encode_arrow_payload(table, format_choice, compression=compression, write_options=write_options)
-
-
-def _write_backend_sync(backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str) -> None:
-    execute_sync_storage_operation(
-        partial(backend.write_bytes_sync, path, payload), backend=backend_name, operation="write_bytes", path=path
+) -> "tuple[bytes, int]":
+    buffer = import_pyarrow().BufferOutputStream()
+    _bytes_written, rows_written = encode_arrow_to_sink(
+        source, buffer, format_hint=format_choice, compression=compression, write_options=write_options
     )
+    return buffer.getvalue().to_pybytes(), rows_written
+
+
+def _invoke_sync_close(close_fn: "Callable[[], Any]") -> None:
+    try:
+        close_fn()
+    except Exception:
+        return
+
+
+def close_sync_arrow_source(source: Any) -> None:
+    """Close a synchronous Arrow batch source while suppressing cleanup errors."""
+    close_fn = getattr(source, "close", None)
+    if callable(close_fn):
+        _invoke_sync_close(close_fn)
+
+
+async def _await_aclose_shielded(aclose_fn: "Callable[[], Awaitable[Any]]") -> None:
+    try:
+        await join_shielded(asyncio.ensure_future(aclose_fn()), suppress_result=True)
+    except Exception:
+        return
+
+
+async def _close_async_batch_iterator(iterator: Any) -> None:
+    cancel_exc: asyncio.CancelledError | None = None
+    aclose = getattr(iterator, "aclose", None)
+    if callable(aclose):
+        try:
+            await _await_aclose_shielded(cast("Callable[[], Awaitable[Any]]", aclose))
+        except asyncio.CancelledError as caught_cancel:
+            cancel_exc = caught_cancel
+    close_sync_arrow_source(iterator)
+    if cancel_exc is not None:
+        raise cancel_exc
+
+
+async def close_async_arrow_result_resources(
+    data: Any, *, batch_iter: Any = None, stream_aclose: Any = None, stream_close: Any = None
+) -> None:
+    """Close async and sync resources owned by an ArrowResult under cancellation shield."""
+    cancel_exc: asyncio.CancelledError | None = None
+    if batch_iter is not None and batch_iter is not data:
+        try:
+            await _close_async_batch_iterator(batch_iter)
+        except asyncio.CancelledError as caught_cancel:
+            cancel_exc = caught_cancel
+    try:
+        await _close_async_batch_iterator(data)
+    except asyncio.CancelledError as caught_cancel:
+        if cancel_exc is None:
+            cancel_exc = caught_cancel
+    if callable(stream_aclose):
+        try:
+            await _await_aclose_shielded(cast("Callable[[], Awaitable[Any]]", stream_aclose))
+        except asyncio.CancelledError as caught_cancel:
+            if cancel_exc is None:
+                cancel_exc = caught_cancel
+    if callable(stream_close):
+        _invoke_sync_close(cast("Callable[[], Any]", stream_close))
+    if cancel_exc is not None:
+        raise cancel_exc
+
+
+async def _collect_async_batches(source: Any) -> "list[ArrowRecordBatch]":
+    iterator = source.__aiter__()
+    batches: list[ArrowRecordBatch] = []
+    pending_exc: BaseException | None = None
+    try:
+        while True:
+            try:
+                batch = await iterator.__anext__()
+            except StopAsyncIteration:
+                break
+            batches.append(batch)
+    except BaseException as stream_exc:
+        pending_exc = stream_exc
+    await _close_async_batch_iterator(iterator)
+    if pending_exc is not None:
+        raise pending_exc
+    return batches
+
+
+def _write_backend_sync(
+    backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str, overwrite: bool = True
+) -> None:
+    operation = (
+        partial(backend.write_bytes_sync, path, payload, overwrite=False)
+        if not overwrite
+        else partial(backend.write_bytes_sync, path, payload)
+    )
+    execute_sync_storage_operation(operation, backend=backend_name, operation="write_bytes", path=path)
 
 
 def _read_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> bytes:

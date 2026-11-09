@@ -90,3 +90,96 @@ def test_stream_source_caches_deserializer() -> None:
 
     async_source = MysqlConnectorAsyncStreamSource(driver, "SELECT 1", (), 10, set())
     assert async_source._deserializer is custom_deserializer
+
+
+def test_mysqlconnector_sync_stream_source_sets_column_types_on_start() -> None:
+    """MysqlConnectorSyncStreamSource populates column_types on start() while keeping NEWDECIMAL as generic decimal."""
+    from sqlspec.adapters.mysqlconnector.core import _resolve_column_types
+
+    description = [("id", 3, None, None, None, None, True), ("amount", 246, None, None, None, None, True)]
+    assert _resolve_column_types([("amount", 246, None, None, None, None, True)]) == {"amount": "decimal"}
+
+    class _SyncCursor:
+        def __init__(self) -> None:
+            self.description = description
+            self.closed = False
+
+        def execute(self, sql: str, params: Any = None) -> None:
+            _ = (sql, params)
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _SyncConnection:
+        unread_result = False
+
+        def __init__(self, cursor: _SyncCursor) -> None:
+            self._cursor = cursor
+
+        def cursor(self, **_kwargs: Any) -> _SyncCursor:
+            return self._cursor
+
+    class _SyncDriverDouble:
+        def __init__(self, connection: _SyncConnection) -> None:
+            self.connection = connection
+            self.driver_features: dict[str, Any] = {}
+
+        def handle_database_exceptions(self) -> object:
+            return object()
+
+        def _run_with_exception_handler(self, _handler: object, fn: Any, *args: Any) -> Any:
+            return fn(*args)
+
+        def _check_pending_exception(self, _handler: object) -> None:
+            return None
+
+    cursor = _SyncCursor()
+    source = MysqlConnectorSyncStreamSource(_SyncDriverDouble(_SyncConnection(cursor)), "SELECT 1", (), 10, set())
+    source.start()
+    assert source.column_types == {"id": "int64", "amount": "decimal"}
+    source.close()
+
+
+async def test_mysqlconnector_async_stream_source_sets_column_types_on_start() -> None:
+    """MysqlConnectorAsyncStreamSource populates column_types on await start()."""
+    description = [("id", 3, None, None, None, None, True), ("amount", 246, None, None, None, None, True)]
+
+    class _AsyncCursor:
+        def __init__(self) -> None:
+            self.description = description
+            self.closed = False
+
+        async def execute(self, sql: str, params: Any = None) -> None:
+            _ = (sql, params)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class _AsyncConnection:
+        unread_result = False
+
+        def __init__(self, cursor: _AsyncCursor) -> None:
+            self._cursor = cursor
+
+        async def cursor(self, **_kwargs: Any) -> _AsyncCursor:
+            return self._cursor
+
+    class _AsyncDriverDouble:
+        def __init__(self, connection: _AsyncConnection) -> None:
+            self.connection = connection
+            self.driver_features: dict[str, Any] = {}
+
+        def handle_database_exceptions(self) -> object:
+            return object()
+
+        async def _run_with_exception_handler(self, _handler: object, fn: Any, *args: Any) -> Any:
+            return await fn(*args)
+
+        def _check_pending_exception(self, _handler: object) -> None:
+            return None
+
+    cursor = _AsyncCursor()
+    source = MysqlConnectorAsyncStreamSource(_AsyncDriverDouble(_AsyncConnection(cursor)), "SELECT 1", (), 10, set())
+    await source.start()
+    assert source.column_types == {"id": "int64", "amount": "decimal"}
+    await source.close()

@@ -300,7 +300,7 @@ class SybaseDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Execute a query and write the Arrow result to storage."""
         self._require_capability("arrow_export_enabled")
-        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        arrow_result = self._select_for_storage(statement, *parameters, statement_config=statement_config, **kwargs)
         pipeline = self._storage_pipeline()
         telemetry_payload = self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=pipeline

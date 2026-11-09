@@ -215,3 +215,74 @@ async def test_aiomysql_transaction_methods_catch_pymysql_error() -> None:
         await driver.commit()
     with pytest.raises(SQLSpecError):
         await driver.rollback()
+
+
+@pytest.mark.parametrize(
+    ("column_descriptor", "expected"),
+    [
+        (("amount", 246, None, 12, 12, 2, True), {"amount": "decimal(11,2)"}),
+        (("n", 246, None, 11, 11, 0, True), {"n": "decimal(11,0)"}),
+        (("n", 0, None, 11, 11, 2, True), {"n": "decimal"}),
+        (("n", 246, None, None, None, 2, True), {"n": "decimal"}),
+        (("n", 246, None, 90, 90, 2, True), {"n": "decimal"}),
+    ],
+)
+def test_aiomysql_resolve_column_types_decimals(column_descriptor: tuple[Any, ...], expected: dict[str, str]) -> None:
+    """_resolve_column_types in aiomysql.core emits exact decimal(P,S) tokens for NEWDECIMAL metadata."""
+    from sqlspec.adapters.aiomysql.core import _resolve_column_types
+
+    assert _resolve_column_types([column_descriptor]) == expected
+
+
+async def test_aiomysql_stream_source_exposes_column_types_to_arrow_batches() -> None:
+    """AiomysqlStreamSource sets column_types on start() so all-NULL streamed columns keep declared Arrow types."""
+    import pyarrow as pa
+
+    from sqlspec.adapters.aiomysql.core import AiomysqlStreamSource
+    from sqlspec.driver import AsyncRowStream
+    from sqlspec.utils.arrow_helpers import arrow_batches_from_async_rows
+
+    class _StreamCursor:
+        def __init__(self, description: list[tuple[Any, ...]], chunks: list[list[tuple[Any, ...]]]) -> None:
+            self.description = description
+            self._chunks = list(chunks)
+            self.closed = False
+
+        async def execute(self, statement: str, parameters: Any = None) -> None:
+            _ = (statement, parameters)
+
+        async def fetchmany(self, size: int) -> list[tuple[Any, ...]]:
+            _ = size
+            return self._chunks.pop(0) if self._chunks else []
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class _StreamConnection:
+        def __init__(self, stream_cursor: _StreamCursor) -> None:
+            self._stream_cursor = stream_cursor
+
+        async def cursor(self, cursor_type: Any = None) -> Any:
+            _ = cursor_type
+            return self._stream_cursor
+
+        def get_transaction_status(self) -> bool:
+            return False
+
+    cursor = _StreamCursor(description=[("id", 3, None, None, None, None, True)], chunks=[[(None,), (None,)]])
+    driver = AiomysqlDriver(connection=cast("Any", _StreamConnection(cursor)))
+    source = AiomysqlStreamSource(driver, "SELECT id FROM demo", (), 10, set())
+    await source.start()
+    assert source.column_types == {"id": "int64"}
+    await source.close()
+
+    cursor_for_arrow = _StreamCursor(description=[("id", 3, None, None, None, None, True)], chunks=[[(None,), (None,)]])
+    driver_for_arrow = AiomysqlDriver(connection=cast("Any", _StreamConnection(cursor_for_arrow)))
+    stream: AsyncRowStream[dict[str, Any]] = AsyncRowStream(
+        AiomysqlStreamSource(driver_for_arrow, "SELECT id FROM demo", (), 10, set())
+    )
+    resolved = await arrow_batches_from_async_rows(stream, batch_size=10)
+    batches = [batch async for batch in resolved] if resolved is not None else []
+    assert len(batches) == 1
+    assert batches[0].schema.field("id").type == pa.int64()
+    assert batches[0].column("id").to_pylist() == [None, None]

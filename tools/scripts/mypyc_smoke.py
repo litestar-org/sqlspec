@@ -10,7 +10,8 @@ import json
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -248,6 +249,383 @@ def _check_obstore_arrow_reads(*, require_compiled: bool = False) -> dict[str, A
                 assert table.equals(expected), f"{uri}: read_arrow_async"
                 assert pa.Table.from_batches(batches).equals(expected), f"{uri}: stream_arrow_async"
                 assert data == b"smoke", f"{uri}: read_bytes_async"
+    except Exception as exc:
+        underlying = exc.__cause__ or exc.__context__
+        detail = f" (from {type(underlying).__name__}: {underlying})" if underlying is not None else ""
+        result["error"] = f"{type(exc).__name__}: {exc}{detail}"
+    return result
+
+
+def _generate_failing_arrow_batches(pa: Any, target_schema: Any, /) -> Iterator[Any]:
+    """Yield a single batch and raise RuntimeError to simulate midstream failure."""
+    yield pa.RecordBatch.from_pydict({"id": [10]}, schema=target_schema)
+    raise RuntimeError("failing batch")
+
+
+def _generate_slow_arrow_batches(
+    pa: Any, target_schema: Any, started_event: asyncio.Event, event_loop: asyncio.AbstractEventLoop, /
+) -> Iterator[Any]:
+    """Yield a batch, notify caller, pause to allow cancellation, and yield again."""
+    yield pa.RecordBatch.from_pydict({"id": [20]}, schema=target_schema)
+    event_loop.call_soon_threadsafe(started_event.set)
+    time.sleep(0.3)
+    yield pa.RecordBatch.from_pydict({"id": [21]}, schema=target_schema)
+
+
+async def _cancel_in_flight_write(pipeline: Any, destination: str, pa: Any, target_schema: Any, /) -> None:
+    """Launch async batch write, await start, cancel, and expect CancelledError."""
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    batches = _generate_slow_arrow_batches(pa, target_schema, started, loop)
+    task = asyncio.create_task(pipeline.write_arrow_batches_async(destination, batches))
+    await started.wait()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("task was not cancelled")
+
+
+async def _cancel_stream_aenter(backend: Any, path: str, /) -> None:
+    """Cancel open_write_stream_async().__aenter__() and verify CancelledError propagates."""
+    loop = asyncio.get_running_loop()
+    stream = backend.open_write_stream_async(path)
+    task = asyncio.create_task(stream.__aenter__())
+    loop.call_soon(task.cancel)
+    try:
+        sink = await task
+    except asyncio.CancelledError:
+        return
+    await stream.__aexit__(None, None, None)
+    _ = sink
+    raise AssertionError("open_write_stream_async.__aenter__ was not cancelled")
+
+
+async def _verify_preflight_async_batch_cleanup(
+    async_p: Any, destination: str, arrow_helpers_module: Any, exceptions_module: Any, /
+) -> None:
+    """Verify write_arrow_batches_async closes opened async batch iterators on pre-iteration errors."""
+    events: list[str] = []
+
+    class _SmokeAsyncRows:
+        column_types: dict[str, str] = {"id": "int64"}
+
+        def __init__(self) -> None:
+            self._items = [{"id": 1}, {"id": 2}]
+            self._idx = 0
+
+        def __aiter__(self) -> "_SmokeAsyncRows":
+            return self
+
+        async def __anext__(self) -> dict[str, int]:
+            if self._idx >= len(self._items):
+                raise StopAsyncIteration
+            item = self._items[self._idx]
+            self._idx += 1
+            return item
+
+        async def aclose(self) -> None:
+            events.append("aclosed")
+
+    batches = await arrow_helpers_module.arrow_batches_from_async_rows(_SmokeAsyncRows(), batch_size=1)
+    assert batches is not None
+    assert events == []
+    try:
+        await async_p.write_arrow_batches_async(destination, batches, file_format="json")
+    except exceptions_module.StorageCapabilityError:
+        pass
+    else:
+        raise AssertionError("write_arrow_batches_async(file_format='json') did not raise StorageCapabilityError")
+    assert events == ["aclosed"], f"expected ['aclosed'], got {events!r}"
+
+
+def _verify_pipeline_preflight_and_cancel_smoke(
+    *,
+    uri: str,
+    alias: str,
+    expected_backend: str,
+    backend: Any,
+    local_dir: Path,
+    sample_table: Any,
+    sync_p: Any,
+    async_p: Any,
+    pa: Any,
+    arrow_helpers_module: Any,
+    exceptions_module: Any,
+) -> None:
+    """Verify pre-iteration batch cleanup and staged stream __aenter__ cancellation."""
+    sync_closed: list[str] = []
+    deferred_reader = arrow_helpers_module.arrow_reader_with_deferred_close(
+        pa.RecordBatchReader.from_batches(sample_table.schema, sample_table.to_batches()),
+        lambda closed=sync_closed: closed.append("closed"),
+    )
+    try:
+        sync_p.write_arrow_batches(f"alias://{alias}/preflight_bad.json", deferred_reader, file_format="json")
+    except exceptions_module.StorageCapabilityError:
+        pass
+    else:
+        raise AssertionError(f"{uri}: sync json format did not raise StorageCapabilityError")
+    assert sync_closed == ["closed"], f"{uri}: deferred reader not closed on preflight error"
+
+    asyncio.run(
+        _verify_preflight_async_batch_cleanup(
+            async_p, f"alias://{alias}/preflight_async_bad.json", arrow_helpers_module, exceptions_module
+        )
+    )
+
+    if expected_backend == "local":
+        asyncio.run(_cancel_stream_aenter(backend, "cancelled_aenter.parquet"))
+        assert [p.name for p in local_dir.iterdir() if p.name.startswith(".sqlspec-stage-")] == []
+        assert not (local_dir / "cancelled_aenter.parquet").exists()
+
+
+def _verify_fsspec_aenter_cancel_smoke(*, tmp_dir: str, require_compiled: bool) -> str | None:
+    """Verify _AsyncFsspecWriteStream.__aenter__ cancellation when fsspec is installed."""
+    if importlib.util.find_spec("fsspec") is None:
+        return None
+    fsspec_module = importlib.import_module("sqlspec.storage.backends.fsspec")
+    if require_compiled and not is_compiled_module(fsspec_module):
+        return "sqlspec.storage.backends.fsspec was imported from source, not a compiled extension"
+    fsspec_dir = Path(tmp_dir) / "fsspec_root"
+    fsspec_dir.mkdir(parents=True, exist_ok=True)
+    fsspec_backend = fsspec_module.FSSpecBackend("file://", base_path=str(fsspec_dir))
+    asyncio.run(_cancel_stream_aenter(fsspec_backend, "cancelled_fsspec_aenter.parquet"))
+    assert [p.name for p in fsspec_dir.iterdir() if p.name.startswith(".sqlspec-stage-")] == []
+    assert not (fsspec_dir / "cancelled_fsspec_aenter.parquet").exists()
+    return None
+
+
+def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Stream Arrow tables and batches through compiled pipelines over ObStoreBackend and LocalStore."""
+    result = _new_smoke_result(
+        name="pipeline_arrow_streaming",
+        module="sqlspec.storage.pipeline",
+        attribute="SyncStoragePipeline",
+        compiled_required=require_compiled,
+    )
+    for dependency in ("obstore", "pyarrow"):
+        if importlib.util.find_spec(dependency) is None:
+            result["skipped"] = True
+            result["skip_reason"] = f"optional dependency missing: {dependency}"
+            return result
+    try:
+        pipeline_module = importlib.import_module("sqlspec.storage.pipeline")
+        backend_module = importlib.import_module("sqlspec.storage.backends.obstore")
+        local_module = importlib.import_module("sqlspec.storage.backends.local")
+        type_guards_module = importlib.import_module("sqlspec.utils.type_guards")
+        sync_driver_module = importlib.import_module("sqlspec.driver._sync")
+        base_module = importlib.import_module("sqlspec.base")
+        sqlite_module = importlib.import_module("sqlspec.adapters.sqlite")
+        arrow_payload_module = importlib.import_module("sqlspec.storage._arrow_payload")
+        arrow_helpers_module = importlib.import_module("sqlspec.utils.arrow_helpers")
+        registry_module = importlib.import_module("sqlspec.storage.registry")
+        exceptions_module = importlib.import_module("sqlspec.exceptions")
+        pa = importlib.import_module("pyarrow")
+        decode_arrow = arrow_payload_module.decode_arrow_payload
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    compiled_pipeline = is_compiled_module(pipeline_module)
+    compiled_backend = is_compiled_module(backend_module)
+    compiled_local = is_compiled_module(local_module)
+    compiled_type_guards = is_compiled_module(type_guards_module)
+    compiled_sync_driver = is_compiled_module(sync_driver_module)
+    arrow_payload_interpreted = not is_compiled_module(arrow_payload_module)
+    result["compiled"] = (
+        compiled_pipeline and compiled_backend and compiled_local and compiled_type_guards and compiled_sync_driver
+    )
+
+    if require_compiled:
+        if not compiled_pipeline:
+            result["error"] = "sqlspec.storage.pipeline was imported from source, not a compiled extension"
+            return result
+        if not compiled_backend:
+            result["error"] = "sqlspec.storage.backends.obstore was imported from source, not a compiled extension"
+            return result
+        if not compiled_local:
+            result["error"] = "sqlspec.storage.backends.local was imported from source, not a compiled extension"
+            return result
+        if not compiled_type_guards:
+            result["error"] = "sqlspec.utils.type_guards was imported from source, not a compiled extension"
+            return result
+        if not compiled_sync_driver:
+            result["error"] = "sqlspec.driver._sync was imported from source, not a compiled extension"
+            return result
+        if not arrow_payload_interpreted:
+            result["error"] = "sqlspec.storage._arrow_payload should remain interpreted"
+            return result
+
+    expected_rows = 3
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            obstore_dir = Path(tmp_dir) / "obstore_root"
+            obstore_dir.mkdir(parents=True, exist_ok=True)
+            local_dir = Path(tmp_dir) / "local_root"
+            local_dir.mkdir(parents=True, exist_ok=True)
+            targets = [
+                ("memory://", "mem", "obstore"),
+                (obstore_dir.as_uri(), "file", "obstore"),
+                (local_dir.as_uri(), "local", "local"),
+            ]
+            for uri, prefix, expected_backend in targets:
+                registry = registry_module.StorageRegistry()
+                alias = f"{prefix}_alias"
+                registry.register_alias(alias, uri, backend=expected_backend)
+                backend = registry.get(alias)
+                sync_p = pipeline_module.SyncStoragePipeline(registry=registry)
+                async_p = pipeline_module.AsyncStoragePipeline(registry=registry)
+
+                sample_table = pa.table({"id": [1, 2, 3], "label": ["a", "b", "c"]})
+
+                for fmt in ("parquet", "arrow-ipc", "csv"):
+                    dest_sync = f"alias://{alias}/sync_table_{fmt}.{fmt}"
+                    t_sync = sync_p.write_arrow(sample_table, dest_sync, format_hint=fmt)
+                    assert t_sync["backend"] == expected_backend, f"{uri}: {fmt} sync backend"
+                    assert t_sync["rows_processed"] == expected_rows, f"{uri}: {fmt} sync rows"
+                    assert t_sync["bytes_processed"] > 0, f"{uri}: {fmt} sync bytes"
+                    assert t_sync["format"] == fmt, f"{uri}: {fmt} sync format"
+
+                    dest_sync_b = f"alias://{alias}/sync_batches_{fmt}.{fmt}"
+                    t_sync_b = sync_p.write_arrow_batches(dest_sync_b, sample_table.to_batches(), file_format=fmt)
+                    assert t_sync_b["backend"] == expected_backend, f"{uri}: {fmt} sync batches backend"
+                    assert t_sync_b["rows_processed"] == expected_rows, f"{uri}: {fmt} sync batches rows"
+
+                    dest_async = f"alias://{alias}/async_table_{fmt}.{fmt}"
+                    t_async = asyncio.run(async_p.write_arrow(sample_table, dest_async, format_hint=fmt))
+                    assert t_async["backend"] == expected_backend, f"{uri}: {fmt} async backend"
+                    assert t_async["rows_processed"] == expected_rows, f"{uri}: {fmt} async rows"
+
+                    dest_async_b = f"alias://{alias}/async_batches_{fmt}.{fmt}"
+                    t_async_b = asyncio.run(
+                        async_p.write_arrow_batches_async(dest_async_b, sample_table.to_batches(), file_format=fmt)
+                    )
+                    assert t_async_b["backend"] == expected_backend, f"{uri}: {fmt} async batches backend"
+                    assert t_async_b["rows_processed"] == expected_rows, f"{uri}: {fmt} async batches rows"
+
+                    raw = backend.read_bytes_sync(f"sync_table_{fmt}.{fmt}")
+                    decoded = decode_arrow(raw, fmt)
+                    assert decoded.num_rows == expected_rows, f"{uri}: {fmt} decoded rows"
+
+                existing_table = pa.table({"id": [1]})
+                sync_p.write_arrow(existing_table, f"alias://{alias}/existing.parquet")
+
+                try:
+                    sync_p.write_arrow_batches(
+                        f"alias://{alias}/existing.parquet", _generate_failing_arrow_batches(pa, existing_table.schema)
+                    )
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError(f"{uri}: midstream failure did not raise RuntimeError")
+
+                assert backend.read_arrow_sync("existing.parquet").equals(existing_table), f"{uri}: existing preserved"
+
+                asyncio.run(
+                    _cancel_in_flight_write(async_p, f"alias://{alias}/existing.parquet", pa, existing_table.schema)
+                )
+                assert backend.read_arrow_sync("existing.parquet").equals(existing_table), f"{uri}: cancel preserved"
+
+                once_dest = f"alias://{alias}/once.parquet"
+                sync_p.write_arrow(sample_table, once_dest, overwrite=False)
+                try:
+                    sync_p.write_arrow(sample_table, once_dest, overwrite=False)
+                except exceptions_module.FileExistsInStorageError:
+                    pass
+                else:
+                    raise AssertionError(f"{uri}: Sync overwrite=False did not raise FileExistsInStorageError")
+
+                try:
+                    asyncio.run(async_p.write_arrow(sample_table, once_dest, overwrite=False))
+                except exceptions_module.FileExistsInStorageError:
+                    pass
+                else:
+                    raise AssertionError(f"{uri}: Async overwrite=False did not raise FileExistsInStorageError")
+
+                if uri == "memory://":
+                    assert backend.supports_direct_arrow_write("parquet", overwrite=False) is True
+                    once_batches_dest = f"alias://{alias}/once_batches.parquet"
+                    t_once_b = sync_p.write_arrow_batches(
+                        once_batches_dest, sample_table.to_batches(), file_format="parquet", overwrite=False
+                    )
+                    assert t_once_b["rows_processed"] == expected_rows
+                    assert [k for k in backend.list_objects_sync() if ".sqlspec-stage-" in k] == []
+                    try:
+                        sync_p.write_arrow_batches(
+                            once_batches_dest, sample_table.to_batches(), file_format="parquet", overwrite=False
+                        )
+                    except exceptions_module.FileExistsInStorageError:
+                        pass
+                    else:
+                        raise AssertionError("memory:// staged overwrite=False batches did not raise conflict")
+                    assert [k for k in backend.list_objects_sync() if ".sqlspec-stage-" in k] == []
+
+                _verify_pipeline_preflight_and_cancel_smoke(
+                    uri=uri,
+                    alias=alias,
+                    expected_backend=expected_backend,
+                    backend=backend,
+                    local_dir=local_dir,
+                    sample_table=sample_table,
+                    sync_p=sync_p,
+                    async_p=async_p,
+                    pa=pa,
+                    arrow_helpers_module=arrow_helpers_module,
+                    exceptions_module=exceptions_module,
+                )
+
+            fsspec_err = _verify_fsspec_aenter_cancel_smoke(tmp_dir=tmp_dir, require_compiled=require_compiled)
+            if fsspec_err is not None:
+                result["error"] = fsspec_err
+                return result
+
+            spec = base_module.SQLSpec()
+            sqlite_cfg = sqlite_module.SqliteConfig()
+            spec.add_config(sqlite_cfg)
+            try:
+                with spec.provide_session(sqlite_cfg) as sqlite_session:
+                    sqlite_session.execute("CREATE TABLE smoke_export (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+                    sqlite_rows = [(1, "one"), (2, "two"), (3, "three"), (4, "four"), (5, "five")]
+                    sqlite_session.execute_many("INSERT INTO smoke_export (id, label) VALUES (?, ?)", sqlite_rows)
+                    sqlite_session.commit()
+
+                    export_dest = local_dir / "sqlite_export.parquet"
+                    export_job = sqlite_session.select_to_storage(
+                        "SELECT id, label FROM smoke_export WHERE id >= ? ORDER BY id",
+                        export_dest,
+                        (1,),
+                        format_hint="parquet",
+                        batch_size=2,
+                    )
+                    assert export_job.telemetry["rows_processed"] == len(sqlite_rows)
+                    assert export_job.telemetry["bytes_processed"] > 0
+                    decoded_export = decode_arrow(export_dest.read_bytes(), "parquet")
+                    assert decoded_export.column_names == ["id", "label"]
+                    assert decoded_export.to_pylist() == [
+                        {"id": 1, "label": "one"},
+                        {"id": 2, "label": "two"},
+                        {"id": 3, "label": "three"},
+                        {"id": 4, "label": "four"},
+                        {"id": 5, "label": "five"},
+                    ]
+
+                    empty_dest = local_dir / "sqlite_empty.parquet"
+                    empty_job = sqlite_session.select_to_storage(
+                        "SELECT id, label FROM smoke_export WHERE id < ?",
+                        empty_dest,
+                        (0,),
+                        format_hint="parquet",
+                        batch_size=2,
+                    )
+                    assert empty_job.telemetry["rows_processed"] == 0
+                    decoded_empty = decode_arrow(empty_dest.read_bytes(), "parquet")
+                    assert decoded_empty.num_rows == 0
+                    assert decoded_empty.column_names == ["id", "label"]
+            finally:
+                sqlite_cfg.close_pool()
     except Exception as exc:
         underlying = exc.__cause__ or exc.__context__
         detail = f" (from {type(underlying).__name__}: {underlying})" if underlying is not None else ""
@@ -1143,6 +1521,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
         _check_obstore_arrow_reads(require_compiled=require_compiled),
+        _check_pipeline_arrow_streaming(require_compiled=require_compiled),
         _check_service_subclasses(require_compiled=require_compiled),
         _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
         _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
