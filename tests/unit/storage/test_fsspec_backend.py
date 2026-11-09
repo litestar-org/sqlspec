@@ -1085,3 +1085,94 @@ async def test_fsspec_commit_and_block_strategies_and_conflict_mapping() -> None
     assert flaky_fs.transaction.files.items == []
     assert flaky_fs.transaction.files.attempts == 2
     _forget_transaction_file(flaky_fs, "missing")
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED or not PYARROW_INSTALLED, reason="fsspec or pyarrow missing")
+@pytest.mark.parametrize("protocol_kind", ["file", "memory"])
+async def test_fsspec_write_arrow_parity_formats_overwrite_and_failure_preservation(
+    tmp_path: Path, protocol_kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FSSpecBackend.write_arrow_* supports parquet/arrow-ipc/csv, overwrite=False, single telemetry event, and atomic failure preservation."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from sqlspec.exceptions import StorageCapabilityError, StorageOperationFailedError
+    from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload
+    from sqlspec.storage.backends import fsspec as fsspec_mod
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    base = str(tmp_path) if protocol_kind == "file" else f"/arrow_parity_{tmp_path.name}"
+    store = FSSpecBackend(protocol_kind, base_path=base)
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    orig_log = fsspec_mod.log_storage_event
+
+    def _capture_log(event_name: str, **fields: Any) -> None:
+        events.append((event_name, fields))
+        orig_log(event_name, **fields)
+
+    monkeypatch.setattr(fsspec_mod, "log_storage_event", _capture_log)
+
+    table = pa.table({"id": [1, 2, 3], "name": ["x", "y", "z"]})
+    formats: tuple[StorageFormat, ...] = ("parquet", "arrow-ipc", "csv")
+
+    for fmt in formats:
+        events.clear()
+        sync_key = f"sync_item.{fmt}"
+        store.write_arrow_sync(sync_key, table, format_hint=fmt)
+        write_events = [e for e in events if e[0] == "storage.write"]
+        assert len(write_events) == 1
+        assert write_events[0][1]["operation"] == "write_arrow"
+        decoded_sync = decode_arrow_payload(store.read_bytes_sync(sync_key), fmt)
+        assert decoded_sync.to_pylist() == table.to_pylist()
+
+        events.clear()
+        async_key = f"async_item.{fmt}"
+        await store.write_arrow_async(async_key, table, format_hint=fmt)
+        async_write_events = [e for e in events if e[0] == "storage.write"]
+        assert len(async_write_events) == 1
+        assert async_write_events[0][1]["operation"] == "write_arrow"
+        decoded_async = decode_arrow_payload(await store.read_bytes_async(async_key), fmt)
+        assert decoded_async.to_pylist() == table.to_pylist()
+
+    other_table = pa.table({"id": [99], "name": ["other"]})
+    store.write_arrow_sync("create_only_sync.parquet", table, overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        store.write_arrow_sync("create_only_sync.parquet", other_table, overwrite=False)
+    assert store.read_arrow_sync("create_only_sync.parquet").to_pylist() == table.to_pylist()
+
+    await store.write_arrow_async("create_only_async.parquet", table, overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        await store.write_arrow_async("create_only_async.parquet", other_table, overwrite=False)
+    assert (await store.read_arrow_async("create_only_async.parquet")).to_pylist() == table.to_pylist()
+
+    store.write_arrow_sync("zstd.parquet", table, write_options={"compression": "zstd"})
+    zstd_meta = pq.read_metadata(pa.BufferReader(store.read_bytes_sync("zstd.parquet")))
+    assert zstd_meta.row_group(0).column(0).compression == "ZSTD"
+
+    store.write_arrow_sync("default_comp.parquet", table)
+    default_meta = pq.read_metadata(pa.BufferReader(store.read_bytes_sync("default_comp.parquet")))
+    assert default_meta.row_group(0).column(0).compression == "SNAPPY"
+
+    with pytest.raises(TypeError):
+        store.write_arrow_sync("bad_opt.parquet", table, unknown_parquet_kwarg=123)
+    with pytest.raises(TypeError):
+        await store.write_arrow_async("bad_opt.parquet", table, unknown_parquet_kwarg=123)
+
+    with pytest.raises(StorageCapabilityError):
+        store.write_arrow_sync("bad_fmt.json", table, format_hint="json")
+    assert not store.exists_sync("bad_fmt.json")
+
+    sparse_union = pa.UnionArray.from_sparse(pa.array([0, 1], type=pa.int8()), [pa.array([1, 2]), pa.array(["a", "b"])])
+    bad_table = pa.table({"u": sparse_union})
+
+    store.write_bytes_sync("seeded.parquet", b"original-bytes")
+    with pytest.raises(StorageOperationFailedError):
+        store.write_arrow_sync("seeded.parquet", bad_table, format_hint="parquet")
+    assert store.read_bytes_sync("seeded.parquet") == b"original-bytes"
+    assert _fsspec_stage_entries(store) == []
+
+    with pytest.raises(StorageOperationFailedError):
+        await store.write_arrow_async("seeded.parquet", bad_table, format_hint="parquet")
+    assert store.read_bytes_sync("seeded.parquet") == b"original-bytes"
+    assert _fsspec_stage_entries(store) == []

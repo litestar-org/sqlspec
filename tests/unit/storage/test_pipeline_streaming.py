@@ -707,3 +707,47 @@ async def test_pipeline_routes_local_store_direct_stream_and_create_only(tmp_pat
     await async_p.write_arrow(tbl, "alias://loc/create_only_async.parquet", overwrite=False)
     with pytest.raises(FileExistsInStorageError):
         await async_p.write_arrow(tbl, "alias://loc/create_only_async.parquet", overwrite=False)
+
+
+async def test_pipeline_routes_fsspec_memory_direct_stream_and_create_only(tmp_path: Path) -> None:
+    """Sync and async pipelines stream batches to FSSpecBackend memory alias via staging and enforce overwrite=False."""
+    pytest.importorskip("fsspec")
+
+    registry = StorageRegistry()
+    mem_base = f"/pipe_fsspec_{tmp_path.name}"
+    registry.register_alias("fsmem", "memory://", backend="fsspec", base_path=mem_base)
+    sync_p = SyncStoragePipeline(registry=registry)
+    async_p = AsyncStoragePipeline(registry=registry)
+
+    backend = registry.get("fsmem")
+    schema = pa.table({"id": [1]}).schema
+    batch_1 = pa.RecordBatch.from_pydict({"id": [1, 2]}, schema=schema)
+    batch_2 = pa.RecordBatch.from_pydict({"id": [3, 4]}, schema=schema)
+
+    observed_at_batch_2: dict[str, Any] = {}
+
+    def _inspect_fsspec_batches() -> Iterator[pa.RecordBatch]:
+        yield batch_1
+        observed_at_batch_2["dest_exists"] = backend.exists_sync("batches.parquet")
+        observed_at_batch_2["objects"] = backend.list_objects_sync()
+        yield batch_2
+
+    telemetry = sync_p.write_arrow_batches("alias://fsmem/batches.parquet", _inspect_fsspec_batches())
+    assert telemetry["backend"] == "fsspec"
+    assert telemetry["rows_processed"] == 4
+    assert observed_at_batch_2["dest_exists"] is False
+    assert any(".sqlspec-stage-" in item for item in observed_at_batch_2["objects"])
+
+    read_back, _ = sync_p.read_arrow("alias://fsmem/batches.parquet", file_format="parquet")
+    assert read_back.column("id").to_pylist() == [1, 2, 3, 4]
+
+    tbl = pa.table({"id": [10, 20]})
+    sync_p.write_arrow(tbl, "alias://fsmem/exclusive_sync.parquet", overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        sync_p.write_arrow(tbl, "alias://fsmem/exclusive_sync.parquet", overwrite=False)
+
+    await async_p.write_arrow_batches_async("alias://fsmem/exclusive_async.parquet", tbl.to_batches(), overwrite=False)
+    with pytest.raises(FileExistsInStorageError):
+        await async_p.write_arrow_batches_async(
+            "alias://fsmem/exclusive_async.parquet", tbl.to_batches(), overwrite=False
+        )
