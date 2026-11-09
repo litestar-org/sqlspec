@@ -187,6 +187,20 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
 
+    async def prepare_reconcile_async(self, driver: Any) -> None:
+        """Run reconcile-only prerequisite DDL; the default does nothing."""
+
+    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
+        """Return memory-store SchemaTarget definitions without opening a session."""
+        del driver
+        return await self._schema_targets()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Reconcile adapter-specific memory companion objects; the default does nothing."""
+
+    async def finalize_reconcile_async(self, driver: Any) -> None:
+        """Refresh config state after every DDL phase succeeds; the default does nothing."""
+
     @abstractmethod
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.
@@ -249,25 +263,33 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
             db_system=resolve_db_system(type(self).__name__),
         )
 
-    async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
-        """Apply additive ADK memory table changes from canonical adapter DDL."""
-        manage_schema, create_schema = self._schema_management_flags()
-        if not manage_schema or not self._enabled:
-            return
+    async def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct SchemaTarget definitions for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
         statement_config = getattr(self._config, "statement_config", None)
         dialect = getattr(statement_config, "dialect", None)
         ddl = await self._memory_table_ddl()
         ddl_str = ddl if isinstance(ddl, str) else ";\n".join(ddl)
-        target = SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)
+        return [SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)]
+
+    async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive ADK memory table changes from canonical adapter DDL."""
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return
+        targets = await self._schema_targets()
+        if not targets:
+            return
         session_context = self._config.provide_session()
         if hasattr(session_context, "__aenter__"):
             async with cast("Any", session_context) as driver:
                 await ensure_schema_async(
-                    driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+                    driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
                 )
             return
         await async_(_reconcile_adk_schema_sync)(
-            self._config, [target], create_schema=create_schema, assume_existing=assume_existing
+            self._config, targets, create_schema=create_schema, assume_existing=assume_existing
         )
 
     @abstractmethod
@@ -359,6 +381,20 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
     def prepare_schema_sync(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with a synchronous driver."""
 
+    def prepare_reconcile_sync(self, driver: Any) -> None:
+        """Run reconcile-only prerequisite DDL; the default does nothing."""
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return memory-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Reconcile adapter-specific memory companion objects; the default does nothing."""
+
+    def finalize_reconcile_sync(self, driver: Any) -> None:
+        """Refresh config state after every DDL phase succeeds; the default does nothing."""
+
     @abstractmethod
     def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -400,17 +436,25 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
             db_system=resolve_db_system(type(self).__name__),
         )
 
-    def reconcile_schema(self, *, assume_existing: bool = False) -> None:
-        """Apply additive ADK memory table changes from canonical adapter DDL."""
-        manage_schema, create_schema = self._schema_management_flags()
-        if not manage_schema or not self._enabled:
-            return
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct SchemaTarget definitions for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
         statement_config = getattr(self._config, "statement_config", None)
         dialect = getattr(statement_config, "dialect", None)
         ddl = self._memory_table_ddl()
         ddl_str = ddl if isinstance(ddl, str) else ";\n".join(ddl)
-        target = SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)
-        _reconcile_adk_schema_sync(self._config, [target], create_schema=create_schema, assume_existing=assume_existing)
+        return [SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)]
+
+    def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive ADK memory table changes from canonical adapter DDL."""
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return
+        targets = self._schema_targets()
+        if not targets:
+            return
+        _reconcile_adk_schema_sync(self._config, targets, create_schema=create_schema, assume_existing=assume_existing)
 
     @abstractmethod
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:

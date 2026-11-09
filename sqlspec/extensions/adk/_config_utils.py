@@ -242,7 +242,9 @@ def _ensure_adk_store_registration(config: Any) -> None:
 def _validate_adk_extension_config(config: _ADKConfigSource, settings: dict[str, Any]) -> None:
     """Reject ADK options that the adapter and explicit stores do not accept."""
     from sqlspec.config import ADKConfig
+    from sqlspec.migrations.utils import resolve_extension_migration_mode
 
+    resolve_extension_migration_mode(None, dict(settings), extension_name="adk")
     adapter_name = resolve_adapter_name(config)
     adapter_keys = _adk_adapter_config_keys(adapter_name)
     explicit_stores = tuple(

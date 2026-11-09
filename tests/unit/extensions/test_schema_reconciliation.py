@@ -11,12 +11,15 @@ import pytest
 
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.litestar.store import AdbcStore
+from sqlspec.adapters.aiosqlite.adk.store import AiosqliteADKMemoryStore, AiosqliteADKStore
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.adapters.sqlite.events.store import SqliteEventQueueStore
 from sqlspec.adapters.sqlite.litestar.store import SqliteStore
 from sqlspec.exceptions import MigrationError
+from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_sync
@@ -450,3 +453,443 @@ async def test_events_reconcile_sync_and_async_end_to_end_partial_table_and_stri
         await async_cfg.close_pool()
         no_create_cfg.close_pool()
         missing_payload_cfg.close_pool()
+
+
+def _invoke_adk_reconcile(context: MigrationContext) -> Any:
+    import importlib
+
+    reconcile_mod = importlib.import_module("sqlspec.extensions.adk.migrations.reconcile")
+    return reconcile_mod.reconcile(context)
+
+
+def test_adk_session_targets_use_supplied_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
+    qualified_config = SqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"adk": {"session_table": "analytics.adk_session"}}
+    )
+
+    class _TwoPartSqliteADKStore(SqliteADKStore):
+        _max_table_name_parts = 2
+
+    try:
+        store = SqliteADKStore(config)
+        qualified_store = _TwoPartSqliteADKStore(qualified_config)
+        monkeypatch.setattr(SqliteConfig, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+        driver = MagicMock()
+
+        targets = store.get_schema_targets_sync(driver)
+        qualified_targets = qualified_store.get_schema_targets_sync(driver)
+        store.prepare_reconcile_sync(driver)
+        store.reconcile_companion_objects_sync(driver)
+        store.finalize_reconcile_sync(driver)
+
+        assert [t.identity for t in targets] == [
+            "adk_session",
+            "adk_event",
+            "adk_app_state",
+            "adk_user_state",
+            "adk_internal_metadata",
+        ]
+        assert qualified_targets[0].identity == "analytics.adk_session"
+        assert driver.mock_calls == []
+    finally:
+        config.close_pool()
+        qualified_config.close_pool()
+
+
+@pytest.mark.anyio
+async def test_adk_session_targets_async_use_supplied_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"adk": {"session_table": "custom_sessions"}}
+    )
+    try:
+        store = AiosqliteADKStore(config)
+        monkeypatch.setattr(AiosqliteConfig, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+        driver = MagicMock()
+
+        targets = await store.get_schema_targets_async(driver)
+        await store.prepare_reconcile_async(driver)
+        await store.reconcile_companion_objects_async(driver)
+        await store.finalize_reconcile_async(driver)
+
+        assert len(targets) == 5
+        assert targets[0].identity == "custom_sessions"
+        assert driver.mock_calls == []
+    finally:
+        await config.close_pool()
+
+
+@pytest.mark.anyio
+async def test_adk_memory_targets_follow_enabled_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    disabled_cfg = SqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"adk": {"enable_memory": False}}
+    )
+    enabled_cfg = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
+    async_enabled_cfg = AiosqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
+
+    class _ListDdlMemoryStore(BaseSyncADKMemoryStore[SqliteConfig]):
+        def create_tables(self) -> None:
+            return None
+
+        def insert_memory_entries(self, entries: list[Any], owner_id: object | None = None) -> int:
+            del entries, owner_id
+            return 0
+
+        def search_entries(
+            self,
+            query: str,
+            app_name: str,
+            user_id: str,
+            limit: int | None = None,
+            scope_filter: Any = "all",
+            embedding: Any = None,
+        ) -> list[Any]:
+            del query, app_name, user_id, limit, scope_filter, embedding
+            return []
+
+        def delete_entries_by_session(self, session_id: str) -> int:
+            del session_id
+            return 0
+
+        def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
+            del days, app_name, scope
+            return 0
+
+        def _memory_table_ddl(self) -> list[str]:
+            return [
+                "CREATE TABLE IF NOT EXISTS adk_memory (id TEXT PRIMARY KEY, app_name TEXT NOT NULL)",
+                "CREATE INDEX IF NOT EXISTS idx_extra ON adk_memory(app_name)",
+            ]
+
+        def _drop_memory_table_sql(self) -> list[str]:
+            return ["DROP TABLE IF EXISTS adk_memory"]
+
+    try:
+        disabled_store = SqliteADKMemoryStore(disabled_cfg)
+        sqlite_enabled_store = SqliteADKMemoryStore(enabled_cfg)
+        enabled_store = _ListDdlMemoryStore(enabled_cfg)
+        async_store = AiosqliteADKMemoryStore(async_enabled_cfg)
+        monkeypatch.setattr(SqliteConfig, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+        monkeypatch.setattr(AiosqliteConfig, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+        driver = MagicMock()
+
+        assert disabled_store.get_schema_targets_sync(driver) == []
+        sqlite_targets = sqlite_enabled_store.get_schema_targets_sync(driver)
+        assert len(sqlite_targets) == 1
+        assert sqlite_targets[0].identity == "adk_memory"
+        sync_targets = enabled_store.get_schema_targets_sync(driver)
+        assert len(sync_targets) == 1
+        assert sync_targets[0].identity == "adk_memory"
+
+        async_targets = await async_store.get_schema_targets_async(driver)
+        assert len(async_targets) == 1
+        assert async_targets[0].identity == "adk_memory"
+        enabled_store.prepare_reconcile_sync(driver)
+        enabled_store.reconcile_companion_objects_sync(driver)
+        enabled_store.finalize_reconcile_sync(driver)
+        await async_store.prepare_reconcile_async(driver)
+        await async_store.reconcile_companion_objects_async(driver)
+        await async_store.finalize_reconcile_async(driver)
+        assert driver.mock_calls == []
+    finally:
+        disabled_cfg.close_pool()
+        enabled_cfg.close_pool()
+        await async_enabled_cfg.close_pool()
+
+
+def test_adk_reconcile_schema_still_adds_column(tmp_path: Path) -> None:
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "adk_runtime_reconcile.db")}, extension_config={"adk": {}}
+    )
+    try:
+        SqliteADKStore(config).create_tables()
+        store = AdditiveSqliteADKStore(config)
+        store.reconcile_schema(assume_existing=True)
+
+        with config.provide_session() as driver:
+            columns = driver.data_dictionary.get_columns(driver, "adk_session")
+        assert "schema_tag" in {str(col["column_name"]).casefold() for col in columns}
+    finally:
+        config.close_pool()
+
+
+def test_adk_reconcile_creates_only_enabled_targets(tmp_path: Path) -> None:
+    sessions_only_cfg = SqliteConfig(
+        connection_config={"database": str(tmp_path / "sessions_only.db")},
+        extension_config={"adk": {"migration_mode": "reconcile", "enable_memory": False}},
+    )
+    memory_only_cfg = SqliteConfig(
+        connection_config={"database": str(tmp_path / "memory_only.db")},
+        extension_config={"adk": {"migration_mode": "reconcile", "enable_sessions": False}},
+    )
+    try:
+        with sessions_only_cfg.provide_session() as driver:
+            assert (
+                _invoke_adk_reconcile(MigrationContext(config=sessions_only_cfg, dialect="sqlite", driver=driver))
+                is None
+            )
+            session_tables = {str(t["table_name"]).casefold() for t in driver.data_dictionary.get_tables(driver)}
+        assert session_tables == {
+            "adk_session",
+            "adk_event",
+            "adk_app_state",
+            "adk_user_state",
+            "adk_internal_metadata",
+        }
+
+        with memory_only_cfg.provide_session() as driver:
+            assert (
+                _invoke_adk_reconcile(MigrationContext(config=memory_only_cfg, dialect="sqlite", driver=driver)) is None
+            )
+            memory_tables = {str(t["table_name"]).casefold() for t in driver.data_dictionary.get_tables(driver)}
+        assert memory_tables == {"adk_memory"}
+    finally:
+        sessions_only_cfg.close_pool()
+        memory_only_cfg.close_pool()
+
+
+def test_adk_reconcile_repeat_keeps_rows_and_names(tmp_path: Path) -> None:
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "adk_repeat.db")},
+        extension_config={
+            "adk": {"migration_mode": "reconcile", "session_table": "custom_sessions", "events_table": "custom_events"}
+        },
+    )
+    try:
+        with config.provide_session() as driver:
+            _invoke_adk_reconcile(MigrationContext(config=config, dialect="sqlite", driver=driver))
+            driver.execute(
+                "INSERT INTO custom_sessions (id, app_name, user_id, state, create_time, update_time) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("s1", "app", "u1", "{}", 1.0, 1.0),
+            )
+            _invoke_adk_reconcile(MigrationContext(config=config, dialect="sqlite", driver=driver))
+            count = driver.select_value("SELECT count(*) FROM custom_sessions")
+            tables = {str(t["table_name"]).casefold() for t in driver.data_dictionary.get_tables(driver)}
+        assert int(count) == 1
+        assert "custom_sessions" in tables
+        assert "custom_events" in tables
+        assert "adk_session" not in tables
+    finally:
+        config.close_pool()
+
+
+def test_adk_reconcile_uses_supplied_driver_without_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "adk_no_commit.db"
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)}, extension_config={"adk": {"migration_mode": "reconcile"}}
+    )
+    try:
+        with config.provide_session() as driver:
+            driver.begin()
+            commit_spy = MagicMock()
+            with monkeypatch.context() as m:
+                m.setattr(SqliteConfig, "provide_session", MagicMock(side_effect=AssertionError("second session")))
+                m.setattr(SqliteDriver, "commit", commit_spy)
+                _invoke_adk_reconcile(MigrationContext(config=config, dialect="sqlite", driver=driver))
+            assert commit_spy.call_count == 0
+            assert driver.connection.in_transaction is True
+            with sqlite3.connect(db_path) as peer_conn:
+                peer_tables = {
+                    str(r[0]).casefold()
+                    for r in peer_conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+            assert "adk_session" not in peer_tables
+            driver.commit()
+    finally:
+        config.close_pool()
+
+
+def test_adk_reconcile_orders_phases(tmp_path: Path) -> None:
+    call_log: list[str] = []
+
+    class _RecordingSessionStore(SqliteADKStore):
+        def prepare_schema_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("session.prepare")
+
+        def prepare_reconcile_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("session.prepare_reconcile")
+
+        def get_schema_targets_sync(self, driver: Any) -> list[SchemaTarget]:
+            call_log.append("session.targets")
+            return super().get_schema_targets_sync(driver)
+
+        def reconcile_companion_objects_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("session.companions")
+
+        def finalize_reconcile_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("session.finalize")
+
+    class _RecordingMemoryStore(SqliteADKMemoryStore):
+        def prepare_schema_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("memory.prepare")
+
+        def prepare_reconcile_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("memory.prepare_reconcile")
+
+        def get_schema_targets_sync(self, driver: Any) -> list[SchemaTarget]:
+            call_log.append("memory.targets")
+            return super().get_schema_targets_sync(driver)
+
+        def reconcile_companion_objects_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("memory.companions")
+
+        def finalize_reconcile_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("memory.finalize")
+
+    class _RecordingConfig(SqliteConfig):
+        adk_store_class = _RecordingSessionStore
+        adk_memory_store_class = _RecordingMemoryStore
+
+    config = _RecordingConfig(
+        connection_config={"database": str(tmp_path / "adk_phases.db")},
+        extension_config={"adk": {"migration_mode": "reconcile"}},
+    )
+    try:
+        with config.provide_session() as driver:
+            _invoke_adk_reconcile(MigrationContext(config=config, dialect="sqlite", driver=driver))
+        assert call_log == [
+            "session.prepare",
+            "memory.prepare",
+            "session.prepare_reconcile",
+            "memory.prepare_reconcile",
+            "session.targets",
+            "memory.targets",
+            "session.companions",
+            "memory.companions",
+            "session.finalize",
+            "memory.finalize",
+        ]
+    finally:
+        config.close_pool()
+
+
+def test_adk_reconcile_refuses_unsafe_target_before_helper_ddl(tmp_path: Path) -> None:
+    call_log: list[str] = []
+
+    class _RecordingSessionStore(SqliteADKStore):
+        def reconcile_companion_objects_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("session.companions")
+
+        def finalize_reconcile_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("session.finalize")
+
+    class _RecordingMemoryStore(SqliteADKMemoryStore):
+        def reconcile_companion_objects_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("memory.companions")
+
+        def finalize_reconcile_sync(self, driver: Any) -> None:
+            del driver
+            call_log.append("memory.finalize")
+
+    class _RecordingConfig(SqliteConfig):
+        adk_store_class = _RecordingSessionStore
+        adk_memory_store_class = _RecordingMemoryStore
+
+    config = _RecordingConfig(
+        connection_config={"database": str(tmp_path / "adk_unsafe.db")},
+        extension_config={"adk": {"migration_mode": "reconcile"}},
+    )
+    try:
+        with config.provide_session() as driver:
+            driver.execute_script("CREATE TABLE adk_session (id TEXT PRIMARY KEY)")
+            driver.commit()
+            with pytest.raises(MigrationError, match="adk_session"):
+                _invoke_adk_reconcile(MigrationContext(config=config, dialect="sqlite", driver=driver))
+            tables = {str(t["table_name"]).casefold() for t in driver.data_dictionary.get_tables(driver)}
+        assert "adk_event" not in tables
+        assert call_log == []
+    finally:
+        config.close_pool()
+
+
+def test_adk_reconcile_accepts_application_subclass(tmp_path: Path) -> None:
+    class AppConfig(SqliteConfig):
+        pass
+
+    AppConfig.__module__ = "myapp.db"
+    config = AppConfig(
+        connection_config={"database": str(tmp_path / "adk_app_subclass.db")},
+        extension_config={"adk": {"migration_mode": "reconcile"}},
+    )
+    try:
+        with config.provide_session() as driver:
+            _invoke_adk_reconcile(MigrationContext(config=config, dialect="sqlite", driver=driver))
+            tables = {str(t["table_name"]).casefold() for t in driver.data_dictionary.get_tables(driver)}
+        assert "adk_session" in tables
+        assert "adk_memory" in tables
+    finally:
+        config.close_pool()
+
+
+def test_adk_reconcile_honors_manage_schema_false() -> None:
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"adk": {"migration_mode": "reconcile", "manage_schema": False}},
+    )
+    driver = MagicMock()
+    try:
+        assert _invoke_adk_reconcile(MigrationContext(config=config, dialect="sqlite", driver=driver)) is None
+        assert driver.mock_calls == []
+    finally:
+        config.close_pool()
+
+
+def test_adk_reconcile_create_schema_false_refuses_missing_table(tmp_path: Path) -> None:
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "adk_no_create.db")},
+        extension_config={"adk": {"migration_mode": "reconcile", "create_schema": False}},
+    )
+    try:
+        with config.provide_session() as driver:
+            with pytest.raises(MigrationError, match="adk_session"):
+                _invoke_adk_reconcile(MigrationContext(config=config, dialect="sqlite", driver=driver))
+            tables = {str(t["table_name"]).casefold() for t in driver.data_dictionary.get_tables(driver)}
+        assert tables == set()
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.anyio
+async def test_adk_reconcile_dispatches_on_driver_mode(tmp_path: Path) -> None:
+    sync_cfg = SqliteConfig(
+        connection_config={"database": str(tmp_path / "adk_dispatch_sync.db")},
+        extension_config={"adk": {"migration_mode": "reconcile"}},
+    )
+    async_cfg = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "adk_dispatch_async.db")},
+        extension_config={"adk": {"migration_mode": "reconcile"}},
+    )
+    try:
+        with sync_cfg.provide_session() as sync_driver:
+            sync_outcome = _invoke_adk_reconcile(
+                MigrationContext(config=sync_cfg, dialect="sqlite", driver=sync_driver)
+            )
+            assert sync_outcome is None
+            sync_tables = {str(t["table_name"]).casefold() for t in sync_driver.data_dictionary.get_tables(sync_driver)}
+        assert "adk_session" in sync_tables
+
+        async with async_cfg.provide_session() as async_driver:
+            async_outcome = _invoke_adk_reconcile(
+                MigrationContext(config=async_cfg, dialect="sqlite", driver=async_driver)
+            )
+            assert inspect.isawaitable(async_outcome)
+            await async_outcome
+            async_tables = {
+                str(t["table_name"]).casefold() for t in await async_driver.data_dictionary.get_tables(async_driver)
+            }
+        assert "adk_session" in async_tables
+    finally:
+        sync_cfg.close_pool()
+        await async_cfg.close_pool()
