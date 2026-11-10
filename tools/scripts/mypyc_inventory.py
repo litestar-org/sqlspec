@@ -537,7 +537,7 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
             "modules": adapter_drivers,
             "status": "blocked",
             "classification": "prove_separately",
-            "reason": "SQLite sync/async driver admission compiled but failed installed-wheel session construction; driver.py files stay interpreted pending layout work.",
+            "reason": "Driver shells need separate layout and dispatch verification: grouped builds lose inherited fields, and compiled SQLite bypasses an interpreted Arrow conversion override.",
         },
         "adapter_pool_runtimes": {
             "count": len(adapter_pools),

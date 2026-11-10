@@ -114,6 +114,18 @@ def is_compiled_module(module: Any) -> bool:
     return module_file.endswith(COMPILED_SUFFIXES)
 
 
+def _has_compiled_module_file(module_name: str) -> bool:
+    spec = importlib.util.find_spec("sqlspec")
+    if spec is None or spec.submodule_search_locations is None:
+        return False
+    relative_module = Path(*module_name.split(".")[1:])
+    return any(
+        (Path(location) / relative_module).with_suffix(suffix).is_file()
+        for location in spec.submodule_search_locations
+        for suffix in COMPILED_SUFFIXES
+    )
+
+
 def _is_missing_optional_dependency(missing_name: str, optional_dependency: str | None) -> bool:
     if optional_dependency is None or not missing_name:
         return False
@@ -880,8 +892,11 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
             missing_name = exc.name or ""
             optional_dependency = entry.optional_dependency
             if _is_missing_optional_dependency(missing_name, optional_dependency):
-                result["skipped"] = True
-                result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
+                if require_compiled and entry.require_compiled and not _has_compiled_module_file(entry.module):
+                    result["error"] = "compiled extension is missing from the installed package"
+                else:
+                    result["skipped"] = True
+                    result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
             else:
                 result["error"] = f"{type(exc).__name__}: {exc}"
         except Exception as exc:
