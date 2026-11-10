@@ -1204,7 +1204,7 @@ def test_oracle_tenant_hook_configuration_must_match_strategy(mode: str) -> None
     with pytest.raises(ImproperConfigurationError, match="session_context_hook"):
         config_cls(driver_features={"tenant_strategy": strategy_cls(), "session_context_hook": hook})
     config = config_cls(driver_features={"tenant_strategy": strategy_cls(hook), "session_context_hook": hook})
-    assert config.driver_features["tenant_strategy"].source_hook == OracleSessionContextConfig(**hook)
+    assert config.driver_features["tenant_strategy"].source_hook == OracleSessionContextConfig(module=hook["module"])
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
