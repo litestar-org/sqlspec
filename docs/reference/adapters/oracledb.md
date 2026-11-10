@@ -25,6 +25,8 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 
 ## Configuration & Parameters
 
+The [connection and pool parameter table](../../databases/oracledb.md#connection-and-pool-parameters) lists every supported key, type, and default.
+
 ::: sqlspec.adapters.oracledb.OracleSyncConfig
     options:
       heading_level: 3
@@ -38,12 +40,14 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 ::: sqlspec.adapters.oracledb.OracleConnectionParams
     options:
       heading_level: 3
+      members: []
       separate_signature: false
       show_signature_annotations: true
 
 ::: sqlspec.adapters.oracledb.OraclePoolParams
     options:
       heading_level: 3
+      members: []
       separate_signature: false
       show_signature_annotations: true
 
@@ -78,22 +82,22 @@ Missing tenant identity raises `TenantContextError` before acquisition. Failed c
 
 ::: sqlspec.adapters.oracledb.OracleSyncIdentifierStrategy
     options:
-      heading_level: 3
+      heading_level: 4
       members: [__init__, checkout, checkin]
 
 ::: sqlspec.adapters.oracledb.OracleAsyncIdentifierStrategy
     options:
-      heading_level: 3
+      heading_level: 4
       members: [__init__, checkout, checkin]
 
 ::: sqlspec.adapters.oracledb.OracleSyncVPDStrategy
     options:
-      heading_level: 3
+      heading_level: 4
       members: [__init__, checkout, checkin]
 
 ::: sqlspec.adapters.oracledb.OracleAsyncVPDStrategy
     options:
-      heading_level: 3
+      heading_level: 4
       members: [__init__, checkout, checkin]
 
 ## Driver, Pool & Data Dictionary
@@ -110,12 +114,12 @@ Missing tenant identity raises `TenantContextError` before acquisition. Failed c
 
 ::: sqlspec.adapters.oracledb.OracleSyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.oracledb.OracleAsyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.oracledb.data_dictionary.OracledbSyncDataDictionary

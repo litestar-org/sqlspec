@@ -58,7 +58,8 @@ See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) for database policy se
 
 ::: sqlspec.adapters.psycopg.PsycopgSyncRLSStrategy
     options:
-      heading_level: 3
+      heading_level: 4
+      inherited_members: [__init__]
       members:
         - __init__
         - checkout
@@ -66,7 +67,8 @@ See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) for database policy se
 
 ::: sqlspec.adapters.psycopg.PsycopgAsyncRLSStrategy
     options:
-      heading_level: 3
+      heading_level: 4
+      inherited_members: [__init__]
       members:
         - __init__
         - checkout
@@ -86,12 +88,12 @@ See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) for database policy se
 
 ::: sqlspec.adapters.psycopg.PsycopgSyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.psycopg.PsycopgAsyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.psycopg.data_dictionary.PsycopgSyncDataDictionary
