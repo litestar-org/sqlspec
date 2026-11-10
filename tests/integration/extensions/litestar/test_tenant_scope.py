@@ -165,7 +165,6 @@ async def test_tenant_native_auth_bypass_switching_and_rollback(tenant_database:
 async def test_tenant_security_composites_cannot_authorize_unrelated_tenants(tenant_database: Any) -> None:
     security = pytest.importorskip("litestar_security")
     from litestar.middleware.session.client_side import CookieBackendConfig
-    from litestar_security.context import NullSessionHandle
 
     config, table = tenant_database
     config.extension_config["litestar"] = {"tenant_header": "x-tenant-id"}
@@ -175,7 +174,7 @@ async def test_tenant_security_composites_cannot_authorize_unrelated_tenants(ten
             return AuthenticationResult(
                 user=security.Principal(id="reader"),
                 auth=security.SecurityContext(
-                    session=NullSessionHandle(),
+                    session=security.NullSessionHandle(),
                     authorization=security.AuthorizationSnapshot(
                         roles=frozenset({"reader"}),
                         tenant_ids=frozenset({"acme", "globex"}),
