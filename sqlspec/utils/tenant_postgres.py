@@ -45,6 +45,9 @@ class PostgresTenantSettings:
     ) -> None:
         self._tenant_key = validate_session_setting_name(tenant_key)
         self._variable_keys = dict(variable_keys or {})
+        if any(not isinstance(key, str) or not key for key in self._variable_keys):
+            msg = "Tenant variable names must be non-empty strings"
+            raise ImproperConfigurationError(msg)
         targets = {self._tenant_key.casefold()}
         if schema_resolver is not None:
             targets.add("search_path")
@@ -102,7 +105,8 @@ class PostgresTenantSettings:
             (
                 key,
                 value
-                or (DEFAULT_SEARCH_PATH_RESTORE if key.casefold() == "search_path" else self._unset_restore_value),
+                if value is not None
+                else (DEFAULT_SEARCH_PATH_RESTORE if key.casefold() == "search_path" else self._unset_restore_value),
             )
             for key, value in state.baseline.items()
         ]

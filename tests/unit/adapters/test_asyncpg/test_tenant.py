@@ -140,3 +140,17 @@ def test_tenant_baseline_validates_values_and_conflicts() -> None:
         )
     with pytest.raises(ImproperConfigurationError):
         validate_asyncpg_tenant_config({"tenant_session_baseline": {"bad;key": "x"}}, {})
+
+
+async def test_tenant_preserves_empty_search_path_baseline() -> None:
+    connection = FakeGucConnection({"search_path": ""})
+    strategy = AsyncpgRLSStrategy(schema_resolver=lambda _: "tenant_a")
+    state = await strategy.checkout(connection, TenantContextPayload("a"))
+    await strategy.checkin(connection, state)
+    assert connection.settings["search_path"] == ""
+
+
+@pytest.mark.parametrize("key", ["", 1])
+def test_tenant_rejects_invalid_variable_source_names(key: Any) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        AsyncpgRLSStrategy(variable_keys={key: "app.region"})

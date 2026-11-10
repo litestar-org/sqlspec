@@ -31,6 +31,11 @@ from sqlspec.adapters.asyncpg.core import (
     register_pgvector_support,
 )
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
+from sqlspec.adapters.asyncpg.tenant import (
+    AsyncpgRLSStrategy,
+    build_asyncpg_tenant_lease,
+    validate_asyncpg_tenant_config,
+)
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import (
@@ -52,6 +57,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from sqlspec.core import StatementConfig
+    from sqlspec.core.tenant import AsyncTenantStrategy, TenantStrategyShorthand
     from sqlspec.observability import ObservabilityConfig
 
 
@@ -211,6 +217,10 @@ class AsyncpgDriverFeatures(TypedDict):
     """External pooler compatibility mode; sets ``statement_cache_size=0`` in ``transaction`` or ``statement`` mode."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
+    tenant_strategy: NotRequired["AsyncTenantStrategy | TenantStrategyShorthand"]
+    """Opt-in tenant strategy or ``rls`` shorthand applied to every session lease."""
+    tenant_session_baseline: NotRequired["Mapping[str, str]"]
+    """Declared session settings replayed before each tenant checkout."""
     type_codecs: NotRequired["list[dict[str, Any]]"]
     """Custom ``asyncpg`` type codec specifications registered on connection initialization."""
 
@@ -274,13 +284,47 @@ class _AsyncpgAlloydbConnector:
 
 
 class _AsyncpgSessionFactory(AsyncPoolSessionFactory):
-    __slots__ = ()
+    __slots__ = ("_lease",)
+
+    def __init__(self, config: "AsyncpgConfig") -> None:
+        super().__init__(config)
+        self._lease = (
+            build_asyncpg_tenant_lease(config) if config.driver_features.get("tenant_strategy") is not None else None
+        )
+
+    async def acquire_connection(self) -> Any:
+        if self._lease is not None:
+            return await self._lease.acquire()
+        return await super().acquire_connection()
+
+    async def release_connection(self, _conn: Any, **kwargs: Any) -> None:
+        if self._lease is not None:
+            await self._lease.release(_conn, **kwargs)
+        else:
+            await super().release_connection(_conn, **kwargs)
 
 
 class AsyncpgConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for AsyncPG connections."""
 
-    __slots__ = ()
+    __slots__ = ("_lease",)
+
+    def __init__(self, config: "AsyncpgConfig") -> None:
+        super().__init__(config)
+        self._lease = (
+            build_asyncpg_tenant_lease(config) if config.driver_features.get("tenant_strategy") is not None else None
+        )
+
+    async def __aenter__(self) -> Any:
+        if self._lease is not None:
+            return await self._lease.acquire()
+        return await super().__aenter__()
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self._lease is not None:
+            await self._lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+        else:
+            await super().__aexit__(exc_type, exc_val, exc_tb)
 
 
 @mypyc_attr(native_class=False)
@@ -289,6 +333,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     driver_type: "ClassVar[type[AsyncpgDriver]]" = AsyncpgDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncpgConnection)
+    supports_tenant_strategy: "ClassVar[bool]" = True
+    supports_tenant_session_baseline: "ClassVar[bool]" = True
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = False
@@ -330,6 +376,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
+        raw_strategy = (driver_features or {}).get("tenant_strategy")
+        if raw_strategy is not None and raw_strategy is not False:
+            validate_asyncpg_tenant_config(driver_features or {}, normalize_connection_config(connection_config))
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features)
@@ -365,6 +414,11 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             observability_config=observability_config,
             **kwargs,
         )
+        if self.driver_features.get("tenant_strategy") is not None:
+            self.driver_features["tenant_session_baseline"] = validate_asyncpg_tenant_config(
+                self.driver_features, self.connection_config
+            )
+            self.driver_features["pooler_mode"] = "session"
         if self._user_connection_hook is not None:
             self.driver_features["on_connection_create"] = self._user_connection_hook
 
@@ -377,6 +431,11 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self._extension_probe_lock = asyncio.Lock()
 
         self._validate_connector_config()
+
+    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
+        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "rls"}):
+            return AsyncpgRLSStrategy()
+        return super()._resolve_tenant_strategy(strategy)
 
     @property
     def pg_textsearch_available(self) -> bool:
@@ -392,6 +451,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             An AsyncPG connection instance.
         """
+        if self.driver_features.get("tenant_strategy") is not None:
+            msg = "Tenant configurations require provide_connection or provide_session leases"
+            raise ImproperConfigurationError(msg)
         config = {
             key: value for key, value in build_connection_config(self.connection_config).items() if value is not None
         }
