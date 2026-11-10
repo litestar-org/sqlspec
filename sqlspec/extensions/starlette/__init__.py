@@ -9,6 +9,7 @@ from sqlspec.extensions.starlette._utils import get_connection_from_request, get
 from sqlspec.extensions.starlette.extension import SQLSpecPlugin
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+from sqlspec.utils.tenant import SQLSpecTenantMiddleware
 
 __all__ = (
     "SQLSpecAsyncService",
@@ -17,6 +18,7 @@ __all__ = (
     "SQLSpecManualMiddleware",
     "SQLSpecPlugin",
     "SQLSpecSyncService",
+    "SQLSpecTenantMiddleware",
     "get_connection_from_request",
     "get_or_create_session",
 )

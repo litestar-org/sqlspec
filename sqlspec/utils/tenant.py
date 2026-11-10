@@ -1,21 +1,27 @@
 """Immutable tenant identities and explicit context scopes."""
 
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterator, Mapping, MutableMapping
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from inspect import isawaitable
 from types import MappingProxyType
-from typing import Final
+from typing import Any, Final, TypeAlias
 from uuid import UUID
 
-from sqlspec.exceptions import TenantContextError
+from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
 
 __all__ = (
     "MAX_TENANT_ID_BYTES",
+    "SQLSpecTenantMiddleware",
     "TenantContext",
     "TenantContextPayload",
+    "TenantExtractor",
+    "TenantExtractorValue",
     "async_tenant_bypass",
     "async_tenant_scope",
+    "coerce_tenant_payload",
+    "single_membership_tenant_extractor",
     "tenant_context_var",
 )
 
@@ -171,3 +177,76 @@ async def async_tenant_bypass() -> AsyncIterator[TenantContextPayload]:
     """
     with TenantContext.bypass() as payload:
         yield payload
+
+
+TenantExtractorValue: TypeAlias = TenantContextPayload | str | UUID | None
+TenantExtractor: TypeAlias = Callable[
+    [MutableMapping[str, Any]], TenantExtractorValue | Awaitable[TenantExtractorValue]
+]
+
+
+def coerce_tenant_payload(value: TenantExtractorValue) -> TenantContextPayload | None:
+    """Validate an application-authorized tenant extractor result.
+
+    Args:
+        value: Verified tenant identity, immutable payload, explicit bypass, or None.
+
+    Returns:
+        An immutable payload, preserving None and existing payloads.
+
+    Raises:
+        TenantContextError: The result is an unsupported type or invalid identity.
+    """
+    if value is None or isinstance(value, TenantContextPayload):
+        return value
+    if isinstance(value, (str, UUID)):
+        return TenantContextPayload(value)
+    msg = "Tenant extractors must return a payload, string, UUID, or None"
+    raise TenantContextError(msg)
+
+
+class SQLSpecTenantMiddleware:
+    """Bind an application-authorized tenant for an entire ASGI invocation."""
+
+    __slots__ = ("app", "extractor")
+
+    def __init__(self, app: Any, *, extractor: TenantExtractor) -> None:
+        """Configure the ASGI application and trusted tenant extractor."""
+        if not callable(extractor):
+            msg = "tenant extractor must be callable"
+            raise ImproperConfigurationError(msg)
+        self.app = app
+        self.extractor = extractor
+
+    async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
+        """Bind HTTP and WebSocket contexts and restore the caller on every exit."""
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+        raw = self.extractor(scope)
+        if isawaitable(raw):
+            raw = await raw
+        token = TenantContext.set(coerce_tenant_payload(raw))
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            TenantContext.reset(token)
+
+
+def single_membership_tenant_extractor(
+    memberships: Callable[[MutableMapping[str, Any]], Collection[str]],
+) -> TenantExtractor:
+    """Select a tenant only when the application reports exactly one membership.
+
+    Args:
+        memberships: Trusted accessor for memberships verified by the application.
+
+    Returns:
+        An extractor that refuses to choose between multiple memberships.
+    """
+
+    def extract(scope: MutableMapping[str, Any]) -> TenantContextPayload | None:
+        values = memberships(scope)
+        return TenantContextPayload(next(iter(values))) if len(values) == 1 else None
+
+    return extract

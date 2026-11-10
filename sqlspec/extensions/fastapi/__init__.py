@@ -8,6 +8,7 @@ from sqlspec.extensions.fastapi.extension import SQLSpecPlugin
 from sqlspec.extensions.fastapi.providers import DependencyDefaults, FieldNameType, FilterConfig, provide_filters
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+from sqlspec.utils.tenant import SQLSpecTenantMiddleware
 
 __all__ = (
     "DependencyDefaults",
@@ -18,5 +19,6 @@ __all__ = (
     "SQLSpecManualMiddleware",
     "SQLSpecPlugin",
     "SQLSpecSyncService",
+    "SQLSpecTenantMiddleware",
     "provide_filters",
 )
