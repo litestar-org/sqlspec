@@ -57,11 +57,18 @@ def build_psqlpy_tenant_lease(config: Any) -> Any:
         try:
             await config._ensure_connection(connection)
         except BaseException as exc:
-            current, context = context, None
+            cleanup = asyncio.create_task(invalidate(connection))
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
             try:
-                await current.__aexit__(type(exc), exc, exc.__traceback__)
-            except BaseException as cleanup:
-                exc.add_note(f"Tenant acquire context cleanup failed: {type(cleanup).__name__}")
+                cleanup.result()
+            except BaseException as disposal_error:
+                exc.add_note(f"Tenant acquire connection disposal failed: {type(disposal_error).__name__}")
             raise
         return connection
 
@@ -82,15 +89,13 @@ def build_psqlpy_tenant_lease(config: Any) -> Any:
             return False
 
         try:
-            try:
-                closed = await asyncio.wait_for(terminate_and_confirm(), PSQLPY_DISPOSAL_TIMEOUT_S)
-            except Exception:
-                closed = False
-            if not closed:
-                await config._close_pool()
-        finally:
-            with suppress(Exception):
-                await release(connection)
+            closed = await asyncio.wait_for(terminate_and_confirm(), PSQLPY_DISPOSAL_TIMEOUT_S)
+        except Exception:
+            closed = False
+        if not closed:
+            await config._close_pool()
+        with suppress(Exception):
+            await release(connection)
 
     async def finish_transaction(connection: Any, _exc_type: type[BaseException] | None) -> None:
         await connection.execute("ROLLBACK")

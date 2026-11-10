@@ -143,3 +143,55 @@ async def test_tenant_rejects_active_checkout_and_failed_restore(asynchronous: b
     connection.corrupt = True
     with pytest.raises(TenantCleanupError):
         await checkin(strategy, connection, state)
+
+
+@pytest.mark.parametrize("adapter", ["postgres", "cockroach"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_tenant_close_failure_never_returns_unverified_connection(adapter: str, asynchronous: bool) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlspec.adapters.cockroach_psycopg.tenant import (
+        build_cockroach_psycopg_async_tenant_lease,
+        build_cockroach_psycopg_sync_tenant_lease,
+    )
+    from sqlspec.adapters.psycopg.tenant import build_psycopg_async_tenant_lease, build_psycopg_sync_tenant_lease
+    from sqlspec.utils.tenant import TenantContext
+
+    payload = TenantContextPayload("a")
+    strategy = AsyncMock() if asynchronous else MagicMock()
+    strategy.checkout.return_value = TenantLeaseState(payload)
+    strategy.checkin.side_effect = RuntimeError("unverified restore")
+    connection = AsyncMock() if asynchronous else MagicMock()
+    connection.close.side_effect = RuntimeError("physical close failed")
+    context = AsyncMock() if asynchronous else MagicMock()
+    if asynchronous:
+        context.__aenter__.return_value = connection
+    else:
+        context.__enter__.return_value = connection
+    pool = SimpleNamespace(connection=lambda: context)
+    config = SimpleNamespace(
+        provide_pool=AsyncMock(return_value=pool) if asynchronous else lambda: pool,
+        driver_features={"tenant_strategy": strategy},
+    )
+    if adapter == "cockroach":
+        builder = (
+            build_cockroach_psycopg_async_tenant_lease if asynchronous else build_cockroach_psycopg_sync_tenant_lease
+        )
+    else:
+        builder = build_psycopg_async_tenant_lease if asynchronous else build_psycopg_sync_tenant_lease
+    lease = builder(config)
+    with TenantContext.scope(payload):
+        if asynchronous:
+            await lease.acquire()
+        else:
+            lease.acquire()
+    with pytest.raises(TenantCleanupError) as caught:
+        if asynchronous:
+            await lease.release()
+        else:
+            lease.release()
+    assert any("physical close failed" in note for note in caught.value.__notes__)
+    if asynchronous:
+        context.__aexit__.assert_not_awaited()
+    else:
+        context.__exit__.assert_not_called()

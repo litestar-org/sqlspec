@@ -418,3 +418,46 @@ async def test_tenant_rls_native_pool_and_disposal(postgres_service: Any) -> Non
         await admin.execute(f"DROP ROLE {quoted_role}")
         admin.close()
         await admin_config.close_pool()
+
+
+async def test_tenant_partial_connection_hook_failure_discards_transactional_state(postgres_service: Any) -> None:
+    """A failed setup hook cannot leave identity hidden behind a transaction."""
+    from sqlspec.adapters.psqlpy import PsqlpyConnection
+    from sqlspec.utils.tenant import TenantContext
+
+    failure = RuntimeError("partial connection initialization")
+    failed_pid: int | None = None
+
+    async def partial_hook(connection: PsqlpyConnection) -> None:
+        nonlocal failed_pid
+        if failed_pid is not None:
+            return
+        failed_pid = await connection.fetch_val("SELECT pg_backend_pid()")
+        await connection.execute("SELECT set_config($1, $2, false)", ["app.current_tenant_id", "a"])
+        await connection.execute("BEGIN")
+        raise failure
+
+    config = PsqlpyConfig(
+        connection_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "username": postgres_service.user,
+            "password": postgres_service.password,
+            "db_name": postgres_service.database,
+            "max_db_pool_size": 2,
+        },
+        driver_features={"tenant_strategy": "rls", "on_connection_create": partial_hook},
+    )
+    try:
+        with TenantContext.scope("a"), pytest.raises(RuntimeError) as caught:
+            async with config.provide_connection():
+                pass
+        assert caught.value is failure
+        with TenantContext.scope("b"):
+            async with config.provide_connection() as connection:
+                assert await connection.fetch_val("SELECT current_setting('app.current_tenant_id', true)") == "b"
+                await connection.execute("ROLLBACK")
+                assert await connection.fetch_val("SELECT current_setting('app.current_tenant_id', true)") == "b"
+                assert await connection.fetch_val("SELECT pg_backend_pid()") != failed_pid
+    finally:
+        await config.close_pool()

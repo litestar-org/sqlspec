@@ -123,6 +123,7 @@ async def test_tenant_acquire_probe_failure_exits_once() -> None:
     config = SimpleNamespace(
         provide_pool=AsyncMock(return_value=SimpleNamespace(acquire=lambda: context)),
         _ensure_connection=AsyncMock(side_effect=error),
+        _close_pool=AsyncMock(),
         driver_features={"tenant_strategy": AsyncMock()},
     )
     lease = build_psqlpy_tenant_lease(config)
@@ -131,3 +132,50 @@ async def test_tenant_acquire_probe_failure_exits_once() -> None:
     assert caught.value is error
     context.__aexit__.assert_awaited_once()
     config.driver_features["tenant_strategy"].checkout.assert_not_awaited()
+    config._close_pool.assert_awaited_once()
+    context.__aenter__.return_value.execute.assert_any_await("SELECT pg_terminate_backend(pg_backend_pid())")
+
+
+async def test_tenant_failed_acquire_waits_for_disposal_despite_cancellation() -> None:
+    entered_disposal = asyncio.Event()
+    finish_disposal = asyncio.Event()
+    context = AsyncMock()
+    failure = RuntimeError("partial setup")
+
+    async def close_pool() -> None:
+        entered_disposal.set()
+        await finish_disposal.wait()
+
+    config = SimpleNamespace(
+        provide_pool=AsyncMock(return_value=SimpleNamespace(acquire=lambda: context)),
+        _ensure_connection=AsyncMock(side_effect=failure),
+        _close_pool=close_pool,
+        driver_features={"tenant_strategy": AsyncMock()},
+    )
+    lease = build_psqlpy_tenant_lease(config)
+    with TenantContext.scope("a"):
+        task = asyncio.create_task(lease.acquire())
+    await entered_disposal.wait()
+    task.cancel()
+    finish_disposal.set()
+    with pytest.raises(RuntimeError) as caught:
+        await task
+    assert caught.value is failure
+    context.__aexit__.assert_awaited_once()
+
+
+async def test_tenant_failed_pool_disposal_never_returns_dirty_context() -> None:
+    context = AsyncMock()
+    failure = RuntimeError("partial setup")
+    config = SimpleNamespace(
+        provide_pool=AsyncMock(return_value=SimpleNamespace(acquire=lambda: context)),
+        _ensure_connection=AsyncMock(side_effect=failure),
+        _close_pool=AsyncMock(side_effect=RuntimeError("pool close failed")),
+        driver_features={"tenant_strategy": AsyncMock()},
+    )
+    lease = build_psqlpy_tenant_lease(config)
+    with TenantContext.scope("a"), pytest.raises(RuntimeError) as caught:
+        await lease.acquire()
+    assert caught.value is failure
+    assert any("disposal failed" in note for note in caught.value.__notes__)
+    context.__aexit__.assert_not_awaited()

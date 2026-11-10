@@ -44,10 +44,8 @@ def build_cockroach_psycopg_sync_tenant_lease(config: Any, *, rollback_on_exit: 
             current.__exit__(None, None, None)
 
     def invalidate(connection: Any) -> None:
-        try:
-            connection.close()
-        finally:
-            release(connection)
+        connection.close()
+        release(connection)
 
     def finish_transaction(connection: Any, exc_type: type[BaseException] | None) -> None:
         if exc_type is None and not rollback_on_exit:
@@ -83,10 +81,8 @@ def build_cockroach_psycopg_async_tenant_lease(config: Any, *, rollback_on_exit:
             await current.__aexit__(None, None, None)
 
     async def invalidate(connection: Any) -> None:
-        try:
-            await connection.close()
-        finally:
-            await release(connection)
+        await connection.close()
+        await release(connection)
 
     async def finish_transaction(connection: Any, exc_type: type[BaseException] | None) -> None:
         if exc_type is None and not rollback_on_exit:
