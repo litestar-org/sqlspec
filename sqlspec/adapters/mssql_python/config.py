@@ -142,7 +142,7 @@ class MssqlPythonPoolParams(MssqlPythonConnectionParams):
 class MssqlPythonDriverFeatures(TypedDict):
     """mssql-python driver feature flags."""
 
-    tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand]
+    tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand | None]
     """Opt in to verified tenant session leases."""
 
     enable_pooling: NotRequired[bool]

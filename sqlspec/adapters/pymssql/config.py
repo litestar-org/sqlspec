@@ -82,7 +82,7 @@ class PymssqlPoolParams(PymssqlConnectionParams):
 class PymssqlDriverFeatures(TypedDict):
     """Optional pymssql driver feature flags for JSON serialization, connection hooks, and events."""
 
-    tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand]
+    tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand | None]
     """Opt in to verified tenant session leases."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
