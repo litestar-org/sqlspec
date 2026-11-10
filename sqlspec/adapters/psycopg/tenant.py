@@ -1,7 +1,7 @@
 """Session RLS identity for synchronous and asynchronous psycopg pools."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, LiteralString, cast
+from typing import TYPE_CHECKING, Any
 
 from psycopg import pq
 from psycopg.rows import tuple_row
@@ -30,7 +30,7 @@ class PsycopgSyncRLSStrategy(PostgresTenantSettings):
         sql, params = self.prepare_checkout(payload)
         with connection.cursor(row_factory=tuple_row) as cursor:
             query, binds = psycopg_setting_query(sql, params)
-            cursor.execute(cast("LiteralString", query), binds)
+            cursor.execute(query.encode("ascii"), binds)
             state = self.capture(payload, params, cursor.fetchone())
         if not connection.autocommit:
             connection.commit()
@@ -46,7 +46,7 @@ class PsycopgSyncRLSStrategy(PostgresTenantSettings):
             sql, params = self.prepare_checkin(state)
             with connection.cursor(row_factory=tuple_row) as cursor:
                 query, binds = psycopg_setting_query(sql, params)
-                cursor.execute(cast("LiteralString", query), binds)
+                cursor.execute(query.encode("ascii"), binds)
                 self.verify_checkin(params, cursor.fetchone())
             if not connection.autocommit:
                 connection.commit()
@@ -70,7 +70,7 @@ class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
         sql, params = self.prepare_checkout(payload)
         async with connection.cursor(row_factory=tuple_row) as cursor:
             query, binds = psycopg_setting_query(sql, params)
-            await cursor.execute(cast("LiteralString", query), binds)
+            await cursor.execute(query.encode("ascii"), binds)
             state = self.capture(payload, params, await cursor.fetchone())
         if not connection.autocommit:
             await connection.commit()
@@ -86,7 +86,7 @@ class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
             sql, params = self.prepare_checkin(state)
             async with connection.cursor(row_factory=tuple_row) as cursor:
                 query, binds = psycopg_setting_query(sql, params)
-                await cursor.execute(cast("LiteralString", query), binds)
+                await cursor.execute(query.encode("ascii"), binds)
                 self.verify_checkin(params, await cursor.fetchone())
             if not connection.autocommit:
                 await connection.commit()

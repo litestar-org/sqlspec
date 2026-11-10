@@ -27,7 +27,8 @@ class GucCursor:
     async def __aexit__(self, *_: Any) -> None:
         pass
 
-    def apply(self, sql: str, params: dict[str, str]) -> None:
+    def apply(self, sql: str | bytes, params: dict[str, str]) -> None:
+        sql = sql.decode("ascii") if isinstance(sql, bytes) else sql
         self.connection.calls.append((sql, params))
         values: list[str | None] = []
         for index in range(1, len(params), 2):
@@ -41,7 +42,7 @@ class GucCursor:
         self.row = tuple(values)
         self.connection.info.transaction_status = pq.TransactionStatus.INTRANS
 
-    def execute(self, sql: str, params: dict[str, str]) -> None:
+    def execute(self, sql: str | bytes, params: dict[str, str]) -> None:
         self.apply(sql, params)
 
     def fetchone(self) -> tuple[str | None, ...]:
@@ -49,7 +50,7 @@ class GucCursor:
 
 
 class AsyncGucCursor(GucCursor):
-    async def execute(self, sql: str, params: dict[str, str]) -> None:
+    async def execute(self, sql: str | bytes, params: dict[str, str]) -> None:
         self.apply(sql, params)
 
     async def fetchone(self) -> tuple[str | None, ...]:
