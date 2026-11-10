@@ -46,7 +46,8 @@ def _report_cleanup_failure(
     if invalidation_error is not None:
         error.add_note(f"Tenant connection invalidation failed: {invalidation_error!r}")
     if body_error is None:
-        raise error from cause
+        error.__cause__ = cause
+        raise error
 
 
 class SyncTenantLease:
@@ -193,13 +194,15 @@ class AsyncTenantLease:
                 else _lease_state(payload, await self._strategy.checkout(connection, payload))
             )
         except BaseException as exc:
-            disposal = asyncio.create_task(self._dispose(connection))
-            invalidation_error, _ = await _await_owned(disposal)
-            if invalidation_error is not None:
-                exc.add_note(f"Tenant connection invalidation failed: {invalidation_error!r}")
-            raise
-        self._connection, self._state = connection, state
-        return connection
+            checkout_error = exc
+        else:
+            self._connection, self._state = connection, state
+            return connection
+        disposal = asyncio.create_task(self._dispose(connection))
+        invalidation_error, _ = await _await_owned(disposal)
+        if invalidation_error is not None:
+            checkout_error.add_note(f"Tenant connection invalidation failed: {invalidation_error!r}")
+        raise checkout_error
 
     async def _dispose(self, connection: Any) -> None:
         await self._invalidate(connection)
