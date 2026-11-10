@@ -309,3 +309,13 @@ async def test_sanic_rejects_conflicting_tenant_extractors() -> None:
     plugin = SQLSpecPlugin(MagicMock(configs=dict(enumerate(configs))))
     with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
         plugin.init_app(Sanic("conflict_" + uuid4().hex))
+
+
+async def test_sanic_rejects_non_callable_tenant_extractor() -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = _make_config(connection=_make_connection())
+    config.extension_config["sanic"]["tenant_extractor"] = "untrusted"
+    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    with pytest.raises(ImproperConfigurationError, match="must be callable"):
+        plugin.init_app(Sanic("invalid_" + uuid4().hex))

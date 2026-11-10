@@ -11,6 +11,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 from sqlspec.extensions.sanic import SQLSpecPlugin
+from tests.integration.fixtures.tenant import tenant_policy_database as tenant_policy_database
 
 pytestmark = pytest.mark.xdist_group("postgres")
 

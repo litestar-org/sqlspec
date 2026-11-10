@@ -16,6 +16,8 @@ from sqlspec.extensions.flask._utils import get_or_create_session
 from sqlspec.extensions.flask.extension import DEFAULT_SESSION_KEY
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
     from sqlspec.config import DatabaseConfigProtocol
 
 pytest.importorskip("flask")
@@ -175,12 +177,12 @@ def test_tenant_extractor_binds_before_flask_acquisition(
         return raw
 
     @contextmanager
-    def connection_context(self: Any, pool: Any = None) -> Any:
+    def connection_context(self: Any, pool: Any = None) -> "Iterator[object]":
         seen.append(TenantContext.get())
         yield object()
 
     @asynccontextmanager
-    async def async_connection_context(self: Any, pool: Any = None) -> Any:
+    async def async_connection_context(self: Any, pool: Any = None) -> "AsyncIterator[object]":
         seen.append(TenantContext.get())
         yield object()
 
@@ -296,5 +298,33 @@ def test_flask_extractor_failure_leaves_ambient_context_untouched(monkeypatch: p
         with TenantContext.scope("outer"):
             assert app.test_client().get("/").status_code == 500
             assert TenantContext.get_tenant_id() == "outer"
+    finally:
+        plugin.shutdown()
+
+
+def test_flask_rejects_extractor_with_invalid_request_signature() -> None:
+    def extractor(first: object, second: object) -> str:
+        return "a"
+
+    spec = SQLSpec()
+    spec.add_config(
+        SqliteConfig(
+            connection_config={"database": ":memory:"}, extension_config={"flask": {"tenant_extractor": extractor}}
+        )
+    )
+    with pytest.raises(ImproperConfigurationError, match="zero arguments or one request"):
+        SQLSpecPlugin(spec, Flask(__name__))
+
+
+def test_flask_disabled_injection_needs_no_tenant_extractor() -> None:
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"flask": {"disable_di": True}})
+    config.driver_features["tenant_strategy"] = object()
+    spec.add_config(config)
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(spec, app)
+    app.add_url_rule("/", view_func=lambda: "ok")
+    try:
+        assert app.test_client().get("/").status_code == 200
     finally:
         plugin.shutdown()

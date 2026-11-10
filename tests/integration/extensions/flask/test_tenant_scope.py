@@ -1,6 +1,6 @@
 """Flask request tenant scopes against PostgreSQL policies."""
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from flask import Flask, current_app
@@ -9,6 +9,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.psycopg import PsycopgSyncConfig
 from sqlspec.extensions.flask import SQLSpecPlugin
+from tests.integration.fixtures.tenant import tenant_policy_database as tenant_policy_database
 
 pytestmark = pytest.mark.xdist_group("postgres")
 
@@ -55,8 +56,9 @@ def test_flask_tenant_policy_isolation_and_missing_identity(
             app.config["TEST_IDENTITY"] = identity
             response = client.get("/")
             assert response.status_code == 200
-            assert [row["value"] for row in response.json["rows"]] == [expected]
-            current_pid = response.json["rows"][0]["pid"]
+            data = cast("dict[str, Any]", response.get_json())
+            assert [row["value"] for row in data["rows"]] == [expected]
+            current_pid = data["rows"][0]["pid"]
             if pid is not None:
                 assert current_pid == pid
             pid = current_pid
@@ -65,6 +67,7 @@ def test_flask_tenant_policy_isolation_and_missing_identity(
         app.config["TEST_IDENTITY"] = "b"
         response = client.get("/")
         assert response.status_code == 200
-        assert [row["value"] for row in response.json["rows"]] == [2]
+        data = cast("dict[str, Any]", response.get_json())
+        assert [row["value"] for row in data["rows"]] == [2]
     finally:
         plugin.shutdown()

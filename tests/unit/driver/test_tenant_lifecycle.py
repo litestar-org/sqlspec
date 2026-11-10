@@ -1,6 +1,6 @@
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -8,6 +8,9 @@ from sqlspec.core.tenant import TenantLeaseState
 from sqlspec.driver import AsyncTenantLease, SyncTenantLease
 from sqlspec.exceptions import TenantContextError
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+if TYPE_CHECKING:
+    from sqlspec.core.tenant import AsyncTenantStrategy, SyncTenantStrategy
 
 
 def make_recording_lease(
@@ -70,7 +73,7 @@ def make_recording_lease(
 
     if asynchronous:
         return AsyncTenantLease(
-            SimpleNamespace(checkout=async_checkout, checkin=async_checkin),
+            cast("AsyncTenantStrategy", SimpleNamespace(checkout=async_checkout, checkin=async_checkin)),
             acquire=async_acquire,
             release=lambda conn: async_record("release"),
             invalidate=lambda conn: async_record("invalidate"),
@@ -78,7 +81,7 @@ def make_recording_lease(
             cleanup_timeout=timeout,
         ), connection
     return SyncTenantLease(
-        SimpleNamespace(checkout=checkout, checkin=checkin),
+        cast("SyncTenantStrategy", SimpleNamespace(checkout=checkout, checkin=checkin)),
         acquire=acquire,
         release=lambda conn: record("release"),
         invalidate=lambda conn: record("invalidate"),
@@ -133,9 +136,12 @@ async def test_tenant_lease_normalizes_strategy_state_to_captured_payload(asynch
 
     if asynchronous:
         lease: SyncTenantLease | AsyncTenantLease = AsyncTenantLease(
-            SimpleNamespace(
-                checkout=lambda conn, payload: async_value(returned),
-                checkin=lambda conn, state: async_value(checked_in.append(state)),
+            cast(
+                "AsyncTenantStrategy",
+                SimpleNamespace(
+                    checkout=lambda conn, payload: async_value(returned),
+                    checkin=lambda conn, state: async_value(checked_in.append(state)),
+                ),
             ),
             acquire=lambda: async_value(connection),
             release=lambda conn: async_value(None),
@@ -144,8 +150,11 @@ async def test_tenant_lease_normalizes_strategy_state_to_captured_payload(asynch
         )
     else:
         lease = SyncTenantLease(
-            SimpleNamespace(
-                checkout=lambda conn, payload: returned, checkin=lambda conn, state: checked_in.append(state)
+            cast(
+                "SyncTenantStrategy",
+                SimpleNamespace(
+                    checkout=lambda conn, payload: returned, checkin=lambda conn, state: checked_in.append(state)
+                ),
             ),
             acquire=lambda: connection,
             release=lambda conn: None,
