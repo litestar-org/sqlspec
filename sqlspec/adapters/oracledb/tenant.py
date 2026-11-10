@@ -96,7 +96,8 @@ class OracleSyncIdentifierStrategy:
 
     def checkin(self, connection: "OracleSyncConnection", state: TenantLeaseState) -> None:
         """Clear the identifier and verify that the server has no tenant value."""
-        execute_session_release_sync(connection, self._hook)
+        with TenantContext.scope(state.payload):
+            execute_session_release_sync(connection, self._hook)
         with connection.cursor() as cursor:
             cursor.execute(_IDENTIFIER_QUERY)
             row = cursor.fetchone()
@@ -129,7 +130,8 @@ class OracleAsyncIdentifierStrategy:
 
     async def checkin(self, connection: "OracleAsyncConnection", state: TenantLeaseState) -> None:
         """Clear the identifier and verify that the server has no tenant value."""
-        await execute_session_release_async(connection, self._hook)
+        with TenantContext.scope(state.payload):
+            await execute_session_release_async(connection, self._hook)
         with connection.cursor() as cursor:
             await cursor.execute(_IDENTIFIER_QUERY)
             row = await cursor.fetchone()

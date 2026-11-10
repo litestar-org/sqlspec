@@ -273,3 +273,50 @@ async def test_identifier_cleanup_uses_nullable_sdk_identifier(mode: str) -> Non
     state = await _invoke(strategy.checkout, connection, TenantContextPayload("a"))
     await _invoke(strategy.checkin, connection, state)
     assert connection.client_identifier is None
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("release_error", [False, True])
+async def test_identifier_cleanup_resolves_hook_with_captured_tenant(mode: str, release_error: bool) -> None:
+    connection = _connection(mode)
+    cursor = connection.cursor.return_value
+    native_execute = cursor.execute.side_effect
+    contexts: dict[str, dict[str, str]] = {"ctx_b": {"tenant": "b"}}
+    resolved: list[str] = []
+
+    def tenant_contexts() -> dict[str, dict[str, str]]:
+        payload = TenantContext.get()
+        if payload is None:
+            raise AssertionError("tenant hook requires a captured payload")
+        resolved.append(payload.tenant_id)
+        return {f"ctx_{payload.tenant_id}": {"tenant": payload.tenant_id}}
+
+    def execute(statement: str, binds: dict[str, Any] | None = None) -> None:
+        native_execute(statement, binds)
+        if "DBMS_SESSION.SET_CONTEXT" in statement and binds is not None:
+            contexts[binds["ctx_ns_0"]] = {binds["ctx_attr_0"]: binds["ctx_val_0"]}
+        if "DBMS_SESSION.CLEAR_CONTEXT" in statement:
+            if release_error:
+                raise RuntimeError("context clear failed")
+            for namespace in tuple(contexts):
+                if f"DBMS_SESSION.CLEAR_CONTEXT('{namespace}')" in statement:
+                    contexts.pop(namespace)
+
+    cursor.execute.side_effect = execute
+    strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
+    strategy = strategy_cls(OracleSessionContextConfig(contexts=tenant_contexts))
+    state = await _invoke(strategy.checkout, connection, TenantContextPayload("a"))
+    assert contexts == {"ctx_b": {"tenant": "b"}, "ctx_a": {"tenant": "a"}}
+    with TenantContext.scope("b") as caller:
+        if release_error:
+            with pytest.raises(RuntimeError, match="context clear failed"):
+                await _invoke(strategy.checkin, connection, state)
+        else:
+            await _invoke(strategy.checkin, connection, state)
+        assert TenantContext.get() is caller
+    assert resolved == ["a", "a"]
+    release_sql = next(statement for statement, _ in connection.calls if "DBMS_SESSION.CLEAR_CONTEXT" in statement)
+    assert "DBMS_SESSION.CLEAR_CONTEXT('ctx_a')" in release_sql
+    assert contexts == (
+        {"ctx_b": {"tenant": "b"}, "ctx_a": {"tenant": "a"}} if release_error else {"ctx_b": {"tenant": "b"}}
+    )
