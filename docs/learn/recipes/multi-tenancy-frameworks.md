@@ -44,9 +44,14 @@ auth = JWTAuth(
 )
 
 
-@get("/orgs/{org_id:str}/projects", guards=[require_tenant(path_parameter="org_id")])
+@get(
+    "/orgs/{org_id:str}/projects",
+    guards=[require_tenant(path_parameter="org_id")],
+)
 async def projects(db_session: AsyncpgDriver) -> list[dict[str, Any]]:
-    return await db_session.select("SELECT id, name FROM public.projects ORDER BY id")
+    return await db_session.select(
+        "SELECT id, name FROM public.projects ORDER BY id"
+    )
 
 
 @get("/health", opt={"exclude_from_auth": True, "tenant_bypass": True})
