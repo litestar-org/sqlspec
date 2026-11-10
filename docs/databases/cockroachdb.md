@@ -139,6 +139,8 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     <!-- GENERATED:START config-table:sqlspec.adapters.cockroach_asyncpg.config.CockroachAsyncpgDriverFeatures -->
     | Key | Type | Default | Description |
     | --- | --- | --- | --- |
+    | `tenant_strategy` | `AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Strategy or shorthand for session-scoped tenant identity. |
+    | `pooler_mode` | `Literal['session', 'transaction', 'statement', 'auto'] or None` | - | Tenant connections require session affinity. |
     | `enable_native_storage` | `bool` | - | Opt in to server-side CockroachDB `EXPORT` and `IMPORT INTO` storage operations. |
     | `native_storage_csv_options` | `_NativeStorageCSVOptions` | - | Explicit CSV markers mapping supporting `nullas` (export NULL string), `nullif` (import NULL string), and `skip` (header line count to skip on import). |
     | `enable_auto_retry` | `bool` | - | Automatically retry CockroachDB `40001` serialization failure transactions with backoff. |
@@ -211,6 +213,8 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     <!-- GENERATED:START config-table:sqlspec.adapters.cockroach_psycopg.config.CockroachPsycopgDriverFeatures -->
     | Key | Type | Default | Description |
     | --- | --- | --- | --- |
+    | `tenant_strategy` | `SyncTenantStrategy or AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Strategy or shorthand for session-scoped tenant identity. |
+    | `pooler_mode` | `Literal['session', 'transaction', 'statement', 'auto'] or None` | - | Tenant connections require session affinity. |
     | `enable_native_storage` | `bool` | - | Opt in to server-side CockroachDB `EXPORT` and `IMPORT INTO` storage operations. |
     | `native_storage_csv_options` | `_NativeStorageCSVOptions` | - | Explicit CSV markers mapping supporting `nullas` (export NULL string), `nullif` (import NULL string), and `skip` (header line count to skip on import). |
     | `enable_auto_retry` | `bool` | - | Automatically retry CockroachDB `40001` serialization failure transactions with backoff. |

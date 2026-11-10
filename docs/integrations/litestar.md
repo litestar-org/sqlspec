@@ -53,6 +53,14 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 <!-- GENERATED:START config-table:sqlspec.config.LitestarConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `tenant_extractor` | `Callable[[MutableMapping[str, Any]], Any]` | - | Trusted scope callable returning a tenant identity, payload, None or an awaitable. |
+| `tenant_user_attr` | `str` | `'tenant_id'` | Verified direct tenant attribute or mapping key. Default: 'tenant_id'. |
+| `tenant_memberships_attr` | `str` | `'tenant_ids'` | Verified membership attribute or mapping key. Default: 'tenant_ids'. |
+| `tenant_variables_attr` | `str` | `'tenant_variables'` | Extra session variables attribute or mapping key. Default: 'tenant_variables'. |
+| `tenant_jwt_claim` | `str` | `'tenant_id'` | Direct tenant key in verified auth claims or extras. Default: 'tenant_id'. |
+| `tenant_path_parameter` | `str or None` | `'tenant_id'` | Route parameter checked against verified memberships. Default: 'tenant_id'. |
+| `tenant_session_key` | `str or None` | `'tenant_id'` | Session selector checked against verified memberships. Default: 'tenant_id'. |
+| `tenant_header` | `str or None` | `None` | Optional header selector checked against verified memberships. Default: None. |
 | `migrations_path` | `str or Path` | - | Directory containing this extension's migrations, or a `'<dotted.module>:<subdir>'` specification. Overrides the default `sqlspec.extensions.<name>` lookup. Setting this auto-includes the extension in `migration_config["include_extensions"]`. |
 | `session_table` | `bool or str` | - | Enable session table for server-side session storage. `True`: Use default table name ('litestar_session'); `"custom_name"`: Use custom table name. When set, litestar extension migrations are auto-included to create the session table. If you're only using litestar for DI/connection management (not session storage), leave this unset to skip the migrations. |
 | `connection_key` | `str` | `'db_connection'` | Key for storing connection in ASGI scope. Default: 'db_connection' |

@@ -86,6 +86,43 @@ For high-throughput endpoints that only acquire connections on demand rather tha
     --8<-- "docs/examples/frameworks/sanic/observability.py:example"
     ```
 
+## Tenant-Aware Requests
+
+A Sanic config with `tenant_strategy` requires a trusted `tenant_extractor`. Install `sqlspec[sanic,asyncpg]` and create the role and policy in [Multi-Tenancy](../learn/recipes/multi-tenancy.md). Run your auth middleware before SQLSpec's request middleware so it can read the trusted user from `request.ctx.user`.
+
+```python
+from typing import Any
+
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+
+async def verified_tenant(request: Any) -> str | None:
+    user = getattr(request.ctx, "user", None)
+    if user is None:
+        return None
+    tenant = getattr(user, "tenant_id", None)
+    return tenant if tenant in getattr(user, "tenant_ids", ()) else None
+
+
+def tenant_config(dsn: str) -> AsyncpgConfig:
+    return AsyncpgConfig(
+        connection_config={"dsn": dsn},
+        driver_features={"tenant_strategy": "rls"},
+        extension_config={"sanic": {
+            "tenant_extractor": verified_tenant,
+            "commit_mode": "autocommit",
+        }},
+    )
+```
+
+Register this config with the plugin shown above. Use `db_plugin.get_session(request)` in handlers. Sanic accepts sync and async extractors and awaits their result before taking a connection. Results can be `TenantContextPayload`, `str`, `UUID`, or `None`.
+
+The request hook binds the tenant before acquisition. Response cleanup exits the lease before it restores the outer scope. Setup errors and cancellation also restore the scope; the request-complete listener cleans up residual leases. `None` clears the tenant, so missing identity cannot reuse an outer tenant. A tenant-enabled config with no extractor fails at `init_app`. All managed configs in one plugin must share the same extractor object.
+
+Tenant-enabled leases roll back open transactions at cleanup, including in manual mode. Commit explicitly or choose an autocommit mode to save writes. The manual-mode table above describes configs with tenant mode disabled.
+
+A raw header or path grants no tenant access. Check the chosen value against trusted user memberships. A bypass payload skips SQLSpec's identity setup and keeps RLS in force. Use a separate config for admin work. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) and [Tenant Operations](../learn/recipes/multi-tenancy-operations.md).
+
 ## Configuration Options
 
 Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration:
@@ -93,6 +130,7 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 <!-- GENERATED:START config-table:sqlspec.config.SanicConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `tenant_extractor` | `Callable[[Any], TenantExtractorValue or Awaitable[TenantExtractorValue]]` | - | Return the authorized tenant payload, string, UUID, or None, optionally as an awaitable. Required with a tenant strategy. |
 | `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.ctx. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.ctx. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.ctx. Default: 'db_session' |

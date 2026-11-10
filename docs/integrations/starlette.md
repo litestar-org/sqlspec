@@ -49,6 +49,7 @@ Bind multiple async or sync configurations by specifying unique `session_key`, `
 <!-- GENERATED:START config-table:sqlspec.config.StarletteConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `tenant_extractor` | `Callable[[Any], Any]` | - | Trusted scope extractor returning a tenant payload, string, UUID, None, or an awaitable. |
 | `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.state. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.state. Default: 'db_session' |
