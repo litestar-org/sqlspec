@@ -1,11 +1,15 @@
 """Test _ConfigState dataclass for Starlette extension."""
 
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
 
 import pytest
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette import SQLSpecConfigState
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def test_config_state_creation() -> None:
@@ -102,5 +106,5 @@ def test_config_state_rejects_invalid_tenant_extractor(extractor: object) -> Non
             extra_commit_statuses=None,
             extra_rollback_statuses=None,
             disable_di=False,
-            tenant_extractor=extractor,
+            tenant_extractor=cast("Callable[[Any], Any]", extractor),
         )

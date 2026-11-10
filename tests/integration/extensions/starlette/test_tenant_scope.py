@@ -62,7 +62,7 @@ async def tenant_database(postgres_service: PostgresService) -> AsyncIterator[tu
 
 def _tenant_extractor(scope: Any) -> str | None:
     verified_users = {b"alice": "a", b"bob": "b"}
-    return verified_users.get(dict(scope["headers"]).get(b"authorization"))
+    return verified_users.get(dict(scope["headers"]).get(b"authorization", b""))
 
 
 def _tenant_app(

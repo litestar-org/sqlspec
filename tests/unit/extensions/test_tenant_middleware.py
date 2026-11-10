@@ -1,7 +1,7 @@
 """Framework-free tenant extraction and scope ownership."""
 
 import asyncio
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import UUID
 
 import pytest
@@ -14,6 +14,9 @@ from sqlspec.utils.tenant import (
     coerce_tenant_payload,
     single_membership_tenant_extractor,
 )
+
+if TYPE_CHECKING:
+    from sqlspec.utils.tenant import TenantExtractor
 
 
 @pytest.mark.parametrize(
@@ -41,7 +44,7 @@ def test_single_membership(memberships: list[str], expected: TenantContextPayloa
 
 def test_middleware_validates_extractor() -> None:
     with pytest.raises(ImproperConfigurationError):
-        SQLSpecTenantMiddleware(None, extractor=None)
+        SQLSpecTenantMiddleware(None, extractor=cast("TenantExtractor", None))
 
 
 @pytest.mark.anyio

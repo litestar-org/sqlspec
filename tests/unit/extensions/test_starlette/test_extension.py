@@ -20,6 +20,8 @@ from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.starlette._state import CommitMode
 
@@ -273,7 +275,7 @@ async def test_tenant_extractor_binds_connection_entry_and_exit(middleware_type:
     connection = _Connection()
 
     @asynccontextmanager
-    async def provide_connection(pool: Any) -> Any:
+    async def provide_connection(pool: object) -> "AsyncIterator[_Connection]":
         seen.append(("enter", TenantContext.get_tenant_id()))
         try:
             yield connection
@@ -344,7 +346,7 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
     connection = SimpleNamespace(commit=commit, rollback=rollback)
 
     @asynccontextmanager
-    async def provide_connection(pool: Any) -> Any:
+    async def provide_connection(pool: object) -> "AsyncIterator[SimpleNamespace]":
         nonlocal active
         active = True
         events.append("acquire")
@@ -458,7 +460,7 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
     connection = _Connection()
 
     @asynccontextmanager
-    async def provide_connection(pool: Any) -> Any:
+    async def provide_connection(pool: object) -> "AsyncIterator[_Connection]":
         yield connection
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
@@ -494,7 +496,7 @@ async def test_tenant_nonpooled_connection_uses_lease_context_with_async_extract
     connection = _Connection()
 
     @asynccontextmanager
-    async def provide_connection() -> Any:
+    async def provide_connection() -> "AsyncIterator[_Connection]":
         events.append(("enter", TenantContext.get_tenant_id()))
         try:
             yield connection
@@ -531,13 +533,14 @@ async def test_tenant_connection_middleware_non_http_passthrough(scope_type: str
     async def app(scope: Any, receive: Any, send: Any) -> None:
         events.append((scope["type"], TenantContext.get_tenant_id()))
 
-    state = _make_state(_Config(pooled=False, connection=_Connection()))
+    config = _Config(pooled=False, connection=_Connection())
+    state = _make_state(config)
     state.tenant_extractor = lambda scope: pytest.fail("non-http extractor invoked")
     with TenantContext.scope("outer"):
         await middleware_type(app=app, config_state=state)({"type": scope_type}, None, None)
         assert TenantContext.get_tenant_id() == "outer"
     assert events == [(scope_type, "outer")]
-    assert state.config.created is False
+    assert config.created is False
 
 
 @pytest.mark.anyio
@@ -554,7 +557,7 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
         raise RuntimeError("cleanup failed")
 
     @asynccontextmanager
-    async def provide_connection(pool: Any) -> Any:
+    async def provide_connection(pool: object) -> "AsyncIterator[SimpleNamespace]":
         try:
             yield SimpleNamespace(rollback=rollback)
         except ValueError as exc:
