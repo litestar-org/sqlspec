@@ -8,7 +8,7 @@ __signature__/__annotations__ at runtime for dependency injection.
 
 import contextlib
 import inspect
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -66,37 +66,41 @@ async def record_request_exception(exc: BaseException, scope: "Scope") -> None:
 def _resolve_connection_tenant(
     config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", settings: TenantResolutionSettings | None
 ) -> "Awaitable[TenantContextPayload | None] | TenantContextPayload | None":
-    if (
-        config.supports_tenant_strategy
-        and config.driver_features.get("tenant_strategy") is not None
-        and TenantContext.get() is None
-    ):
-        return resolve_litestar_tenant(cast("Any", scope), settings or TenantResolutionSettings())
+    if config.supports_tenant_strategy and config.driver_features.get("tenant_strategy") is not None:
+        ambient = TenantContext.get()
+        return (
+            ambient
+            if ambient is not None
+            else resolve_litestar_tenant(cast("Any", scope), settings or TenantResolutionSettings())
+        )
     return None
 
 
-def _store_tenant_token(scope: "Scope", connection_key: str, payload: TenantContextPayload | None) -> None:
-    if payload is not None:
-        set_sqlspec_scope_state(scope, f"{connection_key}_tenant_token", TenantContext.set(payload))
+@contextlib.contextmanager
+def _tenant_connection_scope(payload: TenantContextPayload | None) -> Iterator[None]:
+    """Bind a payload only while the current execution context performs lease I/O.
+
+    Yields:
+        Control to acquisition or cleanup in the token's creating context.
+    """
+    token = TenantContext.set(payload)
+    try:
+        yield
+    finally:
+        TenantContext.reset(token)
 
 
-def _reset_tenant_token(scope: "Scope", connection_key: str | None) -> None:
-    if connection_key is not None:
-        token = get_sqlspec_scope_state(scope, f"{connection_key}_tenant_token", pop=True)
-        if token is not None:
-            TenantContext.reset(token)
-
-
-async def _bind_connection_tenant(
+async def _capture_connection_tenant(
     config: "DatabaseConfigProtocol[Any, Any, Any]",
     scope: "Scope",
     connection_key: str,
     settings: TenantResolutionSettings | None,
-) -> None:
+) -> TenantContextPayload | None:
     payload = _resolve_connection_tenant(config, scope, settings)
     if inspect.isawaitable(payload):
         payload = await payload
-    _store_tenant_token(scope, connection_key, payload)
+    set_sqlspec_scope_state(scope, f"{connection_key}_tenant_payload", payload)
+    return payload
 
 
 async def _exit_connection_context(
@@ -114,19 +118,22 @@ async def _exit_connection_context(
         connection: The database connection instance.
         scope: The ASGI connection scope.
         exc_override: Optional exception overriding any scope-recorded exception.
-        connection_key: Connection scope key whose tenant token is reset after exit.
+        connection_key: Connection scope key holding its captured immutable tenant payload.
     """
     exc = exc_override if exc_override is not None else get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
     exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
-    try:
+    payload = (
+        get_sqlspec_scope_state(scope, f"{connection_key}_tenant_payload", pop=True)
+        if connection_key is not None
+        else None
+    )
+    with _tenant_connection_scope(payload):
         if isinstance(connection_cm, AbstractAsyncContextManager):
             await connection_cm.__aexit__(*exit_args)
         elif isinstance(connection_cm, AbstractContextManager):
             await with_ensure_async_(connection_cm).__aexit__(*exit_args)
         else:
             await ensure_async_(connection.close)()
-    finally:
-        _reset_tenant_token(scope, connection_key)
 
 
 def manual_handler_maker(
@@ -346,23 +353,25 @@ def connection_provider_maker(
             msg = f"Database pool with key '{pool_key}' not found. Cannot create a connection."
             raise ImproperConfigurationError(msg)
 
-        await _bind_connection_tenant(config, scope, connection_key, tenant_settings)
+        payload = await _capture_connection_tenant(config, scope, connection_key, tenant_settings)
         try:
-            connection_cm: Any = config.provide_connection(db_pool)
             context_manager: AbstractAsyncContextManager[ConnectionT] | None = None
-
-            if isinstance(connection_cm, AbstractAsyncContextManager):
-                context_manager = connection_cm
-            elif isinstance(connection_cm, AbstractContextManager):
-                context_manager = with_ensure_async_(connection_cm)
-
-            if context_manager is None:
+            with _tenant_connection_scope(payload):
+                connection_cm: Any = config.provide_connection(db_pool)
+                if isinstance(connection_cm, AbstractAsyncContextManager):
+                    context_manager = connection_cm
+                elif isinstance(connection_cm, AbstractContextManager):
+                    context_manager = with_ensure_async_(connection_cm)
                 conn_instance: ConnectionT
-                if inspect.isawaitable(connection_cm):
+                if context_manager is not None:
+                    conn_instance = await context_manager.__aenter__()
+                elif inspect.isawaitable(connection_cm):
                     conn_instance = await cast("Awaitable[ConnectionT]", connection_cm)
                 else:
                     conn_instance = cast("ConnectionT", connection_cm)
-                set_sqlspec_scope_state(scope, connection_key, conn_instance)
+
+            set_sqlspec_scope_state(scope, connection_key, conn_instance)
+            if context_manager is None:
                 try:
                     yield conn_instance
                 except BaseException as exc:
@@ -373,17 +382,15 @@ def connection_provider_maker(
                     raise
                 return
 
-            entered_connection = await context_manager.__aenter__()
             ctx_scope_key = f"{connection_key}_ctx"
             try:
                 set_sqlspec_scope_state(scope, provider_owned_key, True)
-                set_sqlspec_scope_state(scope, connection_key, entered_connection)
-                yield entered_connection
+                yield conn_instance
             except BaseException as exc:
                 delete_sqlspec_scope_state(scope, provider_owned_key)
                 delete_sqlspec_scope_state(scope, connection_key)
                 await _exit_connection_context(
-                    context_manager, entered_connection, scope, exc_override=exc, connection_key=connection_key
+                    context_manager, conn_instance, scope, exc_override=exc, connection_key=connection_key
                 )
                 raise
             delete_sqlspec_scope_state(scope, provider_owned_key)
@@ -391,9 +398,9 @@ def connection_provider_maker(
                 set_sqlspec_scope_state(scope, ctx_scope_key, context_manager)
                 return
             delete_sqlspec_scope_state(scope, connection_key)
-            await _exit_connection_context(context_manager, entered_connection, scope, connection_key=connection_key)
+            await _exit_connection_context(context_manager, conn_instance, scope, connection_key=connection_key)
         except BaseException:
-            _reset_tenant_token(scope, connection_key)
+            delete_sqlspec_scope_state(scope, f"{connection_key}_tenant_payload")
             raise
 
     return provide_connection

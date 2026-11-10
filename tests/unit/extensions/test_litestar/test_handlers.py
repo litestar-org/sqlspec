@@ -989,7 +989,9 @@ async def test_connection_cleanup_middleware_isolates_multi_db_teardown() -> Non
 
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize("failure", [None, "enter", "exit", "body"])
-async def test_tenant_provider_retains_context_through_checkin(is_async: bool, failure: str | None) -> None:
+async def test_tenant_provider_captures_payload_for_acquisition_and_checkin(
+    is_async: bool, failure: str | None
+) -> None:
     from contextlib import asynccontextmanager, contextmanager
     from types import SimpleNamespace
 
@@ -1039,7 +1041,7 @@ async def test_tenant_provider_retains_context_through_checkin(is_async: bool, f
         assert events == [("enter", "acme")]
     else:
         assert await anext(iterator) is connection
-        assert TenantContext.get_tenant_id() == "acme"
+        assert TenantContext.get() is None
         if failure == "body":
             error = ValueError("body")
             with pytest.raises(ValueError) as raised:
@@ -1056,7 +1058,7 @@ async def test_tenant_provider_retains_context_through_checkin(is_async: bool, f
                 await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
         assert events == [("enter", "acme"), ("exit", "acme")]
     assert TenantContext.get() is None
-    assert get_sqlspec_scope_state(scope, "tenant_conn_tenant_token") is None
+    assert get_sqlspec_scope_state(scope, "tenant_conn_tenant_payload") is None
 
 
 async def test_tenant_provider_preserves_existing_ambient_scope() -> None:
@@ -1127,7 +1129,7 @@ async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: p
             connection = await plugin.provide_request_connection_async("db_connection", state, scope)
         else:
             connection = plugin.provide_request_connection_sync("db_connection", state, scope)
-        assert TenantContext.get_tenant_id() == "acme"
+        assert TenantContext.get() is None
         assert get_sqlspec_scope_state(scope, "db_connection") is connection
         await manual_handler_maker("db_connection")(
             cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope
@@ -1172,3 +1174,62 @@ async def test_tenant_sync_on_demand_closes_rejected_extractor_coroutine(monkeyp
     finally:
         coroutine.close()
         config.close_pool()
+
+
+@pytest.mark.parametrize("tenant_enabled", [False, True])
+async def test_tenant_provider_handoff_rebinds_payload_in_each_owning_context(tenant_enabled: bool) -> None:
+    import asyncio
+    from contextlib import asynccontextmanager
+    from contextvars import Context
+    from types import SimpleNamespace
+
+    from sqlspec.extensions.litestar.tenant import TenantResolutionSettings
+    from sqlspec.utils.tenant import TenantContext
+
+    events: list[tuple[str, str | None]] = []
+    connection = object()
+
+    @asynccontextmanager
+    async def connection_context(pool: object) -> "AsyncGenerator[object, None]":
+        events.append(("acquire", TenantContext.get_tenant_id()))
+        try:
+            yield connection
+        finally:
+            events.append(("checkin", TenantContext.get_tenant_id()))
+
+    config = SimpleNamespace(
+        supports_tenant_strategy=tenant_enabled,
+        driver_features={"tenant_strategy": object()} if tenant_enabled else {},
+        provide_connection=connection_context,
+    )
+    scope = cast("Scope", {"type": "http"})
+    provider = connection_provider_maker(
+        cast("DatabaseConfigProtocol[Any, Any, Any]", config),
+        "pool",
+        "db_connection",
+        tenant_settings=TenantResolutionSettings(tenant_extractor=lambda scope: "acme"),
+    )
+    iterator = provider(State({"pool": object()}), scope)
+
+    async def enter() -> object:
+        if tenant_enabled:
+            return await anext(iterator)
+        with TenantContext.scope("child"):
+            result = await anext(iterator)
+            assert TenantContext.get_tenant_id() == "child"
+            return result
+
+    with TenantContext.scope("parent"):
+        assert await asyncio.create_task(enter(), context=Context()) is connection
+        assert TenantContext.get_tenant_id() == "parent"
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+        assert TenantContext.get_tenant_id() == "parent"
+        with TenantContext.scope("cleanup"):
+            await manual_handler_maker("db_connection")(
+                cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope
+            )
+            assert TenantContext.get_tenant_id() == "cleanup"
+        assert TenantContext.get_tenant_id() == "parent"
+    expected = "acme" if tenant_enabled else None
+    assert events == [("acquire", expected), ("checkin", expected)]

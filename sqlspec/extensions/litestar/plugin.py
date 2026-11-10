@@ -40,11 +40,10 @@ from sqlspec.extensions.litestar._utils import (
 from sqlspec.extensions.litestar.cli import database_group
 from sqlspec.extensions.litestar.handlers import (
     _REQUEST_EXCEPTION_KEY,
-    _bind_connection_tenant,
+    _capture_connection_tenant,
     _exit_connection_context,
-    _reset_tenant_token,
     _resolve_connection_tenant,
-    _store_tenant_token,
+    _tenant_connection_scope,
     autocommit_handler_maker,
     connection_provider_maker,
     lifespan_handler_maker,
@@ -1025,12 +1024,14 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 close()
             msg = "Synchronous on-demand connections require a synchronous tenant_extractor"
             raise ImproperConfigurationError(msg)
-        _store_tenant_token(scope, plugin_state.connection_key, payload)
+        payload_key = f"{plugin_state.connection_key}_tenant_payload"
+        set_sqlspec_scope_state(scope, payload_key, payload)
         try:
-            cm = cast("AbstractContextManager[Any]", plugin_state.config.provide_connection(pool))
-            connection = cm.__enter__()
+            with _tenant_connection_scope(payload):
+                cm = cast("AbstractContextManager[Any]", plugin_state.config.provide_connection(pool))
+                connection = cm.__enter__()
         except BaseException:
-            _reset_tenant_token(scope, plugin_state.connection_key)
+            delete_sqlspec_scope_state(scope, payload_key)
             raise
         set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_ctx", cm)
         set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)
@@ -1046,14 +1047,15 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if pool is None:
             self._raise_missing_connection(plugin_state.connection_key)
 
-        await _bind_connection_tenant(
+        payload = await _capture_connection_tenant(
             plugin_state.config, scope, plugin_state.connection_key, plugin_state.tenant_settings
         )
         try:
-            cm = cast("AbstractAsyncContextManager[Any]", plugin_state.config.provide_connection(pool))
-            connection = await cm.__aenter__()
+            with _tenant_connection_scope(payload):
+                cm = cast("AbstractAsyncContextManager[Any]", plugin_state.config.provide_connection(pool))
+                connection = await cm.__aenter__()
         except BaseException:
-            _reset_tenant_token(scope, plugin_state.connection_key)
+            delete_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_tenant_payload")
             raise
         set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_ctx", cm)
         set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)

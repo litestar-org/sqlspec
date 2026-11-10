@@ -116,7 +116,8 @@ async def test_tenant_native_auth_bypass_switching_and_rollback(tenant_database:
 
     @get("/health", opt={"tenant_bypass": True})
     async def health(db_session: NamedDependency[AsyncDriverAdapterBase]) -> bool:
-        return TenantContext.is_bypassed() and await db_session.select_value("SELECT 1") == 1
+        assert await db_session.select_value("SELECT current_setting('app.current_tenant_id', true)") in {None, ""}
+        return bool(await db_session.select_value("SELECT 1") == 1)
 
     @get("/failure", guards=[require_tenant()])
     async def failure(db_session: NamedDependency[AsyncDriverAdapterBase]) -> None:
@@ -235,4 +236,90 @@ async def test_tenant_security_composites_cannot_authorize_unrelated_tenants(ten
         await client.set_session_data({})
         assert (await client.get("/or/evil")).status_code == 500
         assert (await client.get("/or/acme")).json() == [1]
+    assert TenantContext.get() is None
+
+
+@pytest.mark.parametrize("second_tenant", ["acme", "globex"])
+async def test_tenant_parallel_database_dependencies_capture_distinct_payloads(
+    tenant_database: Any, second_tenant: str
+) -> None:
+    config, table = tenant_database
+    config.extension_config["litestar"] = {
+        "connection_key": "first_connection",
+        "pool_key": "first_pool",
+        "session_key": "first_session",
+        "tenant_extractor": lambda scope: "acme",
+    }
+    second = type(config)(
+        connection_config=dict(config.connection_config),
+        driver_features={"tenant_strategy": True},
+        extension_config={
+            "litestar": {
+                "connection_key": "second_connection",
+                "pool_key": "second_pool",
+                "session_key": "second_session",
+                "tenant_extractor": lambda scope: second_tenant,
+            }
+        },
+    )
+    sqlspec = SQLSpec()
+    sqlspec.add_config(config)
+    sqlspec.add_config(second)
+
+    @get("/parallel")
+    async def parallel(
+        first_session: NamedDependency[AsyncDriverAdapterBase], second_session: NamedDependency[AsyncDriverAdapterBase]
+    ) -> list[list[int]]:
+        first_rows = await first_session.select(f"SELECT value FROM {table}")
+        second_rows = await second_session.select(f"SELECT value FROM {table}")
+        return [[row["value"] for row in first_rows], [row["value"] for row in second_rows]]
+
+    app = Litestar([parallel], plugins=[SQLSpecPlugin(sqlspec=sqlspec)])
+    async with AsyncTestClient(app=app, raise_server_exceptions=True) as client:
+        for _ in range(2):
+            response = await client.get("/parallel")
+            assert response.status_code == 200, response.text
+            assert response.json() == [[1], [1 if second_tenant == "acme" else 2]]
+    assert TenantContext.get() is None
+
+
+async def test_tenant_threaded_sync_on_demand_restores_its_context(tenant_database: Any) -> None:
+    from litestar import Request
+    from litestar.testing import TestClient
+
+    from sqlspec.adapters.psycopg import PsycopgSyncConfig
+
+    config, table = tenant_database
+    if isinstance(config, AsyncpgConfig):
+        parameters = config.connection_config
+        conninfo = make_conninfo(
+            host=parameters["host"],
+            port=str(parameters["port"]),
+            user=parameters["user"],
+            password=parameters["password"],
+            dbname=parameters["database"],
+        )
+    else:
+        conninfo = config.connection_config["conninfo"]
+    sync_config = PsycopgSyncConfig(
+        connection_config={"conninfo": conninfo, "min_size": 1, "max_size": 1},
+        driver_features={"tenant_strategy": True},
+        extension_config={"litestar": {"tenant_extractor": lambda scope: "acme"}},
+    )
+    plugin = _plugin(sync_config)
+
+    @get("/threaded", sync_to_thread=True)
+    def threaded(request: Request) -> list[int]:
+        before = TenantContext.get()
+        session = plugin.provide_request_session_sync("db_connection", request.app.state, request.scope)
+        assert TenantContext.get() is before
+        assert session.select_value("SELECT current_setting('app.current_tenant_id', true)") == "acme"
+        return [row["value"] for row in session.select(f"SELECT value FROM {table}")]
+
+    app = Litestar([threaded], plugins=[plugin])
+    with TestClient(app=app) as client:
+        for _ in range(2):
+            response = client.get("/threaded")
+            assert response.status_code == 200
+            assert response.json() == [1]
     assert TenantContext.get() is None

@@ -155,7 +155,9 @@ If your app owns its leases, wrap it with `SQLSpecTenantMiddleware(app, extracto
 
 ## Request Lifetime and Authentication Lookups
 
-Starlette and FastAPI keep the request driver alive through the stream and background work. Autocommit waits until the body and background work finish. A body, send, or background error rolls back the work. So does a cancelled request. Manual mode needs an explicit commit. If commit fails after headers are sent, the server gets the error, but the client's status cannot change. Commit before you yield a success message if the client needs proof the write is saved.
+Litestar binds the resolved payload while it acquires and cleans up each lease. Parallel dependencies and threaded handlers can run in different contexts, so the plugin does not leave that payload in the handler's ambient `TenantContext`. Use `SQLSpecTenantMiddleware` or an explicit verified scope for request-wide ambient context. Code that opens another session outside the plugin needs its own verified scope. Each injected lease keeps its captured identity, even when two configs select different tenants.
+
+Starlette and FastAPI keep the request driver alive through the stream and background work. Autocommit waits until the body and background work finish. A body, send, or background error rolls back the work. So does a cancelled request. In manual mode, psycopg keeps its native clean-exit commit behavior; other tenant adapters may roll back open work. Commit explicitly when the endpoint must save its writes. If commit fails after headers are sent, the server gets the error, but the client's status cannot change. Commit before you yield a success message if the client needs proof the write is saved.
 
 Auth code may need a query before it knows the tenant. Inside `retrieve_user_handler`, wrap that lookup in `async with async_tenant_bypass(), config.provide_session() as session:`. Import `async_tenant_bypass` from `sqlspec`. The database must permit the query under its normal rules. Bypass skips tenant setup; it does not turn off RLS or grant admin rights. Use a separate config for admin queries, global account stores, and migrations.
 
