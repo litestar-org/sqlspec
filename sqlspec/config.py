@@ -13,7 +13,7 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from difflib import get_close_matches
-from inspect import Signature, signature
+from inspect import Signature, iscoroutinefunction, signature
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, NotRequired, Self, TypeAlias, TypeVar, cast
 
@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.core import StatementConfig
+    from sqlspec.core.tenant import TenantStrategy
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
     from sqlspec.storage import StorageCapabilities
@@ -868,6 +869,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_reliable_rowcount: "ClassVar[bool]" = True
+    supports_tenant_strategy: "ClassVar[bool]" = False
+    supports_tenant_session_baseline: "ClassVar[bool]" = False
     default_storage_profile: "ClassVar[str | None]" = None
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
@@ -1488,6 +1491,24 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             msg = f"{type(self).__name__}.__init__() got unexpected keyword arguments: {unexpected}"
             raise TypeError(msg)
 
+    def _resolve_tenant_strategy(self, strategy: Any) -> "TenantStrategy | None":
+        """Normalize disabled tenancy and validate structural strategy instances.
+
+        Adapters override this method to resolve their supported shorthands.
+
+        Raises:
+            ImproperConfigurationError: The shorthand or strategy is unsupported.
+        """
+        if strategy is None or strategy is False:
+            return None
+        if isinstance(strategy, (str, bool)):
+            msg = f"{type(self).__name__} does not support tenant_strategy shorthand {strategy!r}"
+            raise ImproperConfigurationError(msg)
+        if callable(getattr(strategy, "checkout", None)) and callable(getattr(strategy, "checkin", None)):
+            return cast("TenantStrategy", strategy)
+        msg = f"{type(self).__name__} received an invalid tenant_strategy: {strategy!r}"
+        raise ImproperConfigurationError(msg)
+
     def _init_config_state(
         self,
         *,
@@ -1519,6 +1540,21 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self._init_observability(observability_config)
         self.statement_config = statement_config or build_default_statement_config(default_dialect)
         self._storage_capabilities = None
+        strategy = self._resolve_tenant_strategy((driver_features or {}).get("tenant_strategy"))
+        if driver_features is not None and "tenant_strategy" in driver_features:
+            driver_features = {**driver_features, "tenant_strategy": strategy}
+        if strategy is not None:
+            if not self.supports_tenant_strategy:
+                msg = f"{type(self).__name__} does not support tenant_strategy"
+                raise ImproperConfigurationError(msg)
+            if any(
+                iscoroutinefunction(method) is not self.is_async for method in (strategy.checkout, strategy.checkin)
+            ):
+                msg = f"{type(self).__name__} tenant_strategy must match its async execution mode ({self.is_async})"
+                raise ImproperConfigurationError(msg)
+        if "tenant_session_baseline" in (driver_features or {}) and not self.supports_tenant_session_baseline:
+            msg = f"{type(self).__name__} does not support tenant_session_baseline"
+            raise ImproperConfigurationError(msg)
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self.driver_features["_statement_cache_holder"] = StatementCacheHolder(
             self.statement_config, resolve_statement_cache_size(self.driver_features)
