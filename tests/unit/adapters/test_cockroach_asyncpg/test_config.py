@@ -762,7 +762,7 @@ async def test_tenant_provider_applies_structural_strategy_and_disposes(provider
     connection.terminate.side_effect = lambda: calls.append("terminate")
     pool = MagicMock()
     pool.acquire = AsyncMock(return_value=connection)
-    pool.release = AsyncMock(side_effect=lambda conn: calls.append("release"))
+    pool.release = AsyncMock(side_effect=lambda conn, **_kwargs: calls.append("release"))
     strategy = Strategy("custom")
     config = CockroachAsyncpgConfig(connection_instance=pool, driver_features={"tenant_strategy": strategy})
     assert config.driver_features["tenant_strategy"] is strategy
@@ -827,7 +827,9 @@ async def test_tenant_disposal_tolerates_an_already_terminated_proxy() -> None:
     with TenantContext.scope("a"), pytest.raises(TenantCleanupError):
         async with config.provide_connection():
             pass
-    pool.release.assert_awaited_once_with(connection)
+    pool.release.assert_awaited_once()
+    assert pool.release.call_args.args == (connection,)
+    assert pool.release.call_args.kwargs["timeout"] > 0
 
 
 @pytest.mark.parametrize("stage", ["statement", "prepare"])

@@ -562,7 +562,9 @@ async def test_tenant_public_providers_apply_and_restore(provider: str) -> None:
             assert calls == ["checkout:a"]
             assert (value if provider == "provide_connection" else value.connection) is connection
     assert calls == ["checkout:a", "checkin:a"]
-    pool.release.assert_awaited_once_with(connection)
+    pool.release.assert_awaited_once()
+    assert pool.release.call_args.args == (connection,)
+    assert pool.release.call_args.kwargs["timeout"] > 0
 
 
 @pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
@@ -600,7 +602,9 @@ async def test_tenant_prepare_failure_releases_once(monkeypatch: pytest.MonkeyPa
             pass
     assert caught.value is error
     strategy.checkin.assert_awaited_once()
-    pool.release.assert_awaited_once_with(connection)
+    pool.release.assert_awaited_once()
+    assert pool.release.call_args.args == (connection,)
+    assert pool.release.call_args.kwargs["timeout"] > 0
 
 
 async def test_tenant_failed_restore_terminates_before_release() -> None:
@@ -620,7 +624,7 @@ async def test_tenant_failed_restore_terminates_before_release() -> None:
     connection.terminate = Mock(side_effect=lambda: events.append("terminate"))
     pool = AsyncMock()
     pool.acquire.return_value = connection
-    pool.release.side_effect = lambda _: events.append("release")
+    pool.release.side_effect = lambda _, **_kwargs: events.append("release")
     config = AsyncpgConfig(connection_instance=pool, driver_features={"tenant_strategy": strategy})
     with TenantContext.scope(payload), pytest.raises(TenantCleanupError):
         async with config.provide_connection():

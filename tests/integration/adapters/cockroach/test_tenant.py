@@ -184,3 +184,14 @@ async def test_tenant_cockroach_async_isolation(
                     assert (await cursor.fetchone())[0] != failed_pid
     finally:
         await config.close_pool()
+
+
+@pytest.mark.parametrize("scenario", ["deadline", "cancel", "reset_error"])
+async def test_tenant_cockroach_native_reset_finishes_before_holder_reuse(
+    cockroachdb_service: CockroachDBService, scenario: str
+) -> None:
+    from tests.integration.adapters._asyncpg_tenant_release import assert_owned_tenant_reset
+
+    await assert_owned_tenant_reset(
+        CockroachAsyncpgConfig, _cockroach_asyncpg_connection_config(cockroachdb_service), scenario
+    )

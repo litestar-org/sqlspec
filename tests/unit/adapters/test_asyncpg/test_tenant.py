@@ -161,3 +161,52 @@ async def test_tenant_preserves_empty_search_path_baseline() -> None:
 def test_tenant_rejects_invalid_variable_source_names(key: Any) -> None:
     with pytest.raises(ImproperConfigurationError):
         AsyncpgRLSStrategy(variable_keys={key: "app.region"})
+
+
+@pytest.mark.parametrize("scenario", ["success", "error", "timeout", "native_cancel"])
+async def test_owned_release_joins_sdk_shielded_child_after_repeated_cancellation(scenario: str) -> None:
+    import asyncio
+
+    from sqlspec.utils.tenant_asyncpg import await_owned_release
+
+    started = asyncio.Event()
+    complete = asyncio.Event()
+    parent_finished = asyncio.Event()
+    children: list[asyncio.Task[None]] = []
+
+    async def reset() -> None:
+        started.set()
+        if scenario == "timeout":
+            async with asyncio.timeout(0.02):
+                await complete.wait()
+        else:
+            await complete.wait()
+        if scenario == "error":
+            msg = "SDK reset failed"
+            raise RuntimeError(msg)
+        if scenario == "native_cancel":
+            raise asyncio.CancelledError
+
+    async def native_release() -> None:
+        child = asyncio.create_task(reset())
+        children.append(child)
+        try:
+            await asyncio.shield(child)
+        finally:
+            parent_finished.set()
+
+    operation = asyncio.create_task(await_owned_release(native_release()))
+    await started.wait()
+    operation.cancel()
+    await asyncio.sleep(0)
+    operation.cancel()
+    if scenario != "timeout":
+        complete.set()
+    expected = (
+        RuntimeError if scenario == "error" else TimeoutError if scenario == "timeout" else asyncio.CancelledError
+    )
+    with pytest.raises(expected):
+        await operation
+    assert parent_finished.is_set()
+    assert len(children) == 1
+    assert children[0].done()

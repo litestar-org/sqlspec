@@ -761,3 +761,13 @@ async def test_tenant_pool_enforces_rls_and_restores_after_failures(postgres_ser
         await admin.execute(f"DROP TABLE IF EXISTS {quoted_table}")
         await admin.execute(f"DROP ROLE {quoted_role}")
         await admin.close()
+
+
+@pytest.mark.parametrize("scenario", ["deadline", "cancel", "reset_error"])
+async def test_tenant_native_reset_finishes_before_holder_reuse(
+    postgres_service: PostgresService, scenario: str
+) -> None:
+    from tests.integration.adapters._asyncpg_tenant_release import assert_owned_tenant_reset
+    from tests.integration.fixtures.postgres import _postgres_connection_config
+
+    await assert_owned_tenant_reset(AsyncpgConfig, _postgres_connection_config(postgres_service), scenario)
