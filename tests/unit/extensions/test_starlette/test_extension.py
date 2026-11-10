@@ -481,3 +481,103 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
     assert messages[-1] == {"type": "http.response.body", "body": b"", "more_body": False}
     assert connection.rolled_back is True
     assert connection.committed is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
+async def test_tenant_nonpooled_connection_uses_lease_context_with_async_extractor(middleware_type: Any) -> None:
+    from contextlib import asynccontextmanager
+
+    from sqlspec.utils.tenant import TenantContext
+
+    events = []
+    connection = _Connection()
+
+    @asynccontextmanager
+    async def provide_connection() -> Any:
+        events.append(("enter", TenantContext.get_tenant_id()))
+        try:
+            yield connection
+        finally:
+            events.append(("exit", TenantContext.get_tenant_id()))
+
+    async def extractor(scope: Any) -> str:
+        return "inner"
+
+    config = SimpleNamespace(
+        supports_connection_pooling=False,
+        provide_connection=provide_connection,
+        driver_features={"tenant_strategy": object()},
+    )
+    state = _make_state(config)
+    state.tenant_extractor = extractor
+    request = _make_request()
+    request.scope = {}
+    with TenantContext.scope("outer"):
+        async with middleware_type(app=object(), config_state=state)._connection_cm(request) as acquired:
+            assert acquired is connection
+        assert TenantContext.get_tenant_id() == "outer"
+    assert events == [("enter", "inner"), ("exit", "inner")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("scope_type", ["lifespan", "websocket"])
+@pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
+async def test_tenant_connection_middleware_non_http_passthrough(scope_type: str, middleware_type: Any) -> None:
+    from sqlspec.utils.tenant import TenantContext
+
+    events = []
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        events.append((scope["type"], TenantContext.get_tenant_id()))
+
+    state = _make_state(_Config(pooled=False, connection=_Connection()))
+    state.tenant_extractor = lambda scope: pytest.fail("non-http extractor invoked")
+    with TenantContext.scope("outer"):
+        await middleware_type(app=app, config_state=state)({"type": scope_type}, None, None)
+        assert TenantContext.get_tenant_id() == "outer"
+    assert events == [(scope_type, "outer")]
+    assert state.config.created is False
+
+
+@pytest.mark.anyio
+async def test_tenant_response_error_retains_identity_when_rollback_fails() -> None:
+    from contextlib import asynccontextmanager
+
+    from sqlspec.utils.tenant import TenantContext
+
+    body_error = ValueError("body failed")
+    events = []
+
+    async def rollback() -> None:
+        events.append("rollback")
+        raise RuntimeError("cleanup failed")
+
+    @asynccontextmanager
+    async def provide_connection(pool: Any) -> Any:
+        try:
+            yield SimpleNamespace(rollback=rollback)
+        except ValueError as exc:
+            assert exc is body_error
+            events.append("body_forwarded")
+            raise
+        finally:
+            events.append("release")
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        raise body_error
+
+    async def send(message: Any) -> None:
+        pytest.fail("body failure sent a response")
+
+    config = SimpleNamespace(supports_connection_pooling=True, provide_connection=provide_connection)
+    state = _make_state(config, "autocommit")
+    state.tenant_extractor = lambda scope: "inner"
+    scope = {"type": "http", "app": SimpleNamespace(state=SimpleNamespace(db_pool=object()))}
+    with TenantContext.scope("outer"):
+        with pytest.raises(ValueError) as caught:
+            await SQLSpecAutocommitMiddleware(app=app, config_state=state)(scope, None, send)
+        assert caught.value is body_error
+        assert TenantContext.get_tenant_id() == "outer"
+    assert events == ["rollback", "body_forwarded", "release"]
+    assert body_error.__notes__ == ["Request transaction rollback failed (RuntimeError)"]
