@@ -21,6 +21,7 @@ from sqlspec.adapters.psycopg.driver import (
     PsycopgSyncDriver,
     PsycopgSyncExceptionHandler,
 )
+from sqlspec.adapters.psycopg.tenant import PsycopgAsyncRLSStrategy, PsycopgSyncRLSStrategy
 
 __all__ = (
     "PsycopgAsyncConfig",
@@ -28,6 +29,7 @@ __all__ = (
     "PsycopgAsyncCursor",
     "PsycopgAsyncDriver",
     "PsycopgAsyncExceptionHandler",
+    "PsycopgAsyncRLSStrategy",
     "PsycopgConnectionParams",
     "PsycopgDriverFeatures",
     "PsycopgPoolParams",
@@ -36,6 +38,7 @@ __all__ = (
     "PsycopgSyncCursor",
     "PsycopgSyncDriver",
     "PsycopgSyncExceptionHandler",
+    "PsycopgSyncRLSStrategy",
     "build_connection_config",
     "default_statement_config",
 )
