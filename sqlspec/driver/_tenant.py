@@ -1,7 +1,9 @@
 """Fail-closed tenant leases around adapter-owned connection callbacks."""
 
-from collections.abc import Callable, Mapping
-from typing import Any
+import asyncio
+import math
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, Final
 
 from sqlspec.core.tenant.base import (
     AsyncTenantStrategy,
@@ -11,7 +13,7 @@ from sqlspec.core.tenant.base import (
     TenantStrategyShorthand,
     require_session_pooler,
 )
-from sqlspec.exceptions import TenantCleanupError, TenantContextError
+from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
@@ -26,6 +28,7 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.driver")
+DEFAULT_TENANT_CLEANUP_TIMEOUT: Final = 5.0
 
 
 def _lease_state(payload: TenantContextPayload, state: TenantLeaseState | Mapping[str, str | None]) -> TenantLeaseState:
@@ -113,3 +116,86 @@ class SyncTenantLease:
             except BaseException as exc:
                 invalidation_error = exc
             _report_cleanup_failure(cause, kwargs.get("exc_val"), invalidation_error)
+
+
+async def _await_owned(
+    task: asyncio.Future[None], timeout: float | None = None
+) -> tuple[BaseException | None, asyncio.CancelledError | None]:
+    cancellation: asyncio.CancelledError | None = None
+    deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
+    while not task.done():
+        try:
+            remaining = None if deadline is None else max(0.0, deadline - asyncio.get_running_loop().time())
+            await asyncio.wait_for(asyncio.shield(task), remaining)
+        except asyncio.CancelledError as exc:
+            if not task.cancelled():
+                cancellation = exc
+        except BaseException as exc:
+            return exc, cancellation
+    try:
+        task.result()
+    except BaseException as exc:
+        return exc, cancellation
+    return None, cancellation
+
+
+class AsyncTenantLease:
+    """Capture tenant identity and shield adapter-owned disposal from cancellation."""
+
+    __slots__ = (
+        "_acquire",
+        "_cleanup_timeout",
+        "_connection",
+        "_finish_transaction",
+        "_invalidate",
+        "_release",
+        "_state",
+        "_strategy",
+    )
+
+    def __init__(
+        self,
+        strategy: AsyncTenantStrategy,
+        *,
+        acquire: Callable[[], Awaitable[Any]],
+        release: Callable[[Any], Awaitable[None]],
+        invalidate: Callable[[Any], Awaitable[None]],
+        finish_transaction: Callable[[Any, type[BaseException] | None], Awaitable[None]],
+        cleanup_timeout: float = DEFAULT_TENANT_CLEANUP_TIMEOUT,
+    ) -> None:
+        if not math.isfinite(cleanup_timeout) or cleanup_timeout <= 0:
+            msg = "Tenant cleanup timeout must be finite and positive"
+            raise ImproperConfigurationError(msg)
+        self._strategy = strategy
+        self._acquire = acquire
+        self._release = release
+        self._invalidate = invalidate
+        self._finish_transaction = finish_transaction
+        self._cleanup_timeout = cleanup_timeout
+        self._connection: Any = None
+        self._state: TenantLeaseState | None = None
+
+    async def acquire(self) -> Any:
+        """Acquire a connection and apply a captured tenant or explicit bypass."""
+        if self._state is not None:
+            msg = "Tenant lease already owns a connection"
+            raise TenantContextError(msg)
+        payload = TenantContext.get()
+        if payload is None:
+            msg = "A tenant scope or explicit bypass is required before acquiring a connection"
+            raise TenantContextError(msg)
+        connection = await self._acquire()
+        try:
+            state = (
+                TenantLeaseState(payload)
+                if payload.is_bypass
+                else _lease_state(payload, await self._strategy.checkout(connection, payload))
+            )
+        except BaseException as exc:
+            disposal = asyncio.ensure_future(self._invalidate(connection))
+            invalidation_error, _ = await _await_owned(disposal)
+            if invalidation_error is not None:
+                exc.add_note(f"Tenant connection invalidation failed: {invalidation_error!r}")
+            raise
+        self._connection, self._state = connection, state
+        return connection
