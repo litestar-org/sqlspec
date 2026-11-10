@@ -1648,18 +1648,27 @@ async def _run_tenant_lease_case(
     """Check one strategy and native-callback ordering scenario."""
     events: list[str] = []
     connection = object()
+    setup_error = ValueError("injected checkout failure")
+    cleanup_error = RuntimeError("injected reset failure")
 
     def checkout(conn: object, payload: Any) -> Any:
         assert conn is connection
         events.append("checkout")
-        return contracts.TenantLeaseState(payload=payload, baseline={})
+        if scenario == "checkout_failure":
+            raise setup_error
+        return (
+            {"owned_key": "baseline"}
+            if scenario == "mapping"
+            else contracts.TenantLeaseState(payload=payload, baseline={})
+        )
 
     def checkin(conn: object, state: Any) -> None:
         assert conn is connection
         assert state.payload.tenant_id == "a"
         events.append("checkin")
+        assert dict(state.baseline) == ({"owned_key": "baseline"} if scenario == "mapping" else {})
         if scenario == "checkin_failure":
-            raise RuntimeError("injected reset failure")
+            raise cleanup_error
 
     class SyncStrategy:
         __slots__ = ()
@@ -1690,6 +1699,8 @@ async def _run_tenant_lease_case(
     def invalidate(conn: object) -> None:
         assert conn is connection
         events.append("invalidate")
+        if scenario == "checkout_failure":
+            raise RuntimeError("injected invalidation failure")
 
     def finish(conn: object, exc_type: type[BaseException] | None) -> None:
         assert conn is connection
@@ -1709,23 +1720,34 @@ async def _run_tenant_lease_case(
         lease = leases.SyncTenantLease(SyncStrategy(), **callbacks)
     scope = context.TenantContext.bypass() if scenario == "bypass" else context.TenantContext.scope("a")
     with scope:
-        acquired = lease.acquire()
-        if asynchronous:
-            acquired = await acquired
+        try:
+            acquired = lease.acquire()
+            if asynchronous:
+                acquired = await acquired
+        except ValueError as exc:
+            assert scenario == "checkout_failure"
+            if exc is not setup_error:
+                raise AssertionError("Checkout must preserve its original exception") from exc
+            if not any("invalidation failed" in note for note in exc.__notes__):
+                raise AssertionError("Failed invalidation must add a note to the original exception") from exc
+            assert events == ["acquire", "checkout", "invalidate"]
+            return
+        assert scenario != "checkout_failure", "checkout failure must propagate"
         assert acquired is connection
         try:
             cleanup = lease.release(connection)
             if asynchronous:
                 await cleanup
-        except errors.TenantCleanupError:
-            if scenario != "checkin_failure":
-                raise
+        except errors.TenantCleanupError as exc:
+            if scenario != "checkin_failure" or exc.__cause__ is not cleanup_error:
+                raise AssertionError("Cleanup must propagate with its original cause") from exc
         else:
             assert scenario != "checkin_failure", "reset failure must propagate"
-    expected = ["acquire", "finish", "release"]
-    if scenario != "bypass":
-        expected = ["acquire", "checkout", "finish", "checkin"]
-        expected.append("invalidate" if scenario == "checkin_failure" else "release")
+    expected = (
+        ["acquire", "finish", "release"]
+        if scenario == "bypass"
+        else ["acquire", "checkout", "finish", "checkin", "invalidate" if scenario == "checkin_failure" else "release"]
+    )
     assert events == expected, (asynchronous, scenario, events)
 
 
@@ -1751,7 +1773,7 @@ def _check_tenant_lease_boundary(*, require_compiled: bool = False) -> dict[str,
 
         async def run_cases() -> None:
             for asynchronous in (False, True):
-                for scenario in ("normal", "bypass", "checkin_failure"):
+                for scenario in ("normal", "mapping", "bypass", "checkin_failure", "checkout_failure"):
                     await _run_tenant_lease_case(
                         leases, contracts, context, errors, asynchronous=asynchronous, scenario=scenario
                     )
