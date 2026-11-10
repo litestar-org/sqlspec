@@ -470,6 +470,7 @@ VALID_ORACLE_DRIVER_FEATURE_KEYS: Final[frozenset[str]] = frozenset({
     "oracle_varchar2_byte_limit",
     "prefetchrows",
     "session_context_hook",
+    "tenant_strategy",
     "storage_capabilities",
     "vector_return_format",
 })
@@ -1285,6 +1286,7 @@ def apply_oracle_session_trace_attributes(
     client_identifier: "str | None" = None,
     econtext_id: "str | None" = None,
     ecid: "str | None" = None,
+    preserve_client_identifier: bool = False,
 ) -> None:
     """Set Oracle end-to-end tracing attributes on connection for zero-RTT OALL8 piggybacking.
 
@@ -1295,6 +1297,7 @@ def apply_oracle_session_trace_attributes(
         client_identifier: Optional explicit V$SESSION.CLIENT_IDENTIFIER value (truncated to 64 UTF-8 bytes).
         econtext_id: Optional explicit V$SESSION.ECID value (truncated to 64 UTF-8 bytes).
         ecid: Optional alias for ``econtext_id``.
+        preserve_client_identifier: Keep an active tenant identifier unchanged.
     """
     ctx = SQLCommenterContext.get() or {}
     resolved_module = (
@@ -1322,7 +1325,7 @@ def apply_oracle_session_trace_attributes(
     if resolved_action is not None:
         with contextlib.suppress(Exception):
             connection.action = truncate_utf8_bytes(resolved_action, ORACLE_ACTION_MAX_BYTES)
-    if resolved_client_id is not None:
+    if resolved_client_id is not None and not preserve_client_identifier:
         with contextlib.suppress(Exception):
             connection.client_identifier = truncate_utf8_bytes(resolved_client_id, ORACLE_CLIENT_IDENTIFIER_MAX_BYTES)
     if resolved_ecid is not None:
