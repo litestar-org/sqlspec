@@ -52,24 +52,27 @@ def test_sanic_tenant_isolation_and_failed_request_cleanup(
         raise ValueError("handler failed")
 
     client: Any = ReusableClient(app)
-    with client:
-        pid = None
-        for identity, expected in [("a", 1), ("b", 2)]:
-            app.ctx.test_identity = identity
+    try:
+        with client:
+            pid = None
+            for identity, expected in [("a", 1), ("b", 2)]:
+                app.ctx.test_identity = identity
+                _, result = client.get("/")
+                assert result.status == 200
+                assert [row["value"] for row in result.json["rows"]] == [expected]
+                current_pid = result.json["rows"][0]["pid"]
+                if pid is not None:
+                    assert current_pid == pid
+                pid = current_pid
+            app.ctx.test_identity = None
+            _, result = client.get("/", headers={"X-Tenant-ID": "evil"})
+            assert result.status == 500
+            app.ctx.test_identity = "a"
+            if adapter == "psycopg":
+                _, result = client.post("/fail")
+                assert result.status == 500
             _, result = client.get("/")
             assert result.status == 200
-            assert [row["value"] for row in result.json["rows"]] == [expected]
-            current_pid = result.json["rows"][0]["pid"]
-            if pid is not None:
-                assert current_pid == pid
-            pid = current_pid
-        app.ctx.test_identity = None
-        _, result = client.get("/", headers={"X-Tenant-ID": "evil"})
-        assert result.status == 500
-        app.ctx.test_identity = "a"
-        if adapter == "psycopg":
-            _, result = client.post("/fail")
-            assert result.status == 500
-        _, result = client.get("/")
-        assert result.status == 200
-        assert [row["value"] for row in result.json["rows"]] == [1]
+            assert [row["value"] for row in result.json["rows"]] == [1]
+    finally:
+        Sanic.unregister_app(app)
