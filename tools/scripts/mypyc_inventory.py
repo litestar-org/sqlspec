@@ -293,11 +293,11 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
     "sqlspec/adapters/aiosqlite/driver.py": {
         "classification": "prove_separately",
-        "reason": "Async SQLite driver shares the same native adapter-driver layout risk as the sync driver and stays out of the compiled baseline.",
+        "reason": "Grouped code generation cannot resolve the inherited pending_exception slot through the interpreted driver facade.",
     },
     "sqlspec/adapters/asyncpg/driver.py": {
         "classification": "prove_separately",
-        "reason": "Optional async adapter drivers remain outside baseline smoke until vendor dependencies and exception-handler paths are proven.",
+        "reason": "Grouped code generation cannot resolve the inherited pending_exception slot through the interpreted driver facade.",
     },
     **{
         f"sqlspec/adapters/{adapter}/tenant.py": {
