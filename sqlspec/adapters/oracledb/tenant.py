@@ -61,12 +61,30 @@ def compose_tenant_session_hook(
         ImproperConfigurationError: An existing client identifier conflicts.
     """
     source = OracleSessionContextConfig(**existing) if isinstance(existing, Mapping) else existing
-    if source is not None and source.client_identifier not in (None, tenant_client_identifier):
+    if source is None:
+        source = OracleSessionContextConfig()
+    if source.client_identifier not in (None, tenant_client_identifier):
         msg = "Oracle tenant strategy conflicts with session_context_hook.client_identifier"
         raise ImproperConfigurationError(msg)
-    values = {name: getattr(source, name) for name in OracleSessionContextConfig.__slots__} if source else {}
-    values.update(client_identifier=tenant_client_identifier, clear_identifier=True, reset_on_release=True)
-    return OracleSessionContextConfig(**values)
+    return OracleSessionContextConfig(
+        module=source.module,
+        action=source.action,
+        client_identifier=tenant_client_identifier,
+        ecid=source.ecid,
+        edition=source.edition,
+        time_zone=source.time_zone,
+        nls_parameters=source.nls_parameters,
+        contexts=source.contexts,
+        context_attributes=source.context_attributes,
+        ebs_apps_initialize=source.ebs_apps_initialize,
+        mo_global_policy=source.mo_global_policy,
+        apex_session=source.apex_session,
+        reset_package=source.reset_package,
+        clear_identifier=True,
+        clear_context_namespaces=source.clear_context_namespaces,
+        apex_detach=source.apex_detach,
+        reset_on_release=True,
+    )
 
 
 class OracleSyncIdentifierStrategy:

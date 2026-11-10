@@ -69,11 +69,30 @@ def test_tenant_hook_keeps_every_session_option() -> None:
         reset_package=True,
         clear_context_namespaces=("app",),
         apex_detach=True,
+        contexts={"app": {"tenant": "acme"}},
+        ebs_apps_initialize=(101, 202, 303),
+        mo_global_policy=("S", 84),
+        apex_session=(100, 1, 999),
+        reset_on_release=False,
     )
     composed = compose_tenant_session_hook(hook)
-    for field in OracleSessionContextConfig.__slots__:
-        if field not in {"client_identifier", "clear_identifier", "reset_on_release"}:
-            assert getattr(composed, field) == getattr(hook, field)
+    assert composed.module == "m"
+    assert composed.action == "a"
+    assert composed.edition == "E1"
+    assert composed.time_zone == "UTC"
+    assert composed.nls_parameters == {"NLS_DATE_FORMAT": "YYYY-MM-DD"}
+    assert composed.ecid == "e"
+    assert composed.contexts == {"app": {"tenant": "acme"}}
+    assert composed.context_attributes == {"app": {"tenant": "acme"}}
+    assert composed.ebs_apps_initialize == (101, 202, 303)
+    assert composed.mo_global_policy == ("S", 84)
+    assert composed.apex_session == (100, 1, 999)
+    assert composed.reset_package is True
+    assert composed.clear_context_namespaces == ("app",)
+    assert composed.apex_detach is True
+    assert composed.client_identifier is tenant_client_identifier
+    assert composed.clear_identifier is True
+    assert composed.reset_on_release is True
 
 
 def test_tenant_hook_rejects_conflicting_client_identifier() -> None:
@@ -320,3 +339,33 @@ async def test_identifier_cleanup_resolves_hook_with_captured_tenant(mode: str, 
     assert contexts == (
         {"ctx_b": {"tenant": "b"}, "ctx_a": {"tenant": "a"}} if release_error else {"ctx_b": {"tenant": "b"}}
     )
+
+
+def test_tenant_hook_keeps_deferred_options_and_context_alias() -> None:
+    def deferred_text() -> str:
+        raise AssertionError("composing a hook must not evaluate deferred text")
+
+    def deferred_nls() -> dict[str, str]:
+        raise AssertionError("composing a hook must not evaluate deferred NLS settings")
+
+    def deferred_contexts() -> dict[str, dict[str, str]]:
+        raise AssertionError("composing a hook must not evaluate deferred contexts")
+
+    hook = OracleSessionContextConfig(
+        module=deferred_text,
+        action=deferred_text,
+        ecid=deferred_text,
+        edition=deferred_text,
+        time_zone=deferred_text,
+        nls_parameters=deferred_nls,
+        context_attributes=deferred_contexts,
+    )
+    composed = compose_tenant_session_hook(hook)
+    assert composed.module is deferred_text
+    assert composed.action is deferred_text
+    assert composed.ecid is deferred_text
+    assert composed.edition is deferred_text
+    assert composed.time_zone is deferred_text
+    assert composed.nls_parameters is deferred_nls
+    assert composed.contexts is deferred_contexts
+    assert composed.context_attributes is deferred_contexts
