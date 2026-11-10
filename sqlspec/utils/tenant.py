@@ -42,13 +42,15 @@ class TenantContextPayload:
             if normalized_id or snapshot:
                 msg = "Tenant bypass cannot contain an identity or variables"
                 raise TenantContextError(msg)
-        elif (
-            not normalized_id.strip()
-            or "\x00" in normalized_id
-            or len(normalized_id.encode("utf-8")) > MAX_TENANT_ID_BYTES
-        ):
-            msg = "Tenant identity must be nonblank, NUL-free, and at most 256 UTF-8 bytes"
-            raise TenantContextError(msg)
+        else:
+            try:
+                identity_bytes = normalized_id.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                msg = "Tenant identity must be valid UTF-8"
+                raise TenantContextError(msg) from exc
+            if not normalized_id.strip() or "\x00" in normalized_id or len(identity_bytes) > MAX_TENANT_ID_BYTES:
+                msg = "Tenant identity must be nonblank, NUL-free, and at most 256 UTF-8 bytes"
+                raise TenantContextError(msg)
         for key, value in snapshot.items():
             if not isinstance(key, str) or not isinstance(value, str) or "\x00" in key or "\x00" in value:
                 msg = "Tenant variable keys and values must be NUL-free strings"

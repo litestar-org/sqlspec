@@ -110,6 +110,14 @@ def test_payload_rejects_invalid_identity(tenant_id: object) -> None:
         TenantContextPayload(cast("str", tenant_id))
 
 
+@pytest.mark.parametrize("tenant_id", ["\ud800", "\udc00"], ids=["high-surrogate", "low-surrogate"])
+def test_payload_rejects_non_utf8_identity(tenant_id: str) -> None:
+    with pytest.raises(TenantContextError) as exc_info:
+        TenantContextPayload(tenant_id)
+    assert isinstance(exc_info.value.__cause__, UnicodeEncodeError)
+    assert exc_info.value.__cause__.object == tenant_id
+
+
 @pytest.mark.parametrize("tenant_id", ["x" * 256, "é" * 128, UUID("fd46b755-cdef-43d8-a0a1-32b97ee847fa")])
 def test_payload_preserves_valid_identity(tenant_id: str | UUID) -> None:
     assert TenantContextPayload(tenant_id).tenant_id == str(tenant_id)
@@ -209,7 +217,7 @@ def test_set_rejects_invalid_payload_without_mutating_context(invalid: object) -
         assert TenantContext.get() is outer
 
 
-@pytest.mark.parametrize("invalid", ["", "x" * 257, True])
+@pytest.mark.parametrize("invalid", ["", "x" * 257, True, "\ud800", "\udc00"])
 def test_invalid_scope_keeps_outer_context(invalid: object) -> None:
     with TenantContext.scope("outer") as outer:
         with pytest.raises(TenantContextError):
