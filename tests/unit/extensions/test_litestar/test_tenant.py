@@ -1,8 +1,9 @@
 """Verified tenant resolution and guards for the Litestar integration."""
 
 from collections.abc import Awaitable
+from inspect import isawaitable
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 import pytest
@@ -12,10 +13,25 @@ pytest.importorskip("litestar")
 from sqlspec.extensions.litestar.tenant import TenantResolutionSettings, resolve_litestar_tenant, set_connection_tenant
 from sqlspec.utils.tenant import TenantContextPayload
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from litestar.connection import ASGIConnection
+    from litestar.handlers import BaseRouteHandler
+    from litestar.types import ASGIApp, Guard
+
 
 async def _resolve(scope: dict[str, Any], **settings: Any) -> TenantContextPayload | None:
     value = resolve_litestar_tenant(scope, TenantResolutionSettings(**settings))
     return await value if isinstance(value, Awaitable) else value
+
+
+async def _invoke_guard(guard: "Guard", scope: dict[str, Any]) -> None:
+    connection = cast("ASGIConnection[Any, Any, Any, Any]", SimpleNamespace(scope=scope))
+    route_handler = cast("BaseRouteHandler", SimpleNamespace(opt={}))
+    result = guard(connection, route_handler)
+    if isawaitable(result):
+        await result
 
 
 async def test_tenant_bypass_precedes_extractor() -> None:
@@ -41,7 +57,7 @@ async def test_tenant_explicit_scope_receipt(as_connection: bool) -> None:
     "value", ["acme", UUID("12345678-1234-5678-1234-567812345678"), None, TenantContextPayload.bypass()]
 )
 @pytest.mark.parametrize("is_async", [False, True])
-async def test_tenant_custom_extractor(value: object, is_async: bool) -> None:
+async def test_tenant_custom_extractor(value: TenantContextPayload | str | UUID | None, is_async: bool) -> None:
     async def async_extractor(scope: object) -> object:
         return value
 
@@ -108,7 +124,7 @@ async def test_tenant_selectors_require_verified_membership(selected: str, selec
         def wrapped_guard() -> None:
             pass
 
-        wrapped_guard.children = composite.children
+        setattr(wrapped_guard, "children", composite.children)
         route_guard = SimpleNamespace(func=wrapped_guard) if selector == "wrapped_guard" else composite
         scope["route_handler"] = SimpleNamespace(opt={}, resolve_guards=lambda: [route_guard])
         scope["path_params"] = {"org_id": selected}
@@ -164,8 +180,8 @@ async def test_tenant_guard_rejects_unverified_selection(scope_type: str, failur
         else (NotAuthorizedException if failure == "unauthenticated" else PermissionDeniedException)
     )
     with pytest.raises(exception_type) as raised:
-        await guard(SimpleNamespace(scope=scope), SimpleNamespace(opt={}))
-    if scope_type == "websocket":
+        await _invoke_guard(guard, scope)
+    if isinstance(raised.value, WebSocketException):
         assert raised.value.code == (4001 if failure == "unauthenticated" else 4003)
     else:
         assert raised.value.status_code == (401 if failure == "unauthenticated" else 403)
@@ -180,7 +196,7 @@ async def test_tenant_guard_authorizes_configured_membership_and_binds_receipt()
         "headers": [(b"x-org-id", b"globex")],
     }
     guard = require_tenant(header="x-org-id", memberships_attr="org_ids", variables_attr="variables")
-    await guard(SimpleNamespace(scope=scope), SimpleNamespace(opt={}))
+    await _invoke_guard(guard, scope)
     assert await _resolve(scope) == TenantContextPayload("globex", variables={"region": "eu"})
 
 
@@ -209,7 +225,12 @@ def test_tenant_middleware_native_litestar_registration(trusted_tenant: str | No
         return {"tenant": TenantContext.get_tenant_id()}
 
     app = Litestar(
-        [handler], middleware=[DefineMiddleware(SQLSpecTenantMiddleware, extractor=lambda scope: trusted_tenant)]
+        [handler],
+        middleware=[
+            DefineMiddleware(
+                cast("Callable[..., ASGIApp]", SQLSpecTenantMiddleware), extractor=lambda scope: trusted_tenant
+            )
+        ],
     )
     with TestClient(app) as client:
         assert client.get("/", headers={"x-tenant-id": "evil"}).json() == {"tenant": trusted_tenant}

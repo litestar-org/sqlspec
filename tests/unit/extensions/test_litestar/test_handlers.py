@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from litestar.constants import HTTP_RESPONSE_START
+from litestar.datastructures import State
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -21,7 +22,11 @@ from sqlspec.extensions.litestar.handlers import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Generator
+
     from litestar.types import Message, Scope
+
+    from sqlspec.config import DatabaseConfigProtocol
 
 pytestmark = pytest.mark.anyio
 
@@ -995,7 +1000,7 @@ async def test_tenant_provider_retains_context_through_checkin(is_async: bool, f
     connection = SimpleNamespace()
 
     @contextmanager
-    def sync_connection(pool: object) -> Any:
+    def sync_connection(pool: object) -> "Generator[Any, None, None]":
         events.append(("enter", TenantContext.get_tenant_id()))
         if failure == "enter":
             raise RuntimeError("entry")
@@ -1007,7 +1012,7 @@ async def test_tenant_provider_retains_context_through_checkin(is_async: bool, f
                 raise RuntimeError("checkin")
 
     @asynccontextmanager
-    async def async_connection(pool: object) -> Any:
+    async def async_connection(pool: object) -> "AsyncGenerator[Any, None]":
         with sync_connection(pool) as conn:
             yield conn
 
@@ -1021,9 +1026,12 @@ async def test_tenant_provider_retains_context_through_checkin(is_async: bool, f
     )
     scope = cast("Scope", {"type": "http"})
     provider = connection_provider_maker(
-        config, "pool", "tenant_conn", tenant_settings=TenantResolutionSettings(tenant_extractor=extractor)
+        cast("DatabaseConfigProtocol[Any, Any, Any]", config),
+        "pool",
+        "tenant_conn",
+        tenant_settings=TenantResolutionSettings(tenant_extractor=extractor),
     )
-    iterator = provider({"pool": object()}, scope)
+    iterator = provider(State({"pool": object()}), scope)
     assert TenantContext.get() is None
     if failure == "enter":
         with pytest.raises(RuntimeError, match="entry"):
@@ -1059,7 +1067,7 @@ async def test_tenant_provider_preserves_existing_ambient_scope() -> None:
     from sqlspec.utils.tenant import TenantContext
 
     @asynccontextmanager
-    async def connection(pool: object) -> Any:
+    async def connection(pool: object) -> "AsyncGenerator[object, None]":
         assert TenantContext.get_tenant_id() == "outer"
         yield object()
 
@@ -1071,10 +1079,13 @@ async def test_tenant_provider_preserves_existing_ambient_scope() -> None:
     )
     scope = cast("Scope", {"type": "http"})
     provider = connection_provider_maker(
-        config, "pool", "tenant_conn", tenant_settings=TenantResolutionSettings(tenant_extractor=extractor)
+        cast("DatabaseConfigProtocol[Any, Any, Any]", config),
+        "pool",
+        "tenant_conn",
+        tenant_settings=TenantResolutionSettings(tenant_extractor=extractor),
     )
     with TenantContext.scope("outer"):
-        iterator = provider({"pool": object()}, scope)
+        iterator = provider(State({"pool": object()}), scope)
         await anext(iterator)
         await iterator.aclose()
         assert TenantContext.get_tenant_id() == "outer"
@@ -1082,8 +1093,6 @@ async def test_tenant_provider_preserves_existing_ambient_scope() -> None:
 
 @pytest.mark.parametrize("is_async", [False, True])
 async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    from litestar.datastructures import State
-
     from sqlspec.base import SQLSpec
     from sqlspec.extensions.litestar import SQLSpecPlugin
     from sqlspec.utils.tenant import TenantContext
@@ -1110,7 +1119,7 @@ async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: p
     spec = SQLSpec()
     spec.add_config(config)
     plugin = SQLSpecPlugin(sqlspec=spec)
-    pool = await config.create_pool() if is_async else config.create_pool()
+    pool = await config.create_pool() if isinstance(config, AiosqliteConfig) else config.create_pool()
     scope = cast("Scope", {"type": "http"})
     state = State({"db_pool": pool})
     try:
@@ -1125,7 +1134,7 @@ async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: p
         )
         assert TenantContext.get() is None
     finally:
-        if is_async:
+        if isinstance(config, AiosqliteConfig):
             await config.close_pool()
         else:
             config.close_pool()
@@ -1134,8 +1143,6 @@ async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: p
 async def test_tenant_sync_on_demand_closes_rejected_extractor_coroutine(monkeypatch: pytest.MonkeyPatch) -> None:
     import inspect
     from types import SimpleNamespace
-
-    from litestar.datastructures import State
 
     from sqlspec.base import SQLSpec
     from sqlspec.extensions.litestar import SQLSpecPlugin
