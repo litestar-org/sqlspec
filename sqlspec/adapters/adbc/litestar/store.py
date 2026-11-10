@@ -521,11 +521,13 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Synchronous implementation of get using ADBC driver."""
+        dialect = self._get_dialect()
         p1 = self._get_param_placeholder(1)
         current_ts = self._get_current_timestamp_expr()
+        data_expr = "HEX(data) AS data" if dialect == "db2" else "data"
 
         sql = f"""
-        SELECT data, expires_at FROM {self._table_name}
+        SELECT {data_expr}, expires_at FROM {self._table_name}
         WHERE session_id = {p1}
         AND (expires_at IS NULL OR expires_at > {current_ts})
         """

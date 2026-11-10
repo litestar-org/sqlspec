@@ -307,9 +307,9 @@ DROP TABLE {filename.split("_")[1]};
         applied = commands.tracker.get_applied_migrations(session)
 
     assert len(applied) == 3
-    assert applied[0]["version_num"] == "0001"
-    assert applied[1]["version_num"] == "0002"
-    assert applied[2]["version_num"] == "ext_litestar_0001"
+    assert applied[0]["version_num"] == "ext_litestar_0001"
+    assert applied[1]["version_num"] == "0001"
+    assert applied[2]["version_num"] == "0002"
 
 
 def test_upgrade_respects_version_comparison_order(sqlite_config: SqliteConfig, migrations_dir: Path) -> None:
@@ -341,7 +341,7 @@ DROP TABLE {filename.split("_")[0]};
 
     applied_versions = [m["version_num"] for m in applied]
 
-    expected_order = ["0001", "9999", "20200101000000", "20251011120000", "ext_aaa_0001", "ext_zzz_0001"]
+    expected_order = ["ext_aaa_0001", "ext_zzz_0001", "0001", "9999", "20200101000000", "20251011120000"]
 
     assert applied_versions == expected_order
 
@@ -474,7 +474,7 @@ DROP INDEX queue_tasks_id_idx;
             tables = session.execute("SELECT name FROM sqlite_master WHERE type = 'table'").get_data()
 
         versions = [row["version_num"] for row in applied]
-        assert versions == ["0001", "ext_litestar_queues_0001", "ext_litestar_queues_0002", "ext_litestar_queues_0003"]
+        assert versions == ["ext_litestar_queues_0001", "ext_litestar_queues_0002", "ext_litestar_queues_0003", "0001"]
         table_names = {row["name"] for row in tables}
         assert "queue_tasks" in table_names
         assert "queue_metadata" in table_names

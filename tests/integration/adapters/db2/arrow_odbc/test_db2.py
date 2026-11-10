@@ -303,7 +303,7 @@ config = ArrowOdbcConfig(
 )
 all_tables = (chunk_table, sess_table, events_table, adk_memory, adk_meta, adk_user, adk_app, adk_event, adk_session)
 try:
-    config.migrate_up()
+    config.migrate_up(echo=False)
     with config.provide_session() as driver:
         schema_name = str(driver.select_value("SELECT CURRENT SCHEMA FROM SYSIBM.SYSDUMMY1")).strip()
         existing = {row["table_name"].upper() for row in driver.data_dictionary.get_tables(driver, schema=schema_name)}
@@ -312,7 +312,7 @@ try:
         driver.execute(f"DROP TABLE {chunk_table}")
         driver.execute(f"DROP INDEX {dropped_adk_index}")
 
-    config.migrate_up()
+    config.migrate_up(echo=False)
     with config.provide_session() as driver:
         schema_name = str(driver.select_value("SELECT CURRENT SCHEMA FROM SYSIBM.SYSDUMMY1")).strip()
         restored_tables = {

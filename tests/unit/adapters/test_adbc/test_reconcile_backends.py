@@ -532,6 +532,22 @@ def test_adbc_litestar_store_snowflake_hex_binary_and_uppercase_rows() -> None:
     assert fetched_plain == b"plain-text"
     assert ttl is None
 
+    db2_config = AdbcConfig(connection_config={"uri": "db2://localhost:50000/testdb"})
+    db2_store = AdbcStore(db2_config)
+    db2_driver = MagicMock()
+    db2_driver.dialect = "db2"
+    db2_driver.select_one_or_none.return_value = {"DATA": b"persisted-payload".hex().upper(), "EXPIRES_AT": None}
+
+    @contextlib.contextmanager
+    def _fake_db2_session(_self: Any) -> Any:
+        yield db2_driver
+
+    with patch.object(AdbcConfig, "provide_session", _fake_db2_session):
+        assert db2_store._get("seed-session") == b"persisted-payload"
+
+    select_call = db2_driver.select_one_or_none.call_args_list[0]
+    assert "SELECT HEX(data) AS data, expires_at" in str(select_call.args[0])
+
 
 @pytest.mark.parametrize(
     ("stmt_dialect", "expected_dialect"),

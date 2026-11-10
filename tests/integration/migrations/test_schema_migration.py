@@ -321,7 +321,6 @@ def test_tracker_get_applied_migrations_orders_by_execution_sequence(sqlite_sess
 def test_sqlite_litestar_reconcile_mode_end_to_end(tmp_path: object) -> None:
     from pathlib import Path
 
-    from sqlspec.exceptions import MigrationError
     from sqlspec.migrations.commands import SyncMigrationCommands
 
     root = Path(str(tmp_path))
@@ -359,8 +358,12 @@ def test_sqlite_litestar_reconcile_mode_end_to_end(tmp_path: object) -> None:
         assert rows[0]["session_id"] == "keep-me"
         assert all(not str(r["version_num"]).startswith("ext_litestar_") for r in ledger)
 
-        with pytest.raises(MigrationError):
-            commands.downgrade()
+        commands.downgrade()
+        with config.provide_session() as session:
+            remaining_tables = {
+                str(tbl["table_name"]).casefold() for tbl in session.data_dictionary.get_tables(session)
+            }
+        assert "litestar_session" not in remaining_tables
     finally:
         config.close_pool()
 
