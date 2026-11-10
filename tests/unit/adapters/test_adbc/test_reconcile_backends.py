@@ -536,7 +536,7 @@ def test_adbc_litestar_store_snowflake_hex_binary_and_uppercase_rows() -> None:
     db2_store = AdbcStore(db2_config)
     db2_driver = MagicMock()
     db2_driver.dialect = "db2"
-    db2_driver.select_one_or_none.return_value = {"DATA": b"persisted-payload".hex().upper(), "EXPIRES_AT": None}
+    db2_driver.select_one_or_none.return_value = {"DATA": b"persisted-payload".hex().upper(), "EXPIRES_AT": 0}
 
     @contextlib.contextmanager
     def _fake_db2_session(_self: Any) -> Any:
@@ -546,7 +546,10 @@ def test_adbc_litestar_store_snowflake_hex_binary_and_uppercase_rows() -> None:
         assert db2_store._get("seed-session") == b"persisted-payload"
 
     select_call = db2_driver.select_one_or_none.call_args_list[0]
-    assert "SELECT HEX(data) AS data, expires_at" in str(select_call.args[0])
+    assert (
+        "SELECT HEX(CAST(data AS VARCHAR(16336) FOR BIT DATA)) AS data, "
+        "CASE WHEN expires_at IS NULL THEN 0 ELSE 1 END AS expires_at"
+    ) in str(select_call.args[0])
 
 
 @pytest.mark.parametrize(

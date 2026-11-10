@@ -524,10 +524,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         dialect = self._get_dialect()
         p1 = self._get_param_placeholder(1)
         current_ts = self._get_current_timestamp_expr()
-        data_expr = "HEX(data) AS data" if dialect == "db2" else "data"
+        if dialect == "db2":
+            select_cols = (
+                "HEX(CAST(data AS VARCHAR(16336) FOR BIT DATA)) AS data, "
+                "CASE WHEN expires_at IS NULL THEN 0 ELSE 1 END AS expires_at"
+            )
+        else:
+            select_cols = "data, expires_at"
 
         sql = f"""
-        SELECT {data_expr}, expires_at FROM {self._table_name}
+        SELECT {select_cols} FROM {self._table_name}
         WHERE session_id = {p1}
         AND (expires_at IS NULL OR expires_at > {current_ts})
         """
@@ -541,7 +547,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             data = result["data"] if "data" in result else result["DATA"]
             expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
 
-            if renew_for is not None and expires_at is not None:
+            if renew_for is not None and expires_at:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 p1_update = self._get_param_placeholder(1)
                 p2_update = self._get_param_placeholder(2)
@@ -736,6 +742,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         sql = f"""
         SELECT expires_at FROM {self._table_name}
         WHERE session_id = {p1}
+        AND expires_at IS NOT NULL
         """
 
         with self._config.provide_session() as driver:
