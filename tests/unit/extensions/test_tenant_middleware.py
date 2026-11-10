@@ -68,7 +68,7 @@ async def test_async_extractor_and_concurrent_invocations() -> None:
 
     async def extractor(scope: Any) -> str:
         await asyncio.sleep(0)
-        return scope["tenant"]
+        return cast("str", scope["tenant"])
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
         await asyncio.sleep(0)

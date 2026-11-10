@@ -22,6 +22,8 @@ from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware,
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from starlette.types import Message
+
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.starlette._state import CommitMode
 
@@ -133,7 +135,7 @@ class _Config:
         return self.manager
 
 
-def _make_state(config: _Config, commit_mode: "CommitMode" = "manual") -> SQLSpecConfigState:
+def _make_state(config: _Config | SimpleNamespace, commit_mode: "CommitMode" = "manual") -> SQLSpecConfigState:
     return SQLSpecConfigState(
         config=cast("DatabaseConfigProtocol[Any, Any, Any]", config),
         connection_key="db_connection",
@@ -570,6 +572,9 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
     async def app(scope: Any, receive: Any, send: Any) -> None:
         raise body_error
 
+    async def receive() -> "Message":
+        return {"type": "http.request", "body": b"", "more_body": False}
+
     async def send(message: Any) -> None:
         pytest.fail("body failure sent a response")
 
@@ -579,7 +584,7 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
     scope = {"type": "http", "app": SimpleNamespace(state=SimpleNamespace(db_pool=object()))}
     with TenantContext.scope("outer"):
         with pytest.raises(ValueError) as caught:
-            await SQLSpecAutocommitMiddleware(app=app, config_state=state)(scope, None, send)
+            await SQLSpecAutocommitMiddleware(app=app, config_state=state)(scope, receive, send)
         assert caught.value is body_error
         assert TenantContext.get_tenant_id() == "outer"
     assert events == ["rollback", "body_forwarded", "release"]
