@@ -1,0 +1,142 @@
+"""Tenant session state is bound, verified, and restored through one SQL call."""
+
+from typing import Any
+
+import pytest
+
+from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
+from sqlspec.adapters.asyncpg.tenant import apply_session_baseline, validate_asyncpg_tenant_config
+from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.utils.tenant import TenantContextPayload
+
+
+class FakeGucConnection:
+    """Model bound session settings at the database I/O boundary."""
+
+    def __init__(self, settings: dict[str, str | None] | None = None) -> None:
+        self.settings = dict(settings or {})
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+        self.busy = False
+        self.corrupt = False
+        self.missing = False
+
+    def is_in_transaction(self) -> bool:
+        return self.busy
+
+    async def fetchrow(self, sql: str, *params: str) -> tuple[str | None, ...] | None:
+        self.calls.append((sql, params))
+        if self.missing:
+            return None
+        values: list[str | None] = []
+        checkout = "captured AS MATERIALIZED" in sql
+        restoring = "applied AS MATERIALIZED" in sql
+        for key, value in zip(params[::2], params[1::2], strict=True):
+            baseline = self.settings.get(key)
+            self.settings[key] = value
+            if checkout:
+                values.extend((baseline, "wrong" if self.corrupt else value))
+            elif restoring:
+                values.extend((value, "wrong" if self.corrupt else self.settings[key]))
+            else:
+                values.append(value)
+        return tuple(values)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"variable_keys": {"region": "app.Current_Tenant_Id"}},
+        {"variable_keys": {"a": "app.Region", "b": "APP.REGION"}},
+        {"schema_resolver": lambda _: "tenant_a", "variable_keys": {"region": "SEARCH_PATH"}},
+        {"schema_resolver": lambda _: "tenant_a", "tenant_key": "SEARCH_PATH"},
+        {"tenant_key": "bad;key"},
+    ],
+)
+def test_tenant_rejects_overlapping_or_invalid_targets(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        AsyncpgRLSStrategy(**kwargs)
+
+
+async def test_tenant_captures_and_restores_owned_settings_once() -> None:
+    connection = FakeGucConnection({"app.Tenant": "previous", "unrelated": "leave"})
+    strategy = AsyncpgRLSStrategy(tenant_key="app.Tenant", variable_keys={"z": "app.Z", "a": "app.A"})
+    payload = TenantContextPayload("a'; DROP", variables={"z": "2", "a": "1"})
+    state = await strategy.checkout(connection, payload)
+    assert dict(state.baseline) == {"app.Tenant": "previous", "app.A": None, "app.Z": None}
+    assert connection.calls[0][1] == ("app.Tenant", "a'; DROP", "app.A", "1", "app.Z", "2")
+    assert "a'; DROP" not in connection.calls[0][0]
+    assert connection.settings["app.Tenant"] == "a'; DROP"
+    await strategy.checkin(connection, state)
+    assert len(connection.calls) == 2
+    assert connection.settings == {"app.Tenant": "previous", "unrelated": "leave", "app.A": "", "app.Z": ""}
+
+
+async def test_tenant_schema_restore_and_subset() -> None:
+    connection = FakeGucConnection()
+    strategy = AsyncpgRLSStrategy(variable_keys={"a": "app.a", "b": "app.b"}, schema_resolver=lambda _: "tenant_a")
+    state = await strategy.checkout(connection, TenantContextPayload("a", variables={"b": "2"}))
+    assert connection.settings["search_path"] == '"tenant_a"'
+    assert connection.calls[0][1] == ("app.current_tenant_id", "a", "app.b", "2", "search_path", '"tenant_a"')
+    await strategy.checkin(connection, state)
+    assert connection.settings["search_path"] == '"$user", public'
+
+
+@pytest.mark.parametrize("case", ["busy", "unmapped", "schema", "missing", "corrupt"])
+async def test_tenant_checkout_fails_closed(case: str) -> None:
+    connection = FakeGucConnection()
+    connection.busy = case == "busy"
+    connection.missing = case == "missing"
+    connection.corrupt = case == "corrupt"
+    strategy = AsyncpgRLSStrategy(schema_resolver=(lambda _: "bad;schema") if case == "schema" else None)
+    payload = TenantContextPayload("a", variables={"region": "eu"} if case == "unmapped" else None)
+    with pytest.raises(TenantContextError):
+        await strategy.checkout(connection, payload)
+    if case in {"busy", "unmapped", "schema"}:
+        assert connection.calls == []
+
+
+@pytest.mark.parametrize("missing", [True, False])
+async def test_tenant_checkin_requires_verified_readback(missing: bool) -> None:
+    connection = FakeGucConnection()
+    strategy = AsyncpgRLSStrategy()
+    state = await strategy.checkout(connection, TenantContextPayload("a"))
+    connection.missing = missing
+    connection.corrupt = not missing
+    with pytest.raises(TenantCleanupError):
+        await strategy.checkin(connection, state)
+
+
+async def test_tenant_baseline_replay_is_batched() -> None:
+    connection = FakeGucConnection()
+    await apply_session_baseline(connection, {})
+    assert connection.calls == []
+    await apply_session_baseline(connection, {"timezone": "UTC", "statement_timeout": "5000"})
+    assert len(connection.calls) == 1
+    assert connection.settings == {"timezone": "UTC", "statement_timeout": "5000"}
+
+
+@pytest.mark.parametrize("mode", ["transaction", "statement", "auto"])
+def test_tenant_config_requires_session_affinity(mode: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match="session"):
+        validate_asyncpg_tenant_config({"pooler_mode": mode}, {})
+
+
+@pytest.mark.parametrize("source", ["hook", "init", "setup"])
+def test_tenant_callbacks_require_explicit_baseline(source: str) -> None:
+    callback = object()
+    features = {"on_connection_create": callback} if source == "hook" else {}
+    connection = {source: callback} if source != "hook" else {}
+    with pytest.raises(ImproperConfigurationError, match="tenant_session_baseline"):
+        validate_asyncpg_tenant_config(features, connection)
+    assert validate_asyncpg_tenant_config({**features, "tenant_session_baseline": {}}, connection) == {}
+
+
+def test_tenant_baseline_validates_values_and_conflicts() -> None:
+    assert validate_asyncpg_tenant_config({}, {}) == {}
+    assert validate_asyncpg_tenant_config({"tenant_session_baseline": {"timezone": "UTC"}}, {}) == {"timezone": "UTC"}
+    with pytest.raises(ImproperConfigurationError):
+        validate_asyncpg_tenant_config(
+            {"tenant_session_baseline": {"timezone": "UTC"}}, {"server_settings": {"timezone": "CET"}}
+        )
+    with pytest.raises(ImproperConfigurationError):
+        validate_asyncpg_tenant_config({"tenant_session_baseline": {"bad;key": "x"}}, {})
