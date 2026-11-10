@@ -285,3 +285,136 @@ async def test_async_percent_escapes_with_bound_values(psycopg_async_config: Psy
                 "remainder": 1,
                 "value": value,
             }
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("autocommit", [False, True])
+async def test_tenant_rls_reuse_and_transaction_ownership(
+    postgres_service: "PostgresService", asynchronous: bool, autocommit: bool
+) -> None:
+    """Both psycopg modes preserve tenant identity across native transactions."""
+    import inspect
+    from contextlib import asynccontextmanager
+    from uuid import uuid4
+
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.sql import SQL, Identifier, Literal
+
+    from sqlspec.exceptions import SQLSpecError, TenantCleanupError, TenantContextError
+    from sqlspec.utils.tenant import TenantContext
+
+    credentials = {
+        "host": postgres_service.host,
+        "port": postgres_service.port,
+        "user": postgres_service.user,
+        "password": postgres_service.password,
+        "dbname": postgres_service.database,
+    }
+    role = "sqlspec_tenant_" + uuid4().hex[:12]
+    table = "sqlspec_tenant_rows_" + uuid4().hex[:12]
+    admin = psycopg.connect(**credentials, autocommit=True)
+    admin.execute(
+        SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {}").format(
+            Identifier(role), Literal("sqlspec-tenant-test")
+        )
+    )
+    admin.execute(SQL("CREATE TABLE {} (tenant_id text NOT NULL, value integer NOT NULL)").format(Identifier(table)))
+    admin.execute(SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(Identifier(table)))
+    admin.execute(SQL("ALTER TABLE {} FORCE ROW LEVEL SECURITY").format(Identifier(table)))
+    admin.execute(
+        SQL(
+            "CREATE POLICY tenant_policy ON {} USING (tenant_id = current_setting('app.current_tenant_id', true)) WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true))"
+        ).format(Identifier(table))
+    )
+    admin.execute(SQL("GRANT SELECT, INSERT ON {} TO {}").format(Identifier(table), Identifier(role)))
+    config_type = PsycopgAsyncConfig if asynchronous else PsycopgSyncConfig
+    config = config_type(
+        connection_config={
+            **credentials,
+            "user": role,
+            "password": "sqlspec-tenant-test",
+            "min_size": 1,
+            "max_size": 1,
+            "autocommit": autocommit,
+            "row_factory": dict_row,
+        },
+        driver_features={"tenant_strategy": "rls"},
+    )
+
+    async def invoke(call: Any, *args: Any) -> Any:
+        value = call(*args)
+        return await value if inspect.isawaitable(value) else value
+
+    @asynccontextmanager
+    async def session_scope() -> Any:
+        if asynchronous:
+            async with config.provide_session() as session:
+                yield session
+        else:
+            with config.provide_session() as session:
+                yield session
+
+    quoted_table = Identifier(table).as_string(admin)
+    try:
+        first_pid = 0
+        for tenant, value in [("a", 1), ("b", 2)]:
+            with TenantContext.scope(tenant):
+                async with session_scope() as session:
+                    pid = await invoke(session.select_value, "SELECT pg_backend_pid()")
+                    assert pid == first_pid if first_pid else pid > 0
+                    first_pid = pid
+                    await invoke(session.execute, f"INSERT INTO {quoted_table} VALUES (%s, %s)", (tenant, value))
+                    await invoke(session.commit)
+                    assert (
+                        await invoke(session.select_value, "SELECT current_setting('app.current_tenant_id', true)")
+                        == tenant
+                    )
+                    assert await invoke(session.select_value, f"SELECT value FROM {quoted_table}") == value
+        with TenantContext.scope("a"):
+            async with session_scope() as session:
+                with pytest.raises(SQLSpecError):
+                    await invoke(session.execute, f"INSERT INTO {quoted_table} VALUES (%s, %s)", ("b", 3))
+                await invoke(session.rollback)
+                assert await invoke(session.select_value, f"SELECT value FROM {quoted_table}") == 1
+        with pytest.raises(TenantContextError):
+            async with session_scope():
+                pass
+        with TenantContext.scope("a"):
+            async with session_scope() as session:
+                await invoke(session.begin)
+                await invoke(session.execute, f"INSERT INTO {quoted_table} VALUES (%s, %s)", ("a", 99))
+        with TenantContext.scope("a"):
+            async with session_scope() as session:
+                assert await invoke(session.select_value, f"SELECT count(*) FROM {quoted_table}") == 1
+                assert await invoke(session.select_value, "SELECT pg_backend_pid()") == first_pid
+        strategy = config.driver_features["tenant_strategy"]
+
+        class FailingSyncStrategy:
+            def checkout(self, connection: Any, payload: Any) -> Any:
+                return strategy.checkout(connection, payload)
+
+            def checkin(self, connection: Any, state: Any) -> None:
+                raise TenantCleanupError("injected restore failure")
+
+        class FailingAsyncStrategy:
+            async def checkout(self, connection: Any, payload: Any) -> Any:
+                return await strategy.checkout(connection, payload)
+
+            async def checkin(self, connection: Any, state: Any) -> None:
+                raise TenantCleanupError("injected restore failure")
+
+        config.driver_features["tenant_strategy"] = FailingAsyncStrategy() if asynchronous else FailingSyncStrategy()
+        with TenantContext.scope("a"), pytest.raises(TenantCleanupError):
+            async with session_scope():
+                pass
+        config.driver_features["tenant_strategy"] = strategy
+        with TenantContext.scope("b"):
+            async with session_scope() as session:
+                assert await invoke(session.select_value, "SELECT pg_backend_pid()") != first_pid
+                assert await invoke(session.select_value, f"SELECT value FROM {quoted_table}") == 2
+    finally:
+        await invoke(config.close_pool)
+        admin.execute(SQL("DROP TABLE IF EXISTS {}").format(Identifier(table)))
+        admin.execute(SQL("DROP ROLE {}").format(Identifier(role)))
+        admin.close()
