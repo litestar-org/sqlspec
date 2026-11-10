@@ -29,7 +29,79 @@ from sqlspec.utils.type_guards import (
 from sqlspec.utils.uuids import nanoid, uuid4, uuid6, uuid7
 ```
 
-Reusable helpers for runtime type narrowing, JSON serialization, schema model conversion, UUID/NanoID generation, Apache Arrow batch/table coercion, table fixture loading/exporting, correlation tracking, and sync/async bridging.
+Reusable helpers for runtime type narrowing, JSON serialization, schema model conversion, UUID/NanoID generation, Apache Arrow batch/table coercion, table fixture loading/exporting, tenant and correlation tracking, and sync/async bridging.
+
+## Tenant Context
+
+Tenant scopes store an immutable identity in the current Python context. They perform no database I/O and do not enforce database isolation. Connection leases, adapter tenant strategies, and automatic framework extraction are not implemented.
+
+```python
+from sqlspec import TenantContext, TenantContextPayload
+
+tenant = TenantContextPayload("tenant-a", {"region": "west"})
+with TenantContext.scope(tenant):
+    print(TenantContext.get_tenant_id())
+    with TenantContext.bypass():
+        print(TenantContext.is_bypassed())
+        print(TenantContext.get_tenant_id())
+    print(TenantContext.get_tenant_id())
+```
+
+This prints `tenant-a`, `True`, `None`, and `tenant-a` in order.
+
+`TenantContextPayload` accepts a nonblank string or UUID, which it converts to a string. Identities must be NUL-free and at most 256 UTF-8 bytes (`MAX_TENANT_ID_BYTES`). Variables are copied into a read-only mapping; keys and values must be NUL-free strings. An existing payload passed to `scope()` is reused unless `variables` supplies merged overrides.
+
+`get()` returns the payload or `None` when unset. `get_tenant_id()` returns `None` for both unset and bypassed contexts; use `is_bypassed()` to distinguish explicit bypass. A bypass payload contains no identity or variables.
+
+Synchronous and asynchronous scopes restore the preceding payload on normal exit, exceptions, and cancellation. The async equivalents use the same context state:
+
+```python
+from sqlspec import TenantContext, async_tenant_bypass, async_tenant_scope
+
+
+async def read_tenant_context() -> tuple[str | None, bool]:
+    async with async_tenant_scope("tenant-a"):
+        tenant_id = TenantContext.get_tenant_id()
+        async with async_tenant_bypass():
+            bypassed = TenantContext.is_bypassed()
+        return tenant_id, bypassed
+```
+
+Async tasks inherit context when created, and changes stay local to their context. `asyncio.to_thread()` copies context; unmanaged threads and direct executor submissions require an explicit `contextvars.copy_context()`.
+
+Prefer scopes for automatic restoration. For manual binding, `set(payload)` or `set(None)` returns a token for `reset(token)` in the original context. `tenant_context_var` is available from `sqlspec.utils.tenant` for direct context access.
+
+Invalid identities, variable entries, bypass payloads, or values passed to `set()` raise `TenantContextError`, a subclass of both `SQLSpecError` and `ValueError`. Token misuse follows `ContextVar.reset()` errors. `TenantCleanupError` is exported for connection cleanup failures; context scopes do not raise it.
+
+::: sqlspec.utils.tenant.TenantContextPayload
+    options:
+      heading_level: 4
+      members: [bypass]
+
+::: sqlspec.utils.tenant.TenantContext
+    options:
+      heading_level: 4
+      members: [get, get_tenant_id, is_bypassed, set, reset, scope, bypass]
+
+::: sqlspec.utils.tenant.async_tenant_scope
+    options:
+      heading_level: 4
+      separate_signature: false
+
+::: sqlspec.utils.tenant.async_tenant_bypass
+    options:
+      heading_level: 4
+      separate_signature: false
+
+::: sqlspec.exceptions.TenantContextError
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.exceptions.TenantCleanupError
+    options:
+      heading_level: 4
+      members: false
 
 ## Schema, Serialization & Identifiers
 
