@@ -547,7 +547,8 @@ async def test_tenant_disabled_retains_native_provider(disabled: Any) -> None:
     context.__aenter__.return_value = connection
     pool = SimpleNamespace(acquire=lambda: context)
     config = PsqlpyConfig(
-        connection_instance=cast("PsqlpyConnectionPool", pool), driver_features={"tenant_strategy": disabled, "pooler_mode": "transaction"}
+        connection_instance=cast("PsqlpyConnectionPool", pool),
+        driver_features={"tenant_strategy": disabled, "pooler_mode": "transaction"},
     )
     assert config.driver_features["tenant_strategy"] is None
     assert config.driver_features["pooler_mode"] == "transaction"
@@ -585,7 +586,9 @@ async def test_tenant_public_provider_applies_captured_strategy(provider: str) -
     context.__aenter__.return_value = connection
     pool = SimpleNamespace(acquire=lambda: context)
     strategy = Strategy("custom")
-    config = PsqlpyConfig(connection_instance=cast("PsqlpyConnectionPool", pool), driver_features={"tenant_strategy": strategy})
+    config = PsqlpyConfig(
+        connection_instance=cast("PsqlpyConnectionPool", pool), driver_features={"tenant_strategy": strategy}
+    )
     assert config.driver_features["tenant_strategy"] is strategy
     with TenantContext.scope("a"):
         async with getattr(config, provider)() as acquired:
@@ -603,7 +606,9 @@ async def test_tenant_missing_scope_prevents_acquire(provider: str) -> None:
     from sqlspec.exceptions import TenantContextError
 
     pool = SimpleNamespace(acquire=Mock())
-    config = PsqlpyConfig(connection_instance=cast("PsqlpyConnectionPool", pool), driver_features={"tenant_strategy": "rls"})
+    config = PsqlpyConfig(
+        connection_instance=cast("PsqlpyConnectionPool", pool), driver_features={"tenant_strategy": "rls"}
+    )
     with pytest.raises(TenantContextError):
         async with getattr(config, provider)():
             pass
@@ -629,7 +634,8 @@ async def test_tenant_preparation_failure_releases_once(monkeypatch: pytest.Monk
     context = AsyncMock()
     context.__aenter__.return_value = connection
     config = PsqlpyConfig(
-        connection_instance=cast("PsqlpyConnectionPool", SimpleNamespace(acquire=lambda: context)), driver_features={"tenant_strategy": strategy}
+        connection_instance=cast("PsqlpyConnectionPool", SimpleNamespace(acquire=lambda: context)),
+        driver_features={"tenant_strategy": strategy},
     )
     error = RuntimeError("prepare failure")
 

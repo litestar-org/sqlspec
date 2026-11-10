@@ -43,11 +43,9 @@ def async_config() -> AiosqliteConfig:
 def test_migrations_reject_tenant_configuration(tenant_scope: bool, is_async: bool) -> None:
     config = AiosqliteConfig() if is_async else SqliteConfig()
     config.driver_features["tenant_strategy"] = object()
-    command_type = AsyncMigrationCommands if is_async else SyncMigrationCommands
-
     with TenantContext.scope("tenant-a") if tenant_scope else TenantContext.bypass():
         with pytest.raises(MigrationError, match=r"tenant_strategy.*separate configuration"):
-            command_type(config)
+            create_migration_commands(config)
 
 
 def test_migrations_reject_tenant_strategy_after_direct_config_derivation() -> None:
