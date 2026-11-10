@@ -169,12 +169,11 @@ async def _drop_lock_table(driver: OracleFamilyDriver, table: str) -> None:
 async def _tenant_oracle_session(
     config: OracleSyncConfig | OracleAsyncConfig,
 ) -> AsyncGenerator[OracleFamilyDriver, None]:
-    context = config.provide_session()
     if isinstance(config, OracleAsyncConfig):
-        async with context as session:
+        async with config.provide_session() as session:
             yield session
     else:
-        with context as session:
+        with config.provide_session() as session:
             yield session
 
 
@@ -288,10 +287,12 @@ async def test_tenant_failed_reset_replaces_physical_session(mode: str, oracle_2
         driver_features={"tenant_strategy": strategy_cls()},
     )
     query = "SELECT SYS_CONTEXT('USERENV', 'SID') || ':' || SYS_CONTEXT('USERENV', 'SESSIONID') FROM DUAL"
+    original: str | None = None
     try:
         with TenantContext.scope("a"), pytest.raises(TenantCleanupError):
             async with _tenant_oracle_session(config) as session:
                 original = await _invoke(_method(session, "select_value"), query)
+        assert isinstance(original, str)
         with TenantContext.bypass():
             async with _tenant_oracle_session(config) as session:
                 replacement = await _invoke(_method(session, "select_value"), query)
