@@ -226,5 +226,6 @@ class SQLSpecPlugin(_StarlettePlugin):
             "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
             "auto_trace_headers": framework_config.get("auto_trace_headers", True),
             "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
+            "tenant_extractor": framework_config.get("tenant_extractor"),
             "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "fastapi"),
         }

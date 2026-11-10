@@ -239,3 +239,245 @@ def test_config_state_by_key_unknown_key_raises_value_error() -> None:
     plugin = SQLSpecPlugin(SQLSpec())
     with pytest.raises(ValueError, match="No configuration found with session_key: missing"):
         plugin._config_state_by_key("missing")
+
+
+@pytest.mark.parametrize("framework", ["starlette", "fastapi"])
+def test_plugin_tenant_extractor_state_and_validation(framework: str) -> None:
+    from sqlspec.extensions.fastapi import SQLSpecPlugin as FastAPIPlugin
+
+    def extractor(scope: Any) -> str:
+        return "a"
+
+    config = AiosqliteConfig(extension_config={framework: {"tenant_extractor": extractor}})
+    sqlspec = SQLSpec()
+    sqlspec.add_config(config)
+    plugin = (FastAPIPlugin if framework == "fastapi" else SQLSpecPlugin)(sqlspec)
+    assert plugin._config_states[0].tenant_extractor is extractor
+
+    invalid = AiosqliteConfig(extension_config={framework: {"tenant_extractor": 123}})
+    invalid_sqlspec = SQLSpec()
+    invalid_sqlspec.add_config(invalid)
+    with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
+        (FastAPIPlugin if framework == "fastapi" else SQLSpecPlugin)(invalid_sqlspec)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
+@pytest.mark.parametrize("value", ["inner", None])
+async def test_tenant_extractor_binds_connection_entry_and_exit(middleware_type: Any, value: str | None) -> None:
+    from contextlib import asynccontextmanager
+
+    from sqlspec.utils.tenant import TenantContext
+
+    seen = []
+    connection = _Connection()
+
+    @asynccontextmanager
+    async def provide_connection(pool: Any) -> Any:
+        seen.append(("enter", TenantContext.get_tenant_id()))
+        try:
+            yield connection
+        finally:
+            seen.append(("exit", TenantContext.get_tenant_id()))
+
+    config = SimpleNamespace(supports_connection_pooling=True, provide_connection=provide_connection)
+    state = _make_state(config)
+    state.tenant_extractor = lambda scope: value
+    middleware = middleware_type(app=object(), config_state=state)
+    request = _make_request(object())
+    request.scope = {}
+    with TenantContext.scope("outer"):
+        async with middleware._connection_cm(request):
+            assert TenantContext.get_tenant_id() == value
+        assert TenantContext.get_tenant_id() == "outer"
+    assert seen == [("enter", value), ("exit", value)]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
+async def test_tenant_extractor_rejection_prevents_acquisition(middleware_type: Any) -> None:
+    from sqlspec.exceptions import TenantContextError
+
+    config = _Config(pooled=False, connection=_Connection())
+    state = _make_state(config)
+    state.tenant_extractor = lambda scope: 123
+    middleware = middleware_type(app=object(), config_state=state)
+    request = _make_request()
+    request.scope = {}
+    with pytest.raises(TenantContextError):
+        async with middleware._connection_cm(request):
+            pytest.fail("invalid tenant acquired a connection")
+    assert config.created is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("framework", ["starlette", "fastapi"])
+@pytest.mark.parametrize("mode", ["manual", "autocommit"])
+@pytest.mark.parametrize("failure", [None, "body", "background", "cancel", "send"])
+async def test_tenant_stream_keeps_connection_through_body_and_background(
+    framework: str, mode: str, failure: str | None
+) -> None:
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    from starlette.background import BackgroundTask
+    from starlette.responses import StreamingResponse
+
+    from sqlspec.utils.tenant import TenantContext
+
+    events: list[str] = []
+    first_sent = asyncio.Event()
+    gate = asyncio.Event()
+    active = False
+
+    async def query(stage: str) -> None:
+        assert active, "database connection released before delayed I/O"
+        assert TenantContext.get_tenant_id() == "inner"
+        events.append(stage)
+
+    async def commit() -> None:
+        await query("commit")
+
+    async def rollback() -> None:
+        await query("rollback")
+
+    connection = SimpleNamespace(commit=commit, rollback=rollback)
+
+    @asynccontextmanager
+    async def provide_connection(pool: Any) -> Any:
+        nonlocal active
+        active = True
+        events.append("acquire")
+        try:
+            yield connection
+        finally:
+            events.append("release")
+            active = False
+
+    async def body() -> Any:
+        try:
+            yield b"first"
+            await gate.wait()
+            await query("body_query")
+            if failure == "body":
+                raise ValueError("body failure")
+            yield b"last"
+        finally:
+            events.append("generator_exit")
+
+    async def background() -> None:
+        await query("background_query")
+        if failure == "background":
+            raise ValueError("background failure")
+
+    async def endpoint(request: Request) -> StreamingResponse:
+        return StreamingResponse(body(), background=BackgroundTask(background))
+
+    if framework == "fastapi":
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.add_api_route("/", endpoint)
+    else:
+        app = Starlette(routes=[Route("/", endpoint)])
+    config = SimpleNamespace(supports_connection_pooling=True, provide_connection=provide_connection)
+    state = _make_state(config, cast("CommitMode", mode))
+    state.tenant_extractor = lambda scope: "inner"
+    middleware_type = SQLSpecManualMiddleware if mode == "manual" else SQLSpecAutocommitMiddleware
+    middleware = middleware_type(app=app, config_state=state)
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.4"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 123),
+        "server": ("test", 80),
+        "app": SimpleNamespace(state=SimpleNamespace(db_pool=object())),
+    }
+    request_received = False
+
+    async def receive() -> Any:
+        nonlocal request_received
+        if not request_received:
+            request_received = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await asyncio.Event().wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: Any) -> None:
+        if message["type"] == "http.response.body":
+            if message.get("body") == b"first":
+                events.append("first_sent")
+                first_sent.set()
+            if message.get("body") == b"last" and failure == "send":
+                raise OSError("send failure")
+            if not message.get("more_body", False):
+                events.append("final_sent")
+
+    with TenantContext.scope("outer"):
+        task = asyncio.create_task(middleware(scope, receive, send))
+        await asyncio.wait_for(first_sent.wait(), timeout=3)
+        assert active
+        assert events == ["acquire", "first_sent"]
+        if failure == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            gate.set()
+            if failure is None:
+                await asyncio.wait_for(task, timeout=3)
+            else:
+                with pytest.raises((ValueError, OSError), match=f"{failure} failure"):
+                    await asyncio.wait_for(task, timeout=3)
+        assert TenantContext.get_tenant_id() == "outer"
+    assert events.count("acquire") == events.count("release") == 1
+    assert events[-1] == "release"
+    assert not active
+    if failure is None:
+        assert events.index("body_query") < events.index("final_sent")
+        assert events.index("background_query") < events.index("release")
+        if mode == "autocommit":
+            assert events.index("background_query") < events.index("commit") < events.index("release")
+    if mode == "manual":
+        assert "commit" not in events and "rollback" not in events
+    elif failure is not None:
+        assert "commit" not in events
+        assert events.count("rollback") == 1
+
+
+@pytest.mark.anyio
+async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
+    from contextlib import asynccontextmanager
+
+    connection = _Connection()
+
+    @asynccontextmanager
+    async def provide_connection(pool: Any) -> Any:
+        yield connection
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"partial", "more_body": True})
+
+    async def receive() -> Any:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    messages = []
+
+    async def send(message: Any) -> None:
+        messages.append(message)
+
+    config = SimpleNamespace(supports_connection_pooling=True, provide_connection=provide_connection)
+    state = _make_state(config, "autocommit")
+    middleware = SQLSpecAutocommitMiddleware(app=app, config_state=state)
+    scope = {"type": "http", "app": SimpleNamespace(state=SimpleNamespace(db_pool=object()))}
+    await middleware(scope, receive, send)
+    assert messages[-1] == {"type": "http.response.body", "body": b"", "more_body": False}
+    assert connection.rolled_back is True
+    assert connection.committed is False

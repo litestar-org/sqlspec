@@ -217,6 +217,7 @@ class SQLSpecPlugin:
             "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
             "auto_trace_headers": framework_config.get("auto_trace_headers", True),
             "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
+            "tenant_extractor": framework_config.get("tenant_extractor"),
             "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "starlette"),
         }
 
@@ -245,6 +246,7 @@ class SQLSpecPlugin:
             auto_trace_headers=settings["auto_trace_headers"],
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             sqlcommenter_framework=settings["sqlcommenter_framework"],
+            tenant_extractor=settings.get("tenant_extractor"),
         )
 
     def _ensure_unique_keys(self) -> None:
