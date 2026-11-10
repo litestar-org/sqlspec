@@ -37,7 +37,9 @@ class SyncTenantStrategy(Protocol):
 
     __slots__ = ()
 
-    def checkout(self, connection: Any, payload: "TenantContextPayload") -> TenantLeaseState: ...
+    def checkout(
+        self, connection: Any, payload: "TenantContextPayload"
+    ) -> TenantLeaseState | Mapping[str, str | None]: ...
     def checkin(self, connection: Any, state: TenantLeaseState) -> None: ...
 
 
@@ -46,7 +48,9 @@ class AsyncTenantStrategy(Protocol):
 
     __slots__ = ()
 
-    async def checkout(self, connection: Any, payload: "TenantContextPayload") -> TenantLeaseState: ...
+    async def checkout(
+        self, connection: Any, payload: "TenantContextPayload"
+    ) -> TenantLeaseState | Mapping[str, str | None]: ...
     async def checkin(self, connection: Any, state: TenantLeaseState) -> None: ...
 
 
