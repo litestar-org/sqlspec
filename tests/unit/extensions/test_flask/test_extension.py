@@ -156,3 +156,145 @@ def test_config_state_by_key_unknown_key_raises_improper_configuration_error() -
     plugin = SQLSpecPlugin(SQLSpec())
     with pytest.raises(ImproperConfigurationError, match="No configuration found for key: missing"):
         plugin._config_state_by_key("missing")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("identity", ["a", "uuid", "bypass", "none"])
+def test_tenant_extractor_binds_before_flask_acquisition(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool, identity: str
+) -> None:
+    from contextlib import asynccontextmanager, contextmanager
+    from uuid import UUID
+
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    raw = {"a": "a", "uuid": UUID(int=1), "bypass": TenantContextPayload.bypass(), "none": None}[identity]
+    seen = []
+
+    def extractor() -> Any:
+        return raw
+
+    @contextmanager
+    def connection_context(self: Any, pool: Any = None) -> Any:
+        seen.append(TenantContext.get())
+        yield object()
+
+    @asynccontextmanager
+    async def async_connection_context(self: Any, pool: Any = None) -> Any:
+        seen.append(TenantContext.get())
+        yield object()
+
+    config_type = AiosqliteConfig if asynchronous else SqliteConfig
+    monkeypatch.setattr(
+        config_type, "provide_connection", async_connection_context if asynchronous else connection_context
+    )
+    config = config_type(
+        connection_config={"database": ":memory:"}, extension_config={"flask": {"tenant_extractor": extractor}}
+    )
+    spec = SQLSpec()
+    spec.add_config(config)
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(spec, app)
+    app.add_url_rule("/", view_func=lambda: "ok")
+    try:
+        with TenantContext.scope("outer"):
+            result = app.test_client().get("/")
+            assert result.status_code == 200
+            assert TenantContext.get_tenant_id() == "outer"
+        assert seen == [
+            None if raw is None else (raw if isinstance(raw, TenantContextPayload) else TenantContextPayload(raw))
+        ]
+    finally:
+        plugin.shutdown()
+
+
+@pytest.mark.parametrize("invalid", ["missing", "async", "conflict"])
+def test_flask_rejects_invalid_tenant_extractors(monkeypatch: pytest.MonkeyPatch, invalid: str) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(SqliteConfig, "supports_tenant_strategy", True)
+
+    async def async_extractor() -> str:
+        return "a"
+
+    spec = SQLSpec()
+    first_extractor = (lambda: "a") if invalid == "conflict" else async_extractor if invalid == "async" else None
+    cfg = SqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"flask": {"tenant_extractor": first_extractor}}
+    )
+    cfg.driver_features["tenant_strategy"] = SimpleNamespace(checkout=lambda *args: None, checkin=lambda *args: None)
+    spec.add_config(cfg)
+    if invalid == "conflict":
+        spec.add_config(
+            SqliteConfig(
+                connection_config={"database": ":memory:"},
+                extension_config={"flask": {"session_key": "other", "tenant_extractor": lambda: "b"}},
+            )
+        )
+    with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
+        SQLSpecPlugin(spec, Flask(__name__))
+
+
+def test_flask_tenant_resets_after_handler_error_and_short_circuit() -> None:
+    from sqlspec.utils.tenant import TenantContext
+
+    spec = SQLSpec()
+    spec.add_config(
+        SqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={"flask": {"tenant_extractor": lambda req: "a"}},
+        )
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(spec, app)
+
+    seen = []
+
+    @app.get("/")
+    def error_handler() -> str:
+        seen.append(TenantContext.get_tenant_id())
+        raise ValueError("handler")
+
+    try:
+        with TenantContext.scope("outer"):
+            assert app.test_client().get("/").status_code == 500
+            assert TenantContext.get_tenant_id() == "outer"
+            assert seen == ["a"]
+    finally:
+        plugin.shutdown()
+    early = Flask("early")
+    early.before_request(lambda: ("denied", 401))
+    plugin = SQLSpecPlugin(spec, early)
+    try:
+        with TenantContext.scope("outer"):
+            assert early.test_client().get("/").status_code == 401
+            assert TenantContext.get_tenant_id() == "outer"
+    finally:
+        plugin.shutdown()
+
+
+def test_flask_extractor_failure_leaves_ambient_context_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.utils.tenant import TenantContext
+
+    def extractor() -> str:
+        raise KeyError("authentication failed")
+
+    def unexpected_acquire(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("No connection may be acquired after extractor failure")
+
+    monkeypatch.setattr(SqliteConfig, "provide_connection", unexpected_acquire)
+    spec = SQLSpec()
+    spec.add_config(
+        SqliteConfig(
+            connection_config={"database": ":memory:"}, extension_config={"flask": {"tenant_extractor": extractor}}
+        )
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(spec, app)
+    app.add_url_rule("/", view_func=lambda: "ok")
+    try:
+        with TenantContext.scope("outer"):
+            assert app.test_client().get("/").status_code == 500
+            assert TenantContext.get_tenant_id() == "outer"
+    finally:
+        plugin.shutdown()

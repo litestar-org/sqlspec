@@ -1,8 +1,9 @@
 """Flask extension for SQLSpec database integration."""
 
 import atexit
+import inspect
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
@@ -20,8 +21,12 @@ from sqlspec.extensions.flask._utils import (
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantExtractorValue, coerce_tenant_payload
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractAsyncContextManager
+
     from flask import Flask, Response
 
 __all__ = ("SQLSpecPlugin",)
@@ -30,6 +35,15 @@ logger = get_logger("sqlspec.extensions.flask")
 
 DEFAULT_COMMIT_MODE: Literal["manual"] = "manual"
 DEFAULT_SESSION_KEY = "db_session"
+_TENANT_SCOPE_KEY: Final = "sqlspec_tenant_token"
+
+
+async def _enter_tenant_connection(conn_ctx: Any, payload: TenantContextPayload | None) -> Any:
+    token = TenantContext.set(payload)
+    try:
+        return await conn_ctx.__aenter__()
+    finally:
+        TenantContext.reset(token)
 
 
 class SQLSpecPlugin:
@@ -55,6 +69,8 @@ class SQLSpecPlugin:
         self._enable_correlation = False
         self._enable_sqlcommenter = False
         self._extractor: CorrelationExtractor | None = None
+        self._tenant_extractor: Callable[..., TenantExtractorValue] | None = None
+        self._tenant_extractor_takes_request = False
 
         for cfg in self._sqlspec.configs.values():
             state = self._config_state(cfg)
@@ -97,6 +113,7 @@ class SQLSpecPlugin:
             raise ImproperConfigurationError(msg)
 
         self._ensure_unique_keys()
+        self._configure_tenant_extractor()
 
         if self._has_async_configs:
             self._portal = PortalProvider()
@@ -236,6 +253,7 @@ class SQLSpecPlugin:
             extra_commit_statuses=extra_commit_statuses,
             extra_rollback_statuses=extra_rollback_statuses,
             is_async=is_async,
+            tenant_extractor=flask_config.get("tenant_extractor"),
             disable_di=disable_di,
             enable_correlation_middleware=enable_correlation,
             correlation_header=correlation_header,
@@ -243,6 +261,39 @@ class SQLSpecPlugin:
             auto_trace_headers=auto_trace_headers,
             enable_sqlcommenter_middleware=enable_sqlcommenter,
         )
+
+    def _configure_tenant_extractor(self) -> None:
+        for state in self._config_states:
+            if state.disable_di:
+                continue
+            extractor = state.tenant_extractor
+            if state.config.driver_features.get("tenant_strategy") is not None and extractor is None:
+                msg = f"Flask session {state.session_key!r} requires tenant_extractor for tenant strategy"
+                raise ImproperConfigurationError(msg)
+            if extractor is None:
+                continue
+            if (
+                not callable(extractor)
+                or inspect.iscoroutinefunction(extractor)
+                or inspect.iscoroutinefunction(type(extractor).__call__)
+            ):
+                msg = "Flask tenant_extractor must be a synchronous callable"
+                raise ImproperConfigurationError(msg)
+            if self._tenant_extractor is not None and self._tenant_extractor is not extractor:
+                msg = "Flask configurations must share the same tenant_extractor"
+                raise ImproperConfigurationError(msg)
+            self._tenant_extractor = extractor
+        if self._tenant_extractor is not None:
+            extractor_signature = inspect.signature(self._tenant_extractor)
+            try:
+                extractor_signature.bind()
+            except TypeError:
+                try:
+                    extractor_signature.bind(object())
+                except TypeError as exc:
+                    msg = "Flask tenant_extractor must accept zero arguments or one request"
+                    raise ImproperConfigurationError(msg) from exc
+                self._tenant_extractor_takes_request = True
 
     def _ensure_unique_keys(self) -> None:
         """Validate that all state keys are unique across configs.
@@ -292,6 +343,11 @@ class SQLSpecPlugin:
                 attrs["action"] = endpoint
             SQLCommenterContext.set(attrs)
 
+        if self._tenant_extractor is not None:
+            raw = self._tenant_extractor(request) if self._tenant_extractor_takes_request else self._tenant_extractor()
+            payload = coerce_tenant_payload(raw)
+            set_context_value(g, _TENANT_SCOPE_KEY, TenantContext.set(payload))
+
         for config_state in self._config_states:
             if config_state.disable_di:
                 continue
@@ -301,7 +357,13 @@ class SQLSpecPlugin:
                 conn_ctx = config_state.config.provide_connection(pool)
 
                 if config_state.is_async:
-                    connection = self._portal.portal.call(conn_ctx.__aenter__)  # type: ignore[union-attr]
+                    assert self._portal is not None
+                    if self._tenant_extractor is not None:
+                        connection = self._portal.portal.call(_enter_tenant_connection, conn_ctx, TenantContext.get())
+                    else:
+                        connection = self._portal.portal.call(
+                            cast("AbstractAsyncContextManager[Any]", conn_ctx).__aenter__
+                        )
                 else:
                     connection = conn_ctx.__enter__()  # type: ignore[union-attr]
 
@@ -353,6 +415,17 @@ class SQLSpecPlugin:
         return response
 
     def _teardown_appcontext_handler(self, _exc: "BaseException | None" = None) -> None:
+        """Release request connections and always restore the caller's tenant context."""
+        from flask import g
+
+        try:
+            self._close_request_connections(_exc)
+        finally:
+            token = pop_context_value(g, _TENANT_SCOPE_KEY)
+            if token is not None:
+                TenantContext.reset(token)
+
+    def _close_request_connections(self, _exc: "BaseException | None" = None) -> None:
         """Clean up connections when request context ends.
 
         Rolls back uncommitted transactions when an unhandled exception occurred,

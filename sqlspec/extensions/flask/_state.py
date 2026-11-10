@@ -1,10 +1,12 @@
 """Flask configuration state management."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.utils.tenant import TenantExtractorValue
 
 __all__ = ("FlaskConfigState",)
 
@@ -28,6 +30,7 @@ class FlaskConfigState:
     extra_rollback_statuses: "set[int] | None"
     is_async: bool
     disable_di: bool
+    tenant_extractor: Callable[..., TenantExtractorValue] | None = None
     enable_correlation_middleware: bool = True
     correlation_header: str = "x-request-id"
     correlation_headers: "tuple[str, ...] | None" = None

@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
     from sqlspec.storage import StorageCapabilities
+    from sqlspec.utils.tenant import TenantExtractorValue
 
 
 __all__ = (
@@ -322,6 +323,9 @@ class FlaskConfig(TypedDict):
 
     All fields are optional with sensible defaults. Use in extension_config["flask"]:
     """
+
+    tenant_extractor: NotRequired[Callable[..., "TenantExtractorValue"]]
+    """Return the authorized tenant payload, string, UUID, or None for the request. Required with a tenant strategy. Accepts zero arguments or the Flask request."""
 
     connection_key: NotRequired[str]
     """Key for storing connection in Flask g object. Default: auto-generated from session_key."""
