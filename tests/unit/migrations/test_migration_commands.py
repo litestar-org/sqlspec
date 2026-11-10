@@ -1671,6 +1671,7 @@ def test_versioned_extensions_skip_out_of_order_and_checksum_warnings(tmp_path: 
             "version": "ext_demo_0001",
             "description": "init",
             "file_path": tmp_path / "0001_init.sql",
+            "content": "-- name: migrate-0001-up\nSELECT 1;\n",
             "checksum": "new_package_checksum",
             "replaces": [],
             "loader": MagicMock(),

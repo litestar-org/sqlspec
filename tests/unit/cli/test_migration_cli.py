@@ -594,18 +594,13 @@ def _reconcile_cli_config(bind_key: str, db_path: Path, migrations_dir: Path, ex
 
 @pytest.mark.parametrize(
     "cli_args",
-    [
-        ("upgrade", "0001", "--dry-run", "--no-prompt"),
-        ("upgrade", "0001", "--no-prompt"),
-        ("downgrade", "--dry-run", "--no-prompt"),
-        ("downgrade", "--no-prompt"),
-    ],
-    ids=["upgrade-dry", "upgrade-live", "downgrade-dry", "downgrade-live"],
+    [("upgrade", "0001", "--dry-run", "--no-prompt"), ("downgrade", "--dry-run", "--no-prompt")],
+    ids=["upgrade-dry", "downgrade-dry"],
 )
-def test_cli_single_and_multi_config_reject_historical_ops_with_reconcilers(
+def test_cli_single_and_multi_config_dry_run_ops_succeed_without_importing_reconcilers(
     tmp_path: Path, cli_args: tuple[str, ...]
 ) -> None:
-    """Single- and multi-config CLI non-head upgrade and downgrade exit 1 with ClickException when reconcilers exist."""
+    """Single- and multi-config CLI dry-run upgrade and downgrade succeed without importing reconcile.py."""
     migrations_dir = tmp_path / "migrations"
     _write_migrations(migrations_dir)
     ext_dir = tmp_path / "ext_demo"
@@ -614,19 +609,41 @@ def test_cli_single_and_multi_config_reject_historical_ops_with_reconcilers(
 
     cfg1 = _reconcile_cli_config("primary", tmp_path / "one.db", migrations_dir, ext_dir)
     single_res = _invoke(cfg1, *cli_args)
-    _assert_cli_error(single_res, "demo")
-    assert "Would upgrade" not in single_res.output
-    assert "Would downgrade" not in single_res.output
+    assert single_res.exit_code == 0, single_res.output
+
+    cfg2 = _sqlite_config(tmp_path / "two.db", migrations_dir)
+    cfg2.bind_key = "secondary"
+    multi_res = _invoke([cfg1, cfg2], *cli_args)
+    assert multi_res.exit_code == 0, multi_res.output
+
+
+@pytest.mark.parametrize(
+    "cli_args",
+    [("upgrade", "0001", "--no-prompt"), ("downgrade", "--no-prompt")],
+    ids=["upgrade-live", "downgrade-live"],
+)
+def test_cli_single_and_multi_config_live_ops_report_reconciler_errors(
+    tmp_path: Path, cli_args: tuple[str, ...]
+) -> None:
+    """Single- and multi-config CLI live upgrade and base downgrade surface reconciler errors cleanly."""
+    migrations_dir = tmp_path / "migrations"
+    _write_migrations(migrations_dir)
+    ext_dir = tmp_path / "ext_demo"
+    ext_dir.mkdir()
+    (ext_dir / "reconcile.py").write_text(
+        'from sqlspec.exceptions import MigrationError\nraise_err = MigrationError("demo_reconcile_failed")\ndef reconcile(context):\n    raise raise_err\ndef downgrade(context):\n    raise raise_err\n',
+        encoding="utf-8",
+    )
+
+    cfg1 = _reconcile_cli_config("primary", tmp_path / "one.db", migrations_dir, ext_dir)
+    single_res = _invoke(cfg1, *cli_args)
+    _assert_cli_error(single_res, "demo_reconcile_failed")
 
     cfg2 = _sqlite_config(tmp_path / "two.db", migrations_dir)
     cfg2.bind_key = "secondary"
     multi_res = _invoke([cfg1, cfg2], *cli_args)
     assert multi_res.exit_code == 1, multi_res.output
     assert isinstance(multi_res.exception, SystemExit)
-    assert "Would upgrade" not in multi_res.output
-    assert "Would downgrade" not in multi_res.output
-    if "--dry-run" in cli_args:
-        assert "demo" in multi_res.output
 
 
 def test_cli_multi_config_head_dry_run_succeeds_and_missing_reconcile_module_exits_cleanly(tmp_path: Path) -> None:
