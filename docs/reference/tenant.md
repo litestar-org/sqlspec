@@ -101,7 +101,7 @@ Extractors return an app-authorized `TenantContextPayload`, string, UUID, or `No
 
 ## Strategy and Lease Contracts
 
-A strategy returns `TenantLeaseState` from checkout and restores its captured baseline at checkin. Implement these interfaces structurally. Interpreted strategies must not inherit compiled protocols. Built-in adapters own connection acquisition, transaction completion, release, and physical disposal.
+A strategy returns `TenantLeaseState` or a baseline `Mapping[str, str | None]` from checkout. The lease freezes a returned mapping with the captured payload before checkin. Implement these interfaces structurally. Interpreted strategies must not inherit compiled protocols. Built-in adapters own connection acquisition, transaction completion, release, and physical disposal.
 
 ::: sqlspec.core.tenant.base.TenantLeaseState
     options:

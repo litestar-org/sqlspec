@@ -7,7 +7,7 @@ important operational fixes.
 
 ## Recent Updates
 
-* Added opt-in tenant leases and database-policy strategies for PostgreSQL, Oracle, SQL Server, and CockroachDB, with restoring context scopes, explicit bypass, and framework tenant extraction. Missing tenant identity fails before acquisition; failed cleanup discards the connection. Migrations require a separate configuration without `tenant_strategy`. See [Multi-Tenancy](learn/recipes/multi-tenancy.md).
+* Added tenant leases for PostgreSQL, Oracle, SQL Server, and CockroachDB. Request hooks bind each lease to a tenant scope. Failed cleanup keeps the connection out of the pool. Migrations use a separate config and pool. See [Multi-Tenancy](learn/recipes/multi-tenancy.md).
 
 ### v0.72.0
 

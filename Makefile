@@ -237,8 +237,8 @@ coverage:                                           ## Run tests with coverage r
 	@uv run pytest --cov --cov-append --cov-report= --cov-fail-under=0 -n $(INTEGRATION_WORKERS) --dist=loadgroup --run-bigquery-tests --run-spanner-tests --quiet \
 		$(SHARD_CLOUD_ADBC_STORAGE)
 	@uv run coverage report --fail-under=0
-	@uv run coverage html >/dev/null 2>&1
-	@uv run coverage xml >/dev/null 2>&1
+	@uv run coverage html --fail-under=0 >/dev/null 2>&1
+	@uv run coverage xml --fail-under=0 >/dev/null 2>&1
 	@echo "${OK} Coverage report generated ✨"
 
 # -----------------------------------------------------------------------------
