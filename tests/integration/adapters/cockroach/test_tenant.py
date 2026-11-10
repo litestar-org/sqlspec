@@ -1,7 +1,7 @@
 """CockroachDB policies enforce tenant identity on the real provider boundaries."""
 
 from collections.abc import Generator
-from typing import Any
+from typing import Any, LiteralString
 
 import psycopg
 import pytest
@@ -56,6 +56,14 @@ class _InvalidRestore:
         self.checkin = fail_async if asynchronous else fail_sync
 
 
+def _native_scalar(connection: psycopg.Connection[Any], query: LiteralString) -> object:
+    row = connection.execute(query).fetchone()
+    if row is None:
+        msg = "Native scalar query returned no row"
+        raise AssertionError(msg)
+    return row[0]
+
+
 def _assert_rows(driver: Any, identity: str) -> None:
     assert {row["tenant_id"] for row in driver.select("SELECT tenant_id FROM sqlspec_tenant_rows")} == {identity}
     assert driver.select_value("SELECT current_setting('app.region', true)") == ("eu" if identity == "a" else "")
@@ -92,17 +100,18 @@ def test_tenant_cockroach_psycopg_sync_isolation(tenant_connection_settings: tup
         with TenantContext.scope("a"), config.provide_session() as driver, pytest.raises(SQLSpecError):
             driver.execute("INSERT INTO sqlspec_tenant_rows VALUES ('b', 2)")
         with TenantContext.scope("a"), config.provide_connection() as conn:
-            assert conn.execute("SELECT current_setting('app.current_tenant_id', true)").fetchone()[0] == "a"
+            assert _native_scalar(conn, "SELECT current_setting('app.current_tenant_id', true)") == "a"
         with config.provide_pool().connection() as conn:
-            assert conn.execute("SELECT current_setting('app.current_tenant_id', true)").fetchone()[0] in (None, "")
+            assert _native_scalar(conn, "SELECT current_setting('app.current_tenant_id', true)") in (None, "")
         strategy = config.driver_features["tenant_strategy"]
         config.driver_features["tenant_strategy"] = _InvalidRestore(strategy, False)
+        failed_pid: object = None
         with TenantContext.scope("a"), pytest.raises(TenantCleanupError):
             with config.provide_connection() as conn:
-                failed_pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+                failed_pid = _native_scalar(conn, "SELECT pg_backend_pid()")
         config.driver_features["tenant_strategy"] = strategy
         with TenantContext.scope("a"), config.provide_connection() as conn:
-            assert conn.execute("SELECT pg_backend_pid()").fetchone()[0] != failed_pid
+            assert _native_scalar(conn, "SELECT pg_backend_pid()") != failed_pid
 
     finally:
         config.close_pool()
@@ -157,6 +166,7 @@ async def test_tenant_cockroach_async_isolation(
                 assert (await cursor.fetchone())[0] in (None, "")
         strategy = config.driver_features["tenant_strategy"]
         config.driver_features["tenant_strategy"] = _InvalidRestore(strategy, True)
+        failed_pid: object = None
         with TenantContext.scope("a"), pytest.raises(TenantCleanupError):
             async with config.provide_connection() as conn:
                 if adapter == "asyncpg":

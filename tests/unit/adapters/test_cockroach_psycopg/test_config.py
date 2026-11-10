@@ -1418,7 +1418,7 @@ async def test_tenant_session_entry_failure_releases_once(asynchronous: bool, st
         prepare_driver=prepare,
     )
     with pytest.raises(RuntimeError) as raised:
-        if asynchronous:
+        if isinstance(context, CockroachPsycopgAsyncSessionContext):
             async with context:
                 pass
         else:

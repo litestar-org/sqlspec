@@ -1,6 +1,6 @@
 """Session-context strategy behavior through recording native cursor seams."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -8,6 +8,9 @@ from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrate
 from sqlspec.core.tenant import TenantLeaseState
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContextPayload
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.mssql_python import MssqlPythonConnection
 
 
 class BatchConnection:
@@ -83,7 +86,7 @@ def test_tenant_context_batches_capture_restore_and_binds(autocommit: bool) -> N
     connection = BatchConnection(autocommit=autocommit)
     strategy = MssqlPythonSessionContextStrategy(variable_keys={"z": "zone", "a": "area"})
     payload = TenantContextPayload("a'; DROP TABLE x;--", variables={"z": "1", "a": "2"})
-    state = strategy.checkout(connection, payload)
+    state = strategy.checkout(cast("MssqlPythonConnection", connection), payload)
     assert state.baseline == {"tenant_id": "prior", "area": None, "zone": None}
     assert connection.values == {"tenant_id": payload.tenant_id, "area": "2", "zone": "1"}
     assert len(connection.calls) == 1
@@ -104,7 +107,7 @@ def test_tenant_context_batches_capture_restore_and_binds(autocommit: bool) -> N
         "area",
         "zone",
     )
-    strategy.checkin(connection, state)
+    strategy.checkin(cast("MssqlPythonConnection", connection), state)
     assert len(connection.calls) == 2
     assert connection.calls[1][0].count("?") == 9
     assert connection.values == {"tenant_id": "prior", "area": None, "zone": None}
@@ -119,10 +122,13 @@ def test_tenant_context_rejects_malformed_batch(malformed: str, cleanup: bool) -
     strategy = MssqlPythonSessionContextStrategy()
     if cleanup:
         with pytest.raises(TenantCleanupError):
-            strategy.checkin(conn, TenantLeaseState(TenantContextPayload("a"), baseline={"tenant_id": "baseline"}))
+            strategy.checkin(
+                cast("MssqlPythonConnection", conn),
+                TenantLeaseState(TenantContextPayload("a"), baseline={"tenant_id": "baseline"}),
+            )
     else:
         with pytest.raises(TenantContextError):
-            strategy.checkout(conn, TenantContextPayload("a"))
+            strategy.checkout(cast("MssqlPythonConnection", conn), TenantContextPayload("a"))
     assert len(conn.calls) == 1
     assert conn.closed == 1
 
@@ -146,8 +152,8 @@ def test_tenant_context_unmapped_variable_and_empty_cleanup() -> None:
     conn = BatchConnection()
     strategy = MssqlPythonSessionContextStrategy()
     with pytest.raises(TenantContextError):
-        strategy.checkout(conn, TenantContextPayload("a", variables={"region": "eu"}))
-    strategy.checkin(conn, TenantLeaseState(TenantContextPayload("a"), baseline={}))
+        strategy.checkout(cast("MssqlPythonConnection", conn), TenantContextPayload("a", variables={"region": "eu"}))
+    strategy.checkin(cast("MssqlPythonConnection", conn), TenantLeaseState(TenantContextPayload("a"), baseline={}))
     assert conn.calls == []
     assert conn.closed == 0
 
