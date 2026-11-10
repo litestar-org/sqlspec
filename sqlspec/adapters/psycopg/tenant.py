@@ -113,10 +113,12 @@ def build_psycopg_sync_tenant_lease(config: Any, *, rollback_on_exit: bool = Fal
     from sqlspec.driver._tenant import SyncTenantLease
 
     context: Any = None
+    pool: Any = None
 
     def acquire() -> Any:
-        nonlocal context
-        context = config.provide_pool().connection()
+        nonlocal context, pool
+        pool = config.provide_pool()
+        context = pool.connection()
         return context.__enter__()
 
     def release(_connection: Any) -> None:
@@ -126,7 +128,15 @@ def build_psycopg_sync_tenant_lease(config: Any, *, rollback_on_exit: bool = Fal
             current.__exit__(None, None, None)
 
     def invalidate(connection: Any) -> None:
-        connection.close()
+        try:
+            connection.close()
+        except BaseException as close_error:
+            try:
+                pool.close(timeout=0)
+            except BaseException as quarantine_error:
+                msg = f"Physical close failed: {close_error!r}; pool quarantine failed: {quarantine_error!r}"
+                raise TenantCleanupError(msg) from close_error
+            raise
         release(connection)
 
     def finish_transaction(connection: Any, exc_type: type[BaseException] | None) -> None:
@@ -149,9 +159,10 @@ def build_psycopg_async_tenant_lease(config: Any, *, rollback_on_exit: bool = Fa
     from sqlspec.driver._tenant import AsyncTenantLease
 
     context: Any = None
+    pool: Any = None
 
     async def acquire() -> Any:
-        nonlocal context
+        nonlocal context, pool
         pool = await config.provide_pool()
         context = pool.connection()
         return await context.__aenter__()
@@ -163,7 +174,15 @@ def build_psycopg_async_tenant_lease(config: Any, *, rollback_on_exit: bool = Fa
             await current.__aexit__(None, None, None)
 
     async def invalidate(connection: Any) -> None:
-        await connection.close()
+        try:
+            await connection.close()
+        except BaseException as close_error:
+            try:
+                await pool.close(timeout=0)
+            except BaseException as quarantine_error:
+                msg = f"Physical close failed: {close_error!r}; pool quarantine failed: {quarantine_error!r}"
+                raise TenantCleanupError(msg) from close_error
+            raise
         await release(connection)
 
     async def finish_transaction(connection: Any, exc_type: type[BaseException] | None) -> None:

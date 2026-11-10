@@ -168,7 +168,12 @@ async def test_tenant_close_failure_never_returns_unverified_connection(adapter:
         context.__aenter__.return_value = connection
     else:
         context.__enter__.return_value = connection
-    pool = SimpleNamespace(connection=lambda: context)
+    pool = SimpleNamespace(
+        connection=lambda: context,
+        close=AsyncMock(side_effect=RuntimeError("pool close failed"))
+        if asynchronous
+        else MagicMock(side_effect=RuntimeError("pool close failed")),
+    )
     config = SimpleNamespace(
         provide_pool=AsyncMock(return_value=pool) if asynchronous else lambda: pool,
         driver_features={"tenant_strategy": strategy},
@@ -190,8 +195,94 @@ async def test_tenant_close_failure_never_returns_unverified_connection(adapter:
             await lease.release()
         else:
             lease.release()
+    assert caught.value.__cause__ is strategy.checkin.side_effect
     assert any("physical close failed" in note for note in caught.value.__notes__)
+    assert any("pool quarantine failed" in note for note in caught.value.__notes__)
     if asynchronous:
         context.__aexit__.assert_not_awaited()
     else:
         context.__exit__.assert_not_called()
+
+
+@pytest.mark.parametrize("adapter", ["postgres", "cockroach"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_tenant_failed_close_quarantines_native_pool_before_context_gc(
+    adapter: str, asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import gc
+    from unittest.mock import AsyncMock, MagicMock
+
+    from psycopg_pool import AsyncConnectionPool, ConnectionPool
+
+    from sqlspec.adapters.cockroach_psycopg.tenant import (
+        build_cockroach_psycopg_async_tenant_lease,
+        build_cockroach_psycopg_sync_tenant_lease,
+    )
+    from sqlspec.adapters.psycopg.tenant import build_psycopg_async_tenant_lease, build_psycopg_sync_tenant_lease
+    from sqlspec.utils.tenant import TenantContext
+
+    payload = TenantContextPayload("a")
+    connection = AsyncMock() if asynchronous else MagicMock()
+    connection.close.side_effect = RuntimeError("physical close failed")
+    strategy = AsyncMock() if asynchronous else MagicMock()
+    strategy.checkout.return_value = TenantLeaseState(payload)
+    strategy.checkin.side_effect = RuntimeError("unverified reset")
+    reusable_returns: list[bool] = []
+    pool: Any = (
+        AsyncConnectionPool(open=False, min_size=0, max_size=1)
+        if asynchronous
+        else ConnectionPool(open=False, min_size=0, max_size=1)
+    )
+    monkeypatch.setattr(
+        pool, "getconn", AsyncMock(return_value=connection) if asynchronous else MagicMock(return_value=connection)
+    )
+
+    async def async_putconn(_connection: Any) -> None:
+        reusable_returns.append(not pool.closed)
+
+    def sync_putconn(_connection: Any) -> None:
+        reusable_returns.append(not pool.closed)
+
+    monkeypatch.setattr(pool, "putconn", async_putconn if asynchronous else sync_putconn)
+    config = SimpleNamespace(
+        provide_pool=AsyncMock(return_value=pool) if asynchronous else lambda: pool,
+        driver_features={"tenant_strategy": strategy},
+    )
+    if adapter == "cockroach":
+        builder = (
+            build_cockroach_psycopg_async_tenant_lease if asynchronous else build_cockroach_psycopg_sync_tenant_lease
+        )
+    else:
+        builder = build_psycopg_async_tenant_lease if asynchronous else build_psycopg_sync_tenant_lease
+    if asynchronous:
+        await pool.open()
+    else:
+        pool.open()
+    try:
+        lease = builder(config)
+        with TenantContext.scope(payload):
+            if asynchronous:
+                await lease.acquire()
+            else:
+                lease.acquire()
+        with pytest.raises(TenantCleanupError):
+            if asynchronous:
+                await lease.release()
+            else:
+                lease.release()
+        connection.close.side_effect.__traceback__ = None
+        strategy.checkin.side_effect.__traceback__ = None
+        del lease
+        gc.collect()
+        if asynchronous:
+            import asyncio
+
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+        assert reusable_returns == [False]
+        assert pool.closed
+    finally:
+        if asynchronous:
+            await pool.close()
+        else:
+            pool.close()
