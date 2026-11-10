@@ -54,9 +54,13 @@ async def tenant_database(
             driver_features={"tenant_strategy": True},
         )
     else:
-        conninfo = make_conninfo(**{
-            ("dbname" if key == "database" else key): value for key, value in tenant_credentials.items()
-        })
+        conninfo = make_conninfo(
+            host=postgres_service.host,
+            port=str(postgres_service.port),
+            user=role,
+            password="sqlspec-tenant-web",
+            dbname=postgres_service.database,
+        )
         config = PsycopgAsyncConfig(
             connection_config={"conninfo": conninfo, "min_size": 1, "max_size": 1},
             driver_features={"tenant_strategy": True},
