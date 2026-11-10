@@ -57,6 +57,7 @@ Missing tenant identity raises `TenantContextError` before acquisition. Failed c
 ::: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgRLSStrategy
     options:
       heading_level: 3
+      inherited_members: [__init__, checkout, checkin]
       members: [__init__, checkout, checkin]
 
 ## Driver, Pool & Data Dictionary

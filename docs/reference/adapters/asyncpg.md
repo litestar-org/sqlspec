@@ -51,6 +51,7 @@ See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) for database policy se
 ::: sqlspec.adapters.asyncpg.AsyncpgRLSStrategy
     options:
       heading_level: 3
+      inherited_members: [__init__]
       members:
         - __init__
         - checkout
