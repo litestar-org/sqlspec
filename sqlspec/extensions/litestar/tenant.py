@@ -90,6 +90,9 @@ def _guard_parameters(route_handler: Any) -> list[str]:
         if id(guard) in seen:
             continue
         seen.add(id(guard))
+        wrapped = getattr(guard, "func", None)
+        if callable(wrapped):
+            pending.append(wrapped)
         name = getattr(guard, "tenant_parameter", None)
         if isinstance(name, str) and name not in parameters:
             parameters.append(name)

@@ -92,7 +92,7 @@ async def test_tenant_multiple_memberships_need_selection() -> None:
 
 
 @pytest.mark.parametrize("selected", ["acme", "evil"])
-@pytest.mark.parametrize("selector", ["path", "session", "header", "guard"])
+@pytest.mark.parametrize("selector", ["path", "session", "header", "guard", "wrapped_guard"])
 async def test_tenant_selectors_require_verified_membership(selected: str, selector: str) -> None:
     scope: dict[str, Any] = {"user": {"tenant_id": "acme"}}
     if selector == "path":
@@ -104,7 +104,13 @@ async def test_tenant_selectors_require_verified_membership(selected: str, selec
     else:
         tenant_guard = SimpleNamespace(tenant_parameter="org_id")
         composite = SimpleNamespace(children=[SimpleNamespace(role="reader"), tenant_guard])
-        scope["route_handler"] = SimpleNamespace(opt={}, resolve_guards=lambda: [composite])
+
+        def wrapped_guard() -> None:
+            pass
+
+        wrapped_guard.children = composite.children
+        route_guard = SimpleNamespace(func=wrapped_guard) if selector == "wrapped_guard" else composite
+        scope["route_handler"] = SimpleNamespace(opt={}, resolve_guards=lambda: [route_guard])
         scope["path_params"] = {"org_id": selected}
     result = await _resolve(scope, header="x-tenant-id" if selector == "header" else None)
     assert result == (TenantContextPayload("acme") if selected == "acme" else None)
