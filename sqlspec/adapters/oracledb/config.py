@@ -54,6 +54,8 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.adapters.oracledb.tenant import (
+    OracleAsyncIdentifierStrategy,
+    OracleSyncIdentifierStrategy,
     build_oracle_async_tenant_lease,
     build_oracle_sync_tenant_lease,
     validate_oracle_tenant_hook,
@@ -300,7 +302,7 @@ class OracleDriverFeatures(TypedDict):
     """Event queue backend (``'poll_queue'`` default, ``'aq'``, or ``'txeventq'``)."""
     enable_direct_path_load: NotRequired[bool]
     """Route ``load_from_arrow`` through Thin-mode ``Connection.direct_path_load`` with ``executemany`` fallback (defaults to ``True``)."""
-    tenant_strategy: NotRequired[TenantStrategy | TenantStrategyShorthand]
+    tenant_strategy: NotRequired[TenantStrategy | TenantStrategyShorthand | None]
     """Opt-in tenant identifier or explicit trusted-context strategy."""
     session_context_hook: NotRequired[OracleSessionContextConfig | dict[str, Any]]
     """Declarative ``DBMS_SESSION`` / ``CLIENT_IDENTIFIER`` context applied on checkout and cleared on release."""
@@ -510,7 +512,13 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections."""
 
-    __slots__ = ("_extracted_wallet_dir", "_oracle_version_cache", "_pool_session_callback", "_user_connection_hook")
+    __slots__ = (
+        "_extracted_wallet_dir",
+        "_oracle_version_cache",
+        "_pool_session_callback",
+        "_tenant_source_hook",
+        "_user_connection_hook",
+    )
 
     driver_type: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
@@ -565,6 +573,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features) if driver_features else {}
+        self._tenant_source_hook: OracleSessionContextConfig | None = features_dict.get("session_context_hook")
         self._user_connection_hook: Callable[[OracleSyncConnection, str], None] | None = features_dict.pop(
             "on_connection_create", None
         )
@@ -585,6 +594,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         if pending_wallet_dir is not None:
             self._extracted_wallet_dir = pending_wallet_dir
             retain_extracted_wallet_dir(pending_wallet_dir)
+
+    def _resolve_tenant_strategy(self, strategy: Any) -> TenantStrategy | None:
+        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "identifier"}):
+            return OracleSyncIdentifierStrategy(self._tenant_source_hook)
+        return super()._resolve_tenant_strategy(strategy)
 
     def create_connection(self) -> "OracleSyncConnection":
         """Create a single connection (not from pool).
@@ -842,7 +856,13 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections."""
 
-    __slots__ = ("_extracted_wallet_dir", "_oracle_version_cache", "_pool_session_callback", "_user_connection_hook")
+    __slots__ = (
+        "_extracted_wallet_dir",
+        "_oracle_version_cache",
+        "_pool_session_callback",
+        "_tenant_source_hook",
+        "_user_connection_hook",
+    )
 
     connection_type: "ClassVar[type[OracleAsyncConnection]]" = OracleAsyncConnection
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
@@ -900,6 +920,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features) if driver_features else {}
+        self._tenant_source_hook: OracleSessionContextConfig | None = features_dict.get("session_context_hook")
         self._user_connection_hook: Callable[[OracleAsyncConnection, str], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
@@ -920,6 +941,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if pending_wallet_dir is not None:
             self._extracted_wallet_dir = pending_wallet_dir
             retain_extracted_wallet_dir(pending_wallet_dir)
+
+    def _resolve_tenant_strategy(self, strategy: Any) -> TenantStrategy | None:
+        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "identifier"}):
+            return OracleAsyncIdentifierStrategy(self._tenant_source_hook)
+        return super()._resolve_tenant_strategy(strategy)
 
     async def create_connection(self) -> OracleAsyncConnection:
         """Create a single async connection (not from pool).

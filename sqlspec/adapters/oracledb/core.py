@@ -2684,7 +2684,7 @@ def _build_session_release_plan(
 
     piggyback_attrs: dict[str, str | None] = {}
     if resolved.client_identifier is not None or resolved.clear_identifier:
-        piggyback_attrs["client_identifier"] = ""
+        piggyback_attrs["client_identifier"] = None if resolved.clear_identifier else ""
     if resolved.module is not None:
         piggyback_attrs["module"] = ""
     if resolved.action is not None:

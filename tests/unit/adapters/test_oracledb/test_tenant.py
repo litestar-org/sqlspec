@@ -24,8 +24,8 @@ async def _invoke(function: Any, *args: Any) -> Any:
     return await result if isawaitable(result) else result
 
 
-def _connection(mode: str) -> Any:
-    connection = SimpleNamespace(client_identifier=None, calls=[], dirty=False, ignore_identifier=False)
+def _connection(mode: str, connection_type: Any = SimpleNamespace) -> Any:
+    connection = connection_type(client_identifier=None, calls=[], dirty=False, ignore_identifier=False)
     cursor = MagicMock()
     cursor.__enter__.return_value = cursor
 
@@ -158,3 +158,118 @@ async def test_driver_tracing_respects_resolved_strategy(mode: str, strategy: An
         await _invoke(driver.execute, "SELECT 1 FROM DUAL")
     assert connection.client_identifier == ("hdr" if strategy is None else "tenant-a")
     assert connection.module == "sqlspec"
+
+
+def _vpd_connection(mode: str) -> Any:
+    connection = _connection(mode)
+    connection.context_value = None
+    connection.ignore_context_set = False
+    connection.ignore_context_clear = False
+    connection.fail_context_set = False
+    connection.fail_context_clear = False
+    cursor = connection.cursor.return_value
+    identifier_execute = cursor.execute.side_effect
+
+    def execute(statement: str, binds: dict[str, Any] | None = None) -> None:
+        identifier_execute(statement, binds)
+        if statement.startswith("BEGIN app.ctx.set_tenant"):
+            if connection.fail_context_set:
+                raise RuntimeError("setter failed")
+            if not connection.ignore_context_set:
+                connection.context_value = (binds or {})["tenant_id"]
+        elif statement.startswith("BEGIN app.ctx.clear_tenant"):
+            if connection.fail_context_clear:
+                raise RuntimeError("clearer failed")
+            if not connection.ignore_context_clear:
+                connection.context_value = None
+        elif "SYS_CONTEXT(:namespace" in statement:
+            cursor.fetchone.return_value = (connection.context_value,)
+
+    cursor.execute.side_effect = execute
+    return connection
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_vpd_strategy_binds_and_verifies_context(mode: str) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncVPDStrategy, OracleSyncVPDStrategy
+
+    connection = _vpd_connection(mode)
+    strategy_cls = OracleSyncVPDStrategy if mode == "sync" else OracleAsyncVPDStrategy
+    strategy = strategy_cls(
+        set_procedure="app.ctx.set_tenant",
+        clear_procedure="app.ctx.clear_tenant",
+        namespace="tenant_ctx",
+        attribute="tenant_id",
+    )
+    payload = TenantContextPayload("a'; DROP TABLE users;")
+    state = await _invoke(strategy.checkout, connection, payload)
+    assert connection.context_value == payload.tenant_id
+    await _invoke(strategy.checkin, connection, state)
+    assert connection.context_value is None
+    assert connection.client_identifier is None
+    statements = [statement for statement, _ in connection.calls]
+    assert all(payload.tenant_id not in statement for statement in statements)
+    assert ("BEGIN app.ctx.set_tenant(:tenant_id); END;", {"tenant_id": payload.tenant_id}) in connection.calls
+    assert statements.index("BEGIN app.ctx.clear_tenant; END;") < next(
+        i for i, statement in enumerate(statements) if "CLEAR_IDENTIFIER" in statement
+    )
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    "failure", ["ignore_context_set", "ignore_context_clear", "fail_context_set", "fail_context_clear"]
+)
+async def test_vpd_strategy_detects_setter_and_clear_failures(mode: str, failure: str) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncVPDStrategy, OracleSyncVPDStrategy
+
+    connection = _vpd_connection(mode)
+    strategy_cls = OracleSyncVPDStrategy if mode == "sync" else OracleAsyncVPDStrategy
+    strategy = strategy_cls(
+        set_procedure="app.ctx.set_tenant",
+        clear_procedure="app.ctx.clear_tenant",
+        namespace="tenant_ctx",
+        attribute="tenant_id",
+    )
+    if "set" in failure:
+        setattr(connection, failure, True)
+        with pytest.raises(TenantContextError):
+            await _invoke(strategy.checkout, connection, TenantContextPayload("a"))
+    else:
+        state = await _invoke(strategy.checkout, connection, TenantContextPayload("a"))
+        setattr(connection, failure, True)
+        with pytest.raises(TenantCleanupError):
+            await _invoke(strategy.checkin, connection, state)
+
+
+@pytest.mark.parametrize("strategy_cls_name", ["OracleSyncVPDStrategy", "OracleAsyncVPDStrategy"])
+@pytest.mark.parametrize(
+    "field,value",
+    [("set_procedure", "app; DROP"), ("clear_procedure", "app..clear"), ("namespace", "a' OR 1=1"), ("attribute", "")],
+)
+def test_vpd_strategy_rejects_untrusted_identifiers(strategy_cls_name: str, field: str, value: str) -> None:
+    from sqlspec.adapters.oracledb import tenant
+
+    args = {
+        "set_procedure": "app.ctx.set_tenant",
+        "clear_procedure": "app.ctx.clear_tenant",
+        "namespace": "tenant_ctx",
+        "attribute": "tenant_id",
+    }
+    args[field] = value
+    with pytest.raises(ImproperConfigurationError):
+        getattr(tenant, strategy_cls_name)(**args)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_identifier_cleanup_uses_nullable_sdk_identifier(mode: str) -> None:
+    class NullableIdentifierConnection(SimpleNamespace):
+        def __setattr__(self, name: str, value: Any) -> None:
+            if name == "client_identifier" and value == "":
+                raise RuntimeError("SDK rejects empty-string client identifier")
+            super().__setattr__(name, value)
+
+    connection = _connection(mode, NullableIdentifierConnection)
+    strategy = OracleSyncIdentifierStrategy() if mode == "sync" else OracleAsyncIdentifierStrategy()
+    state = await _invoke(strategy.checkout, connection, TenantContextPayload("a"))
+    await _invoke(strategy.checkin, connection, state)
+    assert connection.client_identifier is None

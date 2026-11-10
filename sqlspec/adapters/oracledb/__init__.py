@@ -48,6 +48,12 @@ from sqlspec.adapters.oracledb.driver import (
     OracleSyncDriver,
     OracleSyncExceptionHandler,
 )
+from sqlspec.adapters.oracledb.tenant import (
+    OracleAsyncIdentifierStrategy,
+    OracleAsyncVPDStrategy,
+    OracleSyncIdentifierStrategy,
+    OracleSyncVPDStrategy,
+)
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.utils.arrow_helpers import (
     coerce_oracle_df_to_arrow_batches,
@@ -61,6 +67,8 @@ __all__ = (
     "OracleAsyncConfig",
     "OracleAsyncDriver",
     "OracleAsyncExceptionHandler",
+    "OracleAsyncIdentifierStrategy",
+    "OracleAsyncVPDStrategy",
     "OracleBlob",
     "OracleClob",
     "OracleConnectionParams",
@@ -73,6 +81,8 @@ __all__ = (
     "OracleSyncConfig",
     "OracleSyncDriver",
     "OracleSyncExceptionHandler",
+    "OracleSyncIdentifierStrategy",
+    "OracleSyncVPDStrategy",
     "OracleTopologyConfig",
     "OracleVersionInfo",
     "OracledbAsyncDataDictionary",
