@@ -11,8 +11,89 @@ from uuid import UUID
 
 import pytest
 
-from sqlspec.exceptions import SQLSpecError, TenantCleanupError, TenantContextError
+from sqlspec.core.tenant import TenantLeaseState, validate_session_setting_name, validate_tenant_session_baseline
+from sqlspec.driver._tenant import require_session_pooler
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload, async_tenant_bypass, async_tenant_scope
+
+
+def test_lease_state_snapshots_baseline_and_captures_payload() -> None:
+    baseline: dict[str, str | None] = {"app.tenant": "previous", "app.role": None}
+    with TenantContext.scope("tenant-a") as payload:
+        state = TenantLeaseState(payload, baseline)
+    baseline["app.tenant"] = "changed"
+    with TenantContext.scope("tenant-b"):
+        assert state.payload is payload
+        assert state.payload.tenant_id == "tenant-a"
+        assert state.baseline == {"app.tenant": "previous", "app.role": None}
+    with pytest.raises(TypeError):
+        cast("MutableMapping[str, str | None]", state.baseline)["app.tenant"] = "changed"
+
+
+def test_lease_states_have_independent_defaults_and_assignable_attributes() -> None:
+    payload = TenantContextPayload("tenant")
+    first, second = TenantLeaseState(payload), TenantLeaseState(payload)
+    assert first is not second
+    assert first.baseline == second.baseline == {}
+    assert first.baseline is not second.baseline
+    first.payload = TenantContextPayload("other")
+    first.baseline = {"app.tenant": "restored"}
+    assert first.payload.tenant_id == "other"
+    assert first.baseline == {"app.tenant": "restored"}
+    assert second.payload is payload
+    assert second.baseline == {}
+
+
+@pytest.mark.parametrize("name", ["app.current_tenant_id", "_tenant", "tenant9", "Tenant", "a.b_c.9"])
+def test_session_setting_name_accepts_identifiers(name: str) -> None:
+    assert validate_session_setting_name(name) == name
+
+
+@pytest.mark.parametrize("name", ["app.x; DROP", "1app", "", "app\n", "app x", "é", "a\x00b", True, 123, None])
+def test_session_setting_name_rejects_invalid_names(name: object) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        validate_session_setting_name(name)
+
+
+@pytest.mark.parametrize("server_settings", [None, {}, {"timezone": "UTC"}, {"application_name": "sqlspec"}])
+def test_tenant_session_baseline_accepts_consistent_values(server_settings: dict[str, str] | None) -> None:
+    baseline = {"timezone": "UTC"}
+    validated = validate_tenant_session_baseline(baseline, server_settings)
+    baseline["timezone"] = "CET"
+    assert validated == {"timezone": "UTC"}
+    assert validate_tenant_session_baseline({}, server_settings) == {}
+
+
+@pytest.mark.parametrize(
+    "baseline,server_settings",
+    [
+        ({"timezone": "UTC"}, {"timezone": "CET"}),
+        ({"a": "x\x00"}, None),
+        ({"a;b": "1"}, None),
+        ({1: "value"}, None),
+        ({"a": None}, None),
+        ({"a": 123}, None),
+        ("a=1", None),
+        (None, None),
+        ([("a", "1")], None),
+    ],
+)
+def test_tenant_session_baseline_rejects_invalid_settings(
+    baseline: object, server_settings: dict[str, str] | None
+) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        validate_tenant_session_baseline(baseline, server_settings)
+
+
+@pytest.mark.parametrize("mode", [None, "session"])
+def test_session_pooler_defaults_and_explicit_mode(mode: object) -> None:
+    assert require_session_pooler(mode, "AsyncpgConfig") == "session"
+
+
+@pytest.mark.parametrize("mode", ["transaction", "statement", "auto", "", 123, 0, True, False, [], {}])
+def test_session_pooler_rejects_incompatible_modes(mode: object) -> None:
+    with pytest.raises(ImproperConfigurationError, match="AsyncpgConfig"):
+        require_session_pooler(mode, "AsyncpgConfig")
 
 
 def test_payload_snapshots_variables() -> None:
