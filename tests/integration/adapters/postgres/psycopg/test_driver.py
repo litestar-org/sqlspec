@@ -313,7 +313,14 @@ async def test_tenant_rls_reuse_and_transaction_ownership(
     }
     role = "sqlspec_tenant_" + uuid4().hex[:12]
     table = "sqlspec_tenant_rows_" + uuid4().hex[:12]
-    admin = psycopg.connect(**credentials, autocommit=True)
+    admin = psycopg.connect(
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        dbname=postgres_service.database,
+        autocommit=True,
+    )
     admin.execute(
         SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {}").format(
             Identifier(role), Literal("sqlspec-tenant-test")
